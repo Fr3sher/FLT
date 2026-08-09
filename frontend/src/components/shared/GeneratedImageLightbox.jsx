@@ -7,6 +7,9 @@ import KleinImproveNote from '../dataset/KleinImproveNote';
 import {
   imageHeadlineFacts, imagePromptBlocks, imageSettingFacts, promptFold,
 } from '../../utils/generatedImageFacts';
+import {
+  FACTS_PANEL_CLASS, IMAGE_CLASS, IMAGE_PANE_CLASS, SHELL_CLASS,
+} from './generatedImageLightboxLayout';
 
 /* 🔍 ONE generated image, large, with what it was made from.
 
@@ -31,8 +34,11 @@ import {
      1. HIERARCHY. The facts are not the same kind of thing as the prompt. Step,
         seed and strength are chips; the settings that decided the picture are a
         table; the prose is last.
-     2. BOUNDED READING WIDTH. Above `lg` the metadata is a column beside the
-        image, not a line under it, so it can never run wider than a paragraph.
+     2. BOUNDED READING WIDTH. Above `md` the metadata is a column beside the
+        image, not a line under it, so it can never run wider than a paragraph —
+        and the image takes the whole height it leaves. See
+        generatedImageLightboxLayout.js for why that split starts at `md` and
+        not, as it first did, at `lg`.
      3. THE PROMPT FOLDS. Long by nature, it opens collapsed past a threshold
         and scrolls rather than pushing everything else off the screen.
 
@@ -136,7 +142,7 @@ function ImproveActions({ img, onImprove, improvePending, improveReady, busy,
         <button key={btn.id} type="button" data-testid={`lightbox-improve-${btn.id}`}
           onClick={run(btn.id, btn.disabled)} disabled={btn.disabled}
           aria-busy={active} title={btn.title}
-          /* Full width under `sm`: this column is 22rem at its widest, so two
+          /* Full width under `sm`: this column is 27rem at its widest, so two
              engine buttons beside a Download would each be a 5rem stub on a
              400 px phone. Same class the dataset lightbox uses. */
           className="min-h-9 w-full rounded-lg border border-indigo-400/50 bg-indigo-500/20 px-3 py-1.5 text-[0.75rem] font-semibold text-indigo-100 hover:bg-indigo-500/30 disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto">
@@ -202,19 +208,23 @@ export default function GeneratedImageLightbox({ img, alt, actions = null,
       // ⚠️ /95, not an arbitrary /92: Tailwind only emits the opacities in its
       // scale, so bg-black/92 compiled to NOTHING and the board behind stayed at
       // full brightness under what was supposed to be a backdrop.
-      className="fixed inset-0 z-[9997] flex flex-col bg-black/95 lg:flex-row">
+      // The stacked/split shape itself lives in generatedImageLightboxLayout.js.
+      className={SHELL_CLASS}>
+      {/* Pinned to the OVERLAY, not to either half, so it is the same target at
+          every width — over the picture when stacked, over the panel's top
+          padding when split. */}
       <button type="button" ref={closeRef}
         onClick={(e) => { e.stopPropagation(); onClose?.(); }}
         title="Close (Esc)" aria-label="Close image"
         className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-lg leading-none text-white hover:bg-white/20">✕</button>
 
-      <div className="flex min-h-0 flex-1 items-center justify-center p-3">
+      <div className={IMAGE_PANE_CLASS}>
         <img src={img.url} alt={label} onClick={(e) => e.stopPropagation()}
-          className="max-h-full max-w-full select-none rounded-lg object-contain shadow-2xl" />
+          className={IMAGE_CLASS} />
       </div>
 
-      {/* THE fix for the wall of text: a column, not a line. `max-w-md` above
-          `lg` and the panel's own width below it — either way the prose has a
+      {/* THE fix for the wall of text: a column, not a line. Bounded width above
+          `md` and the panel's own width below it — either way the prose has a
           reading width, never the width of the screen. Its own scroll, so the
           image never shrinks to make room for a long prompt. */}
       {facts && (
@@ -224,8 +234,7 @@ export default function GeneratedImageLightbox({ img, alt, actions = null,
            the panel — a settings table you read the board through is a table you
            misread. The backdrop can be translucent; the thing you are reading
            cannot. */
-        className="max-h-[45vh] w-full shrink-0 overflow-y-auto border-t border-white/10 bg-app px-3 py-2.5
-                   lg:max-h-none lg:w-[22rem] lg:border-l lg:border-t-0 lg:px-4 lg:py-10">
+        className={FACTS_PANEL_CLASS}>
         <div className="mx-auto max-w-md">
           {/* The three answers to "what am I looking at", as chips. Big, tabular,
               and the seed carries its own copy — a seed is a thing you re-play. */}

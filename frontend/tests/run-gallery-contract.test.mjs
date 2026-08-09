@@ -50,7 +50,10 @@ test('the card gesture answers for itself — a captured pointer eats the click'
 });
 
 test('clicking a checkpoint pill still opens that checkpoint, unchanged', () => {
-  assert.match(canvas, /onOpenGallery=\{\(recordId, step\) => setGallery\(\{ recordId, step \}\)\}/);
+  // Hoisted out of the JSX so the lanes' memo boundary survives a pan — the
+  // wiring is the same, its declaration just moved (see LineageCanvas).
+  assert.match(canvas, /const openGallery = useCallback\(\(recordId, step\) => setGallery\(\{ recordId, step \}\), \[\]\)/);
+  assert.match(canvas, /onOpenGallery=\{openGallery\}/);
   // …and a pill press is still never a drag or a pan.
   assert.match(canvas, /closest\?\.\('\.lds-ckpill-wrap'\)/);
 });

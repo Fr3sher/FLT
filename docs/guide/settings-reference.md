@@ -312,6 +312,21 @@ It is a **rendering** knob, not an anatomy fix: extra limbs, tails or wrong body
 
 Separate from **Upscale & improve ▸ Steps** (`klein.improve_steps`), which drives the manual improve pass only.
 
+### Variation output size (both local engines)
+
+Not in Settings — it sits at the top of the **Generate variations** panel, above the shot cards, whenever a local engine is selected. **Output size (MP)** → `variations.output_megapixels` (0.5–2.0, default **2.0**).
+
+It is **one dial for both local engines**, on purpose. Before it existed the two disagreed: **Klein** rendered every shot at a hardcoded 2 MP *in the reference photo's shape*, while **Krea 2 Edit** used the shot card's shape but never spent more pixels than the reference itself held — so a 1024×832 reference gave you 0.84 MP Krea tiles next to 2 MP Klein ones, in different shapes, in the same dataset, with nothing on screen explaining either number.
+
+Now both engines spend this budget on **the shot card's ratio**: pick 2.0 and a portrait card renders at 1216 × 1632, a square one at 1408 × 1408, a 16:9 one at 1872 × 1056. Two consequences worth knowing:
+
+- **Klein no longer follows the reference photo's shape.** A card that says 16:9 gets 16:9, whatever your reference is. That is the point — a dataset's framing should come from the shots you picked, not from how you happened to crop one photo.
+- **The dial wins even above the reference's own pixel count.** Asking for 2 MP from a 0.85 MP reference genuinely renders 2 MP; the model paints the extra pixels rather than resampling them. It is a generation, not a copy — but do not expect detail your reference never had.
+
+Lower it for a shorter wait and less VRAM per image (0.5 MP renders visibly softer shots, fine for a quick trial run). **2.0 is the ceiling** because the Flux edit models lose coherence past roughly that; to go bigger, generate at 2.0 and then run ✨ **Upscale & improve**, which has its own separate budget (`klein.improve_megapixels`, up to 8 MP).
+
+Unaffected: the ✦ reference edit (no shot card, so it keeps your source's exact frame and is never upscaled) and the three API engines, which are billed per image and framed by their provider.
+
 ### Klein model (per dataset)
 
 Not in Settings — it lives on the **dataset**, in the 🖥️ *Klein tuning* block of the generation panel and next to the ✨ **Upscale & improve** action itself. One setting, deliberately: generation and improve drive the same loader in the same workflow, so two near-identical model dropdowns would only be a lasting source of confusion. If you ever need to improve with a heavier model than the one you generate with, say so — splitting one stored value into two is additive; merging two back into one would have to throw one of your answers away.
@@ -534,11 +549,27 @@ Pillow's own decompression-bomb threshold, so the choice is real in both
 directions. It is offered because "let it through" is a legitimate answer for a
 panorama you produced yourself.
 
-**One consumer cannot follow it.** Image Bank *inference workers* (face,
-aesthetic and NSFW scoring, watermark inpainting) run in a separate Python
-interpreter that does not import the app or its config, and keep their own fixed
-16 Mi-pixel / 8192 px guard (`backend/infer/bank_image_guard.py`). An image above
-that imports, displays and trains normally; those workers skip it.
+**Inference workers get it handed down, one lane at a time.** Face, aesthetic and
+NSFW scoring, semantic indexing and watermark inpainting run in a separate Python
+interpreter that cannot import the app or its config, so their shared guard
+(`backend/infer/bank_image_guard.py`) enforces its own fixed 16 Mi-pixel /
+8192 px ceiling unless the lane that launched it passes this budget down as
+environment.
+
+**JoyCaption captioning does.** It was the lane where the split actually hurt: an
+image this budget accepts imports, displays and trains normally, but the
+captioner refused it one by one — a 89-image dataset of camera masters came back
+with 37 captions and 52 refusals reading *"bank image rejects images above 8192 px
+per side or 16777216 pixels"*. Captioning now enforces the budget above (the
+model sees a 384 px copy either way), and a pass that still has to refuse an image
+counts it and repeats the engine's own reason in its result line instead of just
+returning a smaller number.
+
+**The other lanes still keep the fixed ceiling.** Scoring, embedding and watermark
+work hold a model and a full decode at once, and nobody has measured what a 64
+Mi-pixel input costs them — so they keep the conservative number rather than
+inherit an unmeasured one. An image above it imports, displays and trains
+normally; those workers skip it.
 
 **Auto head-crop is deliberately different.** It changes the picture into a
 square head shot, so it creates a derived WebP even when `preserve` is selected.
@@ -817,6 +848,7 @@ its own, stays allowed and says what it costs.
 |---|---|---|---|
 | **Steps** | (per launch) | adaptive | ≥ 500 when set explicitly. |
 | **Preview prompts** | `sample_prompts` | generic per dataset kind | Up to 8 lines, `{trigger}` marks the subject. Shared with the LoRA lane on purpose — same dataset, same subject. The defaults describe nobody, and these images are the only way to judge a run while it is still costing money. |
+| **🎲 Use dataset captions** | (fills `sample_prompts`) | — | Replaces the field with up to 5 captions drawn at random from this dataset's **kept** images (the long caption, the one the run trains on). Click again for a new draw. Captions are pasted as they are: the trigger is added by the run when it is missing, and never for a style dataset. Disabled while the dataset has no captions yet. |
 | **Learning rate** | `dense_lr` | `1e-6` | 1e-7 – 5e-6. |
 | **Resolution** | `dense_resolution` | `1024` | `768` or `1024`. 768 trains faster and cheaper, at lower fidelity. |
 | **Checkpoint every / keep** | `dense_save_every` / `dense_max_step_saves` | `250` / `1` | ≥ 100 steps; keep 1–3. Each kept checkpoint is ~26 GB of **private** Hugging Face storage — the panel states the total before launch and the pre-check uses the same number, never the shipped default. |
@@ -1422,6 +1454,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `watermark.allow_crop` | When `true` (default), a border watermark is cropped off; when `false`, it is repainted instead. Also editable in the Clean bar. |
 | `zimage.vae` | Pins the Z-Image VAE (blank = the app resolves it itself, any spelling, any sub-folder). |
 | `zimage.text_encoder` | Pins the Z-Image text encoder (blank = the app resolves it itself). |
+| `variations.output_megapixels` | Pixel budget every generated variation is rendered at, in megapixels, on the shot card's ratio — shared by **both** local engines (Klein and Krea 2 Edit). Default `2.0` = Klein's historical hardcoded value; 0.5–2.0. Not the improve pass (`klein.improve_megapixels`), and not the ✦ reference edit (source frame, never upscaled). |
 | `klein.consistency_lora` | Filename of the Klein consistency LoRA, relative to ComfyUI's LoRA folder. |
 | `klein.consistency_strength` | Strength (0–1) applied to the Klein consistency LoRA. |
 | `klein.generation_steps` | Sampler steps for Klein **generation** (variations, regenerate, small-image rescue). Default `5` = the value hardcoded in the shipped workflow; 1–50. Not the improve pass (`klein.improve_steps`). |

@@ -7,6 +7,7 @@ import {
   DEPLOY_BAR_CLASS, deployState, deployTitleSuffix,
 } from '../../utils/checkpointDeployState';
 import { pillSelectScale } from '../../utils/canvasNodeChrome';
+import { datasetThumbUrl } from '../../utils/datasetThumbUrl';
 
 /* ◉ The two things a lineage is DRAWN with: a run card and a checkpoint pill.
 
@@ -215,10 +216,13 @@ export function CheckpointPill({ pill, offX, offY, active, selected, preview, bi
           style={{ width: pill.w, height: pill.h }}
           className={shellCls + deployCls + ' flex w-full flex-col overflow-hidden text-[0.625rem] font-medium tabular-nums'}>
           <div className="relative min-h-0 flex-1 w-full">
+            {/* The tile is 128×132 board units (PILL_W_BIG), so 320 stays crisp
+                at 2× DPR and at the zoom levels the board actually reads at.
+                `zoom` opens the FULL image — this tag is the tile only. */}
             {preview?.url ? (
-              <img src={preview.url} alt={`Preview at step ${pill.step}`}
+              <img src={datasetThumbUrl(preview.url, 320)} alt={`Preview at step ${pill.step}`}
                 role="button" tabIndex={0} title="Click to view this preview full-screen"
-                onClick={zoom} onKeyDown={zoomKey}
+                onClick={zoom} onKeyDown={zoomKey} loading="lazy" decoding="async"
                 className="h-full w-full cursor-zoom-in object-cover hover:opacity-90" />
             ) : (
               <div className="flex h-full w-full items-center justify-center text-base">

@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   INITIAL_MIN_SCALE, LANE_GAP, LANE_HEADER_H, MAX_SCALE, MIN_SCALE,
   clampScale, clampView, fitView, initialView, panBy, pinchCenter, pinchDistance,
-  stackLanes, toWorld, viewTransform, zoomAt,
+  previewFrameHeight, stackLanes, toWorld, viewTransform, zoomAt,
 } from './canvasLayout.js';
 
 // ---- stackLanes ------------------------------------------------------------
@@ -103,6 +103,55 @@ test('a positive minX is not overhang and cannot shrink the board', () => {
   assert.equal(w.width, 500);
 });
 
+/* ── The DOWNWARD half of the same freedom ─────────────────────────────────
+   A picture dragged above its lane floated free; the same picture dragged
+   BELOW it used to shove the next dataset down the board, because the downward
+   reach was folded into the lane's `height` and `height` is what the stack
+   advances by. `maxY` is that reach reported separately: it grows the box and
+   moves nothing. */
+
+test('a picture below its lane pulls the board box down, without moving any lane', () => {
+  const plain = stackLanes([{ datasetId: 1, width: 500, height: 200 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  const over = stackLanes([{ datasetId: 1, width: 500, height: 200, maxY: 600, maxX: 800 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  // Lane 1's graph starts at 34, so reaching 600 down ends at 634 — past the
+  // whole plain board (34+200+56+34+100 = 424).
+  assert.equal(over.height, LANE_HEADER_H + 600);
+  assert.equal(over.width, 800);
+  // THE non-negotiable, the mirror of the upward case: no lane moved.
+  assert.deepEqual(over.lanes.map((l) => [l.x, l.y, l.graphY]),
+    plain.lanes.map((l) => [l.x, l.y, l.graphY]));
+});
+
+test('the stack advances by the lane, never by what hangs off it', () => {
+  // Same lane heights, wildly different reach in BOTH directions: the second
+  // lane starts at the same place either way.
+  const plain = stackLanes([{ datasetId: 1, width: 500, height: 200 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  const wild = stackLanes([
+    { datasetId: 1, width: 500, height: 200, minY: -900, maxY: 5000, maxX: 4000 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  assert.equal(wild.lanes[1].graphY, plain.lanes[1].graphY);
+  assert.equal(wild.lanes[1].y, plain.lanes[1].y);
+  // …and the lane keeps reporting its own size, not the pictures' — the header
+  // strip and the "no runs to draw" hint are measured on it.
+  assert.deepEqual([wild.lanes[0].width, wild.lanes[0].height], [500, 200]);
+});
+
+test('reach smaller than the lane itself cannot shrink the board', () => {
+  const w = stackLanes([{ datasetId: 1, width: 500, height: 200, maxX: 10, maxY: 10 }]);
+  assert.equal(w.width, 500);
+  assert.equal(w.height, LANE_HEADER_H + 200);
+});
+
+test('a board with no reach fields is byte-for-byte the board it always was', () => {
+  const w = stackLanes([{ datasetId: 1, width: 500, height: 200 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  assert.deepEqual([w.x, w.y, w.width], [0, 0, 500]);
+  assert.equal(w.height, LANE_HEADER_H + 200 + LANE_GAP + LANE_HEADER_H + 100);
+});
+
 test('Fit frames the board BOX, corner included', () => {
   const world = { x: -500, y: -250, width: 2000, height: 1000 };
   const v = fitView(world, { width: 800, height: 600 }, { padding: 0 });
@@ -173,6 +222,42 @@ test('an empty board or an unmeasured frame answers a safe identity view', () =>
     assert.equal(v.scale, 1);
     assert.ok(Number.isFinite(v.tx) && Number.isFinite(v.ty));
   }
+});
+
+// ---- previewFrameHeight -----------------------------------------------------
+
+test('a board narrower than the frame previews at its own natural height', () => {
+  // No width-binding here: 700 < 1000, so scale is 1 and the preview is just
+  // the content plus the padding on both edges.
+  const h = previewFrameHeight({ width: 700, height: 300 }, 1000, { padding: 16 });
+  assert.equal(h, 300 + 32);
+});
+
+test('a board wider than the frame is bound by width, never magnified past 1', () => {
+  // Same rule fitView/initialView already enforce, asked the opposite question:
+  // not "what scale fits this height" but "how tall does the board stand once
+  // its WIDTH is fit" — width is the only axis previewFrameHeight can see.
+  const wide = { width: 2000, height: 400 };
+  const h = previewFrameHeight(wide, 1000, { padding: 16 });
+  const expectedScale = (1000 - 32) / 2000;
+  assert.equal(h, 400 * expectedScale + 32);
+  assert.ok(h < 400 + 32, 'a wide board previews SHORTER than its raw content height');
+});
+
+test('an unmeasured board or frame previews as 0, not a division by zero', () => {
+  assert.equal(previewFrameHeight({ width: 0, height: 0 }, 1000), 0);
+  assert.equal(previewFrameHeight(null, 1000), 0);
+  assert.equal(previewFrameHeight({ width: 500, height: 300 }, 0), 0);
+});
+
+test('a sparse one-lane board previews far short of the old fixed ceiling', () => {
+  // The actual measurement that drove the product call: a one-lane board on a
+  // 1336-px-wide desktop frame (1400 minus the frame's own border/padding)
+  // used to open under a 684-px (76vh of 900) ceiling regardless of content.
+  const oneLane = stackLanes([{ datasetId: 1, width: 900, height: 260 }]);
+  const h = previewFrameHeight(oneLane, 1336, { padding: 16 });
+  assert.ok(h < 350, `expected a sparse board to preview well under the ceiling, got ${h}`);
+  assert.ok(h < 684 / 2, 'and specifically well under half the old 76vh-of-900 ceiling');
 });
 
 // ---- initialView -----------------------------------------------------------

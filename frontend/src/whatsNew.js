@@ -54,8 +54,144 @@ export const WHATS_NEW = [
     date: '2026-08-09',
     title: 'The bank filters now sit beside the images they filter',
     blurb:
-      'Changing a filter on a 20 000-image bank meant scrolling up to the chips, clicking, and scrolling back down to see what it did. The filters now live in a rail down the left of the grid, so the result is in front of you as you click. The eight analysis passes moved into a ⚙ Passes panel you open when you need them — all of them are still there, each with the same window, scope and counts as before — which gives the images the third of the screen the passes used to hold. Score, Framing, Medium, Angle, Resolution and Origin fold behind 🎛 More filters so the everyday chips stay on one screen. On a narrow window the rail becomes a drawer behind ☰ Filters, and it remembers whether you keep it open.',
+      'Changing a filter on a 20 000-image bank meant scrolling up to the chips, clicking, and scrolling back down to see what it did. The filters now live in a rail down the left of the grid, and the rail stays put as you scroll, so the chips are still beside the images ten thousand rows down and the result is in front of you as you click. The eight analysis passes moved into a ⚙ Passes panel you open when you need them — all of them are still there, each with the same window, scope and counts as before — which gives the images the third of the screen the passes used to hold. Score, Framing, Medium, Angle, Resolution and Origin fold behind 🎛 More filters so the everyday chips stay on one screen. On a narrow window the rail becomes a drawer behind ☰ Filters, and it remembers whether you keep it open.',
     to: '/bank',
+  },
+  {
+    id: '2026-08-09-canvas-pins-float-both-ways',
+    date: '2026-08-09',
+    title: 'Park a pinned picture below its lane without shoving the next dataset',
+    blurb:
+      'On the Canvas, dragging a pinned image above its dataset always let it float free — dragging it below pushed every dataset underneath further down the board. Pinned pictures now sit on a free layer in both directions: they overlap the lane below if you park them there, and nothing else moves. Fit still frames them, Export PNG still includes them, and ✦ Tidy up still brings them back beside the run that made them.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-setup-chatgpt-subscription',
+    date: '2026-08-09',
+    title: 'Set up ChatGPT with your Plus/Pro plan, no API key',
+    blurb:
+      'The first-run Setup screen only ever offered an OpenAI API key, so the ChatGPT engine looked like it cost money per image. It now shows both ways in side by side — paste a key, or sign in once with your ChatGPT Plus/Pro subscription and run on your plan\'s image quota. The step turns green as soon as either one is in place.',
+    to: '/setup?step=image',
+  },
+  {
+    id: '2026-08-09-dataset-thumbnails',
+    date: '2026-08-09',
+    title: 'Grids and the board load in a blink',
+    blurb:
+      'Every thumbnail surface — the Canvas board, the dataset grid, Test Studio result tiles, checkpoint pills and the run cards — used to download and decode your full-resolution images just to paint a small tile. They now ask for a right-sized WebP thumbnail instead: a board that pulled 47 MB of pictures fetches 0.4 MB, and off-screen tiles no longer load at all. Opening an image, downloading it or exporting the board still uses the full-quality original — and a pinned image now carries an HQ button that swaps its tile for the original file in place, one picture at a time, for when you are judging skin or fine text and a re-encode is not good enough.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-canvas-machine-load',
+    date: '2026-08-09',
+    title: 'See how hard the machine is working, without leaving the board',
+    blurb:
+      'The Canvas toolbar now carries a small CPU · GPU · VRAM · RAM readout of the machine running LDS, so you can tell a run that is working from one that is stuck without opening Task Manager. It turns amber past 50% and red past 80%, refreshes only while the tab is open, and folds away with ▾ if you would rather not see it. No NVIDIA card: it simply shows no GPU numbers.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-lightbox-side-by-side-tablet',
+    date: '2026-08-09',
+    title: 'Full-height images on a tablet, with the facts beside them',
+    blurb:
+      'Opening a generated image on a tablet in landscape used to shrink it to a thumbnail with the prompt, Download and ✨ Upscale & improve buttons stacked below the fold. The picture now takes the whole height on the left and everything else reads in a scrollable column on the right — the same split you already had on a desktop, from 768 px up. Held upright, or on a phone, the stacked layout is unchanged.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-canvas-phone-board-room',
+    date: '2026-08-09',
+    title: 'The canvas gives the board back its screen on a phone',
+    blurb:
+      'On a phone the filter row was three wrapped lines floating on the board and the search box you rarely type in took most of one — it is now two lines: the chips keep their icon and their count, and 🔍 unfolds the search only when you ask for it (with the words still shown on the chip while a search is narrowing the board). The page blurb stays out of the way up to a laptop width, and a run in flight is announced once instead of twice when the Generate sheet is open. The board’s floating rows are also properly opaque now, so a strip of pinned images parked in a corner can no longer be read through Reset.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-canvas-external-lora-links',
+    date: '2026-08-09',
+    title: 'See which images an external LoRA actually touched',
+    blurb:
+      'A permanent cyan line now joins each 🔌 plugin node to every board image generated with it, and an image’s facts panel lists its External LoRAs on their own row instead of filing them under always-on.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-preview-prompts-from-captions',
+    date: '2026-08-09',
+    title: 'Preview images that finally show YOUR subject',
+    blurb:
+      'The preview prompts a run renders every few hundred steps used to be generic defaults that describe nobody — so the images you judge an expensive run by showed a stranger. A new 🎲 Use dataset captions button under Preview prompts fills the field with up to five real captions drawn at random from this dataset’s kept images. Click it again for a different draw.',
+    to: '/datasets?section=training&panel=advanced',
+  },
+  {
+    id: '2026-08-09-canvas-phone-toolbar',
+    date: '2026-08-09',
+    title: 'The LoRA Canvas gives the board back to your phone',
+    blurb:
+      'On a phone the board’s bottom controls took a quarter of the screen, and tapping ☝ Gestures buried the board under its own instructions with no way to put them away. The row is icons-only below a tablet — two rows instead of five, every button still thumb-sized — and the gesture help is now a sheet that floats over the board and closes with its ×. Nothing changes on a desktop.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-canvas-external-loras',
+    date: '2026-08-09',
+    title: 'Pin any LoRA onto the Canvas, even one you never trained here',
+    blurb:
+      'Pin any LoRA from your ComfyUI folder onto the LoRA Canvas as a 🔌 plugin node and stack it on your generations, with its own strength. It stacks on a run anchored by a checkpoint trained here — there is no solo generation from an external LoRA alone.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-the-canvas-controls-live-on-the-board',
+    date: '2026-08-08',
+    title: 'The Canvas gives the screen back to the board',
+    blurb:
+      'Everything that steers the LoRA Canvas — the zoom row, Fit, Tidy up, Generate, the colour key, the gestures sheet, the dataset filter and the banner announcing finished images — used to be stacked above the board. On a phone that chrome cost most of the screen before a single card was drawn, which is why the board opened tiny and pinned under a wall of buttons. Those controls now float ON the board: what it is showing sits along the top, what you do to it sits along the bottom within thumb reach, and the board itself takes back the space they were using. Nothing was removed and nothing moved to another page — the same controls, on the surface they act on.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-filter-bar',
+    date: '2026-08-08',
+    title: 'The canvas filters stopped eating half the screen',
+    blurb:
+      'The Datasets panel was a fold-out card: unfolded on a library of fourteen datasets it stood 389 px tall on a 720-px screen — 54 % of the window, directly above the board, for anyone who had ever left it open. It is now a single row of chips about 40 px tall. Datasets, Models and Status each open a small menu with the same checkboxes (the dataset menu gained a search of its own, which the three-column list never had), Pinned images and Reset stay in the row, and the run search keeps its full-size box. Every chip shows its count and lights up while it is filtering, so nothing can narrow your board without saying so — and the menus now open above the board instead of under a pinned image.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-zoom-labels',
+    date: '2026-08-08',
+    title: 'Run cards stay readable when you zoom the board out',
+    blurb:
+      'A board holding a dozen datasets is read at 30-40 % zoom, and at that scale a run card\'s title renders at about four pixels: the canvas was showing you everything and telling you nothing, so finding a run meant zooming in on each one in turn. Below 55 % every card now carries its run number at a constant, readable size, and below 30 % it carries the dataset name too — because the lane headings have gone unreadable by then as well.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-layout-presets',
+    date: '2026-08-08',
+    title: 'Keep a board arrangement instead of losing it to ✦ Tidy up',
+    blurb:
+      'Laying two datasets\' renders out side by side to judge a likeness takes twenty minutes, and until now the board only ever held ONE arrangement: the moment you needed it for something else, your only options were to leave it there forever or throw it away. 💾 Layouts in the board toolbar saves where every run card and every pinned picture sits — closed pictures included — under a name, and puts it back whenever you want. A run deleted since is simply not restored, and the app says how many, rather than leaving you to hunt for the card that is missing.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-export-png',
+    date: '2026-08-08',
+    title: 'Save the whole board as a PNG',
+    blurb:
+      '📷 PNG in the board toolbar writes the entire canvas to one image file: every pinned picture at full size, every run card with its checkpoints, and the lines that join them. Useful for a comparison you want to keep, post, or look at next to something else. It is a redraw of the board, not a screenshot, so the buttons and badges are not in it — and a picture whose file has been cleaned off the disk comes out as a labelled placeholder instead of silently missing.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-delete-image',
+    date: '2026-08-08',
+    title: 'Bin a bad render from the board itself',
+    blurb:
+      'The board is where you actually decide a render is a failure — and deleting it meant closing the node, opening the run, finding the checkpoint, opening its gallery, entering Select mode and finding the same picture again. Pinned images now carry a 🗑 next to their ✕. Press it once to arm it, again to delete: ✕ still only takes the picture off the board and remembers where it was, 🗑 deletes the image itself, through the same route (and the same recoverable-or-not setting) the gallery uses.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-lora-strength-up-to-5',
+    date: '2026-08-08',
+    title: 'LoRA strength and blend weights now go up to 5',
+    blurb:
+      'The weight slider of a 🧬 Blend stopped at 2 and the strength sweep at 4 — both were comfort limits, not technical ones, and pushing an under-trained LoRA or an overwhelming style meant leaving the app for a hand-built workflow. The ceiling is 5 everywhere now: the blend slider, the strength chips behind « + », and the server that validates them. The weight next to each slider is also typeable, so getting to 3.35 no longer means eighty small drags.',
+    to: '/canvas',
   },
   {
     id: '2026-08-08-launch-anyway-actually-asks',
@@ -63,6 +199,14 @@ export const WHATS_NEW = [
     title: 'A second cloud run on one dataset now actually asks you',
     blurb:
       'Launching a second cloud training on a dataset that already had one was supposed to ask "launch anyway?" and go ahead if you said yes. The question never reached you: the refusal arrived as an error toast printing the question at you, with no way to answer it, so the second run was simply impossible however many times you tried. The confirmation now appears and the run starts when you accept. Nothing about what is allowed has changed — the guard, your fleet limit and your budget behave exactly as before; the answer you gave it was being thrown away. Reported by Arrow (Discord).',
+  },
+  {
+    id: '2026-08-08-one-output-size-for-both-local-engines',
+    date: '2026-08-08',
+    title: 'Your generated shots are finally all the same size',
+    blurb:
+      'Klein and Krea 2 Edit used to size their images by two unrelated rules, so one dataset could hold 2 MP Klein tiles next to 0.84 MP Krea ones, in different shapes, with nothing on screen explaining either. There is now a single Output size dial at the top of the Generate variations panel, above the shot cards: both local engines spend that budget, on the shape of the shot card you picked. Klein therefore stops inheriting your reference photo\'s frame — a 16:9 card renders 16:9 even if your reference is portrait. It ships at 2.0 MP, exactly what Klein always did, so nothing moves until you touch it; drop it for quicker, lighter trial runs, or leave it at 2.0, which is as far as these edit models hold together (go bigger afterwards with ✨ Upscale & improve).',
+    to: '/datasets?section=add&panel=generate',
   },
   {
     id: '2026-08-08-start-comfyui-from-the-banner',
