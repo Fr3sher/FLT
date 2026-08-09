@@ -169,7 +169,7 @@ export const WHATS_NEW = [
       'Launching a second cloud training on a dataset that already had one was supposed to ask "launch anyway?" and go ahead if you said yes. The question never reached you: the refusal arrived as an error toast printing the question at you, with no way to answer it, so the second run was simply impossible however many times you tried. The confirmation now appears and the run starts when you accept. Nothing about what is allowed has changed — the guard, your fleet limit and your budget behave exactly as before; the answer you gave it was being thrown away. Reported by Arrow (Discord).',
   },
   {
-id: '2026-08-08-one-output-size-for-both-local-engines',
+    id: '2026-08-08-one-output-size-for-both-local-engines',
     date: '2026-08-08',
     title: 'Your generated shots are finally all the same size',
     blurb:
