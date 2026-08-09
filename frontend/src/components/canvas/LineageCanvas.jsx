@@ -2129,6 +2129,10 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
               ExternalLoraNodes.jsx for the popover and the node cards. */}
           <button type="button" onClick={() => setExtPickerOpen((v) => !v)}
             aria-pressed={extPickerOpen}
+            /* The popover closes on a press anywhere else; this button is the
+               one exception, or the press would shut it and this click would
+               toggle it straight back open — leaving no way to close it here. */
+            data-canvas-ext-lora-toggle
             title="Add an external LoRA to the board"
             className={'flex h-10 items-center gap-1 rounded-md border px-2 sm:px-3 text-[0.6875rem] font-semibold lg:h-9 '
               + (extPickerOpen

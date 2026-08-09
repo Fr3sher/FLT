@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import KleinLoraCombobox, { useKleinGenerationLoras } from '../settings/KleinLoraCombobox';
 import { findLora } from '../../utils/kleinLoraOptions';
@@ -66,6 +66,35 @@ export function ExternalLoraAddFlow({ nodes = [], onNodesChange, family = 'zimag
   const { loras, loading, error, rescan, rescanning } = useKleinGenerationLoras(family);
   const [pickText, setPickText] = useState('');
 
+  /* Closing, the three ways every other Canvas popover closes (CanvasFilterMenu
+     wrote the rule): the ✕, Escape, and a press anywhere else. This one had
+     only the ✕ — and the ✕ did not work either, see `data-canvas-control`
+     below. `pointerdown` in the CAPTURE phase, like the filter menus, so a
+     press that starts inside and drifts out is not read as "away"; the toolbar
+     button that opened this is exempt, or its own click would toggle the
+     popover straight back open and it could never be shut with it. */
+  useEffect(() => {
+    const onDown = (e) => {
+      if (e.target?.closest?.('.lds-extlora-add, [data-canvas-ext-lora-toggle]')) return;
+      onClose?.();
+    };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      // An open suggestion list owns the first Escape — closing the whole
+      // popover from under a dropdown the user was only dismissing would
+      // throw the typed path away with it. The second Escape lands here.
+      if (e.target?.closest?.('[role="combobox"][aria-expanded="true"]')) return;
+      e.stopPropagation();
+      onClose?.();
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [onClose]);
+
   const addNode = useCallback(() => {
     const filename = pickText.trim();
     if (!filename || nodes.length >= MAX_EXTERNAL_LORAS) return;
@@ -84,7 +113,17 @@ export function ExternalLoraAddFlow({ nodes = [], onNodesChange, family = 'zimag
 
   if (typeof document === 'undefined') return null;
   return createPortal(
-    <div className="fixed right-2 top-16 z-50 w-[min(20rem,calc(100vw-1rem))] rounded-lg border border-border bg-surface-overlay p-2 shadow-xl">
+    /* 🩹 `data-canvas-control` — the board's documented opt-out, and the reason
+       the ✕ (and the ↻, and Add to board) did nothing at all. This popover is
+       PORTALLED to <body>, but a React portal still bubbles its events up the
+       REACT tree, and that tree runs through the canvas frame: the frame's
+       onPointerDown saw the press, found no control marker on it, and took
+       pointer capture to start a pan. A captured pointer retargets the click
+       that follows to the frame, so the button never heard it — mouse and
+       finger alike. Third time this trap has been sprung (lane header 🪪,
+       group ✕); wearing the attribute is how a control opts out of it. */
+    <div data-canvas-control
+      className="lds-extlora-add fixed right-2 top-16 z-50 w-[min(20rem,calc(100vw-1rem))] rounded-lg border border-border bg-surface-overlay p-2 shadow-xl">
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[0.6875rem] font-semibold text-content">
           <span aria-hidden>🔌</span> Add an external LoRA
