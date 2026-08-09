@@ -58,6 +58,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-08-10-lightbox-keep-reject-shortcuts',
+    date: '2026-08-10',
+    title: 'Judge a dataset image while you are looking at it — K, R, S',
+    blurb:
+      'The full-screen view is where you can actually see whether a hand is right, but the ✓/✕ lived on the thumbnail behind it. It now carries the Bank review bar: ✓ Keep (K), ✕ Reject (R), ⏭ Skip (S or →), and each verdict moves you to the next picture as soon as it is saved. Same keys as ▶ Review in the Image Bank, same green and red, and the same status the grid writes — a chip beside the name says whether the image is kept, rejected or still undecided. ← still goes back without deciding anything, and nothing is ever deleted.',
+    to: '/datasets?section=images',
+  },
+  {
     id: '2026-08-09-canvas-pins-float-both-ways',
     date: '2026-08-09',
     title: 'Park a pinned picture below its lane without shoving the next dataset',
@@ -78,7 +86,7 @@ export const WHATS_NEW = [
     date: '2026-08-09',
     title: 'Grids and the board load in a blink',
     blurb:
-      'Every thumbnail surface — the Canvas board, the dataset grid, Test Studio result tiles, checkpoint pills and the run cards — used to download and decode your full-resolution images just to paint a small tile. They now ask for a right-sized WebP thumbnail instead: a board that pulled 47 MB of pictures fetches 0.4 MB, and off-screen tiles no longer load at all. Opening an image, downloading it or exporting the board still uses the full-quality original — and a pinned image now carries an HQ button that swaps its tile for the original file in place, one picture at a time, for when you are judging skin or fine text and a re-encode is not good enough.',
+      'Every thumbnail surface — the Canvas board, the dataset grid, Test Studio result tiles, checkpoint pills and the run cards — used to download and decode your full-resolution images just to paint a small tile. They now ask for a right-sized WebP thumbnail instead: a board that pulled 47 MB of pictures fetches 0.4 MB, and off-screen tiles no longer load at all. Opening an image, downloading it or exporting the board still uses the full-quality original — and a pinned image now carries an HQ button that swaps its tile for the original file in place, one picture at a time, for when you are judging skin or fine text and a re-encode is not good enough. A group of pinned images has the same HQ in its title bar, next to Export grid: one click puts the whole strip on its original files for a side-by-side comparison, and one more click gives the board its fast tiles back.',
     to: '/canvas',
   },
   {

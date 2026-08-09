@@ -12,8 +12,7 @@ import {
 } from '../utils/canvasFamilyFilter';
 import { toOverrideMap } from '../utils/canvasPlacement';
 import { pinWriteShortfall, toImageNodeMap, visibleImageNodes } from '../utils/canvasImageNodes';
-import { layoutImageNodes } from '../utils/canvasImageGroups';
-import { placeImageBatch, tidyGroupRows } from '../utils/canvasPinBatch';
+import { tidyLaneRows } from '../utils/canvasPinBatch';
 import { useToast } from '../components/common/Toast';
 import CanvasDatasetFilter from '../components/canvas/CanvasDatasetFilter';
 import LineageCanvas from '../components/canvas/LineageCanvas';
@@ -323,33 +322,15 @@ export default function CanvasPage() {
            A strip therefore comes home too. What the old rule was really
            protecting is untouched: only the ANCHOR's row is written, the strip
            is derived from it, and no membership is sent — so a tidy can move a
-           group but can never take one apart. */
-        const strips = tidyGroupRows({
-          graph, layout: layoutImageNodes(visibleImageNodes(map)),
-        });
-        for (const r of strips.rows) {
+           group but can never take one apart.
+
+           The strips and the loose pictures are placed by ONE function
+           (utils/canvasPinBatch.tidyLaneRows), which the lane STACK also asks
+           how much room to leave under this tree — otherwise the next dataset
+           starts straight through the band this is about to lay down. */
+        for (const r of tidyLaneRows({ graph, nodes: visibleImageNodes(map) }).rows) {
           lane[r.imageId] = { ...lane[r.imageId], x: r.x, y: r.y, w: r.w, h: r.h };
           rows.push({ image_id: r.imageId, x: r.x, y: r.y, w: r.w, h: r.h, visible: true });
-        }
-
-        const nodes = visibleImageNodes(map).filter((n) => !n.groupId);
-        if (nodes.length) {
-          const res = placeImageBatch({
-            graph,
-            // …and nothing may land ON one of those strips either — nor on the
-            // BAR above one, which is the group's only grip and carries its ✕.
-            // These are the footprints the strips ended up on, handed straight
-            // back by tidyGroupRows, so the two passes cannot disagree about
-            // what is free.
-            existing: strips.boxes,
-            images: nodes.map((n) => ({ id: n.imageId, dataset_id: id,
-              record_id: n.image?.record_id, step: n.image?.step })),
-            max: nodes.length,
-          });
-          for (const p of res.placed) {
-            lane[p.imageId] = { ...lane[p.imageId], x: p.x, y: p.y, w: p.w, h: p.h };
-            rows.push({ image_id: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h, visible: true });
-          }
         }
 
         next[id] = lane;

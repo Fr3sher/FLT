@@ -108,12 +108,16 @@ test('the placers are handed the reserved boxes, so Tidy up cannot create the ov
   assert.ok(reserved, 'layoutBoxes must report the group with its bar');
   // Both placement call sites go through the same helper — two answers to "how
   // much board does this take" is how they would drift apart again. ✦ Tidy up
-  // now asks it through `tidyGroupRows` (which brings a strayed strip home and
+  // asks it through `tidyGroupRows` (which brings a strayed strip home and
   // hands back the footprints it landed on, bar included — see
   // utils/canvasPinBatch.test.js), and feeds exactly those to the placer that
-  // puts the lone pictures down.
-  const page = read('pages/CanvasPage.jsx')
-  assert.match(page, /tidyGroupRows/)
-  assert.match(page, /existing:\s*strips\.boxes/)
+  // puts the lone pictures down. That sequence lives in `tidyLaneRows` because
+  // it has a SECOND caller: the lane stack, which has to reserve the room the
+  // tidy layout will need before the button is ever pressed.
+  const batch = read('utils/canvasPinBatch.js')
+  assert.match(batch, /tidyGroupRows/)
+  assert.match(batch, /existing:\s*strips\.boxes/)
+  assert.match(read('pages/CanvasPage.jsx'), /tidyLaneRows/)
+  assert.match(CANVAS, /tidyLaneReach/)
   assert.match(CANVAS, /layoutBoxes\(layoutImageNodes\(visibleImageNodes\(laneMap\)\)\)/)
 })

@@ -79,7 +79,7 @@ import { datasetThumbUrl, ratchetThumbSide } from '../../utils/datasetThumbUrl';
 
 function CanvasImageNode({ node, datasetId, laneName, onGeometry,
   onClose, onOpen, onDelete, boardScale = 1, variant = 'node', box = null,
-  blendNote = null, lastInGroup = false }) {
+  blendNote = null, lastInGroup = false, forceHq = false }) {
   const img = node.image || {};
   const stepLabel = img.step == null ? 'step unknown' : `step ${img.step}`;
   // The gallery payload publishes the value persisted on LoraTestImage as
@@ -128,6 +128,19 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
      and turning HQ on for the one picture you are squinting at never costs the
      other thirty-nine. */
   const [hq, setHq] = useState(false);
+  /* 🖼🖼 …and the same look taken at a whole STRIP at once (`forceHq`, from the
+     group's bar). Comparing eight checkpoints on one face means eight clicks on
+     eight little HQ buttons, at a zoom where they are counter-scaled to a
+     thumbnail — so the group offers ONE master toggle.
+
+     It OVERRIDES rather than broadcasts: turning the strip's HQ off gives every
+     picture back the choice it had before, instead of silently wiping the two
+     you had turned on by hand. That is why this is an `||` over a live prop and
+     not a setHq() the bar fires at its members.
+     ⚠️ The honest cost of that shape: while the strip forces HQ, pressing a
+     member's own HQ still records its choice but changes nothing on screen —
+     the override wins until it is lifted. Its title says so at that moment. */
+  const showHq = forceHq || hq;
   // The row's width budget is the row that is actually drawn: 🔍 ✕ ⬇ HQ, plus
   // 🗑 when a host wired it. Asking for five when four are rendered would
   // shrink the four for nothing.
@@ -309,17 +322,21 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
             immediately beside it. */}
         <button type="button" onClick={(e) => { e.stopPropagation(); setHq((v) => !v); }}
           data-testid="canvas-image-hq"
-          data-hq={hq ? 'true' : 'false'}
-          aria-pressed={hq}
-          title={hq
-            ? 'HQ is on — showing the original file. Click to go back to the fast tile'
-            : 'HQ — show this picture at full quality (the original file)'}
-          aria-label={hq
+          data-hq={showHq ? 'true' : 'false'}
+          data-hq-forced={forceHq ? 'true' : 'false'}
+          aria-pressed={showHq}
+          title={forceHq
+            ? 'HQ is on for the whole strip — use the group bar’s HQ to go back to '
+              + 'fast tiles'
+            : (hq
+              ? 'HQ is on — showing the original file. Click to go back to the fast tile'
+              : 'HQ — show this picture at full quality (the original file)')}
+          aria-label={showHq
             ? `Show the fast tile again for the image at ${imageLabel}`
             : `Show the image at ${imageLabel} at full quality`}
           className={'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border '
             + 'font-semibold transition-colors text-[0.5rem] leading-none '
-            + (hq
+            + (showHq
               ? 'border-indigo-300 bg-indigo-500/90 text-white'
               : 'border-white/15 bg-black/65 text-white hover:bg-black/70')}>HQ</button>
         {/* 🗑 Delete the PICTURE, not the node.
@@ -399,10 +416,11 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
             every frame of the drag. Full resolution stays one 🔍, one ⬇ or one
             board export away. `lazy` because a board is panned: the nodes
             off-screen right now cost nothing until they are scrolled to.
-            …unless HQ is on for THIS picture, in which case the original URL is
+            …unless HQ is on for THIS picture — or for the strip it belongs to,
+            from the group bar's own HQ — in which case the original URL is
             used verbatim — same box, same object-contain, so it simply becomes
             the sharpest thing that box can hold. */}
-        <img src={hq ? img.url : datasetThumbUrl(img.url, thumbSide)}
+        <img src={showHq ? img.url : datasetThumbUrl(img.url, thumbSide)}
           alt={`Generated at ${imageLabel}`}
           draggable={false} loading="lazy" decoding="async"
           className="h-full w-full select-none object-contain" />

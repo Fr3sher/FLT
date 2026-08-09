@@ -48,7 +48,7 @@ import CanvasImageNode from './CanvasImageNode';
    wide one. */
 
 function CanvasImageGroup({ group, datasetId, laneName, boardScale = 1,
-  onClose, onOpen, onDelete, dropHint = null, blendNotes = null }) {
+  onClose, onOpen, onDelete, dropHint = null, blendNotes = null, hq = false }) {
   const count = group.members.length;
   const anchorId = group.members[0]?.node.imageId;
   // The drag-out hint below is CHROME, not content: it must stay readable at
@@ -85,6 +85,13 @@ function CanvasImageGroup({ group, datasetId, laneName, boardScale = 1,
           // it does not draw itself. Without this the armed 🗑 landed on top of
           // the group's only size grip.
           lastInGroup={i === count - 1}
+          // 🖼🖼 One HQ for the whole strip. The state lives with the bar that
+          // carries the button (see LaneImages) rather than here, because the
+          // bar is drawn in a LAYER above the pictures and not inside this
+          // component — see the header of CanvasGroupBar for why. It reaches a
+          // member as an override, so switching it off gives each picture back
+          // its own HQ choice instead of wiping it.
+          forceHq={hq}
           onClose={onClose} onOpen={onOpen} onDelete={onDelete} boardScale={boardScale}
           blendNote={blendNotes?.get(m.node.imageId) || null} />
       ))}

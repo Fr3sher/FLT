@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { canRegenerateGeneric } from './improveRerun.js';
+import { REVIEW_SHORTCUT_HINT } from '../shared/reviewShortcuts.js';
 
 const lightbox = readFileSync(new URL('./DatasetLightbox.jsx', import.meta.url), 'utf8');
 const workspace = readFileSync(new URL('./DatasetWorkspace.jsx', import.meta.url), 'utf8');
@@ -79,7 +80,7 @@ test('any dataset image can be inspected next to the reference photo', () => {
   // id-STAMPED per-image slot, not in a useState of its own: that is what makes
   // ⟩ leave the comparison behind with the image it belonged to, instead of
   // carrying an "Original" pane onto a picture whose parent is someone else's.
-  assert.match(lightbox, /full, compareMode, improving, actionsOpen,\n  \} = lightboxImageState\(/);
+  assert.match(lightbox, /full, compareMode, improving, actionsOpen, deciding,\n  \} = lightboxImageState\(/);
   assert.doesNotMatch(lightbox, /useState\((true|false|'none')\)/);
   assert.match(lightbox,
     /patchImageState\(\{\s*full: false,\s*compareMode: compareMode === mode \? 'none' : mode,/);
@@ -94,6 +95,59 @@ test('any dataset image can be inspected next to the reference photo', () => {
   // A reference recorded without a usable file states why, like the other mode.
   assert.match(lightbox, /refCompare && !refCompare\.available/);
   assert.match(lightbox, /\{refCompare\.reason\}/);
+});
+
+/* The dataset lightbox is where a picture is actually LOOKED at, and until now
+   the only thing it could not do there was judge it: the verdict had to be taken
+   on the thumbnail behind the overlay. It now offers the Bank's review bar —
+   same three verdicts, same glyphs, same keys — wired to the dataset's OWN
+   status. node --test cannot render JSX, so the wiring is pinned as text; the
+   keyboard grammar itself is unit-tested in shared/reviewShortcuts.test.js. */
+test('the dataset lightbox offers Keep / Reject / Skip on the Bank keys', () => {
+  assert.match(lightbox, /✓ Keep<ShortcutKey>K<\/ShortcutKey>/);
+  assert.match(lightbox, /✕ Reject<ShortcutKey>R<\/ShortcutKey>/);
+  assert.match(lightbox, /⏭ Skip<ShortcutKey>S<\/ShortcutKey>/);
+  // The grammar is READ, never re-decided here — that is what stops the two
+  // review surfaces from drifting apart one refactor at a time.
+  assert.match(lightbox, /from '\.\.\/shared\/reviewShortcuts'/);
+  assert.match(lightbox, /const action = reviewKeyAction\(e\)/);
+  assert.match(lightbox, /action === 'keep' \|\| action === 'reject'/);
+  assert.match(lightbox, /decide\(action\)/);
+  // K/R are the SAME status words the grid tile writes — no second notion of
+  // "kept" for captioning, export and training to disagree with.
+  assert.match(lightbox, /await onStatus\(imageId, status\)/);
+  assert.match(workspace, /onStatus=\{viewImgLive\._rescueReviewPreview \? null : ds\.setStatus\}/);
+  // Printed, not folklore — from the same constant the handler is built on.
+  assert.match(lightbox, /\{REVIEW_SHORTCUT_HINT\} · ← → move without deciding · Esc close/);
+  assert.equal(REVIEW_SHORTCUT_HINT, 'K keep · R reject · S skip');
+});
+
+test('a verdict advances only once the write has landed, and skip touches nothing', () => {
+  const decide = lightbox.match(/const decide = useCallback\(([\s\S]*?)\n  \}, \[/)[1];
+  // The move is INSIDE the try, after the await: advancing first and posting
+  // afterwards is how a decision is silently dropped on a slow disk.
+  assert.match(decide, /await onStatus\(imageId, status\);\s*\n[\s\S]*?if \(after && onNavigate\) onNavigate\(after\)/);
+  // The next image is captured BEFORE the write — refreshing under a status
+  // filter can retire this very image from the shown list.
+  assert.match(decide, /const after = nextImage;[\s\S]*await onStatus/);
+  // A second K while the first is in flight must not fire a second write.
+  assert.match(decide, /if \(!onStatus \|\| deciding \|\| busy \|\| imageId == null\) return/);
+  // ⏭ Skip is nothing but "next": no status call anywhere in it.
+  const skip = lightbox.match(/const skipImage = useCallback\(([\s\S]*?)\n  \}, \[/)[1];
+  assert.doesNotMatch(skip, /onStatus/);
+  assert.match(skip, /onNavigate\(nextImage\)/);
+});
+
+test('the lightbox says which verdict the image already carries', () => {
+  // Three buttons that also CHANGE the state cannot be the only reading of it —
+  // "did my K land?" is otherwise unanswerable on the last image of a list.
+  assert.match(lightbox, /keep: \{ text: '✓ kept'/);
+  assert.match(lightbox, /reject: \{ text: '✕ rejected'/);
+  assert.match(lightbox, /pending: \{ text: '· undecided'/);
+  assert.match(lightbox, /VERDICT_CHIP\[img\.status\]/);
+  // Same green/red as the Bank's review chips: one colour code across the app.
+  assert.match(lightbox, /bg-emerald-500\/25 text-emerald-200/);
+  assert.match(lightbox, /bg-rose-500\/25 text-rose-200/);
 });
 
 test('workspace hands the lightbox the reference photo and its own nonce', () => {

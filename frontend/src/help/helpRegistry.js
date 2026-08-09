@@ -1028,7 +1028,12 @@ const TOPICS = [
      'my images merged', 'two images became one', 'images stuck together',
      'ungroup', 'split a group', 'take an image out of the group',
      'undo a group', 'move a group of images', 'resize a group',
-     'close a whole group', 'which x closes which image'],
+     'close a whole group', 'which x closes which image',
+     // The strip's own HQ. Somebody comparing eight renders asks for the whole
+     // strip, not for one picture — and the per-picture wording above would
+     // send them clicking eight buttons.
+     'hq for the whole group', 'full quality for every image in the strip',
+     'all the images in high quality', 'group hq'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-deploy-state', 'Which checkpoints are deployed (the edge colour)',
     ['deployed', 'not deployed', 'blue bar', 'dashed bar', 'edge colour', 'legend',
@@ -1861,6 +1866,19 @@ const TOPICS = [
      'counter', 'first image', 'last image', 'wrap', 'loop', 'end of the list',
      'crosses pages', 'page', 'filters', 'sort'],
     '/datasets?section=images', 'using-the-app', 'move-through-a-dataset-without-closing-the-image'),
+  // ✓ Keep / ✕ Reject / ⏭ Skip in the dataset lightbox — the Bank's review bar,
+  // on the same K/R/S. Its own topic because the questions it raises are not the
+  // arrows': does K delete anything, is it the same ✓ as the tile's, and why did
+  // the picture move on by itself.
+  action('action-lightbox-keep-reject', 'Keep or reject an image without leaving the picture',
+    ['keep', 'reject', 'skip', 'verdict', 'decide', 'decision', 'judge', 'triage',
+     'curate', 'curation', 'review', 'review one by one', 'one by one', 'fast',
+     'k', 'r', 's', 'shortcut', 'shortcuts', 'keyboard', 'hotkey', 'key',
+     'lightbox', 'full screen', 'fullscreen', 'inspect', 'zoom', 'grid',
+     'tick', 'cross', 'green', 'red', 'undecided', 'pending', 'status',
+     'moves on', 'next image by itself', 'auto advance', 'advance',
+     'does it delete', 'delete', 'undo', 'take it back', 'same as the tile'],
+    '/datasets?section=images', 'using-the-app', 'keep-or-reject-a-dataset-image-without-leaving-the-picture'),
   // ☰ Actions — the one button the whole action list moves behind on a phone.
   // Its own topic because the question it raises is "where did Crop go?", which
   // no other topic answers: the buttons are not hidden, they are one tap away,

@@ -7,7 +7,7 @@ import {
 } from '../../utils/canvasLayout';
 import { applyPlacement, pinSnapshot, toOverrideMap } from '../../utils/canvasPlacement';
 import {
-  clampImageBox, defaultImageSpot, imageNodeEdges, imageNodeExtent,
+  clampImageBox, defaultImageSpot, imageNodeEdges,
   openGeometry, visibleImageNodes,
 } from '../../utils/canvasImageNodes';
 import {
@@ -48,7 +48,7 @@ import { isNodeControlTarget, nodePointerIntent } from '../../utils/canvasNodeCh
 import { showsZoomLabels, zoomLabelScale, zoomLabelText } from '../../utils/canvasZoomLegibility';
 import {
   pinBatchAnnouncement, pinBatchPendingAcrossLanes, placeImageBatch,
-  groupPinnedBatchBySource, groupPinnedBatchTogether,
+  groupPinnedBatchBySource, groupPinnedBatchTogether, laneStackEntries,
 } from '../../utils/canvasPinBatch';
 import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
 import { galleryDeleteSummary } from '../../utils/gallerySelection';
@@ -309,6 +309,23 @@ const LaneGraph = memo(function LaneGraph({ lane, isLit, onHover, onNodeClick, d
  *  well outside the tree's box and the tree's <svg> is sized to the tree. */
 const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onDelete, onCloseGroup,
   onExportGrid, boardScale, hint, blendNotes }) {
+  /* 🖼🖼 Which STRIPS are showing their originals instead of their tiles.
+     Held here, by group id, and deliberately not inside CanvasImageGroup: the
+     button that flips it lives in CanvasGroupBar, which is drawn in a separate
+     LAYER above every picture (see that file's header) and is therefore a
+     SIBLING of the group, not a child of it. This is the nearest node that owns
+     both. Not persisted, like every HQ on this board.
+     A group id that leaves the board (the strip was dissolved or closed) simply
+     stops being read — a stale key here costs nothing and a sweep on every
+     layout change would cost a render. */
+  const [hqGroups, setHqGroups] = useState(() => new Set());
+  const toggleGroupHq = useCallback((g) => {
+    setHqGroups((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(g.groupId)) next.add(g.groupId);
+      return next;
+    });
+  }, []);
   if (!layout.length) return null;
   /* Edges are drawn from where each picture actually IS — a member's slot in
      its strip, not the box it remembers while it waits to leave one.
@@ -330,6 +347,7 @@ const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose,
           laneName={lane.name} onClose={onClose} onOpen={onOpen} onDelete={onDelete}
           boardScale={boardScale}
           blendNotes={blendNotes}
+          hq={hqGroups.has(r.groupId)}
           dropHint={hint?.leaving && hint.groupId === r.groupId ? 'leaving' : null} />
       ) : (
         <CanvasImageNode key={r.key} node={r.node} datasetId={lane.datasetId}
@@ -346,6 +364,7 @@ const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose,
       {layout.map((r) => (r.kind === 'group' ? (
         <CanvasGroupBar key={`bar:${r.key}`} group={r} datasetId={lane.datasetId}
           boardScale={boardScale}
+          hq={hqGroups.has(r.groupId)} onToggleHq={toggleGroupHq}
           onCloseGroup={onCloseGroup} onExportGrid={onExportGrid} />
       ) : null))}
       {/* ⊕ "Let go here and these become one node." Without it the very first
@@ -444,18 +463,28 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      that is only half yours -- and you find that out on the day you change
      desk. Geometry mid-gesture is an override on top, exactly like a card drag. */
   const [imgDrag, setImgDrag] = useState(null);   // {datasetId,imageId,x,y,w,h}
+  /* The lanes' COMMITTED rows — the board as it would come back from a reload,
+     with no gesture folded in. Split out from `imagesByLane` below because the
+     LANE STACK has to be measured on it and on nothing else: see
+     utils/canvasPinBatch.laneStackEntries for what went wrong when the stack
+     was measured on the in-flight list instead. */
+  const restingByLane = useMemo(() => {
+    const out = {};
+    for (const e of placed) out[e.datasetId] = visibleImageNodes(imageNodes?.[e.datasetId] || {});
+    return out;
+  }, [placed, imageNodes]);
   const imagesByLane = useMemo(() => {
+    if (!imgDrag) return restingByLane;
     const out = {};
     for (const e of placed) {
-      let list = visibleImageNodes(imageNodes?.[e.datasetId] || {});
-      if (imgDrag && imgDrag.datasetId === e.datasetId) {
-        list = list.map((n) => (n.imageId === imgDrag.imageId
-          ? { ...n, x: imgDrag.x, y: imgDrag.y, w: imgDrag.w, h: imgDrag.h } : n));
-      }
-      out[e.datasetId] = list;
+      const list = restingByLane[e.datasetId] || [];
+      out[e.datasetId] = imgDrag.datasetId === e.datasetId
+        ? list.map((n) => (n.imageId === imgDrag.imageId
+          ? { ...n, x: imgDrag.x, y: imgDrag.y, w: imgDrag.w, h: imgDrag.h } : n))
+        : list;
     }
     return out;
-  }, [placed, imageNodes, imgDrag]);
+  }, [placed, restingByLane, imgDrag]);
   const imagesRef = useRef(imagesByLane);
   useEffect(() => { imagesRef.current = imagesByLane; }, [imagesByLane]);
 
@@ -496,19 +525,20 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      reachable: a render dragged out of the row is still framed, exported and
      scrollable-to, it just no longer shoves anything.
      Measured on the STRIPS: a group is wider than any of its members and
-     cropping it would put a picture out of reach with no way back. */
-  const world = useMemo(() => stackLanes(placed.map((e) => {
-    const ext = imageNodeExtent(layoutBoxes(layoutByLane[e.datasetId] || []));
-    return {
-      ...e,
-      width: e.graph?.width || 0,
-      height: e.graph?.height || 0,
-      minX: ext.minX,
-      minY: ext.minY,
-      maxX: ext.width,
-      maxY: ext.height,
-    };
-  })), [placed, layoutByLane]);
+     cropping it would put a picture out of reach with no way back.
+
+     ⚠️ The stacking height is the tree OR THE TIDY REACH, whichever is taller
+     (utils/canvasPinBatch.tidyLaneReach) — not the tree alone. ✦ Tidy up lays a
+     lane's strips and its contact-sheet band BELOW the tree, so a stack that
+     reserved only the tree started the next dataset straight through them and
+     the button that rebuilds the board produced strips piled on strips and on
+     other lanes' run cards. That reserve is measured on the RESTING rows, never
+     on the gesture in flight — the reach is position-independent but not
+     membership-independent, and a picture on its way out of a strip changes the
+     membership on every frame. See utils/canvasPinBatch.laneStackEntries. */
+  const world = useMemo(() => stackLanes(laneStackEntries({
+    placed, layoutByLane, restingByLane,
+  })), [placed, layoutByLane, restingByLane]);
 
   /* 🔌 External LoRA plugin nodes: files pinned on the board (not produced by
      any run here) that, when checked, stack on top of the next generation.
