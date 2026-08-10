@@ -45,7 +45,8 @@ _INDEX_NAMES = frozenset(name[:-4] for name in _INDEX_ARRAYS)
 # has shape ``(1,)`` too; treating every first dimension equal to the image count
 # as row-aligned corrupts metadata whenever a one-image cache is subset.
 _ROW_ALIGNED_NAMES = frozenset((
-    'states', 'sigs', 'hashes', 'aes', 'nsfw', 'dets', 'bfracs', 'yaws', 'embs',
+    'states', 'sigs', 'hashes', 'aes', 'nsfw', 'dets', 'bfracs', 'yaws', 'bpx',
+    'embs',
 ))
 _MAX_WRITTEN_UNCOMPRESSED = 1024 * 1024 * 1024
 _WRITE_LOCKS = tuple(threading.Lock() for _ in range(64))

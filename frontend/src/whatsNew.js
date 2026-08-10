@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-10-group-by-person-smaller-faces',
+    date: '2026-08-10',
+    title: 'Group by person now recognises much smaller faces',
+    blurb:
+      'Point the Bank at a general photo library and most of it used to come back ungrouped: the pass only kept a face filling at least a quarter of the frame, so full-body shots, group photos and anything taken a few steps back were skipped as "face too small" and never joined their person. The size test is now a real measurement of the face in pixels rather than a share of the image, which is what identification actually depends on — the same head is the same head whether the photo is 1 or 24 megapixels. Faces below 64 pixels are still left out, because that is where the recognition itself stops being trustworthy and starts merging different people. Banks you already scanned keep their existing groups; photos you add from now on, and any bank scanned from here, use the new floor.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-10-sharpness-reads-the-sharpest-region',
     date: '2026-08-10',
     title: 'Bokeh portraits are no longer flagged as blurry',

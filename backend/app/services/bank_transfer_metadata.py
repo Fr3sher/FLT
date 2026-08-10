@@ -1233,7 +1233,12 @@ def load_runtime_cache_index(score_path=None, face_path=None, *, semantic_path=N
     z = _runtime_npz(face_path, wanted_paths=wanted_paths)
     face_required = {'paths', 'states', 'dets', 'bfracs', 'embs'}
     if (z is not None and face_required.issubset(z)
-            and set(z).issubset(face_required | {'yaws', 'sigs', 'hashes'})):
+            # 'bpx' (the face's pixel size, which the identity gate is taken on)
+            # is tolerated but not carried: an entry transferred to another bank
+            # lands legacy-shaped and keeps the verdict it already holds, which
+            # is exactly what a re-run would do with it anyway.
+            and set(z).issubset(
+                face_required | {'yaws', 'bpx', 'sigs', 'hashes'})):
         try:
             paths, states, dets, bfracs, embs = (z[k] for k in ('paths', 'states', 'dets', 'bfracs', 'embs'))
             yaws, sigs = z.get('yaws'), z.get('sigs')
