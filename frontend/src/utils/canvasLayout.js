@@ -151,34 +151,6 @@ export function fitView(world, viewport, { padding = 16 } = {}) {
   };
 }
 
-/**
- * The frame's own PREFERRED height, in px, for a board this size at this
- * available width — the number the frame's `height: clamp(MIN, preferred, MAX)`
- * CSS is built from (see LineageCanvas.jsx's `lds-canvas-frame`).
- *
- * Deliberately independent of the frame's own measured height: the frame's
- * WIDTH is `w-full` from its parent, so it never depends on what this function
- * returns, but the frame's height as CLAMPED by CSS obviously does — asking
- * this function for the frame's current clientHeight to compute a new height
- * would be circular.
- *
- * Same "never magnify past 1" rule as `fitView`/`initialView` — this is not a
- * new zoom policy, it is asking the existing one "how tall would the board
- * stand, unscaled or scaled down to fit the width, before Fit or panning ever
- * touch it?" A wide board is bound by its width exactly like `fitView`; the
- * frame then wraps ITS natural height instead of stretching past it to a
- * ceiling sized for content that was never there.
- */
-export function previewFrameHeight(world, availWidth, { padding = 16 } = {}) {
-  const ww = Math.max(0, Number(world?.width) || 0);
-  const wh = Math.max(0, Number(world?.height) || 0);
-  const aw = Math.max(0, Number(availWidth) || 0);
-  if (!ww || !wh || !aw) return 0;                 // unmeasured -> CSS keeps its ceiling
-  const availW = Math.max(1, aw - padding * 2);
-  const scale = clampScale(Math.min(1, availW / ww));
-  return wh * scale + padding * 2;
-}
-
 // The smallest scale the board is allowed to OPEN at. A true fit is the right
 // answer for the Fit button, but not for a first paint on a phone: a board of
 // three datasets fits a 400-px frame at ~35 %, where a run card is four pixels

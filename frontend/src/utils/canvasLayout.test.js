@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   INITIAL_MIN_SCALE, LANE_GAP, LANE_HEADER_H, MAX_SCALE, MIN_SCALE,
   clampScale, clampView, fitView, initialView, panBy, pinchCenter, pinchDistance,
-  previewFrameHeight, stackLanes, toWorld, viewTransform, zoomAt,
+  stackLanes, toWorld, viewTransform, zoomAt,
 } from './canvasLayout.js';
 
 // ---- stackLanes ------------------------------------------------------------
@@ -222,42 +222,6 @@ test('an empty board or an unmeasured frame answers a safe identity view', () =>
     assert.equal(v.scale, 1);
     assert.ok(Number.isFinite(v.tx) && Number.isFinite(v.ty));
   }
-});
-
-// ---- previewFrameHeight -----------------------------------------------------
-
-test('a board narrower than the frame previews at its own natural height', () => {
-  // No width-binding here: 700 < 1000, so scale is 1 and the preview is just
-  // the content plus the padding on both edges.
-  const h = previewFrameHeight({ width: 700, height: 300 }, 1000, { padding: 16 });
-  assert.equal(h, 300 + 32);
-});
-
-test('a board wider than the frame is bound by width, never magnified past 1', () => {
-  // Same rule fitView/initialView already enforce, asked the opposite question:
-  // not "what scale fits this height" but "how tall does the board stand once
-  // its WIDTH is fit" — width is the only axis previewFrameHeight can see.
-  const wide = { width: 2000, height: 400 };
-  const h = previewFrameHeight(wide, 1000, { padding: 16 });
-  const expectedScale = (1000 - 32) / 2000;
-  assert.equal(h, 400 * expectedScale + 32);
-  assert.ok(h < 400 + 32, 'a wide board previews SHORTER than its raw content height');
-});
-
-test('an unmeasured board or frame previews as 0, not a division by zero', () => {
-  assert.equal(previewFrameHeight({ width: 0, height: 0 }, 1000), 0);
-  assert.equal(previewFrameHeight(null, 1000), 0);
-  assert.equal(previewFrameHeight({ width: 500, height: 300 }, 0), 0);
-});
-
-test('a sparse one-lane board previews far short of the old fixed ceiling', () => {
-  // The actual measurement that drove the product call: a one-lane board on a
-  // 1336-px-wide desktop frame (1400 minus the frame's own border/padding)
-  // used to open under a 684-px (76vh of 900) ceiling regardless of content.
-  const oneLane = stackLanes([{ datasetId: 1, width: 900, height: 260 }]);
-  const h = previewFrameHeight(oneLane, 1336, { padding: 16 });
-  assert.ok(h < 350, `expected a sparse board to preview well under the ceiling, got ${h}`);
-  assert.ok(h < 684 / 2, 'and specifically well under half the old 76vh-of-900 ceiling');
 });
 
 // ---- initialView -----------------------------------------------------------

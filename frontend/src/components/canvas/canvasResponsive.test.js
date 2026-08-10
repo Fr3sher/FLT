@@ -200,33 +200,50 @@ test('a run in flight is announced once on a phone, and Stop stays reachable', (
   assert.match(canvas, /const runPhase = describeCanvasRun\(tracker\.run\.data\)\.phase;/);
 });
 
-/* …and the frame itself gives back the last 5vh, so the WHOLE board — bottom
-   edge included — is on screen at 400×800 rather than hanging under the fold.
-   A board whose bottom you have to scroll the page to reach is a board whose
-   pan gesture competes with the page's scroll. */
-test('the board frame fits the fold on a phone and is unchanged from sm up', () => {
-  // 60vh was the height left AFTER ~290 px of chrome — the zoom row, the colour
-  // key, the gestures sheet, the run tracker and the dataset filter, all stacked
-  // above the frame at 400 px. Every one of them now floats ON the board, so the
-  // frame takes that space back: the number went up because the reason it was
-  // small went away. Still short of the fold, which is the actual contract —
-  // a board whose bottom edge you have to scroll to is a board whose pan gesture
-  // fights the page's, and it is what makes ✦ Fit mean anything.
-  //
-  // 72vh/76vh stayed the CEILING (still in this pin, as the third `clamp()`
-  // argument) once the frame became adaptive: a board that fills the frame
-  // still gets exactly the same space it always did, so the fold contract
-  // above still holds verbatim. What changed — a product call, after
-  // `previewFrameHeight` showed a one-lane board opening with ~370 px of
-  // empty canvas above the pill — is that a SPARSE board is now allowed to
-  // shrink the frame down to its own content height, floored at 40vh (44 from
-  // `sm`) and never below the original 380px phone floor either.
-  assert.match(canvas, /h-\[clamp\(max\(40vh,380px\),var\(--canvas-content-h,72vh\),72vh\)\][^"]*sm:h-\[clamp\(max\(44vh,380px\),var\(--canvas-content-h,76vh\),76vh\)\]/);
+/* …and the frame takes the WHOLE fold, once, and then stops moving.
+
+   Three heights have now been tried on this frame and only the third answers
+   both halves of the complaint. `60vh`, then `72vh/76vh`, left dead page under
+   the board on a desktop. `clamp(floor, --canvas-content-h, ceiling)` — the
+   frame sized to its CONTENT, which shipped for a single day — fixed the dead
+   strip and bought a worse problem: an elastic canvas. ✦ Tidy up compacted the
+   board and the frame snapped shut around it, cutting cards off at the zoom the
+   user was on; dragging a node downwards inflated the frame live under the
+   hand.
+
+   So: no `vh` and no content term. `flex-1 min-h-0` in a one-viewport-tall
+   column (App.jsx pins the `/canvas` shell, CanvasPage the page root) — the
+   fold contract holds by CONSTRUCTION rather than by a fraction that had to be
+   re-measured every time the chrome above changed, and the frame is now the
+   most room there is on the screen. */
+test('the board frame is fixed and fills the fold, with no content term left', () => {
+  // Fills what is left of the viewport, floors at 320px, and no longer carries
+  // a height of its own at any breakpoint.
+  assert.match(canvas, /className="lds-canvas-frame relative isolate z-0 min-h-\[320px\] w-full flex-1 /);
+  assert.doesNotMatch(canvas, /--canvas-content-h/);
+  assert.doesNotMatch(canvas, /previewFrameHeight/);
+  const frameClass = canvas.slice(canvas.indexOf('className="lds-canvas-frame'));
+  assert.doesNotMatch(frameClass.slice(0, frameClass.indexOf('"', 11)), /vh\]/);
+  // The column the frame stretches inside: `min-h-0` is the load-bearing half —
+  // without it a flex child refuses to shrink below its content and the PAGE
+  // scrolls instead of the board.
+  assert.match(canvas, /className="lds-canvas-stage relative flex min-h-0 flex-1 flex-col"/);
   // The overlays must stay SIBLINGS of the frame, never children: the frame owns
   // the pointer handlers and `touch-none`, so a control nested inside it would
   // hand every tap to the board underneath.
   assert.match(canvas, /pointer-events-none absolute inset-x-0 top-0 z-20/);
   assert.match(canvas, /pointer-events-none absolute inset-x-0 bottom-0 z-20/);
+});
+
+/* ✦ Tidy up compacts the board on purpose, and it is only reachable from a
+   board the user has ARRANGED — so the auto-fit is switched off at exactly the
+   moment the framing stops matching the content. It has to re-frame itself. */
+test('✦ Tidy up re-fits the board it just compacted', () => {
+  assert.match(canvas, /onClick=\{handleTidyUp\}/);
+  assert.match(canvas, /refitAfterTidy\.current = true;\s*\n\s*onTidyUp\?\.\(\);/);
+  // Deferred: the parent still holds the OLD positions at click time, so the
+  // fit has to land on the next world, not this render's.
+  assert.match(canvas, /if \(!refitAfterTidy\.current\) return;[^]{0,400}setView\(fitView\(world, viewport\)\);/);
 });
 
 /* The 🎨 Generate chip carries the pick count, which is what makes closing the

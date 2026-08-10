@@ -101,7 +101,12 @@ test('the canvas disambiguates the touch gesture with a long press', () => {
 test('✦ Tidy up exists and is wired to the page, not to a local reset', () => {
   const page = fs.readFileSync(new URL('../../pages/CanvasPage.jsx', import.meta.url), 'utf8');
   assert.match(canvas, /Tidy up/);
-  assert.match(canvas, /onClick=\{onTidyUp\}/);
+  // Through `handleTidyUp` since the frame stopped resizing itself: the button
+  // arms a re-fit and then delegates, unchanged, to the page's handler. What is
+  // pinned is that the page still owns the RESET — the local wrapper adds a
+  // view decision on top of it and nothing else.
+  assert.match(canvas, /onClick=\{handleTidyUp\}/);
+  assert.match(canvas, /const handleTidyUp = useCallback\(\(\) => \{[^]{0,200}onTidyUp\?\.\(\);/);
   // It clears the SERVER's memory of the lane; a client-only reset would come
   // back on the next reload.
   assert.match(page, /del\(`\/api\/dataset\/\$\{id\}\/canvas\/positions`\)/);
