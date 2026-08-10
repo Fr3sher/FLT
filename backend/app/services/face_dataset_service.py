@@ -7239,7 +7239,8 @@ def _enforce_concept_omission(caption, leak_re, image_bytes, concept_desc, descr
 
 
 def _caption_concept(ds, force, backend, token=None, image_ids=None,
-                     ollama_model=None, extra_instructions='', report=None):
+                     ollama_model=None, extra_instructions='', report=None,
+                     outcome=None):
     """Concept caption pipeline (INVERTED logic): describe everything INCLUDING identity
     but OMIT the recurring act so it binds to the trigger. JoyCaption is literal (it NAMES
     the act/fluids/watermark) -> its drafts are REFINED by Qwen, then every caption passes
@@ -7279,6 +7280,7 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
     # 1) JoyCaption batch (draft) when the backend allows it.
     if backend in ('auto', 'joycaption'):
         jc = {}
+        jc_errors = {}
         try:
             from .joycaption import caption_images_joycaption, is_available
             if is_available():
@@ -7286,7 +7288,8 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                     token, detail=f'Loading JoyCaption model and captioning {len(todo)} images…')
                 jc = caption_images_joycaption(
                     [p for _, p in todo], prompt=cap_prompt, activity_token=token,
-                    should_cancel=lambda: dataset_activity.cancel_requested(ds.id))
+                    should_cancel=lambda: dataset_activity.cancel_requested(ds.id),
+                    errors_out=jc_errors)
             elif backend == 'joycaption':
                 raise RuntimeError('JoyCaption backend is not available - check the ai-toolkit folder in Settings')
         except RuntimeError:
@@ -7304,6 +7307,17 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
     # 2a) Backend 'joycaption' forced: no Qwen. Store Joy drafts scrubbed mechanically
     #     (leak_re from the desc words only) - respects "no Ollama fallback".
     if backend == 'joycaption':
+        # The images JoyCaption refused are HANDLED — nothing else in this run will
+        # look at them, because forcing the backend is exactly the promise that no
+        # Ollama pass follows. Counting them here is what keeps the indicator from
+        # freezing short of the total on a pass that is actually finished; the same
+        # freeze was reported on the main lane and fixed there (see caption_images).
+        if remaining:
+            dataset_activity.bump(token, len(remaining))
+            _record_caption_skips(outcome, remaining, jc_errors)
+            logger.info('caption concept: %d image(s) refused by JoyCaption, first '
+                        'reason: %s', len(remaining),
+                        _first_caption_skip_reason(remaining, jc_errors))
         leak_re = _concept_terms_re(_fallback_concept_terms(concept_desc))
         for image_id, p, joycap in refine_targets:
             if dataset_activity.cancel_requested(ds.id):
@@ -7535,7 +7549,8 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
         try:
             n = _caption_concept(ds, force, backend, token=token, image_ids=ids,
                                  ollama_model=ollama_model,
-                                 extra_instructions=extra_instructions, report=report)
+                                 extra_instructions=extra_instructions, report=report,
+                                 outcome=outcome)
             logger.info('captioning finished: dataset=%s backend=%s captioned=%s elapsed=%.1fs',
                         dataset_id, backend, n, time.monotonic() - started)
             return n

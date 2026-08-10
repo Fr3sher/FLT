@@ -286,3 +286,67 @@ def test_a_pass_that_refused_nothing_reports_no_skips(app, monkeypatch):
             lambda paths, errors_out=None, **kw: {p: 'a caption' for p in paths})
         assert svc.caption_images(LOCAL_USER, dataset.id, outcome=outcome) == 2
     assert outcome == {}
+
+
+def _concept_dataset_with_kept_images(svc, local_user, count):
+    """The same fixture, for a CONCEPT dataset — a different pipeline entirely
+    (`_caption_concept`), which is why it needs its own coverage."""
+    import io as _io
+    import os
+    from PIL import Image
+    from app.models import FaceDatasetImage
+
+    buf = _io.BytesIO()
+    Image.new('RGB', (16, 12), (20, 30, 40)).save(buf, 'PNG')
+    dataset = svc.create_dataset(local_user, 'SkipConcept', 'skipconcept',
+                                 kind='concept', concept_desc='a recurring pose')
+    directory = svc._dataset_dir(dataset.id)
+    os.makedirs(directory, exist_ok=True)
+    for index in range(count):
+        name = f'kept{index}.webp'
+        with open(os.path.join(directory, name), 'wb') as handle:
+            handle.write(buf.getvalue())
+        svc.db.session.add(FaceDatasetImage(
+            dataset_id=dataset.id, source='import', status='keep',
+            filename=name, framing='face'))
+    svc.db.session.commit()
+    return dataset
+
+
+def test_a_forced_concept_pass_counts_what_joycaption_refused(app, monkeypatch):
+    """The CONCEPT pipeline is a second lane with the same shape and the same hole:
+    forcing JoyCaption means no Qwen pass follows, so a refused image is finished —
+    and it advanced neither the indicator nor the report. Fixed on the main lane
+    first; this pins the concept one so the two cannot drift apart again."""
+    from app.services import face_dataset_service as svc
+    from app.services import dataset_activity as da
+    import app.services.joycaption as jc_mod
+    from app.config import LOCAL_USER, save_config
+
+    final = {}
+    real_end = da.end
+
+    def _capture_end(token):
+        entry = da.get(da._dsid_of(token))
+        if entry:
+            final.update(entry)
+        return real_end(token)
+
+    monkeypatch.setattr(da, 'end', _capture_end)
+    outcome: dict = {}
+    with app.app_context():
+        save_config({'captioning': {'backend': 'joycaption'}})
+        dataset = _concept_dataset_with_kept_images(svc, LOCAL_USER, 3)
+        monkeypatch.setattr(jc_mod, 'is_available', lambda: True)
+
+        def _caption(paths, errors_out=None, **kwargs):
+            if errors_out is not None:
+                for refused in paths[1:]:
+                    errors_out[refused] = REFUSAL
+            return {paths[0]: 'a joycaption draft'}
+
+        monkeypatch.setattr(jc_mod, 'caption_images_joycaption', _caption)
+        assert svc.caption_images(LOCAL_USER, dataset.id, outcome=outcome) == 1
+
+    assert final.get('done') == final.get('total') == 3
+    assert outcome == {'skipped': 2, 'skipped_reason': REFUSAL}
