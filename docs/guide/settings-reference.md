@@ -646,7 +646,7 @@ with **no rescan**. (The two exceptions are noted below.)
 > save, and groups the controls by intent. See
 > *Using the app → Tune the Bank filter thresholds*.
 
-- **Sharpness minimum** → `bank.sharpness_min`. Variance of the Laplacian (the classic focus measure) under this = flagged **🌫 blurry**. Default **`100`**. Raise it to be stricter about focus, lower it if artistic soft shots get flagged.
+- **Sharpness minimum** → `bank.sharpness_min`. Variance of the Laplacian (the classic focus measure) under this = flagged **🌫 blurry**. Default **`100`**. Raise it to be stricter about focus, lower it if artistic soft shots get flagged. Measured **region by region**, and the score kept is that of the sharpest regions — so a bokeh portrait (sharp subject, creamy background) is not flagged just because most of the frame is deliberately out of focus. A bank scanned before that change carries the old whole-frame scores, which are lower: re-run the Quality pass on it to compare like with like.
 - **Noise maximum** → `bank.noise_max`. High-frequency residual (RMS vs a Gaussian blur) over this = flagged **📺 noisy**. Default **`15`**. Heavily textured images (foliage, fabric) score high by nature — this is a flag to review, not a verdict.
 - **Uniformity minimum** → `bank.uniformity_min`. Grayscale spread under this = flagged **⬜ flat** (solid colors, black frames, empty screenshots). Default **`12`**.
 - **Minimum side (px)** → `bank.min_side`. Smaller image side under this = flagged **📐 small**. Default **`768`** — the same bar as the dataset import guard, because trainers only ever *downscale*.

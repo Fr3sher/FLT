@@ -119,7 +119,7 @@ export const BANK_THRESHOLDS = [
     label: 'Sharpness minimum', unit: 'Laplacian variance',
     step: 10, min: 0, integer: false,
     catchesMoreWhen: 'raised', applies: 'instant',
-    hint: 'Laplacian variance under this is flagged 🌫 blurry. ~100 is the classic rule of thumb.',
+    hint: 'Laplacian variance of the image\'s SHARPEST regions under this is flagged 🌫 blurry — a bokeh subject on a soft background stays sharp. ~100 is the classic rule of thumb.',
   },
   {
     field: 'noise_max', group: 'quality', flag: 'noise',

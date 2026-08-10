@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-10-sharpness-reads-the-sharpest-region',
+    date: '2026-08-10',
+    title: 'Bokeh portraits are no longer flagged as blurry',
+    blurb:
+      'The 🌫 blurry flag measured focus across the whole frame, so a shot with a razor-sharp subject on a creamy out-of-focus background averaged out as soft — and the pictures you most wanted to keep were the ones getting flagged. Sharpness is now read region by region and scored on the sharpest parts of the image, so the flag means what it always should have: even the crispest area of this photo is soft. It also stops the reverse mistake, where one blazing block — a watermark, a compression artefact, a burnt highlight — vouched for an otherwise soft frame. Scores are on a new, higher scale; run the Quality pass again on an already-scanned bank to pick them up. Thanks to the community for reporting it.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-10-bank-pass-remembers-itself',
     date: '2026-08-10',
     title: 'Find crops & variants shows its work, and remembers running',

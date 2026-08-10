@@ -324,7 +324,7 @@ class BankImage(db.Model):
     # Quality pass (pure-PIL, CPU). quality_state: NULL = not scanned yet |
     # 'ok' | 'unreadable'. Scores are raw metric values (see image_quality.py).
     quality_state = db.Column(String(12), nullable=True)
-    blur_score = db.Column(Float, nullable=True)         # Laplacian variance (sharpness)
+    blur_score = db.Column(Float, nullable=True)         # Laplacian variance of the sharpest regions
     noise_score = db.Column(Float, nullable=True)        # residual std vs Gaussian blur
     uniformity_score = db.Column(Float, nullable=True)   # grayscale std (low = flat)
     dhash = db.Column(String(16), nullable=True)         # 64-bit hex, same dHash as imports

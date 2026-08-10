@@ -298,7 +298,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               value={config.bank?.sharpness_min ?? bankDefault('sharpness_min')}
               onChange={(e) => setField('bank', 'sharpness_min', parseFloat(e.target.value) || 0)}
               className={INPUT_CLASS} />
-            <p className="mt-0.5 text-xs text-content-muted">Laplacian variance under this = 🌫 blurry.</p>
+            <p className="mt-0.5 text-xs text-content-muted">Sharpest region under this = 🌫 blurry.</p>
             <ResetToDefault label="Sharpness minimum" section="bank" field="sharpness_min"
               config={config} configDefaults={configDefaults} setField={setField} />
           </div>
