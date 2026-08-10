@@ -1054,3 +1054,38 @@ test('without stackPlaced the entries are what they always were', () => {
   assert.deepEqual(withOut, withSame);
   assert.equal(withOut[0].height, GRAPH.height);
 });
+
+test('✦ Tidy up spends WIDTH, so a lane keeps its own height', () => {
+  /* The room a tidied lane needs under its tree is room the dataset below it
+     gets pushed away by — permanently, and whether or not the button is ever
+     pressed. Measured before this changed, on a 150-unit tree: one pinned
+     picture reserved 518 units and two reserved 862. Tidy up therefore lays its
+     strips and its contact sheet to the RIGHT, wrapping into a new column
+     rather than a seventh row. */
+  const graph = { nodes: [card(1, 22, 22, [1000])], edges: [], width: 700, height: 150 };
+  const pic = (id, i) => ({ imageId: id, x: 40 + i * 340, y: 900, w: 320, h: 320,
+    visible: true, image: { record_id: 1, step: 1000 * (i + 1) } });
+
+  const reachOf = (n) => tidyLaneReach({
+    graph, nodes: Array.from({ length: n }, (_, i) => pic(i + 1, i)),
+  });
+  assert.ok(reachOf(8) <= reachOf(1) + 1,
+    'the eighth picture made the lane taller — the band is still stacking down');
+  assert.ok(reachOf(4) < 500, `four pictures still reserve ${reachOf(4)} units`);
+
+  // …and they really are out to the RIGHT of the cards, not under them.
+  const rightOfCards = Math.max(...graph.nodes.map((n) => n.x + CARD_W));
+  const { rows } = tidyLaneRows({ graph, nodes: [pic(1, 0), pic(2, 1), pic(3, 2)] });
+  assert.ok(rows.every((r) => r.x >= rightOfCards),
+    'a tidied picture landed under the tree instead of beside it');
+});
+
+test('a fresh 📌 batch still hangs UNDER the lineage that made it', () => {
+  // The other half of the same decision: a contact sheet of a run's outputs
+  // reads under that run. Only ✦ Tidy up asks for the sideways layout.
+  const graph = { nodes: [card(1, 22, 22, [1000])], edges: [], width: 700, height: 150 };
+  const images = [1, 2, 3].map((i) => ({ id: i, record_id: 1, step: 1000 * i }));
+  const under = placeImageBatch({ graph, images, max: 3 });
+  assert.ok(under.placed.every((p) => p.y >= graph.height),
+    'the pin batch moved sideways — that is the tidy layout, not this one');
+});

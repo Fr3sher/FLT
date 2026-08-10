@@ -57,7 +57,8 @@ import {
 } from './canvasImageGroups.js';
 import { groupBarMaxHeight } from './canvasNodeChrome.js';
 import {
-  IMG_DEFAULT, IMG_MAX, IMG_MIN, imageNodeExtent, slideBelow, spotBesideCard,
+  IMG_DEFAULT, IMG_MAX, IMG_MIN, imageNodeExtent, slideBelow, slideRight,
+  spotBesideCard,
 } from './canvasImageNodes.js';
 
 /* How many pictures one click may put down. Not a technical limit — the band
@@ -471,7 +472,8 @@ export function pinBatchPendingAcrossLanes(candidates, lanes) {
  * Returns {size, placed, skipped}. `skipped` is never empty in silence — the
  * caller announces it (pinBatchAnnouncement).
  */
-export function placeImageBatch({ graph, existing, images, remembered, max } = {}) {
+export function placeImageBatch({ graph, existing, images, remembered, max,
+                                  beside = false } = {}) {
   const cap = Number.isFinite(max) ? Math.max(0, max) : PIN_BATCH_MAX;
   const all = (Array.isArray(images) ? images : []).filter((i) => i?.id != null);
 
@@ -503,10 +505,26 @@ export function placeImageBatch({ graph, existing, images, remembered, max } = {
 
   const band = taking.filter((i) => !bandBound.has(i.id));
   if (band.length) {
-    // The band starts below EVERYTHING already on the lane. That single line is
-    // what makes "no overlap" structural rather than searched for.
+    /* The band starts clear of EVERYTHING already on the lane. That single
+       measurement is what makes "no overlap" structural rather than searched
+       for — the only question is on which axis.
+
+       BELOW, for a fresh 📌 batch: the pictures read as a contact sheet hung
+       under the lineage that produced them, which is what they are.
+
+       BESIDE, for ✦ Tidy up: a lane stacks under the one above it, so anything
+       a tidied lane reaches DOWN is room the next dataset must be pushed away
+       by. Measured on a 150-unit tree, one pinned picture cost 518 units of
+       reserved board and two cost 862 — under every lane that had ever pinned
+       anything, pressed or not. Sideways costs nothing: the board pans that
+       way and no lane owns the space to its right. */
     let bandTop = 0;
-    for (const o of occupied) bandTop = Math.max(bandTop, o.y + o.h);
+    let bandLeft = 0;
+    for (const o of occupied) {
+      if (beside) bandLeft = Math.max(bandLeft, o.x + o.w);
+      else bandTop = Math.max(bandTop, o.y + o.h);
+    }
+    if (beside) bandLeft += BAND_GAP;
     // A current (run_id-bearing) batch will become one or more Canvas groups
     // immediately after this placement. Reserve the TALLEST possible group bar
     // now: it is drawn above the strip, and without this allowance the first
@@ -520,6 +538,15 @@ export function placeImageBatch({ graph, existing, images, remembered, max } = {
     // The same reservation between source rows prevents the bar of prompt N+1
     // from climbing into prompt N before the final cross-column reflow above.
     const rowH = size + TILE_GAP + futureGroupBar;
+    /* How tall a column may get before the next one starts. Six for a 📌 batch,
+       which is what a contact sheet under a lineage should read like.
+       For ✦ Tidy up it is however many rows fit BESIDE the tree, because a
+       seventh row there would make the lane taller than its own content and
+       push the dataset below it away by that much. One row minimum: a picture
+       taller than the whole tree still has to land somewhere. */
+    const rowsPerColumn = beside
+      ? Math.max(1, Math.floor((Number(graph?.height) || 0) / rowH))
+      : COLUMN_ROWS;
 
     // One group per source checkpoint, ordered by where that source sits on the
     // board (left to right, then top to bottom) so the band reads in the same
@@ -554,8 +581,9 @@ export function placeImageBatch({ graph, existing, images, remembered, max } = {
       let col = takeColumn(preferred);
       let row = 0;
       for (const image of group.images.sort(byTrainingOrder)) {
-        if (row >= COLUMN_ROWS) { col = takeColumn(col + 1); row = 0; }
-        const box = { x: col * colW, y: bandTop + row * rowH, w: size, h: size };
+        if (row >= rowsPerColumn) { col = takeColumn(col + 1); row = 0; }
+        const box = { x: bandLeft + col * colW, y: bandTop + row * rowH,
+          w: size, h: size };
         occupied.push(box);
         placed.push({ imageId: image.id, ...box, image });
         row += 1;
@@ -632,7 +660,10 @@ export function tidyGroupRows({ graph, layout, taken } = {}) {
     // What occupiedBox reserved ABOVE the pictures for the group's drag bar.
     const bar = footprint.h - strip.h;
     const at = spotBesideCard(graph, anchor.image?.record_id);
-    const spot = slideBelow({ ...at, w: footprint.w, h: footprint.h }, busy);
+    // Sideways, not down: see canvasImageNodes.slideRight — every unit a tidied
+    // lane reaches below its tree is a unit the next dataset gets pushed away
+    // by, in advance and for good.
+    const spot = slideRight({ ...at, w: footprint.w, h: footprint.h }, busy);
     const landed = { x: spot.x, y: spot.y, w: footprint.w, h: footprint.h };
     busy.push(landed);
     boxes.push(landed);
@@ -667,6 +698,7 @@ export function tidyLaneRows({ graph, nodes } = {}) {
   if (loose.length) {
     const res = placeImageBatch({
       graph,
+      beside: true,   // ✦ Tidy up spends width, never the next dataset's room
       // Nothing may land ON one of those strips either — nor on the BAR above
       // one, which is the group's only grip and carries its ✕. These are the
       // footprints the strips ended up on, so the two passes cannot disagree.
