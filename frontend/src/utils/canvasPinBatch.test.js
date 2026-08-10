@@ -1001,3 +1001,53 @@ test('the dragged picture still grows the BOX that ✦ Fit and 📷 Export frame
   assert.ok(world.height > still.height,
     'a picture dragged below its lane is still reachable, framed and exported');
 });
+
+test('dragging a RUN CARD down moves no dataset below it either', () => {
+  /* The report, in the user's words: "if I take a dataset node and drag it down,
+     all the dataset nodes below come down with it". A card drag is applied to
+     the lane's TREE, so `graph.height` grows under the hand — and the stack
+     advances by exactly that number. Measured here on lane tops, which is what
+     the user actually sees move. */
+  const placed = (h) => [
+    { datasetId: 1, graph: { ...GRAPH, height: h } },
+    { datasetId: 2, graph: GRAPH },
+    { datasetId: 3, graph: GRAPH },
+  ];
+  const resting = placed(GRAPH.height);
+  const laneTops = (live) => stackLanes(laneStackEntries({
+    placed: live, restingPlaced: resting,
+    layoutByLane: {}, restingByLane: {},
+  })).lanes.map((l) => l.graphY);
+
+  const atRest = laneTops(resting);
+  // Card #117 dragged 700 units down: the lane's own tree is that much taller
+  // for as long as the gesture lasts.
+  const midDrag = laneTops(placed(GRAPH.height + 700));
+
+  assert.deepEqual(midDrag, atRest,
+    'a dataset below moved while a card above was still under the hand');
+});
+
+test('the dragged run card still grows the BOX that ✦ Fit and 📷 Export frame', () => {
+  const resting = [{ datasetId: 1, graph: GRAPH }, { datasetId: 2, graph: GRAPH }];
+  const live = [
+    { datasetId: 1, graph: { ...GRAPH, height: GRAPH.height + 700 } },
+    { datasetId: 2, graph: GRAPH },
+  ];
+  const box = (p) => stackLanes(laneStackEntries({
+    placed: p, restingPlaced: resting, layoutByLane: {}, restingByLane: {},
+  })).height;
+  assert.ok(box(live) > box(resting),
+    'a card dragged below its lane must still be framed while it moves');
+});
+
+test('without restingPlaced the entries are what they always were', () => {
+  // A caller that never drags anything cannot tell this change happened.
+  const placed = [{ datasetId: 1, graph: GRAPH }];
+  const withOut = laneStackEntries({ placed, layoutByLane: {}, restingByLane: {} });
+  const withSame = laneStackEntries({
+    placed, restingPlaced: placed, layoutByLane: {}, restingByLane: {},
+  });
+  assert.deepEqual(withOut, withSame);
+  assert.equal(withOut[0].height, GRAPH.height);
+});

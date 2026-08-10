@@ -738,19 +738,39 @@ export function tidyLaneReach({ graph, nodes } = {}) {
  * that has genuinely left its strip is a membership change, so the lane really
  * does need a different amount of room for the button to have somewhere to put
  * it. What nothing may do is move a lane while the gesture is still in flight.
+ *
+ * ── …and the same rule for the RUN CARDS ────────────────────────────────────
+ * `restingPlaced` is the lane's committed TREE, for exactly the reason above:
+ * dragging a run card down grows `graph.height`, and `graph.height` is the
+ * number the stack advances by, so every dataset underneath slid down while the
+ * card was still under the hand. Reported as "if I take a dataset node and drag
+ * it down, all the dataset nodes below come down with it".
+ *
+ * The dragged card still has to be REACHED — ✦ Fit and 📷 Export must frame a
+ * card that is being moved — so the live graph's height feeds `maxY` instead,
+ * where it grows the board's box without ever advancing the stack. Omit
+ * `restingPlaced` and this behaves exactly as it did: the live graph is used for
+ * both, and a caller that never drags anything cannot tell the difference.
  */
-export function laneStackEntries({ placed, layoutByLane, restingByLane } = {}) {
+export function laneStackEntries({ placed, layoutByLane, restingByLane,
+                                   restingPlaced } = {}) {
+  const restingGraphs = new Map(
+    (Array.isArray(restingPlaced) ? restingPlaced : [])
+      .map((e) => [e?.datasetId, e?.graph]));
   return (Array.isArray(placed) ? placed : []).map((e) => {
     const ext = imageNodeExtent(layoutBoxes(layoutByLane?.[e.datasetId] || []));
     const tidy = tidyLaneReach({ graph: e.graph, nodes: restingByLane?.[e.datasetId] || [] });
+    const resting = restingGraphs.has(e.datasetId)
+      ? restingGraphs.get(e.datasetId) : e.graph;
+    const liveHeight = e.graph?.height || 0;
     return {
       ...e,
       width: e.graph?.width || 0,
-      height: Math.max(e.graph?.height || 0, tidy),
+      height: Math.max(resting?.height || 0, tidy),
       minX: ext.minX,
       minY: ext.minY,
       maxX: ext.width,
-      maxY: ext.height,
+      maxY: Math.max(ext.height, liveHeight),
     };
   });
 }
