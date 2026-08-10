@@ -2016,6 +2016,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     onOverrideChange={setNotReadyAck} />
                 )}
                 <TrainingPanel ds={ds} keptCount={kept} kind={d.kind} allowNotReady={notReadyAck}
+                  sectionVisible={section === 'training'}
                   onCheckpointsChange={setCheckpointCount}
                   checkpointHost={checkpointHost}
                   navigationPanel={section === 'training' && panel === 'advanced' ? panel : null}

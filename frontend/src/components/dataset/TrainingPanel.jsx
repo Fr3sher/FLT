@@ -27,6 +27,7 @@ import {
   trainingRunSelection,
   trainFamilyLabel,
 } from '../../utils/checkpointBrowser';
+import { stepsRecipeRefreshDelay } from '../../utils/stepsRecipeRefresh';
 import { confirmableRetryFlag, postWithConfirmations } from '../../utils/trainingRefusals';
 import {
   deployedFilenamesOf,
@@ -689,6 +690,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                                         navigationPanel = null,
                                         onNavigationStateChange,
                                         onPanelOpenChange,
+                                        // La section Training est-elle à l'écran ? Le panneau reste
+                                        // MONTÉ quand une autre section s'affiche (le poll de la file
+                                        // doit continuer), donc rien d'autre ne dit qu'on le regarde —
+                                        // et le barème de steps ne se rafraîchit que quand on le regarde.
+                                        sectionVisible = true,
                                         // « Continue anyway » ack from the readiness pastille: a
                                         // bypassable quality blocker was acknowledged → relax the
                                         // image-floor gate and carry allow_not_ready into the launch.
@@ -750,6 +756,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // {steps, kind, n_images, rationale} renvoyé par /train/checkpoints — le POURQUOI
   // du barème adaptatif, affiché avec le champ Steps (pédagogie, pas boîte noire).
   const [stepsInfo, setStepsInfo] = useState(null);
+  // Miroir en ref : le calcul du délai de refetch lit le barème AFFICHÉ sans en
+  // faire une dépendance de l'effet — sinon chaque réponse relancerait l'effet.
+  const stepsInfoRef = useRef(stepsInfo);
+  stepsInfoRef.current = stepsInfo;
   const [imported, setImported] = useState([]);
   const [enqErr, setEnqErr] = useState(null);
   // Base d'entraînement (officielle ou merge custom) + variante + conversion.
@@ -1910,14 +1920,23 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
 
   // Le barème affiché dans Training suit uniquement la configuration Training,
   // jamais le filtre indépendant du navigateur de résultats.
+  // keptCount EST une dépendance : le barème est calculé serveur à partir du
+  // nombre d'images gardées, et ce panneau ne se démonte jamais (sections
+  // masquées, pas démontées) — sans lui, curer puis revenir sur Train affichait
+  // encore la recette calculée pour l'ancien compte, jusqu'à ce qu'un réglage
+  // d'entraînement soit touché. Voir utils/stepsRecipeRefresh.js pour le quand.
   useEffect(() => {
     if (!caps.training_visible || !ds.currentId || !baseInfo) return undefined;
+    const delay = stepsRecipeRefreshDelay(sectionVisible, stepsInfoRef.current, keptCount);
+    if (delay == null) return undefined;
     let alive = true;
-    ds.listCheckpoints(base, trainType, variant).then((data) => {
-      if (alive) setStepsInfo(data?.recommended_steps_info || null);
-    }).catch(() => { /* keep the last truthful rationale */ });
-    return () => { alive = false; };
-  }, [base, trainType, variant, ds.currentId, baseInfo, caps.training_visible]); // eslint-disable-line react-hooks/exhaustive-deps
+    const timer = setTimeout(() => {
+      ds.listCheckpoints(base, trainType, variant).then((data) => {
+        if (alive) setStepsInfo(data?.recommended_steps_info || null);
+      }).catch(() => { /* keep the last truthful rationale */ });
+    }, delay);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [base, trainType, variant, keptCount, sectionVisible, ds.currentId, baseInfo, caps.training_visible]); // eslint-disable-line react-hooks/exhaustive-deps
   const removeImported = async (filename, label) => {
     // Guard-rail: this LoRA may be the one the Studio's ★ best settings point to —
     // deleting it silently breaks the saved winning combo.
