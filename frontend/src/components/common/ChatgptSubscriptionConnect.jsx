@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import { StatusBadge } from '../settings/primitives'
+import { connectFeedback } from './chatgptConnectFeedback'
 
 /* The ChatGPT subscription (Codex OAuth) device-code login, as ONE component.
    It lives in common/ because two screens need it: Settings ▸ Image engines and
@@ -11,11 +12,18 @@ import { StatusBadge } from '../settings/primitives'
    open yet.
 
    Device-code flow: the user opens the verification URL on ANY device, types the
-   one-time code, and we poll the backend until it reports connected. */
-export default function ChatgptSubscriptionConnect({ caps, refreshCaps, toast }) {
+   one-time code, and we poll the backend until it reports connected.
+
+   `label` picks the shape. With one (Setup) the row reads as a plain lane —
+   label + inline state on the left, a compact button on the right — so the
+   engine's two doors sit at the same visual level as the neighbouring API-key
+   fields instead of inside a box of their own. Without one (Settings, where the
+   card title already names the lane) it keeps the status badge. */
+export default function ChatgptSubscriptionConnect({ caps, refreshCaps, toast, label, description }) {
   const sub = (caps && caps.chatgpt_subscription) || {}
   const [device, setDevice] = useState(null)     // {verification_url, user_code}
   const [busy, setBusy] = useState(false)
+  // {action, message} — never a bare string: see connectFeedback.
   const [error, setError] = useState(null)
 
   useEffect(() => {
@@ -29,49 +37,61 @@ export default function ChatgptSubscriptionConnect({ caps, refreshCaps, toast })
           await refreshCaps(true)
         } else if (r.status === 'error') {
           setDevice(null)
-          setError(r.detail || 'Login failed — try again.')
+          setError({ action: 'connect', message: r.detail || 'Login failed — try again.' })
         }
       } catch { /* transient — keep polling */ }
     }, 3000)
     return () => clearInterval(id)
   }, [device, refreshCaps, toast])
 
-  const run = async (fn, done) => {
+  const run = async (action, fn, done) => {
     setBusy(true); setError(null)
     try {
       const r = await fn()
       if (done) { setDevice(null); done(r) } else { setDevice(r) }
       if (done) await refreshCaps(true)
     } catch (e) {
-      setError(e.message || 'Request failed.')
+      setError({ action, message: e.message || 'Request failed.' })
     } finally {
       setBusy(false)
     }
   }
 
-  const start = () => run(() => postJson('/api/settings/chatgpt-oauth/start', {}))
+  const start = () => run('connect', () => postJson('/api/settings/chatgpt-oauth/start', {}))
   const importCodex = () => run(
-    () => postJson('/api/settings/chatgpt-oauth/import-codex', {}),
+    'import', () => postJson('/api/settings/chatgpt-oauth/import-codex', {}),
     () => toast.success('Codex CLI session imported.'))
   const disconnect = () => run(
-    () => postJson('/api/settings/chatgpt-oauth/logout', {}),
+    'disconnect', () => postJson('/api/settings/chatgpt-oauth/logout', {}),
     () => toast.success('ChatGPT subscription disconnected.'))
 
   const btn = 'rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium ' +
     'text-content hover:bg-surface-raised disabled:opacity-50'
+  const feedback = connectFeedback(error)
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <StatusBadge
-          ok={!!sub.connected}
-          okLabel={subscriptionLabel(sub)}
-          missingLabel="Not connected"
-        />
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        {label ? (
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+            <span className="text-sm font-medium text-content">{label}</span>
+            <span className={`text-xs ${sub.connected ? 'text-emerald-400' : 'text-content-subtle'}`}>
+              {sub.connected ? `✓ ${subscriptionLabel(sub)}` : 'Not connected'}
+            </span>
+          </div>
+        ) : (
+          <StatusBadge
+            ok={!!sub.connected}
+            okLabel={subscriptionLabel(sub)}
+            missingLabel="Not connected"
+          />
+        )}
         <div className="flex flex-wrap gap-2">
           {!sub.connected && (
             <button type="button" onClick={start} disabled={busy || !!device} className={btn}>
-              {device ? 'Waiting for you to enter the code…' : 'Connect ChatGPT subscription'}
+              {device
+                ? (label ? 'Waiting for the code…' : 'Waiting for you to enter the code…')
+                : (label ? 'Connect' : 'Connect ChatGPT subscription')}
             </button>
           )}
           {!sub.connected && sub.codex_cli_detected && (
@@ -87,6 +107,8 @@ export default function ChatgptSubscriptionConnect({ caps, refreshCaps, toast })
         </div>
       </div>
 
+      {description && <p className="text-xs text-content-muted">{description}</p>}
+
       {device && (
         <div role="status" className="rounded-lg border border-primary/40 bg-primary/10 p-3 text-sm text-content">
           <p>1. Open <a href={device.verification_url} target="_blank" rel="noreferrer" className="font-medium underline">{device.verification_url}</a> on any device and sign in.</p>
@@ -95,7 +117,7 @@ export default function ChatgptSubscriptionConnect({ caps, refreshCaps, toast })
         </div>
       )}
 
-      {error && <p className="text-xs text-rose-400"><span aria-hidden="true">✗</span> {error}</p>}
+      {feedback && <p className="text-xs text-rose-400"><span aria-hidden="true">✗</span> {feedback}</p>}
     </div>
   )
 }

@@ -58,6 +58,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-08-10-canvas-edges-tinted-per-dataset',
+    date: '2026-08-10',
+    title: 'Tell whose line is whose on a multi-dataset Canvas',
+    blurb:
+      'Every connector on the board used to be the same pale grey, so once two datasets had pictures parked near each other their lines crossed and became one tangle. Each dataset now draws its links in its own colour, shown as a dot next to its name in the lane header. The colour is fixed per dataset, so it is the same next time you open the board. The three colours that mean something keep meaning it: amber for a superseded branch, violet for "blended from", cyan for an external LoRA file.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-10-lightbox-keep-reject-shortcuts',
     date: '2026-08-10',
     title: 'Judge a dataset image while you are looking at it — K, R, S',

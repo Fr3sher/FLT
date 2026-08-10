@@ -3,7 +3,7 @@ import { buildLineageGraph, CARD_W } from '../../utils/lineageGraph';
 import {
   LANE_HEADER_H, MAX_SCALE, MIN_SCALE,
   clampScale, clampView, fitView, initialView, panBy, pinchCenter, pinchDistance,
-  previewFrameHeight, stackLanes, viewTransform, zoomAt,
+  stackLanes, viewTransform, zoomAt,
 } from '../../utils/canvasLayout';
 import { applyPlacement, pinSnapshot, toOverrideMap } from '../../utils/canvasPlacement';
 import {
@@ -67,6 +67,8 @@ import CanvasLayoutPresets from './CanvasLayoutPresets';
 import CanvasSystemStats from './CanvasSystemStats';
 import { blendEdgesFor, blendSourcesNote } from '../../utils/canvasBlendEdges';
 import { externalEdgesFor } from '../../utils/canvasExternalEdges';
+// 🎨 Which colour this dataset's connectors are drawn in (utils/datasetTint).
+import { tintIndexFor, tintFor } from '../../utils/datasetTint';
 import {
   boardExportFilename, boardExportPlan, boardExportRefusal, drawBoardExport,
 } from '../../utils/canvasExportPng';
@@ -183,6 +185,14 @@ const LaneHeader = memo(function LaneHeader({ lane, onZoomRef }) {
             className="h-full w-full object-cover" />
         </button>
       )}
+      {/* 🎨 The dataset's edge colour, said once where its name is. Without it
+          the tints on the connectors are only "these two lines are different";
+          with it they read "this line comes from THAT lane", which is the whole
+          point on a board where pictures can be parked anywhere. A 6-px dot, no
+          label: the name next to it IS the label. */}
+      <span aria-hidden data-testid="lane-tint-dot"
+        className="shrink-0 rounded-full"
+        style={{ width: 6, height: 6, background: tintFor(lane.datasetId) }} />
       <span className="truncate text-[0.8125rem] font-semibold text-content" title={lane.name}>
         {lane.name}
       </span>
@@ -232,7 +242,7 @@ const LaneGraph = memo(function LaneGraph({ lane, isLit, onHover, onNodeClick, d
       viewBox={`0 0 ${g.width} ${g.height}`}
       role="img"
       aria-label={`${lane.name}: lineage of ${g.nodes.length} run${g.nodes.length === 1 ? '' : 's'}`}>
-      <LineageEdges edges={g.edges} isLit={isLit} />
+      <LineageEdges edges={g.edges} isLit={isLit} tintIndex={tintIndexFor(lane.datasetId)} />
       <g>
         {g.nodes.map((n) => (
           <foreignObject key={n.node.record_id}
@@ -340,7 +350,7 @@ const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose,
   return (
     <div style={{ position: 'absolute', left: 0, top: lane.graphY }}>
       <svg width="1" height="1" className="block overflow-visible" aria-hidden>
-        <LineageEdges edges={edges} isLit={() => false} />
+        <LineageEdges edges={edges} isLit={() => false} tintIndex={tintIndexFor(lane.datasetId)} />
       </svg>
       {layout.map((r) => (r.kind === 'group' ? (
         <CanvasImageGroup key={r.key} group={r} datasetId={lane.datasetId}
@@ -440,6 +450,14 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     }
     return { ...e, graph: applyPlacement(e.graph, ov) };
   }), [shown, positions, drag]);
+  /* The same lanes WITHOUT the gesture — the trees as they would come back from
+     a reload. The stack is measured on these and only these: a card dragged
+     down grows its lane's graph height, and the stack advances by that height,
+     so measuring the in-flight tree slid every dataset below out from under the
+     hand. Deliberately not `drag`-dependent, which is the whole point. */
+  const restingPlaced = useMemo(() => shown.map((e) => (e.graph
+    ? { ...e, graph: applyPlacement(e.graph, positions?.[e.datasetId] || {}) }
+    : e)), [shown, positions]);
 
   // A lane that gained a run since it was arranged reports the new card's spot;
   // persisting it is what makes "a new run moves nothing" survive the NEXT
@@ -537,8 +555,8 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      membership-independent, and a picture on its way out of a strip changes the
      membership on every frame. See utils/canvasPinBatch.laneStackEntries. */
   const world = useMemo(() => stackLanes(laneStackEntries({
-    placed, layoutByLane, restingByLane,
-  })), [placed, layoutByLane, restingByLane]);
+    placed, layoutByLane, restingByLane, restingPlaced,
+  })), [placed, layoutByLane, restingByLane, restingPlaced]);
 
   /* 🔌 External LoRA plugin nodes: files pinned on the board (not produced by
      any run here) that, when checked, stack on top of the next generation.
@@ -672,17 +690,26 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const touched = useRef(false);
   const fitSignature = `${world.width}x${world.height}:${viewport.width}x${viewport.height}`;
   const lastFit = useRef('');
-  // 📐 The frame's own PREFERRED height for the board sitting on it right now —
-  // fed to the `lds-canvas-frame` CSS as a custom property, so a sparse board
-  // stops hoarding a screen's worth of empty canvas above the toolbar pill.
-  // Bound by `viewport.width`, never `viewport.height`: the frame's height is
-  // what this number produces, so measuring the frame's OWN height to compute
-  // it would be circular. Width does not have that problem — the frame is
-  // `w-full` from its parent, so its width is independent of its height.
-  const framePreferredHeight = useMemo(
-    () => previewFrameHeight(world, viewport.width),
-    [world, viewport.width],
-  );
+  /* ✦ TIDY UP ENDS ON A FIT, and that is not a nicety — it is what makes the
+     button readable. Tidying is the one gesture that shrinks the board on
+     purpose (every remembered position dropped, every pinned picture brought
+     back beside its run), and it is only ever reached from a board the user has
+     ARRANGED — so `touched` is true and the auto-fit below is, correctly,
+     switched off. The result was a compacted board still framed for the sprawl
+     it used to be: a corner of empty canvas, cards off the edge, and a pan to
+     find them. The frame no longer resizes to hide that (it is fixed now), so
+     the answer is the zoom, which is the reversible half.
+
+     Deferred through a ref rather than called inline: `onTidyUp` clears the
+     positions in the PARENT, so at the moment of the click `world` is still the
+     old, sprawling one. The refit lands on the next world this component sees.
+     `fitView`, not `initialView` — this is the ✦ Fit button's answer (fill the
+     frame, cut nothing), not the first-paint one with its legibility floor. */
+  const refitAfterTidy = useRef(false);
+  const handleTidyUp = useCallback(() => {
+    refitAfterTidy.current = true;
+    onTidyUp?.();
+  }, [onTidyUp]);
   /* 🖐 ARRANGING THE BOARD IS TAKING THE VIEW OVER, and that is the half that was
      missing. Not re-fitting mid-gesture fixed the board sliding under the finger
      while it dragged; it left the jump at the DROP. So: you carry a render up
@@ -708,6 +735,19 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   // lane's corner grows the board immediately — where before it needed a long
   // haul to the bottom right.
   const gesturing = Boolean(drag || imgDrag);
+  // The other half of ✦ Tidy up (see `handleTidyUp`): the tidied world has
+  // arrived, so frame it. Runs BEFORE the auto-fit effect below and claims the
+  // signature, so the two can never both answer the same render.
+  useEffect(() => {
+    if (!refitAfterTidy.current) return;
+    if (!viewport.width || !viewport.height) return;
+    refitAfterTidy.current = false;
+    // A tidied board is an un-arranged board again, so it also earns back the
+    // auto-fit a virgin board gets — same reasoning as the ✦ Fit button.
+    touched.current = false;
+    lastFit.current = fitSignature;
+    setView(fitView(world, viewport));
+  }, [world, viewport, fitSignature]);
   useEffect(() => {
     if (touched.current || gesturing || lastFit.current === fitSignature) return;
     if (!viewport.width || !viewport.height) return;
@@ -1906,33 +1946,31 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
           the board underneath. The wrapper is `pointer-events-none` and only the
           controls themselves take the pointer, so the board stays draggable
           through the gaps between them. */}
-      <div className="relative">
+      <div className="lds-canvas-stage relative flex min-h-0 flex-1 flex-col">
       <div
         ref={frameRef}
         data-testid="lora-canvas-frame"
         // select-none: shift-click is the compare gesture, and shift-click is ALSO
         // the browser's extend-selection — without this, comparing two runs paints
         // half the board blue.
-        /* 📱 A CEILING of 72vh on a phone, 76 from `sm` up — never taller than
-           that, so the frame still brings the WHOLE board on screen the way it
-           always has: measured at 400×800, the chrome above this frame — nav,
-           title, the folded filter, the toolbar — costs ~290 px, and a board
-           you have to scroll the PAGE to see the bottom of is a board whose pan
-           gesture fights the page's.
+        /* 📐 THE FRAME IS FIXED, AND IT IS ALL THE ROOM THERE IS. No `vh`
+           fraction and no content-derived height any more: `flex-1 min-h-0`
+           inside a column that is exactly one viewport tall (see App.jsx's
+           `/canvas` shell and CanvasPage's root), so the board takes every
+           pixel left under the app header, the page title and whatever banner
+           happens to be up — and not one pixel more, so the PAGE never scrolls.
 
-           But a ceiling sized for a board that fills it left every SPARSER
-           board — the common case, a fresh dataset with a handful of runs —
-           opening under a few hundred px of plain canvas before the toolbar
-           pill: measured, a one-lane board opened with ~370 px of nothing
-           above the pill on desktop. `--canvas-content-h` (set below from
-           `previewFrameHeight`) is the board's own preferred height for its
-           current width; `clamp()` lets the frame SHRINK to that — down to a
-           floor of 40vh (44 from `sm`, and never under 380px either, the
-           original phone floor) — while still growing back up to the ceiling
-           for a board that earns it. Unmeasured on the first paint (`viewport`
-           starts at 0), the var is unset and the ceiling is what `var()`'s
-           fallback supplies — exactly today's fixed height, so there is no
-           flash between "no adaptive height yet" and "the old behaviour". */
+           Both of the heights this replaces were wrong in the same way, from
+           opposite ends. A fixed 72vh/76vh left a strip of dead page under the
+           board on a desktop. Sizing the frame to the CONTENT (a clamp around
+           the board's own preferred height, which shipped for one day) then made
+           the frame elastic: ✦ Tidy up compacted the board and the frame collapsed
+           around it mid-view, cutting cards off at the current zoom, and
+           dragging a node downwards inflated the frame live under the hand. A
+           canvas whose own edges move while you work it is unreadable. The
+           board's size is answered by ZOOM (✦ Fit, the +/− buttons, the wheel),
+           which is reversible and asked for; the frame itself just stops
+           moving. */
         /* `isolate z-0`. The frame already clips (`overflow-hidden`), and the
            controls are now SIBLINGS drawn over it — so "the board cannot cover
            its own filter" was resting on one class name plus a sibling order.
@@ -1940,8 +1978,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
            at any z-index, can paint over a sibling overlay: two independent
            guarantees instead of one, for the controls the user cannot afford to
            lose. It sits at z-0 so every overlay above it (z-20) still wins. */
-        className="lds-canvas-frame relative isolate z-0 h-[clamp(max(40vh,380px),var(--canvas-content-h,72vh),72vh)] w-full select-none touch-none overflow-hidden rounded-xl border border-border bg-app/40 sm:h-[clamp(max(44vh,380px),var(--canvas-content-h,76vh),76vh)]"
-        style={framePreferredHeight ? { '--canvas-content-h': `${framePreferredHeight}px` } : undefined}
+        className="lds-canvas-frame relative isolate z-0 min-h-[320px] w-full flex-1 select-none touch-none overflow-hidden rounded-xl border border-border bg-app/40"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endPointer}
@@ -2134,7 +2171,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
               hand" is not an answer — this drops every remembered position, hands
               the board to the automatic tree again, and brings every picture back
               beside the run that made it, however far it was dragged. */}
-          <button type="button" onClick={onTidyUp} disabled={!arranged}
+          <button type="button" onClick={handleTidyUp} disabled={!arranged}
             title={arranged
               ? 'Forget every moved card, rebuild the automatic tree, and bring '
                 + 'every pinned image back beside its run'

@@ -31,8 +31,7 @@ const KEY_FIELDS = [
   // describes ITS lane; the engine's other door is rendered right under it.
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', engine: 'chatgpt',
     href: 'https://platform.openai.com/api-keys',
-    help: 'One of the two ways to power ChatGPT (gpt-image-2) — pay-per-image, '
-      + 'and the lane that accepts up to 16 reference images.' },
+    help: 'Pay-per-image, and the lane that accepts up to 16 reference images.' },
   { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API key', engine: 'openrouter',
     href: 'https://openrouter.ai/keys',
     help: 'Powers the OpenRouter engine — one key and one balance for the same '
@@ -448,8 +447,10 @@ export default function SetupPage() {
             const laneOk = isChatgpt ? chatgpt.keySet : !!step.engines[f.engine]
             const field = (
               <div key={f.key}>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-content">{f.label}</span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className={isChatgpt
+                    ? 'text-sm font-medium text-content-muted'
+                    : 'text-sm font-medium text-content'}>{f.label}</span>
                   <span className={`text-xs ${laneOk ? 'text-emerald-400' : 'text-content-subtle'}`}>
                     {laneOk ? '✓ Ready' : '○ Not set'}
                   </span>
@@ -467,30 +468,34 @@ export default function SetupPage() {
               </div>
             )
             if (!isChatgpt) return field
+            // FLAT, like its neighbours: the engine gets the same heading line and
+            // the same right-hand state as "Gemini API key" or "OpenRouter API
+            // key", and its two lanes hang under it as ordinary rows. The nested
+            // bordered card this used to be described the same thing correctly
+            // and broke the rhythm of the page doing it — the one engine on the
+            // screen that looked like a different kind of object.
             return (
-              <div key={f.key} className="rounded-lg border border-border p-3 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-content">ChatGPT (gpt-image-2)</span>
-                  <span className={`text-xs ${chatgpt.ready ? 'text-emerald-400' : 'text-content-subtle'}`}>
-                    {chatgpt.ready ? '✓ Ready' : '○ Not set up'}
-                  </span>
-                </div>
-                <p className="text-xs text-content-muted">{chatgptLaneSummary(chatgpt)}</p>
-                {field}
-                <div className="border-t border-border pt-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-content">ChatGPT Plus/Pro subscription</span>
+              <div key={f.key} className="space-y-3">
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-content">ChatGPT (gpt-image-2)</span>
+                    <span className={`text-xs ${chatgpt.ready ? 'text-emerald-400' : 'text-content-subtle'}`}>
+                      {chatgpt.ready ? '✓ Ready' : '○ Not set up'}
+                    </span>
                   </div>
-                  <p className="mb-2 text-xs text-content-muted">
-                    Sign in once and the engine runs on your plan&apos;s image quota instead of a
-                    paid API key. Experimental and undocumented by OpenAI — up to 5 reference
-                    images, your plan&apos;s daily cap applies, SFW only.
-                  </p>
-                  {/* The SAME component Settings ▸ Image engines mounts — one
-                      device-code flow, so the two screens cannot disagree about
-                      what "connected" means. */}
-                  <ChatgptSubscriptionConnect caps={caps} refreshCaps={refresh} toast={toast} />
+                  <p className="text-xs text-content-muted">{chatgptLaneSummary(chatgpt)}</p>
                 </div>
+                {field}
+                {/* The SAME component Settings ▸ Image engines mounts — one
+                    device-code flow, so the two screens cannot disagree about
+                    what "connected" means. Given a label it renders as one sober
+                    row (state inline, compact button) instead of a badge adrift
+                    opposite a full-width call to action. */}
+                <ChatgptSubscriptionConnect caps={caps} refreshCaps={refresh} toast={toast}
+                  label="ChatGPT Plus/Pro subscription"
+                  description={'Runs on your plan’s image quota instead of a paid key. '
+                    + 'Experimental and undocumented by OpenAI — up to 5 reference images, '
+                    + 'your plan’s daily cap applies, SFW only.'} />
               </div>
             )
           })}

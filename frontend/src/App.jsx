@@ -434,8 +434,21 @@ function UpdateBanner() {
 function Shell() {
   const { pathname } = useLocation();
   const wideWorkspaceRoute = pathname === '/canvas' || pathname === '/bank';
+  /* 🖼 THE BOARD IS THE WHOLE SCREEN. The canvas is not a document with a
+     picture in it — it is a surface you pan and zoom, and every pixel the page
+     keeps for itself is a pixel of board you have to pan to reach. So `/canvas`
+     alone (the Bank is a scrolling GRID and needs its reading measure) drops
+     the 1800-px measure and the generous gutters for a near edge-to-edge 8/12-px
+     one, and turns the shell into a column exactly one viewport tall so the
+     frame inside it can claim everything left under the header.
+
+     `h-svh`, not `h-screen`: on a phone `100vh` is the LARGEST viewport, the one
+     you only get once the URL bar has scrolled away — so `h-screen` here would
+     put the bottom of the board under the browser chrome on every load, which
+     is the exact fold bug the frame's old `vh` heights were fighting. */
+  const boardRoute = pathname === '/canvas';
   return (
-    <>
+    <div className={boardRoute ? 'flex h-svh flex-col' : undefined}>
       <NavBar />
       <WhatsNewModal />
       {/* Above the update banner: "can I reach the server at all" outranks
@@ -450,13 +463,15 @@ function Shell() {
       <ComfyRecoveryBanner />
       <UpdateBanner />
       <main id="main-content" tabIndex={-1}
-        className={wideWorkspaceRoute
-          ? 'mx-auto w-full max-w-[1800px] px-3 py-4 sm:px-4 sm:py-6'
-          : 'mx-auto max-w-5xl px-4 py-6'}>
+        className={boardRoute
+          ? 'flex min-h-0 w-full flex-1 flex-col px-2 py-2 sm:px-3 sm:py-3'
+          : wideWorkspaceRoute
+            ? 'mx-auto w-full max-w-[1800px] px-3 py-4 sm:px-4 sm:py-6'
+            : 'mx-auto max-w-5xl px-4 py-6'}>
         <Outlet />
       </main>
       <TipHost />
-    </>
+    </div>
   )
 }
 

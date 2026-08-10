@@ -835,6 +835,19 @@ test('the Setup image step mounts the subscription connect flow', () => {
     'the key field still claims to be what powers the engine');
 });
 
+// A wizard that greets a first-time user with a red "✗ Network error" under an
+// engine he has not touched reads as a broken app. Errors belong to the action
+// that produced them; a state fetch failing on its own must stay off the screen.
+import { connectFeedback } from '../components/common/chatgptConnectFeedback.js';
+
+test('the subscription row shows an error only when a user action produced it', () => {
+  assert.equal(connectFeedback(null), null);
+  assert.equal(connectFeedback({ message: 'Network error' }), null,
+    'an error with no action behind it reaches the screen');
+  assert.equal(connectFeedback({ action: 'connect' }), null);
+  assert.equal(connectFeedback({ action: 'connect', message: 'Network error' }), 'Network error');
+});
+
 // One device-code implementation, mounted by both screens. Two copies of an OAuth
 // polling loop is how "connected" starts meaning different things per page.
 test('Settings and Setup share one subscription component', () => {

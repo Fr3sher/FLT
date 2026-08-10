@@ -12,6 +12,7 @@
 // panneau « Generate from the board » du canvas) via PromptField/RunSetupPanel :
 // le lot existe donc des deux côtés par construction, pas par duplication.
 import { HelpBadge } from '../../../help/HelpMode';
+import { datasetThumbUrl } from '../../../utils/datasetThumbUrl';
 
 export default function RecentPrompts({
   items, datasetId, selectedPrompt, onPick, onDelete,
@@ -76,8 +77,8 @@ export default function RecentPrompts({
                 className={`flex items-center gap-1.5 p-1 text-left min-w-0 ${
                   sel ? 'text-purple-200' : 'text-content-muted'}`}>
                 {pr.thumbnail
-                  ? <img src={`/api/dataset/${pr.thumb_dataset_id ?? datasetId}/img/${encodeURIComponent(pr.thumbnail)}`}
-                      alt="" loading="lazy"
+                  ? <img src={datasetThumbUrl(`/api/dataset/${pr.thumb_dataset_id ?? datasetId}/img/${encodeURIComponent(pr.thumbnail)}`, 128)}
+                      alt="" loading="lazy" decoding="async"
                       className="w-8 h-10 object-cover rounded shrink-0" />
                   : <span className="w-8 h-10 rounded bg-app/60 shrink-0 flex items-center justify-center text-content-subtle">?</span>}
                 <span className="flex flex-col items-start min-w-0">

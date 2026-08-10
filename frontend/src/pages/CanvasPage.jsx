@@ -447,7 +447,13 @@ export default function CanvasPage() {
     (count, entry) => count + (entry.tree?.nodes || []).length, 0), [entries]);
 
   return (
-    <div>
+    /* 📐 The page is a COLUMN one viewport tall (App.jsx pins the `/canvas`
+       shell to `h-svh`), and everything above the board — the title, an error
+       line — is fixed-size, so `min-h-0 flex-1` on the board's own wrapper
+       hands it every remaining pixel. `min-h-0` is the load-bearing half: a
+       flex child defaults to `min-height:auto`, refuses to shrink under its
+       content, and the PAGE scrolls instead of the board. */
+    <div className="flex min-h-0 flex-1 flex-col">
       {/* 📱 The blurb is the first thing a small screen can afford to lose. It
           explains the page once; after that it is height spent above the board,
           on every single load.
