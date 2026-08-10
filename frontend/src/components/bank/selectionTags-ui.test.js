@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -11,7 +15,7 @@ import { readFileSync } from 'node:fs';
  * image, show the tags in every case. When several images are selected, show the
  * tags in common with the number of times it was cited."
  */
-const ws = readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8')
+const ws = bankTreeSource()
   .replace(/\r\n/g, '\n');
 
 test('the tag row opens on the SELECTION, with no second click', () => {
@@ -29,23 +33,26 @@ test('one selected image reads as one image, several read as several', () => {
   assert.match(ws, /🏷️ Tags of \$\{tagRow\.name\}/);
 });
 
-test('the tag inspector sits to the right of the Bank gallery on desktop', () => {
-  assert.match(ws, /xl:grid-cols-\[minmax\(0,1fr\)_20rem\]/);
-  assert.match(ws, /<aside aria-label="Image tags"/);
-  assert.match(ws, /hidden xl:col-start-2 xl:row-start-1 xl:block xl:sticky xl:top-20/);
-  assert.match(ws, /xl:max-h-\[calc\(100vh-6rem\)\] xl:overflow-y-auto/);
-  assert.match(ws, /className="min-w-0 xl:col-start-1 xl:row-start-1"/);
-  assert.ok(ws.indexOf('<aside aria-label="Image tags"')
-    < ws.indexOf("{filter.flag === 'dups' ? ("));
+test('the tag inspector is mounted ONCE, in the filter rail, at every width', () => {
+  /* It used to be mounted TWICE — a phone copy in the filter zone and a sticky
+     desktop inspector — with one of them hidden by `xl:hidden`. Two copies of a
+     panel is two places for it to drift, and the reason it existed was that the
+     old stack had no single home for a control that had to work at 400 px and
+     at 1440. The rail is that home, so the duplicate is gone rather than moved,
+     and this asserts the stronger property: exactly one. */
+  const mounts = ws.match(/<SelectionTagsPanel /g) || [];
+  assert.equal(mounts.length, 1, 'the tag panel is mounted exactly once');
+  assert.doesNotMatch(ws, /<div className="xl:hidden">\s*<SelectionTagsPanel/);
+  assert.match(ws, /onToggle=\{\(tag\) => toggleTag\(tag, tagRow\)\}/);
 });
 
-test('mobile keeps the tag inspector in the filter zone', () => {
-  assert.match(ws, /<div className="xl:hidden">\s*<SelectionTagsPanel/);
-  assert.match(ws, /onToggle=\{\(tag\) => toggleTag\(tag, tagRow\)\}/);
-  const mobile = ws.indexOf('<div className="xl:hidden">');
-  const filters = ws.indexOf('{/* Filters — grouped by facet');
-  const gallery = ws.indexOf("{filter.flag === 'dups' ? (");
-  assert.ok(mobile < filters && filters < gallery);
+test('the tag inspector is still a NAMED landmark, and still ahead of the grid', () => {
+  // Folding the two mounts into one nearly dropped this label; the surface
+  // inventory caught it. A screen reader must still reach the panel by name.
+  assert.match(ws, /<section aria-label="Image tags"/);
+  assert.ok(ws.indexOf('aria-label="Image tags"')
+    < ws.indexOf("{filter.flag === 'dups' ? ("),
+  'the tags landmark comes before the grid in reading order');
 });
 
 test('every chip carries a FRACTION, never a bare count', () => {

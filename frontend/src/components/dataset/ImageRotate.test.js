@@ -17,6 +17,9 @@ const workspace = read('./DatasetWorkspace.jsx');
 const lightbox = read('./DatasetLightbox.jsx');
 const gridItem = read('./DatasetGridItem.jsx');
 const bankWorkspace = read('../bank/BankWorkspace.jsx');
+// The thumbnail cache-buster lives on the TILE now (the Encre redesign
+// split the workspace); the rotate handlers stay in the workspace.
+const bankTile = read('../bank/BankTile.jsx');
 const bankReview = read('../bank/BankReviewLightbox.jsx');
 
 test('the dataset hook rotates once per image and cache-busts only on success', () => {
@@ -74,7 +77,7 @@ test('the bank rotates a selection without ever writing to the user folder', () 
   // The promise made in the tooltip is the one the backend keeps.
   assert.match(bankWorkspace, /Your own files are never modified/);
   // A cached thumbnail (max-age=3600) would otherwise keep the old orientation.
-  assert.ok(bankWorkspace.includes('${img.rotation ? `?r=${img.rotation}` : \'\'}'));
+  assert.ok(bankTile.includes('${img.rotation ? `?r=${img.rotation}` : \'\'}'));
 });
 
 test('the bank review lightbox rotates without deciding, and updates the tile behind it', () => {

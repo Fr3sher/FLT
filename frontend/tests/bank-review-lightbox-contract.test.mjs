@@ -20,6 +20,9 @@ const frontend = path.resolve(here, '..')
 const read = (rel) => fs.readFileSync(path.join(frontend, rel), 'utf8')
 const lightbox = read('src/components/bank/BankReviewLightbox.jsx')
 const workspace = read('src/components/bank/BankWorkspace.jsx')
+// The tile is its own component since the Encre redesign; the review WIRING
+// (which ids, which start) stays in the workspace.
+const tile = read('src/components/bank/BankTile.jsx')
 
 test('the lightbox offers Keep, Reject and Skip with their K/R/S shortcuts', () => {
   assert.match(lightbox, /✓ Keep/)
@@ -95,8 +98,8 @@ test('the workspace opens the review over a SNAPSHOT of the current filter', () 
 test('the tile click still (de)selects — review is its own ▶ hit target', () => {
   assert.match(workspace, /onReview=\{\(\) => openReview\(img\.id\)\}/)
   assert.match(workspace, /onToggle=\{\(\) => setSelected\(/)
-  assert.match(workspace, /<button type="button" onClick=\{onReview\}/)
-  assert.match(workspace, /<button type="button" onClick=\{onToggle\}/)
+  assert.match(tile, /<button type="button" onClick=\{onReview\}/)
+  assert.match(tile, /<button type="button" onClick=\{onToggle\}/)
 })
 
 test('header counters follow the run and the grid refreshes on close', () => {

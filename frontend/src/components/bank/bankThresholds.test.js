@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -9,7 +13,7 @@ import {
   rerunFor, resetAllEdits, thresholdByField, thresholdsInGroup,
 } from './bankThresholds.js';
 
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 const panel = fs.readFileSync(new URL('./BankThresholdsPanel.jsx', import.meta.url), 'utf8');
 const captioning = fs.readFileSync(
   new URL('../settings/CaptioningSection.jsx', import.meta.url), 'utf8');

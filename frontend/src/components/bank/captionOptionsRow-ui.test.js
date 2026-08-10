@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource, bankWorkspaceSource } from './bankTreeSource.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,7 +11,7 @@ import { markdownHeadingId } from '../../utils/headingId.js';
    curation-ui.test.js and pipeline-ui.test.js: the file is read and asserted against,
    because these are wiring and layout facts that no pure function can hold. */
 
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 
 test('only the model select is width-capped, and the other four are not truncated', () => {
   // A <select> sizes itself to its widest option and has min-width:auto, so it does not
@@ -52,21 +56,23 @@ test('the caption options live INSIDE the caption window, not spread under the p
   assert.ok(!ws.includes('<GroupLabel>Caption options</GroupLabel>'),
     'the old options row is still rendered under the panel');
   // The window is what the pass button opens…
-  assert.match(ws, /onClick=\{\(\) => setPassOpen\('caption'\)\}/);
+  assert.match(ws, /onClick=\{\(\) => onPassOpen\('caption'\)\}/);
   // …and the controls are handed to PassDialog, not rendered on the panel.
   assert.match(ws, /passOpen === 'caption' \? captionRunControls : null/);
 });
 
 test('every new option is spread-if-set, so an untouched run posts the old body', () => {
-  const opts = ws.slice(ws.indexOf('const captionRunOptions'),
-    ws.indexOf('const cancelJob'));
+  // The handler layer stays in BankWorkspace.jsx; only its JSX moved out.
+  const wsFile = bankWorkspaceSource();
+  const opts = wsFile.slice(wsFile.indexOf('const captionRunOptions'),
+    wsFile.indexOf('const cancelJob'));
   assert.match(opts, /\.\.\.\(captionEngine \? \{ backend: captionEngine \} : \{\}\)/);
   assert.match(opts, /\.\.\.\(captionModel \? \{ ollama_model: captionModel \} : \{\}\)/);
   // The scope now rides through the SHARED body builder every pass uses, and it is
   // spread-if-set there — a run left on the default omits `statuses` entirely, and a
   // selection sends image_ids instead. The window never produces both, because the
   // selection and the piles are radio buttons in one group.
-  const body = ws.slice(ws.indexOf('const passBody'), ws.indexOf('const runPass'));
+  const body = wsFile.slice(wsFile.indexOf('const passBody'), wsFile.indexOf('const runPass'));
   assert.match(body, /\.\.\.\(statuses \? \{ statuses \} : \{\}\)/);
   assert.match(body, /imageIds === 'selection' && selected\.size \? \{ image_ids/);
 });

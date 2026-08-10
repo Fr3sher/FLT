@@ -51,6 +51,17 @@
   --border-alpha: 0.10;
   --border-strong: 255 255 255;
   --border-strong-alpha: 0.20;
+
+  /* Height of the sticky top bar (App.jsx `<header className="… sticky top-0">`),
+     measured at 57 px on every width where it is the desktop bar.
+     Anything else that pins itself to the top of the viewport has to clear it,
+     or it slides UNDER the bar and loses its own header — which is what the
+     Bank's filter rail did before this existed.
+     ⚠️ This is a measured constant, not a computed one: no test can catch the
+     bar growing (the suite runs on `node --test`, which has no layout engine).
+     If you change the bar's padding or type size, change this with it — this is
+     the single place that has to move. */
+  --app-header-h: 57px;
 }
 
 

@@ -81,7 +81,9 @@ test('the app renders one persistent offline indicator', () => {
 
 test('the bank progress zone knows about the offline state', () => {
   const s = read('components/bank/BankWorkspace.jsx');
-  assert.match(s, /progressPresence\(activity, offline\)/);
+  // The bar itself is BankProgress.jsx now; the workspace still passes it the
+  // connection state, which is the property this test protects.
+  assert.match(read('components/bank/BankProgress.jsx'), /progressPresence\(activity, offline\)/);
   assert.match(s, /<ProgressBar activity=\{payload\?\.activity\} onCancel=\{cancelJob\} offline=\{!connection\.online\}/);
 });
 

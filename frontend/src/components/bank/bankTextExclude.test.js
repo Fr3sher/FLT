@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 // 🔤 Push down — the wording of an exclusion CLIP can only approximate.
 //
 // The failure this whole feature answers is silent: CLIP ignores "without", so
@@ -117,7 +121,7 @@ test('three strengths, ordered, with the calibrated default in the middle', () =
 });
 
 // --- wiring contract on the JSX ----------------------------------------------
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 
 test('the push-down field is labelled and sent to the backend', () => {
   assert.match(ws, /htmlFor="bank-text-exclude"/);

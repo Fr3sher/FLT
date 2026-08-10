@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -221,7 +225,7 @@ test('the progress bar names the destructive pass instead of "Job running"', () 
   // The bar keeps its OWN kind->label map (it renders shorter, un-emoji'd
   // wording); a kind missing from it falls through to the anonymous fallback,
   // which is the last thing a delete should do.
-  const src = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+  const src = bankTreeSource();
   assert.match(src, /delete_rejected: 'Deleting rejected files'/);
   assert.equal(jobLabel('delete_rejected'), '\u{1F5D1} Delete rejected');
 });

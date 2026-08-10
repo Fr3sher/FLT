@@ -1,47 +1,47 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, del, patchJson, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
-// "This is configurable, here" — a deep link that lands ON the field, not on a tab.
-import SettingsLink from '../common/SettingsLink'
 import { useCapabilities } from '../../context/CapabilitiesContext'
 import { useConnectionStatus } from '../../hooks/useConnectionStatus'
 import DupGroupsPanel from './DupGroupsPanel'
+// ── The pieces this screen used to define inline ────────────────────────────
+// Split out by the Encre redesign: the top bar, the filter rail, the passes
+// panel and the grid are four files now, and all four drew the same chips.
+// The surface-inventory contract scans the whole Bank TREE, so moving a button
+// between these files is free and losing one is loud (see bankSurfaces.js).
+import { Stat } from './BankAtoms.jsx'
+import { ProgressBar, UndoBar } from './BankProgress.jsx'
+import Tile from './BankTile.jsx'
+import CoveragePanel from './BankCoveragePanel.jsx'
+// The two structural halves of the redesign: all of triage beside the grid, and
+// the eight passes behind one button instead of across the top of the screen.
+import BankFilterRail from './BankFilterRail.jsx'
+import BankPassesPanel from './BankPassesPanel.jsx'
+import {
+  FLAG_HINT, FLAG_LABEL, FRAMING_BUCKETS, ORIGIN_BUCKETS, QUALITY_REJECT_FLAGS,
+  RES_BUCKETS, SCORE_REJECT_FLAGS,
+} from './bankFacets.js'
+// Structure B's own logic — rail folding, facet groups, the passes panel.
+import {
+  loadRailOpen, passesButtonLabel, passesPanelStartsOpen, railIsColumn, saveRailOpen,
+} from './bankLayout.js'
 import PromoteDialog from './PromoteDialog'
 import DeleteRejectedDialog from './DeleteRejectedDialog'
 import LaunchAllDialog from './LaunchAllDialog'
-import BankSemanticEngine from './BankSemanticEngine.jsx'
 import ScoringPythonDialog from './ScoringPythonDialog'
 import PipelineReport from './PipelineReport'
 import FolderSyncNote from './FolderSyncNote'
 import RelocateBankDialog from './RelocateBankDialog'
 import BankReviewLightbox from './BankReviewLightbox'
-import BankWatermarkPanel from './BankWatermarkPanel'
-import BankOverview from './BankOverview.jsx'
-// 👤 "Single person here" — a folder the user declares to hold one person.
-import SubfolderPersonPanel from './SubfolderPersonPanel'
-import { assertionFor, folderMarker, scanOffer, suggestionFor } from './folderPerson.js'
 import PersonPreflightDialog from './PersonPreflightDialog'
 import { preflightNeeded, preflightWillSample } from './personPreflight.js'
-// 🎚 The twelve triage thresholds, edited here instead of in Settings.
-import BankThresholdsPanel from './BankThresholdsPanel.jsx'
-// Source-folder re-walk messages (pure/testable).
-import { spreadReadout, spreadCoverageNote } from './coverageVisual.js'
-// Shared with the dataset coverage panel on purpose: both render the SAME
-// caption-lexicon payload, so the row/summary logic lives in one place rather
-// than being copied and left to drift.
-import { axisRows, axisSummary } from '../dataset/datasetCoverage.js'
 import { folderSyncToast } from './bankSync.js'
-import { UNDO_HINT, undoBannerText, undoOffer, undoResultMessage } from './bankUndo.js'
-// Four progress states, not two — including the honest "I don't know" (pure/testable).
-import { progressPresence, PROGRESS_HIDDEN, PROGRESS_UNKNOWN, PROGRESS_STALE } from './progressPresence.js'
-import { etaPhrase } from './passEta.js'
-// A Stop that answers the click locally, and says the phase's price (pure/testable).
-import { jobKey, stopLabel, stopNote, stopRequested } from './passStop.js'
+import { undoOffer, undoResultMessage } from './bankUndo.js'
 // An occupied bank refuses in OUR words, never in the server's (pure/testable).
 import { busyRefusal } from './bankPassRun.js'
-import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
+import { scoreDeviceNote } from './bankScoreDevice.js'
 // Wording that adapts to the machine (a card-less box is never sold CUDA).
-import { openerLabel, PICKER_PROFILES } from './scoringPython.js'
+import { PICKER_PROFILES } from './scoringPython.js'
 // Reuse the dataset's register list so the Bank lane never drifts from it — and the
 // same ENGINE list, so "which engine" means the same thing on both surfaces.
 import {
@@ -49,9 +49,9 @@ import {
 } from '../dataset/CaptionOptionsPopover'
 // Which pile the caption pass is aimed at, and the number the button quotes (pure).
 import {
-  captionButtonLabel, captionIncludeAssertedLabel,
-  captionRecaptionConfirmation, captionRecaptionDisabledReason, captionRecaptionLabel,
-  captionRecaptionNote, captionScopeNote, captionScopeStatuses,
+  captionIncludeAssertedLabel, captionRecaptionConfirmation,
+  captionRecaptionDisabledReason, captionRecaptionLabel, captionRecaptionNote,
+  captionScopeNote, captionScopeStatuses,
 } from './bankCaptionScope.js'
 // …and the one thing the captioners are known to do badly, said where the engine is
 // still free to change. Pure/testable; stays silent unless the scope is measurably
@@ -67,19 +67,11 @@ import {
 } from './bankSemanticEngine.js'
 // Ordered zone model + the "what's next" accent, both pure/testable.
 import { BANK_ZONES, nextBankStep } from './bankGuide.js'
-// Provenance wording (effective resolution, origin, black bars) — pure/testable.
-import { ORIGIN_CHIPS, PROVENANCE_FLAG_LABEL, detailSummary } from './bankProvenance.js'
 // Grid ordering menu (which sorts exist, and which ones have data) — pure/testable.
 import { bankSortGroups, loadBankSort, saveBankSort } from '../../utils/gridSort.js'
-// WHO wrote the caption on a tile — the per-image half of the same provenance the
-// pass reports in aggregate (utils/captionEngines.js).
-import { captionOriginTooltipLine } from '../../utils/captionOrigin.js'
 // 🏷️ One image's caption → the chips you can filter by, and the same chips over a
 // whole SELECTION with how often each was cited (pure/testable).
-import {
-  captionChips, tagsParam, tagFilterSummary,
-  selectionTagCounts, selectionTagsNotes, tagCountLabel,
-} from './bankTags.js'
+import { tagsParam, selectionTagCounts } from './bankTags.js'
 // 🔤 Text search wording — "closest", never "matching" — plus the cold-start and
 // CLIP-limitation copy. Pure/testable (node --test cannot parse this JSX).
 import {
@@ -97,17 +89,13 @@ import {
 // has to print. Pure/testable: what matters is that we never claim more than we
 // measured (see bankMedium.js for the numbers behind the wording).
 import {
-  ANGLE_BUCKETS, MEDIUM_BUCKETS, angleBadge, angleReadiness, angleTitle,
-  mediumLimits, mediumTitle, shownBuckets,
+  ANGLE_BUCKETS, MEDIUM_BUCKETS, angleReadiness, mediumLimits, shownBuckets,
 } from './bankMedium.js'
 // 🧹 Auto-reject — the number next to a checkbox must be the number the click
 // moves, and a 0 has to say WHICH of its two meanings it carries.
 import {
   flagCandidateLabel, flagPrereq, pickedCandidates, unscannedNotice,
 } from './autoRejectReadiness.js'
-// 🗃️ Chip counters — the number a chip PRINTS (measured under the filters in
-// force) is not the number that decides the chip EXISTS (bank-wide).
-import DescribeFilterBar from './DescribeFilterBar.jsx'
 import { chipCounts, facetDataKey, isFacetFiltered } from './bankFacetCounts.js'
 
 function semanticPayloadMatches(payload, engine, modelKey = null) {
@@ -136,57 +124,6 @@ const FULL_PAYLOAD_MS = 10000
    surface exists to end. */
 const TAG_CAPTION_FETCH_CAP = 500
 
-const FLAG_LABEL = {
-  blur: '🌫 Blurry', noise: '📺 Noisy', uniform: '⬜ Flat',
-  small: '📐 Small', unreadable: '❌ Unreadable',
-  // Provenance pass — same CPU scan, no extras needed.
-  ...PROVENANCE_FLAG_LABEL,
-  // V2 scoring flags (aesthetic · NSFW · watermark passes).
-  low_aesthetic: '💔 Low aesthetic', nsfw: '🔞 NSFW', watermark: '🚩 Watermark',
-}
-const FLAG_HINT = {
-  soft_detail: 'The picture stops before the pixels do — usually an enlargement. '
-    + 'A soft or out-of-focus shot reads the same, so check before mass-rejecting.',
-  bars: 'Flat black letterbox/pillarbox bars — video screenshots and padded stills. '
-    + 'A dark-themed screenshot reads the same, so check before mass-rejecting.',
-}
-// These two are measurements of PROVENANCE, not quality verdicts, which is why
-// the overnight pipeline does not offer them (backend PIPELINE_REJECT_FLAGS) and
-// why the standalone button prints their caveat instead of hiding it in a
-// tooltip. Here you can see the count, undo, and look at the pile first.
-// Quality flags the CPU scan produces vs the ones the ML scoring/watermark
-// passes add — auto-reject only offers a flag whose pass has actually run.
-const QUALITY_REJECT_FLAGS = ['blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars']
-const SCORE_REJECT_FLAGS = ['low_aesthetic', 'nsfw', 'watermark']
-// Resolution tiers — ids + labels MUST mirror backend _RES_BUCKETS (order and
-// megapixel bands). Rendered as a dedicated chip row so a mixed dump can be
-// sliced by resolution and mass-acted one tier at a time.
-const RES_BUCKETS = [
-  { id: 'res_lt_025', label: '< 0.25 MP' },
-  { id: 'res_025_1', label: '0.25–1 MP' },
-  { id: 'res_1_2', label: '1–2 MP' },
-  { id: 'res_2_4', label: '2–4 MP' },
-  { id: 'res_gt_4', label: '≥ 4 MP' },
-]
-// Framing buckets — ids MUST mirror backend _FRAMING_KEYS. Face/bust/body/back
-// are the character composition axes; 'unknown' is a parseable-but-unclassed shot.
-// Origin states — ids MUST mirror backend ORIGINS. THREE, never two: 'unknown'
-// is the honest answer for any file whose metadata was stripped (which is most
-// of them) and it has to be visible and selectable as its own pile.
-const ORIGIN_BUCKETS = ORIGIN_CHIPS
-const FRAMING_BUCKETS = [
-  { id: 'face', label: '😀 Face' },
-  { id: 'bust', label: '👤 Bust' },
-  { id: 'body', label: '🧍 Body' },
-  { id: 'back', label: '🔙 Back' },
-  { id: 'unknown', label: '❔ Unknown' },
-]
-const STATUS_RING = {
-  keep: 'ring-2 ring-emerald-400',
-  reject: 'ring-2 ring-rose-400 opacity-60',
-  pending: '',
-}
-
 /** Fetch EVERY image id matching a filter, page by page (used by the
  * cluster/flag "select all" actions — a cluster can exceed one grid page). */
 async function fetchAllIds(bankId, params) {
@@ -199,556 +136,6 @@ async function fetchAllIds(bankId, params) {
   const qs = new URLSearchParams({ ...params, ids_only: '1' })
   const d = await apiFetch(`/api/bank/${bankId}/images?${qs}`)
   return d.ids || []
-}
-
-const STEP_SHORT = {
-  scan: '🔎 Scan', auto_reject: '🧹 Auto-reject', score: '✨ Score',
-  semantic_index: '🧠 Semantic index',
-  semantic_dedup: '✂ Crops', watermark: '🚩 Watermarks', faces: '👥 Person',
-  framing: '📐 Framing', caption: '🏷️ Caption', medium: '🎨 Medium',
-  angles: '⤢ Angles',
-}
-
-/* No contact with the server, so no fresh job snapshot. Saying NOTHING here is
-   the bug this replaces: a pass that is running perfectly well in the bank's
-   server-side thread looked exactly like a pass that had stopped. Plain text,
-   NOT a live region — the global ConnectionBanner already announces the outage
-   once, and a second live region would double every announcement. */
-function ProgressUnknown({ stale }) {
-  return (
-    <p className="m-0 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-content-muted">
-      <span aria-hidden>📡</span>{' '}
-      {stale
-        ? 'Lost contact — the progress above is the last thing we heard. The pass keeps running on the server.'
-        : 'Lost contact — can’t read job progress right now. Anything you started keeps running on the server; this comes back when the connection does.'}
-    </p>
-  )
-}
-
-/** ↩ The net under the bank's biggest gesture.
- *
- * Deliberately NOT a toast: a bar that vanishes after four seconds is unusable
- * for anyone who reads slowly, and this is the one control you reach for after
- * realising you just marked 400 images wrong. It stays until it is used,
- * dismissed, or replaced by a newer action — and it is fed by the bank payload,
- * so it is still there after a reload, unlike an undo that only ever lived in
- * this tab.
- *
- * `role="status"` + `aria-live="polite"` so a screen reader is told the net
- * exists at the moment the bulk action lands, without stealing focus from the
- * grid. Both controls are real buttons, in tab order.
- */
-function UndoBar({ offer, busy, onUndo, onDismiss }) {
-  if (!offer) return null
-  return (
-    <div role="status" aria-live="polite"
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-sky-400/40 bg-sky-500/10 px-3 py-2 text-sm text-content">
-      <p className="m-0 min-w-0 grow basis-full sm:basis-auto">
-        <span aria-hidden>↩</span>{' '}
-        <span className="font-semibold">{undoBannerText(offer)}</span>
-        <span className="block text-xs text-content-muted sm:inline sm:before:content-['_—_']">
-          {UNDO_HINT}
-        </span>
-      </p>
-      <button type="button" onClick={onUndo} disabled={busy}
-        className="rounded border border-sky-400/60 px-2 py-1 text-xs font-semibold hover:bg-white/10 disabled:opacity-50">
-        {busy ? 'Undoing…' : '↩ Undo'}
-      </button>
-      <button type="button" onClick={onDismiss} disabled={busy}
-        title="Keep the change and hide this"
-        className="rounded border border-border px-2 py-1 text-xs text-content-muted hover:bg-surface-raised hover:text-content disabled:opacity-50">
-        Dismiss
-      </button>
-    </div>
-  )
-}
-
-// Exported for the render test only: what this bar says during a step with no
-// per-image counter is the whole fix for "the pass looks frozen", and a source
-// regex cannot see what the renderer produces.
-export function ProgressBar({ activity, onCancel, offline = false }) {
-  /* Held HERE and not in the parent on purpose: the click has to be answered
-     without waiting for the payload that takes 2.7 s to rebuild on a bank this
-     size. Keyed by job, so the next pass gets a live button back with no effect
-     and no cleanup — see passStop.js for the measurements behind this. */
-  const [stopAskedFor, setStopAskedFor] = useState(null)
-  const presence = progressPresence(activity, offline)
-  if (presence === PROGRESS_HIDDEN) return null
-  if (presence === PROGRESS_UNKNOWN) return <ProgressUnknown />
-  const stale = presence === PROGRESS_STALE
-  const { kind, done, total, detail } = activity
-  const pct = total > 0 ? Math.round((100 * done) / total) : null
-  // "12939 / 37800" says where the pass is; it never said how long that leaves.
-  // On a bank this size the difference between twenty minutes and four hours is
-  // the difference between waiting and going to do something else.
-  const eta = etaPhrase(activity)
-  const asked = stopRequested(activity, stopAskedFor)
-  const note = stopNote(activity, asked)
-  const pipe = kind === 'pipeline' ? activity.pipeline : null
-  return (
-    <div className="space-y-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm">
-      {/* flex-wrap: at 400 px the label, the bar and Stop cannot share one row —
-          they used to squash the label to a sliver. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <span aria-hidden>⏳</span>
-        <span className={`text-content ${stale ? 'opacity-60' : ''}`}>
-          {pipe
-            ? `🚀 Launch all — step ${(pipe.index ?? 0) + 1}/${pipe.total_steps} · ${STEP_SHORT[pipe.current] || pipe.current}`
-            : ({ scan: 'Quality scan', faces: 'Face pass', score: 'Scoring pass',
-              semantic_index: 'Semantic index',
-              semantic_dedup: 'Crops & variants', watermark: 'Watermark scan',
-              framing: 'Framing pass', caption: 'Captioning', promote: 'Promotion',
-              medium: 'Medium pass', angles: 'Measuring head angles',
-              bank_promote: 'Copying into the new bank',
-              // The one destructive pass: it must NAME itself in the bar, not
-              // ride under the anonymous "Job running" fallback.
-              delete_rejected: 'Deleting rejected files' }[kind] || 'Job') + ' running'}
-          {/* A step with no per-image counter publishes done=total=0 and says
-              what it is doing in words (the cache write, the style grouping).
-              Printing a bare "0" next to that sentence would read as "0 done"
-              on work that is running — so the figure only appears when there
-              is one. */}
-          {(done || total) ? <>{' — '}{done}{total ? ` / ${total}` : ''}</> : null}
-          {eta ? `${(done || total) ? ' · ' : ' — '}${eta}` : ''}
-          {detail ? `${(done || total || eta) ? ' · ' : ' — '}${detail}` : ''}
-        </span>
-        {pct != null && (
-          <div className="h-1.5 w-40 overflow-hidden rounded bg-surface-raised" role="progressbar"
-            aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-            <div className="h-full bg-amber-400" style={{ width: `${pct}%` }} />
-          </div>
-        )}
-        {/* `disabled` is the whole of requirement one: seven POSTs in 20 ms is
-            what an enabled button that looks identical after the click buys.
-            `title` carries the promise for the pointer that hovers before it
-            presses; the line below carries it for everyone else. */}
-        <button type="button" disabled={asked} title={note || undefined}
-          onClick={() => { setStopAskedFor(jobKey(activity)); onCancel?.() }}
-          className="ml-auto rounded-md border border-border px-2 py-0.5 text-xs text-content hover:bg-surface-raised disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent">
-          {stopLabel(asked)}
-        </button>
-      </div>
-      {/* One line, xs, muted — and it REPLACES the Stop sentence that used to
-          ride inside the style-grouping phase label, where everyone read it all
-          the time and it wrapped the counter off its row at 400 px.
-          aria-live so the answer to the click reaches a screen reader too. */}
-      {note && (
-        <p className="m-0 pl-6 text-xs text-content-muted" aria-live="polite">{note}</p>
-      )}
-      {stale && <ProgressUnknown stale />}
-      {pipe && Array.isArray(pipe.results) && pipe.results.length > 0 && (
-        <ul className="flex flex-wrap gap-1.5 pl-6 text-xs">
-          {pipe.results.map((r, i) => (
-            <li key={`${r.step}-${i}`}
-              className={`rounded px-1.5 py-px ${r.status === 'done' ? 'bg-emerald-500/15 text-emerald-300'
-                : r.status === 'error' ? 'bg-rose-500/15 text-rose-300'
-                : 'bg-black/20 text-content-subtle'}`}
-              title={r.reason || r.detail || ''}>
-              {r.status === 'done' ? '✅' : r.status === 'error' ? '⚠️' : '⏭️'} {STEP_SHORT[r.step] || r.step}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-function Chip({ active, onClick, children, title }) {
-  return (
-    <button type="button" onClick={onClick} title={title}
-      className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors ${active
-        ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
-        : 'border-border bg-surface text-content-muted hover:text-content hover:bg-surface-raised'}`}>
-      {children}
-    </button>
-  )
-}
-
-// One header stat — a bold tabular figure with a subtle label. Kept/rejected/
-// promoted carry their status colour so the strip reads at a glance.
-function Stat({ label, value, tone }) {
-  const toneCls = { emerald: 'text-emerald-300', rose: 'text-rose-300', indigo: 'text-indigo-300' }[tone] || 'text-content'
-  const n = typeof value === 'number' ? value.toLocaleString() : value
-  return (
-    <span className="inline-flex items-baseline gap-1">
-      <span className={`font-semibold tabular-nums ${toneCls}`}>{n}</span>
-      <span className="text-xs text-content-subtle">{label}</span>
-    </span>
-  )
-}
-
-// A small uppercase eyebrow that names a group of controls (a filter facet, the
-// passes toolbar) so dense rows read as grouped rather than as a flat wall.
-function GroupLabel({ children }) {
-  return (
-    <span className="text-[10px] font-semibold uppercase tracking-wide text-content-subtle">{children}</span>
-  )
-}
-
-// A labelled cluster of filter chips — the eyebrow names the facet (Status,
-// Quality, Score, Groups); chips wrap together within it on narrow viewports.
-function FilterGroup({ label, children }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <GroupLabel>{label}</GroupLabel>
-      {children}
-    </div>
-  )
-}
-
-// The selection's caption tags stay visible while the gallery changes. The
-// component is mounted once per responsive position: in the filter zone below
-// xl, and as a sticky inspector beside the gallery on desktop.
-function SelectionTagsPanel({ tagRow, tagPicked, onToggle, onClear }) {
-  return (
-    <div className="space-y-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/5 px-2.5 py-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <GroupLabel>
-          {tagRow.kind === 'image' ? `🏷️ Tags of ${tagRow.name}`
-            : tagRow.size === 1 ? '🏷️ Tags of the selected image'
-              : `🏷️ Tags across ${tagRow.size} selected images`}
-        </GroupLabel>
-        <span className="text-[11px] text-content-subtle">
-          attributes you pick — unlike 🎯 Similar, which matches the look
-        </span>
-        {tagRow.frozen && (
-          <span className="rounded border border-border px-1.5 text-[11px] text-content-subtle">
-            held from the selection you filtered on
-          </span>
-        )}
-        <button type="button" onClick={onClear}
-          className="ml-auto rounded border border-border px-2 py-0.5 text-[11px] text-content-muted hover:text-content">
-          ✕ Close
-        </button>
-      </div>
-      {tagRow.rows.length === 0 ? (
-        <p className="m-0 text-xs text-content-muted">
-          {tagRow.uncaptioned > 0 && tagRow.counted === 0
-            ? (tagRow.size === 1
-              ? 'This image has no caption yet — run 🏷️ Caption and its tags appear here.'
-              : `None of these ${tagRow.size} images has a caption yet — run 🏷️ Caption on them and their tags appear here.`)
-            : 'No caption here has a word worth filtering on.'}
-        </p>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {tagRow.rows.map(({ tag, count }) => {
-            const n = tagCountLabel(count, tagRow.counted)
-            return (
-              <Chip key={tag} active={tagPicked.has(tag)}
-                onClick={() => onToggle(tag)}
-                title={tagPicked.has(tag)
-                  ? `Stop requiring “${tag}”`
-                  : `Show only images whose caption mentions “${tag}”`
-                    + (n ? ` — cited by ${count} of the ${tagRow.counted} captioned images you selected` : '')}>
-                {tag}
-                {n && <span className="ml-1 text-[10px] text-content-subtle">{n}</span>}
-              </Chip>
-            )
-          })}
-        </div>
-      )}
-      {selectionTagsNotes(tagRow, tagRow.unread).map((note) => (
-        <p key={note} className="m-0 text-[11px] leading-snug text-content-subtle">{note}</p>
-      ))}
-      {tagPicked.size > 0 && (
-        <p className="m-0 text-[11px] text-content-muted">
-          {tagFilterSummary(tagPicked)} Matched as whole words, in captions and file names.
-        </p>
-      )}
-    </div>
-  )
-}
-
-// The individual analysis passes share one quiet, uniform button so they read
-// as a secondary group next to the prominent Launch all / Promote actions.
-function PassButton({ onClick, disabled, title, children }) {
-  return (
-    <button type="button" onClick={onClick} disabled={disabled} title={title}
-      className="rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content transition-colors hover:bg-surface disabled:opacity-50 disabled:hover:bg-surface-raised">
-      {children}
-    </button>
-  )
-}
-
-// One numbered workflow zone: a labelled, collapsible section grouping the
-// controls of one step (① Analyze … ④ Promote). `accented` draws a discreet
-// amber ring + "Next step" pill on the ONE zone nextBankStep recommends — purely
-// advisory: every zone stays open and clickable. Default expanded (nothing hidden).
-function ZoneSection({ zone, accented, children }) {
-  const [open, setOpen] = useState(true)
-  return (
-    <section className={`rounded-xl border bg-surface ${accented
-      ? 'border-amber-400/60 ring-1 ring-amber-400/40' : 'border-border'}`}>
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-        className="flex w-full items-center gap-2 px-4 py-2 text-left">
-        <span aria-hidden className="text-base tabular-nums">{zone.emoji}</span>
-        <span className="text-sm font-semibold text-content">{zone.label}</span>
-        {accented && (
-          <span className="rounded-full border border-amber-400/50 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
-            Next step
-          </span>
-        )}
-        <span aria-hidden className="ml-auto text-xs text-content-subtle">{open ? '▲' : '▼'}</span>
-      </button>
-      {open && <div className="space-y-3 px-4 pb-3">{children}</div>}
-    </section>
-  )
-}
-
-// 📊 Coverage advice (idea by @antonp) — a read-only, collapsible panel. Reads
-// what the passes already computed (framing, person/style clusters, resolution)
-// and says, in plain sentences, what the kept set leans on and what's thin for a
-// good LoRA. Never selects or rejects; warnings first, then gentler notes.
-function FramingBar({ framing }) {
-  const total = FRAMING_BUCKETS.reduce((a, b) => a + (framing[b.id] || 0), 0)
-  if (!total) return null
-  const tone = { face: 'bg-teal-400', bust: 'bg-sky-400', body: 'bg-indigo-400',
-    back: 'bg-fuchsia-400', unknown: 'bg-content-subtle' }
-  return (
-    <div className="space-y-1">
-      <div className="flex h-2 overflow-hidden rounded bg-surface-raised" role="img"
-        aria-label="Framing distribution of the set">
-        {FRAMING_BUCKETS.map((b) => (framing[b.id] || 0) > 0 && (
-          <div key={b.id} className={tone[b.id]} style={{ width: `${(100 * framing[b.id]) / total}%` }}
-            title={`${b.label}: ${framing[b.id]}`} />
-        ))}
-      </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-content-subtle">
-        {FRAMING_BUCKETS.map((b) => (framing[b.id] || 0) > 0 && (
-          <span key={b.id}>{b.label} {framing[b.id]}</span>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// 👁 What the labels cannot see: how alike the pool actually LOOKS, measured on
-// the currently selected semantic cache. A Bank with no usable index shows "Not
-// measured" rather than a reassuring colour — the whole point is that silence
-// must never read as variety.
-function VisualSpread({ visual, total, semanticEngine }) {
-  const r = spreadReadout(visual, semanticEngine)
-  if (!r) return null
-  const tone = r.tone === 'warn' ? 'border-amber-400/50 bg-amber-400/10 text-amber-200'
-    : r.tone === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-      : 'border-border bg-surface-raised text-content-subtle'
-  const note = spreadCoverageNote(visual, total, semanticEngine)
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] uppercase tracking-wide text-content-muted">Visual spread</span>
-        <span className={`rounded-full border px-2 py-0.5 text-[11px] ${tone}`}>{r.label}</span>
-      </div>
-      <p className="m-0 text-[11px] text-content-subtle">{r.detail}</p>
-      {note && <p className="m-0 text-[11px] text-content-subtle">{note}</p>}
-    </div>
-  )
-}
-
-// The caption-derived axes, rendered from the SAME pure helpers the dataset panel
-// uses (imported, not copied) so the two surfaces cannot drift apart.
-function VarietyAxes({ variety }) {
-  if (!variety || !variety.captioned || !(variety.axes || []).length) return null
-  const chip = { ok: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
-    thin: 'border-amber-400/50 bg-amber-400/10 text-amber-300',
-    gap: 'border-rose-400/50 bg-rose-400/10 text-rose-300',
-    none: 'border-border bg-surface-raised text-content-subtle' }
-  return (
-    <div className="flex flex-col gap-2 border-t border-border pt-2">
-      {variety.axes.map((axis) => (
-        <div key={axis.id} className="flex flex-col gap-1">
-          <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className="text-[11px] uppercase tracking-wide text-content-muted">{axis.label}</span>
-            {axis.hint && <span className="text-[11px] text-content-subtle">{axis.hint}</span>}
-          </div>
-          {/* The chips decorate a sentence a screen reader can read out; the
-              sentence is the carrier, never the colour. */}
-          <span className="sr-only">{axisSummary(axis)}</span>
-          <div aria-hidden className="flex flex-wrap gap-1">
-            {axisRows(axis).map((r) => (
-              <span key={r.id}
-                title={r.count ? `${r.count} caption${r.count === 1 ? '' : 's'} mention this`
-                  : (r.state === 'gap' ? 'No caption mentions this' : 'Not mentioned (optional)')}
-                className={`rounded-full border px-2 py-0.5 text-[11px] ${chip[r.state]}`}>
-                {r.label}<span className="opacity-60"> {r.count}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function CoveragePanel({ coverage, semanticEngine, semanticLabel,
-  onClose, onBalance = null, balanceReason = '' }) {
-  if (!coverage) {
-    return <p className="text-sm text-content-subtle">Reading coverage…</p>
-  }
-  const poolWord = coverage.pool === 'kept' ? 'kept' : 'candidate (nothing kept yet)'
-  return (
-    <div className="space-y-3 rounded-lg border border-indigo-400/40 bg-indigo-500/5 px-3 py-2.5">
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold text-content">📊 Coverage advice</span>
-        <span className="text-xs text-content-subtle">
-          {coverage.total.toLocaleString()} {poolWord} image{coverage.total === 1 ? '' : 's'}
-        </span>
-        <span className="ml-auto rounded border border-indigo-400/40 px-1.5 py-px text-[10px] uppercase tracking-wide text-indigo-300"
-          title="Community idea by @antonp">idea by @antonp</span>
-        <button type="button" onClick={onClose} aria-label="Hide coverage advice"
-          className="rounded-md border border-border px-1.5 py-0.5 text-xs text-content-subtle hover:text-content">✕</button>
-      </div>
-      {coverage.framing_available && <FramingBar framing={coverage.framing} />}
-      <VisualSpread visual={coverage.visual} total={coverage.total}
-        semanticEngine={semanticEngine} />
-      <ul className="space-y-1 text-sm">
-        {coverage.advice.map((a, i) => (
-          <li key={i} className="flex items-start gap-2">
-            <span aria-hidden>{a.tone === 'warn' ? '⚠️' : '💡'}</span>
-            <span className={a.tone === 'warn' ? 'text-amber-200' : 'text-content-muted'}>{a.text}</span>
-          </li>
-        ))}
-      </ul>
-      {/* The advice said what leans; this is the gesture that acts on it. Still
-          only a SELECTION — the panel itself never keeps or rejects anything. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={onBalance || undefined} disabled={!onBalance}
-          title={onBalance
-            ? 'Select a set spread evenly over the framings, instead of the top of one ranking'
-            : balanceReason}
-          className="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-emerald-500/20">
-          ⚖️ Pick a balanced set…
-        </button>
-        {!onBalance && balanceReason && (
-          <span className="text-[11px] text-content-subtle">{balanceReason}</span>
-        )}
-      </div>
-      <VarietyAxes variety={coverage.variety} />
-      <p className="text-[11px] text-content-subtle">
-        Advice only — nothing is kept or rejected. Based on what the passes already computed:
-        the labels, your captions (words, not pixels — a shot the captioner never described is
-        invisible here, and “not smiling” still counts as a smile) and the {semanticLabel} semantic index.
-        Judged as a character source, like the framing target above.
-      </p>
-    </div>
-  )
-}
-
-function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
-  // `key` matters only for the flags list below (the one mapped array) — it was
-  // missing and logged a React warning on every bank grid render.
-  // The chips this image would actually offer. Computed HERE rather than asked of
-  // the caption's mere existence: a caption of nothing but stop words ("a photo of
-  // her") yields zero chips, and `img.caption && …` would have offered the button
-  // anyway. The test for "can this button do its job" is the job's own output.
-  const tagChips = captionChips(img.caption)
-  const badge = (txt, cls, key) => (
-    <span key={key} className={`rounded px-1 py-px text-[10px] font-semibold leading-none ${cls}`}>{txt}</span>
-  )
-  return (
-    <li className={`relative overflow-hidden rounded-lg border border-border bg-surface ${STATUS_RING[img.status] || ''}`}>
-      <button type="button" onClick={onToggle}
-        title={`${img.name} — ${img.width || '?'}×${img.height || '?'}`
-          + (img.blur_score != null ? ` · sharpness ${Math.round(img.blur_score)}` : '')
-          + (img.aesthetic_score != null ? ` · aesthetic ${img.aesthetic_score.toFixed(1)}` : '')
-          + (img.nsfw_score != null ? ` · NSFW ${Math.round(img.nsfw_score * 100)}%` : '')
-          + (img.face_cluster ? ` · person #${img.face_cluster}`
-            // A declaration is not a measurement — the tooltip says which it is.
-            + (img.face_cluster_origin === 'asserted' ? ' (your folder assertion)' : '') : '')
-          + (img.framing ? ` · ${img.framing}` : '')
-          + (img.medium ? ` · ${img.medium}` : '')
-          + (img.face_yaw != null ? ` · head turned ${Math.round(Math.abs(img.face_yaw))}°` : '')
-          + (detailSummary(img)?.soft ? ` · only ~${detailSummary(img).real} px of real detail` : '')
-          + (img.origin && img.origin !== 'unknown' ? ` · ${img.origin}` : '')
-          + (img.style_cluster ? ` · style #${img.style_cluster}` : '')
-          + (img.semantic_dup_group ? ` · same shot #${img.semantic_dup_group}` : '')
-          // The caption, and WHO WROTE IT in the same breath. The 'auto' backend
-          // chains two engines inside one run, so a bank holds both and the
-          // sentence alone cannot say which half produced it — exactly the reading
-          // this tooltip was missing.
-          + (img.caption
-            ? `\n${captionOriginTooltipLine(img.caption, img.caption_origin)}: ${img.caption}`
-            : '')}
-        className="block w-full">
-        {/* ?r= is a cache buster, not a parameter the server reads: the thumb
-            route answers with max-age=3600, so a turned image would keep showing
-            its old orientation for an hour and read as "the button did nothing". */}
-        <img src={`/api/bank/${bankId}/thumb/${img.id}${img.rotation ? `?r=${img.rotation}` : ''}`}
-          alt={img.rotation ? `${img.name} (rotated ${img.rotation}°)` : img.name} loading="lazy"
-          className={`w-full object-cover ${size === 'S' ? 'h-24' : 'h-36'}`} />
-      </button>
-      {selected && (
-        <span aria-hidden className="absolute inset-0 bg-indigo-500/30 ring-2 ring-indigo-400 rounded-lg pointer-events-none" />
-      )}
-      <span className="absolute left-1 top-1 flex flex-wrap gap-0.5 max-w-[85%]">
-        {img.status === 'keep' && badge('✓', 'bg-emerald-500/80 text-white')}
-        {img.status === 'reject' && badge(`✕ ${img.reject_reason || ''}`.trim(), 'bg-rose-500/80 text-white')}
-        {/* ⬆ = this image left for somewhere: a dataset, another bank, or both.
-            One badge for both destinations — the tile says THAT it went, the
-            tooltip and the review lightbox say where. */}
-        {(img.promoted_dataset_id != null || img.promoted_bank_id != null)
-          && badge('⬆', 'bg-indigo-500/80 text-white')}
-        {img.flags.map((f) => badge(FLAG_LABEL[f]?.slice(0, 2) || f, 'bg-black/60 text-amber-200', f))}
-        {img.face_cluster != null && badge(`👤${img.face_cluster}`, 'bg-black/60 text-sky-200')}
-        {img.framing && badge(`📐${img.framing}`, 'bg-black/60 text-teal-200')}
-        {/* A medium badge is stamped only when the classifier actually COMMITTED
-            to one — 'unsure' is a real verdict but it is not a label to write on
-            a thumbnail, and NULL means the pass never reached this image. */}
-        {img.medium && img.medium !== 'unsure'
-          && badge(`🎨${img.medium}`, 'bg-black/60 text-lime-200')}
-        {angleBadge(img) && badge(angleBadge(img).text, 'bg-black/60 text-cyan-200')}
-        {/* Only the PROVEN states get a badge. Stamping ❔ on the 80% of files
-            whose metadata was stripped would be noise, not information. */}
-        {img.origin === 'ai' && badge('🤖', 'bg-black/60 text-violet-200')}
-        {img.origin === 'camera' && badge('📷', 'bg-black/60 text-emerald-200')}
-        {img.style_cluster != null && badge(`🎨${img.style_cluster}`, 'bg-black/60 text-fuchsia-200')}
-        {img.dup_group != null && badge(`≈${img.dup_group}`, 'bg-black/60 text-fuchsia-200')}
-        {img.semantic_dup_group != null && badge(`✂${img.semantic_dup_group}`, 'bg-black/60 text-orange-200')}
-      </span>
-      {/* ▶ starts the fast-triage lightbox AT this image. It's a separate hit
-          target on purpose: the tile's own click still (de)selects for the bulk
-          ✓/✕/⬆ bar, so neither use loses its gesture. */}
-      {/* 🏷️ MOVED HERE, out of the badge cluster in the top-left corner.
-          Everything up there is a STATE READOUT — ✓, ✕, ⬆, the flags, the person
-          and framing chips — and none of it is clickable. A button dropped in the
-          middle of that row does not read as an action; in the maintainer's own
-          words, "otherwise it gets drowned at the top with the icons that aren't
-          clickable". The tile's two real actions live in this bottom-right group,
-          so the third one joins them, in the same clothes.
-
-          AND IT ONLY APPEARS WHEN IT CAN DELIVER. The chips ARE the words of the
-          caption, so on an image whose caption yields none the picker could only
-          say "This caption has no word worth filtering on." — a button promising
-          something it cannot do. That silence has already cost once, the other way
-          round: the feature had shipped for two days and was read as absent,
-          because the bank simply had no captions. So the button says WHY it is
-          not there, exactly the way a semantic action names its missing index
-          on the pass row — a shipped feature that says nothing is indistinguishable
-          from one that does not exist. */}
-      {tagChips.length > 0 ? (
-        <button type="button" onClick={onTags}
-          title={`Filter the bank by this image's tags — ${img.caption}`}
-          aria-label={`Use the tags of ${img.name} as a filter`}
-          className="absolute bottom-1 right-11 rounded bg-black/60 px-1 text-[11px] text-emerald-200 hover:bg-black/80">🏷️</button>
-      ) : (
-        <span
-          title={img.caption
-            ? '🏷️ Tags — this caption has no word worth filtering on (the chips are the caption\'s own words)'
-            : '🏷️ Tags (needs a caption) — run 🏷️ Caption on this bank and the chips appear here'}
-          aria-label={img.caption
-            ? 'Tags unavailable: this caption has no word worth filtering on'
-            : 'Tags unavailable: this image has no caption yet'}
-          className="absolute bottom-1 right-11 rounded bg-black/40 px-1 text-[11px] text-white/35">🏷️</span>
-      )}
-      <button type="button" onClick={onReview}
-        title="Review from this image — full size, one at a time, with Keep/Reject/Skip"
-        aria-label={`Review from ${img.name}`}
-        className="absolute bottom-1 right-6 rounded bg-black/60 px-1 text-[11px] text-white hover:bg-black/80">▶</button>
-      <a href={`/api/bank/${bankId}/file/${img.id}`} target="_blank" rel="noreferrer"
-        title="Open the original file" aria-label={`Open ${img.name} full size`}
-        className="absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[11px] text-white no-underline hover:bg-black/80">⛶</a>
-    </li>
-  )
 }
 
 export default function BankWorkspace({ bankId, onBack, onGone }) {
@@ -838,6 +225,34 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // 🎚 The threshold editor folds away: the chips are the daily gesture, the
   // numbers behind them are the occasional one.
   const [thresholdsOpen, setThresholdsOpen] = useState(false)
+
+  /* ── Structure B's own view state ─────────────────────────────────────────
+     The rail folds instead of overflowing, and the passes live in a panel
+     opened on demand. Every DECISION behind these lives in bankLayout.js, where
+     `node --test` can reach it; what is here is only the React wiring. */
+  const viewportWidth = () => (typeof window === 'undefined' ? undefined : window.innerWidth)
+  // Whether the rail can sit BESIDE the grid at this width, tracked live: a
+  // window dragged narrow must turn the rail into a drawer, not clip it.
+  const [railIsColumnNow, setRailIsColumnNow] = useState(() => railIsColumn(viewportWidth()))
+  const [railOpen, setRailOpen] = useState(() => loadRailOpen(viewportWidth()))
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [passesOpen, setPassesOpen] = useState(false)
+  useEffect(() => {
+    const onResize = () => setRailIsColumnNow(railIsColumn(window.innerWidth))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  /* The rail state is REMEMBERED (a screen preference — it belongs with view
+     state, never with the settings that describe what a dataset produces), but
+     only when the rail is a column. Closing the phone drawer is "I am done
+     filtering", not "hide the filters on my desktop too". */
+  const setRail = useCallback((open) => {
+    setRailOpen(open)
+    if (railIsColumn(viewportWidth())) saveRailOpen(open)
+  }, [])
+  const openRail = useCallback(() => setRail(true), [setRail])
+  const closeRail = useCallback(() => setRail(false), [setRail])
+  const togglePasses = useCallback(() => setPassesOpen((v) => !v), [])
   // Curation popovers ('diverse' | 'similar' | null) and their target counts.
   const [curateOpen, setCurateOpen] = useState(null)
   const [diverseN, setDiverseN] = useState(60)
@@ -1875,6 +1290,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   }
 
   const counts = payload?.counts
+  /* A freshly imported dump has nothing measured: the grid is a wall of
+     unscanned images and every useful action is inside the passes panel, so it
+     opens ITSELF once. Guarded on the computed boolean rather than on `counts`,
+     so the first scan flipping it to false never re-runs this — and so a user
+     who closes the panel on such a bank is not fought by the effect. */
+  const passesShouldOpen = passesPanelStartsOpen(counts)
+  useEffect(() => { if (passesShouldOpen) setPassesOpen(true) }, [passesShouldOpen])
   const semanticState = semanticEngineState(payload, capsLoading ? null : caps)
   semanticEngineRef.current = semanticState.engine
   semanticModelKeyRef.current = semanticState.modelKey
@@ -2150,57 +1572,52 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const promoteZone = BANK_ZONES.find((z) => z.id === 'promote')
 
   return (
-    <div className="space-y-4">
+    /* ── Structure B ──────────────────────────────────────────────────────
+       Layout only. An "Encre" skin was trialled here — a scoped token override
+       that re-coloured the whole subtree — and dropped: the app keeps its own
+       palette, and the Bank must not be the one screen that looks foreign.
+       Every surface below therefore speaks the app's semantic utilities
+       (bg-surface, border-border, text-content) and nothing else.
+
+       The children are in READING ORDER — top bar, rail, grid — which is also
+       the tab order. Nothing here carries a tabindex; the DOM is the
+       accessibility contract, and a rail that tabbed out of order would be a
+       regression the eye cannot see. */
+    <div className="space-y-3">
+      {/* ── The top bar ──────────────────────────────────────────────────
+          Bank identity, the counters, and the DECISIVE actions. Everything
+          here is bank-wide; anything that narrows the grid lives in the rail. */}
       <header className="space-y-2 rounded-xl border border-border bg-surface px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={onBack}
             className="rounded-md border border-border px-2 py-1 text-xs text-content-muted hover:text-content hover:bg-surface-raised">
             ← Banks
           </button>
-          <h1 className="text-lg font-bold text-content">🗃️ {payload?.name || `Bank #${bankId}`}</h1>
+          <h1 className="text-lg text-content">🗃️ {payload?.name || `Bank #${bankId}`}</h1>
+          {payload?.source_path && (
+            <div className="flex min-w-0 grow items-center gap-2">
+              <p className="min-w-0 grow truncate font-mono text-xs text-content-subtle"
+                title={payload.source_path}>
+                {payload.source_path}
+              </p>
+              <button type="button" onClick={openSourceFolder}
+                disabled={openingSourceFolder} aria-busy={openingSourceFolder}
+                title="Open this Bank's source folder in the system file explorer."
+                className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content disabled:cursor-wait disabled:opacity-60">
+                {openingSourceFolder ? 'Opening…' : '📂 Open folder'}
+              </button>
+              {/* Cold path. The folder-sync note below offers this too, but only once
+                  the folder is already gone — and the real move is PLANNED: you look
+                  for the option before you drag 30 000 files to another drive, not
+                  after breaking the bank to discover it could have been repaired. */}
+              <button type="button" onClick={() => setRelocating(true)}
+                title="Moving this folder to another disk? Point the bank at its new location."
+                className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
+                📦 Move folder…
+              </button>
+            </div>
+          )}
         </div>
-        {payload?.source_path && (
-          <div className="flex min-w-0 items-center gap-2">
-            <p className="min-w-0 grow truncate font-mono text-xs text-content-subtle"
-              title={payload.source_path}>
-              {payload.source_path}
-            </p>
-            <button type="button" onClick={openSourceFolder}
-              disabled={openingSourceFolder} aria-busy={openingSourceFolder}
-              title="Open this Bank's source folder in the system file explorer."
-              className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content disabled:cursor-wait disabled:opacity-60">
-              {openingSourceFolder ? 'Opening…' : '📂 Open folder'}
-            </button>
-            {/* Cold path. The folder-sync note below offers this too, but only once
-                the folder is already gone — and the real move is PLANNED: you look
-                for the option before you drag 30 000 files to another drive, not
-                after breaking the bank to discover it could have been repaired. */}
-            <button type="button" onClick={() => setRelocating(true)}
-              title="Moving this folder to another disk? Point the bank at its new location."
-              className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
-              📦 Move folder…
-            </button>
-          </div>
-        )}
-        {/* A bank created before this was refused can still point at a dataset's
-            own image folder. Nothing is repaired behind the user's back — the
-            bank stays fully readable — but the fact is stated every time it is
-            opened, because the click that hurts (🗑 Delete rejected) is right
-            here on this page. */}
-        {payload?.dataset_conflict && (
-          <div role="alert"
-            className="rounded-md border border-rose-500/70 bg-rose-500/15 p-3 text-sm text-rose-100 space-y-1">
-            <p className="font-semibold">⛔ This bank sits on a dataset’s image folder</p>
-            <p className="text-rose-100/90">{payload.dataset_conflict.message}</p>
-            <p className="text-rose-100/90">
-              🗑 Delete rejected is disabled here. Use 📦 Move folder… to point this
-              bank at a folder of its own, or remove the bank — removing a bank never
-              touches files.
-            </p>
-          </div>
-        )}
-        <FolderSyncNote sync={payload?.folder_sync}
-          onRelocate={() => setRelocating(true)} />
         {counts && (
           <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-border pt-2 text-sm">
             <Stat label="images" value={counts.total} />
@@ -2220,7 +1637,73 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             <Stat label="promoted" value={counts.promoted} tone="indigo" />
           </div>
         )}
+        {/* The decisive actions. ⚙ Passes opens the analysis panel; the other
+            three are the ones that change what leaves this bank. */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
+          {/* ☰ exists only where the rail cannot sit beside the grid — at 400 px
+              it is the ONLY way back to the filters, so it is a real button and
+              never a CSS-hidden one. */}
+          {!railIsColumnNow && (
+            <button type="button" onClick={openRail}
+              aria-expanded={railOpen} aria-controls="bank-filter-rail"
+              className="rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content hover:bg-surface">
+              ☰ Filters
+            </button>
+          )}
+          <button type="button" onClick={togglePasses}
+            aria-expanded={passesOpen} aria-controls="bank-passes-panel"
+            title="Open the analysis passes — scan, score, group by person, framing, medium, crops, watermarks and captions."
+            className="rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content hover:bg-surface">
+            {passesButtonLabel(live)}
+          </button>
+          <button type="button" onClick={() => setLaunchOpen(true)} disabled={live || !(counts?.total > 0)}
+            title={`Run the whole triage in one go — scan, auto-reject, Score${semanticState.engine === 'siglip2' ? ', SigLIP 2 semantic index' : ''}, crops/variants, watermarks, group by person and (optionally) caption. Start it and walk away. If the person pass is in, it checks your folders first and asks once, before the run.`}
+            className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-bold text-white shadow disabled:opacity-50">
+            🚀 Launch all…
+          </button>
+          <span className="ml-auto" />
+          <button type="button" onClick={() => setPromoteOpen(true)} disabled={live || !canPromote}
+            title={canPromote
+              ? 'Copy the kept selection into a dataset — or into a brand-new bank, to keep working on a shortlist apart'
+              : 'Keep some images first'}
+            className="rounded-md bg-gradient-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
+            ⬆ Promote…
+          </button>
+          {/* Disabled outright when this bank's folder belongs to a dataset: the
+              banner below says it is, and a button that still opened a dialog only
+              to be refused there would make that sentence a lie. */}
+          <button type="button" onClick={() => setDeleteRejectedOpen(true)}
+            disabled={live || !(counts?.reject > 0) || !!payload?.dataset_conflict}
+            title={payload?.dataset_conflict
+              ? 'This bank sits on a dataset’s image folder — deleting these files would delete the dataset’s images.'
+              : (counts?.reject > 0)
+                ? 'Delete the rejected images from your disk (OS trash when available). Irreversible — asks you to type DELETE first. Kept images are untouched.'
+                : 'No rejected images to delete'}
+            className="rounded-md border border-rose-500/50 px-3 py-1.5 text-sm text-rose-300 disabled:opacity-40 hover:bg-rose-500/10">
+            🗑 Delete rejected from disk{(counts?.reject > 0) ? ` (${counts.reject})` : ''}
+          </button>
+        </div>
       </header>
+
+      {/* A bank created before this was refused can still point at a dataset's
+          own image folder. Nothing is repaired behind the user's back — the
+          bank stays fully readable — but the fact is stated every time it is
+          opened, because the click that hurts (🗑 Delete rejected) is right
+          here on this page. */}
+      {payload?.dataset_conflict && (
+        <div role="alert"
+          className="rounded-md border border-rose-500/70 bg-rose-500/15 p-3 text-sm text-rose-100 space-y-1">
+          <p className="font-semibold">⛔ This bank sits on a dataset’s image folder</p>
+          <p className="text-rose-100/90">{payload.dataset_conflict.message}</p>
+          <p className="text-rose-100/90">
+            🗑 Delete rejected is disabled here. Use 📦 Move folder… to point this
+            bank at a folder of its own, or remove the bank — removing a bank never
+            touches files.
+          </p>
+        </div>
+      )}
+      <FolderSyncNote sync={payload?.folder_sync}
+        onRelocate={() => setRelocating(true)} />
 
       <ProgressBar activity={payload?.activity} onCancel={cancelJob} offline={!connection.online} />
 
@@ -2233,1159 +1716,624 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           onDismiss={() => setDismissedReportAt(payload.pipeline_report.finished_at)} />
       )}
 
-      {/* At xl the workflow uses the available width: the action-heavy Analyze
-          zone and the read-only, bank-wide overview sit side by side. Below xl
-          this remains the same simple vertical flow. */}
-      <div className="grid gap-4 xl:grid-cols-12 xl:items-start">
-      <div className="min-w-0 xl:col-span-7">
-      {/* ① Analyze — run the analysis passes (or 🚀 Launch all) on the dump.
-          Grouping + accent only; every pass keeps its own endpoint/behaviour. */}
-      <ZoneSection zone={analyzeZone} accented={activeStep === 'analyze'}>
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => setLaunchOpen(true)} disabled={live || !(counts?.total > 0)}
-          title={`Run the whole triage in one go — scan, auto-reject, Score${semanticState.engine === 'siglip2' ? ', SigLIP 2 semantic index' : ''}, crops/variants, watermarks, group by person and (optionally) caption. Start it and walk away. If the person pass is in, it checks your folders first and asks once, before the run.`}
-          className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-bold text-white shadow disabled:opacity-50">
-          🚀 Launch all…
-        </button>
-        <p className="hidden text-xs text-content-subtle md:block">
-          One-click funnel — or step through the passes below.
-        </p>
-      </div>
-
-      <BankSemanticEngine state={semanticState} capsLoading={capsLoading}
-        switching={semanticSwitching} disabled={semanticOperationBusy} live={live}
-        gpuPresent={scoreGpuPresent}
-        onPickPython={() => setPythonPickerFor('semantic')}
-        onChange={changeSemanticEngine}
-        onIndex={() => {
-          // The visible “Reindex” promise and the request body agree on first
-          // open; incomplete indexes resume with rescan:false.
-          setPassRedoFor('semantic_index', semanticState.complete)
-          setPassOpen('semantic_index')
-        }} />
-
-      {/* Analysis passes — individual, quieter than the primary actions. */}
-      <div className="space-y-1.5">
-        <GroupLabel>Analysis passes</GroupLabel>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {/* Every button OPENS ITS WINDOW instead of firing. The window is where
-              the scope, the counts, the settings the calculation really reads and
-              the things it does NOT decide finally have room to be said — and
-              where the launch button quotes the exact number it will move.
-
-              “Rescan all” is gone as a button on purpose: it was never a second
-              pass, it was a SCOPE wearing a button's clothes. It is now the last
-              line of 🔎 Scan's THIS RUN block, next to the piles it belongs with.
-              “Rescore all” went the same way, into ✨ Score's window. */}
-          <PassButton onClick={() => setPassOpen('scan')} disabled={live}
-            title="Measure sharpness, noise, flatness, size and detail, hash every image and group the exact duplicates — CPU only. Opens the launch window.">
-            🔎 Scan quality…
-          </PassButton>
-          <PassButton onClick={() => setPassOpen('faces')} disabled={live || !caps.face_scoring}
-            title={caps.face_scoring
-              ? 'Detect the dominant face of every non-rejected image and cluster the bank by person (no reference needed). CPU, can take a while on thousands of images. It samples your subfolders first and offers the ones that look like a single person, so you can skip them.'
-              : 'Install the Quality tools (Setup) to sort by person'}>
-            👥 Group by person…
-          </PassButton>
-          <PassButton onClick={() => setPassOpen('score')} disabled={live || !caps.bank_scoring}
-            title={caps.bank_scoring
-              ? `Rate every non-rejected image for aesthetics (1–10), flag NSFW, and group by visual style — one CLIP pass. Powers a smarter "keep best". Already-scored images are reused, so stopping and relaunching costs only what is left. Runs in the background${
-                holdsTheGpu(scoreDevice) ? ', and holds the GPU (ComfyUI is unloaded and training cannot start) for its duration' : ' on the CPU, leaving the GPU free'}.`
-              : 'Install the Bank scoring extra (Setup ▸ Quality tools) to score aesthetics / NSFW / style'}>
-            ✨ Score…{!caps.bank_scoring && ' (needs setup)'}
-          </PassButton>
-          <PassButton onClick={() => setPassOpen('medium')} disabled={live || !caps.bank_scoring}
-            title={caps.bank_scoring
-              ? 'Sort every scored image into photograph / anime / 3D render / illustration — read off the CLIP embeddings ✨ Score already computed, so no image is looked at again and the GPU stays free. It answers “unsure” rather than guessing: measured on a real 23 500-image bank, it named 2 anime drawings and no wrong verdict.'
-              : 'Install the Bank scoring extra (Setup ▸ Quality tools) — 🎨 Medium reads the embeddings ✨ Score produces'}>
-            🎨 Classify medium…{!caps.bank_scoring && ' (needs setup)'}
-          </PassButton>
-          <PassButton onClick={() => setPassOpen('framing')} disabled={live || !visionReady}
-            title={visionReady
-              ? 'Classify every non-rejected image by shot type — face close-up, bust, full body, back view — with the same Qwen3-VL classifier the datasets use. Powers the 📐 Framing filter and the coverage advice. GPU vision pass.'
-              : 'Pull the vision model (Settings ▸ Local tools) to classify framing'}>
-            📐 Classify framing…{!visionReady && ' (needs setup)'}
-          </PassButton>
-          <PassButton onClick={() => setPassOpen('semantic_dedup')} disabled={live || !semanticReady}
-            title={semanticReady
-              ? `Group crops and re-compressed variants of the SAME shot the exact-duplicate hash misses from the ${semanticState.label} semantic index. Review them under the ✂ Same shot chip.`
-              : semanticBlocked}>
-            ✂ Find crops &amp; variants…{!semanticReady
-              && ` (needs ${semanticState.engine === 'clip' ? 'Score' : 'SigLIP 2 index'})`}
-          </PassButton>
-          {/* The label QUOTES THE NUMBER IT WILL MOVE — the scope's uncaptioned rows,
-              or the selection when there is one. "Caption all" was the older, vaguer
-              promise, and a button that announces one figure and acts on another is the
-              misunderstanding this whole row exists to end.
-
-              IT NO LONGER GREYS OUT AT ZERO. It used to, and it took the engine, the
-              model, the register and the length pickers down with it — on exactly the
-              bank whose captions you wanted redone with a better model. The window is
-              always reachable; the LAUNCH button inside it is what refuses a run of 0,
-              and it says why. */}
-          <PassButton onClick={() => setPassOpen('caption')} disabled={live}
-            title={selected.size
-              ? `Caption the ${selected.size} selected image(s). Opens the window with the engine, model, register, length and scope.`
-              : `${captionScopeNote(selected.size, counts, captionScope)} Opens the window with the engine, model, register, length and scope.`}>
-            {captionButtonLabel(selected.size, counts, captionScope)}…
-          </PassButton>
-          {/* ⤢ the opt-in angle backfill. Its own button and its own window, never
-              folded into 👥: it is hours of work on a big bank and nobody must pay
-              it by accident. Shown only when there is something to measure. */}
-          {(counts?.angle_backfillable || 0) > 0 && (
-            <PassButton onClick={() => setPassOpen('angles')} disabled={live}
-              title="Measure the head angle of the images a previous build face-scanned without keeping it. Writes the angle and nothing else.">
-              ⤢ Measure head angles…
-            </PassButton>
-          )}
+      {/* ⚙ The analysis passes, opened on demand. All eight are here with their
+          own dialogs untouched — only the door changed. */}
+      {passesOpen && (
+        <div id="bank-passes-panel">
+          <BankPassesPanel
+            bankId={bankId} payload={payload} counts={counts} live={live}
+            caps={caps} capsLoading={capsLoading}
+            semanticState={semanticState} semanticReady={semanticReady}
+            semanticBlocked={semanticBlocked} semanticSwitching={semanticSwitching}
+            semanticOperationBusy={semanticOperationBusy}
+            scoreGpuPresent={scoreGpuPresent} scoreDevice={scoreDevice}
+            scoreNote={scoreNote} visionReady={visionReady}
+            selected={selected} captionScope={captionScope}
+            captionVocab={captionVocab} visionModel={visionModel}
+            visionModelLooksUncensored={visionModelLooksUncensored}
+            onPassOpen={setPassOpen} onPassRedo={setPassRedoFor}
+            onPickPython={setPythonPickerFor}
+            onSemanticEngineChange={changeSemanticEngine}
+            onChanged={async () => { await refreshPayload(); await refreshImages() }} />
         </div>
-        {/* Watermark CLEANING — the two manual levels (crop, then inpaint), with
-            their own per-level progress. Lives in its own component so the
-            "which level can run, and why not" logic stays unit-tested. */}
-        <BankWatermarkPanel bankId={bankId} live={live}
-          onFind={() => setPassOpen('watermark')}
-          payload={payload} selectedIds={[...selected]}
-          onChanged={async () => { await refreshPayload(); await refreshImages() }} />
-        {scoreNote && (
-          <p className={`text-xs ${scoreNote.tone === 'warn'
-            ? 'text-amber-400/90' : 'text-content-subtle'}`}>
-            {scoreNote.text}
-          </p>
+      )}
+
+      {/* ── The rail, beside the grid it filters ─────────────────────────
+          Below `sm` it cannot share this row, so it becomes a drawer OVER the
+          grid instead of squeezing it: at 400 px both would be unusable. */}
+      <div className={`grid gap-3 ${railOpen && railIsColumnNow
+        ? 'lg:grid-cols-[17rem_minmax(0,1fr)]' : 'grid-cols-1'}`}>
+        {railOpen && !railIsColumnNow && (
+          <div className="fixed inset-0 z-40 bg-black/60" onClick={closeRail} aria-hidden />
         )}
-        {!capsLoading && !caps.bank_scoring && (
-          <p className="text-xs text-content-muted">
-            ✨ Score needs its own packages (Setup ▸ Quality tools) — or an interpreter
-            that already has them{scoreGpuPresent
-              ? '. If you train LoRAs or run ComfyUI, this machine probably has one.'
-              : ', which saves installing them twice.'}
-          </p>
+        {railOpen && (
+          /* ⚠️ Plain block comment, NOT {/* … *!/}: this is the inside of
+             `{railOpen && ( … )}`, an EXPRESSION position where braces are read
+             as an object literal, not JSX children. `node --test` cannot parse
+             JSX, so nothing in the suite would have caught it.
+
+             ⚠️ STICKY is not decoration — it is what makes layout B keep its own
+              promise. The rail is ~500 px tall; the grid it filters is thousands
+              (20 000 images). As a plain grid column the rail scrolls away after
+              one screen, so changing a filter means scrolling back UP — the exact
+              round trip this layout was built to remove, reintroduced by a
+              missing property. Pinned, the filters are beside the grid at every
+              scroll position, and the empty band under a short rail is never on
+              screen.
+              It carries its own overflow: a rail taller than the viewport (many
+              people, many tags) must scroll INSIDE its pin, otherwise its lower
+              half becomes unreachable — worse than not pinning at all.
+              Only when it IS a column: as a drawer it is `fixed` already, and
+             sticky on a drawer does nothing. */
+          <div id="bank-filter-rail"
+            className={railIsColumnNow
+              ? 'min-w-0 lg:sticky lg:top-[calc(var(--app-header-h)+0.75rem)] lg:max-h-[calc(100vh-var(--app-header-h)-1.5rem)] lg:overflow-y-auto lg:self-start'
+              : 'min-w-0'}>
+            <BankFilterRail
+              bankId={bankId} filter={filter} setF={setF}
+              clusters={clusters} styleClusters={styleClusters}
+              searchText={searchText} setSearchText={setSearchText}
+              excludeText={excludeText} setExcludeText={setExcludeText}
+              subfolders={subfolders} folderPersonInfo={folderPersonInfo}
+              folderPersons={folderPersons} folderPersonBusy={folderPersonBusy}
+              assertFolderPerson={assertFolderPerson} revokeFolderPerson={revokeFolderPerson}
+              checkFolderPerson={checkFolderPerson} scanFolderPersons={scanFolderPersons}
+              tagRow={tagRow} tagPicked={tagPicked} toggleTag={toggleTag} clearTags={clearTags}
+              chipsFiltered={chipsFiltered} flags={flags}
+              availableScoreFlags={availableScoreFlags} payload={payload}
+              shownResBuckets={shownResBuckets} resBuckets={resBuckets}
+              originMeasured={originMeasured} originCounts={originCounts}
+              shownFramings={shownFramings} framingCounts={framingCounts}
+              shownMediums={shownMediums} mediumCounts={mediumCounts} mediumNote={mediumNote}
+              shownAngles={shownAngles} angleCounts={angleCounts} angleState={angleState}
+              live={live} setPassOpen={setPassOpen}
+              thresholdsOpen={thresholdsOpen} setThresholdsOpen={setThresholdsOpen}
+              connection={connection} refreshPayload={refreshPayload} refreshImages={refreshImages}
+              onRunPass={(endpoint, body) => act(
+                () => postJson(`/api/bank/${bankId}/${endpoint}`, body || {}),
+                null)}
+              sortGroups={sortGroups} setSort={setSort}
+              tileSize={tileSize} setTileSize={setTileSize}
+              moreOpen={moreOpen} setMoreOpen={setMoreOpen}
+              isDrawer={!railIsColumnNow} onClose={closeRail} />
+          </div>
         )}
-        {/* The interpreter picker, offered where it can actually help: the pass is
-            about to crawl on the CPU of a machine that HAS a card, or the scoring
-            packages are missing and another Python here may already carry them
-            (true with or without a card — it saves an install either way). The
-            LABEL adapts: a machine with no NVIDIA card must never be promised "a
-            GPU Python", and the note it gets alongside is "this is how it is",
-            not a fix to chase. */}
-        {!capsLoading && (scoreNote?.tone === 'warn' || !caps.bank_scoring) && (
-          <div>
-            <button type="button" onClick={() => setPythonPickerFor('scoring')}
-              className={`rounded-md border px-2 py-1 text-xs font-medium ${scoreGpuPresent
-                ? 'border-amber-400/50 text-amber-300 hover:bg-amber-500/10'
-                : 'border-border text-content-muted hover:bg-surface-raised hover:text-content'}`}>
-              {openerLabel(scoreGpuPresent)}
+
+        {/* ── The grid, full height ── with everything that acts on a SELECTION
+            directly above it, where the effect of the click is visible. */}
+        <main className="min-w-0 space-y-3">
+        {/* Results readout + selection actions */}
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-content-muted">
+            <span className="font-semibold tabular-nums text-content">{(page.total ?? 0).toLocaleString()}</span> shown
+            {isFiltered && (
+              <span className="text-content-subtle"> of {(counts?.total ?? 0).toLocaleString()}</span>
+            )}
+          </span>
+          <span aria-hidden className="h-4 w-px bg-border" />
+          {/* The fast lane: full-size, one image at a time, Keep/Reject/Skip with
+              K/R/S. Deliberately a button of its own rather than a tile gesture —
+              the tile click stays the bulk-selection gesture it has always been. */}
+          <button type="button" onClick={() => openReview(null)} disabled={reviewLoading}
+            title="Review the images of this filter one at a time, full size: ✓ Keep / ✕ Reject / ⏭ Skip (K/R/S) each move to the next. Optional random order."
+            className="rounded-md border border-indigo-400/60 bg-indigo-500/20 px-2.5 py-0.5 text-xs font-semibold text-indigo-200 disabled:opacity-50 hover:bg-indigo-500/30">
+            {reviewLoading ? '▶ Preparing…' : '▶ Review one by one'}
+          </button>
+          <span aria-hidden className="h-4 w-px bg-border" />
+          <span className="text-content-muted">{selected.size} selected</span>
+          <button type="button" onClick={selectAllCurrent}
+            className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content hover:bg-surface-raised">
+            Select all in filter
+          </button>
+          {/* Bulk-reject undecided images by quality flag — a triage shortcut that
+              leaves your manual ✓/✕ untouched and deletes nothing off disk. */}
+          <div className="relative">
+            <button type="button" onClick={() => setShowAutoReject((v) => !v)} disabled={live}
+              aria-expanded={showAutoReject}
+              title="Bulk-reject the still-undecided images carrying the chosen quality flags"
+              className="rounded-md border border-border bg-surface-raised px-2 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              🧹 Auto-reject…
             </button>
-          </div>
-        )}
-        {captionVocab === 'explicit' && !visionModelLooksUncensored && (
-          /* The old wording sent people to Settings ▸ Captioning & quality, which holds
-             the ENGINE selector — the vision model lives in Settings ▸ Local tools. Now
-             that the model is pickable right here, the sentence points at the control
-             on screen instead, and only mentions Settings for the case the picker
-             cannot solve: no uncensored model pulled on this machine at all. */
-          <p className="text-xs text-amber-400/90">
-            ⚠️ Explicit captions need an uncensored (abliterated) Ollama vision model
-            {visionModel ? ` — “${visionModel}” may refuse or soften explicit terms` : ''}.
-            Pick another one in <b>Caption vision model</b> above, or pull one from{' '}
-            <SettingsLink section="local-tools" focus="ollama-vision-model" tone="warning">
-              Settings ▸ Local tools
-            </SettingsLink>. Richer captions also feed the 🔍 search.
-          </p>
-        )}
-      </div>
-      </ZoneSection>
-      </div>
-      <div className="min-w-0 xl:col-span-5 xl:sticky xl:top-20">
-        <BankOverview payload={payload} />
-      </div>
-      </div>
-
-      {/* ② Triage — browse by facet/cluster and Keep/Reject to decide what stays.
-          Stays fully visible; density was never the complaint. */}
-      <ZoneSection zone={triageZone} accented={activeStep === 'triage'}>
-
-      {/* Say it in words; the app sets its own chips and the counters below —
-          measured, not the model — say what that lands on. Placed at the TOP of
-          triage because it is a shortcut to the controls underneath, not a
-          separate way of selecting. */}
-      <DescribeFilterBar bankId={bankId} onApply={setF} />
-
-      {/* Person clusters (after the face pass) */}
-      {clusters.length > 0 && (
-        <div className="space-y-1">
-          <GroupLabel>
-            People ({clusters.length} cluster{clusters.length > 1 ? 's' : ''} — biggest first)
-          </GroupLabel>
-          <ul className="flex gap-2 overflow-x-auto pb-1">
-            {clusters.map((c) => (
-              <li key={c.id} className="shrink-0">
-                <button type="button" onClick={() => setF({ cluster: filter.cluster === c.id ? null : c.id, flag: null })}
-                  title={`Show person #${c.id} (${c.size} image(s))`}
-                  className={`relative block overflow-hidden rounded-lg border ${filter.cluster === c.id
-                    ? 'border-indigo-400 ring-2 ring-indigo-400' : 'border-border'}`}>
-                  {c.cover_image_id != null && (
-                    <img src={`/api/bank/${bankId}/thumb/${c.cover_image_id}`} alt={`Person ${c.id}`}
-                      loading="lazy" className="h-16 w-16 object-cover" />
+            {showAutoReject && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowAutoReject(false)} aria-hidden />
+                {/* Anchored under the button on a desktop, a bottom sheet on a
+                    phone. It used to be `absolute left-0` at every width: the
+                    button sits mid-toolbar, so at 400 px a 288-px panel ran off
+                    the right edge and clipped its own text — including, now, the
+                    counts this panel exists to show. Capped height + internal
+                    scroll so "Reject them" is reachable however long the caveats
+                    get. */}
+                <div className="fixed inset-x-3 bottom-3 z-50 max-h-[70vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:w-72">
+                  <p className="text-xs text-content-muted">
+                    Rejects the UNDECIDED images with these flags. Your manual ✓/✕ are never changed;
+                    everything stays reversible (nothing is deleted from disk).
+                  </p>
+                  {/* The pile no flag can reach. Every quality flag is gated on a
+                      completed scan, so a never-scanned image is invisible to all
+                      of them — and "0 blurry" would otherwise read as good news
+                      when it means nothing was ever measured. */}
+                  {autoRejectNotice && (
+                    <p className="m-0 rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-[0.6875rem] leading-snug text-amber-200">
+                      ⚠ {autoRejectNotice.text} {autoRejectNotice.action}
+                      {autoRejectNotice.caveat ? ` ${autoRejectNotice.caveat}` : ''}
+                    </p>
                   )}
-                  <span className="absolute bottom-0 inset-x-0 bg-black/60 text-center text-[10px] font-semibold text-white">
-                    #{c.id} · {c.size}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Style clusters (after the scoring pass) — group screenshots/memes vs photoreal */}
-      {styleClusters.length > 0 && (
-        <div className="space-y-1">
-          <GroupLabel>
-            Styles ({styleClusters.length} group{styleClusters.length > 1 ? 's' : ''} — biggest first)
-          </GroupLabel>
-          <ul className="flex gap-2 overflow-x-auto pb-1">
-            {styleClusters.map((c) => (
-              <li key={c.id} className="shrink-0">
-                <button type="button" onClick={() => setF({ style: filter.style === c.id ? null : c.id, flag: null, cluster: null })}
-                  title={`Show style group #${c.id} (${c.size} image(s))`}
-                  className={`relative block overflow-hidden rounded-lg border ${filter.style === c.id
-                    ? 'border-fuchsia-400 ring-2 ring-fuchsia-400' : 'border-border'}`}>
-                  {c.cover_image_id != null && (
-                    <img src={`/api/bank/${bankId}/thumb/${c.cover_image_id}`} alt={`Style ${c.id}`}
-                      loading="lazy" className="h-16 w-16 object-cover" />
+                  {/* The caveat is printed, not left in a title= tooltip: soft_detail
+                      and bars are provenance HINTS, not verdicts, and this is the one
+                      screen that offers to act on them in bulk. A tooltip is invisible
+                      on a phone and to anyone who does not hover. */}
+                  {[...QUALITY_REJECT_FLAGS, ...availableScoreFlags].map((f) => {
+                    // A 0 has two opposite meanings and used to render identically:
+                    // "nothing left to reject" (clean) vs "this flag's pass never
+                    // ran, so it cannot catch anything" (a missing prerequisite).
+                    const prereq = flagPrereq(f, counts, originMeasured)
+                    return (
+                      <label key={f} className="block text-sm text-content">
+                        <span className="flex items-center gap-2">
+                          <input type="checkbox" checked={rejectFlags.has(f)}
+                            onChange={(e) => setRejectFlags((prev) => {
+                              const next = new Set(prev)
+                              if (e.target.checked) next.add(f); else next.delete(f)
+                              return next
+                            })} />
+                          {FLAG_LABEL[f]}{' '}
+                          <span className="text-content-subtle">({flagCandidateLabel(f, flagsActionable)})</span>
+                        </span>
+                        {prereq && (
+                          <span className="mt-0.5 block pl-6 text-[0.6875rem] leading-snug text-sky-200/90">
+                            ⓘ {prereq}
+                          </span>
+                        )}
+                        {FLAG_HINT[f] && (
+                          <span className="mt-0.5 block pl-6 text-[0.6875rem] leading-snug text-amber-200/80">
+                            ⚠ {FLAG_HINT[f]}
+                          </span>
+                        )}
+                      </label>
+                    )
+                  })}
+                  {/* What the button is about to do, before it is pressed — the
+                      whole point of the fix. Amber when the answer is zero, so
+                      "nothing will happen" is visible rather than discovered. */}
+                  {autoRejectPicked && (
+                    <p className={`m-0 text-[0.6875rem] leading-snug ${
+                      autoRejectPicked.sum ? 'text-content-muted' : 'text-amber-200'}`}>
+                      {autoRejectPicked.text}
+                    </p>
                   )}
-                  <span className="absolute bottom-0 inset-x-0 bg-black/60 text-center text-[10px] font-semibold text-white">
-                    🎨{c.id} · {c.size}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Search, subfolder scoping, and the grouped flag filters. */}
-      <div className="space-y-2.5 rounded-lg border border-border bg-surface px-3 py-2.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[12rem] max-w-md flex-1">
-            <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-content-subtle">🔍</span>
-            <input type="search" value={searchText} onChange={(e) => setSearchText(e.target.value)}
-              placeholder="Search captions and file names… (e.g. red dress)"
-              aria-label="Search the bank by caption or file name"
-              className="w-full rounded-md border border-border bg-surface py-1.5 pl-8 pr-8 text-sm text-content placeholder:text-content-subtle" />
-            {searchText && (
-              <button type="button" onClick={() => setSearchText('')} aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-content-subtle hover:text-content">✕</button>
-            )}
-          </div>
-          {/* 🚫 Exclude — the search bar read backwards. Captioning a big bank
-              turns it into a checklist ("which ones have I not tagged with X
-              yet?"), and that question has no answer while the only text tool
-              can just narrow TO a word. Same fields as the search (caption +
-              file name), same debounce, composes with every other facet.
-              Comma-separated: hiding 'logo, watermark' in one pass is the
-              normal case. Its own min-width so the pair wraps to two rows —
-              not two half-unusable boxes — inside a 400 px toolbar. */}
-          <div className="relative min-w-[12rem] max-w-md flex-1">
-            <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-content-subtle">🚫</span>
-            <input type="search" value={excludeText} onChange={(e) => setExcludeText(e.target.value)}
-              placeholder="Exclude words… (e.g. logo, watermark)"
-              aria-label="Hide images whose caption or file name contains these words"
-              title="Hides every image whose caption or file name contains one of these words (comma-separated). Matches anywhere in the text, so 'car' also hides 'scarf'. Images with no caption are never hidden."
-              className="w-full rounded-md border border-border bg-surface py-1.5 pl-8 pr-8 text-sm text-content placeholder:text-content-subtle" />
-            {excludeText && (
-              <button type="button" onClick={() => setExcludeText('')} aria-label="Clear the exclude filter"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-content-subtle hover:text-content">✕</button>
-            )}
-          </div>
-          {/* Subfolder scoping (a Telegram export nests one folder per chat/date).
-              Scoping to ONE folder is also the moment the user knows whose it is,
-              so the 👤 "Single person here" assertion lives right under it — and
-              only then, which is why the group takes the full row only when a
-              folder is actually scoped (otherwise it stays inline as before). */}
-          {subfolders.length > 1 && (
-            <div className={`flex flex-col gap-1.5 ${filter.subfolder != null ? 'w-full' : ''}`}>
-              <div className="flex items-center gap-1.5">
-                <GroupLabel>Subfolder</GroupLabel>
-                <select value={filter.subfolder ?? '__all__'}
-                  onChange={(e) => setF({ subfolder: e.target.value === '__all__' ? null : e.target.value })}
-                  className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-content">
-                  <option value="__all__">All subfolders</option>
-                  {subfolders.map((s) => (
-                    <option key={s.name || '__root__'} value={s.name}>
-                      {s.name === '' ? '(bank root)' : s.name} · {s.count}
-                      {/* '👤?' = the app sampled this folder and it looked like
-                          one person. A hint that something is worth opening,
-                          never a claim — the panel below says the numbers. */}
-                      {folderMarker(folderPersonInfo?.suggestions, s.name)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <SubfolderPersonPanel
-                subfolder={filter.subfolder}
-                entry={assertionFor(folderPersons, filter.subfolder)}
-                suggestion={suggestionFor(folderPersonInfo?.suggestions, filter.subfolder)}
-                offer={scanOffer(folderPersonInfo)}
-                busy={folderPersonBusy}
-                onAssert={assertFolderPerson}
-                onRevoke={revokeFolderPerson}
-                onCheck={checkFolderPerson}
-                onScan={scanFolderPersons} />
-            </div>
-          )}
-        </div>
-
-        {/* Phones keep the established placement inside the filter zone. The
-            desktop copy below is display:none here, so only one inspector is
-            visible (and reachable) at any viewport size. */}
-        {tagRow && (
-          <div className="xl:hidden">
-            <SelectionTagsPanel tagRow={tagRow} tagPicked={tagPicked}
-              onToggle={(tag) => toggleTag(tag, tagRow)} onClear={clearTags} />
-          </div>
-        )}
-
-        {/* Filters — grouped by facet so the chips read as a system, not a wall.
-            While anything is filtered the numbers describe the FILTERED bank, and
-            the row says so: a count that silently changed meaning would be worse
-            than the bank-wide one it replaces. */}
-        {chipsFiltered && (
-          <p className="m-0 text-[11px] leading-snug text-content-subtle">
-            Counts below follow the active filters. Each chip is counted with the
-            others applied and its own value lifted, so you can always switch to
-            a neighbour.
-          </p>
-        )}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <FilterGroup label="Status">
-            <Chip active={!filter.status && !filter.flag && filter.cluster == null && filter.style == null}
-              onClick={() => setF({ status: null, flag: null, cluster: null, style: null })}>All</Chip>
-            <Chip active={filter.status === 'pending'} onClick={() => setF({ status: filter.status === 'pending' ? null : 'pending' })}>Undecided</Chip>
-            <Chip active={filter.status === 'keep'} onClick={() => setF({ status: filter.status === 'keep' ? null : 'keep' })}>✓ Kept</Chip>
-            <Chip active={filter.status === 'reject'} onClick={() => setF({ status: filter.status === 'reject' ? null : 'reject' })}>✕ Rejected</Chip>
-          </FilterGroup>
-
-          <FilterGroup label="Quality">
-            {['blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars', 'unreadable'].map((f) => (
-              <Chip key={f} active={filter.flag === f}
-                onClick={() => setF({ flag: filter.flag === f ? null : f })}
-                title={FLAG_HINT[f] || 'Sorted worst-first'}>
-                {FLAG_LABEL[f]} {flags[f] ?? 0}
-              </Chip>
-            ))}
-            <Chip active={filter.flag === 'clean'} onClick={() => setF({ flag: filter.flag === 'clean' ? null : 'clean' })}>✨ Clean</Chip>
-          </FilterGroup>
-
-          {/* Score-derived flags — only surfaced once their pass has produced data.
-              These used to clear the person/style cluster on click, and the ≈
-              Duplicates chips cleared the cluster too. That silently undid a
-              filter the user had set — and now that each chip PRINTS the size of
-              the page it opens, it would also have made that number wrong.
-              A chip toggles its own facet and nothing else. */}
-          {availableScoreFlags.length > 0 && (
-            <FilterGroup label="Score">
-              {availableScoreFlags.map((f) => (
-                <Chip key={f} active={filter.flag === f}
-                  onClick={() => setF({ flag: filter.flag === f ? null : f })}
-                  title={f === 'watermark' ? 'Overlaid watermark detected' : 'Sorted worst-first'}>
-                  {FLAG_LABEL[f]} {flags[f] ?? 0}
-                </Chip>
-              ))}
-            </FilterGroup>
-          )}
-
-          <FilterGroup label="Groups">
-            <Chip active={filter.flag === 'dups'} onClick={() => setF({ flag: filter.flag === 'dups' ? null : 'dups' })}
-              title="Exact / resized duplicate groups (perceptual hash) with their resolution panel">
-              ≈ Duplicates {payload?.dup?.unresolved ?? 0}
-            </Chip>
-            {(payload?.semantic_dup?.groups ?? 0) > 0 && (
-              <Chip active={filter.flag === 'semantic_dups'}
-                onClick={() => setF({ flag: filter.flag === 'semantic_dups' ? null : 'semantic_dups' })}
-                title="Semantic near-duplicates — same shot, different crop/compression — with their resolution panel">
-                ✂ Same shot {payload?.semantic_dup?.unresolved ?? 0}
-              </Chip>
-            )}
-            {payload?.faces_scanned > 0 && (
-              <Chip active={filter.flag === 'no_face'} onClick={() => setF({ flag: filter.flag === 'no_face' ? null : 'no_face' })}>
-                🚫👤 No face
-              </Chip>
-            )}
-          </FilterGroup>
-
-          {/* Resolution tiers — one active at a time; re-click clears.
-              Composes with every filter and with the Sort menu below. */}
-          {shownResBuckets.length > 0 && (
-            <FilterGroup label="📐 Resolution">
-              {shownResBuckets.map((b) => (
-                <Chip key={b.id} active={filter.resBucket === b.id}
-                  onClick={() => setF({ resBucket: filter.resBucket === b.id ? null : b.id })}
-                  title="Filter the grid to this resolution tier (megapixels = width×height)">
-                  {b.label} {resBuckets[b.id] ?? 0}
-                </Chip>
-              ))}
-            </FilterGroup>
-          )}
-
-          {/* Origin — ai / camera / unknown, read off the file's own metadata by
-              the quality scan. 'Unknown' is the usual answer and is deliberately
-              shown next to the other two: silence is not evidence of anything. */}
-          {originMeasured > 0 && (
-            <FilterGroup label="🔎 Origin">
-              {ORIGIN_BUCKETS.map((b) => (
-                <Chip key={b.id} active={filter.origin === b.id}
-                  onClick={() => setF({ origin: filter.origin === b.id ? null : b.id })}
-                  title={b.id === 'unknown'
-                    ? 'No metadata left in the file — the normal case for anything '
-                      + 'scraped or sent through a chat app. NOT evidence that it is '
-                      + 'a real photo.'
-                    : (b.id === 'ai'
-                      ? 'The file still carries generation metadata (ComfyUI workflow, '
-                        + 'A1111 parameters, or a C2PA "generated" marker).'
-                      : 'The file still carries camera EXIF (make, model or exposure).')}>
-                  {b.label} {originCounts[b.id] ?? 0}
-                </Chip>
-              ))}
-            </FilterGroup>
-          )}
-
-          {/* Framing tiers — face/bust/body/back (+ unknown), from the 📐 Framing
-              pass. One active at a time; re-click clears. Composes with everything. */}
-          {shownFramings.length > 0 && (
-            <FilterGroup label="📐 Framing">
-              {shownFramings.map((b) => (
-                <Chip key={b.id} active={filter.framing === b.id}
-                  onClick={() => setF({ framing: filter.framing === b.id ? null : b.id })}
-                  title="Filter the grid to this shot type (from the Framing pass)">
-                  {b.label} {framingCounts[b.id] ?? 0}
-                </Chip>
-              ))}
-            </FilterGroup>
-          )}
-
-          {/* 🎨 Medium — what the picture is MADE of, from the ✨ Score
-              embeddings. A DIFFERENT question from 🔎 Origin above, which reads
-              the file's metadata: a photorealistic AI render is 🤖 AI and 📷
-              Photo at once. The limits sentence is part of the row, not a
-              tooltip, because "unsure" being the second-biggest pile is the
-              single most important thing to know about this measurement. */}
-          {shownMediums.length > 0 && (
-            <div className="flex flex-col gap-1">
-              <FilterGroup label="🎨 Medium">
-                {shownMediums.map((b) => (
-                  <Chip key={b.id} active={filter.medium === b.id}
-                    onClick={() => setF({ medium: filter.medium === b.id ? null : b.id })}
-                    title={mediumTitle(b.id)}>
-                    {b.label} {mediumCounts[b.id] ?? 0}
-                  </Chip>
-                ))}
-              </FilterGroup>
-              {mediumNote && (
-                <p className="m-0 pl-1 text-[11px] leading-snug text-content-subtle">{mediumNote}</p>
-              )}
-            </div>
-          )}
-
-          {/* ⤢ Angle — measured in the pixels by the 🎭 Faces pass. The backfill
-              offer lives HERE rather than with the other passes: it only makes
-              sense next to the counts that explain why it exists, and it must be
-              priced before it is clicked. */}
-          {(shownAngles.length > 0 || angleState.offer) && (
-            <div className="flex flex-col gap-1">
-              <FilterGroup label="⤢ Angle">
-                {shownAngles.map((b) => (
-                  <Chip key={b.id} active={filter.angle === b.id}
-                    onClick={() => setF({ angle: filter.angle === b.id ? null : b.id })}
-                    title={angleTitle(b.id)}>
-                    {b.label} {angleCounts[b.id] ?? 0}
-                  </Chip>
-                ))}
-              </FilterGroup>
-              {angleState.note && (
-                <p className="m-0 pl-1 text-[11px] leading-snug text-content-subtle">{angleState.note}</p>
-              )}
-              {angleState.offer && (
-                <p className="m-0 flex flex-wrap items-center gap-2 pl-1 text-[11px] leading-snug text-content-subtle">
-                  <span>{angleState.offer.why}</span>
-                  <button type="button" onClick={() => setPassOpen('angles')} disabled={!!live}
-                    title={angleState.offer.why}
-                    className="rounded-md border border-border bg-surface-raised px-2 py-0.5 text-[11px] text-content transition-colors hover:bg-surface disabled:opacity-50">
-                    ⤢ {angleState.offer.label}
+                  <button type="button" onClick={applyAutoReject} disabled={!rejectFlags.size}
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
+                    Reject them
                   </button>
+                </div>
+              </>
+            )}
+          </div>
+          {(selected.size > 0 || showSelected) && (
+            <button type="button" onClick={toggleSelectionView}
+              aria-pressed={showSelected}
+              title={showSelected
+                ? 'Back to the full grid with its filters'
+                : 'Show only the selected images (as their own view), so a scattered curation/similarity result is visible in one place'}
+              className={`rounded-md border px-2 py-0.5 text-xs font-medium ${showSelected
+                ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
+                : 'border-border text-content-muted hover:text-content hover:bg-surface-raised'}`}>
+              {showSelected ? '↩ Show all' : `🔎 Show selected (${selected.size})`}
+            </button>
+          )}
+          {selected.size > 0 && (
+            <>
+              <button type="button" onClick={() => { setSelected(new Set()); if (showSelected) { exitSelectionView(); setOffset(0); refreshImages(filter, 0, { on: false }) } }}
+                className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">Clear</button>
+              <button type="button" onClick={() => batchStatus([...selected], 'keep')}
+                className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20">✓ Keep</button>
+              <button type="button" onClick={() => batchStatus([...selected], 'reject')}
+                className="rounded-md border border-rose-400/50 bg-rose-500/10 px-2 py-0.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20">✕ Reject</button>
+              <button type="button" onClick={() => batchStatus([...selected], 'pending')}
+                className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">↺ Undecided</button>
+              {/* 🔄 Rotate the selection. Your own files are never rewritten: the
+                  angle is stored on the row and applied to what the app shows and
+                  to what it promotes — so four turns cost the original nothing. */}
+              <button type="button" onClick={() => rotateSelection(-90)}
+                aria-label={`Rotate the ${selected.size} selected image(s) 90 degrees left`}
+                title="Rotate 90° left (counter-clockwise). Your own files are never modified — the turn is stored and applied to what you see and to what gets promoted."
+                className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
+                <span aria-hidden="true">↺</span> Rotate left
+              </button>
+              <button type="button" onClick={() => rotateSelection(90)}
+                aria-label={`Rotate the ${selected.size} selected image(s) 90 degrees right`}
+                title="Rotate 90° right (clockwise). Your own files are never modified — the turn is stored and applied to what you see and to what gets promoted."
+                className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
+                <span aria-hidden="true">↻</span> Rotate right
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Curation — build a good LoRA subset out of a big dump from this Bank's
+            selected semantic index. Diversity coverage + reference similarity, both
+            producing a SELECTION the user reviews above. */}
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-xs font-semibold uppercase tracking-wide text-content-subtle">Curate</span>
+          <div className="relative">
+            <button type="button" disabled={live || !semanticReady || diverseBusy}
+              onClick={() => setCurateOpen((v) => (v === 'diverse' ? null : 'diverse'))}
+              aria-expanded={curateOpen === 'diverse'}
+              title={semanticReady
+                ? `Pick the N images that best COVER the visual variety of the current filter (varied angles/outfits/scenes) using the ${semanticState.label} semantic index.`
+                : semanticBlocked}
+              className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              🎨 Pick diverse…{!semanticReady && ` (needs ${semanticState.label})`}{diverseBusy && ' (sampling…)'}
+            </button>
+            {curateOpen === 'diverse' && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
+                <div className="absolute z-50 mt-1 w-72 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2">
+                  <p className="text-xs text-content-muted">
+                    Selects the most <strong>varied</strong> images of the current filter — the best
+                    coverage of the visual space, not N look-alikes. Reviews as a normal selection
+                    (nothing is kept or deleted yet).
+                  </p>
+                  <label className="flex items-center gap-2 text-sm text-content">
+                    How many
+                    <input type="number" min={1} max={2000} value={diverseN}
+                      onChange={(e) => setDiverseN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
+                      className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
+                  </label>
+                  {/* Typicality guard — "most diverse" used to mean "most isolated",
+                      which is how a meme or a photo of someone else won the first
+                      picks. Exposed rather than silently changed: 0 is the old
+                      behaviour, to the pick. */}
+                  <label className="block space-y-1 text-sm text-content">
+                    <span className="flex items-center justify-between gap-2">
+                      <span>Skip the odd ones out</span>
+                      <span className="tabular-nums text-xs text-content-muted">
+                        {diverseTypicality === 0 ? 'off' : `${Math.round(diverseTypicality * 100)}%`}
+                      </span>
+                    </span>
+                    <input type="range" min={0} max={1} step={0.05} value={diverseTypicality}
+                      onChange={(e) => setDiverseTypicality(Number(e.target.value))}
+                      className="w-full accent-primary" />
+                  </label>
+                  <p className="text-[11px] leading-snug text-content-muted">
+                    {diverseTypicality === 0
+                      ? 'Off — pure coverage, exactly like before. The most isolated images win the first picks, so memes, wrong-person shots and botched frames tend to come up first.'
+                      : 'Images that look like nothing else in the bank (memes, screenshots, someone else) stop winning on isolation alone. Variety inside your subject is untouched.'}
+                  </p>
+                  <button type="button" onClick={pickDiverse} disabled={diverseBusy}
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
+                    {diverseBusy ? 'Sampling…' : `Select ${diverseN} most diverse`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          {/* ⚖️ Balanced pick — a DIFFERENT question from 🎨 Pick diverse: not "is
+              my set varied?" but "does it cover the framings I want to generate?".
+              Kept as its own button rather than a mode of the other one, because a
+              bank with no 📐 Framing pass can still use diversity. */}
+          <div className="relative">
+            <button type="button" disabled={live || balanceBusy || !balanceReady.ready}
+              onClick={() => setCurateOpen((v) => (v === 'balanced' ? null : 'balanced'))}
+              aria-expanded={curateOpen === 'balanced'}
+              title={balanceReady.ready
+                ? `Select N images SPREAD OVER the framings (face / bust / body / back), then diversify each bucket with the ${semanticState.label} semantic index.`
+                : balanceReady.reason}
+              className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              ⚖️ Balanced pick…{balanceBusy && ' (sampling…)'}
+            </button>
+            {curateOpen === 'balanced' && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
+                {/* Bottom sheet below sm (measured at 400 px, an anchored w-80 panel
+                    pushes the page sideways), normal popover from sm up. */}
+                <div className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:max-h-none sm:w-80 sm:overflow-visible">
+                  <p className="text-xs text-content-muted">
+                    Splits your pick <strong>evenly across the framings</strong> — “20 face, 20 bust,
+                    20 body” — and fills each bucket with the same most-varied sampling.
+                    Nothing is kept or deleted; you get a selection to review.
+                  </p>
+                  <label className="flex items-center gap-2 text-sm text-content">
+                    How many
+                    <input type="number" min={1} max={2000} value={balanceN}
+                      onChange={(e) => setBalanceN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
+                      className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
+                  </label>
+                  <fieldset className="space-y-1">
+                    <legend className="text-sm text-content">Balance on</legend>
+                    {BALANCE_AXES.map((a) => (
+                      <label key={a.id} className="flex items-start gap-2 text-xs text-content-muted">
+                        <input type="radio" name="bank-balance-axis" value={a.id}
+                          checked={balanceAxis === a.id}
+                          onChange={() => setBalanceAxis(a.id)}
+                          className="mt-0.5 accent-primary" />
+                        <span><span className="text-content">{a.label}</span> — {a.hint}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                  <p className="text-[11px] leading-snug text-content-muted">
+                    Framing is the reliable axis on a one-subject bank: person groups there tend to be
+                    few, sparse and arbitrary. It uses the same “Skip the odd ones out” setting as
+                    🎨 Pick diverse ({diverseTypicality === 0 ? 'off' : `${Math.round(diverseTypicality * 100)}%`}).
+                  </p>
+                  <button type="button" onClick={pickBalanced} disabled={balanceBusy}
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
+                    {balanceBusy ? 'Sampling…' : `Select ${balanceN}, balanced`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="relative">
+            <button type="button"
+              disabled={live || !semanticReady || selected.size !== 1 || similarBusy}
+              onClick={() => setCurateOpen((v) => (v === 'similar' ? null : 'similar'))}
+              aria-expanded={curateOpen === 'similar'}
+              title={!semanticReady
+                ? semanticBlocked
+                : selected.size === 1
+                  ? `Rank the current filter against the ONE selected image with the ${semanticState.label} semantic index and select the closest N.`
+                  : 'Select exactly one image to use as the reference'}
+              className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              🎯 Similar to selected…{similarBusy && ' (ranking…)'}
+            </button>
+            {curateOpen === 'similar' && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
+                <div className="absolute z-50 mt-1 w-72 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2">
+                  <p className="text-xs text-content-muted">
+                    Ranks the current filter by {semanticState.label} similarity to your one selected image and selects
+                    the closest — a fast way to extract one person or look. The reference is kept in
+                    the selection.
+                  </p>
+                  <label className="flex items-center gap-2 text-sm text-content">
+                    How many
+                    <input type="number" min={1} max={2000} value={similarN}
+                      onChange={(e) => setSimilarN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
+                      className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
+                  </label>
+                  <button type="button" onClick={findSimilar} disabled={similarBusy}
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
+                    {similarBusy ? 'Ranking…' : `Select ${similarN} most similar`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="relative">
+            <button type="button" disabled={live || !semanticReady}
+              onClick={openTextSearch}
+              aria-expanded={curateOpen === 'text'}
+              title={semanticReady
+                ? `Describe what you are looking for in words ("brunette outdoors, wide shot") and rank the current filter with ${semanticState.label}.`
+                : semanticBlocked}
+              className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              🔤 Find by text…{!semanticReady && ` (needs ${semanticState.label})`}
+            </button>
+            {curateOpen === 'text' && (
+              <>
+                <div className="fixed inset-0 z-40"
+                  onClick={() => { setCurateOpen(null); releaseTextEncoder() }} aria-hidden />
+                {/* Below sm this is a BOTTOM SHEET, not a dropdown. Anchored to its
+                    trigger it is a w-80 panel hanging off a button that sits
+                    mid-row: measured on a 400 px viewport it reached x=517 and made
+                    the whole page scroll sideways. Pinning only the horizontal
+                    gutters was not enough either — a fixed box with `top: auto`
+                    resolves to its static position and lands off-screen once the
+                    page is scrolled. So the vertical anchor is explicit, and the
+                    sheet scrolls internally when the copy is long. From sm up it
+                    behaves exactly like its two sibling popovers. */}
+                <div className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:max-h-none sm:w-80 sm:overflow-visible">
+                  <p className="text-xs text-content-muted">
+                    Ranks the <strong>current filter</strong> by how close each image is to your
+                    words. It refines what the grid is showing — it does not search the whole bank.
+                  </p>
+                  <label htmlFor="bank-text-search" className="block text-sm text-content">
+                    What are you looking for?
+                  </label>
+                  <input id="bank-text-search" type="search" value={textQuery}
+                    placeholder="brunette outdoors, wide shot"
+                    onChange={(e) => setTextQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !textPending) runTextSearch() }}
+                    className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-content" />
+                  {/* The pedagogy that matters most, because the failure it
+                      prevents is INVISIBLE: "without a hat" comes back full of
+                      hats, confidently, with no signal. Offered, never applied on
+                      its own — a wrong guess acted on silently would be the same
+                      class of bug. */}
+                  {suggestPushDown(textQuery) && !textExclude.trim() && (
+                    <p className="text-xs text-amber-300/90">
+                      “without” is ignored by the search.{' '}
+                      <button type="button"
+                        onClick={() => {
+                          setTextExclude(suggestPushDown(textQuery))
+                          setTextQuery(withoutNegation(textQuery))
+                        }}
+                        className="underline underline-offset-2 hover:text-amber-200">
+                        Push “{suggestPushDown(textQuery)}” down instead?
+                      </button>
+                    </p>
+                  )}
+                  <label htmlFor="bank-text-exclude" className="block text-sm text-content">
+                    Push down (optional)
+                  </label>
+                  <input id="bank-text-exclude" type="search" value={textExclude}
+                    placeholder="hat, sunglasses"
+                    onChange={(e) => setTextExclude(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !textPending) runTextSearch() }}
+                    className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-content" />
+                  <p className="text-xs text-content-subtle">{pushDownCaveat()}</p>
+                  {textExclude.trim() && (
+                    <label className="flex flex-wrap items-center gap-2 text-sm text-content">
+                      How hard
+                      <select value={textExcludeW}
+                        onChange={(e) => setTextExcludeW(Number(e.target.value))}
+                        className="rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content">
+                        {PUSH_DOWN_STRENGTHS.map((s) => (
+                          <option key={s.value} value={s.value}>{s.label}</option>
+                        ))}
+                      </select>
+                      <span className="w-full text-xs text-content-subtle">
+                        {PUSH_DOWN_STRENGTHS.find((s) => s.value === textExcludeW)?.hint}
+                      </span>
+                    </label>
+                  )}
+                  <label className="flex items-center gap-2 text-sm text-content">
+                    How many
+                    <input type="number" min={1} max={2000} value={textN}
+                      onChange={(e) => setTextN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
+                      className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
+                  </label>
+                  {/* The cost, BEFORE the click — a cold CLIP load is ~10 s and an
+                      unexplained wait is exactly how this reads as a hang. */}
+                  <p className="text-xs text-content-subtle">
+                    {readinessHint(textStatus, semanticState.engine)}
+                  </p>
+                  <p className="text-xs text-amber-300/80">
+                    {limitsSentence(semanticState.engine)}
+                  </p>
+                  <button type="button" onClick={runTextSearch}
+                    disabled={textPending || !textQuery.trim()}
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
+                    {textPending ? pendingLabel(textStatus) : `Rank the closest ${textN}`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          {!semanticReady && (
+            <span className="text-xs text-content-subtle">{semanticBlocked}</span>
+          )}
+          <button type="button" onClick={() => setCoverageOpen((v) => !v)}
+            aria-expanded={coverageOpen}
+            title="See what your kept set leans on and what's thin for a good LoRA — advice only, nothing is kept or rejected."
+            className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+            📊 Coverage advice{coverageOpen ? ' ▲' : ' ▼'}
+          </button>
+        </div>
+
+        {/* 🔤 What the grid is currently showing, in words. This is the whole
+            honesty of the feature: the grid alone would read as "these match",
+            when it is a RANKING in which everything scores something. The range,
+            the strength wording and the unsearchable count live here. aria-live so
+            a screen reader hears the outcome — the grid change is silent. */}
+        <div aria-live="polite">
+          {textResult && (
+            <div className="mt-2 space-y-1 rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-2 text-xs text-content">
+              <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
+                <span aria-hidden>🔤</span>
+                <span className="min-w-0 flex-1">
+                  {summarize(textResult, semanticState.engine)}
+                </span>
+                <button type="button"
+                  onClick={() => { setTextResult(null); setShowSelected(false); refreshImages(filter, 0, { on: false }) }}
+                  className="shrink-0 rounded-md border border-border px-2 py-0.5 text-xs text-content hover:bg-surface-raised">
+                  Clear search
+                </button>
+              </div>
+              {/* What the push-down did HERE, measured on this bank for this
+                  pair of phrases — including "it changed nothing", which is the
+                  outcome the user would otherwise never detect. */}
+              {pushDownNote(textResult) && (
+                <p className="text-content-muted">{pushDownNote(textResult)}</p>
+              )}
+              {textResult.cached === false && (
+                <p className="text-content-subtle">
+                  This phrase is now cached — searching it again is instant, even after a restart.
                 </p>
               )}
+              <p className="text-amber-300/80">{limitsSentence(semanticState.engine)}</p>
             </div>
           )}
         </div>
 
-        {/* 🎚 The numbers BEHIND those chips. Folded by default — the chips are
-            the everyday gesture and the thresholds are the occasional one — but
-            present, because tuning them used to mean leaving the bank for
-            Settings and coming back blind. Same config keys, same save. */}
-        <div className="border-t border-border pt-2">
-          <button type="button" onClick={() => setThresholdsOpen((v) => !v)}
-            aria-expanded={thresholdsOpen} aria-controls="bank-thresholds-panel"
-            className="flex w-full items-center gap-1.5 text-left text-xs text-content-muted hover:text-content">
-            <span aria-hidden>🎚</span>
-            <span className="font-medium">Filter thresholds</span>
-            {/* The gloss is the first thing to go on a phone: the label already
-                says what it opens, and a wrapped subtitle costs two lines. */}
-            <span className="hidden text-content-subtle sm:inline">
-              — what the chips above count as blurry, small, duplicate…
-            </span>
-            <span aria-hidden className="ml-auto text-content-subtle">{thresholdsOpen ? '▲' : '▼'}</span>
-          </button>
-          {thresholdsOpen && (
-            <div id="bank-thresholds-panel" className="mt-2">
-              {/* The panel's ↻ re-run buttons start the SAME one-job-per-bank
-                  passes as the toolbar above, so they need the same two facts
-                  the progress bar reads: whether a job holds the bank (to refuse
-                  the click before it is made, saying which pass and where it is)
-                  and the duplicate counts (to report what the pass produced).
-                  Both are already in this payload — no extra poll, no second
-                  progress mechanism. */}
-              <BankThresholdsPanel bankId={bankId}
-                activity={payload?.activity} offline={!connection.online}
-                dupSummary={payload?.dup} semanticDupSummary={payload?.semantic_dup}
-                onSaved={() => { refreshPayload(); refreshImages() }}
-                onRunPass={(endpoint, body) => act(
-                  () => postJson(`/api/bank/${bankId}/${endpoint}`, body || {}),
-                  null)} />
+        {/* ⚖️ What the balanced pick actually GAVE you. A repartition the user
+            cannot see is indistinguishable from an unbalanced one, so this is
+            numbers first — the bar is decoration over a list that reads out. */}
+        <div aria-live="polite">
+          {balanceResult && (
+            <div className="mt-2 space-y-2 rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-xs text-content">
+              <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
+                <span aria-hidden>⚖️</span>
+                <span className="min-w-0 flex-1">{summarizeBalance(balanceResult)}</span>
+                <button type="button" onClick={() => setBalanceResult(null)}
+                  className="shrink-0 rounded-md border border-border px-2 py-0.5 text-xs text-content hover:bg-surface-raised">
+                  Dismiss
+                </button>
+              </div>
+              <ul className="flex flex-wrap gap-x-4 gap-y-1 tabular-nums">
+                {balanceRows(balanceResult).map((r) => (
+                  <li key={r.key} className={r.short ? 'text-amber-200' : 'text-content-muted'}>
+                    <span className="text-content">{r.selected}</span> {r.label}
+                    <span className="text-content-subtle"> of {r.available}</span>
+                    {r.short && <span> · wanted {r.fairShare}</span>}
+                  </li>
+                ))}
+              </ul>
+              {balanceNotes(balanceResult).map((note, i) => (
+                <p key={i} className={note.tone === 'warn' ? 'text-amber-300/90' : 'text-content-subtle'}>
+                  {note.tone === 'warn' ? '⚠️ ' : '💡 '}{note.text}
+                </p>
+              ))}
             </div>
           )}
         </div>
 
-        {/* View controls — order and tile size, off to the right on their own line */}
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
-          <GroupLabel>View</GroupLabel>
-          <label className="flex items-center gap-1 text-xs text-content-muted">
-            Sort
-            {/* Order the grid on ANY quantity the passes measured — resolution,
-                file size, aesthetic rating, NSFW likelihood, sharpness, noise,
-                contrast, detail, bars, JPEG quality, face confidence — each way,
-                so a review opens on what it is looking for. Grouped by the pass
-                that produces them: eleven measures is a long flat list, and the
-                grouping doubles as "run THIS pass to unlock these".
-                Images the matching pass never reached sink to the end (never the
-                top), and an entry whose pass has produced nothing yet is greyed
-                out saying which pass to run. The value rides to the server, which
-                sorts in SQL: it applies to the WHOLE filter, not this page, so
-                "Select all in filter" and ▶ Review walk the same order — and it
-                is remembered per bank, so a dump you review by sharpness opens
-                that way tomorrow. max-w keeps the control inside a 400 px toolbar. */}
-            <select value={filter.sort} onChange={(e) => setSort(e.target.value)}
-              title="Order the grid by anything the passes measured — resolution, size, aesthetic, NSFW, sharpness, noise, contrast, detail, bars, JPEG quality, face confidence. Images a pass never reached sink to the end. Remembered for this bank."
-              aria-label="Sort the grid"
-              className="max-w-[11rem] rounded-md border border-border bg-surface px-2 py-0.5 text-xs text-content">
-              {sortGroups.map((g) => (g.group ? (
-                <optgroup key={g.group} label={g.group}>
-                  {g.options.map((o) => (
-                    <option key={o.id} value={o.id} disabled={o.disabled} title={o.title}>
-                      {o.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : g.options.map((o) => (
-                <option key={o.id} value={o.id} disabled={o.disabled} title={o.title}>
-                  {o.label}
-                </option>
-              ))))}
-            </select>
-          </label>
-          <span className="ml-auto" />
-          <button type="button" onClick={() => setTileSize((s) => (s === 'M' ? 'S' : 'M'))}
-            className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">
-            {tileSize === 'M' ? 'Small tiles' : 'Medium tiles'}
-          </button>
-        </div>
-      </div>
-
-      {/* Results readout + selection actions */}
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-content-muted">
-          <span className="font-semibold tabular-nums text-content">{(page.total ?? 0).toLocaleString()}</span> shown
-          {isFiltered && (
-            <span className="text-content-subtle"> of {(counts?.total ?? 0).toLocaleString()}</span>
-          )}
-        </span>
-        <span aria-hidden className="h-4 w-px bg-border" />
-        {/* The fast lane: full-size, one image at a time, Keep/Reject/Skip with
-            K/R/S. Deliberately a button of its own rather than a tile gesture —
-            the tile click stays the bulk-selection gesture it has always been. */}
-        <button type="button" onClick={() => openReview(null)} disabled={reviewLoading}
-          title="Review the images of this filter one at a time, full size: ✓ Keep / ✕ Reject / ⏭ Skip (K/R/S) each move to the next. Optional random order."
-          className="rounded-md border border-indigo-400/60 bg-indigo-500/20 px-2.5 py-0.5 text-xs font-semibold text-indigo-200 disabled:opacity-50 hover:bg-indigo-500/30">
-          {reviewLoading ? '▶ Preparing…' : '▶ Review one by one'}
-        </button>
-        <span aria-hidden className="h-4 w-px bg-border" />
-        <span className="text-content-muted">{selected.size} selected</span>
-        <button type="button" onClick={selectAllCurrent}
-          className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content hover:bg-surface-raised">
-          Select all in filter
-        </button>
-        {/* Bulk-reject undecided images by quality flag — a triage shortcut that
-            leaves your manual ✓/✕ untouched and deletes nothing off disk. */}
-        <div className="relative">
-          <button type="button" onClick={() => setShowAutoReject((v) => !v)} disabled={live}
-            aria-expanded={showAutoReject}
-            title="Bulk-reject the still-undecided images carrying the chosen quality flags"
-            className="rounded-md border border-border bg-surface-raised px-2 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
-            🧹 Auto-reject…
-          </button>
-          {showAutoReject && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowAutoReject(false)} aria-hidden />
-              {/* Anchored under the button on a desktop, a bottom sheet on a
-                  phone. It used to be `absolute left-0` at every width: the
-                  button sits mid-toolbar, so at 400 px a 288-px panel ran off
-                  the right edge and clipped its own text — including, now, the
-                  counts this panel exists to show. Capped height + internal
-                  scroll so "Reject them" is reachable however long the caveats
-                  get. */}
-              <div className="fixed inset-x-3 bottom-3 z-50 max-h-[70vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:w-72">
-                <p className="text-xs text-content-muted">
-                  Rejects the UNDECIDED images with these flags. Your manual ✓/✕ are never changed;
-                  everything stays reversible (nothing is deleted from disk).
-                </p>
-                {/* The pile no flag can reach. Every quality flag is gated on a
-                    completed scan, so a never-scanned image is invisible to all
-                    of them — and "0 blurry" would otherwise read as good news
-                    when it means nothing was ever measured. */}
-                {autoRejectNotice && (
-                  <p className="m-0 rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-[0.6875rem] leading-snug text-amber-200">
-                    ⚠ {autoRejectNotice.text} {autoRejectNotice.action}
-                    {autoRejectNotice.caveat ? ` ${autoRejectNotice.caveat}` : ''}
-                  </p>
-                )}
-                {/* The caveat is printed, not left in a title= tooltip: soft_detail
-                    and bars are provenance HINTS, not verdicts, and this is the one
-                    screen that offers to act on them in bulk. A tooltip is invisible
-                    on a phone and to anyone who does not hover. */}
-                {[...QUALITY_REJECT_FLAGS, ...availableScoreFlags].map((f) => {
-                  // A 0 has two opposite meanings and used to render identically:
-                  // "nothing left to reject" (clean) vs "this flag's pass never
-                  // ran, so it cannot catch anything" (a missing prerequisite).
-                  const prereq = flagPrereq(f, counts, originMeasured)
-                  return (
-                    <label key={f} className="block text-sm text-content">
-                      <span className="flex items-center gap-2">
-                        <input type="checkbox" checked={rejectFlags.has(f)}
-                          onChange={(e) => setRejectFlags((prev) => {
-                            const next = new Set(prev)
-                            if (e.target.checked) next.add(f); else next.delete(f)
-                            return next
-                          })} />
-                        {FLAG_LABEL[f]}{' '}
-                        <span className="text-content-subtle">({flagCandidateLabel(f, flagsActionable)})</span>
-                      </span>
-                      {prereq && (
-                        <span className="mt-0.5 block pl-6 text-[0.6875rem] leading-snug text-sky-200/90">
-                          ⓘ {prereq}
-                        </span>
-                      )}
-                      {FLAG_HINT[f] && (
-                        <span className="mt-0.5 block pl-6 text-[0.6875rem] leading-snug text-amber-200/80">
-                          ⚠ {FLAG_HINT[f]}
-                        </span>
-                      )}
-                    </label>
-                  )
-                })}
-                {/* What the button is about to do, before it is pressed — the
-                    whole point of the fix. Amber when the answer is zero, so
-                    "nothing will happen" is visible rather than discovered. */}
-                {autoRejectPicked && (
-                  <p className={`m-0 text-[0.6875rem] leading-snug ${
-                    autoRejectPicked.sum ? 'text-content-muted' : 'text-amber-200'}`}>
-                    {autoRejectPicked.text}
-                  </p>
-                )}
-                <button type="button" onClick={applyAutoReject} disabled={!rejectFlags.size}
-                  className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
-                  Reject them
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-        {(selected.size > 0 || showSelected) && (
-          <button type="button" onClick={toggleSelectionView}
-            aria-pressed={showSelected}
-            title={showSelected
-              ? 'Back to the full grid with its filters'
-              : 'Show only the selected images (as their own view), so a scattered curation/similarity result is visible in one place'}
-            className={`rounded-md border px-2 py-0.5 text-xs font-medium ${showSelected
-              ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
-              : 'border-border text-content-muted hover:text-content hover:bg-surface-raised'}`}>
-            {showSelected ? '↩ Show all' : `🔎 Show selected (${selected.size})`}
-          </button>
+        {coverageOpen && (
+          <CoveragePanel coverage={coverage} semanticEngine={coverage?.engine || semanticState.engine}
+            semanticLabel={semanticEngineLabel(coverage?.engine || semanticState.engine)}
+            onClose={() => setCoverageOpen(false)}
+            onBalance={balanceReady.ready ? () => setCurateOpen('balanced') : null}
+            balanceReason={balanceReady.reason} />
         )}
-        {selected.size > 0 && (
-          <>
-            <button type="button" onClick={() => { setSelected(new Set()); if (showSelected) { exitSelectionView(); setOffset(0); refreshImages(filter, 0, { on: false }) } }}
-              className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">Clear</button>
-            <button type="button" onClick={() => batchStatus([...selected], 'keep')}
-              className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20">✓ Keep</button>
-            <button type="button" onClick={() => batchStatus([...selected], 'reject')}
-              className="rounded-md border border-rose-400/50 bg-rose-500/10 px-2 py-0.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20">✕ Reject</button>
-            <button type="button" onClick={() => batchStatus([...selected], 'pending')}
-              className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">↺ Undecided</button>
-            {/* 🔄 Rotate the selection. Your own files are never rewritten: the
-                angle is stored on the row and applied to what the app shows and
-                to what it promotes — so four turns cost the original nothing. */}
-            <button type="button" onClick={() => rotateSelection(-90)}
-              aria-label={`Rotate the ${selected.size} selected image(s) 90 degrees left`}
-              title="Rotate 90° left (counter-clockwise). Your own files are never modified — the turn is stored and applied to what you see and to what gets promoted."
-              className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
-              <span aria-hidden="true">↺</span> Rotate left
-            </button>
-            <button type="button" onClick={() => rotateSelection(90)}
-              aria-label={`Rotate the ${selected.size} selected image(s) 90 degrees right`}
-              title="Rotate 90° right (clockwise). Your own files are never modified — the turn is stored and applied to what you see and to what gets promoted."
-              className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
-              <span aria-hidden="true">↻</span> Rotate right
-            </button>
-          </>
-        )}
-      </div>
-      </ZoneSection>
 
-      {/* The two short finishing zones share a row on wide screens. Promote
-          stays visible while a long Curate result is reviewed; phones retain
-          the natural Curate → Promote stack. */}
-      <div className="grid gap-4 xl:grid-cols-12 xl:items-start">
-      <div className="min-w-0 xl:col-span-8">
-      {/* ③ Curate — optional refinement (diverse/similar/coverage). Always
-          accessible, but never the accented "next step". */}
-      <ZoneSection zone={curateZone} accented={false}>
-
-      {/* Curation — build a good LoRA subset out of a big dump from this Bank's
-          selected semantic index. Diversity coverage + reference similarity, both
-          producing a SELECTION the user reviews above. */}
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-xs font-semibold uppercase tracking-wide text-content-subtle">Curate</span>
-        <div className="relative">
-          <button type="button" disabled={live || !semanticReady || diverseBusy}
-            onClick={() => setCurateOpen((v) => (v === 'diverse' ? null : 'diverse'))}
-            aria-expanded={curateOpen === 'diverse'}
-            title={semanticReady
-              ? `Pick the N images that best COVER the visual variety of the current filter (varied angles/outfits/scenes) using the ${semanticState.label} semantic index.`
-              : semanticBlocked}
-            className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
-            🎨 Pick diverse…{!semanticReady && ` (needs ${semanticState.label})`}{diverseBusy && ' (sampling…)'}
-          </button>
-          {curateOpen === 'diverse' && (
+          {filter.flag === 'dups' ? (
+            <DupGroupsPanel bankId={bankId} live={live} kind="exact"
+              onChanged={async () => { await refreshPayload(); await refreshImages() }} />
+          ) : filter.flag === 'semantic_dups' ? (
+            <DupGroupsPanel bankId={bankId} live={live} kind="semantic"
+              semanticLabel={semanticState.label}
+              onChanged={async () => { await refreshPayload(); await refreshImages() }} />
+          ) : (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
-              <div className="absolute z-50 mt-1 w-72 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2">
-                <p className="text-xs text-content-muted">
-                  Selects the most <strong>varied</strong> images of the current filter — the best
-                  coverage of the visual space, not N look-alikes. Reviews as a normal selection
-                  (nothing is kept or deleted yet).
-                </p>
-                <label className="flex items-center gap-2 text-sm text-content">
-                  How many
-                  <input type="number" min={1} max={2000} value={diverseN}
-                    onChange={(e) => setDiverseN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
-                    className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
-                </label>
-                {/* Typicality guard — "most diverse" used to mean "most isolated",
-                    which is how a meme or a photo of someone else won the first
-                    picks. Exposed rather than silently changed: 0 is the old
-                    behaviour, to the pick. */}
-                <label className="block space-y-1 text-sm text-content">
-                  <span className="flex items-center justify-between gap-2">
-                    <span>Skip the odd ones out</span>
-                    <span className="tabular-nums text-xs text-content-muted">
-                      {diverseTypicality === 0 ? 'off' : `${Math.round(diverseTypicality * 100)}%`}
-                    </span>
-                  </span>
-                  <input type="range" min={0} max={1} step={0.05} value={diverseTypicality}
-                    onChange={(e) => setDiverseTypicality(Number(e.target.value))}
-                    className="w-full accent-primary" />
-                </label>
-                <p className="text-[11px] leading-snug text-content-muted">
-                  {diverseTypicality === 0
-                    ? 'Off — pure coverage, exactly like before. The most isolated images win the first picks, so memes, wrong-person shots and botched frames tend to come up first.'
-                    : 'Images that look like nothing else in the bank (memes, screenshots, someone else) stop winning on isolation alone. Variety inside your subject is untouched.'}
-                </p>
-                <button type="button" onClick={pickDiverse} disabled={diverseBusy}
-                  className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
-                  {diverseBusy ? 'Sampling…' : `Select ${diverseN} most diverse`}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-        {/* ⚖️ Balanced pick — a DIFFERENT question from 🎨 Pick diverse: not "is
-            my set varied?" but "does it cover the framings I want to generate?".
-            Kept as its own button rather than a mode of the other one, because a
-            bank with no 📐 Framing pass can still use diversity. */}
-        <div className="relative">
-          <button type="button" disabled={live || balanceBusy || !balanceReady.ready}
-            onClick={() => setCurateOpen((v) => (v === 'balanced' ? null : 'balanced'))}
-            aria-expanded={curateOpen === 'balanced'}
-            title={balanceReady.ready
-              ? `Select N images SPREAD OVER the framings (face / bust / body / back), then diversify each bucket with the ${semanticState.label} semantic index.`
-              : balanceReady.reason}
-            className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
-            ⚖️ Balanced pick…{balanceBusy && ' (sampling…)'}
-          </button>
-          {curateOpen === 'balanced' && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
-              {/* Bottom sheet below sm (measured at 400 px, an anchored w-80 panel
-                  pushes the page sideways), normal popover from sm up. */}
-              <div className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:max-h-none sm:w-80 sm:overflow-visible">
-                <p className="text-xs text-content-muted">
-                  Splits your pick <strong>evenly across the framings</strong> — “20 face, 20 bust,
-                  20 body” — and fills each bucket with the same most-varied sampling.
-                  Nothing is kept or deleted; you get a selection to review.
-                </p>
-                <label className="flex items-center gap-2 text-sm text-content">
-                  How many
-                  <input type="number" min={1} max={2000} value={balanceN}
-                    onChange={(e) => setBalanceN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
-                    className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
-                </label>
-                <fieldset className="space-y-1">
-                  <legend className="text-sm text-content">Balance on</legend>
-                  {BALANCE_AXES.map((a) => (
-                    <label key={a.id} className="flex items-start gap-2 text-xs text-content-muted">
-                      <input type="radio" name="bank-balance-axis" value={a.id}
-                        checked={balanceAxis === a.id}
-                        onChange={() => setBalanceAxis(a.id)}
-                        className="mt-0.5 accent-primary" />
-                      <span><span className="text-content">{a.label}</span> — {a.hint}</span>
-                    </label>
-                  ))}
-                </fieldset>
-                <p className="text-[11px] leading-snug text-content-muted">
-                  Framing is the reliable axis on a one-subject bank: person groups there tend to be
-                  few, sparse and arbitrary. It uses the same “Skip the odd ones out” setting as
-                  🎨 Pick diverse ({diverseTypicality === 0 ? 'off' : `${Math.round(diverseTypicality * 100)}%`}).
-                </p>
-                <button type="button" onClick={pickBalanced} disabled={balanceBusy}
-                  className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
-                  {balanceBusy ? 'Sampling…' : `Select ${balanceN}, balanced`}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-        <div className="relative">
-          <button type="button"
-            disabled={live || !semanticReady || selected.size !== 1 || similarBusy}
-            onClick={() => setCurateOpen((v) => (v === 'similar' ? null : 'similar'))}
-            aria-expanded={curateOpen === 'similar'}
-            title={!semanticReady
-              ? semanticBlocked
-              : selected.size === 1
-                ? `Rank the current filter against the ONE selected image with the ${semanticState.label} semantic index and select the closest N.`
-                : 'Select exactly one image to use as the reference'}
-            className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
-            🎯 Similar to selected…{similarBusy && ' (ranking…)'}
-          </button>
-          {curateOpen === 'similar' && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
-              <div className="absolute z-50 mt-1 w-72 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2">
-                <p className="text-xs text-content-muted">
-                  Ranks the current filter by {semanticState.label} similarity to your one selected image and selects
-                  the closest — a fast way to extract one person or look. The reference is kept in
-                  the selection.
-                </p>
-                <label className="flex items-center gap-2 text-sm text-content">
-                  How many
-                  <input type="number" min={1} max={2000} value={similarN}
-                    onChange={(e) => setSimilarN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
-                    className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
-                </label>
-                <button type="button" onClick={findSimilar} disabled={similarBusy}
-                  className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
-                  {similarBusy ? 'Ranking…' : `Select ${similarN} most similar`}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-        <div className="relative">
-          <button type="button" disabled={live || !semanticReady}
-            onClick={openTextSearch}
-            aria-expanded={curateOpen === 'text'}
-            title={semanticReady
-              ? `Describe what you are looking for in words ("brunette outdoors, wide shot") and rank the current filter with ${semanticState.label}.`
-              : semanticBlocked}
-            className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
-            🔤 Find by text…{!semanticReady && ` (needs ${semanticState.label})`}
-          </button>
-          {curateOpen === 'text' && (
-            <>
-              <div className="fixed inset-0 z-40"
-                onClick={() => { setCurateOpen(null); releaseTextEncoder() }} aria-hidden />
-              {/* Below sm this is a BOTTOM SHEET, not a dropdown. Anchored to its
-                  trigger it is a w-80 panel hanging off a button that sits
-                  mid-row: measured on a 400 px viewport it reached x=517 and made
-                  the whole page scroll sideways. Pinning only the horizontal
-                  gutters was not enough either — a fixed box with `top: auto`
-                  resolves to its static position and lands off-screen once the
-                  page is scrolled. So the vertical anchor is explicit, and the
-                  sheet scrolls internally when the copy is long. From sm up it
-                  behaves exactly like its two sibling popovers. */}
-              <div className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:max-h-none sm:w-80 sm:overflow-visible">
-                <p className="text-xs text-content-muted">
-                  Ranks the <strong>current filter</strong> by how close each image is to your
-                  words. It refines what the grid is showing — it does not search the whole bank.
-                </p>
-                <label htmlFor="bank-text-search" className="block text-sm text-content">
-                  What are you looking for?
-                </label>
-                <input id="bank-text-search" type="search" value={textQuery}
-                  placeholder="brunette outdoors, wide shot"
-                  onChange={(e) => setTextQuery(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !textPending) runTextSearch() }}
-                  className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-content" />
-                {/* The pedagogy that matters most, because the failure it
-                    prevents is INVISIBLE: "without a hat" comes back full of
-                    hats, confidently, with no signal. Offered, never applied on
-                    its own — a wrong guess acted on silently would be the same
-                    class of bug. */}
-                {suggestPushDown(textQuery) && !textExclude.trim() && (
-                  <p className="text-xs text-amber-300/90">
-                    “without” is ignored by the search.{' '}
-                    <button type="button"
-                      onClick={() => {
-                        setTextExclude(suggestPushDown(textQuery))
-                        setTextQuery(withoutNegation(textQuery))
-                      }}
-                      className="underline underline-offset-2 hover:text-amber-200">
-                      Push “{suggestPushDown(textQuery)}” down instead?
-                    </button>
-                  </p>
-                )}
-                <label htmlFor="bank-text-exclude" className="block text-sm text-content">
-                  Push down (optional)
-                </label>
-                <input id="bank-text-exclude" type="search" value={textExclude}
-                  placeholder="hat, sunglasses"
-                  onChange={(e) => setTextExclude(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !textPending) runTextSearch() }}
-                  className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-content" />
-                <p className="text-xs text-content-subtle">{pushDownCaveat()}</p>
-                {textExclude.trim() && (
-                  <label className="flex flex-wrap items-center gap-2 text-sm text-content">
-                    How hard
-                    <select value={textExcludeW}
-                      onChange={(e) => setTextExcludeW(Number(e.target.value))}
-                      className="rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content">
-                      {PUSH_DOWN_STRENGTHS.map((s) => (
-                        <option key={s.value} value={s.value}>{s.label}</option>
-                      ))}
-                    </select>
-                    <span className="w-full text-xs text-content-subtle">
-                      {PUSH_DOWN_STRENGTHS.find((s) => s.value === textExcludeW)?.hint}
-                    </span>
-                  </label>
-                )}
-                <label className="flex items-center gap-2 text-sm text-content">
-                  How many
-                  <input type="number" min={1} max={2000} value={textN}
-                    onChange={(e) => setTextN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
-                    className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
-                </label>
-                {/* The cost, BEFORE the click — a cold CLIP load is ~10 s and an
-                    unexplained wait is exactly how this reads as a hang. */}
-                <p className="text-xs text-content-subtle">
-                  {readinessHint(textStatus, semanticState.engine)}
-                </p>
-                <p className="text-xs text-amber-300/80">
-                  {limitsSentence(semanticState.engine)}
-                </p>
-                <button type="button" onClick={runTextSearch}
-                  disabled={textPending || !textQuery.trim()}
-                  className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
-                  {textPending ? pendingLabel(textStatus) : `Rank the closest ${textN}`}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-        {!semanticReady && (
-          <span className="text-xs text-content-subtle">{semanticBlocked}</span>
-        )}
-        <button type="button" onClick={() => setCoverageOpen((v) => !v)}
-          aria-expanded={coverageOpen}
-          title="See what your kept set leans on and what's thin for a good LoRA — advice only, nothing is kept or rejected."
-          className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
-          📊 Coverage advice{coverageOpen ? ' ▲' : ' ▼'}
-        </button>
-      </div>
-
-      {/* 🔤 What the grid is currently showing, in words. This is the whole
-          honesty of the feature: the grid alone would read as "these match",
-          when it is a RANKING in which everything scores something. The range,
-          the strength wording and the unsearchable count live here. aria-live so
-          a screen reader hears the outcome — the grid change is silent. */}
-      <div aria-live="polite">
-        {textResult && (
-          <div className="mt-2 space-y-1 rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-2 text-xs text-content">
-            <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
-              <span aria-hidden>🔤</span>
-              <span className="min-w-0 flex-1">
-                {summarize(textResult, semanticState.engine)}
-              </span>
-              <button type="button"
-                onClick={() => { setTextResult(null); setShowSelected(false); refreshImages(filter, 0, { on: false }) }}
-                className="shrink-0 rounded-md border border-border px-2 py-0.5 text-xs text-content hover:bg-surface-raised">
-                Clear search
-              </button>
-            </div>
-            {/* What the push-down did HERE, measured on this bank for this
-                pair of phrases — including "it changed nothing", which is the
-                outcome the user would otherwise never detect. */}
-            {pushDownNote(textResult) && (
-              <p className="text-content-muted">{pushDownNote(textResult)}</p>
-            )}
-            {textResult.cached === false && (
-              <p className="text-content-subtle">
-                This phrase is now cached — searching it again is instant, even after a restart.
-              </p>
-            )}
-            <p className="text-amber-300/80">{limitsSentence(semanticState.engine)}</p>
-          </div>
-        )}
-      </div>
-
-      {/* ⚖️ What the balanced pick actually GAVE you. A repartition the user
-          cannot see is indistinguishable from an unbalanced one, so this is
-          numbers first — the bar is decoration over a list that reads out. */}
-      <div aria-live="polite">
-        {balanceResult && (
-          <div className="mt-2 space-y-2 rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-xs text-content">
-            <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
-              <span aria-hidden>⚖️</span>
-              <span className="min-w-0 flex-1">{summarizeBalance(balanceResult)}</span>
-              <button type="button" onClick={() => setBalanceResult(null)}
-                className="shrink-0 rounded-md border border-border px-2 py-0.5 text-xs text-content hover:bg-surface-raised">
-                Dismiss
-              </button>
-            </div>
-            <ul className="flex flex-wrap gap-x-4 gap-y-1 tabular-nums">
-              {balanceRows(balanceResult).map((r) => (
-                <li key={r.key} className={r.short ? 'text-amber-200' : 'text-content-muted'}>
-                  <span className="text-content">{r.selected}</span> {r.label}
-                  <span className="text-content-subtle"> of {r.available}</span>
-                  {r.short && <span> · wanted {r.fairShare}</span>}
-                </li>
+            {/* The grid owns the width now, so it earns denser columns on a big
+                monitor than it could when it shared the row with three zones. */}
+            <ul className={`grid gap-2 ${tileSize === 'S'
+              ? 'grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 2xl:grid-cols-10'
+              : 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8'}`}>
+              {page.images.map((img) => (
+                <Tile key={img.id} img={img} bankId={bankId} size={tileSize}
+                  selected={selected.has(img.id)}
+                  onReview={() => openReview(img.id)}
+                  onTags={() => openTagPicker(img)}
+                  onToggle={() => setSelected((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(img.id)) next.delete(img.id); else next.add(img.id)
+                    return next
+                  })} />
               ))}
             </ul>
-            {balanceNotes(balanceResult).map((note, i) => (
-              <p key={i} className={note.tone === 'warn' ? 'text-amber-300/90' : 'text-content-subtle'}>
-                {note.tone === 'warn' ? '⚠️ ' : '💡 '}{note.text}
-              </p>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {coverageOpen && (
-        <CoveragePanel coverage={coverage} semanticEngine={coverage?.engine || semanticState.engine}
-          semanticLabel={semanticEngineLabel(coverage?.engine || semanticState.engine)}
-          onClose={() => setCoverageOpen(false)}
-          onBalance={balanceReady.ready ? () => setCurateOpen('balanced') : null}
-          balanceReason={balanceReady.reason} />
-      )}
-      </ZoneSection>
-      </div>
-
-      {/* ④ Promote — ship the kept set into a dataset, or clear rejects off
-          disk. Same actions/handlers as before — just grouped as the last step. */}
-      <div className="min-w-0 xl:col-span-4 xl:sticky xl:top-20">
-      <ZoneSection zone={promoteZone} accented={activeStep === 'promote'}>
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => setPromoteOpen(true)} disabled={live || !canPromote}
-          title={canPromote
-            ? 'Copy the kept selection into a dataset — or into a brand-new bank, to keep working on a shortlist apart'
-            : 'Keep some images first'}
-          className="rounded-md bg-gradient-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
-          ⬆ Promote…
-        </button>
-        {/* Disabled outright when this bank's folder belongs to a dataset: the
-            banner above says it is, and a button that still opened a dialog only
-            to be refused there would make that sentence a lie. */}
-        <button type="button" onClick={() => setDeleteRejectedOpen(true)}
-          disabled={live || !(counts?.reject > 0) || !!payload?.dataset_conflict}
-          title={payload?.dataset_conflict
-            ? 'This bank sits on a dataset’s image folder — deleting these files would delete the dataset’s images.'
-            : (counts?.reject > 0)
-              ? 'Delete the rejected images from your disk (OS trash when available). Irreversible — asks you to type DELETE first. Kept images are untouched.'
-              : 'No rejected images to delete'}
-          className="rounded-md border border-rose-500/50 px-3 py-1.5 text-sm text-rose-300 disabled:opacity-40 hover:bg-rose-500/10">
-          🗑 Delete rejected from disk{(counts?.reject > 0) ? ` (${counts.reject})` : ''}
-        </button>
-      </div>
-      </ZoneSection>
-      </div>
-      </div>
-
-      {/* The selected-image tags are an inspector for the desktop gallery, not
-          another full-width filter row. This responsive mount is hidden below
-          xl; phones keep their established copy in the filter zone above. */}
-      <div className={`grid gap-4 ${tagRow
-        ? 'xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start'
-        : 'grid-cols-1'}`}>
-        {tagRow && (
-          <aside aria-label="Image tags"
-            className="hidden xl:col-start-2 xl:row-start-1 xl:block xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto">
-            <SelectionTagsPanel tagRow={tagRow} tagPicked={tagPicked}
-              onToggle={(tag) => toggleTag(tag, tagRow)} onClear={clearTags} />
-          </aside>
-        )}
-        <div className="min-w-0 xl:col-start-1 xl:row-start-1">
-        {filter.flag === 'dups' ? (
-          <DupGroupsPanel bankId={bankId} live={live} kind="exact"
-            onChanged={async () => { await refreshPayload(); await refreshImages() }} />
-        ) : filter.flag === 'semantic_dups' ? (
-          <DupGroupsPanel bankId={bankId} live={live} kind="semantic"
-            semanticLabel={semanticState.label}
-            onChanged={async () => { await refreshPayload(); await refreshImages() }} />
-        ) : (
-          <>
-          <ul className={`grid gap-2 ${tileSize === 'S'
-            ? 'grid-cols-4 sm:grid-cols-6 lg:grid-cols-8'
-            : 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6'}`}>
-            {page.images.map((img) => (
-              <Tile key={img.id} img={img} bankId={bankId} size={tileSize}
-                selected={selected.has(img.id)}
-                onReview={() => openReview(img.id)}
-                onTags={() => openTagPicker(img)}
-                onToggle={() => setSelected((prev) => {
-                  const next = new Set(prev)
-                  if (next.has(img.id)) next.delete(img.id); else next.add(img.id)
-                  return next
-                })} />
-            ))}
-          </ul>
-          {page.total === 0 && (
-            <p className="text-sm text-content-muted">Nothing matches this filter.</p>
+            {page.total === 0 && (
+              <p className="text-sm text-content-muted">Nothing matches this filter.</p>
+            )}
+            {page.total > PAGE_SIZE && (
+              <nav className="flex items-center gap-3 text-sm" aria-label="Grid pages">
+                <button type="button" disabled={offset === 0} onClick={() => goto(Math.max(0, offset - PAGE_SIZE))}
+                  className="rounded-md border border-border px-2 py-1 text-content disabled:opacity-40">← Prev</button>
+                <span className="text-content-muted">
+                  {offset + 1}–{Math.min(offset + PAGE_SIZE, page.total)} of {page.total}
+                </span>
+                <button type="button" disabled={offset + PAGE_SIZE >= page.total}
+                  onClick={() => goto(offset + PAGE_SIZE)}
+                  className="rounded-md border border-border px-2 py-1 text-content disabled:opacity-40">Next →</button>
+              </nav>
+            )}
+            </>
           )}
-          {page.total > PAGE_SIZE && (
-            <nav className="flex items-center gap-3 text-sm" aria-label="Grid pages">
-              <button type="button" disabled={offset === 0} onClick={() => goto(Math.max(0, offset - PAGE_SIZE))}
-                className="rounded-md border border-border px-2 py-1 text-content disabled:opacity-40">← Prev</button>
-              <span className="text-content-muted">
-                {offset + 1}–{Math.min(offset + PAGE_SIZE, page.total)} of {page.total}
-              </span>
-              <button type="button" disabled={offset + PAGE_SIZE >= page.total}
-                onClick={() => goto(offset + PAGE_SIZE)}
-                className="rounded-md border border-border px-2 py-1 text-content disabled:opacity-40">Next →</button>
-            </nav>
-          )}
-          </>
-        )}
-        </div>
+        </main>
       </div>
+
 
       {promoteOpen && (
         <PromoteDialog bankId={bankId}

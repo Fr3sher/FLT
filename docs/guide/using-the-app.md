@@ -440,7 +440,31 @@ setup into a single file so you can move to a new machine — or recover from on
 You exported 9 000 unsorted images from Telegram (or a scraper dumped a
 mountain of files) and a dataset only needs the best 30–150 of them. The
 **🗃️ Bank** tab is the triage funnel that gets you there — without ever
-touching the folder itself:
+touching the folder itself.
+
+**Where things are on that screen.** A bank you open is laid out in three
+parts, and knowing which is which saves reading the rest of this section twice:
+
+- a **top bar** with the bank's name, its counters, and the four actions that
+  change what leaves the bank — **⚙ Passes**, **🚀 Launch all…**, **⬆ Promote…**
+  and **🗑 Delete rejected from disk**;
+- a **filter rail** down the left: the search, the exclude box, the subfolder
+  picker, the person and style strips, and the chips. The six measured axes
+  (Score, Framing, Medium, Angle, Resolution, Origin) sit behind **🎛 More
+  filters** so the everyday ones stay on one screen. On a narrow window the rail
+  becomes a drawer you open with **☰ Filters**, and it remembers whether you
+  keep it open. On a wide window the rail stays put as you scroll the grid, so
+  the chips are still there ten thousand images down;
+- the **grid** filling the rest, with the selection actions directly above it.
+
+The analysis passes live **inside ⚙ Passes** rather than across the top of the
+page: they are the step you run once per bank and then leave alone for days, and
+they were taking up the third of the screen the images now use. All eight are
+still there, and each still opens its own window with its own scope and counts —
+only the door changed. On a bank with nothing scanned yet the panel opens by
+itself, because there is nothing else to do first.
+
+The funnel itself:
 
 1. **Create a bank** — give it a name and paste the folder path. The app
    inventories every image in place (subfolders included). Nothing is copied,
