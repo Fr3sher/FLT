@@ -95,6 +95,9 @@ test('deletion stays unreachable without Select mode, at both scopes', () => {
   // One Select gate, one confirmation, one delete call — shared by both scopes.
   assert.equal((panel.match(/data-testid="gallery-select-toggle"/g) || []).length, 1);
   assert.equal((panel.match(/data-testid="gallery-confirm-delete"/g) || []).length, 1);
-  assert.equal((panel.match(/postJson\(/g) || []).length, 1);
+  // Counted against the REMOVE endpoint, not every postJson in the file: the
+  // panel also posts non-destructive actions (📂 Open folder), and what this
+  // contract protects is that deletion has exactly one path.
+  assert.equal((panel.match(/postJson\(endpoints\.remove/g) || []).length, 1);
   assert.match(panel, /picking \? 'gallery-pick' : 'gallery-zoom'/);
 });

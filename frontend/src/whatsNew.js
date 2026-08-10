@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-10-canvas-gallery-open-folder',
+    date: '2026-08-10',
+    title: 'Open your generated images straight from the Canvas',
+    blurb:
+      'The gallery a checkpoint pill or a run card opens now has an 📂 Open folder button next to ZIP: it reveals the folder the generated images are saved in (the dataset’s own folder, on the machine running the app), so you can grab the files without archiving anything.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-10-watermark-detector-gpu-python',
     date: '2026-08-10',
     title: 'Run the watermark detector on a GPU Python you already have',

@@ -222,6 +222,12 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted, onD
   const node = target.node || null;
   const paramRows = isRun ? configRows(node?.config) : [];
   const ckNotes = isRun ? checkpointNotes(d, node) : [];
+  // Where these images LIVE: generated cells are moved into the dataset's own
+  // folder on completion (data/datasets/<id> — see lora_test_studio's move on
+  // completion), so "open the folder" is the dataset folder, resolved from the
+  // run's node when the panel has one, else from any listed image (the images
+  // of a checkpoint scope all carry their dataset_id).
+  const folderDatasetId = node?.dataset_id ?? images.find((i) => i?.dataset_id != null)?.dataset_id ?? null;
 
   const tile = (img, altLabel) => {
     const isPicked = selected.has(img.id);
@@ -532,6 +538,22 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted, onD
                 onClick={runZip} disabled={zipBtn.disabled} title={zipBtn.title}
                 className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-content-muted text-[0.75rem] hover:border-indigo-400/50 hover:text-content disabled:opacity-40">
                 {zipBtn.label}
+              </button>
+            )}
+            {/* 📂 The same folder the completed cells are moved into (the
+                dataset's own directory) — for the person who wants the files
+                themselves, not an archive. Server-resolved target, no path in
+                the request; hidden when no row told us which dataset this is
+                (a legacy gallery of unlinked images). */}
+            {folderDatasetId != null && (
+              <button type="button" data-testid="gallery-open-folder"
+                onClick={() => {
+                  postJson(`/api/dataset/${folderDatasetId}/train/open-folder`, { target: 'dataset' })
+                    .catch((e) => setNotice({ kind: 'error', text: e?.message || 'Could not open the folder' }));
+                }}
+                title="Open the folder these images are saved in (the dataset's folder, on the machine running the app)"
+                className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-content-muted text-[0.75rem] hover:border-indigo-400/50 hover:text-content">
+                <span aria-hidden>📂</span> Open folder
               </button>
             )}
             {bar.showsDelete && (
