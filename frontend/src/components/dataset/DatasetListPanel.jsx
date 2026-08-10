@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { datasetThumbUrl } from '../../utils/datasetThumbUrl';
 import ShotIllustration from './ShotIllustration';
 import TileSizeControl from '../shared/TileSizeControl';
 import FullBackupControls from './FullBackupControls';
@@ -154,8 +155,8 @@ function DatasetTile({ d, onOpen, onDelete, onExportZip, onExportBackup, showPre
         <div className="relative aspect-[4/3] bg-app/60">
           {showPreviews && d.ref_filename ? (
             <img
-              src={`/api/dataset/${d.id}/img/${encodeURIComponent(d.ref_filename)}`}
-              alt="" loading="lazy" aria-hidden="true"
+              src={datasetThumbUrl(`/api/dataset/${d.id}/img/${encodeURIComponent(d.ref_filename)}`, 384)}
+              alt="" loading="lazy" decoding="async" aria-hidden="true"
               className="h-full w-full object-cover" />
           ) : (
             <span className={`grid h-full w-full place-items-center bg-gradient-to-br ${gradientFor(d.name)} text-white text-3xl font-bold`}
@@ -240,8 +241,8 @@ function DatasetRow({ d, onOpen, onDelete, onExportZip, onExportBackup, showPrev
         <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md bg-app/60">
           {showPreviews && d.ref_filename ? (
             <img
-              src={`/api/dataset/${d.id}/img/${encodeURIComponent(d.ref_filename)}`}
-              alt="" loading="lazy" aria-hidden="true"
+              src={datasetThumbUrl(`/api/dataset/${d.id}/img/${encodeURIComponent(d.ref_filename)}`, 128)}
+              alt="" loading="lazy" decoding="async" aria-hidden="true"
               className="h-full w-full object-cover" />
           ) : (
             <span className={`grid h-full w-full place-items-center bg-gradient-to-br ${gradientFor(d.name)} text-base font-bold text-white`}

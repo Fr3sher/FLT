@@ -19,6 +19,7 @@ import { postJson } from '../../hooks/useDataset';
 import { HelpBadge } from '../../help/HelpMode';
 import FaceDetectionInstallPrompt from '../setup/FaceDetectionInstallPrompt';
 import { boxStyle, coverageFraction, MAX_COVERAGE } from '../../utils/faceMaskBox';
+import { datasetThumbUrl } from '../../utils/datasetThumbUrl';
 import {
   previewError, previewPercent, previewProgressValue, previewRunning, previewStartLabel,
   previewStatusLabel, previewStopCost, previewStoppedNotice, previewStopLabel,
@@ -62,8 +63,11 @@ function PreviewProgress({ job }) {
   );
 }
 
+/* A tile-sized WebP, not the original: this preview is a small figure in a grid
+   and the boxes drawn over it are positioned in PERCENTAGES (utils/faceMaskBox),
+   so a copy at another scale lines up exactly the same. */
 const imageUrl = (datasetId, filename) =>
-  `/api/dataset/${datasetId}/img/${encodeURIComponent(filename)}`;
+  datasetThumbUrl(`/api/dataset/${datasetId}/img/${encodeURIComponent(filename)}`, 384);
 
 /* One sample with its mask drawn over it. `expand` is applied here, in the
    browser, so dragging the slider is instant — the server pass ran once and
@@ -76,7 +80,7 @@ function SamplePreview({ datasetId, sample, expand }) {
     <figure className="min-w-0">
       <div className="relative overflow-hidden rounded-lg border border-border bg-black">
         <img src={imageUrl(datasetId, sample.filename)} alt=""
-          className="block w-full h-auto select-none" loading="lazy" />
+          className="block w-full h-auto select-none" loading="lazy" decoding="async" />
         {boxes.map((b, i) => (
           <div key={i} aria-hidden style={boxStyle(b, expand)}
             className={`absolute rounded-[50%] border-2 ${tooLarge
