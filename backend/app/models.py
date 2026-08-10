@@ -294,6 +294,12 @@ class ImageBank(db.Model):
     # CLIP vectors needed by aesthetic, NSFW, style and medium analysis.
     semantic_engine = db.Column(String(16), nullable=False, default='clip',
                                 server_default='clip')
+    # {step: {at, detail, counts, ...}} — when each pass last COMPLETED on its
+    # own, whatever launched it. Two things depended on knowing this and had no
+    # way to: "did I already run this?" (the answer used to be "run it again and
+    # find out"), and whether the Launch-all report above still speaks for a step
+    # somebody has re-run since. NULL = no pass has ever finished here.
+    last_passes = db.Column(Text, nullable=True)
 
     def __repr__(self):
         return f'<ImageBank {self.id} {self.name}>'

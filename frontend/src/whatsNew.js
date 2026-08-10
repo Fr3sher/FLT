@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-10-bank-pass-remembers-itself',
+    date: '2026-08-10',
+    title: 'Find crops & variants shows its work, and remembers running',
+    blurb:
+      'Three things went wrong around this pass, none of them in the grouping itself. A "Launch all" you stopped before it reached the pass kept announcing "cancelled before it ran" — next to a standalone run that had just found 2358 groups; a step re-run since the report was written now says so, and the banner drops its 🛑 once nothing is left waiting. The run itself showed one line and then nothing for minutes, because its slowest phase — re-reading every file to prove none moved while it worked — ran unannounced; both phases now fill the bar. And the Bank had no memory of the pass at all, so the only way to know whether you had run it was to run it again: the launch window now tells you when it last ran and what it found, and relaunching an untouched Bank answers "already up to date" in a second instead of redoing the work.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-09-bank-filters-beside-the-grid',
     date: '2026-08-09',
     title: 'The bank filters now sit beside the images they filter',

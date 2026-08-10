@@ -518,8 +518,11 @@ def bank_semantic_dedup(bank_id):
     # used by HTTP, pipeline and direct callers. Invalid input must never fall
     # back silently to a permissive default.
     threshold = data.get('threshold')
+    # ``force`` skips the "nothing has changed since the last run" shortcut. The
+    # shortcut reads state, not pixels, so a file swapped under an unchanged
+    # cache is exactly what it cannot see — this is the way out.
     return _start(banks.start_semantic_dedup, _app(), LOCAL_USER, bank_id,
-                  threshold=threshold)
+                  threshold=threshold, force=bool(data.get('force')))
 
 
 @bp.post('/bank/<int:bank_id>/watermark')

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { attemptModalSubmit } from '../../utils/submitOutcome.js'
+import { lastPassNote, lastPassSentence } from './lastPassNote.js'
 import {
   bankPass, passScopeRows, passSelectionAvailability, watermarkSettings,
 } from './bankPasses.js'
@@ -66,6 +67,7 @@ export default function PassDialog({
   const spec = bankPass(passId, { semanticEngine })
   const selection = passSelectionAvailability(passId)
   const rows = useMemo(() => passScopeRows(passId), [passId])
+  const lastRun = useMemo(() => lastPassNote(payload, passId), [payload, passId])
 
   /* A live selection is the FIRST line of THIS RUN, and it wins by default when
      the pass can honour it — the user just picked those images. Turning it off
@@ -139,6 +141,13 @@ export default function PassDialog({
         <header className="shrink-0 border-b border-border p-4">
           <h2 className="text-base font-bold text-content">{spec.label}</h2>
           <p className="mt-1 text-sm text-content-muted">{spec.what}</p>
+          {/* "Did I already run this?" used to be answerable only by running it
+              again and watching. See lastPassNote.js for why this line stops at
+              what the last run FOUND and leaves "is it still current" to the run
+              itself. */}
+          {lastRun && (
+            <p className="mt-1 text-xs text-content-subtle">↻ {lastPassSentence(lastRun)}</p>
+          )}
         </header>
 
         <div ref={bodyRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 sm:p-4">

@@ -67,10 +67,15 @@ test('the progress bar understands the pipeline kind (step X/N + per-step chips)
 });
 
 test('the report renders per-step status and is fed from the persisted payload field', () => {
-  assert.match(report, /STATUS_STYLE/);
-  assert.match(report, /skipped/);
-  assert.match(report, /cancelled/);
-  assert.match(report, /error/);
+  // The four statuses and their styling moved to pipelineReportView.js, which
+  // also decides when a step has been re-run since — pinned there by
+  // pipelineReportView.test.js. This entry follows the property, not the file it
+  // used to live in.
+  const view = fs.readFileSync(new URL('./pipelineReportView.js', import.meta.url), 'utf8');
+  assert.match(view, /STATUS_STYLE/);
+  assert.match(view, /skipped/);
+  assert.match(view, /cancelled/);
+  assert.match(view, /error/);
   // The workspace shows it only when idle, from the persisted field.
   assert.match(ws, /payload\.pipeline_report/);
   assert.match(ws, /<PipelineReport/);

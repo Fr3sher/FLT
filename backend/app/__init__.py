@@ -354,6 +354,9 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset_image', 'caption_origin', 'VARCHAR(16)'),
     ('face_dataset_image', 'caption_short_origin', 'VARCHAR(16)'),
     ('image_bank', 'pipeline_report', 'TEXT'),
+    # When each pass last completed. A bank that predates it keeps NULL and
+    # simply reports "never recorded" until its next pass writes a row.
+    ('image_bank', 'last_passes', 'TEXT'),
     # Per-Bank semantic engine. The non-null default makes every historical row
     # byte-for-byte compatible with the CLIP behaviour it already had.
     ('image_bank', 'semantic_engine', "VARCHAR(16) NOT NULL DEFAULT 'clip'"),

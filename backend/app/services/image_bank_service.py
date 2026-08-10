@@ -1991,6 +1991,9 @@ def bank_payload(user_id, bank_id) -> dict | None:
         # it takes back is in the database, not in a tab).
         'undo': bank_undo.peek(bank_id),
         'pipeline_report': _load_pipeline_report(bank),
+        # When each pass last completed here — what lets a screen answer "already
+        # done, on this many images" instead of offering an identical re-run.
+        'last_passes': last_passes(bank),
         'score_device': score_device_info(bank_id),
         # Non-null only on a bank created before the create-time guard, whose
         # folder IS a dataset's storage. The workspace turns it into a standing
@@ -2063,17 +2066,72 @@ def flag_preview(user_id, bank_id, overrides=None) -> dict | None:
             'thresholds': th, 'total': base.count()}
 
 
-def _load_pipeline_report(bank: ImageBank):
-    """The persisted 'Launch all' summary (parsed), or None. A corrupt blob is
-    swallowed — a broken report must never 500 the whole bank payload."""
+def _load_json_column(bank, attr):
+    """Parsed JSON column, or None. A corrupt blob is swallowed — one broken
+    field must never 500 the whole bank payload."""
     import json as _json
-    raw = getattr(bank, 'pipeline_report', None)
+    raw = getattr(bank, attr, None)
     if not raw:
         return None
     try:
         return _json.loads(raw)
     except (ValueError, TypeError):
         return None
+
+
+def last_passes(bank: ImageBank) -> dict:
+    """{step: {at, detail, counts, ...}} — when each pass last completed here."""
+    return _load_json_column(bank, 'last_passes') or {}
+
+
+def note_pass_run(bank_id, step, *, detail=None, counts=None, **extra):
+    """Record that ``step`` just COMPLETED on this bank.
+
+    One write serves two questions the Bank could not answer before. "Have I
+    already run this?" — the pass reads its own row back and can recognise an
+    unchanged bank instead of recomputing it. And "does the Launch-all report
+    still speak for this step?" — a report is a photograph of one run, so a step
+    somebody has re-run since must not keep announcing that run's verdict (a
+    Launch-all stopped before ✂ ran went on saying "cancelled before it ran"
+    over a standalone run that had just grouped 2358 shots).
+
+    Failure here never sinks the pass that produced the result: the work is
+    done and committed, and a lost bookkeeping row costs a redundant re-run at
+    worst — so it is logged, not raised."""
+    import json as _json
+    import time as _time
+    bank = db.session.get(ImageBank, bank_id)
+    if bank is None:
+        return
+    row = {'at': _time.time(), 'detail': detail, 'counts': counts or {}}
+    row.update({k: v for k, v in extra.items() if v is not None})
+    journal = last_passes(bank)
+    journal[step] = row
+    try:
+        bank.last_passes = _json.dumps(journal)
+        db.session.commit()
+    except Exception as e:  # noqa: BLE001 — bookkeeping, never the user's result
+        db.session.rollback()
+        logger.warning('bank %s: could not record the %s pass run: %s',
+                       bank_id, step, e)
+
+
+def _load_pipeline_report(bank: ImageBank):
+    """The persisted 'Launch all' summary, with every step that has been re-run
+    since annotated (``superseded_at``/``superseded_detail``). The report itself
+    is never rewritten — it stays the honest record of that run; the annotation
+    is what stops it speaking for a step whose story has moved on."""
+    report = _load_json_column(bank, 'pipeline_report')
+    if not report or not isinstance(report.get('steps'), list):
+        return report
+    journal = last_passes(bank)
+    written_at = report.get('finished_at') or 0
+    for entry in report['steps']:
+        run = journal.get(entry.get('step'))
+        if run and (run.get('at') or 0) > written_at:
+            entry['superseded_at'] = run['at']
+            entry['superseded_detail'] = run.get('detail')
+    return report
 
 
 def list_banks(user_id, dataset_id=None) -> list:
@@ -3877,7 +3935,7 @@ def _semantic_dup_threshold(engine, threshold=None) -> float:
 
 
 def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
-                                _bank_lease=None) -> int | None:
+                                _bank_lease=None, on_phase=None) -> int | None:
     """Stage-2 near-duplicate grouping in the Bank's selected semantic space.
 
     CLIP preserves the historical Score-cache/style-blocking path byte for byte;
@@ -3894,7 +3952,14 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
     if _bank_lease is None:
         with bank_jobs.mutation_lease(bank_id, 'semantic_dedup') as lease:
             return rebuild_semantic_dup_groups(
-                bank_id, threshold=threshold, _bank_lease=lease)
+                bank_id, threshold=threshold, _bank_lease=lease, on_phase=on_phase)
+    # The pass used to announce itself once and then work in silence — on a big
+    # bank that is minutes of an empty bar, and the quietest phase is the
+    # slowest one (proving nothing moved re-hashes every file). Each phase now
+    # says what it is doing and fills the bar as it goes.
+    def _phase(done, total, detail):
+        if on_phase:
+            on_phase(done, total, detail)
     bank_jobs.require_reservation(_bank_lease, bank_id)
     import numpy as np
     bank = db.session.get(ImageBank, bank_id)
@@ -3977,6 +4042,9 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
             'Use CLIP style-blocked grouping or split the Bank; a bounded ANN '
             'path is required for a larger global SigLIP2 partition.')
 
+    compared = 0
+    comparable = sum(len(m) for m in blocks.values() if len(m) >= 2)
+    _phase(0, comparable, f'comparing {comparable:,} image(s) for same-shot groups')
     for members in blocks.values():
         if len(members) < 2:
             continue
@@ -4005,6 +4073,9 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
                         right = members[j0 + int(local_b)]
                         if find(left) != find(right):
                             union(left, right)
+        compared += len(members)
+        _phase(compared, comparable,
+               f'comparing {comparable:,} image(s) for same-shot groups')
     comps: dict = {}
     for i in range(len(items)):
         comps.setdefault(find(i), []).append(i)
@@ -4028,7 +4099,14 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
                 BankImage.id.in_(item_ids[i0:i0 + _SQL_IN_CHUNK])).all()
         })
     partition_valid = cache_still_current
-    for image_id, _block, _emb, expected_path, expected_fp, expected_style in items:
+    # THE slow phase, and the one that used to run unannounced: it re-reads and
+    # SHA-256s every file to prove none moved while the CPU comparison ran.
+    _phase(0, len(items), f'verifying {len(items):,} file(s) are unchanged')
+    for checked, (image_id, _block, _emb, expected_path, expected_fp,
+                  expected_style) in enumerate(items, start=1):
+        if checked % 200 == 0 or checked == len(items):
+            _phase(checked, len(items),
+                   f'verifying {len(items):,} file(s) are unchanged')
         row = live_rows.get(image_id)
         current_path = analysis_image_path(bank, row) if row is not None else None
         current_fp = bank_transfer_metadata.content_fingerprint_path(current_path)
@@ -4069,7 +4147,41 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
     return len(groups)
 
 
-def start_semantic_dedup(app, user_id, bank_id, threshold=None):
+def _semantic_partition_signature(bank_id, threshold) -> str | None:
+    """A cheap fingerprint of everything the grouping reads, so a pass can tell
+    an untouched bank from a changed one WITHOUT redoing the work.
+
+    Deliberately made of facts a query already knows — the embedding cache's
+    size and mtime, the eligible row ids, their style blocks, the engine and the
+    threshold. No file is opened: the whole point is to skip a phase that reads
+    and SHA-256s every image in the bank.
+
+    What it does NOT capture: an image REPLACED on disk at the same path while
+    its cached embedding stayed behind. That cache is stale by then, and the
+    full pass answers it the same way it always did — it refuses the partition
+    and clears it. Users who suspect that hold ⇧ / pass ``force`` to skip the
+    shortcut."""
+    bank = db.session.get(ImageBank, bank_id)
+    if bank is None:
+        return None
+    engine = _selected_semantic_engine(bank)
+    cache_path = (_score_cache_path(bank_id) if engine == 'clip'
+                  else _semantic_cache_path(bank_id))
+    try:
+        stat = cache_path.stat()
+    except OSError:
+        return None
+    rows = (db.session.query(BankImage.id, BankImage.style_cluster)
+            .filter(BankImage.bank_id == bank_id)
+            .order_by(BankImage.id.asc()).all())
+    h = hashlib.sha256()
+    for image_id, style in rows:
+        h.update(f'{image_id}:{"" if style is None else style};'.encode())
+    return (f'{engine}/{float(threshold):.6f}/{stat.st_size}/{stat.st_mtime_ns}'
+            f'/{len(rows)}/{h.hexdigest()[:32]}')
+
+
+def start_semantic_dedup(app, user_id, bank_id, threshold=None, force=False):
     """Launch the CPU semantic near-duplicate pass in the selected space."""
     bank = get_bank(user_id, bank_id)
     if not bank:
@@ -4083,18 +4195,40 @@ def start_semantic_dedup(app, user_id, bank_id, threshold=None):
         raise ValueError('run Semantic index first — no SigLIP2 embeddings are '
                          'available')
     return bank_jobs.start(app, bank_id, 'semantic_dedup',
-                           _semantic_dedup_job(bank_id, threshold), total=0)
+                           _semantic_dedup_job(bank_id, threshold, force=force),
+                           total=0)
 
 
-def _semantic_dedup_job(bank_id, threshold):
+def _semantic_dedup_job(bank_id, threshold, force=False):
     def run(job):
         bank_jobs.progress(job, done=0, total=0, detail='finding crops & variants')
+        signature = _semantic_partition_signature(bank_id, threshold)
+        previous = last_passes(db.session.get(ImageBank, bank_id)).get('semantic_dedup')
+        if (not force and signature and previous
+                and previous.get('signature') == signature):
+            # Nothing the grouping reads has moved since that run. Saying so
+            # costs a query; proving it the long way costs re-reading every
+            # embedding and SHA-256-ing every file in the bank for an answer
+            # already on screen.
+            n = (previous.get('counts') or {}).get('semantic_groups', 0)
+            bank_jobs.progress(
+                job, done=0, total=0,
+                detail=f'already up to date — {n} group(s), nothing changed')
+            return
         n = rebuild_semantic_dup_groups(
-            bank_id, threshold, _bank_lease=_job_bank_capability(job))
+            bank_id, threshold, _bank_lease=_job_bank_capability(job),
+            on_phase=lambda done, total, detail: bank_jobs.progress(
+                job, done=done, total=total, detail=detail))
         if n is None:
             bank_jobs.progress(job, detail='no embeddings — run ✨ Score first')
             return
-        bank_jobs.progress(job, detail=f'done — {n} semantic near-duplicate group(s)')
+        detail = f'done — {n} semantic near-duplicate group(s)'
+        bank_jobs.progress(job, detail=detail)
+        note_pass_run(bank_id, 'semantic_dedup', detail=detail,
+                      counts={'semantic_groups': n},
+                      engine=_selected_semantic_engine(db.session.get(ImageBank, bank_id)),
+                      threshold=float(threshold),
+                      signature=_semantic_partition_signature(bank_id, threshold))
     return run
 
 
@@ -9050,8 +9184,12 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
         # /manual) — near-dups are fuzzier than exact dHash, so the overnight run
         # surfaces them rather than auto-rejecting. Skipped-with-reason (never a
         # mute ✗) when Score produced no embeddings.
+        # Same phase reporting as the standalone button — an overnight run is
+        # exactly when a silent hour is hardest to tell from a hung one.
         n = rebuild_semantic_dup_groups(
-            bank_id, _bank_lease=_job_bank_capability(job))
+            bank_id, _bank_lease=_job_bank_capability(job),
+            on_phase=lambda done, total, detail: bank_jobs.progress(
+                job, done=done, total=total, detail=detail))
         if n is None:
             bank = db.session.get(ImageBank, bank_id)
             if bank is not None and _selected_semantic_engine(bank) == 'siglip2':
@@ -9062,6 +9200,16 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
             return
         entry['counts'] = {'semantic_groups': n}
         entry['detail'] = f'{n} semantic near-duplicate group(s) to review'
+        # The journal records the pass, not the button that fired it. Leaving
+        # Launch-all out would let the launch window quote a week-old standalone
+        # run over one that finished last night.
+        bank = db.session.get(ImageBank, bank_id)
+        engine = _selected_semantic_engine(bank) if bank is not None else None
+        threshold = _semantic_dup_threshold(engine)
+        note_pass_run(bank_id, 'semantic_dedup', detail=entry['detail'],
+                      counts={'semantic_groups': n}, engine=engine,
+                      threshold=float(threshold),
+                      signature=_semantic_partition_signature(bank_id, threshold))
         return
     if step == 'watermark':
         reason = _watermark_prereq() or _gpu_busy_reason()

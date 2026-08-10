@@ -316,8 +316,15 @@ test('the preview endpoint exists and does not save anything', () => {
   assert.match(routes, /@bp\.post\('\/bank\/<int:bank_id>\/flag-preview'\)/);
   const svc = fs.readFileSync(
     new URL('../../../../backend/app/services/image_bank_service.py', import.meta.url), 'utf8');
-  const body = svc.slice(svc.indexOf('def flag_preview'), svc.indexOf('def _load_pipeline_report'));
+  // Cut at the NEXT top-level def, not at a named neighbour: pinning the end to
+  // whichever function happened to follow meant that inserting anything between
+  // them silently widened the slice, and this test then failed on a commit that
+  // was not in flag_preview at all.
+  const start = svc.indexOf('def flag_preview');
+  const after = svc.slice(start + 1).search(/\n(?:def |@)/);
+  const body = svc.slice(start, after === -1 ? undefined : start + 1 + after);
   assert.ok(body.length > 100, 'found flag_preview');
+  assert.doesNotMatch(body, /\ndef _load_json_column/, 'the slice stops at flag_preview');
   assert.doesNotMatch(body, /db\.session\.(commit|add|delete)|save_config/,
     'the preview writes nothing');
 });

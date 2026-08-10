@@ -492,3 +492,201 @@ def test_stale_embedding_dropped_from_semantic_pass(client, tmp_path, app):
         assert banks.abs_image_path(bank, rows['b.jpg']) not in embs   # stale, dropped
         # With b dropped, a has no partner → no semantic group.
         assert banks.rebuild_semantic_dup_groups(bank_id) == 0
+
+
+# --- what the pass tells you about itself ------------------------------------
+# Three defects reported together on a real Telegram bank, none of them about the
+# grouping maths: a stale "Launch all" report kept announcing the step had been
+# cancelled long after a standalone run had found 2358 groups; the run itself
+# showed nothing for minutes; and nothing recorded that the scan had been done, so
+# it could be relaunched forever without ever being told it was already current.
+def _run_semantic_pass(client, bank_id):
+    r = client.post(f'/api/bank/{bank_id}/semantic-dedup', json={})
+    assert r.status_code == 202, r.get_json()
+    return r
+
+
+def _report(client, bank_id):
+    return client.get(f'/api/bank/{bank_id}').get_json()['pipeline_report']
+
+
+def _grouped_bank(client, tmp_path, app):
+    bank_id, src = _mkbank(client, tmp_path, {'a.jpg': _flat(10), 'b.jpg': _flat(20)})
+    _write_score_cache(app, bank_id, {
+        'a.jpg': _emb(1.0, 0.0), 'b.jpg': _emb(0.97, np.sqrt(1 - 0.97 ** 2))})
+    return bank_id, src
+
+
+def _fake_cancelled_report(app, bank_id, steps):
+    """Rewrite the persisted state as a Launch-all that was stopped early.
+
+    A step that never ran leaves no journal row, so the fixture drops those rows
+    as well — antedating the report while keeping the journal would describe a
+    run that both did and did not happen, and the supersession rule would
+    (rightly) fire on it."""
+    import json
+    with app.app_context():
+        from app.models import ImageBank, db
+        bank = db.session.get(ImageBank, bank_id)
+        report = json.loads(bank.pipeline_report)
+        for entry in report['steps']:
+            if entry['step'] in steps:
+                entry.update(status='cancelled', reason='cancelled before it ran',
+                             detail=None, counts={})
+        report['cancelled'] = True
+        report['finished_at'] = 1.0          # long before any standalone run
+        bank.pipeline_report = json.dumps(report)
+        journal = json.loads(bank.last_passes or '{}')
+        bank.last_passes = json.dumps(
+            {k: v for k, v in journal.items() if k not in steps})
+        db.session.commit()
+
+
+def test_standalone_run_supersedes_a_cancelled_pipeline_step(client, tmp_path, app):
+    """The bug as reported: Launch all was stopped before ✂ ran, so the report says
+    'cancelled before it ran' — and kept saying it after a standalone run produced
+    the groups. A step re-run since the report was written is marked as such, so
+    the banner can no longer contradict a fresher result."""
+    bank_id, _ = _grouped_bank(client, tmp_path, app)
+    assert client.post(f'/api/bank/{bank_id}/pipeline',
+                       json={'steps': ['semantic_dedup']}).status_code == 202
+    _fake_cancelled_report(app, bank_id, {'semantic_dedup'})
+    entry = next(e for e in _report(client, bank_id)['steps']
+                 if e['step'] == 'semantic_dedup')
+    assert entry['status'] == 'cancelled' and not entry.get('superseded_at')
+
+    _run_semantic_pass(client, bank_id)
+
+    entry = next(e for e in _report(client, bank_id)['steps']
+                 if e['step'] == 'semantic_dedup')
+    assert entry['superseded_at'], 'the report still speaks for a step re-run since'
+    assert 'group' in (entry['superseded_detail'] or '')
+
+
+def test_a_pass_that_has_not_re_run_keeps_its_verdict(client, tmp_path, app):
+    """The guard above must not whitewash the report: a step nobody re-ran keeps its
+    verdict, or the banner stops being worth reading at all."""
+    bank_id, _ = _grouped_bank(client, tmp_path, app)
+    assert client.post(f'/api/bank/{bank_id}/pipeline',
+                       json={'steps': ['scan', 'semantic_dedup']}).status_code == 202
+    _fake_cancelled_report(app, bank_id, {'scan'})
+    _run_semantic_pass(client, bank_id)          # ✂ only — scan was NOT re-run
+    steps = {e['step']: e for e in _report(client, bank_id)['steps']}
+    assert steps['semantic_dedup'].get('superseded_at')
+    assert not steps['scan'].get('superseded_at')
+    assert steps['scan']['status'] == 'cancelled'
+
+
+def test_launch_all_writes_the_journal_too(client, tmp_path, app):
+    """The journal records the PASS, not the button that fired it — otherwise the
+    launch window would quote an old standalone run over a Launch-all that redid
+    the work last night."""
+    bank_id, _ = _grouped_bank(client, tmp_path, app)
+    assert client.post(f'/api/bank/{bank_id}/pipeline',
+                       json={'steps': ['semantic_dedup']}).status_code == 202
+    last = client.get(f'/api/bank/{bank_id}').get_json()['last_passes']['semantic_dedup']
+    assert last['at'] > 0 and last['counts']['semantic_groups'] == 1
+    # ...and a report written at the same moment is not retroactively superseded
+    # by the very run that produced it.
+    entry = next(e for e in _report(client, bank_id)['steps']
+                 if e['step'] == 'semantic_dedup')
+    assert not entry.get('superseded_at')
+
+
+def test_the_bank_remembers_when_the_pass_last_ran(client, tmp_path, app):
+    """Nothing recorded that a scan had happened, so the answer to 'did I already
+    run this?' was always 'run it again and find out'."""
+    bank_id, _ = _grouped_bank(client, tmp_path, app)
+    assert (client.get(f'/api/bank/{bank_id}').get_json()
+            .get('last_passes', {}).get('semantic_dedup')) is None
+    _run_semantic_pass(client, bank_id)
+    last = client.get(f'/api/bank/{bank_id}').get_json()['last_passes']['semantic_dedup']
+    assert last['at'] > 0
+    assert last['counts']['semantic_groups'] == 1
+    assert last['engine'] == 'clip'
+    assert last['threshold'] > 0
+
+
+def test_rerunning_an_unchanged_bank_says_so_instead_of_recomputing(client, tmp_path, app):
+    """Relaunching over an untouched bank re-read every embedding and re-hashed every
+    file on disk to reach the same answer."""
+    bank_id, _ = _grouped_bank(client, tmp_path, app)
+    _run_semantic_pass(client, bank_id)
+    with app.app_context():
+        from app.services import image_bank_service as banks
+        seen = []
+        original = banks.rebuild_semantic_dup_groups
+
+        def spy(*a, **kw):
+            seen.append(a)
+            return original(*a, **kw)
+        banks.rebuild_semantic_dup_groups = spy
+        try:
+            _run_semantic_pass(client, bank_id)
+        finally:
+            banks.rebuild_semantic_dup_groups = original
+        assert not seen, 'an unchanged bank was regrouped from scratch again'
+    payload = client.get(f'/api/bank/{bank_id}').get_json()
+    assert payload['last_passes']['semantic_dedup']['counts']['semantic_groups'] == 1
+    assert 'already up to date' in payload['activity']['detail']
+
+
+def test_new_embeddings_still_recompute(client, tmp_path, app):
+    """The shortcut must never outlive the state it was measured on. Re-scoring
+    rewrites the embedding cache the grouping reads — the answer can change, so
+    the work has to happen."""
+    bank_id, _ = _grouped_bank(client, tmp_path, app)
+    _run_semantic_pass(client, bank_id)
+    _write_score_cache(app, bank_id, {          # ✨ Score run again
+        'a.jpg': _emb(1.0, 0.0), 'b.jpg': _emb(0.2, 0.98)})   # now far apart
+    _run_semantic_pass(client, bank_id)
+    payload = client.get(f'/api/bank/{bank_id}').get_json()
+    assert 'already up to date' not in payload['activity']['detail']
+    assert payload['last_passes']['semantic_dedup']['counts']['semantic_groups'] == 0
+
+
+def test_the_signature_moves_with_the_images_it_covers(client, tmp_path, app):
+    """The shortcut is only as honest as its signature. Adding or removing a row,
+    or re-styling one, must change it — otherwise an untouched-looking bank would
+    keep serving a stale partition."""
+    bank_id, _ = _grouped_bank(client, tmp_path, app)
+    with app.app_context():
+        from app.models import BankImage, db
+        from app.services import image_bank_service as banks
+        sig = banks._semantic_partition_signature(bank_id, 0.95)
+        assert sig and banks._semantic_partition_signature(bank_id, 0.95) == sig
+        assert banks._semantic_partition_signature(bank_id, 0.90) != sig, \
+            'the threshold is part of what was computed'
+        row = BankImage.query.filter_by(bank_id=bank_id).first()
+        row.style_cluster = (row.style_cluster or 0) + 7
+        db.session.commit()
+        restyled = banks._semantic_partition_signature(bank_id, 0.95)
+        assert restyled != sig, 'style blocks decide who is compared with whom'
+        db.session.delete(BankImage.query.filter_by(bank_id=bank_id).first())
+        db.session.commit()
+        assert banks._semantic_partition_signature(bank_id, 0.95) != restyled
+
+
+def test_the_run_reports_progress_while_it_works(client, tmp_path, app):
+    """Minutes of silence on a big bank: one 'finding crops & variants' line, then
+    nothing until the end — while the slowest phase, re-hashing every file to prove
+    nothing moved, ran unannounced."""
+    bank_id, _ = _grouped_bank(client, tmp_path, app)
+    seen = []
+    with app.app_context():
+        from app.services import bank_jobs
+        original = bank_jobs.progress
+
+        def spy(job, done=None, total=None, detail=None):
+            seen.append((done, total, detail))
+            return original(job, done=done, total=total, detail=detail)
+        bank_jobs.progress = spy
+        try:
+            _run_semantic_pass(client, bank_id)
+        finally:
+            bank_jobs.progress = original
+    assert any(d is not None and t for d, t, _ in seen), \
+        'the bar never got a total to fill — the user watches an empty bar'
+    phases = [d for _, _, d in seen if d]
+    assert any('compar' in p for p in phases), phases
+    assert any('verif' in p for p in phases), phases
