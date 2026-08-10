@@ -335,7 +335,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // would reorder under the cursor and make the run skip or loop.
   const [review, setReview] = useState(null)
   const [reviewLoading, setReviewLoading] = useState(false)
-  const activityWasLive = useRef(false)
+  // started_at of the last FINISHED activity already announced (toast + grid
+  // refresh). `undefined` = no payload seen yet — refreshPayload records the
+  // first snapshot silently; the landing effect announces every one after it.
+  const announcedActivityAt = useRef(undefined)
   // When the dashboard was last pulled in full. A ref, not effect-local state:
   // the poll effect re-subscribes on every change of the job's `detail`.
   const fullPayloadAt = useRef(0)
@@ -367,6 +370,15 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       // doesn't hammer the disk.
       const d = await apiFetch(`/api/bank/${bankId}${opts.force ? '?refresh=1' : ''}`,
         { background: !!opts.background })
+      // First payload of this bank: record its finished-activity generation
+      // WITHOUT announcing it — the snapshot can be a job up to 5 min old, and
+      // toasting stale news on every open is worse than silence. From here on
+      // the landing effect announces every NEW generation, including jobs that
+      // finish before the first 2 s poll ever sees them running.
+      if (announcedActivityAt.current === undefined) {
+        announcedActivityAt.current = (d?.activity?.finished
+          ? d.activity.started_at ?? null : null)
+      }
       setPayload(d)
       // Images dropped in the folder show up on their own — say it, and pull
       // them into the grid, so the counters never move without a reason.
@@ -457,6 +469,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     // instead of a setFilter that the fetch below would race.
     const f = { ...filter, sort: loadBankSort(bankId) }
     if (f.sort !== filter.sort) setFilter(f)
+    // A new bank starts a new announcement history: without this reset, the
+    // first payload of the next bank could re-toast its old finished snapshot.
+    announcedActivityAt.current = undefined
     refreshPayload({ force: true }); refreshImages(f)
     apiFetch(`/api/bank/${bankId}/subfolders`)
       .then((d) => setSubfolders(d.subfolders || []))
@@ -468,17 +483,27 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const live = payload?.activity && !payload.activity.finished
   useEffect(() => {
     if (!live) {
-      if (activityWasLive.current) {
-        activityWasLive.current = false
+      /* The landing is announced PER JOB GENERATION (started_at), not per
+         "the poll saw it running". The old gate was activityWasLive, and it
+         silenced every job that finished before the first 2 s tick — a 👥 pass
+         whose 27 images were already cached ran, landed and said absolutely
+         nothing: no bar (too fast, fine), no toast, and the user launched it
+         three more times looking for a reaction. `undefined` means "first
+         payload after opening this bank": that snapshot can carry a finished
+         job up to 5 min old, which is recorded silently — announcing it would
+         toast stale news on every open. */
+      const act = payload?.activity
+      if (act?.finished && announcedActivityAt.current !== undefined
+          && act.started_at !== announcedActivityAt.current) {
+        announcedActivityAt.current = act.started_at ?? null
         refreshImages()
-        if (payload?.activity?.error) toast.error(`Job failed — ${payload.activity.error}`)
-        else if (payload?.activity?.cancelled && payload?.activity?.detail)
-          toast.info(payload.activity.detail)   // Stopped — N cached (M remaining)…
-        else if (payload?.activity?.detail) toast.success(payload.activity.detail)
+        if (act.error) toast.error(`Job failed — ${act.error}`)
+        else if (act.cancelled && act.detail)
+          toast.info(act.detail)   // Stopped — N cached (M remaining)…
+        else if (act.detail) toast.success(act.detail)
       }
       return undefined
     }
-    activityWasLive.current = true
     // ⏱ The 2 s tick asks for the JOB, not the dashboard. It used to re-fetch the
     // whole bank payload — ~60 bank-wide aggregates plus a per-image path walk —
     // which took 12.5 s at rest on a 50 397-image bank and 28.9 s while a pass
@@ -505,8 +530,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     }
     const t = setInterval(tick, 2000)
     return () => { dropped = true; clearInterval(t) }
-  }, [live, bankId, refreshPayload, refreshImages, toast, payload?.activity?.error,
-      payload?.activity?.cancelled, payload?.activity?.detail])
+  }, [live, bankId, refreshPayload, refreshImages, toast,
+      payload?.activity?.error, payload?.activity?.cancelled,
+      payload?.activity?.detail, payload?.activity?.started_at])
 
   // Keep the coverage panel current: refetch when it opens, and whenever the kept
   // set or the framing classification changes (a keep/reject or the framing pass).

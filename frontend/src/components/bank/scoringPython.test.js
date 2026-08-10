@@ -180,6 +180,24 @@ test('the picker replaces its summary line with the failure banner', () => {
   assert.match(src, /detectionFailure\(result\)/);
 });
 
+// ── The third profile: the 🚩 watermark detector ─────────────────────────────
+
+test('the watermark profile exists, with its own endpoint and its own words', async () => {
+  const { PICKER_PROFILES, pickerProfile } = await import('./scoringPython.js');
+  const p = PICKER_PROFILES.watermark_detect;
+  // `key` is shared with the backend PROFILES map and the /api route — renaming
+  // either side alone silently breaks the dialog.
+  assert.equal(p.key, 'watermark_detect');
+  assert.equal(p.endpoint, '/api/watermark-python');
+  assert.equal(pickerProfile('watermark_detect'), p);
+  const copy = dialogCopy(true, p);
+  assert.match(copy.title, /watermark detector/);
+  assert.match(detectionSummary([row()], true, p), /watermark detector/);
+  // The no-download promise is load-bearing: the weights are not in the
+  // interpreter, and someone who just paid ~0.9 GB must be told so.
+  assert.match(p.extraNote, /downloads nothing/);
+});
+
 test('the panel names the interpreter in use, and stays quiet on the default', () => {
   const chosen = row({ label: 'ai-toolkit', selected: true, detail: 'ready — scores on a 4090' });
   assert.match(selectionNote({ interpreters: [chosen] }), /ai-toolkit/);

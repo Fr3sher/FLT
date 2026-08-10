@@ -496,6 +496,28 @@ def semantic_python_select():
     return _interpreter_select('semantic')
 
 
+@bp.get('/watermark-python')
+def watermark_python_list():
+    """The same picker for the 🚩 watermark detector (``watermark_detect.python``).
+
+    The Setup install pins the app-managed environment here — which carries a
+    CPU torch on purpose — so until this picker existed a machine with a
+    perfectly good CUDA interpreter scanned tens of thousands of images on the
+    CPU and nothing ever said so. The detector needs torch + a transformers
+    that has both cascade halves (SigLIP classifier, Grounding-DINO locator);
+    its pinned weights live under the app's models_root, not in the
+    interpreter, so borrowing one downloads nothing."""
+    return _interpreter_list('watermark_detect')
+
+
+@bp.post('/watermark-python')
+def watermark_python_select():
+    """Select the interpreter the 🚩 watermark scan runs in. Execution only —
+    Setup ▸ Quality tools still installs into the app-managed environment and
+    never into a borrowed one."""
+    return _interpreter_select('watermark_detect')
+
+
 @bp.post('/settings/test/<target>')
 def test_connection(target):
     if target == 'hf_cloud':

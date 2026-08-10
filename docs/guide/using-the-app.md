@@ -2199,6 +2199,39 @@ tools always installs SigLIP 2 into the environment the app built, whatever you
 picked in this dialog — including when you later hit Install/repair, which now
 *keeps* your choice instead of quietly putting the index back on the CPU.
 
+
+## Run the watermark detector on a GPU Python you already have
+
+The **🚩 Find** scan is the third pass with the same story. Installing the
+watermark detector (Setup ▸ Quality tools) builds it a small environment with
+**CPU-only PyTorch** — the same deliberate default as Score — and *pins* that
+environment as the detector's interpreter. On a machine with a card the scan
+therefore ran on the CPU, silently, however good the GPU sitting idle next to
+it was.
+
+Two things changed:
+
+- **The Bank's 🚩 Watermarks panel now says it.** When the fast detector is
+  installed but its Python cannot reach CUDA on a machine that has a card, an
+  amber note names the situation and offers the same button as Score and
+  SigLIP 2: **⚡ Use a GPU Python I already have**. The pass summary also
+  reports which device the scan *actually* ran on — "(detector on GPU, …)" or
+  "(detector on CPU, …)" — read back from the scan itself, not from a guess.
+- **The picker speaks the detector's own dependency list.** It never imports
+  `open_clip`, `timm` or even NumPy, so the ComfyUI interpreter Score refuses
+  is usually perfect here. What it *does* need is a **Transformers carrying
+  both halves of the cascade** — the SigLIP classifier and the Grounding-DINO
+  locator (4.40 or newer). Both classes are really looked for, not assumed
+  from the package name, and an interpreter missing either is refused with the
+  exact repair command.
+
+**Borrowing an interpreter downloads nothing.** The detector's pinned weights
+live under the app's models folder, not inside the interpreter. And as
+everywhere in this dialog family, nothing is ever installed into an
+environment the app did not build — **Back to the app default** reverts the
+choice at any time, after which the scan falls back to Score's interpreter and
+then the app's own, exactly as before.
+
 Score and the semantic index are chosen separately. Pointing one at an
 interpreter never moves the other, and **Back to the app default** undoes either
 on its own.

@@ -126,6 +126,7 @@ export default function BankPassesPanel({
           <BankWatermarkPanel bankId={bankId} live={live}
             onFind={() => onPassOpen('watermark')}
             payload={payload} selectedIds={[...selected]}
+            gpuPresent={scoreGpuPresent} onPickPython={onPickPython}
             onChanged={onChanged} />
           {scoreNote && (
             <p className={`text-xs ${scoreNote.tone === 'warn'

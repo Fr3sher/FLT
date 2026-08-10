@@ -50,6 +50,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-10-watermark-detector-gpu-python',
+    date: '2026-08-10',
+    title: 'Run the watermark detector on a GPU Python you already have',
+    blurb:
+      'The 🚩 Find scan quietly ran on the CPU even on machines with a perfectly good graphics card: its environment ships a CPU-only PyTorch on purpose, and nothing ever said so. The Bank’s Watermarks panel now tells you when the scan will run on the CPU and offers the same one-click picker ✨ Score already has — point the detector at the Python ComfyUI or ai-toolkit already uses and the scan runs about ten times faster, downloading nothing. The pass summary now also says which device it actually ran on.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-10-pass-report-and-flash-jobs-feedback',
+    date: '2026-08-10',
+    title: 'Re-run passes clear their old red report line — and instant passes say they finished',
+    blurb:
+      'Two silences fixed. A "Launch all" stopped early kept announcing "cancelled before it ran" over passes you had since re-run successfully — the re-run is now recorded for every pass, so the report marks the line as re-run since. And a pass that finishes in a couple of seconds (everything already cached) used to end without a progress bar, a toast, or any sign it had worked; its completion message now always arrives.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-10-group-by-person-smaller-faces',
     date: '2026-08-10',
     title: 'Group by person now recognises much smaller faces',

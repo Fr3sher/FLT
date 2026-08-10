@@ -2116,6 +2116,31 @@ def note_pass_run(bank_id, step, *, detail=None, counts=None, **extra):
                        bank_id, step, e)
 
 
+# Which report step a completed standalone job journals as. ONE row per step
+# key the Launch-all report uses, so _load_pipeline_report can annotate its
+# rows "re-run since" for EVERY pass — until this map existed only
+# semantic_dedup wrote its journal and a report's red "cancelled before it ran"
+# outlived successful 👥/🚩 re-runs indefinitely. Deliberately absent:
+#   semantic_dedup — journals itself, with engine/threshold/signature the
+#                    launch window reads back (a plain overwrite would erase them);
+#   pipeline       — the Launch-all run WRITES the report, it never supersedes it;
+#   angles/medium/promote/delete_rejected/dataset_import — not report steps.
+_JOURNALED_JOB_KINDS = {
+    'scan': 'scan', 'score': 'score', 'faces': 'faces',
+    'watermark': 'watermark', 'framing': 'framing', 'caption': 'caption',
+    'semantic_index': 'semantic_index',
+}
+
+
+def _journal_completed_job(bank_id, kind, detail):
+    step = _JOURNALED_JOB_KINDS.get(kind)
+    if step and isinstance(bank_id, int):     # video-lane keys are 'video:<id>'
+        note_pass_run(bank_id, step, detail=detail)
+
+
+bank_jobs.on_complete = _journal_completed_job
+
+
 def _load_pipeline_report(bank: ImageBank):
     """The persisted 'Launch all' summary, with every step that has been re-run
     since annotated (``superseded_at``/``superseded_detail``). The report itself
@@ -7265,11 +7290,17 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
         window = (gpu_exclusive_vision_window(flag_ttl=1800) if on_gpu
                   else contextlib.nullcontext())
         located = 0
+        # Filled by scan() from the child's summary: which device the ranker
+        # actually ran on. The pass detail repeats it because "the scan is slow"
+        # has exactly one usual cause — a CPU torch in the detector env — and the
+        # user cannot fix what nothing tells them.
+        run_info = {}
         try:
             with window:
                 for path, state, score, regions, fingerprint, error in watermark_detector.scan(
                         [p for _rid, p in planned],
-                        should_cancel=should_cancel, cancel_file=cancel_file):
+                        should_cancel=should_cancel, cancel_file=cancel_file,
+                        info=run_info):
                     # Match on the path the child echoed, popping it so a bank
                     # that holds the same file twice gets one verdict each
                     # rather than both landing on the first row.
@@ -7348,8 +7379,13 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
             bank_jobs.progress(job, detail=f'cancelled — {detected} with a watermark '
                                            f'so far' + skipped)
             return
+        # 'on GPU' / 'on CPU' comes from the child's own summary, not from the
+        # capability probe: the probe says what SHOULD happen, the summary says
+        # what DID. A CPU verdict on a machine with a card is the cue to pick a
+        # GPU Python in Settings ▸ Watermarks.
+        ran_on = {'cuda': ' on GPU', 'cpu': ' on CPU'}.get(run_info.get('device'), '')
         detail = (f'done — {detected} with a watermark, {clean} clean '
-                  f'(detector, score ≥ {threshold:g})')
+                  f'(detector{ran_on}, score ≥ {threshold:g})')
         if detected and located < detected:
             detail += (f', {detected - located} flagged without a position '
                        '(they cannot be cropped or repainted until you draw a zone '
