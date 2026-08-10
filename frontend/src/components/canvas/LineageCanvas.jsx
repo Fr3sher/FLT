@@ -450,14 +450,6 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     }
     return { ...e, graph: applyPlacement(e.graph, ov) };
   }), [shown, positions, drag]);
-  /* The same lanes WITHOUT the gesture — the trees as they would come back from
-     a reload. The stack is measured on these and only these: a card dragged
-     down grows its lane's graph height, and the stack advances by that height,
-     so measuring the in-flight tree slid every dataset below out from under the
-     hand. Deliberately not `drag`-dependent, which is the whole point. */
-  const restingPlaced = useMemo(() => shown.map((e) => (e.graph
-    ? { ...e, graph: applyPlacement(e.graph, positions?.[e.datasetId] || {}) }
-    : e)), [shown, positions]);
 
   // A lane that gained a run since it was arranged reports the new card's spot;
   // persisting it is what makes "a new run moves nothing" survive the NEXT
@@ -554,9 +546,13 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      on the gesture in flight — the reach is position-independent but not
      membership-independent, and a picture on its way out of a strip changes the
      membership on every frame. See utils/canvasPinBatch.laneStackEntries. */
+  /* `shown` — the AUTOMATIC trees — is what the stack advances by, so where a
+     lane sits never depends on how another lane was arranged. Moving a card
+     down used to grow its lane for good, leaving dead board between it and the
+     next dataset for as long as the arrangement lasted. */
   const world = useMemo(() => stackLanes(laneStackEntries({
-    placed, layoutByLane, restingByLane, restingPlaced,
-  })), [placed, layoutByLane, restingByLane, restingPlaced]);
+    placed, layoutByLane, restingByLane, stackPlaced: shown,
+  })), [placed, layoutByLane, restingByLane, shown]);
 
   /* 🔌 External LoRA plugin nodes: files pinned on the board (not produced by
      any run here) that, when checked, stack on top of the next generation.

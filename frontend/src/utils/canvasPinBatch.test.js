@@ -1002,51 +1002,54 @@ test('the dragged picture still grows the BOX that ✦ Fit and 📷 Export frame
     'a picture dragged below its lane is still reachable, framed and exported');
 });
 
-test('dragging a RUN CARD down moves no dataset below it either', () => {
-  /* The report, in the user's words: "if I take a dataset node and drag it down,
-     all the dataset nodes below come down with it". A card drag is applied to
-     the lane's TREE, so `graph.height` grows under the hand — and the stack
-     advances by exactly that number. Measured here on lane tops, which is what
-     the user actually sees move. */
-  const placed = (h) => [
+test('moving a RUN CARD down moves no dataset below it — during OR after', () => {
+  /* Two reports, one cause. First: "if I take a dataset node and drag it down,
+     all the dataset nodes below come down with it". Then, after freezing it for
+     the gesture only: "…which creates space for nothing" — a card DROPPED low
+     left its lane permanently taller, so the next dataset stayed pushed down
+     with dead board between them. The stack must therefore ignore the
+     arrangement entirely, not merely ignore it while a finger is down. */
+  const auto = [
+    { datasetId: 1, graph: GRAPH },
+    { datasetId: 2, graph: GRAPH },
+    { datasetId: 3, graph: GRAPH },
+  ];
+  const arranged = (h) => [
     { datasetId: 1, graph: { ...GRAPH, height: h } },
     { datasetId: 2, graph: GRAPH },
     { datasetId: 3, graph: GRAPH },
   ];
-  const resting = placed(GRAPH.height);
   const laneTops = (live) => stackLanes(laneStackEntries({
-    placed: live, restingPlaced: resting,
-    layoutByLane: {}, restingByLane: {},
+    placed: live, stackPlaced: auto, layoutByLane: {}, restingByLane: {},
   })).lanes.map((l) => l.graphY);
 
-  const atRest = laneTops(resting);
-  // Card #117 dragged 700 units down: the lane's own tree is that much taller
-  // for as long as the gesture lasts.
-  const midDrag = laneTops(placed(GRAPH.height + 700));
-
-  assert.deepEqual(midDrag, atRest,
-    'a dataset below moved while a card above was still under the hand');
+  const atRest = laneTops(auto);
+  // 700 units down: mid-gesture and, identically, once dropped and stored.
+  assert.deepEqual(laneTops(arranged(GRAPH.height + 700)), atRest,
+    'a dataset below moved while the card above was still under the hand');
+  assert.deepEqual(laneTops(arranged(GRAPH.height + 700)), atRest,
+    'the gap survived the drop — the lane below stayed pushed away');
 });
 
-test('the dragged run card still grows the BOX that ✦ Fit and 📷 Export frame', () => {
-  const resting = [{ datasetId: 1, graph: GRAPH }, { datasetId: 2, graph: GRAPH }];
-  const live = [
+test('the moved run card still grows the BOX that ✦ Fit and 📷 Export frame', () => {
+  const auto = [{ datasetId: 1, graph: GRAPH }, { datasetId: 2, graph: GRAPH }];
+  const arranged = [
     { datasetId: 1, graph: { ...GRAPH, height: GRAPH.height + 700 } },
     { datasetId: 2, graph: GRAPH },
   ];
   const box = (p) => stackLanes(laneStackEntries({
-    placed: p, restingPlaced: resting, layoutByLane: {}, restingByLane: {},
+    placed: p, stackPlaced: auto, layoutByLane: {}, restingByLane: {},
   })).height;
-  assert.ok(box(live) > box(resting),
-    'a card dragged below its lane must still be framed while it moves');
+  assert.ok(box(arranged) > box(auto),
+    'a card parked below its lane must still be framed and exported');
 });
 
-test('without restingPlaced the entries are what they always were', () => {
-  // A caller that never drags anything cannot tell this change happened.
+test('without stackPlaced the entries are what they always were', () => {
+  // A caller that never arranges anything cannot tell this change happened.
   const placed = [{ datasetId: 1, graph: GRAPH }];
   const withOut = laneStackEntries({ placed, layoutByLane: {}, restingByLane: {} });
   const withSame = laneStackEntries({
-    placed, restingPlaced: placed, layoutByLane: {}, restingByLane: {},
+    placed, stackPlaced: placed, layoutByLane: {}, restingByLane: {},
   });
   assert.deepEqual(withOut, withSame);
   assert.equal(withOut[0].height, GRAPH.height);

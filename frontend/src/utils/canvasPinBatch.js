@@ -740,33 +740,42 @@ export function tidyLaneReach({ graph, nodes } = {}) {
  * it. What nothing may do is move a lane while the gesture is still in flight.
  *
  * ── …and the same rule for the RUN CARDS ────────────────────────────────────
- * `restingPlaced` is the lane's committed TREE, for exactly the reason above:
- * dragging a run card down grows `graph.height`, and `graph.height` is the
- * number the stack advances by, so every dataset underneath slid down while the
- * card was still under the hand. Reported as "if I take a dataset node and drag
- * it down, all the dataset nodes below come down with it".
+ * `stackPlaced` carries each lane's AUTOMATIC tree — the layout the lane has
+ * before anybody moved anything — and the stacking height is read from there.
  *
- * The dragged card still has to be REACHED — ✦ Fit and 📷 Export must frame a
- * card that is being moved — so the live graph's height feeds `maxY` instead,
- * where it grows the board's box without ever advancing the stack. Omit
- * `restingPlaced` and this behaves exactly as it did: the live graph is used for
- * both, and a caller that never drags anything cannot tell the difference.
+ * Freezing it for the duration of the gesture was not enough, and the second
+ * report says why: "dragging a dataset node down makes the ones below come down
+ * too, which creates space for nothing". A card dropped 800 units low left its
+ * lane permanently that much taller, so the next dataset sat 800 units lower
+ * FOREVER, with dead board between them. Measuring the stack on the arrangement
+ * at all is what puts one lane's layout in charge of another lane's position.
+ *
+ * So: lanes sit where the automatic layout says, and moving a card moves
+ * nothing but that card. The cost is stated rather than hidden — a lane
+ * arranged taller than its automatic tree can overlap the lane below. That is
+ * the same bargain pinned pictures already make, and ✦ Tidy up (which clears
+ * the arrangement) is the way back.
+ *
+ * The moved card still has to be REACHED — ✦ Fit and 📷 Export must frame it —
+ * so the live graph's height feeds `maxY` instead, where it grows the board's
+ * box without ever advancing the stack. Omit `stackPlaced` and this behaves
+ * exactly as it always did: the live graph is used for both.
  */
 export function laneStackEntries({ placed, layoutByLane, restingByLane,
-                                   restingPlaced } = {}) {
-  const restingGraphs = new Map(
-    (Array.isArray(restingPlaced) ? restingPlaced : [])
+                                   stackPlaced } = {}) {
+  const stackGraphs = new Map(
+    (Array.isArray(stackPlaced) ? stackPlaced : [])
       .map((e) => [e?.datasetId, e?.graph]));
   return (Array.isArray(placed) ? placed : []).map((e) => {
     const ext = imageNodeExtent(layoutBoxes(layoutByLane?.[e.datasetId] || []));
     const tidy = tidyLaneReach({ graph: e.graph, nodes: restingByLane?.[e.datasetId] || [] });
-    const resting = restingGraphs.has(e.datasetId)
-      ? restingGraphs.get(e.datasetId) : e.graph;
+    const stackGraph = stackGraphs.has(e.datasetId)
+      ? stackGraphs.get(e.datasetId) : e.graph;
     const liveHeight = e.graph?.height || 0;
     return {
       ...e,
       width: e.graph?.width || 0,
-      height: Math.max(resting?.height || 0, tidy),
+      height: Math.max(stackGraph?.height || 0, tidy),
       minX: ext.minX,
       minY: ext.minY,
       maxX: ext.width,
