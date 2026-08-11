@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-11-single-instance-guard',
+    date: '2026-08-11',
+    title: 'Launching the app twice can no longer split it in two',
+    blurb:
+      'Starting the app while it was already running used to quietly boot a second server on the next port, sharing the same database — jobs launched in one were invisible in the other, with no bar and “pass is running” refusals that pointed at nothing. A second launch now says the app is already running, points at its address, and steps aside. Separate installs and test copies with their own data folder are untouched, and running two on the same data on purpose stays possible (LDS_ALLOW_SECOND_INSTANCE=1).',
+  },
+  {
     id: '2026-08-10-canvas-gallery-open-folder',
     date: '2026-08-10',
     title: 'Open your generated images straight from the Canvas',

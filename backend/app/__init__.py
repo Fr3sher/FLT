@@ -522,6 +522,10 @@ def create_app(config_object=None):
     data_dir.mkdir(parents=True, exist_ok=True)
     app.config.update(
         SECRET_KEY=cfg.secret_key(),
+        # The resolved data folder, for anything that reasons about the folder
+        # itself rather than the database in it — run.py's one-server-per-data-
+        # folder lock is the first customer.
+        LDS_DATA_DIR=str(data_dir),
         SQLALCHEMY_DATABASE_URI=f"sqlite:///{data_dir / 'studio.db'}",
         SQLALCHEMY_ENGINE_OPTIONS={'connect_args': {'check_same_thread': False}},
         MAX_CONTENT_LENGTH=64 * 1024 * 1024,
