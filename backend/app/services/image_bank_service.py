@@ -218,6 +218,15 @@ def _is_safe_bank_source(path, *, label: str = 'bank image') -> bool:
 
 
 # --- thresholds -------------------------------------------------------------
+# The blur default before the per-tile scoring rework. On the current scale
+# (p90 of tile variances, image_quality.py) it flags nothing: measured on a
+# real 36 921-image bank, the LOWEST stored blur_score was 103.9. Any config
+# still carrying exactly this value carries the stale default, not a choice —
+# a full-config Save writes every default back into config.json, so most
+# installs hold it without anyone ever having picked it.
+_STALE_SHARPNESS_DEFAULT = 100.0
+
+
 def thresholds() -> dict:
     """The 'bank' config section, sanitized (a corrupt config.json value falls
     back to the default instead of poisoning every flag computation)."""
@@ -227,6 +236,12 @@ def thresholds() -> dict:
             out[key] = float(cfg.get(f'bank.{key}', default))
         except (TypeError, ValueError):
             out[key] = float(default)
+    # Migrate the dead pre-rework default to the recalibrated one. Only the
+    # EXACT old default: 90 or 120 in a config is a hand-tuned value and stays,
+    # even though it is almost certainly dead too — a deliberate setting is
+    # never rewritten, a stale default is not a setting.
+    if out['sharpness_min'] == _STALE_SHARPNESS_DEFAULT:
+        out['sharpness_min'] = float(cfg.DEFAULTS['bank']['sharpness_min'])
     out['dup_distance'] = int(out['dup_distance'])
     out['min_side'] = int(out['min_side'])
     return out
@@ -1315,6 +1330,21 @@ def _flag_filter(flag: str, th: dict):
     return (ok & crit) if crit is not None else None
 
 
+def _clean_criterion(th):
+    """quality_state 'ok' AND none of the six metric flags — THE definition of
+    the ✨ Clean chip, shared by its filter and its counter so the number on
+    the chip and the grid it opens can never disagree. 'unreadable' needs no
+    clause: it IS a quality_state, excluded by the 'ok' pin. Each negated
+    criterion is NULL-safe where the score can be absent (soft_detail, bars
+    carry their own isnot(None)); blur/noise/uniformity are written together
+    with quality_state='ok' by the scan, so they are never NULL on 'ok' rows.
+    """
+    return and_(BankImage.quality_state == 'ok',
+                *[~_flag_filter(f, th)
+                  for f in ('blur', 'noise', 'uniform', 'small',
+                            'soft_detail', 'bars')])
+
+
 _QUALITY_FLAGS = ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars',
                   'unreadable')
 # V2 score-derived flags. Kept separate from _QUALITY_FLAGS so the "flagged" /
@@ -1693,6 +1723,12 @@ def _flag_counts(bank_id, th) -> tuple[dict, dict]:
             .filter(BankImage.bank_id == bank_id).filter(crit).one())
         flags[flag] = int(total or 0)
         actionable[flag] = int(pending or 0)
+    # ✨ Clean rides along: the one chip of the Quality row that had no number,
+    # which read as "not a filter" next to six counted neighbours. Facet count
+    # only — "auto-reject the clean ones" is not an action anything offers.
+    flags['clean'] = int(
+        db.session.query(func.count(BankImage.id))
+        .filter(BankImage.bank_id == bank_id, _clean_criterion(th)).scalar() or 0)
     return flags, actionable
 
 
@@ -2348,13 +2384,7 @@ def _apply_facets(q, th, skip=None, *, status=None, flag=None, cluster=None,
                  if c is not None]
         q = q.filter(or_(*crits))
     elif flag == 'clean':
-        q = q.filter(BankImage.quality_state == 'ok')
-        # Every quality flag except 'unreadable' (that one IS the quality_state
-        # already pinned to 'ok' above). Each criterion is NULL-safe, so a row
-        # from a build that predates one of these scores still counts as clean
-        # for it instead of dropping out of the chip entirely.
-        for f in ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'):
-            q = q.filter(~_flag_filter(f, th))
+        q = q.filter(_clean_criterion(th))
     elif flag == 'dups':
         q = q.filter(BankImage.dup_group.isnot(None))
         order = (BankImage.dup_group.asc(), BankImage.id.asc())
@@ -2598,6 +2628,9 @@ def facet_counts(user_id, bank_id, **f) -> dict | None:
     live = [n for n in names if crits[n] is not None]
     flags = dict.fromkeys(names, 0)
     flags.update(zip(live, summed(pool('flag'), [crits[n] for n in live])))
+    # Same key as _flag_counts adds bank-wide, measured under the filters in
+    # force here — the ✨ Clean chip prints this one like its six neighbours.
+    flags['clean'] = summed(pool('flag'), [_clean_criterion(th)])[0]
     return {
         # 'total' is the filtered pool itself — what "All" would show. The other
         # three are its status split, each counted with the status facet lifted.
@@ -4594,13 +4627,7 @@ def _pool_query(bank_id, th, *, status=None, flag=None, cluster=None,
                  if c is not None]
         q = q.filter(or_(*crits))
     elif flag == 'clean':
-        q = q.filter(BankImage.quality_state == 'ok')
-        # Every quality flag except 'unreadable' (that one IS the quality_state
-        # already pinned to 'ok' above). Each criterion is NULL-safe, so a row
-        # from a build that predates one of these scores still counts as clean
-        # for it instead of dropping out of the chip entirely.
-        for f in ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'):
-            q = q.filter(~_flag_filter(f, th))
+        q = q.filter(_clean_criterion(th))
     elif flag == 'dups':
         q = q.filter(BankImage.dup_group.isnot(None))
     elif flag == 'semantic_dups':

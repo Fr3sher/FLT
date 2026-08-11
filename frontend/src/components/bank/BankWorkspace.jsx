@@ -104,6 +104,14 @@ function semanticPayloadMatches(payload, engine, modelKey = null) {
 }
 
 const PAGE_SIZE = 120
+/* The Curate row's five buttons, one style. They were the same gray text-xs as
+   every utility control, and asked for from live use ("agrandir — ce sont des
+   features principales"): the semantic curation is what the Bank is FOR once
+   triage is done, and it dressed as a footnote. Same accent family as
+   ▶ Review one by one, one size up. */
+const CURATE_BTN = 'rounded-md border border-indigo-400/60 bg-indigo-500/20 '
+  + 'px-3 py-1.5 text-sm font-semibold text-indigo-200 disabled:opacity-50 '
+  + 'hover:bg-indigo-500/30'
 /* How often the bank-wide counts refresh while a pass runs. The banner ticks
    every 2 s off /activity; the dashboard follows on this slower beat — plus
    immediately when the job lands, so the numbers you end on are exact. The
@@ -235,7 +243,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // window dragged narrow must turn the rail into a drawer, not clip it.
   const [railIsColumnNow, setRailIsColumnNow] = useState(() => railIsColumn(viewportWidth()))
   const [railOpen, setRailOpen] = useState(() => loadRailOpen(viewportWidth()))
-  const [moreOpen, setMoreOpen] = useState(false)
+  /* Open by default (asked for from live use): the six measured axes are what
+     the passes were run FOR, and a closed disclosure hid them from exactly the
+     people who had just paid for the measurements. Still collapsible — the
+     fold exists for the 400 px drawer, not as the resting state. */
+  const [moreOpen, setMoreOpen] = useState(true)
   const [passesOpen, setPassesOpen] = useState(false)
   useEffect(() => {
     const onResize = () => setRailIsColumnNow(railIsColumn(window.innerWidth))
@@ -1832,6 +1844,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               checkFolderPerson={checkFolderPerson} scanFolderPersons={scanFolderPersons}
               tagRow={tagRow} tagPicked={tagPicked} toggleTag={toggleTag} clearTags={clearTags}
               chipsFiltered={chipsFiltered} flags={flags}
+              statusCounts={chipPrint.status}
               availableScoreFlags={availableScoreFlags} payload={payload}
               shownResBuckets={shownResBuckets} resBuckets={resBuckets}
               originMeasured={originMeasured} originCounts={originCounts}
@@ -2015,7 +2028,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               title={semanticReady
                 ? `Pick the N images that best COVER the visual variety of the current filter (varied angles/outfits/scenes) using the ${semanticState.label} semantic index.`
                 : semanticBlocked}
-              className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              className={CURATE_BTN}>
               🎨 Pick diverse…{!semanticReady && ` (needs ${semanticState.label})`}{diverseBusy && ' (sampling…)'}
             </button>
             {curateOpen === 'diverse' && (
@@ -2072,7 +2085,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               title={balanceReady.ready
                 ? `Select N images SPREAD OVER the framings (face / bust / body / back), then diversify each bucket with the ${semanticState.label} semantic index.`
                 : balanceReady.reason}
-              className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              className={CURATE_BTN}>
               ⚖️ Balanced pick…{balanceBusy && ' (sampling…)'}
             </button>
             {curateOpen === 'balanced' && (
@@ -2127,7 +2140,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 : selected.size === 1
                   ? `Rank the current filter against the ONE selected image with the ${semanticState.label} semantic index and select the closest N.`
                   : 'Select exactly one image to use as the reference'}
-              className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              className={CURATE_BTN}>
               🎯 Similar to selected…{similarBusy && ' (ranking…)'}
             </button>
             {curateOpen === 'similar' && (
@@ -2160,7 +2173,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               title={semanticReady
                 ? `Describe what you are looking for in words ("brunette outdoors, wide shot") and rank the current filter with ${semanticState.label}.`
                 : semanticBlocked}
-              className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              className={CURATE_BTN}>
               🔤 Find by text…{!semanticReady && ` (needs ${semanticState.label})`}
             </button>
             {curateOpen === 'text' && (
@@ -2260,7 +2273,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           <button type="button" onClick={() => setCoverageOpen((v) => !v)}
             aria-expanded={coverageOpen}
             title="See what your kept set leans on and what's thin for a good LoRA — advice only, nothing is kept or rejected."
-            className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+            className={CURATE_BTN}>
             📊 Coverage advice{coverageOpen ? ' ▲' : ' ▼'}
           </button>
         </div>

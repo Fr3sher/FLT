@@ -64,6 +64,19 @@ test('the printed count follows the filter, the visibility one does not', () => 
   }
 });
 
+test('the Status buttons read the same two maps as every other chip', () => {
+  // The four Status buttons print counts now (asked for from live use); they
+  // must follow the filter exactly like their neighbours — the bank-wide split
+  // when nothing narrows, the measured split of the current view otherwise.
+  const unfiltered = chipCounts(PAYLOAD, null);
+  assert.equal(unfiltered.print.status.pending, 60);
+  const filtered = chipCounts(PAYLOAD, FILTERED);
+  assert.equal(filtered.print.status.reject, 12);
+  assert.equal(filtered.wide.status.total, 100);
+  // Degrades to empty like every other map — never to undefined.
+  assert.deepEqual(chipCounts(null, null).print.status, {});
+});
+
 test('a chip whose filtered count is 0 is still offered', () => {
   // The way back. A row that hid its empty values would strand the user in the
   // filter they just set.

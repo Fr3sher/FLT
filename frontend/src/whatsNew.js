@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-11-bank-rail-status-curate',
+    date: '2026-08-11',
+    title: 'The Bank puts its main gestures where your eyes are',
+    blurb:
+      'The Status split (All / Undecided / Kept / Rejected) now leads the filter rail as four large colour-coded buttons carrying live counts, the Curate tools (Pick diverse, Balanced pick, Similar, Find by text) wear the size their role deserves, the measured filters under “More filters” start unfolded, and the ✨ Clean chip finally says how many images it holds. The Quality row also tells you when only part of the bank has been scanned — with a one-click way to scan the rest.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-11-single-instance-guard',
     date: '2026-08-11',
     title: 'Launching the app twice can no longer split it in two',

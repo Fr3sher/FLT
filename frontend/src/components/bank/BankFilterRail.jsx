@@ -43,7 +43,7 @@ export default function BankFilterRail({
   subfolders, folderPersonInfo, folderPersons, folderPersonBusy,
   assertFolderPerson, revokeFolderPerson, checkFolderPerson, scanFolderPersons,
   tagRow, tagPicked, toggleTag, clearTags,
-  chipsFiltered, flags, availableScoreFlags, payload,
+  chipsFiltered, flags, statusCounts, availableScoreFlags, payload,
   shownResBuckets, resBuckets, originMeasured, originCounts,
   shownFramings, framingCounts, shownMediums, mediumCounts, mediumNote,
   shownAngles, angleCounts, angleState,
@@ -80,6 +80,43 @@ export default function BankFilterRail({
             ✕
           </button>
         )}
+      </div>
+
+      {/* ── Status — FIRST, and dressed as what it is: the triage's main
+          gesture. These four were the same gray chips as every other facet,
+          lost mid-rail; asked for from live use ("plus visibles, mieux
+          placés"). Each carries its live count and its status colour, so the
+          split of the bank is readable before anything is clicked. */}
+      <div className="grid grid-cols-2 gap-1.5" role="group" aria-label="Filter by status">
+        {[
+          { id: null, label: 'All', n: statusCounts?.total,
+            on: 'border-indigo-400/70 bg-indigo-500/25 text-indigo-100',
+            active: !filter.status && !filter.flag && filter.cluster == null && filter.style == null,
+            set: () => setF({ status: null, flag: null, cluster: null, style: null }) },
+          { id: 'pending', label: 'Undecided', n: statusCounts?.pending,
+            on: 'border-amber-400/70 bg-amber-500/20 text-amber-100' },
+          { id: 'keep', label: '✓ Kept', n: statusCounts?.keep,
+            on: 'border-emerald-400/70 bg-emerald-500/20 text-emerald-100' },
+          { id: 'reject', label: '✕ Rejected', n: statusCounts?.reject,
+            on: 'border-rose-400/70 bg-rose-500/20 text-rose-100' },
+        ].map((s) => {
+          const active = s.active ?? filter.status === s.id
+          return (
+            <button key={s.label} type="button"
+              onClick={s.set || (() => setF({ status: filter.status === s.id ? null : s.id }))}
+              aria-pressed={active}
+              className={`rounded-md border px-2.5 py-1.5 text-sm font-semibold transition-colors ${active
+                ? s.on
+                : 'border-border bg-surface-raised text-content-muted hover:text-content hover:bg-surface'}`}>
+              {s.label}
+              {typeof s.n === 'number' && (
+                <span className="ml-1.5 text-xs font-normal tabular-nums opacity-80">
+                  {s.n.toLocaleString()}
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
 
       {/* Say it in words; the app sets its own chips and the counters below —
@@ -220,24 +257,39 @@ export default function BankFilterRail({
       )}
 
       <div className="flex flex-col gap-3 border-t border-border pt-2">
-        <FilterGroup label="Status">
-          <Chip active={!filter.status && !filter.flag && filter.cluster == null && filter.style == null}
-            onClick={() => setF({ status: null, flag: null, cluster: null, style: null })}>All</Chip>
-          <Chip active={filter.status === 'pending'} onClick={() => setF({ status: filter.status === 'pending' ? null : 'pending' })}>Undecided</Chip>
-          <Chip active={filter.status === 'keep'} onClick={() => setF({ status: filter.status === 'keep' ? null : 'keep' })}>✓ Kept</Chip>
-          <Chip active={filter.status === 'reject'} onClick={() => setF({ status: filter.status === 'reject' ? null : 'reject' })}>✕ Rejected</Chip>
-        </FilterGroup>
-
-        <FilterGroup label="Quality">
-          {['blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars', 'unreadable'].map((f) => (
-            <Chip key={f} active={filter.flag === f}
-              onClick={() => setF({ flag: filter.flag === f ? null : f })}
-              title={FLAG_HINT[f] || 'Sorted worst-first'}>
-              {FLAG_LABEL[f]} {flags[f] ?? 0}
+        <div className="flex flex-col gap-1.5">
+          <FilterGroup label="Quality">
+            {['blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars', 'unreadable'].map((f) => (
+              <Chip key={f} active={filter.flag === f}
+                onClick={() => setF({ flag: filter.flag === f ? null : f })}
+                title={FLAG_HINT[f] || 'Sorted worst-first'}>
+                {FLAG_LABEL[f]} {flags[f] ?? 0}
+              </Chip>
+            ))}
+            {/* Counted like its six neighbours (the backend shares the chip's
+                own criterion): a chip with no number read as "not a filter". */}
+            <Chip active={filter.flag === 'clean'}
+              onClick={() => setF({ flag: filter.flag === 'clean' ? null : 'clean' })}
+              title="Scanned and carrying none of the quality flags">
+              ✨ Clean {flags.clean ?? 0}
             </Chip>
-          ))}
-          <Chip active={filter.flag === 'clean'} onClick={() => setF({ flag: filter.flag === 'clean' ? null : 'clean' })}>✨ Clean</Chip>
-        </FilterGroup>
+          </FilterGroup>
+          {/* Coverage, stated where the zeros are. Measured on a real bank:
+              1 107 of 36 921 scanned showed a row of honest zeros that read as
+              "nothing is blurry" — the flags only see the scanned slice, and
+              only this row knows that. */}
+          {(payload?.counts?.unscanned_scannable ?? 0) > 0 && (
+            <p className="m-0 pl-1 text-[11px] leading-snug text-amber-300/90">
+              Only {(payload.counts.scanned ?? 0).toLocaleString()} of{' '}
+              {(payload.counts.total ?? 0).toLocaleString()} images are scanned —
+              these flags only see that part.{' '}
+              <button type="button" onClick={() => setPassOpen('scan')}
+                className="underline underline-offset-2 hover:text-amber-200">
+                🔎 Scan the rest
+              </button>
+            </p>
+          )}
+        </div>
 
         <FilterGroup label="Groups">
           <Chip active={filter.flag === 'dups'} onClick={() => setF({ flag: filter.flag === 'dups' ? null : 'dups' })}

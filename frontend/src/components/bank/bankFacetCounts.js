@@ -62,6 +62,10 @@ export function chipCounts(payload, facets) {
     origins: payload?.origins || EMPTY,
     mediums: payload?.mediums || EMPTY,
     angles: payload?.angles || EMPTY,
+    // The Status row's four numbers. The payload's counts block carries many
+    // more keys; the chips read exactly these, and /facets answers with the
+    // same four measured under the other filters (its own value lifted).
+    status: payload?.counts || EMPTY,
   }
   const print = facets ? {
     flags: facets.flags || EMPTY,
@@ -70,6 +74,7 @@ export function chipCounts(payload, facets) {
     origins: facets.origins || EMPTY,
     mediums: facets.mediums || EMPTY,
     angles: facets.angles || EMPTY,
+    status: facets.counts || EMPTY,
   } : wide
   return { print, wide, filtered: !!facets }
 }

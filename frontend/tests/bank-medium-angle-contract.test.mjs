@@ -96,6 +96,15 @@ test('the medium row states its limits from THIS bank, not from a constant', () 
   assert.doesNotMatch(
     mediumLimits({ photo: 10, anime: 0, render3d: 0, illustration: 0, unsure: 1 }, 11),
     /cosplay/i)
+  // A real PILE of unsure earns the measured explanation of what it holds
+  // (sampled by eye on a 36 921-image bank: cosplay/filtered photos held back
+  // rather than mislabelled) — a handful does not need the theory.
+  assert.match(
+    mediumLimits({ photo: 33634, anime: 0, render3d: 0, illustration: 0, unsure: 3269 }, 36912),
+    /mostly real photos it would not certify/)
+  assert.doesNotMatch(
+    mediumLimits({ photo: 100, anime: 0, render3d: 0, illustration: 0, unsure: 40 }, 140),
+    /would not certify/)
 })
 
 test('the angle backfill is offered only when there is something to measure, and priced', () => {

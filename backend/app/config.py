@@ -313,8 +313,15 @@ DEFAULTS = {
     # 🗃️ Image bank triage thresholds. Raw scores are persisted per image;
     # these thresholds only drive the FLAGS computed at read time — so tuning
     # them re-sorts an already-scanned bank instantly, no rescan needed.
-    # sharpness_min: Laplacian variance below this = flagged blurry (the classic
-    #   ~100 rule of thumb). noise_max: residual std above this = flagged noisy.
+    # sharpness_min: Laplacian variance below this = flagged blurry. ⚠️ On the
+    #   CURRENT scale — the p90 of per-tile variances (image_quality.py), not the
+    #   classic whole-frame "~100 rule of thumb" the old default came from.
+    #   Measured on a real 36 921-image bank: genuinely sharp photos score
+    #   ~4 000-9 600, a visible gaussian blur (r≈1.5) lands at ~170-920, a frank
+    #   blur (r≈2.5) at ~20-150 — and the LOWEST score in the whole bank was
+    #   103.9, so the old 100 could not flag a single image. 150 catches frank
+    #   blur only; raise it (the 🎚 threshold panel) to be pickier.
+    #   noise_max: residual std above this = flagged noisy.
     # uniformity_min: grayscale std below this = flagged flat/uniform (solid
     #   colors, empty screenshots). dup_distance: dHash Hamming distance (same
     #   64-bit hash as dataset imports) at or under which two images group as
@@ -332,7 +339,7 @@ DEFAULTS = {
     #   above which two scored images are flagged a SEMANTIC near-duplicate (stage 2:
     #   crops / re-compressed variants of the same shot a dHash misses). Higher than
     #   style_threshold on purpose — a crop is far closer than merely "same style".
-    'bank': {'sharpness_min': 100.0, 'noise_max': 15.0, 'uniformity_min': 12.0,
+    'bank': {'sharpness_min': 150.0, 'noise_max': 15.0, 'uniformity_min': 12.0,
              'dup_distance': 8, 'min_side': 768, 'face_threshold': 0.45,
              'aesthetic_min': 5.0, 'nsfw_max': 0.5, 'style_threshold': 0.6,
              'semantic_dup_threshold': 0.96,
