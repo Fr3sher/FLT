@@ -821,7 +821,18 @@ def _state_root(
     *,
     create: bool = False,
 ) -> Path:
-    root = _absolute_local_path(save_root)
+    # The save root is canonicalized FIRST — knowingly. It comes from the
+    # app's own configuration (the ai-toolkit output folder plus run names),
+    # not from bundle content, and a junction in that prefix is a legitimate
+    # layout: a real install moved C:\ai-toolkit\output to another drive to
+    # free the system disk, and every checkpoint inspection under it died on
+    # 'unsafe_state_root'. Resolving turns "unknowingly traversing a link"
+    # (the thing this module must never do) into writing where the OWNER of
+    # the machine pointed the folder. What stays fatal, unresolved, is any
+    # link AT or UNDER the state directory itself — that is the surface a
+    # bundle or a concurrent writer could swap — because the component walk
+    # below runs on the RESOLVED chain, where such a link cannot hide.
+    root = _canonical_root(_absolute_local_path(save_root))
     state_root = root / STATE_DIRECTORY
     if create:
         _ensure_real_directory(state_root)
