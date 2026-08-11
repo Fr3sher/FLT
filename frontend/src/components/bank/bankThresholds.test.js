@@ -280,8 +280,19 @@ test('an occupied-bank refusal is reworded ONCE, for every bank action', () => {
   // ↻ re-runs, 🗑 Delete rejected, ⬆ Promote, 🚀 Launch all). Rewording the 409
   // there is what stops the server sentence reaching a toast anywhere in the
   // bank — a per-button fix would have left eleven other buttons raw.
-  assert.match(ws, /busyRefusal\(\{ kind, activity: payload\?\.activity \}\)/);
+  // The refusal reads the LIVE registry (/activity — instant), not the
+  // ~25-second payload: a 409 is proof the page's picture was stale, and the
+  // fetch it goes through (adoptActivity) also merges the answer into the
+  // payload, which is what makes the progress bar the sentence points at
+  // actually appear. `fallback` keeps the last snapshot for an offline read.
+  assert.match(ws,
+    /busyRefusalLive\(\{ kind, fetchActivity: adoptActivity,\s*fallback: payload\?\.activity \}\)/);
   assert.match(ws, /e\?\.status === 409 && kind/);
+  // …and a 202 adopts the live snapshot BEFORE the heavy payload refresh: the
+  // job is running right now, the dashboard it rides in can be 25 s away, and
+  // the bar must not wait for it. Same lookup, so still no fourth mechanism.
+  assert.match(ws, /await adoptActivity\(\)\s+await refreshPayload\(\)/);
+  assert.match(ws, /apiFetch\(`\/api\/bank\/\$\{bankId\}\/activity`, \{ background: true \}\)/);
   // The route has to label the refusal for that to be possible: the 409 often
   // lands before the first progress poll, so its body is the only thing that
   // knows which pass is in the way.
