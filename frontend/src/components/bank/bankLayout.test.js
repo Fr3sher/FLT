@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import {
   PASSES_PANEL_DEFAULT_OPEN, RAIL_FOLDED_GROUPS, RAIL_PRIMARY_GROUPS,
   RAIL_SIDE_BY_SIDE_PX, RAIL_STORAGE_KEY,
@@ -127,4 +130,26 @@ test('an unloaded payload does not pop the panel open under the user', () => {
   assert.equal(passesPanelStartsOpen({}), PASSES_PANEL_DEFAULT_OPEN)
   // An empty bank has nothing to scan either — the passes cannot help it.
   assert.equal(passesPanelStartsOpen({ total: 0, scanned: 0 }), false)
+})
+
+/* ── The drawer is painted, not tinted ──────────────────────────────────────
+   Same trap the Canvas already fell into (canvasChromeLayering.test.js):
+   `bg-surface` and `bg-surface-overlay` read as synonyms and are not. The
+   first is a 4 %-alpha white tint for lifting a card off the OPAQUE page
+   background; the second is the near-opaque panel token for anything that
+   FLOATS over content. Painted with the tint, the drawer is a sheet of glass —
+   the grid and the header are legible straight through the open filters.
+   A source test, because `node --test` cannot parse JSX and the symptom reads
+   as a z-index bug nobody can locate. */
+test('the filter drawer floats on an OPAQUE panel, never on the card tint', () => {
+  const HERE = dirname(fileURLToPath(import.meta.url))
+  const src = readFileSync(join(HERE, 'BankFilterRail.jsx'), 'utf8')
+  // The drawer branch of the rail's root <aside>: the line that carries the
+  // `fixed` positioning is the one that floats over the grid.
+  const drawer = src.split('\n').find((l) => /\bfixed\b/.test(l) && /inset-y-0/.test(l))
+  assert.ok(drawer, 'the drawer branch must keep its fixed inset-y-0 handle')
+  assert.match(drawer, /\bbg-surface-overlay\b/, 'the drawer floats on a transparent panel')
+  // …and never the bare tint, nor the opaque token thinned back into glass.
+  assert.doesNotMatch(drawer, /\bbg-surface\b(?!-)/)
+  assert.doesNotMatch(drawer, /bg-surface-overlay\/\d/)
 })
