@@ -144,10 +144,13 @@ export function decideActionPlacement({
   return aspect <= leftover * margin ? 'rail' : 'bottom';
 }
 
-/* Intrinsic sizes measured once, keyed by image id. The grid thumbnails and the
- * lightbox request the SAME URL, so the browser usually has the bytes already;
- * remembering the ratio on top of that means reopening an image never replays
- * the bottom→rail commit. Module-level and unbounded on purpose: it is two
+/* Intrinsic sizes measured once, keyed by image id. The grid tile now requests
+ * a THUMBNAIL and the lightbox the full file, so the browser no longer has the
+ * bytes already — which makes remembering the ratio matter MORE, not less: it
+ * is the only thing that still lets the lightbox open with its actions on the
+ * right side instead of replaying the bottom→rail commit once the full image
+ * paints. A thumbnail preserves the source's aspect ratio, and the ratio is the
+ * only thing read here. Module-level and unbounded on purpose: it is two
  * integers per image of one dataset, and it dies with the tab. */
 const ratios = new Map();
 

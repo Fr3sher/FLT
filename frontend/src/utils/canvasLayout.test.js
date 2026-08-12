@@ -103,6 +103,55 @@ test('a positive minX is not overhang and cannot shrink the board', () => {
   assert.equal(w.width, 500);
 });
 
+/* ── The DOWNWARD half of the same freedom ─────────────────────────────────
+   A picture dragged above its lane floated free; the same picture dragged
+   BELOW it used to shove the next dataset down the board, because the downward
+   reach was folded into the lane's `height` and `height` is what the stack
+   advances by. `maxY` is that reach reported separately: it grows the box and
+   moves nothing. */
+
+test('a picture below its lane pulls the board box down, without moving any lane', () => {
+  const plain = stackLanes([{ datasetId: 1, width: 500, height: 200 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  const over = stackLanes([{ datasetId: 1, width: 500, height: 200, maxY: 600, maxX: 800 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  // Lane 1's graph starts at 34, so reaching 600 down ends at 634 — past the
+  // whole plain board (34+200+56+34+100 = 424).
+  assert.equal(over.height, LANE_HEADER_H + 600);
+  assert.equal(over.width, 800);
+  // THE non-negotiable, the mirror of the upward case: no lane moved.
+  assert.deepEqual(over.lanes.map((l) => [l.x, l.y, l.graphY]),
+    plain.lanes.map((l) => [l.x, l.y, l.graphY]));
+});
+
+test('the stack advances by the lane, never by what hangs off it', () => {
+  // Same lane heights, wildly different reach in BOTH directions: the second
+  // lane starts at the same place either way.
+  const plain = stackLanes([{ datasetId: 1, width: 500, height: 200 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  const wild = stackLanes([
+    { datasetId: 1, width: 500, height: 200, minY: -900, maxY: 5000, maxX: 4000 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  assert.equal(wild.lanes[1].graphY, plain.lanes[1].graphY);
+  assert.equal(wild.lanes[1].y, plain.lanes[1].y);
+  // …and the lane keeps reporting its own size, not the pictures' — the header
+  // strip and the "no runs to draw" hint are measured on it.
+  assert.deepEqual([wild.lanes[0].width, wild.lanes[0].height], [500, 200]);
+});
+
+test('reach smaller than the lane itself cannot shrink the board', () => {
+  const w = stackLanes([{ datasetId: 1, width: 500, height: 200, maxX: 10, maxY: 10 }]);
+  assert.equal(w.width, 500);
+  assert.equal(w.height, LANE_HEADER_H + 200);
+});
+
+test('a board with no reach fields is byte-for-byte the board it always was', () => {
+  const w = stackLanes([{ datasetId: 1, width: 500, height: 200 },
+    { datasetId: 2, width: 300, height: 100 }]);
+  assert.deepEqual([w.x, w.y, w.width], [0, 0, 500]);
+  assert.equal(w.height, LANE_HEADER_H + 200 + LANE_GAP + LANE_HEADER_H + 100);
+});
+
 test('Fit frames the board BOX, corner included', () => {
   const world = { x: -500, y: -250, width: 2000, height: 1000 };
   const v = fitView(world, { width: 800, height: 600 }, { padding: 0 });

@@ -137,18 +137,25 @@ def test_pin_overrides_an_already_loaded_entry(poisoned_mimetypes):
 # 3. no-op on a healthy machine / no wrong type imposed
 # --------------------------------------------------------------------------
 
-def test_pinned_values_match_pythons_own_standard_table():
-    """Every pinned type is the value Python uses when no registry interferes.
+def test_pinned_values_match_pythons_standard_or_browser_equivalent_type():
+    """Every pinned type is Python's default or an equivalent script MIME type.
 
-    That is what makes this a no-op on a healthy machine: we only ever restore
-    the standard answer, we never impose a type of our own invention.
+    Python 3.10/3.11 still use ``application/javascript`` for JS while newer
+    versions use the RFC 9239 ``text/javascript`` value pinned by the app. Both
+    are browser-executable; all non-JavaScript types must remain exact.
     """
     default = getattr(mimetypes, '_types_map_default', None)
     if default is None:                       # private, guard across versions
         pytest.skip('mimetypes._types_map_default unavailable')
+
+    def equivalent(ext, ours, standard):
+        if ext in {'.js', '.mjs'}:
+            return ours in EXECUTABLE_JS_TYPES and standard in EXECUTABLE_JS_TYPES
+        return ours == standard
+
     mismatches = {ext: (ours, default[ext])
                   for ext, ours in _STATIC_MIME_TYPES.items()
-                  if ext in default and default[ext] != ours}
+                  if ext in default and not equivalent(ext, ours, default[ext])}
     assert not mismatches, f'diverges from the standard table: {mismatches}'
 
 

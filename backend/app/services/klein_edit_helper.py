@@ -47,6 +47,11 @@ from . import comfy_model_paths
 from ..utils import comfy_fs
 from ..utils.comfyui import load_workflow_local
 from ..job_queue import queue_manager
+# The SAME sizing Krea uses — imported, not re-implemented. Two engines filling
+# one dataset must not each own a private idea of how big a shot is.
+from .output_geometry import (
+    MAX_OUTPUT_MP, fit_output_size, source_size, variation_output_megapixels,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +62,10 @@ WORKFLOW_IMPROVE_SKIN_PATH = cfg.BACKEND_DIR / 'workflows' / 'improve skin.json'
 # Node 6 = CLIPTextEncode: the per-job prompt is written straight into its `text`
 # widget (the RES4LYF TextBox1 node 145 that used to hold it was removed so the
 # graph needs no custom-node packs).
-_REQUIRED_NODES = ('52', '6', '77', '9', '114', '10', '90')
+# 91/119/120/174 are the output-geometry nodes (see enqueue_klein_edit): a card
+# ratio is written straight into them, so a workflow file that lost one must say
+# so here rather than KeyError halfway through building a job.
+_REQUIRED_NODES = ('52', '6', '77', '9', '114', '10', '90', '91', '119', '120', '174')
 
 # The Klein pipeline's model dependencies, keyed by the setup_installer download
 # action that provides each. REQUIRED = the graph is invalid without it (block +
@@ -354,6 +362,18 @@ def klein_pin_gaps():
         if shipped and raw == shipped:
             continue
         _, status = resolve_model_ref(comfy_type, raw)
+        # THE UNET SLOT IS WRITTEN BY THE APP ITSELF, and not in this dialect.
+        # `set_dataset_klein_model` — the run panel's dropdown — stores the BARE
+        # file name into this very key and refuses to store a folder ("the loader
+        # prefix is resolve_klein_unet's job"). `resolve_model_ref` only looks for
+        # a relative name at the ROOT of a search folder, so every model living in
+        # a klein/ sub-folder came back 'missing': picking a model from the app's
+        # own menu wrote a value the app's own gate then called broken, and the
+        # engine went dark explaining that no file was missing.
+        # So the gate asks the LOADER before it declares a gap — the same scan the
+        # picker lists from. A file that is genuinely gone still fails both.
+        if status != 'ok' and slot == 'unet' and klein_model_on_disk(raw):
+            continue
         if status != 'ok':
             gaps.append({'slot': slot, 'key': key, 'configured': raw, 'status': status})
     return gaps
@@ -381,6 +401,19 @@ def _klein_unet_folders():
         suffixes=_MODEL_SUFFIXES)
 
 
+def klein_unet_choices_exist() -> bool:
+    """Is there at least ONE Klein UNET on disk for the run panel to offer?
+
+    The question `klein_engine_ready` asks before letting a broken pin through:
+    "can the user actually repair this from the screen they are on?" With nothing
+    to choose from, an enabled card would only be a dead end dressed as an offer,
+    so the engine stays dark and Setup keeps owning that conversation.
+
+    Reads the SAME scan the picker lists from, so the card can never be lit over
+    a choice the dropdown will not show."""
+    return any(files for _prefix, files in _klein_unet_folders())
+
+
 class KleinModelGone(ValueError):
     """A model was NAMED for this job and is not on disk any more.
 
@@ -391,11 +424,18 @@ class KleinModelGone(ValueError):
     one, and the result looks fine, so nothing ever tells them. Named exception so
     the routes can say WHICH file went missing rather than "improve failed"."""
 
-    def __init__(self, name):
+    def __init__(self, name, *, pinned_in_settings=False):
         self.name = name
+        self.pinned_in_settings = pinned_in_settings
+        # Two origins, two sentences: a stored DATASET pick and a Settings PIN are
+        # repaired in different places, and a message naming the wrong one sends
+        # the user hunting through a page that holds nothing to change.
         super().__init__(
-            f'the Klein model chosen for this dataset is no longer on disk: {name} '
-            '— pick another one, or put the file back')
+            (f'the Klein model pinned in Settings is not on disk: {name} '
+             '— pick a model for this run, or clear that field to go back to '
+             'auto-detection') if pinned_in_settings else
+            (f'the Klein model chosen for this dataset is no longer on disk: {name} '
+             '— pick another one, or put the file back'))
 
 
 def klein_model_on_disk(selected):
@@ -476,6 +516,15 @@ def unet_for_job(klein_model=None):
     calling resolve_klein_unet() with no argument: it was the last place where a
     stored dataset pick was ignored AND a vanished model was swapped in silence."""
     if not klein_model:
+        # A BROKEN PIN and no explicit pick is the one case that must not resolve.
+        # `_configured_model` degrades an unresolvable pin to auto-detection, so
+        # this lane used to load a neighbour of the requested file and produce a
+        # result indistinguishable from a correct one — the pinned-model incident.
+        # The engine card stays lit (klein_engine_ready) precisely so the picker
+        # can answer this refusal; what it may not do is answer it by guessing.
+        gap = next((g for g in klein_pin_gaps() if g.get('slot') == 'unet'), None)
+        if gap:
+            raise KleinModelGone(gap['configured'], pinned_in_settings=True)
         return resolve_klein_unet()
     unet_ref = klein_model_on_disk(klein_model)
     if not unet_ref:
@@ -765,7 +814,18 @@ def klein_engine_ready(comfy_ok, *, missing=None, invalid=None, unsupported_enum
     # user pinned that is not on disk. It comes before the asset scan because the
     # asset scan would answer "everything is here" — auto-detection found files,
     # they are just not the ones that were asked for. See klein_pin_gaps.
-    if klein_pin_gaps():
+    #
+    # ONE EXCEPTION, and it is about where the fix lives rather than about safety:
+    # a broken UNET pin does NOT darken the engine while usable Klein builds sit
+    # on disk. That slot — and only that slot — has a picker in the run panel, so
+    # switching the engine off there removes the very control that would repair
+    # the situation, and leaves Settings-on-another-page as the only exit. The
+    # promise that nothing runs on an unshown file is not relaxed: it moves to
+    # `unet_for_job`, which now REFUSES a run that names no model while the pin is
+    # broken instead of quietly auto-detecting one.
+    for gap in klein_pin_gaps():
+        if gap.get('slot') == 'unet' and klein_unet_choices_exist():
+            continue
         return False
     enums = klein_unsupported_enums() if unsupported_enums is None else unsupported_enums
     if enums:
@@ -918,7 +978,7 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
                        extra_metadata=None, lora_strength=None, source_path=None,
                        extra_ref_paths=None, sampler_steps=None,
                        base_lora_strength=None, generation_loras=None,
-                       output_megapixels=None):
+                       output_megapixels=None, aspect_ratio=None):
     """Copy the source into ComfyUI input, configure the single Klein edit
     workflow, and enqueue it. Returns the app job_id. Raises ValueError on a
     missing source / unloadable workflow / missing required node, RuntimeError
@@ -932,6 +992,13 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
     resolved from config via resolve_generation_lora_preset() (a request can
     only NAME a preset, never define files/order). None/[] = no preset (the
     default). Capped at MAX_GENERATION_LORAS.
+    `aspect_ratio`: the dataset card's `W:H` framing. Present = this is a
+    variation: the OUTPUT canvas becomes that ratio at the shared
+    `variations.output_megapixels` budget (see output_geometry), instead of
+    inheriting the reference photo's shape. Absent = every historical lane,
+    unchanged.
+    `output_megapixels` overrides that budget for the caller that has its own
+    (✨ Upscale & improve, 2→8 MP on the source's own shape).
     `source_path` overrides the default ComfyUI output dir/<source_filename> lookup
     so callers with per-dataset storage can pass the full path directly.
     `extra_ref_paths`: additional identity reference images (the dataset's extra
@@ -996,10 +1063,29 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
         workflow["77"]["inputs"]["steps"] = max(1, int(sampler_steps))
     if base_lora_strength is not None and "139" in workflow:
         workflow["139"]["inputs"]["strength_model"] = float(base_lora_strength)
-    # Output size: node 174 rescales the source to a total pixel budget before the
-    # sampler, so it IS the resolution of the result. Hardcoded at 2 MP until now,
-    # which made "Upscale" a fixed 2 MP pass whatever the source was worth.
-    if output_megapixels is not None and "174" in workflow:
+    # Output size. Two different questions share these nodes:
+    #
+    #   174 ImageScaleToTotalPixels rescales the SOURCE before the VAE encode —
+    #       it is what the reference is read at.
+    #   119/120 PrimitiveInt feed 91 EmptyFlux2LatentImage, i.e. the canvas the
+    #       sampler actually fills. The shipped graph wires them to 175
+    #       GetImageSize of the rescaled source, which is exactly why a Klein
+    #       shot always came out in the REFERENCE's shape.
+    #
+    # A dataset card names its own ratio: pin 119/120 to the shared geometry so
+    # the card decides the frame, and read the reference at the same budget
+    # (leaving 174 at 2 MP while the canvas drops to 0.5 would burn the time the
+    # dial exists to save). The ✨ Upscale & improve lane names a budget and NO
+    # ratio — it keeps the historical source-shaped path untouched.
+    if aspect_ratio:
+        budget = (float(output_megapixels) if output_megapixels is not None
+                  else variation_output_megapixels())
+        ow, oh = fit_output_size(*source_size(staged_source), max_mp=budget,
+                                 requested_aspect=aspect_ratio)
+        workflow["119"]["inputs"]["value"] = ow
+        workflow["120"]["inputs"]["value"] = oh
+        workflow["174"]["inputs"]["megapixels"] = budget
+    elif output_megapixels is not None and "174" in workflow:
         workflow["174"]["inputs"]["megapixels"] = float(output_megapixels)
     # UNIQUE prefix per job: SaveImage numbers files from what's currently in
     # ComfyUI's output folder, and the app MOVES each result out right after

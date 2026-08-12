@@ -79,7 +79,7 @@ test('a caption with no text is attributed to nobody', () => {
    ship, and that has already cost this app twice. */
 test('the four reading surfaces really consume the origin', () => {
   const surfaces = {
-    'components/bank/BankWorkspace.jsx': /captionOriginTooltipLine\(/,
+    'components/bank/BankTile.jsx': /captionOriginTooltipLine\(/,
     'components/dataset/DatasetGridItem.jsx': /captionOriginInfo\(img\.caption_origin\)/,
     'components/dataset/CaptionEditorDialog.jsx': /captionOriginInfo\(/,
     'components/dataset/DatasetWorkspace.jsx': /captionOriginInfo\(img\.caption_origin\)/,

@@ -1,3 +1,4 @@
+import json
 import pathlib
 import pytest
 
@@ -193,17 +194,24 @@ def test_delete_pexels_api_key_clears_runtime_secret_without_leak(client):
 def test_put_settings_accepts_canvas_section_from_full_setup_save(client):
     response = client.put('/api/settings', json={'config': {'canvas': {}}})
     assert response.status_code == 200, response.get_json()
-    assert response.get_json()['config']['canvas'] == {}
+    # The merged defaults are applied on save (empty external-LoRA board list).
+    assert response.get_json()['config']['canvas'] == {'external_loras': []}
 
 
 def test_put_settings_accepts_variations_section_from_full_setup_save(client):
     response = client.put('/api/settings', json={'config': {'variations': {}}})
     assert response.status_code == 200, response.get_json()
-    assert response.get_json()['config']['variations'] == {}
+    # Defaults are applied on save (one output-size dial for local engines).
+    assert response.get_json()['config']['variations'] == {'output_megapixels': 2.0}
 
 
-def test_put_rejects_unknown_section(client):
-    assert client.put('/api/settings', json={'config': {'nope': 1}}).status_code == 400
+def test_put_tolerates_unknown_section(client):
+    """Behavior change (upstream): an unknown config section is now dropped and
+    reported, not rejected — the whole Save is never held hostage by a section
+    another app version wrote."""
+    r = client.put('/api/settings', json={'config': {'nope': 1}})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['preserved_unknown_sections'] == ['nope']
 
 def test_put_rejects_non_object_section_value(client):
     """{"config": {"ollama": "x"}} would otherwise pass the top-level key-name
@@ -216,6 +224,67 @@ def test_put_rejects_non_object_section_value(client):
     after = client.get('/api/settings').get_json()['config']['ollama']
     assert after == before
     assert isinstance(after, dict) and 'url' in after
+
+def test_put_settings_preserves_unknown_config_section_on_disk(client):
+    """A payload can carry a config section this running version doesn't know
+    about -- written by a dev branch that ran once, a downgrade, or an installer
+    ahead of the app (the client echoes back the WHOLE config on every Save). That
+    section must never take the Save hostage: this used to 400 the entire PUT,
+    discarding every valid setting the user just entered along with it (issue
+    class already hit for 'bank_scoring', then 'variations'). The unknown section
+    is dropped from the incoming partial -- neither validated nor applied -- and
+    since it already exists on disk, save_config's deep-merge leaves it there
+    untouched, preserved for whichever version wrote it."""
+    from app import config
+    config._config_path().write_text(
+        json.dumps({'variations_from_the_future': {'flag': True}}),
+        encoding='utf-8')
+    config._cache = None
+    r = client.put('/api/settings', json={'config': {
+        'ollama': {'url': 'http://example.test:11434'},
+        'variations_from_the_future': {'flag': False, 'brand_new_field': 'x'},
+    }})
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert body['config']['ollama']['url'] == 'http://example.test:11434'
+    assert body['preserved_unknown_sections'] == ['variations_from_the_future']
+    on_disk = json.loads(config._config_path().read_text(encoding='utf-8'))
+    # Untouched semantically, not byte-for-byte: save_config() rewrites the whole
+    # file (indent=2), so formatting can differ even though the value doesn't.
+    assert on_disk['variations_from_the_future'] == {'flag': True}
+
+
+def test_put_settings_ignores_unknown_section_absent_from_disk(client):
+    """An unknown section the client sends but that never existed on disk has
+    nothing to preserve -- it's just ignored (still reported, still no 400)."""
+    r = client.put('/api/settings', json={'config': {
+        'ollama': {'url': 'http://example.test:11434'},
+        'totally_new_future_section': {'x': 1},
+    }})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['preserved_unknown_sections'] == ['totally_new_future_section']
+    from app import config
+    assert 'totally_new_future_section' not in config.load_config()
+
+
+def test_put_settings_ignores_non_dict_unknown_section(client):
+    """A non-dict value under an unknown key is dropped the same as any other
+    unknown section -- only KNOWN sections must stay an object."""
+    r = client.put('/api/settings', json={'config': {
+        'ollama': {'url': 'http://example.test:11434'},
+        'weird_unknown': 'not-a-dict',
+    }})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['preserved_unknown_sections'] == ['weird_unknown']
+
+
+def test_put_settings_no_unknown_sections_field_when_none(client):
+    """The diagnostic field stays absent (or empty) on an ordinary Save -- it
+    only ever lists sections that were actually dropped."""
+    r = client.put('/api/settings', json={'config': {'ollama': {'url': 'http://x'}}})
+    assert r.status_code == 200
+    assert r.get_json().get('preserved_unknown_sections', []) == []
+
 
 def test_put_rejects_non_object_config(client):
     assert client.put('/api/settings', json={'config': 'oops'}).status_code == 400

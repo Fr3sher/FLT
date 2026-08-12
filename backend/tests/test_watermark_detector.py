@@ -196,6 +196,24 @@ def _fake_popen(lines):
     return factory
 
 
+def test_the_devices_the_child_ran_on_is_reported_not_dropped(monkeypatch):
+    """The child has always said which device it ranked on; the parent used to
+    read the summary only on failure, which is how a 4090 machine scanned tens
+    of thousands of images on the CPU with no line of UI or log saying so."""
+    lines = [
+        json.dumps({'path': 'a.jpg', 'state': 'none', 'score': 0.1,
+                    'regions': [], 'error': None}) + '\n',
+        json.dumps({'summary': {'ok': True, 'device': 'cpu'}}) + '\n',
+    ]
+    monkeypatch.setattr(wd.subprocess, 'Popen', _fake_popen(lines))
+    info = {}
+    assert len(list(wd.scan(['a.jpg'], info=info))) == 1
+    assert info['device'] == 'cpu'
+    # And a caller that passes nothing keeps the old signature, byte for byte.
+    monkeypatch.setattr(wd.subprocess, 'Popen', _fake_popen(lines))
+    assert len(list(wd.scan(['a.jpg']))) == 1
+
+
 def test_results_are_yielded_per_image_in_order(monkeypatch):
     lines = [
         json.dumps({'path': 'a.jpg', 'state': 'none', 'score': 0.1,

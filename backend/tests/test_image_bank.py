@@ -38,6 +38,25 @@ def photo_like(size=256):
     return im.convert('RGB')
 
 
+def bokeh_like(size=512, subject=208, cell=2, amp=5, base=120):
+    """A bokeh portrait in miniature: an in-focus subject (fine ±``amp``
+    texture) covering ~17% of the frame, on a large creamy out-of-focus
+    background (smooth gradient). The defaults sit in the exact regime the bug
+    report describes — whole-frame Laplacian variance ≈78, i.e. under the
+    default sharpness_min of 100, while the subject's own tiles score ≈320.
+    ``amp=120`` with a tiny ``subject`` gives the opposite pathology: a single
+    blazing block in an otherwise soft frame."""
+    im = Image.new('L', (size, size))
+    lo, hi = (size - subject) // 2, (size + subject) // 2
+
+    def value(x, y):
+        if lo <= x < hi and lo <= y < hi:
+            return base + (amp if (x // cell + y // cell) % 2 else -amp)
+        return min(255, int(60 + 140 * x / size + 40 * y / size))
+    im.putdata([value(x, y) for y in range(size) for x in range(size)])
+    return im.convert('RGB')
+
+
 def noisy(size=128, seed=7):
     rng = random.Random(seed)
     im = Image.new('L', (size, size))
@@ -110,10 +129,60 @@ def test_quality_metrics_discriminate():
     assert gray['uniformity_score'] < 12 < sharp['uniformity_score']
 
 
+def test_sharpness_reads_the_sharpest_region_not_the_whole_frame():
+    """Reported by the community: bokeh portraits — a small razor-sharp subject
+    on a large creamy background — were flagged 🌫 blurry, because whole-frame
+    Laplacian variance averages the sharp subject away. Per-tile scoring must
+    clear the default sharpness_min for the bokeh shot while a genuinely soft
+    image (everything blurred) stays below it."""
+    from app.services.image_quality import (
+        _laplacian_variance, analysis_copy, quality_metrics, _LAPLACIAN,
+        _LAPLACIAN_NEG, _LAP_SCALE)
+    from app.config import DEFAULTS
+    threshold = DEFAULTS['bank']['sharpness_min']
+
+    bokeh = bokeh_like()
+    soft = bokeh.filter(ImageFilter.GaussianBlur(6))
+
+    # The regression this fixes: whole-frame variance sinks the bokeh shot.
+    g = analysis_copy(bokeh)
+    w, h = g.size
+    whole = _laplacian_variance(
+        g.filter(ImageFilter.Kernel((3, 3), _LAPLACIAN, scale=_LAP_SCALE)),
+        g.filter(ImageFilter.Kernel((3, 3), _LAPLACIAN_NEG, scale=_LAP_SCALE)),
+        (1, 1, w - 1, h - 1))
+    assert whole < threshold, 'fixture no longer reproduces the reported bug'
+
+    assert quality_metrics(bokeh)['blur_score'] > threshold
+    assert quality_metrics(soft)['blur_score'] < threshold
+
+
+def test_sharpness_tiles_ignore_a_single_hot_tile():
+    """p90, not max: one blazing block in an otherwise soft frame (a JPEG
+    artefact, a burnt highlight, a watermark) must NOT certify the image as
+    sharp — and here the whole-frame score would have."""
+    from app.services.image_quality import (
+        _laplacian_variance, analysis_copy, quality_metrics, _LAPLACIAN,
+        _LAPLACIAN_NEG, _LAP_SCALE)
+    from app.config import DEFAULTS
+    threshold = DEFAULTS['bank']['sharpness_min']
+    speck = bokeh_like(subject=48, amp=120)  # <1% of the frame, full contrast
+    g = analysis_copy(speck)
+    w, h = g.size
+    whole = _laplacian_variance(
+        g.filter(ImageFilter.Kernel((3, 3), _LAPLACIAN, scale=_LAP_SCALE)),
+        g.filter(ImageFilter.Kernel((3, 3), _LAPLACIAN_NEG, scale=_LAP_SCALE)),
+        (1, 1, w - 1, h - 1))
+    assert whole > threshold, 'whole-frame variance used to call this sharp'
+    assert quality_metrics(speck)['blur_score'] < threshold
+
+
 def test_quality_metrics_match_reference_laplacian():
     """The two-pass histogram trick must equal a direct signed Laplacian
     variance over the interior (PIL leaves the 1-px border unfiltered, so the
-    implementation crops it — the reference does the same)."""
+    implementation crops it — the reference does the same).
+    48 px is below one tile's minimum side, so the grid degenerates to a single
+    tile and blur_score is exactly the whole-interior variance."""
     from app.services.image_quality import quality_metrics
     im = photo_like(size=48).convert('L')
     px = list(im.getdata())

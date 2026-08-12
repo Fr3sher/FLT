@@ -190,13 +190,21 @@ class DetectorUnavailable(RuntimeError):
     should fall back to the vision model rather than fail the pass."""
 
 
-def scan(paths, *, device=None, locate=True, should_cancel=None, cancel_file=None):
+def scan(paths, *, device=None, locate=True, should_cancel=None, cancel_file=None,
+         info=None):
     """Yield ``(path, state, score, regions, fingerprint, error)`` per image.
 
     `state` is 'detected' | 'none' | 'error'. `regions` are normalised
     [x1,y1,x2,y2] boxes in 0..1 (the same contract the hand-drawn masks and the
     crop/inpaint router already use), empty when the locator found nothing or
     could not load. `error` is a short string for 'error' rows only.
+
+    `info`, when given, is a dict this generator fills with facts about the run
+    the per-image tuples cannot carry — today ``device``: 'cuda' or 'cpu', THE
+    DEVICE THE CHILD ACTUALLY RANKED ON. The child has always reported it in its
+    summary and this side always threw it away, which is how a machine with a
+    4090 spent 15 hours scanning on the CPU without one line of UI or log ever
+    saying so.
 
     Raises DetectorUnavailable if the child never got as far as loading its
     ranker — that is the one failure the caller must be able to tell apart from
@@ -209,7 +217,8 @@ def scan(paths, *, device=None, locate=True, should_cancel=None, cancel_file=Non
         chunk = paths[start:start + BATCH]
         produced = 0
         for item in _run_chunk(chunk, device=device, locate=locate,
-                               should_cancel=should_cancel, cancel_file=cancel_file):
+                               should_cancel=should_cancel, cancel_file=cancel_file,
+                               info=info):
             produced += 1
             yield item
         if should_cancel and should_cancel():
@@ -224,7 +233,7 @@ def scan(paths, *, device=None, locate=True, should_cancel=None, cancel_file=Non
             return
 
 
-def _run_chunk(chunk, *, device, locate, should_cancel, cancel_file):
+def _run_chunk(chunk, *, device, locate, should_cancel, cancel_file, info=None):
     job = {
         'images': chunk,
         'threshold': threshold(),
@@ -277,6 +286,15 @@ def _run_chunk(chunk, *, device, locate, should_cancel, cancel_file):
                 continue          # a stray print is noise, never a failed pass
             if 'summary' in payload:
                 summary = payload['summary'] or {}
+                if summary.get('device'):
+                    # Both surfaced ON PURPOSE: the log line is the record an
+                    # agent or a bug report can quote, the `info` dict is what
+                    # the pass detail shows the user. Dropping this on success
+                    # was how CPU-only scans stayed invisible for weeks.
+                    logger.info('watermark detector ran on %s (%d images)',
+                                summary['device'], len(chunk))
+                    if info is not None:
+                        info['device'] = summary['device']
                 continue
             # The child answers in input order, but we key on the path it echoes
             # rather than on our own counter: a desynchronised index would attach

@@ -13,6 +13,7 @@ import uuid
 
 from flask import Blueprint, request, jsonify, send_file, send_from_directory, current_app
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.utils import safe_join
 
 from ..config import LOCAL_USER
 from .. import config as cfg
@@ -20,6 +21,7 @@ from ..gpu_window import gpu_exclusive_vision_window
 from ..services import face_dataset_service as svc
 from ..services import dataset_activity
 from ..services.dataset_storage import dataset_path, ensure_dataset_dir
+from ..services import dataset_thumbs
 from ..services import lora_test_studio as lts
 from ..services import studio_grid_export as sge
 from ..services.face_variations import (NSFW_VARIATION_CATALOG, VARIATION_CATALOG,
@@ -1032,10 +1034,14 @@ def dataset_caption(dataset_id):
     # never said which one produced what. Counted where each caption is stored, so it
     # describes the run that actually happened rather than the setting that was read.
     engines = {}
+    # What the pass HANDLED without writing: {skipped, skipped_reason}. Kept apart
+    # from `engines`, which is a writer-count map the UI renders name by name — a
+    # 'skipped' key in there would be shown as an engine that wrote captions.
+    outcome = {}
     try:
         with gpu_exclusive_vision_window(flag_ttl=1800):
             n = svc.caption_images(LOCAL_USER, dataset_id, force=force, mode=mode,
-                                   image_ids=image_ids, report=engines)
+                                   image_ids=image_ids, report=engines, outcome=outcome)
             # Did the long pass end because the user hit Stop? If so, skip the short
             # pass entirely — the point of stopping is to run NO more inference.
             stopped = dataset_activity.cancel_requested(dataset_id)
@@ -1058,7 +1064,9 @@ def dataset_caption(dataset_id):
         # Consume the flag once the whole operation has unwound so a stop can never
         # bleed into a later run (begin() also disarms defensively).
         dataset_activity.clear_cancel(dataset_id)
-    return jsonify({'ok': True, 'captioned': n, 'stopped': stopped, 'engines': engines})
+    return jsonify({'ok': True, 'captioned': n, 'stopped': stopped, 'engines': engines,
+                    'skipped': int(outcome.get('skipped') or 0),
+                    'skipped_reason': outcome.get('skipped_reason') or ''})
 
 
 @bp.post('/dataset/<int:dataset_id>/caption/cancel')
@@ -1885,6 +1893,40 @@ def dataset_image_file(dataset_id, filename):
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     return send_from_directory(dataset_path(dataset_id), filename)
+
+
+@bp.get('/dataset/<int:dataset_id>/thumb/<path:filename>')
+def dataset_image_thumb(dataset_id, filename):
+    """The same image at tile size — cached WebP instead of the original bytes.
+
+    Every caller that draws a ~100-400 px tile asks for this one; the lightbox,
+    the ⬇ download and the board's PNG export keep asking `/img/` because they
+    are the places the full resolution is the point.
+
+    `?s=` is a hint, snapped onto a fixed ladder (see `clamp_thumb_side`) so no
+    URL can mint an unbounded cache. Anything a thumbnail is the wrong answer for
+    — a missing file, an animated GIF, a picture already smaller than the ask —
+    falls through to the ORIGINAL bytes via the very same `send_from_directory`
+    the `/img/` route uses, so this endpoint's success, 404 and traversal
+    behaviour are its behaviour by construction rather than by imitation.
+
+    Deliberately NOT long-cached in the browser: the filename of a dataset image
+    survives crop, rotate, ✨ improve and regenerate, so a URL's content really
+    does change. The on-disk key carries the source's mtime and size, which makes
+    the SERVER side always fresh; letting the browser revalidate keeps the client
+    side fresh too, and a 304 carries no pixels — the byte win is untouched.
+    """
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    folder = dataset_path(dataset_id)
+    side = dataset_thumbs.clamp_thumb_side(request.args.get('s'))
+    src = safe_join(folder, filename)
+    thumb = (dataset_thumbs.ensure_thumb(dataset_id, src, filename, side)
+             if src else None)
+    if thumb is None:
+        return send_from_directory(folder, filename)
+    return send_file(thumb, mimetype='image/webp', max_age=0,
+                     conditional=True)
 
 
 # ---------------------------------------------------------------------------

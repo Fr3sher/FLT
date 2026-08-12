@@ -1,3 +1,8 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { readFileSync } from 'node:fs';
+import { bankTreeSource, bankWorkspaceSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
@@ -5,7 +10,7 @@ import test from 'node:test'
 import { BANK_PASSES, bankPass, passScopeRows,
   passSelectionAvailability } from './bankPasses.js'
 
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8')
+const ws = bankTreeSource()
 const panel = fs.readFileSync(new URL('./BankSemanticEngine.jsx', import.meta.url), 'utf8')
 const dialog = fs.readFileSync(new URL('./LaunchAllDialog.jsx', import.meta.url), 'utf8')
 
@@ -82,16 +87,26 @@ test('semantic-ready is rendered separately from the aesthetic scored count', ()
 })
 
 test('every semantic action gates on semanticReady, while Medium stays CLIP/Score-owned', () => {
-  const semanticControls = ws.slice(ws.indexOf("setPassOpen('semantic_dedup')"),
-    ws.indexOf('{coverageOpen &&'))
-  assert.match(semanticControls, /disabled=\{live \|\| !semanticReady\}/)
-  assert.match(semanticControls, /disabled=\{live \|\| !semanticReady \|\| diverseBusy\}/)
-  assert.match(semanticControls,
-    /disabled=\{live \|\| !semanticReady \|\| selected\.size !== 1 \|\| similarBusy\}/)
-  assert.match(semanticControls, /disabled=\{live \|\| !semanticReady\}[\s\S]*openTextSearch/)
+  /* The semantic actions now live in TWO files: ✂ Find crops is a pass (the
+     panel), while 🎨 Pick diverse / 🎯 Similar / 🔤 Find by text are curation
+     controls above the grid. Sliced over the concatenated tree this span would
+     swallow a dozen unrelated components and pass on almost anything, so each
+     half is asserted against the file that actually owns it. */
+  const panel = readFileSync(new URL('./BankPassesPanel.jsx', import.meta.url), 'utf8')
+  const workspace = bankWorkspaceSource()
+  const crops = panel.slice(panel.indexOf("onPassOpen('semantic_dedup')"),
+    panel.indexOf("onPassOpen('caption')"))
+  assert.match(crops, /disabled=\{live \|\| !semanticReady\}/)
 
-  const medium = ws.slice(ws.indexOf("setPassOpen('medium')"),
-    ws.indexOf("setPassOpen('framing')"))
+  const curate = workspace.slice(workspace.indexOf('Curate'),
+    workspace.indexOf('{coverageOpen &&'))
+  assert.match(curate, /disabled=\{live \|\| !semanticReady \|\| diverseBusy\}/)
+  assert.match(curate,
+    /disabled=\{live \|\| !semanticReady \|\| selected\.size !== 1 \|\| similarBusy\}/)
+  assert.match(curate, /disabled=\{live \|\| !semanticReady\}[\s\S]*openTextSearch/)
+
+  const medium = panel.slice(panel.indexOf("onPassOpen('medium')"),
+    panel.indexOf("onPassOpen('framing')"))
   assert.match(medium, /!caps\.bank_scoring/)
   assert.match(medium, /CLIP embeddings ✨ Score/)
 })
@@ -106,7 +121,9 @@ test('semantic index is whole-Bank and always posts an explicit rescan boolean',
   assert.equal(passScopeRows('semantic_index').every((row) => !row.ok), true)
   assert.equal(passSelectionAvailability('semantic_index').ok, false)
 
-  const body = ws.slice(ws.indexOf('const passBody'), ws.indexOf('const runPass'))
+  // The handler layer stays in BankWorkspace.jsx; only its JSX moved out.
+  const wsFile = bankWorkspaceSource()
+  const body = wsFile.slice(wsFile.indexOf('const passBody'), wsFile.indexOf('const runPass'))
   assert.match(body, /spec\?\.redo\?\.explicit/)
   assert.match(body, /\{ \[spec\.redo\.key\]: !!redo \}/)
 })

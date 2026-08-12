@@ -1,10 +1,14 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { BANK_PASSES, passScopeRows } from './bankPasses.js';
 
 const panel = fs.readFileSync(new URL('./BankWatermarkPanel.jsx', import.meta.url), 'utf8');
-const workspace = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const workspace = bankTreeSource();
 
 test('level 1 delegates Find to the workspace launch dialog', () => {
   const findCardStart = panel.indexOf('<LevelCard index={1} title="Find them"');
@@ -25,8 +29,10 @@ test('level 1 delegates Find to the workspace launch dialog', () => {
   assert.ok(panelCallStart >= 0 && panelCallEnd > panelCallStart,
     'the workspace watermark panel is missing');
   const panelCall = workspace.slice(panelCallStart, panelCallEnd);
-  assert.match(panelCall, /onFind=\{\(\) => setPassOpen\('watermark'\)\}/,
-    'the workspace must open the shared watermark PassDialog');
+  assert.match(panelCall, /onFind=\{\(\) => onPassOpen\('watermark'\)\}/,
+    'the passes panel must open the shared watermark PassDialog');
+  // …through the workspace's own opener, so there is still ONE pass router.
+  assert.match(workspace, /onPassOpen=\{setPassOpen\}/);
   assert.match(workspace, /\{passOpen && \(\s*<PassDialog passId=\{passOpen\}/,
     'passOpen must render the shared PassDialog');
 });

@@ -197,6 +197,16 @@ def post_prompt_preview():
 
 @bp.put('/settings')
 def put_settings():
+    """Save config/secrets. Used by both the Setup wizard and the Settings page.
+
+    Config sections this running version recognizes (`cfg.DEFAULTS`) are
+    validated as before -- 400 on a non-object section, etc. A section this
+    version does NOT recognize is tolerated, not rejected: it is dropped from
+    the partial (never validated, never applied) so it cannot fail the Save for
+    the sections that ARE valid, and reported back in
+    `preserved_unknown_sections`. Because save_config() deep-merges the partial
+    onto whatever is already on config.json, a dropped section already on disk
+    is left untouched there -- preserved for whichever app version wrote it."""
     body = request.get_json(force=True, silent=True) or {}
     if 'config' in body and not isinstance(body['config'], dict):
         return jsonify({'error': "'config' must be an object"}), 400
@@ -212,9 +222,22 @@ def put_settings():
         cfg.validate_secrets(secrets_partial)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
+    # A section this running version doesn't know is NOT a reason to fail the
+    # whole Save. The client always echoes back the WHOLE config (GET -> edit ->
+    # PUT), so a section written by another app version (a dev branch that ran
+    # once, a downgrade, an installer ahead of the app) rides along in every
+    # subsequent Save. Rejecting it with 400 took the entire request hostage --
+    # every valid setting the user just entered was lost too (hit for
+    # 'bank_scoring', then again for 'variations'). Instead: drop it from the
+    # partial before validation/merge (neither validated nor applied), and
+    # report it so the caller can see what was skipped. save_config() deep-merges
+    # the partial onto the file already on disk, so a dropped section that
+    # exists there is simply left alone -- preserved for the version that wrote
+    # it; one that doesn't exist there is dropped with nothing to preserve.
     unknown = set(config_partial) - set(cfg.DEFAULTS)
-    if unknown:
-        return jsonify({'error': f"unknown config section '{sorted(unknown)[0]}'"}), 400
+    preserved_unknown_sections = sorted(unknown)
+    for k in unknown:
+        config_partial.pop(k)
     # Each section must stay an object -- _deep_merge only recurses when both
     # sides are dicts, so a non-dict value here would REPLACE the whole section
     # (e.g. {"ollama": "x"} silently overwriting ollama.url + ollama.vision_model).
@@ -276,6 +299,8 @@ def put_settings():
     payload = _settings_payload()
     if hf_cloud_check is not None:
         payload['secret_checks'] = {'HF_CLOUD_TOKEN': hf_cloud_check}
+    if preserved_unknown_sections:
+        payload['preserved_unknown_sections'] = preserved_unknown_sections
     return jsonify(payload)
 
 
@@ -469,6 +494,28 @@ def semantic_python_select():
     ▸ Quality tools still installs into the app-managed environment and never
     into a borrowed one."""
     return _interpreter_select('semantic')
+
+
+@bp.get('/watermark-python')
+def watermark_python_list():
+    """The same picker for the 🚩 watermark detector (``watermark_detect.python``).
+
+    The Setup install pins the app-managed environment here — which carries a
+    CPU torch on purpose — so until this picker existed a machine with a
+    perfectly good CUDA interpreter scanned tens of thousands of images on the
+    CPU and nothing ever said so. The detector needs torch + a transformers
+    that has both cascade halves (SigLIP classifier, Grounding-DINO locator);
+    its pinned weights live under the app's models_root, not in the
+    interpreter, so borrowing one downloads nothing."""
+    return _interpreter_list('watermark_detect')
+
+
+@bp.post('/watermark-python')
+def watermark_python_select():
+    """Select the interpreter the 🚩 watermark scan runs in. Execution only —
+    Setup ▸ Quality tools still installs into the app-managed environment and
+    never into a borrowed one."""
+    return _interpreter_select('watermark_detect')
 
 
 @bp.post('/settings/test/<target>')

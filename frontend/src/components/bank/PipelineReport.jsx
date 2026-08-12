@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { reportHeadline, stepView } from './pipelineReportView.js'
 
 /** The morning-after summary of the last "Launch all" run — one row per
  * requested pass (done / skipped-with-reason / error / cancelled) plus the
@@ -22,13 +23,6 @@ export const STEP_LABEL = {
   watermark: '🚩 Watermarks', faces: '👥 Group by person',
   framing: '📐 Classify framing', caption: '🏷️ Caption',
 }
-const STATUS_STYLE = {
-  done: { icon: '✅', cls: 'text-emerald-300' },
-  skipped: { icon: '⏭️', cls: 'text-amber-300' },
-  cancelled: { icon: '🛑', cls: 'text-content-subtle' },
-  error: { icon: '⚠️', cls: 'text-rose-300' },
-}
-
 function fmtWhen(ts) {
   if (!ts) return ''
   try { return new Date(ts * 1000).toLocaleString() } catch { return '' }
@@ -37,8 +31,10 @@ function fmtWhen(ts) {
 export default function PipelineReport({ report, onDismiss }) {
   const [open, setOpen] = useState(true)
   if (!report || !Array.isArray(report.steps)) return null
-  const done = report.steps.filter((s) => s.status === 'done').length
-  const total = report.steps.length
+  // A pass re-run since counts as covered, and drops the 🛑 with it: this banner
+  // used to keep announcing "cancelled before it ran" over a standalone run that
+  // had just done the work. See pipelineReportView.js.
+  const { covered, total, stopped, icon, redone } = reportHeadline(report)
   const c = report.counts || {}
 
   return (
@@ -47,9 +43,12 @@ export default function PipelineReport({ report, onDismiss }) {
         <button type="button" onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           className="flex items-center gap-2 text-sm font-semibold text-content">
-          <span aria-hidden>{report.cancelled ? '🛑' : '🚀'}</span>
-          Last Launch-all run — {done}/{total} passes ran
-          {report.cancelled && <span className="text-content-subtle">(stopped)</span>}
+          <span aria-hidden>{icon}</span>
+          Last Launch-all run — {covered}/{total} passes ran
+          {redone > 0 && (
+            <span className="text-content-subtle">({redone} re-run since)</span>
+          )}
+          {stopped && <span className="text-content-subtle">(stopped)</span>}
           <span aria-hidden className="text-content-subtle">{open ? '▾' : '▸'}</span>
         </button>
         <span className="ml-auto text-xs text-content-subtle">{fmtWhen(report.finished_at)}</span>
@@ -62,18 +61,13 @@ export default function PipelineReport({ report, onDismiss }) {
         <div className="border-t border-border px-3 py-2 space-y-2">
           <ul className="space-y-1">
             {report.steps.map((s, i) => {
-              const st = STATUS_STYLE[s.status] || STATUS_STYLE.error
+              const view = stepView(s)
               return (
                 <li key={`${s.step}-${i}`} className="flex items-start gap-2 text-sm">
-                  <span aria-hidden>{st.icon}</span>
+                  <span aria-hidden>{view.icon}</span>
                   <span className="min-w-0">
                     <span className="font-medium text-content">{STEP_LABEL[s.step] || s.step}</span>
-                    {s.detail && s.status === 'done' && (
-                      <span className="text-content-muted"> — {s.detail}</span>
-                    )}
-                    {s.reason && s.status !== 'done' && (
-                      <span className={st.cls}> — {s.reason}</span>
-                    )}
+                    {view.note && <span className={view.cls}> — {view.note}</span>}
                   </span>
                 </li>
               )

@@ -12,6 +12,9 @@
    still resolve (to the first), but it would be a lie waiting to become a bug
    the day the definitions differ. */
 
+import { Fragment } from 'react';
+import { DATASET_TINTS } from '../../utils/datasetTint';
+
 /** The gradients + glow filter every lineage edge paints with. Render once per
  *  document (see the warning above). */
 export function LineageEdgeDefs() {
@@ -48,6 +51,32 @@ export function LineageEdgeDefs() {
         <stop offset="0" stopColor="#a855f7" stopOpacity="0.45" />
         <stop offset="1" stopColor="#e9d5ff" stopOpacity="0.95" />
       </linearGradient>
+      {/* 🔌 EXTERNAL LoRA PLUGIN NODE — "this picture used a file pinned on the
+          board, not one made here". Its own cyan, matching the 🔌 accent used
+          elsewhere for plugin nodes, so it reads as a third source distinct from
+          both the indigo trunk and the violet blend provenance. */}
+      <linearGradient id="lds-edge-external" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stopColor="#22d3ee" stopOpacity="0.45" />
+        <stop offset="1" stopColor="#0891b2" stopOpacity="0.95" />
+      </linearGradient>
+      {/* 🎨 PER-DATASET TINTS. One pair of gradients per palette slot, using the
+          SAME opacity ramps as the neutral/spine pair above so a tinted board
+          is no busier than the grey one was — only legible. Defined here rather
+          than inline per lane for the reason at the top of this file: gradient
+          ids are document-global, and there is exactly one place in the app that
+          renders these defs. A fixed palette, so the ids are a closed set. */}
+      {DATASET_TINTS.map((c, i) => (
+        <Fragment key={c}>
+          <linearGradient id={`lds-edge-tint-${i}`} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor={c} stopOpacity="0.18" />
+            <stop offset="1" stopColor={c} stopOpacity="0.5" />
+          </linearGradient>
+          <linearGradient id={`lds-edge-tintspine-${i}`} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor={c} stopOpacity="0.6" />
+            <stop offset="1" stopColor={c} stopOpacity="0.98" />
+          </linearGradient>
+        </Fragment>
+      ))}
       <filter id="lds-edge-glow" x="-20%" y="-40%" width="140%" height="180%">
         <feGaussianBlur stdDeviation="2.2" result="b" />
         <feMerge>
@@ -62,9 +91,21 @@ export function LineageEdgeDefs() {
  *  cores on top. `isLit(id)` says whether a node is on the hovered path — an
  *  edge whose two ends are both lit is drawn like the trunk, so hovering a run
  *  traces its whole descent back to the root. Pass `() => false` for a surface
- *  with no hover story. */
-export function LineageEdges({ edges, isLit }) {
+ *  with no hover story.
+ *
+ *  🎨 `tintIndex` (a slot in DATASET_TINTS, from utils/datasetTint) recolours
+ *  the edges that belong to ONE dataset — its trunk and its neutral hops. The
+ *  three edge kinds that carry a MEANING keep their own colour whatever the
+ *  tint is: amber still says "this branch was superseded", violet still says
+ *  "blended from", cyan still says "external LoRA file". Those three answer a
+ *  question about the edge; the tint only answers "whose". Omit it (the in-card
+ *  graph, which shows one dataset and needs no whose) and nothing changes. */
+export function LineageEdges({ edges, isLit, tintIndex = null }) {
   const lit = typeof isLit === 'function' ? isLit : () => false;
+  const tinted = Number.isInteger(tintIndex)
+    && tintIndex >= 0 && tintIndex < DATASET_TINTS.length;
+  const spineGrad = tinted ? `lds-edge-tintspine-${tintIndex}` : 'lds-edge-spine';
+  const normalGrad = tinted ? `lds-edge-tint-${tintIndex}` : 'lds-edge-normal';
   return (
     <>
       {/* Glow halo underneath the trunk (root→current), so even short hops read
@@ -80,7 +121,7 @@ export function LineageEdges({ edges, isLit }) {
           return (
             <path key={`glow-${e.parentId}-${e.childId}`}
               d={e.d}
-              stroke={`url(#${e.superseded ? 'lds-edge-super' : 'lds-edge-spine'})`}
+              stroke={`url(#${e.superseded ? 'lds-edge-super' : spineGrad})`}
               strokeWidth="5"
               opacity="0.5" filter="url(#lds-edge-glow)" />
           );
@@ -92,15 +133,17 @@ export function LineageEdges({ edges, isLit }) {
           const spine = e.onSpine || both;
           // 🧬 A provenance edge keeps its violet whatever the hover is doing:
           // it is not part of the training spine, so lighting it like the trunk
-          // would claim a descent that did not happen.
-          const grad = e.blend ? 'lds-edge-blend'
-            : e.superseded ? 'lds-edge-super' : spine ? 'lds-edge-spine' : 'lds-edge-normal';
+          // would claim a descent that did not happen. 🔌 An external-LoRA edge
+          // is checked first for the same reason, in its own cyan.
+          const grad = e.external ? 'lds-edge-external'
+            : e.blend ? 'lds-edge-blend'
+            : e.superseded ? 'lds-edge-super' : spine ? spineGrad : normalGrad;
           return (
             <path key={`${e.parentId}-${e.childId}`}
               className="lds-ledge"
               d={e.d}
               stroke={`url(#${grad})`}
-              strokeWidth={e.blend ? 2 : spine ? 2.6 : e.superseded ? 2.2 : 1.5}
+              strokeWidth={e.external ? 2 : e.blend ? 2 : spine ? 2.6 : e.superseded ? 2.2 : 1.5}
               /* ⚠️ `.lds-ledge` sets stroke-dasharray in CSS for the draw-in
                  animation, and a CSS declaration beats a presentation attribute:
                  this dash never actually renders. A superseded branch therefore

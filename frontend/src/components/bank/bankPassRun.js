@@ -172,6 +172,30 @@ export function busyRefusal({ kind, activity, labels, subject, stopHint = STOP_H
 }
 
 /**
+ * busyRefusal, composed from the FRESHEST snapshot available.
+ *
+ * The 409 handler used to quote `payload.activity` — but the payload is the
+ * ~60-aggregate dashboard read, measured at ~25 s AT REST on a 36 921-image
+ * bank and worse while the blocking pass writes. At refusal time it is stale or
+ * has never landed, so the toast said "…press Stop in the progress bar" about a
+ * bar that was not on screen (the bar reads the same stale payload).
+ *
+ * `fetchActivity` is the caller's read of the CHEAP endpoint (/activity — one
+ * in-memory registry lookup, no DB); the caller is expected to also merge what
+ * it returns into its payload, which is what makes the bar appear. Any failure
+ * or empty answer falls back to `fallback` (the last known snapshot) — and an
+ * empty answer never erases `kind`: the job can land between the 409 and this
+ * read, but the refusal was true when the click was refused, so it still names
+ * the blocker.
+ */
+export async function busyRefusalLive({ kind, fetchActivity, fallback,
+  labels, subject, stopHint } = {}) {
+  let live = null
+  try { live = fetchActivity ? await fetchActivity() : null } catch { live = null }
+  return busyRefusal({ kind, activity: live || fallback, labels, subject, stopHint })
+}
+
+/**
  * Whether a re-run button can work, and what it must say if it cannot.
  * @returns {{disabled: boolean, reason: string|null, pending: boolean}}
  */

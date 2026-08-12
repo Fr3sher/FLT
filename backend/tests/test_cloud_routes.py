@@ -402,6 +402,42 @@ def test_run_preview_local_record(client, app, monkeypatch, tmp_path):
     assert row['preview_url'] == f'/api/dataset/train/runs/rec-{rec_id}/preview'
 
 
+def test_run_preview_thumbnail_is_opt_in_and_the_link_still_gets_the_file(
+        client, app, monkeypatch, tmp_path):
+    """The Runs-hub card draws this at 64-80 px, in a list that can hold every
+    run ever launched — `?s=` gets the cached WebP so the page stops downloading
+    a full training sample per card. WITHOUT `?s=` the untouched bytes still
+    come back: that is the 'open full size' link wrapped around the card."""
+    import io
+    from PIL import Image
+
+    monkeypatch.setenv('VAST_API_KEY', 'k-test')
+    ds = _mkds(client)
+    staging = tmp_path / 'run_thumb'
+    (staging / 'samples').mkdir(parents=True)
+    buf = io.BytesIO()
+    Image.new('RGB', (1024, 1024), (10, 200, 40)).save(buf, 'PNG')
+    original = buf.getvalue()
+    (staging / 'samples' / '170__500_0.png').write_bytes(original)
+    from app.extensions import db
+    from app.models import CloudTrainingRun
+    with app.app_context():
+        run = CloudTrainingRun(dataset_id=ds, status='done', job_name='j',
+                               vast_label='lds-11', staging_dir=str(staging))
+        db.session.add(run)
+        db.session.commit()
+        rid = run.id
+
+    full = client.get(f'/api/dataset/train/runs/cloud-{rid}/preview')
+    assert full.status_code == 200 and full.data == original
+
+    thumb = client.get(f'/api/dataset/train/runs/cloud-{rid}/preview?s=192')
+    assert thumb.status_code == 200
+    im = Image.open(io.BytesIO(thumb.data))
+    assert im.format == 'WEBP' and max(im.size) == 192
+    assert len(thumb.data) < len(original) / 5
+
+
 def test_run_preview_unknown_or_sampleless_404(client, app, monkeypatch, tmp_path):
     """Unknown keys and runs that left no sample 404; their rows carry no
     preview_url (the hub falls back to the family tile)."""

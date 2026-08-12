@@ -12,8 +12,7 @@ import {
 } from '../utils/canvasFamilyFilter';
 import { toOverrideMap } from '../utils/canvasPlacement';
 import { pinWriteShortfall, toImageNodeMap, visibleImageNodes } from '../utils/canvasImageNodes';
-import { layoutImageNodes } from '../utils/canvasImageGroups';
-import { placeImageBatch, tidyGroupRows } from '../utils/canvasPinBatch';
+import { tidyLaneRows } from '../utils/canvasPinBatch';
 import { useToast } from '../components/common/Toast';
 import CanvasDatasetFilter from '../components/canvas/CanvasDatasetFilter';
 import LineageCanvas from '../components/canvas/LineageCanvas';
@@ -38,6 +37,11 @@ import { HelpBadge } from '../help/HelpMode';
    that also has to answer whatever training or captioning is running. */
 
 const MAX_PARALLEL_FETCHES = 3;
+/* How long a coalesced geometry write waits for the burst to end. Same 500 ms
+   as the external-LoRA list on the board, so the two feel alike; short enough
+   that letting go of an arrow key and closing the tab still lands the write
+   through the unmount flush. */
+const COALESCE_WRITE_MS = 500;
 
 export default function CanvasPage() {
   const toast = useToast();
@@ -65,20 +69,16 @@ export default function CanvasPage() {
   // for the whole board — the lanes need their overrides before the first paint,
   // and these rows are tiny next to the genealogies they precede.
   const [positions, setPositions] = useState({});
-  useEffect(() => {
-    let alive = true;
-    apiFetch('/api/train/canvas/positions')
-      .then((d) => {
-        if (!alive) return;
-        const next = {};
-        for (const [dsId, rows] of Object.entries(d?.positions || {})) next[dsId] = toOverrideMap(rows);
-        setPositions(next);
-      })
-      // A board that opens in its automatic layout is a far better failure than
-      // a board that does not open: nothing about the canvas may block it.
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
+  const loadPositions = useCallback(() => apiFetch('/api/train/canvas/positions')
+    .then((d) => {
+      const next = {};
+      for (const [dsId, rows] of Object.entries(d?.positions || {})) next[dsId] = toOverrideMap(rows);
+      setPositions(next);
+    })
+    // A board that opens in its automatic layout is a far better failure than
+    // a board that does not open: nothing about the canvas may block it.
+    .catch(() => {}), []);
+  useEffect(() => { loadPositions(); }, [loadPositions]);
 
   /* Remember a lane's arrangement. Applied to the screen FIRST and sent
      afterwards, deliberately: a card must follow the finger at the speed of the
@@ -101,22 +101,78 @@ export default function CanvasPage() {
      changes shape -- a user updating into this version finds their cards
      exactly where they left them. */
   const [imageNodes, setImageNodes] = useState({});
-  useEffect(() => {
-    let alive = true;
-    apiFetch('/api/train/canvas/images')
-      .then((d) => {
-        if (!alive) return;
-        const next = {};
-        for (const [dsId, rows] of Object.entries(d?.nodes || {})) {
-          next[dsId] = toImageNodeMap(rows);
-        }
-        setImageNodes(next);
-      })
-      // Same rule as the positions: nothing about the canvas may stop the canvas
-      // from opening.
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
+  const loadImageNodes = useCallback(() => apiFetch('/api/train/canvas/images')
+    .then((d) => {
+      const next = {};
+      for (const [dsId, rows] of Object.entries(d?.nodes || {})) {
+        next[dsId] = toImageNodeMap(rows);
+      }
+      setImageNodes(next);
+    })
+    // Same rule as the positions: nothing about the canvas may stop the canvas
+    // from opening.
+    .catch(() => {}), []);
+  useEffect(() => { loadImageNodes(); }, [loadImageNodes]);
+
+  /* 💾 Re-read the whole arrangement from the server.
+     Used after a layout preset is restored: the preset is applied SERVER-side
+     through the live writers, so the browser's copy of where everything sits is
+     now the stale one. Re-reading both maps is cheaper and far safer than
+     replaying the preset locally — a local replay would be a second
+     implementation of the restore, free to disagree with the one that actually
+     wrote the rows. */
+  const onReloadLayout = useCallback(
+    () => Promise.all([loadPositions(), loadImageNodes()]),
+    [loadPositions, loadImageNodes]);
+
+  /* The write itself, extracted so the immediate path and the coalesced one
+     below cannot drift into two different requests. */
+  const sendImageNodes = useCallback((datasetId, rows) => putJson(
+    `/api/dataset/${datasetId}/canvas/images`, {
+      // `image` is the client's own render payload; the server resolves it from
+      // the id and must not be handed a copy to trust.
+      nodes: rows.map(({ image, ...row }) => row),
+    })
+    // A row the SERVER refused (unusable geometry, an image from another lane)
+    // comes back as a 200 with a smaller `saved` count. Swallowing that is how
+    // a pin could appear, be dropped, and vanish on the next reload without a
+    // word — see utils/canvasImageNodes.pinWriteShortfall. A dropped NETWORK
+    // stays silent as before: that write heals on the next gesture.
+    .then((d) => {
+      const said = pinWriteShortfall(rows, d);
+      if (said) toast.error(said);
+    })
+    .catch(() => {}), [toast]);
+
+  /* The deferred half. `pending` is a dataset id → (image id → row) map, so a
+     burst of thirty nudges of the same picture collapses to one row, and two
+     pictures nudged in the same burst still both get written. */
+  const pending = useRef(new Map());
+  const flushTimer = useRef(null);
+  const flushImageWrites = useCallback(() => {
+    if (flushTimer.current) { clearTimeout(flushTimer.current); flushTimer.current = null; }
+    const batches = pending.current;
+    if (!batches.size) return;
+    pending.current = new Map();
+    for (const [datasetId, byImage] of batches) {
+      sendImageNodes(datasetId, [...byImage.values()]);
+    }
+  }, [sendImageNodes]);
+  const queueImageWrite = useCallback((datasetId, rows) => {
+    const byImage = pending.current.get(datasetId) || new Map();
+    for (const r of rows) byImage.set(r.image_id, r);
+    pending.current.set(datasetId, byImage);
+    if (flushTimer.current) clearTimeout(flushTimer.current);
+    flushTimer.current = setTimeout(() => {
+      flushTimer.current = null;
+      flushImageWrites();
+    }, COALESCE_WRITE_MS);
+  }, [flushImageWrites]);
+  // Leaving the board inside the coalescing window must not lose the last nudge
+  // — the same trap the external-LoRA list had to be taught about.
+  const flushRef = useRef(flushImageWrites);
+  useEffect(() => { flushRef.current = flushImageWrites; }, [flushImageWrites]);
+  useEffect(() => () => flushRef.current(), []);
 
   /* Pin, move, resize or CLOSE one or more images of a lane. Applied to the
      screen first and sent afterwards, exactly like a card position -- and for
@@ -131,8 +187,17 @@ export default function CanvasPage() {
      this picture belongs to, and where in it. They are ADDITIVE and nullable:
      an install whose database predates them reads null and draws the board it
      always drew. A row that does not MENTION them keeps whatever it had, so a
-     plain move or resize can never quietly dissolve a group. */
-  const onSaveImageNodes = useCallback((datasetId, rows) => {
+     plain move or resize can never quietly dissolve a group.
+
+     ⌨ `opts.coalesce` — the screen half ALWAYS happens immediately; only the
+     PUT is deferred, and only when the caller says the write is one of a burst
+     it is still in the middle of (a held arrow key repeats ~30×/s, and each
+     repeat was a full PUT of the node). The pending rows are merged per
+     dataset, so the request that finally goes out describes where the picture
+     ENDED UP rather than every position it passed through. Flushed on unmount
+     with `keepalive`, exactly like the external-LoRA list: a nudge followed
+     immediately by leaving the page must not be the write that vanishes. */
+  const onSaveImageNodes = useCallback((datasetId, rows, opts = null) => {
     setImageNodes((cur) => {
       const lane = { ...(cur[datasetId] || {}) };
       for (const r of rows) {
@@ -147,22 +212,29 @@ export default function CanvasPage() {
       }
       return { ...cur, [datasetId]: lane };
     });
-    putJson(`/api/dataset/${datasetId}/canvas/images`, {
-      // `image` is the client's own render payload; the server resolves it from
-      // the id and must not be handed a copy to trust.
-      nodes: rows.map(({ image, ...row }) => row),
-    })
-      // A row the SERVER refused (unusable geometry, an image from another lane)
-      // comes back as a 200 with a smaller `saved` count. Swallowing that is how
-      // a pin could appear, be dropped, and vanish on the next reload without a
-      // word — see utils/canvasImageNodes.pinWriteShortfall. A dropped NETWORK
-      // stays silent as before: that write heals on the next gesture.
-      .then((d) => {
-        const said = pinWriteShortfall(rows, d);
-        if (said) toast.error(said);
-      })
-      .catch(() => {});
-  }, [toast]);
+    if (opts?.coalesce) { queueImageWrite(datasetId, rows); return; }
+    sendImageNodes(datasetId, rows);
+  }, [queueImageWrite, sendImageNodes]);
+
+  /* 🗑 Forget pinned nodes LOCALLY — no write at all, deliberately.
+     Used after the picture itself has been deleted: its canvas_image_node row
+     now points at nothing, and the ordinary close would try to save geometry
+     for an image the server can no longer validate (save_canvas_image_nodes
+     checks the id against the dataset), so the user would delete a render and
+     get a toast saying the board could not be saved. The orphan row is pruned
+     server-side on the next read of the board — canvas_image_nodes does that
+     already, for exactly this case. */
+  const onForgetImageNodes = useCallback((datasetId, imageIds) => {
+    const gone = new Set((imageIds || []).map(Number));
+    if (!gone.size) return;
+    setImageNodes((cur) => {
+      const lane = cur[datasetId];
+      if (!lane) return cur;
+      const next = Object.fromEntries(
+        Object.entries(lane).filter(([id]) => !gone.has(Number(id))));
+      return { ...cur, [datasetId]: next };
+    });
+  }, []);
 
   const availableIds = useMemo(() => index.datasets.map((d) => d.id), [index.datasets]);
   const selected = useMemo(() => resolveSelection(availableIds, stored), [availableIds, stored]);
@@ -250,33 +322,15 @@ export default function CanvasPage() {
            A strip therefore comes home too. What the old rule was really
            protecting is untouched: only the ANCHOR's row is written, the strip
            is derived from it, and no membership is sent — so a tidy can move a
-           group but can never take one apart. */
-        const strips = tidyGroupRows({
-          graph, layout: layoutImageNodes(visibleImageNodes(map)),
-        });
-        for (const r of strips.rows) {
+           group but can never take one apart.
+
+           The strips and the loose pictures are placed by ONE function
+           (utils/canvasPinBatch.tidyLaneRows), which the lane STACK also asks
+           how much room to leave under this tree — otherwise the next dataset
+           starts straight through the band this is about to lay down. */
+        for (const r of tidyLaneRows({ graph, nodes: visibleImageNodes(map) }).rows) {
           lane[r.imageId] = { ...lane[r.imageId], x: r.x, y: r.y, w: r.w, h: r.h };
           rows.push({ image_id: r.imageId, x: r.x, y: r.y, w: r.w, h: r.h, visible: true });
-        }
-
-        const nodes = visibleImageNodes(map).filter((n) => !n.groupId);
-        if (nodes.length) {
-          const res = placeImageBatch({
-            graph,
-            // …and nothing may land ON one of those strips either — nor on the
-            // BAR above one, which is the group's only grip and carries its ✕.
-            // These are the footprints the strips ended up on, handed straight
-            // back by tidyGroupRows, so the two passes cannot disagree about
-            // what is free.
-            existing: strips.boxes,
-            images: nodes.map((n) => ({ id: n.imageId, dataset_id: id,
-              record_id: n.image?.record_id, step: n.image?.step })),
-            max: nodes.length,
-          });
-          for (const p of res.placed) {
-            lane[p.imageId] = { ...lane[p.imageId], x: p.x, y: p.y, w: p.w, h: p.h };
-            rows.push({ image_id: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h, visible: true });
-          }
         }
 
         next[id] = lane;
@@ -393,20 +447,34 @@ export default function CanvasPage() {
     (count, entry) => count + (entry.tree?.nodes || []).length, 0), [entries]);
 
   return (
-    <div>
-      {/* 📱 The blurb is the first thing a phone can afford to lose. It explains
-          the page once; after that it is 72 px of the 800 this screen has, spent
-          above the board, on every single load — and it was those 72 px that
-          pushed the frame's bottom edge past the fold at 400 px. It stays in full
-          from `sm` up, and the ? badge next to the title carries the same
-          explanation at every width, so nothing is actually hidden. */}
+    /* 📐 The page is a COLUMN one viewport tall (App.jsx pins the `/canvas`
+       shell to `h-svh`), and everything above the board — the title, an error
+       line — is fixed-size, so `min-h-0 flex-1` on the board's own wrapper
+       hands it every remaining pixel. `min-h-0` is the load-bearing half: a
+       flex child defaults to `min-height:auto`, refuses to shrink under its
+       content, and the PAGE scrolls instead of the board. */
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* 📱 The blurb is the first thing a small screen can afford to lose. It
+          explains the page once; after that it is height spent above the board,
+          on every single load.
+
+          The threshold was `sm` (640 px) and that was one breakpoint too early.
+          A phone in portrait reports ~400 CSS px and was already covered, but the
+          widths between 640 and 1024 — a phone in landscape, a tablet, a phone
+          whose browser reports a 900-px layout viewport — got the full paragraph
+          back: measured at 900 px it is 36 px of blurb plus its margin above a
+          board that is the entire point of the page. It now stays hidden right
+          up to `lg`, which is also where every other control on this screen stops
+          being finger-sized — one line, not two. Desktop is untouched, and the ?
+          badge next to the title carries the same explanation at every width, so
+          nothing is actually lost. */}
       <header className="mb-2 sm:mb-3">
         <h1 className="flex items-center gap-2 text-lg font-semibold text-content">
           <span aria-hidden>◉</span> LoRA Canvas
           <span className="px-1.5 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.625rem] font-semibold uppercase tracking-wide">Beta</span>
           <HelpBadge topic="page-canvas" />
         </h1>
-        <p className="mt-1 hidden text-content-muted text-[0.75rem] sm:block">
+        <p className="mt-1 hidden text-content-muted text-[0.75rem] lg:block">
           Every training run you have made, on one board: each dataset gets a lane, each run a card,
           and a continuation is joined to the exact checkpoint it resumed from.
         </p>
@@ -418,35 +486,40 @@ export default function CanvasPage() {
         </p>
       )}
 
-      <CanvasDatasetFilter
-        datasets={index.datasets}
-        selected={selected}
-        onToggle={onToggle}
-        onAll={() => persist(availableIds)}
-        onNone={() => persist([])}
-        families={families}
-        selectedFamilies={selectedFamilies}
-        onToggleFamily={onToggleFamily}
-        onAllFamilies={() => persistFamilies(families)}
-        onNoFamilies={() => persistFamilies([])}
-        query={query}
-        onQueryChange={setQuery}
-        statuses={statuses}
-        selectedStatuses={selectedStatuses}
-        onToggleStatus={onToggleStatus}
-        showPinned={extraFilters.showPinned}
-        onTogglePinned={() => persistExtraFilters({
-          ...extraFilters, showPinned: !extraFilters.showPinned,
-        })}
-        onResetFilters={onResetFilters}
-        visibleRuns={visibleRuns} />
-
       {index.status === 'loading'
         ? <p className="text-content-subtle text-[0.75rem]">Loading your datasets…</p>
         : (
           <LineageCanvas entries={entries} positions={positions}
+            /* The filter rides ON the board — see the overlay comment in
+               LineageCanvas. Same component, moved, not a second copy. */
+            filterSlot={(
+              <CanvasDatasetFilter
+              datasets={index.datasets}
+              selected={selected}
+              onToggle={onToggle}
+              onAll={() => persist(availableIds)}
+              onNone={() => persist([])}
+              families={families}
+              selectedFamilies={selectedFamilies}
+              onToggleFamily={onToggleFamily}
+              onAllFamilies={() => persistFamilies(families)}
+              onNoFamilies={() => persistFamilies([])}
+              query={query}
+              onQueryChange={setQuery}
+              statuses={statuses}
+              selectedStatuses={selectedStatuses}
+              onToggleStatus={onToggleStatus}
+              showPinned={extraFilters.showPinned}
+              onTogglePinned={() => persistExtraFilters({
+              ...extraFilters, showPinned: !extraFilters.showPinned,
+              })}
+              onResetFilters={onResetFilters}
+              visibleRuns={visibleRuns} />
+            )}
             imageNodes={filteredImageNodes} allImageNodes={imageNodes}
             onSaveImageNodes={onSaveImageNodes}
+            onForgetImageNodes={onForgetImageNodes}
+            onReloadLayout={onReloadLayout}
             onPinLane={onPinLane} onTidyUp={onTidyUp}
             onRefetchDataset={onRefetchDataset} />
         )}

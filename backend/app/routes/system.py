@@ -196,6 +196,15 @@ def comfyui_recovery_state():
         # Only ever paid for while something is actually blocking: a healthy app
         # polls this route forever and must not probe ComfyUI for nothing.
         recovery['connection'] = _comfyui_connection(probe.link)
+        # Whether the banner may offer to START ComfyUI itself, rather than only
+        # ask the user to confirm they restarted it. Same check the start route
+        # runs before spawning, so the button can never appear over an endpoint
+        # that would refuse. False on every install whose ComfyUI is not ours to
+        # run — Desktop, a hand-written .bat, another machine — where the honest
+        # offer is the confirmation, not a launch that would fail. Computed only
+        # inside this branch: an unblocked app must not pay for it.
+        from ..services import comfyui_control
+        recovery['can_start_comfyui'] = comfyui_control.can_start()
     return jsonify({'ok': True,
                     'recovery': recovery,
                     'auto_cleared': peek_auto_recovery_notice()})
@@ -259,6 +268,23 @@ def comfyui_recovery_resolve():
     return jsonify({'ok': False, 'error': (
         'The paused job could not be cleared. Refresh the page and try again; '
         'if it persists, check the server log.')}), 409
+
+
+@bp.get('/stats')
+def machine_stats():
+    """📊 CPU / RAM / GPU / VRAM of the machine RUNNING the server.
+
+    Feeds the small load readout on the Canvas, polled every few seconds while
+    the tab is visible. Two properties make that polling harmless: the reading
+    is cached ~3 s and SHARED (N tabs cost one `nvidia-smi`, not N), and every
+    field is optional — a machine with no NVIDIA card simply answers without
+    the GPU keys instead of answering zeros the widget would draw as "idle".
+
+    Always 200: this is a glance, never a gate. A machine that cannot answer
+    anything answers `{}`, and the widget draws nothing.
+    """
+    from ..services import system_stats
+    return jsonify(system_stats.machine_stats())
 
 
 @bp.get('/ollama-fence')

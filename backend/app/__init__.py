@@ -354,6 +354,9 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset_image', 'caption_origin', 'VARCHAR(16)'),
     ('face_dataset_image', 'caption_short_origin', 'VARCHAR(16)'),
     ('image_bank', 'pipeline_report', 'TEXT'),
+    # When each pass last completed. A bank that predates it keeps NULL and
+    # simply reports "never recorded" until its next pass writes a row.
+    ('image_bank', 'last_passes', 'TEXT'),
     # Per-Bank semantic engine. The non-null default makes every historical row
     # byte-for-byte compatible with the CLIP behaviour it already had.
     ('image_bank', 'semantic_engine', "VARCHAR(16) NOT NULL DEFAULT 'clip'"),
@@ -519,6 +522,10 @@ def create_app(config_object=None):
     data_dir.mkdir(parents=True, exist_ok=True)
     app.config.update(
         SECRET_KEY=cfg.secret_key(),
+        # The resolved data folder, for anything that reasons about the folder
+        # itself rather than the database in it — run.py's one-server-per-data-
+        # folder lock is the first customer.
+        LDS_DATA_DIR=str(data_dir),
         SQLALCHEMY_DATABASE_URI=f"sqlite:///{data_dir / 'studio.db'}",
         SQLALCHEMY_ENGINE_OPTIONS={'connect_args': {'check_same_thread': False}},
         MAX_CONTENT_LENGTH=64 * 1024 * 1024,

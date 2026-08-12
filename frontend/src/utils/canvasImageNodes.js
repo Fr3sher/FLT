@@ -213,6 +213,34 @@ export function slideBelow(box, taken) {
 }
 
 /**
+ * The same search, sideways — the first spot at or RIGHT OF `box` that overlaps
+ * nothing in `taken`.
+ *
+ * ✦ Tidy up uses this one, and the reason is a number: a lane stacks under the
+ * one above it, so every unit a tidied lane reaches DOWN is a unit the next
+ * dataset has to be pushed away by, whether or not the button is ever pressed.
+ * Measured on a lane with a 150-unit tree: one pinned picture reserved 518
+ * units, two reserved 862 — dead board under every lane that had ever pinned
+ * anything. Sideways there is no such tax: the board pans horizontally and
+ * nothing lives to the right of a lane.
+ *
+ * Vertical placement is still right for a DRAG (a lineage reads left to right,
+ * so a spare picture belongs under it, not in the middle of a generation) —
+ * which is why `slideBelow` stays and this is a second helper rather than a
+ * change to it.
+ */
+export function slideRight(box, taken) {
+  const list = Array.isArray(taken) ? taken : [];
+  let x = num(box?.x, 0);
+  for (let guard = 0; guard <= list.length; guard += 1) {
+    const hits = list.filter((t) => overlaps({ ...box, x }, t));
+    if (!hits.length) break;
+    x = Math.max(...hits.map((t) => t.x + t.w)) + PIN_GAP;
+  }
+  return { ...box, x };
+}
+
+/**
  * The box a lane's pins really occupy, relative to the LANE's origin.
  *
  * `width`/`height` are how far right and down they reach, as before, so

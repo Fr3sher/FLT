@@ -39,6 +39,14 @@ import {
   refBoostDescription, identityStrengthDescription, stepsDescription,
 } from '../../utils/kreaDials.js';
 import {
+  KLEIN_STEPS_MIN, KLEIN_STEPS_MAX, KLEIN_STEPS_STEP,
+  clampKleinSteps, kleinDialPayload, kleinStepsDescription,
+} from '../../utils/kleinDials.js';
+import {
+  VARIATION_MP_MIN, VARIATION_MP_MAX, VARIATION_MP_STEP,
+  clampVariationMegapixels, variationOutputSizePayload, variationSizeDescription,
+} from '../../utils/variationOutputSize.js';
+import {
   defaultValueAt, isAtDefault, resetAriaLabel, RESET_TO_DEFAULT_TEXT,
 } from '../settings/settingDefaults.js';
 import { kleinUnavailableReason } from '../../utils/localEngineReason.js';
@@ -565,6 +573,13 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   const [kreaRefBoost, setKreaRefBoost] = useState(null);
   const [kreaIdentityStrength, setKreaIdentityStrength] = useState(null);
   const [kreaSteps, setKreaSteps] = useState(null);
+  // Klein's own sampler steps — a SETTING like the Krea dials (it changes every
+  // shot of the batch identically), held the same way: null until the server
+  // answers, so no invented number is ever on screen.
+  const [kleinSteps, setKleinSteps] = useState(null);
+  // Shared by BOTH local engines — not a klein/ or krea/ value, so it is read
+  // and written on its own key and shown above the shot cards it governs.
+  const [variationMp, setVariationMp] = useState(null);
   // The Krea base, held like the dials: one GLOBAL value mirrored locally so
   // the field answers the click before the PUT comes back.
   const [kreaBaseModel, setKreaBaseModel] = useState('');
@@ -611,6 +626,11 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           defaultValueAt(d.config_defaults, 'krea', 'ref_boost')));
         setKreaIdentityStrength(clampIdentityStrength(d.config?.krea?.identity_lora_strength,
           defaultValueAt(d.config_defaults, 'krea', 'identity_lora_strength')));
+        setKleinSteps(clampKleinSteps(d.config?.klein?.generation_steps,
+          defaultValueAt(d.config_defaults, 'klein', 'generation_steps')));
+        setVariationMp(clampVariationMegapixels(
+          d.config?.variations?.output_megapixels,
+          defaultValueAt(d.config_defaults, 'variations', 'output_megapixels')));
       })
       .catch(() => { /* keep the permissive default on a transient failure */ });
     return () => { cancelled = true; };
@@ -638,6 +658,41 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
     KREA_DIAL_SETTERS[field](value);
     kreaDialSaver.current.schedule(field, value);
   };
+  // Klein gets its OWN coalescing saver: one drag must not write into the krea
+  // section, and merging two engines' patches into one PUT would do exactly that.
+  const kleinDialSaver = useRef(null);
+  if (kleinDialSaver.current === null) {
+    kleinDialSaver.current = createDialSaver((patch) => {
+      putJson('/api/settings', kleinDialPayload(patch)).catch(() => {
+        toast.error('Could not save the Klein tuning — check Settings › Image engines.');
+      });
+    });
+  }
+  const setKleinDial = (field, value) => {
+    if (field === 'generation_steps') setKleinSteps(value);
+    kleinDialSaver.current.schedule(field, value);
+  };
+  // Its OWN coalescing saver, for the same reason Klein has one next to Krea's:
+  // merging two sections into one PUT would write a value into a namespace its
+  // owner never touched.
+  const variationSizeSaver = useRef(null);
+  if (variationSizeSaver.current === null) {
+    variationSizeSaver.current = createDialSaver((patch) => {
+      putJson('/api/settings', variationOutputSizePayload(patch)).catch(() => {
+        toast.error('Could not save the output size — check Settings › Image engines.');
+      });
+    });
+  }
+  useEffect(() => () => variationSizeSaver.current?.flush(), []);
+  const variationMpDefault = defaultValueAt(configDefaults, 'variations', 'output_megapixels');
+  const variationMpValue = clampVariationMegapixels(variationMp, variationMpDefault);
+  const setVariationSize = (v) => {
+    const mp = clampVariationMegapixels(v, variationMpDefault);
+    setVariationMp(mp);
+    variationSizeSaver.current.schedule('output_megapixels', mp);
+  };
+  const kleinStepsDefault = defaultValueAt(configDefaults, 'klein', 'generation_steps');
+  const kleinStepsValue = clampKleinSteps(kleinSteps, kleinStepsDefault);
   const kreaGroundingDefault = defaultValueAt(configDefaults, 'krea', 'grounding_px');
   const kreaStepsDefault = defaultValueAt(configDefaults, 'krea', 'steps');
   const kreaRefBoostDefault = defaultValueAt(configDefaults, 'krea', 'ref_boost');
@@ -1168,6 +1223,35 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         </fieldset>
       )}
 
+      {/* Output size — ONE dial for both local engines, deliberately OUTSIDE
+          their tuning blocks. It is the property of the dataset's images, not of
+          the engine that happened to render them: Klein used to pin 2 MP in the
+          reference's shape while Krea capped itself at the reference's own pixel
+          count, so the same dataset held tiles of two sizes and two shapes.
+          Both now spend this budget on the shot card's ratio. */}
+      {(isKlein || isKrea) && (klAvailable || krAvailable) && (
+        <div className="rounded-lg border border-border bg-app/30 px-2.5 py-2">
+          <KreaDial
+            id="variation-output-size-dial"
+            label="Output size (MP)"
+            topic="variations.output_megapixels"
+            value={variationMpValue}
+            min={VARIATION_MP_MIN}
+            max={VARIATION_MP_MAX}
+            step={VARIATION_MP_STEP}
+            description={variationSizeDescription(variationMpValue)}
+            defaultValue={variationMpDefault}
+            onChange={setVariationSize}
+          >
+            How many pixels every generated shot gets, on the shape of its own
+            card. Shared by 🖥️ Klein and Krea 2 Edit so one dataset never mixes
+            two sizes. Larger costs more VRAM and more time per image, and the
+            edit models lose coherence past 2 MP — upscale further afterwards with
+            ✨ Upscale &amp; improve instead.
+          </KreaDial>
+        </div>
+      )}
+
       {/* Klein-only tuning, grouped: model file + consistency-LoRA strength.
           A <details> so the defaults stay out of a newcomer's way — children
           remain mounted, so the model picker still reports its choice. */}
@@ -1178,6 +1262,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             🖥️ Klein tuning
             <span className="ml-2 font-normal text-content-subtle text-[0.625rem]">
               model file · consistency LoRA {loraStrength <= 0 ? 'off' : loraStrength.toFixed(2)}
+              {' · '}{kleinStepsValue} steps
               {activeLoraPreset && activeLoraPreset.loras.length > 0
                 ? ` · LoRA preset: ${activeLoraPreset.name}` : ''}
             </span>
@@ -1208,6 +1293,29 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
                 reference photo(s); add extra references for a stronger identity lock.
               </p>
             </div>
+            {/* Sampler steps — the same GLOBAL klein.generation_steps Settings
+                edits, on the screen where the wait it buys is actually felt.
+                Reuses the Krea dial shell: same shape, same "this saves to your
+                settings" contract, so two engines cannot grow two idioms for one
+                kind of control. */}
+            <KreaDial
+              id="klein-steps-dial"
+              label="Sampler steps"
+              topic="klein.generation_steps"
+              value={kleinStepsValue}
+              min={KLEIN_STEPS_MIN}
+              max={KLEIN_STEPS_MAX}
+              step={KLEIN_STEPS_STEP}
+              description={kleinStepsDescription(kleinStepsValue)}
+              defaultValue={kleinStepsDefault}
+              onChange={(v) => setKleinDial('generation_steps',
+                clampKleinSteps(v, kleinStepsDefault))}
+            >
+              How many sampler steps each generated image gets. More steps usually
+              render more cleanly and cost proportionally more time — 10 steps is
+              about twice the wait of 5, per image. Separate from ✨ Upscale &amp;
+              improve, which has its own step count.
+            </KreaDial>
             {/* Optional generation-LoRA preset (Idea by @waltm) — pick one of
                 the named combinations from Settings; its chain (read-only
                 here) applies to every variation of the run. It opens on

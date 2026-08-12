@@ -52,10 +52,13 @@
    them. Nothing is ever stacked quietly. */
 
 import { CARD_W } from './lineageGraph.js';
-import { layoutImageNodes, nextGroupId, occupiedBox } from './canvasImageGroups.js';
+import {
+  layoutBoxes, layoutImageNodes, nextGroupId, occupiedBox,
+} from './canvasImageGroups.js';
 import { groupBarMaxHeight } from './canvasNodeChrome.js';
 import {
-  IMG_DEFAULT, IMG_MAX, IMG_MIN, slideBelow, spotBesideCard,
+  IMG_DEFAULT, IMG_MAX, IMG_MIN, imageNodeExtent, slideBelow, slideRight,
+  spotBesideCard,
 } from './canvasImageNodes.js';
 
 /* How many pictures one click may put down. Not a technical limit — the band
@@ -469,7 +472,8 @@ export function pinBatchPendingAcrossLanes(candidates, lanes) {
  * Returns {size, placed, skipped}. `skipped` is never empty in silence — the
  * caller announces it (pinBatchAnnouncement).
  */
-export function placeImageBatch({ graph, existing, images, remembered, max } = {}) {
+export function placeImageBatch({ graph, existing, images, remembered, max,
+                                  beside = false } = {}) {
   const cap = Number.isFinite(max) ? Math.max(0, max) : PIN_BATCH_MAX;
   const all = (Array.isArray(images) ? images : []).filter((i) => i?.id != null);
 
@@ -501,10 +505,26 @@ export function placeImageBatch({ graph, existing, images, remembered, max } = {
 
   const band = taking.filter((i) => !bandBound.has(i.id));
   if (band.length) {
-    // The band starts below EVERYTHING already on the lane. That single line is
-    // what makes "no overlap" structural rather than searched for.
+    /* The band starts clear of EVERYTHING already on the lane. That single
+       measurement is what makes "no overlap" structural rather than searched
+       for — the only question is on which axis.
+
+       BELOW, for a fresh 📌 batch: the pictures read as a contact sheet hung
+       under the lineage that produced them, which is what they are.
+
+       BESIDE, for ✦ Tidy up: a lane stacks under the one above it, so anything
+       a tidied lane reaches DOWN is room the next dataset must be pushed away
+       by. Measured on a 150-unit tree, one pinned picture cost 518 units of
+       reserved board and two cost 862 — under every lane that had ever pinned
+       anything, pressed or not. Sideways costs nothing: the board pans that
+       way and no lane owns the space to its right. */
     let bandTop = 0;
-    for (const o of occupied) bandTop = Math.max(bandTop, o.y + o.h);
+    let bandLeft = 0;
+    for (const o of occupied) {
+      if (beside) bandLeft = Math.max(bandLeft, o.x + o.w);
+      else bandTop = Math.max(bandTop, o.y + o.h);
+    }
+    if (beside) bandLeft += BAND_GAP;
     // A current (run_id-bearing) batch will become one or more Canvas groups
     // immediately after this placement. Reserve the TALLEST possible group bar
     // now: it is drawn above the strip, and without this allowance the first
@@ -518,6 +538,15 @@ export function placeImageBatch({ graph, existing, images, remembered, max } = {
     // The same reservation between source rows prevents the bar of prompt N+1
     // from climbing into prompt N before the final cross-column reflow above.
     const rowH = size + TILE_GAP + futureGroupBar;
+    /* How tall a column may get before the next one starts. Six for a 📌 batch,
+       which is what a contact sheet under a lineage should read like.
+       For ✦ Tidy up it is however many rows fit BESIDE the tree, because a
+       seventh row there would make the lane taller than its own content and
+       push the dataset below it away by that much. One row minimum: a picture
+       taller than the whole tree still has to land somewhere. */
+    const rowsPerColumn = beside
+      ? Math.max(1, Math.floor((Number(graph?.height) || 0) / rowH))
+      : COLUMN_ROWS;
 
     // One group per source checkpoint, ordered by where that source sits on the
     // board (left to right, then top to bottom) so the band reads in the same
@@ -552,8 +581,9 @@ export function placeImageBatch({ graph, existing, images, remembered, max } = {
       let col = takeColumn(preferred);
       let row = 0;
       for (const image of group.images.sort(byTrainingOrder)) {
-        if (row >= COLUMN_ROWS) { col = takeColumn(col + 1); row = 0; }
-        const box = { x: col * colW, y: bandTop + row * rowH, w: size, h: size };
+        if (row >= rowsPerColumn) { col = takeColumn(col + 1); row = 0; }
+        const box = { x: bandLeft + col * colW, y: bandTop + row * rowH,
+          w: size, h: size };
         occupied.push(box);
         placed.push({ imageId: image.id, ...box, image });
         row += 1;
@@ -630,7 +660,10 @@ export function tidyGroupRows({ graph, layout, taken } = {}) {
     // What occupiedBox reserved ABOVE the pictures for the group's drag bar.
     const bar = footprint.h - strip.h;
     const at = spotBesideCard(graph, anchor.image?.record_id);
-    const spot = slideBelow({ ...at, w: footprint.w, h: footprint.h }, busy);
+    // Sideways, not down: see canvasImageNodes.slideRight — every unit a tidied
+    // lane reaches below its tree is a unit the next dataset gets pushed away
+    // by, in advance and for good.
+    const spot = slideRight({ ...at, w: footprint.w, h: footprint.h }, busy);
     const landed = { x: spot.x, y: spot.y, w: footprint.w, h: footprint.h };
     busy.push(landed);
     boxes.push(landed);
@@ -638,6 +671,149 @@ export function tidyGroupRows({ graph, layout, taken } = {}) {
       w: anchor.w, h: anchor.h });
   }
   return { rows, boxes };
+}
+
+/**
+ * ✦ Tidy up for a WHOLE lane: the strips first, then the loose pictures in the
+ * contact-sheet band below them. Returns `{ rows, boxes }` — the geometry to
+ * persist, and every footprint the tidied lane occupies.
+ *
+ * Extracted so there is exactly ONE answer to "where does this lane's content
+ * land when the board is rebuilt". It has two callers that must never disagree:
+ * the button itself, and the LANE STACK, which has to reserve that much room
+ * before the button is ever pressed (see `tidyLaneReach`).
+ *
+ * ⚠️ POSITION-INDEPENDENT, and that is load-bearing. Nothing here reads where a
+ * picture currently sits — only the lane's tree, the strips' membership and the
+ * pictures' SIZES. So dragging a render anywhere on the board cannot change
+ * what this returns, which is what lets the stack reserve it without the lane
+ * below jumping under the hand still dragging.
+ */
+export function tidyLaneRows({ graph, nodes } = {}) {
+  const visible = (Array.isArray(nodes) ? nodes : []).filter((n) => n?.visible !== false);
+  const strips = tidyGroupRows({ graph, layout: layoutImageNodes(visible) });
+  const rows = [...strips.rows];
+  const boxes = [...strips.boxes];
+  const loose = visible.filter((n) => !n.groupId);
+  if (loose.length) {
+    const res = placeImageBatch({
+      graph,
+      beside: true,   // ✦ Tidy up spends width, never the next dataset's room
+      // Nothing may land ON one of those strips either — nor on the BAR above
+      // one, which is the group's only grip and carries its ✕. These are the
+      // footprints the strips ended up on, so the two passes cannot disagree.
+      existing: strips.boxes,
+      images: loose.map((n) => ({ id: n.imageId,
+        record_id: n.image?.record_id, step: n.image?.step })),
+      max: loose.length,
+    });
+    for (const p of res.placed) {
+      rows.push({ imageId: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h });
+      boxes.push({ x: p.x, y: p.y, w: p.w, h: p.h });
+    }
+  }
+  return { rows, boxes };
+}
+
+/**
+ * How far down a lane's content reaches once it is tidied — the room the STACK
+ * has to leave under the tree.
+ *
+ * ── The bug this exists for ──────────────────────────────────────────────────
+ * A lane's stacking height is its tree and nothing else, so that a picture
+ * dragged below its dataset stops shoving every lane underneath it down the
+ * board. Right for a DRAG, wrong for ✦ Tidy up: the tidy layout puts the strips
+ * and the contact-sheet band BELOW the tree, often thousands of units below it,
+ * and a stack that reserves only the tree starts the next dataset straight
+ * through them. On a loaded board that reads as strips piled on strips and on
+ * other datasets' run cards — nobody dragged anything, so nobody asked for it.
+ *
+ * Reserving the tidy reach instead of the CURRENT reach keeps both promises: a
+ * drag still moves nothing (this number does not depend on where anything sits),
+ * and the layout the button produces has room to exist. Resizing a picture does
+ * move it, which is correct — a bigger strip genuinely needs more room.
+ */
+export function tidyLaneReach({ graph, nodes } = {}) {
+  const { boxes } = tidyLaneRows({ graph, nodes });
+  let bottom = 0;
+  for (const b of boxes) bottom = Math.max(bottom, (Number(b?.y) || 0) + (Number(b?.h) || 0));
+  return bottom;
+}
+
+/**
+ * The entries the LANE STACK is built from (utils/canvasLayout.stackLanes) —
+ * one per placed dataset, carrying the two extents that function keeps apart.
+ *
+ * Lives here, out of the component, for one reason: this is where the promise
+ * "a drag moves no lane" is either kept or quietly lost, and `node --test`
+ * cannot parse JSX. The wiring below is the whole fix, so the wiring is what
+ * the test drives.
+ *
+ * ── The two lists, and why they must NOT be the same one ─────────────────────
+ * `layoutByLane` is what the lane DRAWS this frame: the picture under the hand
+ * sits where the hand is, at the size it is being given, pulled out of its
+ * strip if it is on its way out. The REACH (minX/minY/maxX/maxY) is measured on
+ * it, and must be — ✦ Fit, 📷 Export and the pan clamp all have to reach a
+ * picture while it is still moving.
+ *
+ * `restingByLane` is the lane's COMMITTED rows — the board as it would reload.
+ * The stacking height is measured on it, and only on it. `tidyLaneReach` was
+ * written to be position-independent, and it is; but it is not, and cannot be,
+ * gesture-independent, because ✦ Tidy up's layout depends on how many strips a
+ * lane has, how many members each one holds, and how many loose pictures go in
+ * the contact-sheet band — and a drag changes all three, live. Measured on a
+ * three-member strip whose anchor is dragged out: the reserve went 576 → 1143
+ * mid-gesture, shoving the next dataset 567 units down the board while the
+ * hand was still moving. Pulling the drag OUT of this input is what freezes it.
+ *
+ * ⚠️ The lane still settles ONCE on release, and that is not the bug: a picture
+ * that has genuinely left its strip is a membership change, so the lane really
+ * does need a different amount of room for the button to have somewhere to put
+ * it. What nothing may do is move a lane while the gesture is still in flight.
+ *
+ * ── …and the same rule for the RUN CARDS ────────────────────────────────────
+ * `stackPlaced` carries each lane's AUTOMATIC tree — the layout the lane has
+ * before anybody moved anything — and the stacking height is read from there.
+ *
+ * Freezing it for the duration of the gesture was not enough, and the second
+ * report says why: "dragging a dataset node down makes the ones below come down
+ * too, which creates space for nothing". A card dropped 800 units low left its
+ * lane permanently that much taller, so the next dataset sat 800 units lower
+ * FOREVER, with dead board between them. Measuring the stack on the arrangement
+ * at all is what puts one lane's layout in charge of another lane's position.
+ *
+ * So: lanes sit where the automatic layout says, and moving a card moves
+ * nothing but that card. The cost is stated rather than hidden — a lane
+ * arranged taller than its automatic tree can overlap the lane below. That is
+ * the same bargain pinned pictures already make, and ✦ Tidy up (which clears
+ * the arrangement) is the way back.
+ *
+ * The moved card still has to be REACHED — ✦ Fit and 📷 Export must frame it —
+ * so the live graph's height feeds `maxY` instead, where it grows the board's
+ * box without ever advancing the stack. Omit `stackPlaced` and this behaves
+ * exactly as it always did: the live graph is used for both.
+ */
+export function laneStackEntries({ placed, layoutByLane, restingByLane,
+                                   stackPlaced } = {}) {
+  const stackGraphs = new Map(
+    (Array.isArray(stackPlaced) ? stackPlaced : [])
+      .map((e) => [e?.datasetId, e?.graph]));
+  return (Array.isArray(placed) ? placed : []).map((e) => {
+    const ext = imageNodeExtent(layoutBoxes(layoutByLane?.[e.datasetId] || []));
+    const tidy = tidyLaneReach({ graph: e.graph, nodes: restingByLane?.[e.datasetId] || [] });
+    const stackGraph = stackGraphs.has(e.datasetId)
+      ? stackGraphs.get(e.datasetId) : e.graph;
+    const liveHeight = e.graph?.height || 0;
+    return {
+      ...e,
+      width: e.graph?.width || 0,
+      height: Math.max(stackGraph?.height || 0, tidy),
+      minX: ext.minX,
+      minY: ext.minY,
+      maxX: ext.width,
+      maxY: Math.max(ext.height, liveHeight),
+    };
+  });
 }
 
 /** The button's own words. It must say HOW MANY it is about to put down —

@@ -34,6 +34,7 @@ import {
   cropLevelState, findLevelState, hasCleanedImages, inpaintLevelState,
   levelCounts, maskNote, progressSummary, rescanNote, sourceNote,
 } from './bankWatermark.js'
+import { openerLabel } from './scoringPython.js'
 import { localEngineUnavailableReason } from '../../utils/localEngineReason'
 
 // How many cleaned images the before/after strip offers. A sample is enough to
@@ -64,6 +65,7 @@ function LevelCard({ index, title, blurb, state, onRun }) {
 
 export default function BankWatermarkPanel({
   bankId, live, onFind, onChanged, payload = null, selectedIds = [],
+  gpuPresent = true, onPickPython = null,
 }) {
   const { caps } = useCapabilities()
   const toast = useToast()
@@ -208,6 +210,30 @@ export default function BankWatermarkPanel({
           blurb="Repaints the marks a crop can't remove. LaMa is fast; Klein is slower but also clears marks on the subject."
           onRun={() => setCleanOpen('watermark_inpaint')} />
       </div>
+
+      {/* The detector's device, SAID — and fixable in place. The Setup install
+          pins the app-managed CPU-torch venv, so a machine with a card scans
+          tens of thousands of images on the CPU unless the user points the
+          detector at a CUDA Python it already has. That gap used to be
+          completely silent; this line is the difference between "the scan is
+          slow" and a one-click fix. Only shown when the fast detector is
+          installed AND its interpreter cannot reach CUDA on a machine that has
+          a card — a CPU-only machine gets no pitch it cannot act on. */}
+      {caps.watermark_detect && !caps.watermark_detect_gpu && gpuPresent && (
+        <div className="space-y-1">
+          <p className="text-xs text-amber-400/90">
+            🚩 Find runs on the CPU — the detector’s Python has no CUDA torch.
+            This machine has a GPU: point the detector at a Python that already
+            has one (ComfyUI’s, ai-toolkit’s) and the scan runs ~10× faster.
+          </p>
+          {onPickPython && (
+            <button type="button" onClick={() => onPickPython('watermark_detect')}
+              className="rounded-md border border-amber-400/50 px-2 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10">
+              {openerLabel(gpuPresent)}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-content-subtle">

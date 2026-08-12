@@ -395,10 +395,19 @@ def test_an_invalid_requested_aspect_keeps_the_reference_edit_source_geometry():
             keh.fit_output_size(1536, 2048))
 
 
-def test_requested_catalog_aspect_never_upscales_a_normal_reference():
+def test_requested_catalog_aspect_spends_the_dial_not_the_reference_size():
+    """REPLACES the previous no-upscale rule on the card path (deliberate).
+
+    That rule capped a card at the reference's own pixel count, so a 1024x832
+    reference produced 0.84 MP Krea tiles beside 2 MP Klein ones in the same
+    dataset — the dial the user set said 2. The output size is now the setting's
+    answer on both engines; see tests/test_variation_output_size.py. The
+    no-upscale rule still governs the free reference edit below.
+    """
     from app.services import krea_edit_helper as keh
     ow, oh = keh.fit_output_size(1024, 1024, requested_aspect='3:4')
-    assert ow * oh <= 1024 * 1024
+    assert ow * oh > 1024 * 1024, 'the card budget is no longer capped by the source'
+    assert ow * oh <= 2_000_000
     assert abs((ow / oh) - (3 / 4)) / (3 / 4) < 0.02
 
 
@@ -574,10 +583,11 @@ def test_no_loader_value_is_ever_hardcoded_in_the_graph_builder():
 
 def test_grounding_is_clamped_and_snapped_and_junk_degrades_to_the_default(krea):
     keh, _base, config = krea
-    assert config.get('krea.grounding_px') == 512
-    assert config.get('krea.ref_boost') == 0.25
-    assert keh.grounding_px() == 512
-    assert keh._ref_boost() == 0.25
+    # The v4 identity-first pair — grounding and pull always ship together.
+    assert config.get('krea.grounding_px') == 1024
+    assert config.get('krea.ref_boost') == 4.0
+    assert keh.grounding_px() == 1024
+    assert keh._ref_boost() == 4.0
     config.save_config({'krea': {'grounding_px': 700}})
     assert keh.grounding_px() == 704, 'snapped to the 64px patch grid'
     config.save_config({'krea': {'grounding_px': 99999}})

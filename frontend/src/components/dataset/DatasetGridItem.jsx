@@ -12,6 +12,7 @@ import SourceAttribution from './SourceAttribution';
 import { ENGINE_ACCENTS, ENGINE_LABELS } from './engineSelection.js';
 import { canRegenerateGeneric, improveRerunAffordance, isImageImproveRow } from './improveRerun.js';
 import { rememberImageRatio } from './lightboxActionPlacement.js';
+import { datasetThumbUrl } from '../../utils/datasetThumbUrl.js';
 import { FACE_BADGE_CLASS, PROVENANCE_BADGE_CLASS, TILE_BADGE_STACK_CLASS,
   WATERMARK_BADGE_CLASS } from './tileBadgeLayout.js';
 
@@ -183,12 +184,16 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
             title="Inspect (zoom)"
             aria-label={`Inspect ${displayLabel(img.variation_label) || 'the image'} full screen`}
             className="block w-full h-full cursor-zoom-in disabled:cursor-not-allowed">
-            {/* The tile and the lightbox request the SAME url, so the tile is
-                where the intrinsic size is known FIRST. Recording it here is
-                what lets the lightbox open with its actions already in the
-                right place, instead of committing them once the image paints
-                — see lightboxActionPlacement.js. */}
-            <img src={url} alt={displayLabel(img.variation_label)} loading="lazy"
+            {/* The TILE fetches a thumbnail, the lightbox fetches the file: a
+                grid of 512 px WebPs instead of a wall of 1-4 megapixel PNGs is
+                the difference between a dataset that opens and one that churns.
+                The intrinsic size recorded here is still the right one — a
+                thumbnail keeps the source's ASPECT RATIO, and the ratio is all
+                lightboxActionPlacement.js reads to open with its actions already
+                on the correct side instead of committing them once the image
+                paints. */}
+            <img src={datasetThumbUrl(url, 512)} alt={displayLabel(img.variation_label)}
+              loading="lazy" decoding="async"
               onLoad={(e) => rememberImageRatio(
                 img.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
               className={`w-full h-full ${imgFitCls}`} />

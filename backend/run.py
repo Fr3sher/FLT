@@ -1,3 +1,4 @@
+import atexit
 import sys, os
 import threading
 import time
@@ -54,6 +55,7 @@ ensure_pillow_consistent()
 
 from app import create_app
 from port_utils import find_available_port
+from single_instance import live_instance, refusal_message, release_lock, write_lock
 
 try:
     from app.config import get as cfg_get
@@ -93,6 +95,21 @@ def _announce_when_ready(url, open_browser=False, timeout=180):
 if __name__ == '__main__':
     host = os.environ.get('LDS_HOST') or cfg_get('server.host')
     requested_port = int(os.environ.get('LDS_PORT') or cfg_get('server.port'))
+    # One data folder, one server — checked BEFORE the port slide below, which
+    # is exactly how a double-launch used to become a second server on :5051
+    # sharing the first one's database (private in-memory job registries, a
+    # pass running in one process while the other swore the bank was idle).
+    # Instances on their OWN data folder (worktrees, proof instances with
+    # LDS_DATA_DIR) are untouched; LDS_ALLOW_SECOND_INSTANCE=1 overrides.
+    data_dir = app.config['LDS_DATA_DIR']
+    running = live_instance(data_dir)
+    if running:
+        print(refusal_message(running), flush=True)
+        if os.environ.get('LDS_OPEN_BROWSER') == '1':
+            # The double-click case: the person wanted the app on screen, and
+            # it exists already — open THAT one instead of printing at them.
+            webbrowser.open(f"http://127.0.0.1:{running['port']}/")
+        sys.exit(0)
     port = (requested_port if os.environ.get('LDS_AUTO_PORT') == '0'
             else find_available_port(host, requested_port))
     if port != requested_port:
@@ -128,6 +145,11 @@ if __name__ == '__main__':
     # reading cfg_get again there would lie about what's currently serving requests.
     app.config['LDS_BOUND_HOST'] = host
     app.config['LDS_BOUND_PORT'] = port
+    # Claim the data folder only once the port is settled, so the lock records
+    # the address the next double-launch should be pointed at. Released on
+    # clean exit; a crash leaves it behind, where the dead pid reads as stale.
+    write_lock(data_dir, host, port)
+    atexit.register(release_lock, data_dir)
     local_host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(host, host)
     if ':' in local_host and not local_host.startswith('['):
         local_host = f'[{local_host}]'
@@ -135,6 +157,38 @@ if __name__ == '__main__':
     threading.Thread(target=_announce_when_ready, args=(url,),
                      kwargs={'open_browser': os.environ.get('LDS_OPEN_BROWSER') == '1'},
                      daemon=True).start()
-    app.run(debug=os.environ.get('FLASK_DEBUG', '0') == '1',
-            host=host,
-            port=port, threaded=True, use_reloader=False)
+
+    # Warm the capability import caches in the background so the FIRST real
+    # request doesn't eat the cold-start cost. probe() spawns several subprocess
+    # `import torch` probes against the ai-toolkit venv; the first one has to
+    # fault ~2 GB of torch DLLs from cold disk page-cache (~30 s). Running it
+    # once here, off the request path, means a user who connects right after a
+    # container restart gets a fast /api/capabilities instead of a 30 s wait.
+    # It shares this process's `_import_cache`, and probe() is a no-op if the
+    # cache is already warm (TTL 30 s) — so this never re-fires on later boots
+    # of the same process.
+    def _warm_capabilities():
+        try:
+            from app import capabilities
+            capabilities.probe()
+        except Exception:
+            pass  # warm-up is best-effort; a failed probe is never fatal
+
+    threading.Thread(target=_warm_capabilities, daemon=True).start()
+
+    if os.environ.get('FLASK_DEBUG', '0') == '1':
+        app.run(debug=True, host=host, port=port, threaded=True, use_reloader=False)
+    else:
+        try:
+            from waitress import serve
+        except Exception:
+            app.run(debug=False, host=host, port=port, threaded=True, use_reloader=False)
+        else:
+            # Production path: waitress (threaded, pure-Python) instead of
+            # Werkzeug's single-threaded dev server. The app keeps its in-memory
+            # state in a single process; waitress runs many threads against that
+            # same process, so nothing that relies on module-level state breaks.
+            # (queue_manager reads/writes are DB-backed via SystemState, so even
+            # multi-worker would be safe, but the threaded single-process model is
+            # the conservative choice.)
+            serve(app, host=host, port=port, threads=8, channel_timeout=120)

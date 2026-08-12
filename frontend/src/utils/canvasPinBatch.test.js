@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import {
   PIN_BATCH_MAX, batchTileSize, boardObstacles, pinBatchAnnouncement,
   groupPinnedBatchBySource, groupPinnedBatchTogether, pinBatchLabel, pinBatchPending,
-  pinBatchPendingAcrossLanes, placeImageBatch, tidyGroupRows,
+  pinBatchPendingAcrossLanes, placeImageBatch, tidyGroupRows, tidyLaneReach,
+  tidyLaneRows, laneStackEntries,
 } from './canvasPinBatch.js';
 import { layoutImageNodes, occupiedBox } from './canvasImageGroups.js';
 import { CARD_W } from './lineageGraph.js';
+import { stackLanes } from './canvasLayout.js';
 
 /* 📌 Pin all — the one assertion that decides whether this feature is worth
    having: NOTHING may end up on top of anything else.
@@ -772,4 +774,318 @@ test('a lane with no strip on it asks for no writes at all', () => {
   const { rows, boxes } = tidyGroupRows({ graph: GRAPH, layout });
   assert.deepEqual(rows, []);
   assert.deepEqual(boxes, [], 'and it does not pretend the cards are taken either');
+});
+
+/* ── ✦ Tidy up across LANES ──────────────────────────────────────────────────
+   The board stacks datasets vertically, and a lane's stacking height decides
+   where the next one starts. Tidy up lays a lane's strips and its contact-sheet
+   band BELOW its tree, so a stack measured on the tree alone starts the next
+   dataset straight through them — strips piled on strips and on other lanes'
+   run cards, with nobody having dragged anything.
+
+   These build a DENSE lane the way a real board is dense (strips of 2 to 6
+   pictures at four different sizes, resized well past the 320 default) and
+   assert what the user sees, in WORLD units. */
+
+const denseLane = (base) => {
+  // [groupId, recordId, memberCount, tile size]
+  const specs = [
+    [`${base}a`, 106, 6, 320],
+    [`${base}b`, 107, 4, 620],
+    [`${base}c`, 114, 3, 900],
+    [`${base}d`, 117, 2, 180],
+  ];
+  const nodes = [];
+  let id = base;
+  for (const [groupId, recordId, count, size] of specs) {
+    for (let i = 0; i < count; i += 1) {
+      nodes.push(member(id, recordId, {
+        // Parked all over the board, including far above and left of the lane.
+        x: -900 + i * size, y: -700 + i * 40, w: size, h: size,
+        groupId, groupPos: i,
+      }));
+      id += 1;
+    }
+  }
+  // …and two loose pictures, which land in the band under the strips.
+  for (const recordId of [106, 114]) {
+    nodes.push(member(id, recordId, { x: -300, y: -300, w: 320, h: 320,
+      groupId: null, groupPos: null }));
+    id += 1;
+  }
+  return nodes;
+};
+
+/** The lane, tidied: every node at the geometry ✦ Tidy up writes for it. */
+const tidiedLane = (nodes) => {
+  const map = new Map(nodes.map((n) => [n.imageId, { ...n }]));
+  for (const row of tidyLaneRows({ graph: GRAPH, nodes }).rows) {
+    map.set(row.imageId, { ...map.get(row.imageId), ...row });
+  }
+  return [...map.values()];
+};
+
+/** Every footprint a tidied board really draws, in WORLD units. */
+const worldBoxes = (lanes) => {
+  const world = stackLanes(lanes.map((nodes) => ({
+    width: GRAPH.width,
+    height: Math.max(GRAPH.height, tidyLaneReach({ graph: GRAPH, nodes })),
+  })));
+  const out = [];
+  world.lanes.forEach((lane, i) => {
+    for (const c of GRAPH.nodes) {
+      out.push({ label: `L${i} card ${c.node.record_id}`,
+        x: lane.x + c.x, y: lane.graphY + c.y, w: CARD_W, h: c.cellH });
+    }
+    for (const row of layoutImageNodes(lanes[i])) {
+      const box = occupiedBox(row);
+      out.push({
+        label: `L${i} ${row.kind === 'group' ? `strip ${row.groupId}` : `img ${row.node.imageId}`}`,
+        x: lane.x + box.x, y: lane.graphY + box.y, w: box.w, h: box.h });
+    }
+  });
+  return out;
+};
+
+const collisions = (boxes) => {
+  const out = [];
+  for (let i = 0; i < boxes.length; i += 1) {
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      if (overlaps(boxes[i], boxes[j])) out.push(`${boxes[i].label} / ${boxes[j].label}`);
+    }
+  }
+  return out;
+};
+
+test('a dense lane tidies onto itself without a single overlap', () => {
+  assert.deepEqual(collisions(worldBoxes([tidiedLane(denseLane(200))])), [],
+    'strips, band and run cards all clear of each other');
+});
+
+test('✦ Tidy up on three dense lanes puts nothing on another lane', () => {
+  const lanes = [200, 400, 600].map((base) => tidiedLane(denseLane(base)));
+  const boxes = worldBoxes(lanes);
+  // Without the tidy reach in the stacking height, every one of these strips
+  // lands on the lane below — 18 overlaps on this very board.
+  assert.deepEqual(collisions(boxes), []);
+  const laneTops = boxes.filter((b) => b.label.endsWith('card 106'))
+    .map((b) => b.y).sort((a, b) => a - b);
+  assert.equal(laneTops.length, 3);
+  assert.ok(laneTops[1] - laneTops[0] > GRAPH.height,
+    "the second lane starts below the first one's pictures, not below its tree");
+});
+
+test('the tidy reach is measured on SIZES, so dragging a picture moves no lane', () => {
+  const nodes = tidiedLane(denseLane(200));
+  const before = tidyLaneReach({ graph: GRAPH, nodes });
+  // The gesture the free-placement fix exists for: one picture dragged far
+  // below its own lane. The lane underneath must not budge.
+  const dragged = nodes.map((n, i) => (i === 0 ? { ...n, x: n.x + 2500, y: n.y + 9000 } : n));
+  assert.equal(tidyLaneReach({ graph: GRAPH, nodes: dragged }), before);
+  // Resizing one, on the other hand, genuinely needs more room and says so.
+  const bigger = nodes.map((n, i) => (i === 0 ? { ...n, w: n.w + 600, h: n.h + 600 } : n));
+  assert.ok(tidyLaneReach({ graph: GRAPH, nodes: bigger }) > before,
+    'a strip made bigger reserves more room');
+});
+
+test('the tidy reach of a lane with no pinned picture is nothing at all', () => {
+  assert.equal(tidyLaneReach({ graph: GRAPH, nodes: [] }), 0,
+    'a board that never pinned anything stacks exactly as it always did');
+  assert.equal(tidyLaneReach({ graph: GRAPH,
+    nodes: denseLane(200).map((n) => ({ ...n, visible: false })) }), 0,
+  'and a lane whose pictures are all CLOSED reserves nothing either');
+});
+
+test('tidyLaneRows writes every visible picture exactly once', () => {
+  const nodes = denseLane(200);
+  const { rows } = tidyLaneRows({ graph: GRAPH, nodes });
+  const ids = rows.map((r) => r.imageId);
+  assert.equal(new Set(ids).size, ids.length, 'no picture is written twice');
+  // Strips are moved by their ANCHOR alone; the loose ones are each placed.
+  const anchors = [200, 206, 210, 213];
+  const loose = nodes.filter((n) => !n.groupId).map((n) => n.imageId);
+  for (const id of [...anchors, ...loose]) assert.ok(ids.includes(id), `${id} was placed`);
+  assert.equal(rows.length, anchors.length + loose.length);
+});
+
+test('tidyLaneRows is deterministic — the same lane twice gives the same board', () => {
+  const nodes = denseLane(200);
+  const key = (list) => [...list].sort((a, b) => a.imageId - b.imageId)
+    .map((r) => [r.imageId, r.x, r.y, r.w, r.h]);
+  assert.deepEqual(
+    key(tidyLaneRows({ graph: GRAPH, nodes: [...nodes].reverse() }).rows),
+    key(tidyLaneRows({ graph: GRAPH, nodes }).rows));
+});
+
+/* ── The lane stack, during a drag ───────────────────────────────────────────
+   Reported as "I cannot bring the top node down without bringing the bottom one
+   down too": a pinned picture dragged out of a strip in the FIRST lane, and the
+   whole floor below spreads apart while the hand is still moving.
+
+   `tidyLaneReach` is position-independent, and these tests do not doubt it —
+   the first one pins exactly that. But it is not membership-independent, and a
+   picture on its way out of a strip changes the membership on every frame: the
+   strip loses a member and the contact-sheet band gains one, so the room the
+   stack reserves moves under the hand. Hence the split the rest of these drive:
+   the REACH follows the gesture, the STACK is measured on the resting rows. */
+
+const dragLane = () => {
+  const mk = (id, x, y, w, h, extra = {}) => ({
+    imageId: id, x, y, w, h, visible: true,
+    image: { record_id: 'r1', step: id * 100, aspect: '1:1' }, ...extra,
+  });
+  return [
+    mk(11, 40, 20, 200, 200, { groupId: 'g11', groupPos: 0 }),
+    mk(12, 40, 20, 200, 200, { groupId: 'g11', groupPos: 1 }),
+    mk(13, 40, 20, 200, 200, { groupId: 'g11', groupPos: 2 }),
+  ];
+};
+
+// Mid-gesture, `imagesByLane` gives the dragged member the drag box — and once
+// it clears the strip that box is its OWN remembered size, three times the slot
+// it had in the band (LineageCanvas: the "leaving" preview).
+const leavingList = (nodes) => nodes.map((n) => (n.imageId === 11
+  ? { ...n, x: 40, y: 720, w: 620, h: 620 } : n));
+
+test('tidyLaneReach ignores where a picture SITS', () => {
+  const nodes = dragLane();
+  const moved = nodes.map((n) => (n.imageId === 11 ? { ...n, x: 900, y: 4000 } : n));
+  assert.equal(tidyLaneReach({ graph: GRAPH, nodes: moved }),
+    tidyLaneReach({ graph: GRAPH, nodes }));
+});
+
+test('tidyLaneReach is NOT membership-independent — which is why the stack '
+  + 'must not be fed the gesture', () => {
+  const nodes = dragLane();
+  // Not a bug in this function: a lane really does need different room once a
+  // picture has left its strip. Asserted so the reason the fix lives in
+  // `laneStackEntries` rather than here stays on the record.
+  assert.notEqual(tidyLaneReach({ graph: GRAPH, nodes: leavingList(nodes) }),
+    tidyLaneReach({ graph: GRAPH, nodes }));
+});
+
+test('a drag moves NO lane below it, however far it goes', () => {
+  const resting = { 1: dragLane(), 2: [] };
+  const placed = [
+    { datasetId: 1, graph: GRAPH },
+    { datasetId: 2, graph: GRAPH },
+  ];
+  const laneTops = (restingByLane, layoutByLane) => stackLanes(
+    laneStackEntries({ placed, layoutByLane, restingByLane }),
+  ).lanes.map((l) => l.graphY);
+
+  const atRest = laneTops(resting, {
+    1: layoutImageNodes(resting[1]), 2: [],
+  });
+  // The frame the report is about: member 11 dragged 700 units down and out of
+  // its strip. The layout follows it (detached, at its own size) — the stack
+  // must not.
+  const live = leavingList(resting[1]).map((n) => (n.imageId === 11
+    ? { ...n, groupId: null, groupPos: null } : n));
+  const mid = laneTops(resting, { 1: layoutImageNodes(live), 2: [] });
+
+  assert.deepEqual(mid, atRest, 'no lane moved while the picture was in flight');
+});
+
+test('the dragged picture still grows the BOX that ✦ Fit and 📷 Export frame', () => {
+  const resting = { 1: dragLane(), 2: [] };
+  const placed = [{ datasetId: 1, graph: GRAPH }, { datasetId: 2, graph: GRAPH }];
+  const live = leavingList(resting[1]).map((n) => (n.imageId === 11
+    ? { ...n, groupId: null, groupPos: null } : n));
+  const world = stackLanes(laneStackEntries({
+    placed, restingByLane: resting, layoutByLane: { 1: layoutImageNodes(live), 2: [] },
+  }));
+  const still = stackLanes(laneStackEntries({
+    placed, restingByLane: resting, layoutByLane: { 1: layoutImageNodes(resting[1]), 2: [] },
+  }));
+  assert.ok(world.height > still.height,
+    'a picture dragged below its lane is still reachable, framed and exported');
+});
+
+test('moving a RUN CARD down moves no dataset below it — during OR after', () => {
+  /* Two reports, one cause. First: "if I take a dataset node and drag it down,
+     all the dataset nodes below come down with it". Then, after freezing it for
+     the gesture only: "…which creates space for nothing" — a card DROPPED low
+     left its lane permanently taller, so the next dataset stayed pushed down
+     with dead board between them. The stack must therefore ignore the
+     arrangement entirely, not merely ignore it while a finger is down. */
+  const auto = [
+    { datasetId: 1, graph: GRAPH },
+    { datasetId: 2, graph: GRAPH },
+    { datasetId: 3, graph: GRAPH },
+  ];
+  const arranged = (h) => [
+    { datasetId: 1, graph: { ...GRAPH, height: h } },
+    { datasetId: 2, graph: GRAPH },
+    { datasetId: 3, graph: GRAPH },
+  ];
+  const laneTops = (live) => stackLanes(laneStackEntries({
+    placed: live, stackPlaced: auto, layoutByLane: {}, restingByLane: {},
+  })).lanes.map((l) => l.graphY);
+
+  const atRest = laneTops(auto);
+  // 700 units down: mid-gesture and, identically, once dropped and stored.
+  assert.deepEqual(laneTops(arranged(GRAPH.height + 700)), atRest,
+    'a dataset below moved while the card above was still under the hand');
+  assert.deepEqual(laneTops(arranged(GRAPH.height + 700)), atRest,
+    'the gap survived the drop — the lane below stayed pushed away');
+});
+
+test('the moved run card still grows the BOX that ✦ Fit and 📷 Export frame', () => {
+  const auto = [{ datasetId: 1, graph: GRAPH }, { datasetId: 2, graph: GRAPH }];
+  const arranged = [
+    { datasetId: 1, graph: { ...GRAPH, height: GRAPH.height + 700 } },
+    { datasetId: 2, graph: GRAPH },
+  ];
+  const box = (p) => stackLanes(laneStackEntries({
+    placed: p, stackPlaced: auto, layoutByLane: {}, restingByLane: {},
+  })).height;
+  assert.ok(box(arranged) > box(auto),
+    'a card parked below its lane must still be framed and exported');
+});
+
+test('without stackPlaced the entries are what they always were', () => {
+  // A caller that never arranges anything cannot tell this change happened.
+  const placed = [{ datasetId: 1, graph: GRAPH }];
+  const withOut = laneStackEntries({ placed, layoutByLane: {}, restingByLane: {} });
+  const withSame = laneStackEntries({
+    placed, stackPlaced: placed, layoutByLane: {}, restingByLane: {},
+  });
+  assert.deepEqual(withOut, withSame);
+  assert.equal(withOut[0].height, GRAPH.height);
+});
+
+test('✦ Tidy up spends WIDTH, so a lane keeps its own height', () => {
+  /* The room a tidied lane needs under its tree is room the dataset below it
+     gets pushed away by — permanently, and whether or not the button is ever
+     pressed. Measured before this changed, on a 150-unit tree: one pinned
+     picture reserved 518 units and two reserved 862. Tidy up therefore lays its
+     strips and its contact sheet to the RIGHT, wrapping into a new column
+     rather than a seventh row. */
+  const graph = { nodes: [card(1, 22, 22, [1000])], edges: [], width: 700, height: 150 };
+  const pic = (id, i) => ({ imageId: id, x: 40 + i * 340, y: 900, w: 320, h: 320,
+    visible: true, image: { record_id: 1, step: 1000 * (i + 1) } });
+
+  const reachOf = (n) => tidyLaneReach({
+    graph, nodes: Array.from({ length: n }, (_, i) => pic(i + 1, i)),
+  });
+  assert.ok(reachOf(8) <= reachOf(1) + 1,
+    'the eighth picture made the lane taller — the band is still stacking down');
+  assert.ok(reachOf(4) < 500, `four pictures still reserve ${reachOf(4)} units`);
+
+  // …and they really are out to the RIGHT of the cards, not under them.
+  const rightOfCards = Math.max(...graph.nodes.map((n) => n.x + CARD_W));
+  const { rows } = tidyLaneRows({ graph, nodes: [pic(1, 0), pic(2, 1), pic(3, 2)] });
+  assert.ok(rows.every((r) => r.x >= rightOfCards),
+    'a tidied picture landed under the tree instead of beside it');
+});
+
+test('a fresh 📌 batch still hangs UNDER the lineage that made it', () => {
+  // The other half of the same decision: a contact sheet of a run's outputs
+  // reads under that run. Only ✦ Tidy up asks for the sideways layout.
+  const graph = { nodes: [card(1, 22, 22, [1000])], edges: [], width: 700, height: 150 };
+  const images = [1, 2, 3].map((i) => ({ id: i, record_id: 1, step: 1000 * i }));
+  const under = placeImageBatch({ graph, images, max: 3 });
+  assert.ok(under.placed.every((p) => p.y >= graph.height),
+    'the pin batch moved sideways — that is the tidy layout, not this one');
 });

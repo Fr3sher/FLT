@@ -37,7 +37,9 @@ export default function CanvasRunTracker({ run, targets, onStop, onResume, onOpe
 
   return (
     <div data-testid="canvas-run-tracker" role="status"
-      className={'mb-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border px-2.5 py-1.5 text-[0.6875rem] ' + tone}>
+      // No bottom margin: the board's overlay owns the gap between its rows, and
+      // this bar now sits INSIDE an opaque pill that provides its own padding.
+      className={'flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border px-2.5 py-1.5 text-[0.6875rem] ' + tone}>
       {working ? (
         <span aria-hidden className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-indigo-400/40 border-t-indigo-400" />
       ) : (

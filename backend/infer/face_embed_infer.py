@@ -8,6 +8,7 @@ Protocol (same family as face_score_infer.py):
   stdin  : {"images": [abs paths], "models_root": path|null,
             "cache": abs path to a .npz|null, "threshold": 0.45,
             "device": "cpu"|"cuda", "require_yaw": bool,
+            "regate_too_small": bool,
             "groups": [{"name": str, "images": [abs paths]}]  # OPTIONAL}
   stdout : ONE JSON line {"ok": bool,
             "results": {path: {state, det, bbox_frac, yaw|null}},
@@ -17,16 +18,42 @@ Protocol (same family as face_score_infer.py):
             drive the UI progress bar).
 
 Embeddings are CACHED in the .npz (parallel arrays paths/embs/states/dets/
-bfracs/yaws/sigs/hashes) and written incrementally every CACHE_EVERY images — killing the
+bfracs/yaws/bpx/sigs/hashes) and written incrementally every CACHE_EVERY images — killing the
 pass mid-way loses at most that slice, and re-clustering at another threshold is
 then near-instant.
 
-``yaws`` is the newest array and every cache written before it exists lacks it.
-Those entries load with yaw = NaN and are reported as ``yaw: null`` — "not
-measured", never 0.0, which would read as a perfectly frontal face. ``require_yaw``
-asks for those entries to be RE-DETECTED (the angle is not recoverable from the
-stored embedding); it is what the app's opt-in ⤢ backfill sets, and it is off by
-default so an ordinary resume never turns into hours of re-detection.
+``yaws`` and ``bpx`` were added after the fact and every cache written before
+each of them lacks it. Those entries load with NaN — for the yaw, reported as
+``yaw: null`` ("not measured", never 0.0, which would read as a perfectly frontal
+face); for ``bpx``, the pixel size of the face this entry's verdict was taken on.
+Both are ADDITIVE: nobody ever has to re-embed a bank because a new number
+joined the tuple.
+
+Two OPT-IN flags ask for cached entries to be RE-DETECTED, because neither
+number is recoverable from a stored embedding. Both are off by default, so an
+ordinary resume never turns into hours of re-detection:
+
+  * ``require_yaw`` — entries with no measured angle. It is what the app's ⤢
+    backfill sets.
+  * ``regate_too_small`` — entries a PRE-``bpx`` build filed as ``too_small``.
+    Their verdict came from the old gate, a fraction of the image AREA, which
+    dropped most faces in an ordinary photo library (see FACE_PX_MIN below);
+    the pixel size that would settle them under the new floor was never stored
+    and CANNOT be recomputed from the fraction alone (the image dimensions are
+    not in the cache either), so the only honest answer is to look again.
+    Deliberately narrow: only ``too_small`` entries with no ``bpx`` qualify.
+    Legacy entries under any other state keep the verdict they hold — the new
+    floor exists to ADD faces to their person, never to demote a face that
+    already clusters.
+
+Update path for a bank that was scanned before this floor existed: a re-run of
+👥 Group by person re-detects NOTHING by itself. ``_needs_work``/``_is_stale``
+only reach an image whose bytes changed (stat signature + SHA-256), so every
+already-cached verdict — including every old ``too_small`` — is returned as-is;
+images ADDED to the bank, or edited, get the new floor immediately, and so does
+any bank scanned for the first time. Freeing the faces an old scan skipped
+therefore takes a caller passing ``regate_too_small``; nothing in the app sets
+it yet (the ⤢ backfill is the shape that action would take).
 
 Clustering = union-find over cosine ≥ threshold on the
 L2-normed embeddings of the SCORABLE faces (biggest face per image — a group
@@ -40,7 +67,24 @@ import os
 import sys
 
 CACHE_EVERY = 50
-DET_MIN, BBOX_MIN, YAW_MAX = 0.50, 0.06, 40.0   # same gates as face_score_infer
+# Detection confidence and head-turn gates — the same values face_score_infer
+# uses. Its SIZE gate is deliberately no longer the same: that pass answers
+# "is this face usable for TRAINING", this one answers "is this face
+# identifiable", and those are different questions about the same pixels.
+DET_MIN, YAW_MAX = 0.50, 40.0
+# Identity size floor, in ABSOLUTE PIXELS on the SHORT side of the detected box.
+# It used to be BBOX_MIN = 0.06, a fraction of the image AREA (≈25% of the
+# linear dimension), which made identifiability depend on the camera rather than
+# on the face: the same 300 px head passes on a 1 Mpx photo and fails on a
+# 24 Mpx one. Pointed at an ordinary photo library — full-body shots, groups,
+# scenes — that gate sent almost every face to 'too_small', so it never got an
+# embedding and never joined its person.
+# 64 px is where the measurement itself stops meaning anything: ArcFace
+# (antelopev2) recognises from a 112x112 aligned crop, so a face under ~64 px is
+# upscaled by more than 2x into the model and its embedding drifts far enough to
+# merge different people. Below the floor the answer would be noise; above it,
+# a small face is merely a small face.
+FACE_PX_MIN = 64.0
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bank_image_guard import read_validated_bank_image  # noqa: E402
@@ -100,9 +144,10 @@ def _file_hash(path):
 
 
 def _load_cache(path):
-    """{path: (state, det, bbox_frac, emb, yaw, sig)}. A cache written before the yaw
-    array existed loads with yaw = NaN — additive, so no user ever has to
-    re-embed a bank just because a new number was added to the tuple."""
+    """{path: (state, det, bbox_frac, emb, yaw, sig, hash, face_px)}. A cache
+    written before the yaw or the bpx array existed loads that slot as NaN —
+    additive, so no user ever has to re-embed a bank just because a new number
+    was added to the tuple."""
     import numpy as np
     out = {}
     if not path or not os.path.isfile(path):
@@ -112,6 +157,7 @@ def _load_cache(path):
             paths, states = z['paths'], z['states']
             embs, dets, bfracs = z['embs'], z['dets'], z['bfracs']
             yaws = z['yaws'] if 'yaws' in z.files else None
+            bpx = z['bpx'] if 'bpx' in z.files else None
             sigs = z['sigs'] if 'sigs' in z.files else None
             hashes = z['hashes'] if 'hashes' in z.files else None
             if (hashes is not None
@@ -125,7 +171,8 @@ def _load_cache(path):
                 digest = b''
             out[str(p)] = (states[i], float(dets[i]), float(bfracs[i]), embs[i],
                            float(yaws[i]) if yaws is not None else float('nan'),
-                           str(sigs[i]) if sigs is not None else '', digest)
+                           str(sigs[i]) if sigs is not None else '', digest,
+                           float(bpx[i]) if bpx is not None else float('nan'))
     except Exception as e:  # noqa: BLE001 — a corrupt cache = recompute, never fatal
         _log(f'[embed] cache unreadable, recomputing: {e}')
         return {}
@@ -149,6 +196,7 @@ def _save_cache(path, cache):
         dets=np.array([cache[p][1] for p in paths], dtype='float32'),
         bfracs=np.array([cache[p][2] for p in paths], dtype='float32'),
         yaws=np.array([cache[p][4] for p in paths], dtype='float32'),
+        bpx=np.array([_cache_px(cache[p]) for p in paths], dtype='float32'),
         embs=np.stack([cache[p][3] for p in paths]).astype('float32'),
         sigs=np.array([_cache_sig(cache[p]) for p in paths]),
         hashes=np.frombuffer(b''.join(
@@ -184,6 +232,33 @@ def _cache_sig(entry):
 def _cache_hash(entry):
     value = entry[6] if len(entry) > 6 else b''
     return value if isinstance(value, bytes) and len(value) == 32 else b''
+
+
+def _cache_px(entry):
+    """Short side, in pixels, of the face this entry's verdict was taken on —
+    NaN for an entry cached before the size was stored ("not measured", and NOT
+    something bbox_frac can be back-solved into: the image dimensions it was
+    divided by are not in the cache)."""
+    return float(entry[7]) if len(entry) > 7 else float('nan')
+
+
+def _verdict(det, face_px, yaw):
+    """The state of one detected face.
+
+    ``face_px`` is the SHORT side of the detected box in pixels, measured on
+    whatever image the detector was handed. The padding-rescue path needs no
+    correction here: cv2.copyMakeBorder ADDS pixels, it does not rescale them,
+    so a face keeps its pixel size in padded coordinates — unlike bbox_frac,
+    which has to be divided back by the padded/original area ratio to stay a
+    fraction of the ORIGINAL image."""
+    if det < DET_MIN:
+        return 'low_det'
+    if not (face_px >= FACE_PX_MIN):     # NaN (no size) reads as too small
+        return 'too_small'
+    # No pose at all must not gate: NaN is "not measured", not a turned head.
+    if abs(0.0 if yaw != yaw else yaw) > YAW_MAX:
+        return 'extreme_pose'
+    return 'scorable'
 
 
 def _is_stale(path, entry):
@@ -258,6 +333,9 @@ def main() -> int:
     # Opt-in only: re-detect the entries a pre-yaw build cached, because the
     # angle cannot be recovered from a stored embedding. See the module docstring.
     require_yaw = bool(req.get('require_yaw'))
+    # Opt-in only, and narrow: re-detect the entries a pre-bpx build filed as
+    # 'too_small' under the old area-fraction gate. See the module docstring.
+    regate_too_small = bool(req.get('regate_too_small'))
 
     used_gpu = False   # set when the model actually loads on CUDA below
     # Claim any embedding work a previous run finished but could not rename into
@@ -270,7 +348,14 @@ def main() -> int:
             return True
         if _is_stale(p, cache[p]):
             return True
-        return require_yaw and not (cache[p][4] == cache[p][4])   # NaN test
+        entry = cache[p]
+        if require_yaw and entry[4] != entry[4]:                 # NaN test
+            return True
+        # A legacy 'too_small' is the ONLY verdict the pixel floor may overturn,
+        # and only while no pixel size was ever stored for it. Everything else
+        # keeps the state it holds.
+        px = _cache_px(entry)
+        return regate_too_small and str(entry[0]) == 'too_small' and px != px
 
     todo = [p for p in images if _needs_work(p)]
     _write_count(cache_path, len(images) - len(todo))
@@ -338,7 +423,7 @@ def main() -> int:
                 img = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if img is None:
                     result = ('unreadable', 0.0, 0.0, zero, float('nan'),
-                              signature, payload_hash)
+                              signature, payload_hash, float('nan'))
                 else:
                     h, w = img.shape[:2]
                     f = biggest(app.get(img))
@@ -351,10 +436,16 @@ def main() -> int:
                         scale = 1.0
                     if f is None:
                         result = ('no_face', 0.0, 0.0, zero, float('nan'),
-                                  signature, payload_hash)
+                                  signature, payload_hash, float('nan'))
                     else:
-                        area = (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])
-                        bbox_frac = float(area / (w * h) / scale)
+                        side_w = float(f.bbox[2] - f.bbox[0])
+                        side_h = float(f.bbox[3] - f.bbox[1])
+                        # bbox_frac stays a fraction of the ORIGINAL image (the
+                        # /scale undoes the padding rescue) — it is still stored
+                        # and still read downstream. It is only no longer the
+                        # thing the size VERDICT is taken on.
+                        bbox_frac = float(side_w * side_h / (w * h) / scale)
+                        face_px = min(side_w, side_h)
                         det = float(f.det_score)
                         # The pose estimate: kept BOTH as the 'extreme_pose'
                         # gate (its original and only use) and, now, as a stored
@@ -363,18 +454,11 @@ def main() -> int:
                         # 0.0, which would claim a perfectly frontal face.
                         pose = getattr(f, 'pose', None)
                         yaw = float(pose[1]) if pose is not None else float('nan')
-                        gate = 0.0 if yaw != yaw else yaw
-                        state = 'scorable'
-                        if det < DET_MIN:
-                            state = 'low_det'
-                        elif bbox_frac < BBOX_MIN:
-                            state = 'too_small'
-                        elif abs(gate) > YAW_MAX:
-                            state = 'extreme_pose'
+                        state = _verdict(det, face_px, yaw)
                         result = (state, round(det, 3), round(bbox_frac, 4),
                                   f.normed_embedding.astype('float32'),
                                   yaw if yaw != yaw else round(yaw, 2), signature,
-                                  payload_hash)
+                                  payload_hash, round(face_px, 1))
                 # Inference may be much slower than the validated read.  Commit
                 # its local result only while the live path still identifies
                 # the bytes captured above.
@@ -396,7 +480,7 @@ def main() -> int:
                     uncached_changed += 1
                 else:
                     cache[p] = ('error', 0.0, 0.0, zero, float('nan'), signature,
-                                payload_hash)
+                                payload_hash, float('nan'))
                 _log(f'[embed] {i}/{len(todo)} ERROR {e}')
                 continue
             finally:
@@ -423,7 +507,8 @@ def main() -> int:
 
     results = {}
     for p in images:
-        entry = cache.get(p) or ('error', 0.0, 0.0, None, float('nan'), '', b'')
+        entry = cache.get(p) or ('error', 0.0, 0.0, None, float('nan'), '', b'',
+                                 float('nan'))
         state, det, bfrac, _emb, yaw = entry[:5]
         digest = _cache_hash(entry)
         results[p] = {'state': str(state), 'det': float(det), 'bbox_frac': float(bfrac),

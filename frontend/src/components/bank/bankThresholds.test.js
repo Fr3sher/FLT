@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -9,7 +13,7 @@ import {
   rerunFor, resetAllEdits, thresholdByField, thresholdsInGroup,
 } from './bankThresholds.js';
 
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 const panel = fs.readFileSync(new URL('./BankThresholdsPanel.jsx', import.meta.url), 'utf8');
 const captioning = fs.readFileSync(
   new URL('../settings/CaptioningSection.jsx', import.meta.url), 'utf8');
@@ -276,8 +280,19 @@ test('an occupied-bank refusal is reworded ONCE, for every bank action', () => {
   // ↻ re-runs, 🗑 Delete rejected, ⬆ Promote, 🚀 Launch all). Rewording the 409
   // there is what stops the server sentence reaching a toast anywhere in the
   // bank — a per-button fix would have left eleven other buttons raw.
-  assert.match(ws, /busyRefusal\(\{ kind, activity: payload\?\.activity \}\)/);
+  // The refusal reads the LIVE registry (/activity — instant), not the
+  // ~25-second payload: a 409 is proof the page's picture was stale, and the
+  // fetch it goes through (adoptActivity) also merges the answer into the
+  // payload, which is what makes the progress bar the sentence points at
+  // actually appear. `fallback` keeps the last snapshot for an offline read.
+  assert.match(ws,
+    /busyRefusalLive\(\{ kind, fetchActivity: adoptActivity,\s*fallback: payload\?\.activity \}\)/);
   assert.match(ws, /e\?\.status === 409 && kind/);
+  // …and a 202 adopts the live snapshot BEFORE the heavy payload refresh: the
+  // job is running right now, the dashboard it rides in can be 25 s away, and
+  // the bar must not wait for it. Same lookup, so still no fourth mechanism.
+  assert.match(ws, /await adoptActivity\(\)\s+await refreshPayload\(\)/);
+  assert.match(ws, /apiFetch\(`\/api\/bank\/\$\{bankId\}\/activity`, \{ background: true \}\)/);
   // The route has to label the refusal for that to be possible: the 409 often
   // lands before the first progress poll, so its body is the only thing that
   // knows which pass is in the way.
@@ -312,8 +327,15 @@ test('the preview endpoint exists and does not save anything', () => {
   assert.match(routes, /@bp\.post\('\/bank\/<int:bank_id>\/flag-preview'\)/);
   const svc = fs.readFileSync(
     new URL('../../../../backend/app/services/image_bank_service.py', import.meta.url), 'utf8');
-  const body = svc.slice(svc.indexOf('def flag_preview'), svc.indexOf('def _load_pipeline_report'));
+  // Cut at the NEXT top-level def, not at a named neighbour: pinning the end to
+  // whichever function happened to follow meant that inserting anything between
+  // them silently widened the slice, and this test then failed on a commit that
+  // was not in flag_preview at all.
+  const start = svc.indexOf('def flag_preview');
+  const after = svc.slice(start + 1).search(/\n(?:def |@)/);
+  const body = svc.slice(start, after === -1 ? undefined : start + 1 + after);
   assert.ok(body.length > 100, 'found flag_preview');
+  assert.doesNotMatch(body, /\ndef _load_json_column/, 'the slice stops at flag_preview');
   assert.doesNotMatch(body, /db\.session\.(commit|add|delete)|save_config/,
     'the preview writes nothing');
 });
@@ -367,15 +389,15 @@ test('only the read-time thresholds offer a live count', () => {
 
 test('the effect line compares candidate to current, and stays silent when it cannot', () => {
   const blur = thresholdByField('sharpness_min');
-  // Thousands are grouped with the READER's separator (a French browser writes
-  // "1 240", a German one "1.240"), so the assertion normalises it away instead
-  // of pinning a locale. These are flag counts, never fractional, so a literal
-  // '.' is always a grouping separator here, not a decimal point.
-  const SEPS = [',', '.', 160, 8239, 8201].map((c) => (typeof c === 'number' ? String.fromCharCode(c) : c));
-  const plain = (s) => (s === null ? null : [...s].filter((c) => !SEPS.includes(c)).join(''));
-  assert.equal(plain(effectLine(blur, { blur: 3019 }, { blur: 1240 })), '1240 → 3019 images flagged ↑');
-  assert.equal(plain(effectLine(blur, { blur: 900 }, { blur: 1240 })), '1240 → 900 images flagged ↓');
-  assert.equal(plain(effectLine(blur, { blur: 1240 }, { blur: 1240 })), '1240 images flagged');
+  // Counts follow the reader's locale. Build the expected strings from that same
+  // contract instead of trying to enumerate every grouping character ICU can use.
+  const n = (value) => Number(value).toLocaleString();
+  assert.equal(effectLine(blur, { blur: 3019 }, { blur: 1240 }),
+    `${n(1240)} → ${n(3019)} images flagged ↑`);
+  assert.equal(effectLine(blur, { blur: 900 }, { blur: 1240 }),
+    `${n(1240)} → ${n(900)} images flagged ↓`);
+  assert.equal(effectLine(blur, { blur: 1240 }, { blur: 1240 }),
+    `${n(1240)} images flagged`);
   assert.equal(effectLine(blur, { blur: 12 }, null), '12 images flagged');
   // No preview yet, or a threshold with no flag: say nothing rather than 0.
   assert.equal(effectLine(blur, null, { blur: 1240 }), null);
