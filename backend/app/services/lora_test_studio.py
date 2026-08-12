@@ -3082,7 +3082,9 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
         key = (did, fam)
         if key not in allowed_cache:
             d = _ds(did)
-            allowed_cache[key] = {c['filename'] for c in list_test_checkpoints(d, fam)} if d else set()
+            allowed_cache[key] = {
+                _norm_rel(c['filename']) for c in list_test_checkpoints(d, fam)
+            } if d else set()
         return allowed_cache[key]
     # Classes du ComfyUI cible, lues UNE fois pour tout le resume → réécriture des nodes
     # à variantes (node 30 Krea) vers le nom réellement enregistré (cf. create_run).

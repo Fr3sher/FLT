@@ -1364,6 +1364,46 @@ def test_studio_payload_exposes_error_only_on_failed_cell(app):
         assert by_id[done.id]['error'] is None  # non-failed cells never leak an error
 
 
+def test_resume_run_matches_opposite_separator_whitelist(app, monkeypatch):
+    """A stored checkpoint remains resumable after crossing host path conventions."""
+    from app.config import LOCAL_USER
+    from app.models import LoraTestImage
+    from app.services import face_dataset_service as svc
+    from app.services import lora_test_studio as lts
+
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'Resume separators', 'resume_sep')
+        checkpoint = 'z image/lora_resume_sep_000001000.safetensors'
+        cell = LoraTestImage(
+            dataset_id=ds.id,
+            run_id='resume-separator-run',
+            checkpoint=checkpoint,
+            strength=1.0,
+            status='failed',
+        )
+        svc.db.session.add(cell)
+        svc.db.session.commit()
+
+        monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
+        monkeypatch.setattr(lts, '_active_run_count', lambda *_args: 0)
+        monkeypatch.setattr(
+            lts,
+            'list_test_checkpoints',
+            lambda _ds, _family=None: [
+                {'filename': r'z image\lora_resume_sep_000001000.safetensors'}
+            ],
+        )
+        monkeypatch.setattr(lts, '_target_node_classes', lambda: None)
+        monkeypatch.setattr(lts, 'get_zimage_models', lambda: [])
+        monkeypatch.setattr(lts, '_build_cell_workflow', lambda *_args, **_kwargs: {'1': {}})
+        monkeypatch.setattr(lts, '_enqueue_cell', lambda *_args, **_kwargs: 'resume-job')
+
+        result = lts.resume_run(LOCAL_USER, run_id=cell.run_id)
+
+        assert result == {'resumed': 1}
+        assert svc.db.session.get(LoraTestImage, cell.id).status == 'pending'
+
+
 def test_run_owned_and_owned_test_image_are_single_user_no_ops(app):
     """Checklist item 2: `_run_owned` always True, `_owned_test_image` drops the
     user comparison (single-user app, no cross-user ownership DB)."""

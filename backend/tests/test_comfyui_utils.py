@@ -231,7 +231,8 @@ def test_resolve_checkpoint_ckpt_name_unconfigured_falls_back_to_name(app):
     with app.app_context():
         assert resolve_checkpoint_ckpt_name('foo.safetensors') == 'foo.safetensors'
         assert resolve_checkpoint_ckpt_name('') == ''
-        assert resolve_checkpoint_ckpt_name('sdxl/foo.safetensors') == 'sdxl/foo.safetensors'  # already a relative path, kept verbatim
+        assert resolve_checkpoint_ckpt_name('sdxl/foo.safetensors') == \
+            os.path.join('sdxl', 'foo.safetensors')
 
 
 def test_api_address_has_default_even_when_unconfigured(app):
@@ -312,6 +313,21 @@ def test_inject_zimage_loras_rewires_consumer_and_respects_allowed():
     lora_node_id = [k for k, v in workflow.items() if v is lora_nodes[0]][0]
     # Consumer (node 7) must be rewired to point at the injected LoRA node, not node 1.
     assert workflow["7"]["inputs"]["model"] == [lora_node_id, 0]
+
+
+def test_inject_zimage_loras_matches_opposite_separator_whitelist():
+    workflow = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "z image/base.safetensors"}},
+        "7": {"class_type": "BasicScheduler", "inputs": {"model": ["1", 0]}},
+    }
+
+    injected = inject_zimage_loras(
+        workflow,
+        [{'filename': 'z image/l.safetensors', 'strength': 1.0}],
+        allowed={r'z image\l.safetensors'},
+    )
+
+    assert injected == 1
 
 
 def test_inject_zimage_loras_empty_allowed_injects_nothing():
