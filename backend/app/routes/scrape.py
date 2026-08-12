@@ -17,6 +17,7 @@ from io import BytesIO
 from pathlib import Path
 import hashlib
 import os
+import threading
 from time import time
 
 from flask import Blueprint, request, jsonify, Response
@@ -29,6 +30,36 @@ bp = Blueprint('scrape', __name__, url_prefix='/api')
 MAX_SCAN_PAGE = 50
 MAX_THUMB_BYTES = 12 * 1024 * 1024  # 12 MB
 _ALLOWED_THUMB_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'}
+
+# A scan-results grid asks for one thumbnail per tile and the frontend fires
+# them all at once; each is a live server-side fetch from Instagram's CDN. Firing
+# dozens concurrently trips Instagram's anti-bot rate limiter (429/403), which is
+# the usual cause of "thumbnails break and never load". Cap simultaneous upstream
+# fetches so the live ones get through, and remember which URLs FAILED for a
+# short window so reloading the grid doesn't re-hit Instagram for every dead tile
+# (which would rate-limit the live ones too).
+_UPSTREAM_SEMAPHORE = threading.BoundedSemaphore(6)
+_UPSTREAM_TIMEOUT = 15  # s per fetch (was 20)
+_FAIL_TTL = 90          # s
+_fail_cache = {}
+_fail_cache_lock = threading.Lock()
+
+
+def _is_failed(url):
+    with _fail_cache_lock:
+        ts = _fail_cache.get(url)
+        if ts is None:
+            return False
+        if time() - ts > _FAIL_TTL:
+            del _fail_cache[url]
+            return False
+        return True
+
+
+def _mark_failed(url):
+    with _fail_cache_lock:
+        _fail_cache[url] = time()
+
 
 # The CDN URL behind /scrape/thumb is often a FULL-RESOLUTION file (an Instagram
 # CDN link is a ~1-4 MB JPEG, not a thumbnail). Serving it unchanged means every
@@ -207,23 +238,31 @@ def scrape_thumb():
         from curl_cffi import requests as cf_requests
     except ImportError:
         return jsonify({'error': 'curl_cffi unavailable'}), 503
+    if _is_failed(url):
+        return jsonify({'error': 'thumbnail unavailable (cached)'}), 502
     host = urlparse(url).hostname or ''
     try:
         # allow_redirects=False: only the ALREADY-validated host is fetched. A 3xx
         # toward an internal IP would bypass the upstream SSRF guard (TOCTOU/redirect).
-        r = cf_requests.get(url, impersonate='chrome', timeout=20, stream=True,
-                            allow_redirects=False,
-                            headers={'Referer': f'https://{host}/', 'Accept': 'image/*,*/*'})
+        # The semaphore caps concurrent upstream hits so a big grid doesn't rate-limit
+        # itself off Instagram.
+        with _UPSTREAM_SEMAPHORE:
+            r = cf_requests.get(url, impersonate='chrome', timeout=_UPSTREAM_TIMEOUT,
+                                stream=True, allow_redirects=False,
+                                headers={'Referer': f'https://{host}/', 'Accept': 'image/*,*/*'})
     except Exception:
+        _mark_failed(url)
         return jsonify({'error': 'fetch failed'}), 502
     if 300 <= r.status_code < 400:
         try: r.close()
         except Exception: pass
+        _mark_failed(url)
         return jsonify({'error': 'redirect refused'}), 502
     ctype = (r.headers.get('content-type') or '').split(';')[0].strip().lower()
     if r.status_code != 200 or ctype not in _ALLOWED_THUMB_TYPES:
         try: r.close()
         except Exception: pass
+        _mark_failed(url)
         return jsonify({'error': 'unsupported type'}), 415
     data = bytearray()
     try:
