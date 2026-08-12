@@ -26,9 +26,9 @@ RUN chmod 755 /usr/local/bin/studio-api-entrypoint.sh
 ENV LDS_DATA_DIR=/data \
     LDS_CONFIG=/data/config.json \
     LDS_HOST=0.0.0.0 \
-    LDS_PORT=5050 \
+    LDS_PORT=5051 \
     LDS_AUTO_PORT=0 \
     LDS_DOCKER_COMFY_MODE=none
-EXPOSE 5050
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5050/api/health', timeout=3).read()"]
+EXPOSE 5051
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5051/api/health', timeout=3).read()"]
 ENTRYPOINT ["/usr/local/bin/studio-api-entrypoint.sh"]

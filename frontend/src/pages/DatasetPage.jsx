@@ -3,17 +3,24 @@
  * generate Klein variations from a reference, import real photos, curate,
  * caption (Qwen3-VL), and export a training-ready ZIP.
  */
+import { lazy, Suspense } from 'react';
 import { useDataset } from '../hooks/useDataset';
 import DatasetListPanel from '../components/dataset/DatasetListPanel';
-import DatasetWorkspace from '../components/dataset/DatasetWorkspace';
 import VideoDatasetsPanel from '../components/videobank/VideoDatasetsPanel';
+// The workspace (and its heavy training/variation sub-tools) only renders once
+// a dataset is OPEN, so it is lazy-loaded: the /datasets landing (the library
+// list) never pays for its ~300 KB of training UI, and the initial bundle stays
+// small on slow links.
+const DatasetWorkspace = lazy(() => import('../components/dataset/DatasetWorkspace'));
 
 export default function DatasetPage() {
   const ds = useDataset();
   return (
     <div className="p-4 max-w-6xl mx-auto">
       {ds.currentId ? (
-        <DatasetWorkspace ds={ds} onBack={() => ds.setCurrentId(null)} />
+        <Suspense fallback={<div className="p-8 text-zinc-500">Loading workspace…</div>}>
+          <DatasetWorkspace ds={ds} onBack={() => ds.setCurrentId(null)} />
+        </Suspense>
       ) : (
         /* Full page width (max-w-6xl above): the library is a desktop-first
            browsing surface — more columns beat a narrower reading measure.

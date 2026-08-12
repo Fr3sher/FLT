@@ -33,7 +33,7 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - LDS_CONFIG=/data/config.json
       - LDS_HOST=0.0.0.0
-      - LDS_PORT=5050
+      - LDS_PORT=5051
       - LDS_DOCKER_HAS_COMFYUI=1
       - LDS_COMFYUI_API_URL=http://10.1.10.179:8188
       - LDS_COMFYUI_BASE_DIR=/home/timo/ComfyUI
