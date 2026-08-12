@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-12-snappier-loading',
+    date: '2026-08-12',
+    title: 'FLT opens fast even on a slow connection',
+    blurb:
+      'The app shell now loads in a fraction of the old time — pages load lazily as you need them instead of all at once, and the big bundled libraries are split so your browser caches the pieces it already has. The server also runs on a production web server that keeps slow connections from blocking the rest of the UI.',
+  },
+  {
     id: '2026-08-11-bank-rail-status-curate',
     date: '2026-08-11',
     title: 'The Bank puts its main gestures where your eyes are',
