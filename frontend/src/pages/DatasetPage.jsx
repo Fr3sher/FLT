@@ -4,6 +4,7 @@
  * caption (Qwen3-VL), and export a training-ready ZIP.
  */
 import { lazy, Suspense } from 'react';
+import LoadingScreen from '../components/common/LoadingScreen';
 import { useDataset } from '../hooks/useDataset';
 import DatasetListPanel from '../components/dataset/DatasetListPanel';
 import VideoDatasetsPanel from '../components/videobank/VideoDatasetsPanel';
@@ -18,7 +19,7 @@ export default function DatasetPage() {
   return (
     <div className="p-4 max-w-6xl mx-auto">
       {ds.currentId ? (
-        <Suspense fallback={<div className="p-8 text-zinc-500">Loading workspace…</div>}>
+        <Suspense fallback={<LoadingScreen label="Loading workspace…" />}>
           <DatasetWorkspace ds={ds} onBack={() => ds.setCurrentId(null)} />
         </Suspense>
       ) : (

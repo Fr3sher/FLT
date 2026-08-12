@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
+import LoadingScreen from './components/common/LoadingScreen'
 import { HashRouter, Routes, Route, Navigate, Outlet, NavLink, useLocation } from 'react-router'
 import { apiFetch, postJson } from './api/fetchClient'
 import { JobsProvider } from './context/JobsContext'
@@ -493,7 +494,7 @@ function AppInner() {
       </a>
       <HashRouter>
         <HelpModeProvider>
-        <Suspense fallback={<div className="flex h-svh items-center justify-center text-content-muted">Loading…</div>}>
+        <Suspense fallback={<LoadingScreen />}>
         <Routes>
           <Route element={<Shell />}>
             <Route path="/" element={<Navigate to="/datasets" replace />} />
