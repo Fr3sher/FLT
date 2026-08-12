@@ -157,6 +157,38 @@ if __name__ == '__main__':
     threading.Thread(target=_announce_when_ready, args=(url,),
                      kwargs={'open_browser': os.environ.get('LDS_OPEN_BROWSER') == '1'},
                      daemon=True).start()
-    app.run(debug=os.environ.get('FLASK_DEBUG', '0') == '1',
-            host=host,
-            port=port, threaded=True, use_reloader=False)
+
+    # Warm the capability import caches in the background so the FIRST real
+    # request doesn't eat the cold-start cost. probe() spawns several subprocess
+    # `import torch` probes against the ai-toolkit venv; the first one has to
+    # fault ~2 GB of torch DLLs from cold disk page-cache (~30 s). Running it
+    # once here, off the request path, means a user who connects right after a
+    # container restart gets a fast /api/capabilities instead of a 30 s wait.
+    # It shares this process's `_import_cache`, and probe() is a no-op if the
+    # cache is already warm (TTL 30 s) — so this never re-fires on later boots
+    # of the same process.
+    def _warm_capabilities():
+        try:
+            from app import capabilities
+            capabilities.probe()
+        except Exception:
+            pass  # warm-up is best-effort; a failed probe is never fatal
+
+    threading.Thread(target=_warm_capabilities, daemon=True).start()
+
+    if os.environ.get('FLASK_DEBUG', '0') == '1':
+        app.run(debug=True, host=host, port=port, threaded=True, use_reloader=False)
+    else:
+        try:
+            from waitress import serve
+        except Exception:
+            app.run(debug=False, host=host, port=port, threaded=True, use_reloader=False)
+        else:
+            # Production path: waitress (threaded, pure-Python) instead of
+            # Werkzeug's single-threaded dev server. The app keeps its in-memory
+            # state in a single process; waitress runs many threads against that
+            # same process, so nothing that relies on module-level state breaks.
+            # (queue_manager reads/writes are DB-backed via SystemState, so even
+            # multi-worker would be safe, but the threaded single-process model is
+            # the conservative choice.)
+            serve(app, host=host, port=port, threads=8, channel_timeout=120)
