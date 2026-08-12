@@ -196,6 +196,8 @@ raise SystemExit(2)
 
 
 def _copy_launcher_checkout(tmp_path: Path) -> Path:
+    if POWERSHELL is None:
+        pytest.skip("Windows PowerShell 5.1 is unavailable")
     checkout = tmp_path / "test neuf é avec espaces"
     for relative in LAUNCHER_FILES:
         source = REPO_ROOT / relative

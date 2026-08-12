@@ -281,10 +281,15 @@ def _ollama_binary() -> str:
     if os.name == 'nt':
         local = os.environ.get('LOCALAPPDATA')
         if local:
-            cand = Path(local).joinpath(*_OLLAMA_WIN_BINARY)
+            # os.path.join, not Path(): Path() picks WindowsPath/POSIXPath from
+            # os.name at call time, so a Windows-path test that fakes os.name='nt'
+            # on a POSIX box (or any mixed-layout caller) would try to build a
+            # WindowsPath and die with UnsupportedOperation. os.path follows the
+            # host but joins strings, which is all this probe needs.
+            cand = os.path.join(local, *_OLLAMA_WIN_BINARY)
             try:
-                if cand.is_file():
-                    return str(cand)
+                if os.path.isfile(cand):
+                    return cand
             except OSError:
                 pass
     return ''
@@ -1566,6 +1571,17 @@ _COMFY_ARGV_FLAGS = {'--output-directory': 'output_dir', '--input-directory': 'i
                      '--models-directory': 'models_dir'}
 
 
+def _is_absolute_anywhere(path) -> bool:
+    """Absolute on ANY platform, not just the host: a Windows drive path
+    (``D:\\comfy-in``) in ComfyUI's argv must be kept as an override even when
+    this app runs on Linux (os.path.isabs only knows the host's scheme)."""
+    path = str(path)
+    return os.path.isabs(path) or bool(_WINDOWS_ABS_RE.match(path))
+
+
+_WINDOWS_ABS_RE = __import__('re').compile(r'^[A-Za-z]:[\\/]|^\\\\')
+
+
 def parse_comfy_argv_dirs(argv) -> dict:
     """Extract the folder overrides ComfyUI was launched with from its own argv.
 
@@ -1590,7 +1606,7 @@ def parse_comfy_argv_dirs(argv) -> dict:
         if not value or (not inline and value.startswith('-')):
             continue
         try:
-            if not os.path.isabs(value):
+            if not _is_absolute_anywhere(value):
                 continue
         except (OSError, ValueError):
             continue

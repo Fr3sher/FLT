@@ -1,5 +1,7 @@
 import io
+import os
 import zipfile
+import pytest
 
 from PIL import Image
 
@@ -413,6 +415,8 @@ def test_delete_unknown_dataset_404(client):
     assert resp.status_code == 404
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                      reason='Windows file-sharing lock semantics (open handle blocks folder move)')
 def test_delete_dataset_locked_file_returns_actionable_409(app, client, monkeypatch):
     """A file still held open (antivirus scan of a just-cleaned image) must give a
     clear 409 toast, never a bare 500."""

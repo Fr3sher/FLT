@@ -50,8 +50,18 @@ def test_the_probe_discriminates(app, tmp_path):
     future refactor could silently restore the unbounded lookup and the test above
     would keep passing for a reason nobody checked."""
     from app.models import BankImage
+    # The ceiling is a property of the SQLite BUILD, not of the code: distros and
+    # the Python bundle compile SQLITE_MAX_VARIABLE_NUMBER differently (32766
+    # stock, 250000 on some). Probe the ACTUAL limit so the "unbounded IN past the
+    # ceiling raises" contract is pinned on whatever SQLite we are running, instead
+    # of failing on a build generous enough to accept the historical fixture size.
+    _conn = sqlite3.connect(':memory:')
+    try:
+        _limit = _conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
+    finally:
+        _conn.close()
     bank_id = _tiny_bank(app, tmp_path)
-    ids = list(range(1, _OVER_THE_CEILING + 1))
+    ids = list(range(1, _limit + 2))
     with app.app_context():
         with pytest.raises((sqlite3.OperationalError, Exception)) as excinfo:
             BankImage.query.filter(

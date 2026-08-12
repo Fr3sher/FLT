@@ -676,9 +676,16 @@ def test_resolve_merge_same_drive_still_works(monkeypatch):
     from app.services import zimage_convert as zc
     _patch_models_root(monkeypatch, r'C:\models')
     target = r'C:\models\unet\z image\merge.safetensors'
+    # The resolver runs on the HOST, so the joined path uses the host separator
+    # (os.sep), while the fixture spells `target` with Windows backslashes. Compare
+    # separator-insensitively so the confinement/join contract is pinned on either OS.
+    def _same(p):
+        return os.path.normpath(p).replace('\\', '/') == os.path.normpath(target).replace('\\', '/')
     monkeypatch.setattr(os.path, 'realpath', lambda p: os.path.normpath(p))
-    monkeypatch.setattr(os.path, 'isfile', lambda p: os.path.normpath(p) == target)
-    assert zc._resolve_merge(r'z image\merge.safetensors') == target
+    monkeypatch.setattr(os.path, 'isfile', _same)
+    got = zc._resolve_merge(r'z image\merge.safetensors')
+    assert got is not None
+    assert _same(got)
 
 
 def test_resolve_merge_confinement_rejects_traversal(monkeypatch):

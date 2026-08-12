@@ -962,10 +962,24 @@ CUSTOM_WEIGHTS_FAMILIES = ('sdxl', 'krea', 'flux', 'flux2klein')
 VAE_TE_OVERRIDE_FAMILIES = ('sdxl',)
 
 
+def _is_absolute_anywhere(path) -> bool:
+    """True for an absolute path on ANY platform, not just the host we run on.
+
+    A custom-weights value typed on Windows (``C:\\weights\\x.safetensors``)
+    must still be recognised as absolute when the app runs on Linux: os.path.isabs
+    only knows the host's drive scheme, but these values travel with the recipe,
+    not the host. UNC (``\\\\server``) counts too."""
+    path = str(path)
+    return os.path.isabs(path) or bool(_WINDOWS_ABS_RE.match(path))
+
+
+_WINDOWS_ABS_RE = re.compile(r'^[A-Za-z]:[\\/]|^\\\\')
+
+
 def _is_custom_weights(value) -> bool:
     """True when `value` is the opt-in custom-weights path (a free ABSOLUTE local
     path), as opposed to a ComfyUI-relative base/merge name or the official base."""
-    return bool(value) and os.path.isabs(str(value))
+    return bool(value) and _is_absolute_anywhere(str(value))
 
 
 def assert_trainable_base_file(path) -> dict:

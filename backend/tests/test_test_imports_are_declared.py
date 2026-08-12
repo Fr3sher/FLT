@@ -71,17 +71,26 @@ def _declared() -> set:
 
 def _repo_local() -> set:
     """Module names that resolve to a file or package IN this repo — sibling test
-    modules, helpers, and `scripts/` (which several suites append to sys.path)."""
+    modules, helpers, and `scripts/` (which several suites append to sys.path).
+
+    Virtualenv directories (.venv/venv/.tox) are skipped: a contributor's venv
+    sits under backend/ and installs THIRD-PARTY packages, so a bare rglob would
+    misread e.g. `safetensors` (installed in .venv) as a repo-local module."""
     out = set()
     for base in (_BACKEND, _ROOT / 'scripts'):
         if not base.exists():
             continue
         for path in base.rglob('*.py'):
+            if any(part in _VENV_DIRS for part in path.parts):
+                continue
             out.add(path.stem)
         for path in base.rglob('*'):
-            if path.is_dir():
+            if path.is_dir() and not any(part in _VENV_DIRS for part in path.parts):
                 out.add(path.name)
     return out
+
+
+_VENV_DIRS = {'.venv', 'venv', '.tox'}
 
 
 def _module_level_imports(tree):

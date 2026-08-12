@@ -3584,8 +3584,8 @@ def set_best_settings(user_id, dataset_id, checkpoint, strength,
     if not ds:
         raise ValueError('dataset not found')
     family = (family_of_lora(checkpoint) or getattr(ds, 'train_type', None) or 'zimage').lower()
-    allowed = {c['filename'] for c in list_test_checkpoints(ds, family)}
-    if checkpoint not in allowed:
+    allowed = {_norm_rel(c['filename']) for c in list_test_checkpoints(ds, family)}
+    if _norm_rel(checkpoint) not in allowed:
         raise ValueError('unknown checkpoint for this dataset')
     try:
         strength = round(float(strength), 2)

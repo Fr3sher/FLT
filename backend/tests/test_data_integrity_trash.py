@@ -446,6 +446,8 @@ def _lock_file(path):
     return open(path, 'rb')
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                      reason='Windows file-sharing lock semantics (open handle blocks rename)')
 def test_send_to_trash_locked_file_aborts_without_partial_copy(app, monkeypatch):
     from app.services import trash
 
@@ -494,6 +496,8 @@ def test_send_to_trash_retries_over_a_transient_lock(app, monkeypatch):
         assert not folder.exists()
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                      reason='Windows file-sharing lock semantics (open handle blocks rename)')
 def test_delete_dataset_locked_file_reports_instead_of_500(app, monkeypatch):
     from app.services import face_dataset_service as svc
     from app.services import trash

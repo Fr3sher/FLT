@@ -47,6 +47,17 @@ def _official_config() -> str | None:
     return g[0] if g else None
 
 
+def _is_absolute_anywhere(path) -> bool:
+    """Absolute on ANY platform, not just the host: a Windows drive path
+    (``C:\\...``) is a custom-weights value that must read as absolute even when
+    this app runs on Linux (os.path.isabs only knows the host's scheme)."""
+    path = str(path)
+    return os.path.isabs(path) or bool(_WINDOWS_ABS_RE.match(path))
+
+
+_WINDOWS_ABS_RE = __import__('re').compile(r'^[A-Za-z]:[\\/]|^\\\\')
+
+
 def _resolve_merge(z_model: str) -> str | None:
     """Chemin absolu du .safetensors ComfyUI depuis une valeur z_model
     (ex. 'z image\\bigLove_zt3.safetensors'). Anti path-traversal : refuse '..'
@@ -73,7 +84,7 @@ def _resolve_merge(z_model: str) -> str | None:
 
     Sans yaml, les racines sont exactement les deux dossiers historiques, dans le
     même ordre : la résolution est inchangée au bit près."""
-    if not z_model or os.path.isabs(z_model) or '..' in z_model.replace('\\', '/'):
+    if not z_model or _is_absolute_anywhere(z_model) or '..' in z_model.replace('\\', '/'):
         return None
     if not cfg.comfyui_dir('models'):
         return None

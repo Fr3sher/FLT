@@ -2296,13 +2296,14 @@ def inject_krea_loras(workflow, requested, allowed, unet_node="20", consumers=("
     Independent of the conditioning rebalance (node 30), on the prompt path."""
     if unet_node not in workflow or not isinstance(requested, list):
         return 0
+    allowed_norm = {_normalise_model_name(a) for a in allowed}
     prev = unet_node
     injected = 0
     for idx, item in enumerate(requested):
         if not isinstance(item, dict):
             continue
         fn = str(item.get("filename") or "")
-        if fn not in allowed:
+        if _normalise_model_name(fn) not in allowed_norm:
             continue
         try:
             strength = max(-2.0, min(20.0, float(item.get("strength", 1.0))))
@@ -2373,13 +2374,14 @@ def inject_zimage_loras(workflow, requested, allowed,
     of LoRAs injected; 0 leaves the workflow untouched."""
     if unet_node not in workflow or not isinstance(requested, list):
         return 0
+    allowed_norm = {_normalise_model_name(a) for a in allowed}
     prev = unet_node
     injected = 0
     for idx, item in enumerate(requested):
         if not isinstance(item, dict):
             continue
         fn = str(item.get("filename") or "")
-        if fn not in allowed:
+        if _normalise_model_name(fn) not in allowed_norm:
             continue
         try:
             # Négatif autorisé (inverse le concept, plage UI -2..2) ; max 6 conservé
@@ -2419,13 +2421,14 @@ def inject_sdxl_loras(workflow, requested, allowed, anchor="25"):
                  if isinstance(node, dict)
                  and (node.get("inputs", {}).get("model") == [anchor, 0]
                       or node.get("inputs", {}).get("clip") == [anchor, 1])]
+    allowed_norm = {_normalise_model_name(a) for a in allowed}
     prev = anchor
     injected = 0
     for idx, item in enumerate(requested):
         if not isinstance(item, dict):
             continue
         fn = str(item.get("filename") or "")
-        if fn not in allowed:
+        if _normalise_model_name(fn) not in allowed_norm:
             continue
         try:
             # Négatif autorisé (plage UI -2..2) ; max 6 conservé (rétro-compat).
