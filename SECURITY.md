@@ -14,7 +14,7 @@ Exposing the app to other machines is **your** decision and **out of the default
 
 **Please don't open a public GitHub issue for a security problem.** Report it privately instead:
 
-1. **Preferred — GitHub private vulnerability reporting.** Go to the repo's **[Security tab](https://github.com/perfectgf/lora-dataset-studio/security) → Report a vulnerability**. This opens a private advisory visible only to the maintainers, where we can discuss and coordinate a fix and, if warranted, a CVE.
+1. **Preferred — GitHub private vulnerability reporting.** Go to the repo's **[Security tab](https://github.com/Fr3sher/FLT/security) → Report a vulnerability**. This opens a private advisory visible only to the maintainers, where we can discuss and coordinate a fix and, if warranted, a CVE.
 2. **Alternative — Discord.** If you can't use GitHub advisories, send a **direct message to a moderator** on the [Discord server](https://discord.gg/j6hnJBFtXE) rather than posting details in a public channel.
 
 Helpful things to include: affected version (from **Settings → Maintenance**, or the diagnostic report), how to reproduce, the impact you think it has, and any proof-of-concept. Please **don't put secrets, real API keys or personal data** in the report.

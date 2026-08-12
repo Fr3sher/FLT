@@ -25,7 +25,7 @@ export const DOCKER_UPDATE_COMMANDS = Object.freeze([
 ])
 
 export const DOCKER_UPDATE_GUIDE_URL =
-  'https://github.com/perfectgf/lora-dataset-studio#option-4--docker-gpu--comfyui'
+  'https://github.com/Fr3sher/FLT#option-4--docker-gpu--comfyui'
 
 export function isDockerInstall(s) {
   return s?.install_mode === 'docker'
@@ -41,7 +41,7 @@ export const PINOKIO_UPDATE_STEPS = Object.freeze([
 ])
 
 export const PINOKIO_UPDATE_GUIDE_URL =
-  'https://github.com/perfectgf/lora-dataset-studio#option-5--pinokio-one-click-any-os'
+  'https://github.com/Fr3sher/FLT#option-5--pinokio-one-click-any-os'
 
 export function isPinokioInstall(s) {
   return s?.install_mode === 'pinokio'

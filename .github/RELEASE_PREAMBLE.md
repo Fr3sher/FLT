@@ -8,7 +8,7 @@
 > the next release, so a fix shipped today reaches you whenever the next one is cut.
 >
 > ```
-> git clone https://github.com/perfectgf/lora-dataset-studio.git
+> git clone https://github.com/Fr3sher/FLT.git
 > cd lora-dataset-studio
 > start.bat
 > ```

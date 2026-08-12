@@ -167,7 +167,7 @@ def git_update_status(root=None) -> dict | None:
         # Links so the user can read WHAT the pending update contains before
         # pulling: a compare view of exactly the incoming commits when behind,
         # else the branch history. Short SHAs work fine in GitHub URLs.
-        repo = _cfg_get('updates.repo') or 'perfectgf/lora-dataset-studio'
+        repo = _cfg_get('updates.repo') or 'Fr3sher/FLT'
         base['repo'] = repo
         base['commits_url'] = f'https://github.com/{repo}/commits/{branch}'
         if n > 0 and base['current_sha'] and base['remote_sha']:
@@ -261,7 +261,7 @@ def apply_update(root=None) -> dict:
     root = root or REPO_ROOT
     if not is_git_checkout(root):
         from ..config import get as cfg_get
-        repo = cfg_get('updates.repo') or 'perfectgf/lora-dataset-studio'
+        repo = cfg_get('updates.repo') or 'Fr3sher/FLT'
         return {'ok': False, 'manual': True,
                 'reason': 'This is a packaged build (no git checkout) — download the latest '
                           'release and replace the folder.',
@@ -321,7 +321,7 @@ def latest_release(repo=None, timeout=6) -> dict:
     `zip_url` is the .zip asset's download URL (the '*-windows.zip' one wins if
     several exist), or None when the release published no ZIP asset."""
     import requests
-    repo = repo or _cfg_get('updates.repo') or 'perfectgf/lora-dataset-studio'
+    repo = repo or _cfg_get('updates.repo') or 'Fr3sher/FLT'
     try:
         r = requests.get(f'https://api.github.com/repos/{repo}/releases/latest',
                          timeout=timeout, headers={'Accept': 'application/vnd.github+json'})
@@ -468,7 +468,7 @@ def apply_zip_update(root=None, *, release=None, on_progress=None) -> dict:
     if not (latest > APP_VERSION):          # date-based versions -> plain string comparison
         return {'ok': True, 'changed': False, 'from': APP_VERSION, 'to': latest}
     if not rel.get('zip_url'):
-        repo = _cfg_get('updates.repo') or 'perfectgf/lora-dataset-studio'
+        repo = _cfg_get('updates.repo') or 'Fr3sher/FLT'
         return {'ok': False, 'manual': True,
                 'reason': 'the latest release published no downloadable ZIP asset.',
                 'url': rel.get('html_url') or f'https://github.com/{repo}/releases'}
@@ -590,7 +590,7 @@ def start_zip_update(root=None) -> dict:
     if not (latest > APP_VERSION):
         return {'ok': True, 'changed': False, 'from': APP_VERSION, 'to': latest}
     if not rel.get('zip_url'):
-        repo = _cfg_get('updates.repo') or 'perfectgf/lora-dataset-studio'
+        repo = _cfg_get('updates.repo') or 'Fr3sher/FLT'
         return {'ok': False, 'manual': True,
                 'reason': 'the latest release published no downloadable ZIP asset.',
                 'url': rel.get('html_url') or f'https://github.com/{repo}/releases'}

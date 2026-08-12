@@ -740,7 +740,7 @@ DEFAULTS = {
     # face_variations.sanitize_custom_shots — this file is hand-editable, and a
     # label shadowing a built-in one would hijack prompt/aspect/NSFW resolution.
     'custom_shots': {},
-    'updates': {'repo': 'perfectgf/lora-dataset-studio'},      # GitHub repo for the release feed
+    'updates': {'repo': 'Fr3sher/FLT'},      # GitHub repo for the release feed
 }
 
 _lock = threading.Lock()

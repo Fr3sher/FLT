@@ -20,6 +20,6 @@ test('Getting help is no longer a Guide chapter and keeps its existing content',
 
 test('Help contact links render as links instead of literal Markdown', () => {
   assert.match(help, /\*\*Discord\*\* — \[discord\.gg\/j6hnJBFtXE\]\(https:\/\/discord\.gg\/j6hnJBFtXE\)/)
-  assert.match(help, /\*\*GitHub\*\* — \[Issues\]\(https:\/\/github\.com\/perfectgf\/lora-dataset-studio\/issues\)/)
+  assert.match(help, /\*\*GitHub\*\* — \[Issues\]\(https:\/\/github\.com\/Fr3sher\/FLT\/issues\)/)
   assert.doesNotMatch(help, /\*\*[^\n]*\[[^\]]+\]\([^)]+\)[^\n]*\*\*/)
 })

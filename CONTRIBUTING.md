@@ -7,7 +7,7 @@ Thanks for wanting to make FLT - Fresh LoRa Trainer better. This is a small, sel
 For anything bigger than a typo or a one-line fix, **talk about it first**. It saves you from building something that's already in progress or that doesn't fit the direction.
 
 - **Discord** ([join](https://discord.gg/j6hnJBFtXE)) — usually the fastest way. Ask in **#help**; float feature ideas in **#feature-requests**; talk implementation in **#dev-chat**. The curated **#community-ideas** board shows what people voted for (the roadmap follows it), and **#roadmap** shows what's shipped and coming.
-- **[GitHub issues](https://github.com/perfectgf/lora-dataset-studio/issues)** — bug reports and feature requests. There are templates for both; for a bug, the app can write most of the report for you (**Guide → Getting help → Copy diagnostic report** — it includes version, OS and a log tail, no keys, no paths).
+- **[GitHub issues](https://github.com/Fr3sher/FLT/issues)** — bug reports and feature requests. There are templates for both; for a bug, the app can write most of the report for you (**Guide → Getting help → Copy diagnostic report** — it includes version, OS and a log tail, no keys, no paths).
 
 A quick "I'm going to look at X" in an issue or on Discord means nobody duplicates your work.
 
@@ -20,7 +20,7 @@ You only need the backend to work on backend code. You only need Node to change 
 Use **CPython 3.10–3.12**. This matters: the optional ML extras (`insightface`, `onnxruntime`, `numpy<2`, …) publish no wheels for 3.13+, so a venv built on a newer Python (a bare `python`/`py -3` often grabs 3.13/3.14) can't install them. Pick the version explicitly.
 
 ```bash
-git clone https://github.com/perfectgf/lora-dataset-studio.git
+git clone https://github.com/Fr3sher/FLT.git
 cd lora-dataset-studio
 
 python -m venv .venv                 # on Windows: py -3.12 -m venv .venv

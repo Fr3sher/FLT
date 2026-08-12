@@ -19,7 +19,7 @@ module.exports = {
   version: "1.0",
   title: "FLT - Fresh LoRa Trainer",
   description:
-    "Build, curate, caption and clean LoRA training datasets in your browser, then train, compare and iterate — local Flask app, your files stay on your disk. https://github.com/perfectgf/lora-dataset-studio",
+    "Build, curate, caption and clean LoRA training datasets in your browser, then train, compare and iterate — local Flask app, your files stay on your disk. https://github.com/Fr3sher/FLT",
   icon: "icon.png",
   menu: async (kernel, info) => {
     let installed = info.exists("env")

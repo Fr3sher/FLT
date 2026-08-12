@@ -21,7 +21,7 @@ old build must be used temporarily, repair the `.js` Content Type to a
 JavaScript MIME type, then restart the browser. Updating is safer than making a
 registry edit by hand.
 
-*(Reported and diagnosed in [GitHub #12](https://github.com/perfectgf/lora-dataset-studio/issues/12).)*
+*(Reported and diagnosed in [GitHub #12](https://github.com/Fr3sher/FLT/issues/12).)*
 
 ## "No Z-Image model available" in the Test Studio or training panel
 
@@ -265,7 +265,7 @@ to and matches it. This also covers the reverse case — the app on Windows driv
 a ComfyUI in WSL, Docker or on another machine, which needs forward slashes — so
 there is nothing to configure either way.
 
-*(Found and diagnosed by 1Tomber, [GitHub #21](https://github.com/perfectgf/lora-dataset-studio/issues/21).)*
+*(Found and diagnosed by 1Tomber, [GitHub #21](https://github.com/Fr3sher/FLT/issues/21).)*
 
 ## Klein engine stays greyed out
 

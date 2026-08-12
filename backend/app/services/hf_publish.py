@@ -47,7 +47,7 @@ _FAMILY_LABEL = {'zimage': 'Z-Image', 'krea': 'Krea 2', 'sdxl': 'SDXL',
                  'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein'}
 _KIND_LABEL = {'concept': 'concept', 'style': 'style'}   # else -> 'character'
 
-GITHUB_REPO = 'perfectgf/lora-dataset-studio'
+GITHUB_REPO = 'Fr3sher/FLT'
 GITHUB_URL = f'https://github.com/{GITHUB_REPO}'
 
 READ_ONLY_MSG = ('your Hugging Face token is read-only — create a write token at '

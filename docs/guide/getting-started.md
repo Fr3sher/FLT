@@ -26,7 +26,7 @@ automatically when their tool is detected.
 ## First launch
 
 **Windows (one command):** download `LoRA-Dataset-Studio-windows.zip` from the
-[latest release](https://github.com/perfectgf/lora-dataset-studio/releases/latest),
+[latest release](https://github.com/Fr3sher/FLT/releases/latest),
 extract it, then double-click `start.bat`. Releases contain an archive/source, not
 a prebuilt executable launcher. `start.bat` finds or downloads a compatible Python
 (3.10–3.12), creates `.venv`, installs the requirements, and opens the app at
@@ -43,7 +43,7 @@ python backend/run.py
 
 **Pinokio (one click, any OS):** in [Pinokio](https://pinokio.computer), use
 **Discover → Download from URL** with
-`https://github.com/perfectgf/lora-dataset-studio.git`, then **Install** and
+`https://github.com/Fr3sher/FLT.git`, then **Install** and
 **Start**. Pinokio creates the environment (`env/`), installs the core
 requirements and opens Studio on the port it really bound. Two things to know:
 the optional tools are still connected from **Setup**, and updates go through

@@ -29,7 +29,7 @@ param(
 
     [string]$InstallRoot = '',
 
-    [string]$Repository = 'perfectgf/lora-dataset-studio',
+    [string]$Repository = 'Fr3sher/FLT',
 
     # Test-only injection points. They are rejected unless -TestMode is
     # explicit; the public BAT launchers never pass that switch.
@@ -56,8 +56,8 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:OfficialRepository = 'perfectgf/lora-dataset-studio'
-$script:UserAgent = 'LoRA-Dataset-Studio-Docker-Updater/1.0 (+https://github.com/perfectgf/lora-dataset-studio)'
+$script:OfficialRepository = 'Fr3sher/FLT'
+$script:UserAgent = 'LoRA-Dataset-Studio-Docker-Updater/1.0 (+https://github.com/Fr3sher/FLT)'
 $script:ProtectedTopLevel = @(
     '.env',
     '.git',

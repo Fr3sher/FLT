@@ -106,7 +106,7 @@ def test_readme_front_matter_nfaa_and_license(app, tmp_path):
     assert 'task_categories:\n- text-to-image' in readme
     assert '- lora-dataset-studio' in readme
     assert '- not-for-all-audiences' in readme          # nfaa ON
-    assert 'FLT - Fresh LoRa Trainer' in readme and 'github.com/perfectgf/lora-dataset-studio' in readme
+    assert 'FLT - Fresh LoRa Trainer' in readme and 'github.com/Fr3sher/FLT' in readme
 
 
 def test_readme_no_nfaa_tag_when_off(app, tmp_path):

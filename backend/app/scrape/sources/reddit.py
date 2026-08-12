@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 _API_BASE = 'https://oauth.reddit.com'
 _TOKEN_URL = 'https://www.reddit.com/api/v1/access_token'
 # UA descriptif (les règles API Reddit demandent un UA unique et identifiable).
-_UA = 'LoRA-Dataset-Studio/1.0 (+https://github.com/perfectgf/lora-dataset-studio)'
+_UA = 'LoRA-Dataset-Studio/1.0 (+https://github.com/Fr3sher/FLT)'
 # client-id public « installed_client » de gallery-dl : autorise un jeton ANONYME
 # (grant device_id) sans compte ni app enregistrée. Surchargé si l'utilisateur
 # fournit le sien — Settings → Scraping & sources (secret REDDIT_CLIENT_ID, posé

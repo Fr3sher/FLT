@@ -790,7 +790,7 @@ export default function SetupPage() {
                   the host; this container intentionally never starts it for you.
                 </p>
               </div>
-              <a href="https://github.com/perfectgf/lora-dataset-studio/blob/main/docs/guide/docker.md"
+              <a href="https://github.com/Fr3sher/FLT/blob/main/docs/guide/docker.md"
                 target="_blank" rel="noreferrer"
                 className="mt-2 inline-block text-xs text-primary underline">
                 Docker setup guide →
@@ -1026,7 +1026,7 @@ export default function SetupPage() {
                 </p>
                 <p>After changing the host service, click this selected card again to test it.</p>
               </div>
-              <a href="https://github.com/perfectgf/lora-dataset-studio/blob/main/docs/guide/docker.md"
+              <a href="https://github.com/Fr3sher/FLT/blob/main/docs/guide/docker.md"
                 target="_blank" rel="noreferrer"
                 className="mt-2 inline-block text-xs text-primary underline">
                 Docker setup guide →

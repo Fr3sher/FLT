@@ -47,7 +47,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-export const REPO_URL = 'https://github.com/perfectgf/lora-dataset-studio';
+export const REPO_URL = 'https://github.com/Fr3sher/FLT';
 
 // Path of the changelog module inside the repo, as git wants it.
 export const WHATS_NEW_REPO_PATH = 'frontend/src/whatsNew.js';

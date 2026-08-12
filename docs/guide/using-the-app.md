@@ -576,7 +576,7 @@ other filter and search), so balancing a character set's angles is a couple of
 clicks. It's a GPU vision pass; add it to **🚀 Launch all** to have it run
 overnight with the rest.
 
-**📊 Coverage advice** (idea by [@antonp](https://github.com/perfectgf/lora-dataset-studio))
+**📊 Coverage advice** (idea by [@antonp](https://github.com/Fr3sher/FLT))
 is a read-only panel next to the Curate row. From what you've **kept** (or every
 non-rejected image before you've kept anything), it says in plain sentences what
 leans and what's thin for a good LoRA — *"70% face shots, add body/back"*,

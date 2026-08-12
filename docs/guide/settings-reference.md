@@ -207,7 +207,7 @@ Outfits and expressions are steered differently here than on the other engines: 
 
 ### SeedVR2 upscaling (local)
 
-*Requested by SurpassHR ([GitHub #32](https://github.com/perfectgf/lora-dataset-studio/issues/32)).*
+*Requested by SurpassHR ([GitHub #32](https://github.com/Fr3sher/FLT/issues/32)).*
 
 The **fidelity** half of ✨ Upscale & improve. The two passes are a choice, not two qualities of the same thing:
 
@@ -235,7 +235,7 @@ Settings:
 
 #### Large upscales: the ceiling, and the optional tiling pack
 
-*Contributed by [SurpassHR](https://github.com/perfectgf/lora-dataset-studio/issues/32), who hit this as a real CUDA out-of-memory on an 11.6 GB card and shipped the tiled workflow this is ported from.*
+*Contributed by [SurpassHR](https://github.com/Fr3sher/FLT/issues/32), who hit this as a real CUDA out-of-memory on an 11.6 GB card and shipped the tiled workflow this is ported from.*
 
 Upscaling a whole frame at once needs the whole frame in VRAM, so past a certain size it simply fails. Two things follow from that:
 
@@ -1324,7 +1324,7 @@ Set one of these **only** to override that search — for instance if your Comfy
 
 | Key | Default | Role |
 |---|---|---|
-| `updates.repo` | `perfectgf/lora-dataset-studio` | The GitHub repo the update checker reads its release feed from. |
+| `updates.repo` | `Fr3sher/FLT` | The GitHub repo the update checker reads its release feed from. |
 
 **Run provenance:**
 
@@ -1434,6 +1434,6 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `identity_prompts.framing_face` / `.framing_bust` / `.framing_body` / `.framing_back` | The per-framing shot-detail block for Klein/Krea. Per subject type. Blank = shipped default. |
 | `identity_prompts.by_subject.<type>.<kind>` | Identity-lock overrides for a **non-human** subject type (`animal`, `creature`, `object`, `other`) × kind (`face_single`, `face_multi`, `klein_identity`). Human overrides stay on the flat `identity_prompts.<kind>` keys. Blank/absent = the shipped default for that subject. |
 | `klein.small_image_prompt` | Optional shared instruction for scraper rescue and single/bulk image improvement (empty = reference image only). |
-| `updates.repo` | GitHub repo the update checker reads its release feed from (default `perfectgf/lora-dataset-studio`). |
+| `updates.repo` | GitHub repo the update checker reads its release feed from (default `Fr3sher/FLT`). |
 
 Additional config-file-only keys (ComfyUI folder overrides, cloud internals, quality-tool interpreters, Klein consistency LoRA) are documented in [Config-file-only settings](#config-file-only-settings) above.
