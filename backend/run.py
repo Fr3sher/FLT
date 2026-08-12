@@ -170,17 +170,20 @@ if __name__ == '__main__':
     def _warm_capabilities():
         try:
             from app import capabilities
-            # Refresh every 4 min (well under the 10-min subprocess-import TTL)
-            # so a cold `import torch` probe (~3-12 s: bank scoring, joycaption,
-            # masks, watermark) never blocks a real /api/capabilities request.
-            # force=True re-runs the probes in this background thread, keeping
-            # the in-process import cache warm; a foreground request then hits
-            # warm caches and answers in tens of ms.
-            while True:
-                capabilities.probe(force=True)
-                time.sleep(4 * 60)
         except Exception:
-            pass  # warm-up is best-effort; a failed probe is never fatal
+            return
+        # Refresh every 4 min (well under the 10-min subprocess-import TTL) so a
+        # cold `import torch` probe (~3-12 s: bank scoring, joycaption, masks,
+        # watermark) never blocks a real /api/capabilities request. force=True
+        # re-runs the probes in this background thread, keeping the in-process
+        # import cache warm; a foreground request then hits warm caches and
+        # answers in tens of ms.
+        while True:
+            try:
+                capabilities.probe(force=True)
+            except Exception:
+                pass  # a single failed probe must not kill the warm-up thread
+            time.sleep(4 * 60)
 
     threading.Thread(target=_warm_capabilities, daemon=True).start()
 
