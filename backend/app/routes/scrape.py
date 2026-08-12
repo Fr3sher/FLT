@@ -38,7 +38,7 @@ _ALLOWED_THUMB_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'i
 # fetches so the live ones get through, and remember which URLs FAILED for a
 # short window so reloading the grid doesn't re-hit Instagram for every dead tile
 # (which would rate-limit the live ones too).
-_UPSTREAM_SEMAPHORE = threading.BoundedSemaphore(6)
+_UPSTREAM_SEMAPHORE = threading.BoundedSemaphore(16)
 _UPSTREAM_TIMEOUT = 15  # s per fetch (was 20)
 _FAIL_TTL = 90          # s
 _fail_cache = {}
