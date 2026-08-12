@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, Navigate, Outlet, NavLink, useLocation } from 'react-router'
 import { apiFetch, postJson } from './api/fetchClient'
 import { JobsProvider } from './context/JobsContext'
@@ -12,15 +12,15 @@ import SetupHealthNotice from './components/setup/SetupHealthNotice'
 import ComfyRecoveryBanner from './components/common/ComfyRecoveryBanner'
 import DockerUpdateInstructions from './components/common/DockerUpdateInstructions'
 import PinokioUpdateInstructions from './components/common/PinokioUpdateInstructions'
-import DatasetPage from './pages/DatasetPage'
-import BankPage from './pages/BankPage'
-import VideoBankPage from './pages/VideoBankPage'
-import StudioPage from './pages/StudioPage'
-import SettingsPage from './pages/SettingsPage'
-import SetupPage from './pages/SetupPage'
-import GuidePage from './pages/GuidePage'
-import CloudRunsPage from './pages/CloudRunsPage'
-import CanvasPage from './pages/CanvasPage'
+const DatasetPage = lazy(() => import('./pages/DatasetPage'))
+const BankPage = lazy(() => import('./pages/BankPage'))
+const VideoBankPage = lazy(() => import('./pages/VideoBankPage'))
+const StudioPage = lazy(() => import('./pages/StudioPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const SetupPage = lazy(() => import('./pages/SetupPage'))
+const GuidePage = lazy(() => import('./pages/GuidePage'))
+const CloudRunsPage = lazy(() => import('./pages/CloudRunsPage'))
+const CanvasPage = lazy(() => import('./pages/CanvasPage'))
 import { recommendedMet } from './hooks/useSetupSteps'
 import { HelpModeProvider, useHelpMode, TipHost } from './help/HelpMode'
 import HeaderMenu from './components/common/HeaderMenu'
@@ -493,6 +493,7 @@ function AppInner() {
       </a>
       <HashRouter>
         <HelpModeProvider>
+        <Suspense fallback={<div className="flex h-svh items-center justify-center text-content-muted">Loading…</div>}>
         <Routes>
           <Route element={<Shell />}>
             <Route path="/" element={<Navigate to="/datasets" replace />} />
@@ -517,6 +518,7 @@ function AppInner() {
             <Route path="*" element={<Navigate to="/datasets" replace />} />
           </Route>
         </Routes>
+        </Suspense>
         </HelpModeProvider>
       </HashRouter>
     </>
