@@ -58,12 +58,17 @@ def test_container_runtime_tracks_server_defaults():
     assert image_env['LDS_PORT'] == str(port)
     assert f'EXPOSE {port}' in dockerfile
     assert f'http://127.0.0.1:{port}/api/health' in dockerfile
-    assert f'- target: {port}' in compose
-    assert f'published: "${{LDS_HOST_PORT:-{port}}}"' in compose
-    assert 'protocol: tcp' in compose
     assert f'LDS_PORT={port}' in compose
     assert 'LDS_HOST=0.0.0.0' in compose
     assert 'LDS_CONFIG=/data/config.json' in compose
+    # Bridge networking publishes the port through a `ports:` mapping; host
+    # networking binds LDS_HOST:LDS_PORT directly on the host and has none.
+    # The default port is tracked either way, so only demand the published-map
+    # shape when the compose is on a bridge network.
+    if 'network_mode: host' not in compose:
+        assert f'- target: {port}' in compose
+        assert f'published: "${{LDS_HOST_PORT:-{port}}}"' in compose
+        assert 'protocol: tcp' in compose
 
 
 def test_developer_entrypoints_track_server_default():

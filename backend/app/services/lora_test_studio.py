@@ -23,7 +23,7 @@ Clones the dataset fan-out mechanics exactly:
     que le code ne tient pas est pire qu'un commentaire absent.
 
 Lifted from the parent project's app/services/lora_test_studio.py (1981
-lines) for LoRA Dataset Studio: SRC's module-level WORKFLOW_ZTURBO_PATH /
+lines) for FLT - Fresh LoRa Trainer: SRC's module-level WORKFLOW_ZTURBO_PATH /
 WORKFLOW_HQ_PATH / WORKFLOW_KREA_TURBO_PATH constants become
 ``cfg.BACKEND_DIR / 'workflows' / '<name>.json'`` accessors below;
 COMFYUI_OUTPUT_DIR becomes the live `_comfy_output_dir()` accessor (same
@@ -341,6 +341,17 @@ def studio_model_defaults(family, models) -> dict:
 def _basename(path: str) -> str:
     """Basename tolerant to ComfyUI's backslash-relative LoRA paths."""
     return (path or '').replace('\\', '/').rsplit('/', 1)[-1]
+
+
+def _norm_rel(path: str) -> str:
+    """A relpath with a canonical forward-slash separator, for exact matching.
+
+    ComfyUI can publish a subfolder path with EITHER separator regardless of the
+    host we run on (a Windows install answers 'Krea\\x.safetensors', a Linux one
+    'Krea/x.safetensors'). A filename that came from a Windows install must still
+    match the same file listed under os.sep on this machine, so every whitelist
+    comparison here goes through this normalisation."""
+    return (path or '').replace('\\', '/')
 
 
 def _wilson_lower_bound(likes: int, voted: int, z: float = 1.96) -> float:
@@ -2267,18 +2278,18 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
         raise ValueError('a test run cannot mix multiple families (ZIT/SDXL/Krea)')
     run_family = (next(iter(fams), None) or family or getattr(ds, 'train_type', None) or 'zimage').lower()
 
-    allowed = {c['filename'] for c in list_test_checkpoints(ds, run_family)}
-    unknown = [c for c in cps_in if c not in allowed]
+    allowed = {_norm_rel(c['filename']) for c in list_test_checkpoints(ds, run_family)}
+    unknown = [c for c in cps_in if _norm_rel(c) not in allowed]
     if unknown:
         raise ValueError(f'unknown checkpoint(s) for this dataset: {unknown}')
 
     # LoRA « always-on » (style/utilitaire) appliqués à CHAQUE cellule (hors batch).
     # Validés contre les candidats de la famille (anti path-injection) + strength clamp.
-    perm_allowed = {c['filename'] for c in permanent_lora_candidates(run_family)}
+    perm_allowed = {_norm_rel(c['filename']) for c in permanent_lora_candidates(run_family)}
     extra_loras = []
     for e in (permanent_loras or []):
         fn = str((e or {}).get('filename') or '')
-        if fn not in perm_allowed:
+        if _norm_rel(fn) not in perm_allowed:
             continue
         try:
             st = max(0.0, min(2.0, round(float(e.get('strength', 1.0)), 2)))
@@ -2604,7 +2615,7 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         """(dataset, allowed checkpoint filenames) for this run's family, scanned once."""
         if ds_id not in _ckpt_memo:
             _ds = fds.get_dataset(user_id, ds_id)
-            _allowed = {c['filename'] for c in list_test_checkpoints(_ds, run_type)} if _ds else set()
+            _allowed = {_norm_rel(c['filename']) for c in list_test_checkpoints(_ds, run_type)} if _ds else set()
             _ckpt_memo[ds_id] = (_ds, _allowed)
         return _ckpt_memo[ds_id]
 
@@ -2616,7 +2627,7 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         if not _pf_ds:
             continue
         _pf_cp = _sel.get('checkpoint')
-        if _pf_cp in _pf_allowed:
+        if _pf_cp is not None and _norm_rel(_pf_cp) in _pf_allowed:
             _preflight_run(user_id, run_type, _pf_cp, valid_models, _pf_allowed,
                            prompt_axis[0] or identity_prompt(_pf_ds), seeds[0],
                            _sel.get('dataset_id'), getattr(_pf_ds, 'trigger_word', None))
@@ -2664,7 +2675,7 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
             if not _ds_i:
                 raise ValueError(f"dataset {sel.get('dataset_id')} not found")
             fn = sel.get('checkpoint')
-            if fn not in _allowed_i:
+            if fn is not None and _norm_rel(fn) not in _allowed_i:
                 raise ValueError(f'unknown checkpoint for {_ds_i.name}: {fn}')
             # 🧬 PROVENANCE DE GÉNÉRATION : d'où vient CE membre sur le board.
             # `origin_of` a déjà résolu l'origine de tous les checkpoints
@@ -2728,7 +2739,7 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         if not ds:
             raise ValueError(f"dataset {sel.get('dataset_id')} not found")
         checkpoint = sel.get('checkpoint')
-        if checkpoint not in allowed:
+        if checkpoint is None or _norm_rel(checkpoint) not in allowed:
             raise ValueError(f'unknown checkpoint for {ds.name}: {checkpoint}')
         cp, strength, cell_aspect, cell_cfg, cell_steps, cell_steps2 = cell
         width, height = _aspect_dims(cell_aspect, run_type, knobs['resolution_tier'],
@@ -2982,7 +2993,7 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
         cell_family = (family_of_lora(img.checkpoint)
                        or getattr(cell_ds, 'train_type', None) or 'zimage').lower()
         allowed = _allowed(img.dataset_id, cell_family)
-        if not cell_ds or img.checkpoint not in allowed:
+        if not cell_ds or (img.checkpoint is not None and _norm_rel(img.checkpoint) not in allowed):
             continue  # dataset/checkpoint disparu → on saute
         # Pool de bases selon la famille de CETTE cellule (SDXL → bases SDXL ; Krea →
         # base fixe ; sinon Z-Image), sinon un resume SDXL retomberait sur une base Z-Image.

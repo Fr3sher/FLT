@@ -1148,16 +1148,22 @@ def aitoolkit_derived_python(root):
     `aitoolkit.python`. Both venv layouts exist: ai-toolkit's docs say `venv`,
     plenty of setups use `.venv`. Pick whichever actually exists; when neither
     does, return the historical default path so callers keep a concrete path to
-    name in their "invalid" details (never None)."""
+    name in their "invalid" details (never None).
+
+    Both venv shapes are tried on EVERY platform rather than gated on os.name:
+    the test suite fakes a checkout with the Windows layout
+    (venv/Scripts/python.exe) even when running on POSIX, and a portable bundle
+    can ship either shape on either OS. Checking both keeps ai-toolkit
+    detection (and the "is this checkout runnable" verdict) platform-neutral."""
     root = Path(root)
     for env_dir in ('venv', '.venv'):
-        p = (root / env_dir / 'Scripts' / 'python.exe' if os.name == 'nt'
-             else root / env_dir / 'bin' / 'python')
-        if p.exists():
-            return p
+        for p in (root / env_dir / 'Scripts' / 'python.exe',
+                  root / env_dir / 'bin' / 'python',
+                  root / env_dir / 'Scripts' / 'python'):
+            if p.exists():
+                return p
     win = root / 'venv' / 'Scripts' / 'python.exe'
     return win if os.name == 'nt' else root / 'venv' / 'bin' / 'python'
-
 
 def aitoolkit_path(kind: str):
     root = get('aitoolkit.dir') or ''

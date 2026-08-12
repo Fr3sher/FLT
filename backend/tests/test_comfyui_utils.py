@@ -2,6 +2,7 @@
 parser (label + group MUST share one parse — the drift-proof invariant),
 config-driven listers (empty/None-safe when ComfyUI isn't configured), and
 the LoRA-chain injectors (allowed-whitelist respected)."""
+import os
 from unittest.mock import MagicMock, patch
 
 from app.utils.comfyui import (
@@ -230,7 +231,7 @@ def test_resolve_checkpoint_ckpt_name_unconfigured_falls_back_to_name(app):
     with app.app_context():
         assert resolve_checkpoint_ckpt_name('foo.safetensors') == 'foo.safetensors'
         assert resolve_checkpoint_ckpt_name('') == ''
-        assert resolve_checkpoint_ckpt_name('sdxl/foo.safetensors') == 'sdxl\\foo.safetensors'
+        assert resolve_checkpoint_ckpt_name('sdxl/foo.safetensors') == 'sdxl/foo.safetensors'  # already a relative path, kept verbatim
 
 
 def test_api_address_has_default_even_when_unconfigured(app):
@@ -260,7 +261,7 @@ def test_listers_use_configured_dirs(app, tmp_path):
         cfg.save_config({'comfyui': {'base_dir': str(base)}})
         result = get_zimage_loras()
         assert len(result) == 1
-        assert result[0]['filename'] == 'z image\\lora_Lola_000002000.safetensors'
+        assert result[0]['filename'] == os.path.join('z image', 'lora_Lola_000002000.safetensors')
         assert result[0]['group'] is not None
 
 
@@ -280,7 +281,7 @@ def test_clear_model_caches_forces_rescan(app, tmp_path):
         cfg.save_config({'comfyui': {'base_dir': str(base)}})
         assert comfyui.get_zimage_models() == []          # stale [] still served (TTL)
         comfyui.clear_model_caches()
-        assert 'z image\\merge_a.safetensors' in comfyui.get_zimage_models()
+        assert os.path.join('z image', 'merge_a.safetensors') in comfyui.get_zimage_models()
 
 
 def test_put_settings_comfyui_clears_model_caches(client):

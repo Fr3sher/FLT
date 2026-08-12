@@ -670,6 +670,11 @@ def create_bank(user_id, name, folder):
             raise ValueError(
                 f'this folder holds more than {BANK_MAX_FILES:,} images '
                 '— point the bank at a subfolder, or split it in two')
+    # Deterministic inventory: os.walk yields files in filesystem (arbitrary)
+    # order, which would make every BankImage.id — and therefore the DEFAULT
+    # grid order (id ASC) — platform-dependent. Sort the relpaths so the same
+    # folder always inventories (and default-lists) the same way.
+    rels.sort()
     bank = ImageBank(user_id=user_id, name=name, source_path=folder)
     db.session.add(bank)
     db.session.flush()          # need bank.id for the child rows

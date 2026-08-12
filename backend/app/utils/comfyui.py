@@ -1598,7 +1598,12 @@ def _parse_trained_stem(filename: str, trigger: str | None = None):
          famille connu (`_FAMILY_BASE_TAGS`), le trigger = tout ce qui le précède.
       4. Sinon, repli legacy : ``tokens[0]`` (triggers mono-token + noms de merge
          tiers ``lora_Lola2_mopMix_pornmaster`` où la frontière est indevinable)."""
-    stem = os.path.basename(filename).rsplit('.', 1)[0]
+    # The separator is a property of the ComfyUI that named the file, never of
+    # the host we are on: family_of_lora() already normalises both spellings.
+    # Do the same here so a Windows-style `\` path parses identically on POSIX
+    # (os.path.basename would otherwise keep the whole string, since `\` is
+    # not a separator on Linux).
+    stem = os.path.basename((filename or '').replace('\\', '/')).rsplit('.', 1)[0]
     if not stem.lower().startswith('lora_'):
         return None
     body = stem[len('lora_'):]

@@ -76,10 +76,14 @@ test('the workspace opens the review over a SNAPSHOT of the current filter', () 
 })
 
 test('the tile click still (de)selects — review is its own ▶ hit target', () => {
-  assert.match(workspace, /onReview=\{\(\) => openReview\(img\.id\)\}/)
-  assert.match(workspace, /onToggle=\{\(\) => setSelected\(/)
-  assert.match(workspace, /<button type="button" onClick=\{onReview\}/)
-  assert.match(workspace, /<button type="button" onClick=\{onToggle\}/)
+  // Tile is memoized, so the grid passes STABLE id-based callbacks (reviewTile /
+  // toggleTile / tagsTile) and the tile routes each click through them by id.
+  assert.match(workspace, /onClick=\{[\(]\) => onReview\(img\.id\)\}/)
+  assert.match(workspace, /onClick=\{[\(]\) => onToggle\(img\.id\)\}/)
+  assert.match(workspace, /onReview=\{reviewTile\}/)
+  assert.match(workspace, /onToggle=\{toggleTile\}/)
+  // Review still opens through openReview (via a ref so the callback stays stable).
+  assert.match(workspace, /const reviewTile = useCallback\([\(]id[\)] => \{ openReviewRef\.current\(id\) \}/)
 })
 
 test('header counters follow the run and the grid refreshes on close', () => {
