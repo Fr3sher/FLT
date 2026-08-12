@@ -30,6 +30,21 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       emptyOutDir: true,
+      rollupOptions: {
+        output: {
+          // Split the vendor libraries (react, etc.) into their own chunk so the
+          // browser caches them across app-code deploys, and the eager shell stays
+          // smaller. Pages are already lazy-loaded (route-level dynamic imports).
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return
+            if (id.includes('/react/') || id.includes('/react-dom/')
+                || id.includes('/scheduler/')) return 'react'
+            // heavy editor/canvas libs — keep them out of the eager shell too
+            if (id.includes('/@monaco-editor/') || id.includes('/monaco-')) return 'monaco'
+            if (id.includes('/three/') || id.includes('/@react-three/')) return 'three'
+          },
+        },
+      },
     },
     server: {
       port: 5173,
