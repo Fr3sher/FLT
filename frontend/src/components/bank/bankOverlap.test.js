@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -117,7 +121,7 @@ test('the delete dialog blocks on a dataset conflict rather than warning about i
 test('the workspace disables 🗑 Delete rejected on a bank that sits on a dataset', () => {
   // The banner promises "Delete rejected is disabled here". A button that still
   // opened the dialog, only to be refused inside it, would make that a lie.
-  const src = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+  const src = bankTreeSource();
   assert.match(src, /disabled=\{live \|\| !\(counts\?\.reject > 0\) \|\| !!payload\?\.dataset_conflict\}/);
   assert.match(src, /payload\?\.dataset_conflict && \(/);
 });

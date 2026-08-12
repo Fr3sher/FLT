@@ -50,22 +50,32 @@ export function clampScale(s) {
  * still loading — or whose runs all vanished — keeps its place on the board
  * instead of making the lanes below it jump when it arrives.
  *
- * `minX`/`minY` are that lane's OVERHANG: how far its content reaches above or
- * left of its own origin, never positive (utils/canvasImageNodes.imageNodeExtent).
- * A pinned picture may be parked above its lane, and the world has to contain it
- * or ✦ Fit frames a board with something floating off the top of it.
+ * ⚠️ TWO EXTENTS, and telling them apart is the whole point of this function:
+ *   • `width`/`height` are the lane's STACKING size — its tree, and nothing
+ *     else. They alone decide where the next lane starts.
+ *   • `minX`/`minY`/`maxX`/`maxY` are its content's REACH, lane-local, from
+ *     utils/canvasImageNodes.imageNodeExtent: how far the pinned pictures get
+ *     above/left (never positive) and right/below (defaulting to the lane's own
+ *     size when absent). They grow only the BOX the board is framed, exported
+ *     and clamped by — never the stack.
+ *
+ * That split is the fix for an asymmetry users hit immediately: a picture
+ * dragged ABOVE its lane floated free, while the same picture dragged BELOW it
+ * shoved the next dataset down the board, because the downward reach used to be
+ * folded into `height` and `height` is what the stack advances by. Pinned
+ * pictures are a free LAYER over the board, in both directions — at worst one
+ * overlaps the lane below, which is what the person dragging it asked for.
  *
  * Returns { lanes, x, y, width, height } in WORLD units — the board's BOX, whose
  * top-left `x`/`y` may be negative. Each lane carries `y` (its header's top) and
  * `graphY` (its graph's top).
  *
- * ⚠️ The overhang does NOT push a lane down, and lanes are NOT shifted right to
- * make room for a left overhang. Both were tried on paper and both are the same
- * bug: a picture dragged one pixel past its lane's corner would move every lane
- * on the board, so the whole thing would slide sideways under the hand still
- * dragging it. Lanes keep the positions they always had; only the box that Fit
- * measures grows to include what hangs out of them. With no overhang anywhere,
- * this returns exactly the numbers it always returned, with x = y = 0.
+ * ⚠️ Reach never MOVES a lane either — not down, not sideways. That was tried on
+ * paper and it is the same bug from the other end: a picture dragged one pixel
+ * past its lane's corner would move every lane on the board, so the whole thing
+ * would slide under the hand still dragging it. Lanes keep the positions they
+ * always had; only the box grows. With no reach fields anywhere, this returns
+ * exactly the numbers it always returned, with x = y = 0.
  */
 export function stackLanes(entries) {
   const list = Array.isArray(entries) ? entries : [];
@@ -80,16 +90,21 @@ export function stackLanes(entries) {
     const h = Math.max(0, Number(e?.height) || 0);
     const overX = Math.min(0, Number(e?.minX) || 0);
     const overY = Math.min(0, Number(e?.minY) || 0);
+    const reachX = Math.max(w, Number(e?.maxX) || 0);
+    const reachY = Math.max(h, Number(e?.maxY) || 0);
     const lane = { ...e, x: 0, y, graphY: y + LANE_HEADER_H, width: w, height: h };
     lanes.push(lane);
     left = Math.min(left, lane.x + overX);
     top = Math.min(top, lane.graphY + overY);
-    right = Math.max(right, lane.x + w);
+    right = Math.max(right, lane.x + reachX);
     // The lane's bottom, header included: `graphY` already carries the header,
     // so a lane with no graph still contributes its title strip. This is also
     // why there is no trailing gap — the board ends where the content ends,
     // instead of carrying one lane-gap of dead space "fit" would waste.
-    bottom = Math.max(bottom, lane.graphY + h);
+    bottom = Math.max(bottom, lane.graphY + reachY);
+    // …and the STACK advances by the lane's own size only. `reachY` is
+    // deliberately absent here: that is what lets a picture hang below its lane
+    // without pushing the next dataset down the board.
     y += LANE_HEADER_H + h + LANE_GAP;
   }
   if (!lanes.length) return { lanes, x: 0, y: 0, width: 0, height: 0 };

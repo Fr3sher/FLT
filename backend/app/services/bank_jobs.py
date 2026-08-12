@@ -26,6 +26,15 @@ _jobs: dict = {}          # bank_id -> job dict (see start())
 _FINISHED_TTL = 5 * 60    # finished snapshot lifetime
 _STALE_TTL = 60 * 60      # running job with no progress for this long = dead
 
+# Called after a pass function returns CLEANLY (no exception, no job error, not
+# cancelled) with (bank_id, kind, detail), inside a fresh app context. Installed
+# by image_bank_service at import to journal the run (note_pass_run); kept as a
+# hook because this runner is lane-agnostic (the video lane shares it) and must
+# not import a lane. Until it existed only ✂ semantic_dedup wrote its journal
+# row, so a Launch-all report's "cancelled before it ran" stayed red forever
+# over 👥/🚩 re-runs that had long since done the work.
+on_complete = None
+
 
 class BankJobBusy(Exception):
     """Another job is already running on this bank."""
@@ -261,9 +270,11 @@ def start(app, bank_id, kind, fn, total=0, reserve_ids=None,
         job['_touched'] = time.time()
 
     def _run():
+        completed = False
         try:
             with app.app_context():
                 fn(job)
+                completed = True
         except Exception as e:  # noqa: BLE001 — a background crash must surface in the UI
             with _lock:
                 job['error'] = f'{type(e).__name__}: {e}'
@@ -271,6 +282,19 @@ def start(app, bank_id, kind, fn, total=0, reserve_ids=None,
             with _lock:
                 job['finished'] = True
                 job['_touched'] = time.time()
+            # AFTER the snapshot is finished, never before: the journal write
+            # commits, and a commit inside the pass's own context would race its
+            # final progress read. A cancelled or errored run is deliberately
+            # not journaled — the step's story has NOT moved on, and marking a
+            # report row "re-run since" over a stop at 3% would be a lie.
+            hook = on_complete
+            if (hook is not None and completed
+                    and not job.get('error') and not job.get('cancelled')):
+                try:
+                    with app.app_context():
+                        hook(bank_id, kind, job.get('detail'))
+                except Exception:  # noqa: BLE001 — bookkeeping never sinks a pass
+                    pass
 
     # Under TESTING the job runs INLINE: the test suite uses a per-connection
     # sqlite:///:memory: DB, so a real worker thread would open a fresh, EMPTY

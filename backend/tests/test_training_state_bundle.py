@@ -413,7 +413,13 @@ def test_state_root_link_is_rejected_before_external_store_iteration_or_cleanup(
         _remove_directory_link(state_link)
 
 
-def test_state_root_rejects_linked_save_root_ancestor(tmp_path):
+def test_a_linked_save_root_ancestor_is_followed_knowingly(tmp_path):
+    """A junction in the save root's PREFIX is a layout, not an attack: a real
+    install moved its ai-toolkit output folder to another drive via a junction,
+    and every checkpoint inspection under it died on 'unsafe_state_root'. The
+    prefix comes from the app's own configuration — it is canonicalized first,
+    and inspection proceeds against the REAL location. What stays fatal is a
+    link at or under the state directory itself (the previous test)."""
     outside_save = tmp_path / 'outside-save'
     outside_state = outside_save / state.STATE_DIRECTORY
     outside_state.mkdir(parents=True)
@@ -422,10 +428,17 @@ def test_state_root_rejects_linked_save_root_ancestor(tmp_path):
     linked_save = tmp_path / 'linked-save'
     _make_directory_link(linked_save, outside_save)
     try:
-        with pytest.raises(
-                state.InvalidBundleError, match='unsafe_state_root'):
-            state.list_bundles(linked_save)
+        # No bundles there yet — the answer is an empty listing, not a refusal.
+        assert list(state.list_bundles(linked_save)) == []
         assert sentinel.read_bytes() == b'preserve'
+        # And a bundle created THROUGH the junction lands in the real folder,
+        # readable from both spellings of the root.
+        source = tmp_path / 'source.bin'
+        source.write_bytes(b'state')
+        state.create_bundle(
+            linked_save, {'trainer/state.bin': source}, _metadata(),
+            reserve_bytes=1)
+        assert len(list(state.list_bundles(outside_save))) == 1
     finally:
         _remove_directory_link(linked_save)
 

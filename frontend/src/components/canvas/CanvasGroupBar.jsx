@@ -1,6 +1,6 @@
 /**
- * 🖼🖼 The title bar of a group of pinned images: its grip, its ✕ and its
- * Export grid.
+ * 🖼🖼 The title bar of a group of pinned images: its grip, its ✕, its
+ * Export grid and its HQ.
  *
  * ── Why this is not inside CanvasImageGroup any more ────────────────────────
  * The bar is drawn ABOVE the strip's box (`top: -barH`), on board space that
@@ -9,7 +9,7 @@
  * those siblings with NO z-index — so any picture the board happened to place
  * over that strip painted on top of the bar and took its pointer events.
  *
- * That is not cosmetic: the bar carries ALL THREE of a group's affordances, so
+ * That is not cosmetic: the bar carries EVERY ONE of a group's affordances, so
  * one picture sitting above a strip left it impossible to move, impossible to
  * export and impossible to close at the same time. Measured on the real DOM: a
  * picture pinned flush above a two-image strip made 5 of 11 points sampled
@@ -29,10 +29,11 @@
  * as the strip, because the frame's pointer handler reads the gesture's target
  * off exactly those — the bar moves the ANCHOR, whose box IS the strip's.
  */
+import { memo } from 'react';
 import { groupBarHeight } from '../../utils/canvasNodeChrome';
 
-export default function CanvasGroupBar({ group, datasetId, boardScale = 1,
-  onCloseGroup, onExportGrid }) {
+function CanvasGroupBar({ group, datasetId, boardScale = 1,
+  onCloseGroup, onExportGrid, hq = false, onToggleHq }) {
   const barH = groupBarHeight(boardScale, group.h);
   const count = group.members.length;
   const anchorId = group.members[0]?.node.imageId;
@@ -53,7 +54,11 @@ export default function CanvasGroupBar({ group, datasetId, boardScale = 1,
         <span aria-hidden>⠿</span> {count} images
       </span>
       <button type="button"
-        onClick={(e) => { e.stopPropagation(); onExportGrid?.(group); }}
+        // The dataset id travels WITH the group rather than being baked into a
+        // closure by the lane: that is what lets the board hand every lane the
+        // same `onExportGrid` function, and a stable function is what keeps the
+        // lane's memo boundary alive during a pan.
+        onClick={(e) => { e.stopPropagation(); onExportGrid?.(group, datasetId); }}
         onPointerDown={(e) => e.stopPropagation()}
         data-testid="canvas-group-export-grid"
         style={{ height: barH, fontSize: Math.max(9, barH * 0.36) }}
@@ -61,6 +66,42 @@ export default function CanvasGroupBar({ group, datasetId, boardScale = 1,
         aria-label={`Export grid from these ${count} images`}
         className="flex shrink-0 items-center gap-1 rounded px-1.5 font-semibold text-indigo-200 hover:bg-indigo-500/25 hover:text-white">
         <span aria-hidden>▦</span> Export grid
+      </button>
+      {/* HQ, for the WHOLE strip.
+          Every picture on this board is a WebP tile, and each one already
+          carries its own HQ. That is the right control for one picture and the
+          wrong one for eight: comparing a face across a strip meant eight
+          clicks on eight buttons that are counter-scaled to the size of a
+          fingernail at Fit zoom. So the strip gets a master toggle, in the bar
+          that already owns everything a group does as a whole.
+          It OVERRIDES the members rather than writing to them: switching it off
+          gives each picture back the HQ choice it had, instead of quietly
+          undoing the two you had turned on by hand.
+          Not persisted, exactly like the per-picture one — it is a look you
+          take, not a property of the board; a board reopened tomorrow is cheap
+          again. */}
+      <button type="button"
+        onClick={(e) => { e.stopPropagation(); onToggleHq?.(group); }}
+        onPointerDown={(e) => e.stopPropagation()}
+        data-testid="canvas-group-hq"
+        data-hq={hq ? 'true' : 'false'}
+        aria-pressed={hq}
+        style={{ height: barH, fontSize: Math.max(9, barH * 0.36) }}
+        title={hq
+          ? 'HQ is on for this strip — showing the original files. Click to go back '
+            + 'to fast tiles'
+          : 'HQ — show every picture in this strip at full quality'}
+        aria-label={hq
+          ? `Show fast tiles again for these ${count} images`
+          : `Show these ${count} images at full quality`}
+        // Same shape and same width budget as Export grid beside it — the two
+        // are the group's two "do it to all of them" actions and they read as a
+        // pair. Lit indigo when it is on, like the per-picture HQ is.
+        className={'flex shrink-0 items-center rounded px-1.5 font-semibold transition-colors '
+          + (hq
+            ? 'bg-indigo-500/90 text-white'
+            : 'text-indigo-200 hover:bg-indigo-500/25 hover:text-white')}>
+        HQ
       </button>
       {/* ✕ on a GROUP closes N pictures at once, so it says N and says what
           happens to them. A destructive action has to be readable before it
@@ -82,3 +123,7 @@ export default function CanvasGroupBar({ group, datasetId, boardScale = 1,
     </div>
   );
 }
+
+// Memoised for the same reason the lanes are: a pan is one state change per
+// frame, and nothing here reads the board's translation.
+export default memo(CanvasGroupBar);

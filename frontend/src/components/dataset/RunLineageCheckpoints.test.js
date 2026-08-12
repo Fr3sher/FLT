@@ -101,7 +101,12 @@ test('the canvas disambiguates the touch gesture with a long press', () => {
 test('✦ Tidy up exists and is wired to the page, not to a local reset', () => {
   const page = fs.readFileSync(new URL('../../pages/CanvasPage.jsx', import.meta.url), 'utf8');
   assert.match(canvas, /Tidy up/);
-  assert.match(canvas, /onClick=\{onTidyUp\}/);
+  // Through `handleTidyUp` since the frame stopped resizing itself: the button
+  // arms a re-fit and then delegates, unchanged, to the page's handler. What is
+  // pinned is that the page still owns the RESET — the local wrapper adds a
+  // view decision on top of it and nothing else.
+  assert.match(canvas, /onClick=\{handleTidyUp\}/);
+  assert.match(canvas, /const handleTidyUp = useCallback\(\(\) => \{[^]{0,200}onTidyUp\?\.\(\);/);
   // It clears the SERVER's memory of the lane; a client-only reset would come
   // back on the next reload.
   assert.match(page, /del\(`\/api\/dataset\/\$\{id\}\/canvas\/positions`\)/);
@@ -277,7 +282,11 @@ test('the compact pill COUNTS results instead of showing an illegible thumbnail'
   assert.match(nodes, /else if \(preview\?\.url\) onZoomPreview\?\./);
   // Both surfaces now wire the gallery, so the count is never a dead chip.
   assert.match(graph, /onOpenGallery=\{\(pill\) => setGallery\(/);
-  assert.match(canvas, /onOpenGallery=\{\(recordId, step\) => setGallery\(/);
+  // On the board the handler is HOISTED out of the JSX (a new arrow per render
+  // would disable the lanes' memo boundary and make every pan frame re-render
+  // the whole board), so the wiring is checked where it now lives.
+  assert.match(canvas, /const openGallery = useCallback\(\(recordId, step\) => setGallery\(/);
+  assert.match(canvas, /onOpenGallery=\{openGallery\}/);
   // The big-preview tile KEEPS its image — that one is sized to be judged.
   assert.match(nodes, /h-full w-full cursor-zoom-in object-cover/);
 });
@@ -402,7 +411,12 @@ test('a finished generation SAYS where the images went, and the board re-reads i
   assert.match(canvas, /onOpenResult=\{\(t\) => setGallery\(\{ recordId: t\.recordId, step: t\.step \}\)\}/);
   // New images ⇒ re-read the lanes they belong to, so the pills show them.
   assert.match(canvas, /const n = readyImageCount\(tracker\.run\.data\);/);
-  assert.match(canvas, /for \(const id of canvasRunDatasetIds\(trackerTargets\)\)/);
+  // …through a THROTTLE (the poller ticks every 3 s for minutes; a full lineage
+  // re-read per tick per lane is the board's most expensive background habit).
+  // The targets are read from a ref because a trailing call may fire from a
+  // timer armed several polls earlier.
+  assert.match(canvas, /for \(const id of canvasRunDatasetIds\(trackerTargetsRef\.current\)\)/);
+  assert.match(canvas, /REFETCH_MIN_MS/);
 });
 
 test('the lineage payload carries the deployed copy name from the testable map', () => {

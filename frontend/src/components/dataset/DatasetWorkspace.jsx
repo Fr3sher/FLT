@@ -2016,6 +2016,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     onOverrideChange={setNotReadyAck} />
                 )}
                 <TrainingPanel ds={ds} keptCount={kept} kind={d.kind} allowNotReady={notReadyAck}
+                  sectionVisible={section === 'training'}
                   onCheckpointsChange={setCheckpointCount}
                   checkpointHost={checkpointHost}
                   navigationPanel={section === 'training' && panel === 'advanced' ? panel : null}
@@ -2146,6 +2147,13 @@ export default function DatasetWorkspace({ ds, onBack }) {
              gets no arrows rather than arrows into someone else's sequence. */
           images={viewImgLive._rescueReviewPreview ? null : gridImages}
           onNavigate={viewImgLive._rescueReviewPreview ? null : setViewImg}
+          /* ✓ Keep / ✕ Reject from inside the lightbox — the SAME write the
+             grid tile makes, so a verdict taken while looking at the picture
+             full size is the very same fact as one taken on the thumbnail.
+             The rescue-review preview gets none: that pair is resolved in
+             Curation, and a status written behind its back would decide half
+             of a decision it owns. */
+          onStatus={viewImgLive._rescueReviewPreview ? null : ds.setStatus}
           improvePending={viewImgImproving}
           improveReady={viewImgImprovementReady}
           busy={ds.busy || gridBulkBusy}

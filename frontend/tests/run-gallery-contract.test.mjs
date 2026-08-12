@@ -50,7 +50,10 @@ test('the card gesture answers for itself — a captured pointer eats the click'
 });
 
 test('clicking a checkpoint pill still opens that checkpoint, unchanged', () => {
-  assert.match(canvas, /onOpenGallery=\{\(recordId, step\) => setGallery\(\{ recordId, step \}\)\}/);
+  // Hoisted out of the JSX so the lanes' memo boundary survives a pan — the
+  // wiring is the same, its declaration just moved (see LineageCanvas).
+  assert.match(canvas, /const openGallery = useCallback\(\(recordId, step\) => setGallery\(\{ recordId, step \}\), \[\]\)/);
+  assert.match(canvas, /onOpenGallery=\{openGallery\}/);
   // …and a pill press is still never a drag or a pan.
   assert.match(canvas, /closest\?\.\('\.lds-ckpill-wrap'\)/);
 });
@@ -92,6 +95,9 @@ test('deletion stays unreachable without Select mode, at both scopes', () => {
   // One Select gate, one confirmation, one delete call — shared by both scopes.
   assert.equal((panel.match(/data-testid="gallery-select-toggle"/g) || []).length, 1);
   assert.equal((panel.match(/data-testid="gallery-confirm-delete"/g) || []).length, 1);
-  assert.equal((panel.match(/postJson\(/g) || []).length, 1);
+  // Counted against the REMOVE endpoint, not every postJson in the file: the
+  // panel also posts non-destructive actions (📂 Open folder), and what this
+  // contract protects is that deletion has exactly one path.
+  assert.equal((panel.match(/postJson\(endpoints\.remove/g) || []).length, 1);
   assert.match(panel, /picking \? 'gallery-pick' : 'gallery-zoom'/);
 });

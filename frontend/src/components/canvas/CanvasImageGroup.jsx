@@ -1,4 +1,5 @@
-import { groupBarHeight } from '../../utils/canvasNodeChrome';
+import { memo } from 'react';
+import { groupBarHeight, groupCornerScale } from '../../utils/canvasNodeChrome';
 import CanvasImageNode from './CanvasImageNode';
 
 /* 🖼🖼 Several pinned images fused into ONE node: a continuous strip, side by
@@ -46,8 +47,8 @@ import CanvasImageNode from './CanvasImageNode';
    stopped being a strip at some threshold nobody can see would be worse than a
    wide one. */
 
-export default function CanvasImageGroup({ group, datasetId, laneName, boardScale = 1,
-  onClose, onOpen, dropHint = null, blendNotes = null }) {
+function CanvasImageGroup({ group, datasetId, laneName, boardScale = 1,
+  onClose, onOpen, onDelete, dropHint = null, blendNotes = null, hq = false }) {
   const count = group.members.length;
   const anchorId = group.members[0]?.node.imageId;
   // The drag-out hint below is CHROME, not content: it must stay readable at
@@ -74,22 +75,39 @@ export default function CanvasImageGroup({ group, datasetId, laneName, boardScal
       className="lds-canvas-group rounded-md border border-indigo-400/40 bg-surface-overlay shadow-lg">
 
       {/* The pictures. Edge to edge, gap zero — the strip is one band. */}
-      {group.members.map((m) => (
+      {group.members.map((m, i) => (
         <CanvasImageNode key={m.node.imageId} node={m.node} datasetId={datasetId}
           laneName={laneName} variant="member"
           box={{ x: m.x - group.x, y: m.y - group.y, w: m.w, h: m.h }}
-          onClose={onClose} onOpen={onOpen} boardScale={boardScale}
+          // ◢ The strip's resize corner (below) is drawn at the strip's
+          // bottom-right, which is the LAST tile's bottom-right — so that one
+          // member, and only it, has to keep its control row clear of a handle
+          // it does not draw itself. Without this the armed 🗑 landed on top of
+          // the group's only size grip.
+          lastInGroup={i === count - 1}
+          // 🖼🖼 One HQ for the whole strip. The state lives with the bar that
+          // carries the button (see LaneImages) rather than here, because the
+          // bar is drawn in a LAYER above the pictures and not inside this
+          // component — see the header of CanvasGroupBar for why. It reaches a
+          // member as an override, so switching it off gives each picture back
+          // its own HQ choice instead of wiping it.
+          forceHq={hq}
+          onClose={onClose} onOpen={onOpen} onDelete={onDelete} boardScale={boardScale}
           blendNote={blendNotes?.get(m.node.imageId) || null} />
       ))}
 
       {/* Resizing the strip resizes it as a WHOLE, keeping its shape: a member
           has no width of its own to drag (it is its aspect ratio at the strip's
           height), so a per-member handle would be a control with nothing behind
-          it. Same 28 units and the same counter-scale as everywhere else. */}
+          it. Same 28 units and the same counter-scale as everywhere else.
+          ⚠️ That scale comes from canvasNodeChrome.groupCornerScale rather than
+          being spelled out here: the last member's control row has to reserve
+          exactly this much board space, and a counter-scale written twice is a
+          counter-scale that will be changed once. */}
       <span data-canvas-group-resize="" aria-hidden
         title="Drag to resize the whole group"
         style={{ position: 'absolute', right: 0, bottom: 0, width: 28, height: 28,
-          transform: `scale(${Math.max(1, 1 / Math.max(boardScale, 0.01))})`,
+          transform: `scale(${groupCornerScale(boardScale)})`,
           transformOrigin: 'bottom right' }}
         className="cursor-nwse-resize touch-none rounded-tl-md border-l border-t border-indigo-400/40 bg-app/80 text-content-subtle after:absolute after:bottom-1 after:right-1 after:text-[0.625rem] after:content-['◢']" />
 
@@ -109,3 +127,8 @@ export default function CanvasImageGroup({ group, datasetId, laneName, boardScal
     </div>
   );
 }
+
+/* ⚡ Memoised — and this is the boundary that pays for the whole strip: its
+   members are given a `box` rebuilt here on every render, so they can never
+   memoise on their own. Stopping the group stops all of them at once. */
+export default memo(CanvasImageGroup);

@@ -5,7 +5,9 @@ import { useToast } from '../components/common/Toast'
 import { useCapabilities } from '../context/CapabilitiesContext'
 import { deriveSetupSteps, deriveCapabilitySummary, SETUP_STEP_IDS, kleinMissingLabels,
   comfyuiDirVerdict, comfyuiLauncherState, COMFYUI_SKIP_LOST, COMFYUI_SKIP_KEPT, installAllPlan,
-  aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS } from '../hooks/useSetupSteps'
+  aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS, chatgptLanes, chatgptLaneSummary }
+  from '../hooks/useSetupSteps'
+import ChatgptSubscriptionConnect from '../components/common/ChatgptSubscriptionConnect'
 import SettingsLink from '../components/common/SettingsLink'
 import GuidedSteps from '../components/setup/GuidedSteps'
 import { ML_INSTALL_CARDS, cardInstalled } from '../components/setup/mlInstallCards'
@@ -22,8 +24,14 @@ const INPUT_CLASS =
 const KEY_FIELDS = [
   { key: 'GEMINI_API_KEY', label: 'Gemini API key', engine: 'nanobanana',
     href: 'https://aistudio.google.com/apikey', help: 'Powers Nano Banana.' },
+  // NOT "Powers ChatGPT (gpt-image-2)" any more. That sentence was true and
+  // still misleading: it made the paid API key read as the only way in, on the
+  // screen where a ChatGPT Plus/Pro subscriber decides what this app can do —
+  // while the subscription lane sat two pages away in Settings. The key row now
+  // describes ITS lane; the engine's other door is rendered right under it.
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', engine: 'chatgpt',
-    href: 'https://platform.openai.com/api-keys', help: 'Powers ChatGPT (gpt-image-2).' },
+    href: 'https://platform.openai.com/api-keys',
+    help: 'Pay-per-image, and the lane that accepts up to 16 reference images.' },
   { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API key', engine: 'openrouter',
     href: 'https://openrouter.ai/keys',
     help: 'Powers the OpenRouter engine — one key and one balance for the same '
@@ -426,28 +434,71 @@ export default function SetupPage() {
   const toolBody = (id) => {
     const step = stepById[id]
     if (id === 'image') {
+      // Two doors into ONE engine, so the ✓ belongs to the engine and each lane
+      // carries its own smaller state. Attaching "✓ Ready" to the API-key row —
+      // as this screen did — meant a subscriber with no key at all watched the
+      // key field certify itself green, and a keyless user saw "○ Not set" on an
+      // engine that was already working.
+      const chatgpt = chatgptLanes(caps, secretsPresence)
       return (
         <div className="space-y-4">
-          {KEY_FIELDS.map((f) => (
-            <div key={f.key}>
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-content">{f.label}</span>
-                <span className={`text-xs ${step.engines[f.engine] ? 'text-emerald-400' : 'text-content-subtle'}`}>
-                  {step.engines[f.engine] ? '✓ Ready' : '○ Not set'}
-                </span>
+          {KEY_FIELDS.map((f) => {
+            const isChatgpt = f.engine === 'chatgpt'
+            const laneOk = isChatgpt ? chatgpt.keySet : !!step.engines[f.engine]
+            const field = (
+              <div key={f.key}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className={isChatgpt
+                    ? 'text-sm font-medium text-content-muted'
+                    : 'text-sm font-medium text-content'}>{f.label}</span>
+                  <span className={`text-xs ${laneOk ? 'text-emerald-400' : 'text-content-subtle'}`}>
+                    {laneOk ? '✓ Ready' : '○ Not set'}
+                  </span>
+                </div>
+                <p className="text-xs text-content-muted">{f.help}</p>
+                <input type="password" autoComplete="off" className={INPUT_CLASS}
+                  value={secretInputs[f.key] ?? ''}
+                  placeholder={secretsPresence[f.key] ? 'Already set — enter a new value to replace it' : 'Paste your key'}
+                  onChange={(e) => setSecretInputs((p) => ({ ...p, [f.key]: e.target.value }))} />
+                <div className="mt-1 flex items-center gap-3">
+                  <a href={f.href} target="_blank" rel="noreferrer" className="text-xs text-primary underline">Get a key</a>
+                  <button type="button" onClick={() => saveSecretThenTest(f.key, KEY_TEST_TARGET[f.engine])}
+                    className="text-xs text-content-muted underline">Save &amp; test</button>
+                </div>
               </div>
-              <p className="text-xs text-content-muted">{f.help}</p>
-              <input type="password" autoComplete="off" className={INPUT_CLASS}
-                value={secretInputs[f.key] ?? ''}
-                placeholder={secretsPresence[f.key] ? 'Already set — enter a new value to replace it' : 'Paste your key'}
-                onChange={(e) => setSecretInputs((p) => ({ ...p, [f.key]: e.target.value }))} />
-              <div className="mt-1 flex items-center gap-3">
-                <a href={f.href} target="_blank" rel="noreferrer" className="text-xs text-primary underline">Get a key</a>
-                <button type="button" onClick={() => saveSecretThenTest(f.key, KEY_TEST_TARGET[f.engine])}
-                  className="text-xs text-content-muted underline">Save &amp; test</button>
+            )
+            if (!isChatgpt) return field
+            // FLAT, like its neighbours: the engine gets the same heading line and
+            // the same right-hand state as "Gemini API key" or "OpenRouter API
+            // key", and its two lanes hang under it as ordinary rows. The nested
+            // bordered card this used to be described the same thing correctly
+            // and broke the rhythm of the page doing it — the one engine on the
+            // screen that looked like a different kind of object.
+            return (
+              <div key={f.key} className="space-y-3">
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-content">ChatGPT (gpt-image-2)</span>
+                    <span className={`text-xs ${chatgpt.ready ? 'text-emerald-400' : 'text-content-subtle'}`}>
+                      {chatgpt.ready ? '✓ Ready' : '○ Not set up'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-content-muted">{chatgptLaneSummary(chatgpt)}</p>
+                </div>
+                {field}
+                {/* The SAME component Settings ▸ Image engines mounts — one
+                    device-code flow, so the two screens cannot disagree about
+                    what "connected" means. Given a label it renders as one sober
+                    row (state inline, compact button) instead of a badge adrift
+                    opposite a full-width call to action. */}
+                <ChatgptSubscriptionConnect caps={caps} refreshCaps={refresh} toast={toast}
+                  label="ChatGPT Plus/Pro subscription"
+                  description={'Runs on your plan’s image quota instead of a paid key. '
+                    + 'Experimental and undocumented by OpenAI — up to 5 reference images, '
+                    + 'your plan’s daily cap applies, SFW only.'} />
               </div>
-            </div>
-          ))}
+            )
+          })}
           <p className="text-xs text-content-subtle">Klein (local) needs ComfyUI — the next step.</p>
           {saveRecheckBtn}
         </div>

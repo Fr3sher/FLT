@@ -58,6 +58,7 @@ from .face_variations import (CAPTION_PROMPT, CAPTION_PROMPT_BOORU,
                               caption_has_identity_leak, caption_has_concept_leak,
                               compose_prompt_suffix, concept_lexical_field,
                               drop_identity_sentences, drop_identity_tags,
+                              drop_style_lead_in,
                               is_nsfw_label, prompt_by_label, wrap_variation,
                               wrap_variation_klein, wrap_variation_krea,
                               get_identity_prompt,
@@ -1194,6 +1195,41 @@ def _writer(report, key, n=1):
     and counting it as one would make the numbers stop matching what people see."""
     if report is not None:
         report[key] = report.get(key, 0) + n
+
+
+# How much of an engine's own refusal is worth quoting back. Long enough for the
+# guard sentence that names the limit AND the offending size, short enough that a
+# toast stays a toast.
+_SKIP_REASON_CHARS = 200
+
+
+def _first_caption_skip_reason(pending, errors) -> str:
+    """One human reason for a batch that left images uncaptioned, quoted VERBATIM
+    from the engine.
+
+    Verbatim on purpose: classifying the message here ("too large", "unreadable")
+    would mean this module deciding what another process meant, and the day the
+    engine adds a reason nobody thought of, the user would be told a confident
+    wrong category instead of the true sentence. '' when the engine said nothing —
+    an empty string is how the caller knows to add no clause at all.
+    """
+    for entry in (pending or []):
+        path = entry[1] if isinstance(entry, tuple) else entry
+        reason = (errors or {}).get(path)
+        if reason:
+            return str(reason).strip()[:_SKIP_REASON_CHARS]
+    return ''
+
+
+def _record_caption_skips(outcome, pending, errors) -> None:
+    """Report the images a caption pass HANDLED without captioning. ``outcome`` is
+    the caller's optional out-dict — None means nobody asked."""
+    if outcome is None or not pending:
+        return
+    outcome['skipped'] = outcome.get('skipped', 0) + len(pending)
+    reason = _first_caption_skip_reason(pending, errors)
+    if reason and not outcome.get('skipped_reason'):
+        outcome['skipped_reason'] = reason
 
 
 def _resolve_caption_backend(ds) -> str:
@@ -2859,6 +2895,11 @@ def delete_dataset(user_id, dataset_id):
         db.session.rollback()
         _restore_from_trash(trashed_path, dataset_path)
         raise
+    # The tile-size thumbnail cache is derived data that lives OUTSIDE the folder
+    # the trash just swallowed, so nothing else would ever collect it. Dropped
+    # after the commit, best effort: a locked cache file must not undo a delete.
+    from . import dataset_thumbs
+    dataset_thumbs.drop_dataset_thumbs(dataset_id)
     # Purge les artefacts d'entraînement (LoRA ComfyUI + ai-toolkit + config). Best
     # effort : un échec ici ne doit pas faire échouer la suppression du dataset.
     if lt is not None:
@@ -7204,7 +7245,8 @@ def _enforce_concept_omission(caption, leak_re, image_bytes, concept_desc, descr
 
 
 def _caption_concept(ds, force, backend, token=None, image_ids=None,
-                     ollama_model=None, extra_instructions='', report=None):
+                     ollama_model=None, extra_instructions='', report=None,
+                     outcome=None):
     """Concept caption pipeline (INVERTED logic): describe everything INCLUDING identity
     but OMIT the recurring act so it binds to the trigger. JoyCaption is literal (it NAMES
     the act/fluids/watermark) -> its drafts are REFINED by Qwen, then every caption passes
@@ -7244,6 +7286,7 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
     # 1) JoyCaption batch (draft) when the backend allows it.
     if backend in ('auto', 'joycaption'):
         jc = {}
+        jc_errors = {}
         try:
             from .joycaption import caption_images_joycaption, is_available
             if is_available():
@@ -7251,7 +7294,8 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                     token, detail=f'Loading JoyCaption model and captioning {len(todo)} images…')
                 jc = caption_images_joycaption(
                     [p for _, p in todo], prompt=cap_prompt, activity_token=token,
-                    should_cancel=lambda: dataset_activity.cancel_requested(ds.id))
+                    should_cancel=lambda: dataset_activity.cancel_requested(ds.id),
+                    errors_out=jc_errors)
             elif backend == 'joycaption':
                 raise RuntimeError('JoyCaption backend is not available - check the ai-toolkit folder in Settings')
         except RuntimeError:
@@ -7269,6 +7313,17 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
     # 2a) Backend 'joycaption' forced: no Qwen. Store Joy drafts scrubbed mechanically
     #     (leak_re from the desc words only) - respects "no Ollama fallback".
     if backend == 'joycaption':
+        # The images JoyCaption refused are HANDLED — nothing else in this run will
+        # look at them, because forcing the backend is exactly the promise that no
+        # Ollama pass follows. Counting them here is what keeps the indicator from
+        # freezing short of the total on a pass that is actually finished; the same
+        # freeze was reported on the main lane and fixed there (see caption_images).
+        if remaining:
+            dataset_activity.bump(token, len(remaining))
+            _record_caption_skips(outcome, remaining, jc_errors)
+            logger.info('caption concept: %d image(s) refused by JoyCaption, first '
+                        'reason: %s', len(remaining),
+                        _first_caption_skip_reason(remaining, jc_errors))
         leak_re = _concept_terms_re(_fallback_concept_terms(concept_desc))
         for image_id, p, joycap in refine_targets:
             if dataset_activity.cancel_requested(ds.id):
@@ -7431,7 +7486,8 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
     return n
 
 
-def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, report=None):
+def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, report=None,
+                   outcome=None):
     """Caption les images gardees. Defaut: seulement celles SANS caption ; force=True
     re-capte TOUTES les gardees (ecrase) - pour rejouer apres un changement de prompt.
     Chaque caption passe par drop_identity_sentences (retire une eventuelle phrase
@@ -7453,7 +7509,13 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
     ({'joycaption': n, 'ollama': n, 'joycaption_refined': n} — clés absentes quand le
     moteur n'a rien écrit). C'est la seule façon, après coup, de savoir QUI a rédigé :
     'auto' enchaîne les deux moteurs sans le dire, et leurs styles diffèrent. La
-    valeur de retour reste le NOMBRE total de captions (contrat inchangé)."""
+    valeur de retour reste le NOMBRE total de captions (contrat inchangé).
+
+    `outcome` (optionnel) : dict rempli avec ce que la passe a TRAITÉ SANS écrire —
+    {'skipped': n, 'skipped_reason': "…"} quand le moteur a refusé des images. Un
+    refus par image n'interrompt pas le lot, donc sans ce canal la seule trace était
+    l'écart entre le nombre d'images et le nombre de captions ; la raison, elle,
+    restait dans le log du serveur."""
     _guard_not_bank_export(dataset_id)
     ds = get_dataset(user_id, dataset_id)
     if not ds:
@@ -7493,7 +7555,8 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
         try:
             n = _caption_concept(ds, force, backend, token=token, image_ids=ids,
                                  ollama_model=ollama_model,
-                                 extra_instructions=extra_instructions, report=report)
+                                 extra_instructions=extra_instructions, report=report,
+                                 outcome=outcome)
             logger.info('captioning finished: dataset=%s backend=%s captioned=%s elapsed=%.1fs',
                         dataset_id, backend, n, time.monotonic() - started)
             return n
@@ -7513,12 +7576,14 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
     mode = (mode or ('booru' if ttype == 'sdxl' else 'prose')).lower()
     style = is_style(ds)
     if style:
-        # Dataset STYLE : captions de CONTENU pur — le rendu n'est jamais décrit (le
-        # prompt porte la règle) pour qu'il soit absorbé par le LoRA. AUCUN nettoyage
-        # d'identité : les sujets varient, leur description EST le contenu contrôlable.
+        # Dataset STYLE : captions de CONTENU pur — le rendu n'est jamais décrit pour
+        # qu'il soit absorbé par le LoRA. AUCUN nettoyage d'identité : les sujets varient,
+        # leur description EST le contenu contrôlable. Le prompt porte la règle, mais elle
+        # est NÉGATIVE et JoyCaption ne la suit pas — d'où le post-filtre d'amorce, exact
+        # pendant de drop_identity_sentences sur la voie character.
         cap_prompt = caption_prompt_for_style(mode)
         def cleaner(text):
-            return text
+            return drop_style_lead_in(text)
     else:
         # Fidélité corps : le prompt bannit EN PLUS les marques corporelles permanentes
         # (tatouages/cicatrices/piercings…) et le post-filtre les retire — elles doivent
@@ -7565,6 +7630,11 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
         # sauté entièrement quand le backend force 'ollama'.
         if backend in ('auto', 'joycaption'):
             jc = {}
+            # Why an image came back WITHOUT a caption, keyed by path. In 'auto' the
+            # Ollama phase covers those images and the reason is noise; with
+            # 'joycaption' forced there IS no second phase, so this is the only
+            # material available to tell the user what happened to them.
+            jc_errors: dict = {}
             try:
                 from .joycaption import availability, caption_images_joycaption, is_available
                 if is_available():
@@ -7575,7 +7645,8 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                     # pas aux mots de la caption (deep-research 2026-06-14).
                     jc = caption_images_joycaption(
                         [p for _, p in todo], prompt=cap_prompt, activity_token=token,
-                        should_cancel=lambda: dataset_activity.cancel_requested(dataset_id))
+                        should_cancel=lambda: dataset_activity.cancel_requested(dataset_id),
+                        errors_out=jc_errors)
                 elif backend == 'joycaption':
                     # Explicit choice, explicit failure: a user who forced 'joycaption' in
                     # Settings must be told WHY (the exact missing deps + pip command),
@@ -7612,9 +7683,21 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
             dataset_activity.progress(
                 token, detail=f'JoyCaption finished; {len(remaining)} image(s) remaining…')
             if backend == 'joycaption':  # backend forcé JoyCaption -> pas de repli Ollama
+                # These images are HANDLED — refused, but handled: nothing else will
+                # look at them in this run. Leaving them uncounted is what made a
+                # finished pass look STUCK: the indicator froze at "37/89" forever
+                # because 52 refusals never advanced it, and the toast said "37
+                # captioned" with no hint that 52 images had been turned away.
+                if remaining:
+                    dataset_activity.bump(token, len(remaining))
+                    _record_caption_skips(outcome, remaining, jc_errors)
+                    logger.info('captioning: %d image(s) refused by JoyCaption, first '
+                                'reason: %s', len(remaining),
+                                _first_caption_skip_reason(remaining, jc_errors))
                 logger.info('captioning finished: dataset=%s backend=%s captioned=%s '
-                            'deleted_mid_pass=%s elapsed=%.1fs',
-                            dataset_id, backend, n, vanished, time.monotonic() - started)
+                            'skipped=%s deleted_mid_pass=%s elapsed=%.1fs',
+                            dataset_id, backend, n, len(remaining), vanished,
+                            time.monotonic() - started)
                 return n
         # 2) Ollama (Qwen3-VL) pour les images non couvertes par JoyCaption ('auto'),
         # ou pour TOUT le lot si le backend force 'ollama'.
@@ -7980,7 +8063,9 @@ def _scrub_short_like_long(ds, text, mode) -> str:
     if not t:
         return ''
     if is_style(ds):
-        return style_content_caption(ds, t)
+        # Same net as the long pass: the shortening LLM is told not to name the medium,
+        # and like the captioner it sometimes opens with one anyway.
+        return style_content_caption(ds, drop_style_lead_in(t))
     if is_concept(ds):
         leak_re = _concept_terms_re(_get_concept_terms(ds, describe=None))
         return _enforce_concept_omission(t, leak_re, b'', (ds.concept_desc or '').strip(),
@@ -9424,6 +9509,10 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
                             # path — deterministic, so a regenerate reproduces it.
                             label=v.get('label') or ''),
                         klein_model=klein_model,
+                        # Same card ratio the Krea lane asks for, resolved from
+                        # the same catalog: the two engines frame a shot alike
+                        # or the dataset is not one dataset.
+                        aspect_ratio=aspect_for_label(v.get('label'), v.get('framing')),
                         lora_strength=lora_strength, extra_ref_paths=extra_paths,
                         generation_loras=run_loras, sampler_steps=_generation_steps(),
                         base_lora_strength=_generation_base_lora_strength(),
@@ -10322,6 +10411,9 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
                 subject_type=subject_type_of(ds),
                 label=img.variation_label or ''),
             klein_model=model,
+            # The card's framing, like the Krea branch above — a regenerate must
+            # produce a tile the same shape and size as its siblings.
+            aspect_ratio=aspect_for_label(img.variation_label, img.framing),
             lora_strength=lora_strength, extra_ref_paths=extra_paths,
             generation_loras=resolve_generation_lora_preset(generation_lora_preset),
             sampler_steps=_generation_steps(),

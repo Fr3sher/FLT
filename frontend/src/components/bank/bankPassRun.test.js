@@ -1,8 +1,13 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
-  ENDPOINT_JOB_KIND, JOB_LABELS, bankIsBusy, busyLine, busyRefusal, jobLabel,
+  ENDPOINT_JOB_KIND, JOB_LABELS, bankIsBusy, busyLine, busyRefusal,
+  busyRefusalLive, jobLabel,
   jobProgress, passButtonState, passOutcome, passSettled, settledActivity,
   summaryKeyFor,
 } from './bankPassRun.js';
@@ -86,6 +91,53 @@ test('the refusal still works with only the 409 body — no snapshot', () => {
   assert.match(refusal, /✂ Crops & variants/);
   assert.match(refusal, /Stop/);
   assert.ok(!refusal.includes('undefined'), refusal);
+});
+
+/* ── 2b. The refusal reads the LIVE registry, not the 25-second payload ──────
+   Measured on a 36 921-image bank: the payload takes ~25 s at rest and longer
+   while a pass writes, so at refusal time `payload.activity` is stale or null —
+   the toast said "Framing pass is running… press Stop in the progress bar"
+   while no bar was on screen, because the bar reads the same stale payload.
+   The registry read behind /activity is in-memory and instant; the refusal must
+   prefer it, and the caller merges it into the payload so the bar appears. */
+
+test('the refusal quotes the FRESH snapshot when the live read lands', async () => {
+  const fresh = { kind: 'framing', done: 1968, total: 34922, finished: false, detail: null };
+  const refusal = await busyRefusalLive({
+    kind: 'framing',
+    fetchActivity: async () => fresh,
+    fallback: null,
+  });
+  assert.match(refusal, /📐 Framing pass/);
+  assert.match(refusal, /1968 \/ 34922/);
+  assert.match(refusal, /press Stop/);
+});
+
+test('a failed live read falls back to the last known snapshot', async () => {
+  const refusal = await busyRefusalLive({
+    kind: 'score',
+    fetchActivity: async () => { throw new Error('offline') },
+    fallback: scoring,
+  });
+  assert.match(refusal, /✨ Score pass/);
+  assert.match(refusal, /137 \/ 412/);
+});
+
+test('no live read and no fallback still names the pass from the 409 body', async () => {
+  const refusal = await busyRefusalLive({ kind: 'watermark' });
+  assert.match(refusal, /🚩 Watermark scan/);
+  assert.match(refusal, /press Stop/);
+});
+
+test('a live read that answers "nothing running" does not erase the 409 kind', async () => {
+  // The job can finish between the 409 and the read — the refusal was still
+  // true when the click was refused, so it still names the blocker.
+  const refusal = await busyRefusalLive({
+    kind: 'framing',
+    fetchActivity: async () => null,
+    fallback: null,
+  });
+  assert.match(refusal, /📐 Framing pass/);
 });
 
 test('an unknown job kind degrades to a neutral phrase, never to an internal id', () => {
@@ -221,7 +273,7 @@ test('the progress bar names the destructive pass instead of "Job running"', () 
   // The bar keeps its OWN kind->label map (it renders shorter, un-emoji'd
   // wording); a kind missing from it falls through to the anonymous fallback,
   // which is the last thing a delete should do.
-  const src = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+  const src = bankTreeSource();
   assert.match(src, /delete_rejected: 'Deleting rejected files'/);
   assert.equal(jobLabel('delete_rejected'), '\u{1F5D1} Delete rejected');
 });

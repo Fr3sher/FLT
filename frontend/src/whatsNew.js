@@ -50,6 +50,265 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-11-bank-rail-status-curate',
+    date: '2026-08-11',
+    title: 'The Bank puts its main gestures where your eyes are',
+    blurb:
+      'The Status split (All / Undecided / Kept / Rejected) now leads the filter rail as four large colour-coded buttons carrying live counts, the Curate tools (Pick diverse, Balanced pick, Similar, Find by text) wear the size their role deserves, the measured filters under “More filters” start unfolded, and the ✨ Clean chip finally says how many images it holds. The Quality row also tells you when only part of the bank has been scanned — with a one-click way to scan the rest.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-11-single-instance-guard',
+    date: '2026-08-11',
+    title: 'Launching the app twice can no longer split it in two',
+    blurb:
+      'Starting the app while it was already running used to quietly boot a second server on the next port, sharing the same database — jobs launched in one were invisible in the other, with no bar and “pass is running” refusals that pointed at nothing. A second launch now says the app is already running, points at its address, and steps aside. Separate installs and test copies with their own data folder are untouched, and running two on the same data on purpose stays possible (LDS_ALLOW_SECOND_INSTANCE=1).',
+  },
+  {
+    id: '2026-08-10-canvas-gallery-open-folder',
+    date: '2026-08-10',
+    title: 'Open your generated images straight from the Canvas',
+    blurb:
+      'The gallery a checkpoint pill or a run card opens now has an 📂 Open folder button next to ZIP: it reveals the folder the generated images are saved in (the dataset’s own folder, on the machine running the app), so you can grab the files without archiving anything.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-10-watermark-detector-gpu-python',
+    date: '2026-08-10',
+    title: 'Run the watermark detector on a GPU Python you already have',
+    blurb:
+      'The 🚩 Find scan quietly ran on the CPU even on machines with a perfectly good graphics card: its environment ships a CPU-only PyTorch on purpose, and nothing ever said so. The Bank’s Watermarks panel now tells you when the scan will run on the CPU and offers the same one-click picker ✨ Score already has — point the detector at the Python ComfyUI or ai-toolkit already uses and the scan runs about ten times faster, downloading nothing. The pass summary now also says which device it actually ran on.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-10-pass-report-and-flash-jobs-feedback',
+    date: '2026-08-10',
+    title: 'Re-run passes clear their old red report line — and instant passes say they finished',
+    blurb:
+      'Two silences fixed. A "Launch all" stopped early kept announcing "cancelled before it ran" over passes you had since re-run successfully — the re-run is now recorded for every pass, so the report marks the line as re-run since. And a pass that finishes in a couple of seconds (everything already cached) used to end without a progress bar, a toast, or any sign it had worked; its completion message now always arrives.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-10-group-by-person-smaller-faces',
+    date: '2026-08-10',
+    title: 'Group by person now recognises much smaller faces',
+    blurb:
+      'Point the Bank at a general photo library and most of it used to come back ungrouped: the pass only kept a face filling at least a quarter of the frame, so full-body shots, group photos and anything taken a few steps back were skipped as "face too small" and never joined their person. The size test is now a real measurement of the face in pixels rather than a share of the image, which is what identification actually depends on — the same head is the same head whether the photo is 1 or 24 megapixels. Faces below 64 pixels are still left out, because that is where the recognition itself stops being trustworthy and starts merging different people. Banks you already scanned keep their existing groups; photos you add from now on, and any bank scanned from here, use the new floor.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-10-sharpness-reads-the-sharpest-region',
+    date: '2026-08-10',
+    title: 'Bokeh portraits are no longer flagged as blurry',
+    blurb:
+      'The 🌫 blurry flag measured focus across the whole frame, so a shot with a razor-sharp subject on a creamy out-of-focus background averaged out as soft — and the pictures you most wanted to keep were the ones getting flagged. Sharpness is now read region by region and scored on the sharpest parts of the image, so the flag means what it always should have: even the crispest area of this photo is soft. It also stops the reverse mistake, where one blazing block — a watermark, a compression artefact, a burnt highlight — vouched for an otherwise soft frame. Scores are on a new, higher scale; run the Quality pass again on an already-scanned bank to pick them up. Thanks to the community for reporting it.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-10-bank-pass-remembers-itself',
+    date: '2026-08-10',
+    title: 'Find crops & variants shows its work, and remembers running',
+    blurb:
+      'Three things went wrong around this pass, none of them in the grouping itself. A "Launch all" you stopped before it reached the pass kept announcing "cancelled before it ran" — next to a standalone run that had just found 2358 groups; a step re-run since the report was written now says so, and the banner drops its 🛑 once nothing is left waiting. The run itself showed one line and then nothing for minutes, because its slowest phase — re-reading every file to prove none moved while it worked — ran unannounced; both phases now fill the bar. And the Bank had no memory of the pass at all, so the only way to know whether you had run it was to run it again: the launch window now tells you when it last ran and what it found, and relaunching an untouched Bank answers "already up to date" in a second instead of redoing the work.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-09-bank-filters-beside-the-grid',
+    date: '2026-08-09',
+    title: 'The bank filters now sit beside the images they filter',
+    blurb:
+      'Changing a filter on a 20 000-image bank meant scrolling up to the chips, clicking, and scrolling back down to see what it did. The filters now live in a rail down the left of the grid, and the rail stays put as you scroll, so the chips are still beside the images ten thousand rows down and the result is in front of you as you click. The eight analysis passes moved into a ⚙ Passes panel you open when you need them — all of them are still there, each with the same window, scope and counts as before — which gives the images the third of the screen the passes used to hold. Score, Framing, Medium, Angle, Resolution and Origin fold behind 🎛 More filters so the everyday chips stay on one screen. On a narrow window the rail becomes a drawer behind ☰ Filters, and it remembers whether you keep it open.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-10-canvas-edges-tinted-per-dataset',
+    date: '2026-08-10',
+    title: 'Tell whose line is whose on a multi-dataset Canvas',
+    blurb:
+      'Every connector on the board used to be the same pale grey, so once two datasets had pictures parked near each other their lines crossed and became one tangle. Each dataset now draws its links in its own colour, shown as a dot next to its name in the lane header. The colour is fixed per dataset, so it is the same next time you open the board. The three colours that mean something keep meaning it: amber for a superseded branch, violet for "blended from", cyan for an external LoRA file.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-10-lightbox-keep-reject-shortcuts',
+    date: '2026-08-10',
+    title: 'Judge a dataset image while you are looking at it — K, R, S',
+    blurb:
+      'The full-screen view is where you can actually see whether a hand is right, but the ✓/✕ lived on the thumbnail behind it. It now carries the Bank review bar: ✓ Keep (K), ✕ Reject (R), ⏭ Skip (S or →), and each verdict moves you to the next picture as soon as it is saved. Same keys as ▶ Review in the Image Bank, same green and red, and the same status the grid writes — a chip beside the name says whether the image is kept, rejected or still undecided. ← still goes back without deciding anything, and nothing is ever deleted.',
+    to: '/datasets?section=images',
+  },
+  {
+    id: '2026-08-09-canvas-pins-float-both-ways',
+    date: '2026-08-09',
+    title: 'Park a pinned picture below its lane without shoving the next dataset',
+    blurb:
+      'On the Canvas, dragging a pinned image above its dataset always let it float free — dragging it below pushed every dataset underneath further down the board. Pinned pictures now sit on a free layer in both directions: they overlap the lane below if you park them there, and nothing else moves. Fit still frames them, Export PNG still includes them, and ✦ Tidy up still brings them back beside the run that made them.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-setup-chatgpt-subscription',
+    date: '2026-08-09',
+    title: 'Set up ChatGPT with your Plus/Pro plan, no API key',
+    blurb:
+      'The first-run Setup screen only ever offered an OpenAI API key, so the ChatGPT engine looked like it cost money per image. It now shows both ways in side by side — paste a key, or sign in once with your ChatGPT Plus/Pro subscription and run on your plan\'s image quota. The step turns green as soon as either one is in place.',
+    to: '/setup?step=image',
+  },
+  {
+    id: '2026-08-09-dataset-thumbnails',
+    date: '2026-08-09',
+    title: 'Grids and the board load in a blink',
+    blurb:
+      'Every thumbnail surface — the Canvas board, the dataset grid, Test Studio result tiles, checkpoint pills and the run cards — used to download and decode your full-resolution images just to paint a small tile. They now ask for a right-sized WebP thumbnail instead: a board that pulled 47 MB of pictures fetches 0.4 MB, and off-screen tiles no longer load at all. Opening an image, downloading it or exporting the board still uses the full-quality original — and a pinned image now carries an HQ button that swaps its tile for the original file in place, one picture at a time, for when you are judging skin or fine text and a re-encode is not good enough. A group of pinned images has the same HQ in its title bar, next to Export grid: one click puts the whole strip on its original files for a side-by-side comparison, and one more click gives the board its fast tiles back.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-canvas-machine-load',
+    date: '2026-08-09',
+    title: 'See how hard the machine is working, without leaving the board',
+    blurb:
+      'The Canvas toolbar now carries a small CPU · GPU · VRAM · RAM readout of the machine running LDS, so you can tell a run that is working from one that is stuck without opening Task Manager. It turns amber past 50% and red past 80%, refreshes only while the tab is open, and folds away with ▾ if you would rather not see it. No NVIDIA card: it simply shows no GPU numbers.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-lightbox-side-by-side-tablet',
+    date: '2026-08-09',
+    title: 'Full-height images on a tablet, with the facts beside them',
+    blurb:
+      'Opening a generated image on a tablet in landscape used to shrink it to a thumbnail with the prompt, Download and ✨ Upscale & improve buttons stacked below the fold. The picture now takes the whole height on the left and everything else reads in a scrollable column on the right — the same split you already had on a desktop, from 768 px up. Held upright, or on a phone, the stacked layout is unchanged.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-canvas-phone-board-room',
+    date: '2026-08-09',
+    title: 'The canvas gives the board back its screen on a phone',
+    blurb:
+      'On a phone the filter row was three wrapped lines floating on the board and the search box you rarely type in took most of one — it is now two lines: the chips keep their icon and their count, and 🔍 unfolds the search only when you ask for it (with the words still shown on the chip while a search is narrowing the board). The page blurb stays out of the way up to a laptop width, and a run in flight is announced once instead of twice when the Generate sheet is open. The board’s floating rows are also properly opaque now, so a strip of pinned images parked in a corner can no longer be read through Reset.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-canvas-external-lora-links',
+    date: '2026-08-09',
+    title: 'See which images an external LoRA actually touched',
+    blurb:
+      'A permanent cyan line now joins each 🔌 plugin node to every board image generated with it, and an image’s facts panel lists its External LoRAs on their own row instead of filing them under always-on.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-preview-prompts-from-captions',
+    date: '2026-08-09',
+    title: 'Preview images that finally show YOUR subject',
+    blurb:
+      'The preview prompts a run renders every few hundred steps used to be generic defaults that describe nobody — so the images you judge an expensive run by showed a stranger. A new 🎲 Use dataset captions button under Preview prompts fills the field with up to five real captions drawn at random from this dataset’s kept images. Click it again for a different draw.',
+    to: '/datasets?section=training&panel=advanced',
+  },
+  {
+    id: '2026-08-09-canvas-phone-toolbar',
+    date: '2026-08-09',
+    title: 'The LoRA Canvas gives the board back to your phone',
+    blurb:
+      'On a phone the board’s bottom controls took a quarter of the screen, and tapping ☝ Gestures buried the board under its own instructions with no way to put them away. The row is icons-only below a tablet — two rows instead of five, every button still thumb-sized — and the gesture help is now a sheet that floats over the board and closes with its ×. Nothing changes on a desktop.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-09-canvas-external-loras',
+    date: '2026-08-09',
+    title: 'Pin any LoRA onto the Canvas, even one you never trained here',
+    blurb:
+      'Pin any LoRA from your ComfyUI folder onto the LoRA Canvas as a 🔌 plugin node and stack it on your generations, with its own strength. It stacks on a run anchored by a checkpoint trained here — there is no solo generation from an external LoRA alone.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-the-canvas-controls-live-on-the-board',
+    date: '2026-08-08',
+    title: 'The Canvas gives the screen back to the board',
+    blurb:
+      'Everything that steers the LoRA Canvas — the zoom row, Fit, Tidy up, Generate, the colour key, the gestures sheet, the dataset filter and the banner announcing finished images — used to be stacked above the board. On a phone that chrome cost most of the screen before a single card was drawn, which is why the board opened tiny and pinned under a wall of buttons. Those controls now float ON the board: what it is showing sits along the top, what you do to it sits along the bottom within thumb reach, and the board itself takes back the space they were using. Nothing was removed and nothing moved to another page — the same controls, on the surface they act on.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-filter-bar',
+    date: '2026-08-08',
+    title: 'The canvas filters stopped eating half the screen',
+    blurb:
+      'The Datasets panel was a fold-out card: unfolded on a library of fourteen datasets it stood 389 px tall on a 720-px screen — 54 % of the window, directly above the board, for anyone who had ever left it open. It is now a single row of chips about 40 px tall. Datasets, Models and Status each open a small menu with the same checkboxes (the dataset menu gained a search of its own, which the three-column list never had), Pinned images and Reset stay in the row, and the run search keeps its full-size box. Every chip shows its count and lights up while it is filtering, so nothing can narrow your board without saying so — and the menus now open above the board instead of under a pinned image.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-zoom-labels',
+    date: '2026-08-08',
+    title: 'Run cards stay readable when you zoom the board out',
+    blurb:
+      'A board holding a dozen datasets is read at 30-40 % zoom, and at that scale a run card\'s title renders at about four pixels: the canvas was showing you everything and telling you nothing, so finding a run meant zooming in on each one in turn. Below 55 % every card now carries its run number at a constant, readable size, and below 30 % it carries the dataset name too — because the lane headings have gone unreadable by then as well.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-layout-presets',
+    date: '2026-08-08',
+    title: 'Keep a board arrangement instead of losing it to ✦ Tidy up',
+    blurb:
+      'Laying two datasets\' renders out side by side to judge a likeness takes twenty minutes, and until now the board only ever held ONE arrangement: the moment you needed it for something else, your only options were to leave it there forever or throw it away. 💾 Layouts in the board toolbar saves where every run card and every pinned picture sits — closed pictures included — under a name, and puts it back whenever you want. A run deleted since is simply not restored, and the app says how many, rather than leaving you to hunt for the card that is missing.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-export-png',
+    date: '2026-08-08',
+    title: 'Save the whole board as a PNG',
+    blurb:
+      '📷 PNG in the board toolbar writes the entire canvas to one image file: every pinned picture at full size, every run card with its checkpoints, and the lines that join them. Useful for a comparison you want to keep, post, or look at next to something else. It is a redraw of the board, not a screenshot, so the buttons and badges are not in it — and a picture whose file has been cleaned off the disk comes out as a labelled placeholder instead of silently missing.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-canvas-delete-image',
+    date: '2026-08-08',
+    title: 'Bin a bad render from the board itself',
+    blurb:
+      'The board is where you actually decide a render is a failure — and deleting it meant closing the node, opening the run, finding the checkpoint, opening its gallery, entering Select mode and finding the same picture again. Pinned images now carry a 🗑 next to their ✕. Press it once to arm it, again to delete: ✕ still only takes the picture off the board and remembers where it was, 🗑 deletes the image itself, through the same route (and the same recoverable-or-not setting) the gallery uses.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-lora-strength-up-to-5',
+    date: '2026-08-08',
+    title: 'LoRA strength and blend weights now go up to 5',
+    blurb:
+      'The weight slider of a 🧬 Blend stopped at 2 and the strength sweep at 4 — both were comfort limits, not technical ones, and pushing an under-trained LoRA or an overwhelming style meant leaving the app for a hand-built workflow. The ceiling is 5 everywhere now: the blend slider, the strength chips behind « + », and the server that validates them. The weight next to each slider is also typeable, so getting to 3.35 no longer means eighty small drags.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-08-launch-anyway-actually-asks',
+    date: '2026-08-08',
+    title: 'A second cloud run on one dataset now actually asks you',
+    blurb:
+      'Launching a second cloud training on a dataset that already had one was supposed to ask "launch anyway?" and go ahead if you said yes. The question never reached you: the refusal arrived as an error toast printing the question at you, with no way to answer it, so the second run was simply impossible however many times you tried. The confirmation now appears and the run starts when you accept. Nothing about what is allowed has changed — the guard, your fleet limit and your budget behave exactly as before; the answer you gave it was being thrown away. Reported by Arrow (Discord).',
+  },
+  {
+    id: '2026-08-08-one-output-size-for-both-local-engines',
+    date: '2026-08-08',
+    title: 'Your generated shots are finally all the same size',
+    blurb:
+      'Klein and Krea 2 Edit used to size their images by two unrelated rules, so one dataset could hold 2 MP Klein tiles next to 0.84 MP Krea ones, in different shapes, with nothing on screen explaining either. There is now a single Output size dial at the top of the Generate variations panel, above the shot cards: both local engines spend that budget, on the shape of the shot card you picked. Klein therefore stops inheriting your reference photo\'s frame — a 16:9 card renders 16:9 even if your reference is portrait. It ships at 2.0 MP, exactly what Klein always did, so nothing moves until you touch it; drop it for quicker, lighter trial runs, or leave it at 2.0, which is as far as these edit models hold together (go bigger afterwards with ✨ Upscale & improve).',
+    to: '/datasets?section=add&panel=generate',
+  },
+  {
+    id: '2026-08-08-start-comfyui-from-the-banner',
+    date: '2026-08-08',
+    title: 'Start ComfyUI from the banner that tells you it is down',
+    blurb:
+      'When LDS cannot reach ComfyUI, the banner explaining it offered one button: "I restarted ComfyUI — clear it", which only lets you say someone else fixed it. On an install whose ComfyUI this app can launch, there is now a ▶ Start ComfyUI button right there, and it comes first: it is the one that ends the outage rather than declaring it over. The banner then clears itself once ComfyUI actually answers, so a start that spawns and dies cannot be mistaken for a fix, and your paused job resumes on its own. The button is deliberately absent when your ComfyUI is not ours to launch — ComfyUI Desktop, your own launcher script, or one running on another machine — because on the one screen whose job is to unblock you, a button that fails costs more than no button at all.',
+  },
+  {
+    id: '2026-08-08-klein-stops-switching-itself-off',
+    date: '2026-08-08',
+    title: 'Picking a Klein model no longer switches Klein off',
+    blurb: 'Choosing a model from the workspace dropdown stored its name without the folder it lives in — and the check that guards that setting only recognised the full path. So the app wrote a value its own guard then called missing, the engine went dark, and the message said no file was missing or broken. Both spellings are now accepted, so nothing you picked was ever wrong. And an unresolvable model no longer takes the whole engine hostage while usable Klein builds sit on your disk: the card asks you to pick one instead. What has not changed is the promise that made that guard exist — a run never quietly loads a file other than the one shown.',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-08-krea-ships-identity-first',
+    date: '2026-08-08',
+    title: 'Krea 2 Edit now ships tuned for likeness, not for variety',
+    blurb: 'Its two identity dials shipped unpaired — reference grounding at 512 with a reference pull of 0.25, a quarter of what the calibrated 512 profile used. A benchmark scoring generated faces against the reference measured the 1024 / 4.0 pair ahead by a clear margin on bust shots, and it got there while pulling LESS hard on the reference, so the likeness is not bought by recopying the pose you asked to change. Both dials, and sampler steps, now ship at those values. If you had never touched them, your next generations will resemble your reference more; if you prefer the looser, more varied restaging, set grounding back to 512 and the pull to 1.0. Anything you had already changed yourself is left exactly as you set it.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-08-one-model-setting-wherever-you-change-it',
     date: '2026-08-08',
     title: 'Change the model where you are working, not in Settings',

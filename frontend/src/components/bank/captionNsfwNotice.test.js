@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -156,7 +160,7 @@ test('the two gates are a quarter of the measured rows, and twenty of them', () 
 /* Shipped-but-invisible is indistinguishable from not shipped. The window that
    opens before the run has to render this. */
 test('the caption launch window really renders the notice', () => {
-  const src = readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+  const src = bankTreeSource();
   assert.match(src, /import \{ captionNsfwNotice \} from '\.\/captionNsfwNotice\.js'/);
   assert.match(src, /captionNsfwNotice\(\{/);
   // It reads THIS RUN's engine, not the stored setting: warning about a half the

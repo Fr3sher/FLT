@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // WHY THIS TEST EXISTS
@@ -39,6 +39,34 @@ const IMAGE_VIEWER_ALLOWLIST = new Set([
 // Opaque panel tokens (alpha-free surfaces a card can be built on).
 const OPAQUE = /\bbg-(surface-overlay|surface-solid|app)\b|\bbg-black(?=["'\s])/
 
+// A dialog's classes do not all live in its own file. When a responsive shape
+// gets big enough to reason about, it is extracted to a sibling module of
+// CLASS CONSTANTS (`export const FACTS_PANEL_CLASS = '… bg-app …'`) so
+// `node --test` can assert the breakpoints without a DOM — and this guard, which
+// only ever read .jsx, went blind the first time that happened: the opaque token
+// was still there, one import away, and the test called the dialog see-through.
+//
+// So the scan follows exactly one kind of import: a RELATIVE one whose imported
+// bindings are ALL SCREAMING_SNAKE_CASE, which is what a class-constant module
+// looks like and what a component or hook does not. One level deep, no
+// recursion — enough to see the extracted classes, not enough to let some
+// unrelated `bg-app` three files away vouch for a genuinely transparent form.
+const CLASS_MODULE_IMPORT = /import\s*\{([^}]*)\}\s*from\s*['"](\.[^'"]*)['"]/g
+
+function withClassModules(file, src) {
+  let text = src
+  for (const [, names, spec] of src.matchAll(CLASS_MODULE_IMPORT)) {
+    const bindings = names.split(',').map((n) => n.trim()).filter(Boolean)
+    if (!bindings.length) continue
+    if (!bindings.every((n) => /^[A-Z][A-Z0-9_]*$/.test(n))) continue
+    for (const ext of ['.js', '.jsx', '']) {
+      const p = join(dirname(file), spec + ext)
+      if (existsSync(p)) { text += '\n' + readFileSync(p, 'utf8'); break }
+    }
+  }
+  return text
+}
+
 function jsxFiles(dir) {
   const out = []
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -56,7 +84,7 @@ test('every form/panel dialog uses an opaque surface (no see-through modals)', (
     if (!src.includes('role="dialog"')) continue
     const name = file.split(/[\\/]/).pop()
     if (IMAGE_VIEWER_ALLOWLIST.has(name)) continue
-    if (!OPAQUE.test(src)) offenders.push(name)
+    if (!OPAQUE.test(withClassModules(file, src))) offenders.push(name)
   }
   assert.deepEqual(offenders, [],
     `these dialogs have no opaque surface token — their content will show the ` +

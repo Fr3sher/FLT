@@ -55,6 +55,12 @@
  * on a phone, and ⟩ pressed behind it would otherwise land you on an image you
  * cannot see, under a panel you did not reopen. Sharing the stamped slot makes
  * "moving image gives you the picture back" structural, like the two panes.
+ *
+ * `deciding` — a ✓ Keep / ✕ Reject verdict is in flight for THIS image — lives
+ * here for the plainest reason of the lot: the verdict advances to the next
+ * picture the moment it lands, so the flag must die with the image it belonged
+ * to. Held in a useState of its own, a slow POST would have left the NEXT image
+ * with its buttons greyed out.
  */
 export function freshLightboxImageState(imageId) {
   return {
@@ -63,6 +69,7 @@ export function freshLightboxImageState(imageId) {
     compareMode: 'none',
     improving: false,
     actionsOpen: false,
+    deciding: false,
   };
 }
 
@@ -133,16 +140,9 @@ export function lightboxNeighbours(images, currentId) {
   };
 }
 
-/**
- * Does this event target own the arrow keys? A caption textarea, a filter box or
- * a select uses ← and → to move a caret or change a value, and stealing them
- * there would edit the wrong thing. The lightbox traps focus inside itself, so
- * this is a cheap guarantee rather than a live bug — but the trap is one layer
- * away from here and this file is where the shortcut is decided.
- */
-export function ownsArrowKeys(target) {
-  if (!target || typeof target !== 'object') return false;
-  if (target.isContentEditable) return true;
-  const tag = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : '';
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-}
+/* The "does this field own the arrow keys?" guard used to live here, in a
+   private copy that only knew about ← and →. It moved to
+   components/shared/reviewShortcuts.js together with the rest of the review
+   grammar, because the lightbox now answers K/R/S as well and the Bank answers
+   the same letters: one guard, one place, and the checkbox exemption the Bank
+   paid for in a real bug applies here too. */

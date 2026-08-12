@@ -27,6 +27,10 @@ import {
 } from './bankProvenance.js'
 import BankWatermarkMaskDialog from './BankWatermarkMaskDialog'
 import { canEditMask } from './bankWatermarkMask.js'
+import {
+  REVIEW_SHORTCUT_HINT, ownsTypedKeys, reviewKeyAction,
+} from '../shared/reviewShortcuts.js'
+import ShortcutKey from '../shared/ShortcutKey'
 
 // How many upcoming images we pull metadata for in one go (the decision helpers
 // below the image). The grid page only holds the ids it rendered.
@@ -196,39 +200,34 @@ export default function BankReviewLightbox({
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return
       // The mask editor owns the keyboard while it is open: every letter here is
       // one keystroke away from a decision on the image being masked.
       if (maskId != null) return
-      if (e.key === 'Escape') { onClose(); return }
-      // Only TEXT entry swallows the shortcuts. A blanket "input" guard broke
-      // the whole mode: the focus trap lands on the 🎲 checkbox when the
-      // lightbox opens, so K/R/S did nothing until you clicked elsewhere.
-      const el = e.target
-      const tag = (el?.tagName || '').toLowerCase()
-      const type = (el?.type || '').toLowerCase()
-      const typing = tag === 'textarea' || tag === 'select' || el?.isContentEditable
-        || (tag === 'input' && !['checkbox', 'radio', 'button', 'submit', 'range'].includes(type))
-      if (typing) return
-      const k = e.key.toLowerCase()
-      if (k === 'k') { e.preventDefault(); sendDecision('keep') }
-      else if (k === 'r') { e.preventDefault(); sendDecision('reject') }
-      else if (k === 's' || e.key === 'ArrowRight') { e.preventDefault(); doSkip() }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); goBack() }
+      // K/R/S, ← and Esc come from the SHARED grammar (components/shared/
+      // reviewShortcuts.js) — the same one the dataset lightbox reads, so the
+      // two review surfaces cannot drift apart one refactor at a time. The keys
+      // below are the Bank's own and are read off the same event.
+      const action = reviewKeyAction(e)
+      if (action === 'close') { onClose(); return }
+      if (action === 'keep') { e.preventDefault(); sendDecision('keep'); return }
+      if (action === 'reject') { e.preventDefault(); sendDecision('reject'); return }
+      if (action === 'skip') { e.preventDefault(); doSkip(); return }
+      if (action === 'back') { e.preventDefault(); goBack(); return }
+      if (e.metaKey || e.ctrlKey || e.altKey || ownsTypedKeys(e.target)) return
       // [ and ] turn the image without deciding anything. Deliberately NOT
       // letters: every free letter here is one keystroke away from a decision.
-      else if (e.key === '[') { e.preventDefault(); rotateCurrent(-90) }
+      if (e.key === '[') { e.preventDefault(); rotateCurrent(-90) }
       else if (e.key === ']') { e.preventDefault(); rotateCurrent(90) }
       // M edits the watermark mask of the flagged image under the cursor.
-      else if (k === 'm' && canEditMask(img)) { e.preventDefault(); setMaskId(id) }
+      else if (e.key?.toLowerCase() === 'm' && canEditMask(img)) { e.preventDefault(); setMaskId(id) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, sendDecision, doSkip, goBack, rotateCurrent, maskId, img, id])
 
-  const shortcut = (label) => (
-    <kbd className="ml-1 rounded border border-white/25 px-1 text-[10px] font-mono text-white/70">{label}</kbd>
-  )
+  // The key cap itself is shared with the dataset lightbox (ShortcutKey.jsx):
+  // same letters, same look, one place.
+  const shortcut = (label) => <ShortcutKey>{label}</ShortcutKey>
 
   const summary = useMemo(() => {
     const bits = [`${p.kept} kept`, `${p.rejected} rejected`]
@@ -336,7 +335,7 @@ export default function BankReviewLightbox({
             </button>
           </div>
           <p className="text-center text-[11px] text-white/45">
-            K keep · R reject · S skip · [ ] rotate · M watermark mask · ← → move without
+            {REVIEW_SHORTCUT_HINT} · [ ] rotate · M watermark mask · ← → move without
             deciding · Esc close. Decisions are saved one by one — closing loses nothing.
           </p>
         </div>

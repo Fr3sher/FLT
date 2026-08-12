@@ -81,7 +81,9 @@ test('the app renders one persistent offline indicator', () => {
 
 test('the bank progress zone knows about the offline state', () => {
   const s = read('components/bank/BankWorkspace.jsx');
-  assert.match(s, /progressPresence\(activity, offline\)/);
+  // The bar itself is BankProgress.jsx now; the workspace still passes it the
+  // connection state, which is the property this test protects.
+  assert.match(read('components/bank/BankProgress.jsx'), /progressPresence\(activity, offline\)/);
   assert.match(s, /<ProgressBar activity=\{payload\?\.activity\} onCancel=\{cancelJob\} offline=\{!connection\.online\}/);
 });
 
@@ -96,7 +98,10 @@ test('the polls that fire on a timer are marked background', () => {
     ['components/bank/BankWorkspace.jsx', /refreshPayload\(\{ background: true \}\)/],
     ['hooks/useTrainingActivity.js', /'\/api\/train\/activity', \{ background: true \}/],
     ['components/settings/MaintenanceSection.jsx', /background: true/],
-    ['components/settings/EnginesSection.jsx', /background: true/],
+    // The ChatGPT device-code poll. It used to live inside EnginesSection; it
+    // moved out whole when the Setup wizard started offering the same login, so
+    // the property is pinned where the setInterval actually is.
+    ['components/common/ChatgptSubscriptionConnect.jsx', /background: true/],
     ['components/dataset/CaptionOptionsPopover.jsx', /background: true/],
     ['App.jsx', /update\/check\?auto=1', \{ background: true \}/],
   ];

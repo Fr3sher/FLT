@@ -40,11 +40,17 @@ export default function DescribeFilterBar({ bankId, onApply, onFenceBlocked }) {
   return (
     <div className="rounded-lg border border-border bg-surface-raised p-2">
       {/* flex-wrap and a full-width field: at 400 px the label, the input and the
-          button cannot share a row. */}
+          button cannot share a row.
+          ⚠️ The field carries a MINIMUM width, not `min-w-0`. With min-w-0 a flex
+          child accepts any width, so `flex-wrap` never fires: instead of moving
+          to its own line the input is squeezed to a few pixels beside the label
+          — which is exactly what it did in the rail, where the whole row has
+          17rem to share. Wrapping is the behaviour this row was written for; the
+          floor is what makes it happen. */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-content-muted">🗣 Describe the set you want</span>
         <input
-          className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1 text-sm"
+          className="w-full min-w-[11rem] flex-1 rounded-md border border-border bg-surface px-2 py-1 text-sm"
           placeholder="an amateur photo set, least polished first"
           value={text} maxLength={400} disabled={busy}
           onChange={(e) => setText(e.target.value)}

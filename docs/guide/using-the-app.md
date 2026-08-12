@@ -440,7 +440,31 @@ setup into a single file so you can move to a new machine — or recover from on
 You exported 9 000 unsorted images from Telegram (or a scraper dumped a
 mountain of files) and a dataset only needs the best 30–150 of them. The
 **🗃️ Bank** tab is the triage funnel that gets you there — without ever
-touching the folder itself:
+touching the folder itself.
+
+**Where things are on that screen.** A bank you open is laid out in three
+parts, and knowing which is which saves reading the rest of this section twice:
+
+- a **top bar** with the bank's name, its counters, and the four actions that
+  change what leaves the bank — **⚙ Passes**, **🚀 Launch all…**, **⬆ Promote…**
+  and **🗑 Delete rejected from disk**;
+- a **filter rail** down the left: the search, the exclude box, the subfolder
+  picker, the person and style strips, and the chips. The six measured axes
+  (Score, Framing, Medium, Angle, Resolution, Origin) sit behind **🎛 More
+  filters** so the everyday ones stay on one screen. On a narrow window the rail
+  becomes a drawer you open with **☰ Filters**, and it remembers whether you
+  keep it open. On a wide window the rail stays put as you scroll the grid, so
+  the chips are still there ten thousand images down;
+- the **grid** filling the rest, with the selection actions directly above it.
+
+The analysis passes live **inside ⚙ Passes** rather than across the top of the
+page: they are the step you run once per bank and then leave alone for days, and
+they were taking up the third of the screen the images now use. All eight are
+still there, and each still opens its own window with its own scope and counts —
+only the door changed. On a bank with nothing scanned yet the panel opens by
+itself, because there is nothing else to do first.
+
+The funnel itself:
 
 1. **Create a bank** — give it a name and paste the folder path. The app
    inventories every image in place (subfolders included). Nothing is copied,
@@ -1589,6 +1613,37 @@ improve) wait for the pass.
 The rescue pairs in **Curation** are the one place with no arrows: there you are
 judging one pair, not walking a list.
 
+## Keep or reject a dataset image without leaving the picture
+
+The full-screen view is where you can actually *see* whether a hand is right or
+an eye is mush — so that is where the verdict belongs. The bar under the image
+carries the same three buttons as the Bank's **▶ Review**, on the same keys:
+
+- **✓ Keep** — `K`
+- **✕ Reject** — `R`
+- **⏭ Skip** — `S` (or **→**)
+
+**Keep and Reject move you on** as soon as the verdict is saved, so a folder of
+300 pictures is worked through with one hand on the keyboard and never a return
+trip to the grid. **Skip is nothing but "next"**: the image keeps whatever it
+already had, undecided included. **←** goes back the same way — navigation only,
+it decides nothing.
+
+It is the *same* verdict as the ✓ / ✕ on the tile behind the overlay, not a
+second one: only kept images are captioned, exported and trained on, and the
+grid, the counters and the ⬇ Export all read that one status. The chip beside
+the image's name says which one it is carrying right now — **✓ kept**,
+**✕ rejected** or **· undecided** — so you can tell a landed decision from a
+missed keystroke.
+
+Two things it deliberately does not do. **Nothing is deleted**: a reject is a
+status, the file stays on disk and ✓ takes it back. And **the verdict is sent
+before you move** — on a slow disk the buttons grey out for a moment rather than
+walking on with a decision still in flight.
+
+At the end of the list there is nowhere to advance to, so the picture stays in
+front of you wearing its new chip; the ⟩ arrow already says which end that is.
+
 ## Inspect an image on a phone
 
 Below a phone-sized window the lightbox changes shape, and it is the same
@@ -2144,6 +2199,39 @@ tools always installs SigLIP 2 into the environment the app built, whatever you
 picked in this dialog — including when you later hit Install/repair, which now
 *keeps* your choice instead of quietly putting the index back on the CPU.
 
+
+## Run the watermark detector on a GPU Python you already have
+
+The **🚩 Find** scan is the third pass with the same story. Installing the
+watermark detector (Setup ▸ Quality tools) builds it a small environment with
+**CPU-only PyTorch** — the same deliberate default as Score — and *pins* that
+environment as the detector's interpreter. On a machine with a card the scan
+therefore ran on the CPU, silently, however good the GPU sitting idle next to
+it was.
+
+Two things changed:
+
+- **The Bank's 🚩 Watermarks panel now says it.** When the fast detector is
+  installed but its Python cannot reach CUDA on a machine that has a card, an
+  amber note names the situation and offers the same button as Score and
+  SigLIP 2: **⚡ Use a GPU Python I already have**. The pass summary also
+  reports which device the scan *actually* ran on — "(detector on GPU, …)" or
+  "(detector on CPU, …)" — read back from the scan itself, not from a guess.
+- **The picker speaks the detector's own dependency list.** It never imports
+  `open_clip`, `timm` or even NumPy, so the ComfyUI interpreter Score refuses
+  is usually perfect here. What it *does* need is a **Transformers carrying
+  both halves of the cascade** — the SigLIP classifier and the Grounding-DINO
+  locator (4.40 or newer). Both classes are really looked for, not assumed
+  from the package name, and an interpreter missing either is refused with the
+  exact repair command.
+
+**Borrowing an interpreter downloads nothing.** The detector's pinned weights
+live under the app's models folder, not inside the interpreter. And as
+everywhere in this dialog family, nothing is ever installed into an
+environment the app did not build — **Back to the app default** reverts the
+choice at any time, after which the scan falls back to Score's interpreter and
+then the app's own, exactly as before.
+
 Score and the semantic index are chosen separately. Pointing one at an
 interpreter never moves the other, and **Back to the app default** undoes either
 on its own.
@@ -2476,13 +2564,67 @@ from an earlier one, the line between them starts at the *exact* checkpoint it
 resumed from — so "where did this LoRA come from" is a thing you read, not a
 thing you reconstruct.
 
-**Choosing what is on the board.** Everything is on it by default. The
-**Datasets** control above the board unticks what you do not want to see; the
-choice is remembered. It opens **folded**, at every screen width: its checkbox
-list is as tall as your library, and expanded on arrival it pushed the board —
-the thing you came to look at — below the fold on every load. Nothing is hidden
-by that, because the current state is written on the button ("3 of 7") so you
-always know what you are looking at. Unfold it and it stays unfolded next time.
+**Choosing what is on the board.** Everything is on it by default. Above the
+board sits a single row of filter chips, about 40 px tall — it used to be a
+fold-out panel, and unfolded on a library of fourteen datasets it stood 389 px
+on a 720-px screen, more than half the window, directly above the thing you came
+to look at.
+
+- **Datasets** opens a menu with a search box, **Select all** / **Clear**, and
+  one checkbox per dataset with its run count. The search matches the name *and*
+  the model family, so typing `krea` brings up every Krea lane.
+- **Models** and **Status** are the same idea for the model family and the run
+  state (Active, Completed, Errors, Unknown).
+- **Pinned** toggles the pinned images on and off. Turned off it goes amber:
+  pinned pictures missing from the board with no visible cause is a bug report
+  waiting to happen.
+- The **search box** stays at full size in the row — it filters the *runs* on the
+  board (dataset, run ID, model, variant), which is a different question from
+  "find me a lane to tick".
+- **Reset** puts everything back, and goes dim when there is nothing to reset.
+
+Every chip carries its own count and lights up while it is narrowing something,
+and the row ends with **N runs shown** — so a filter you set and forgot can never
+empty your board without saying why. Your choices are remembered between visits.
+
+**Saving an arrangement.** **💾 Layouts** in the board toolbar keeps where every
+run card and every pinned picture sits, under a name, and puts it back later —
+closed pictures included. Until this existed, the only way out of an arrangement
+was **✦ Tidy up**, which throws it away. A run deleted since the layout was saved
+simply is not restored, and the app tells you how many were missing rather than
+leaving you to hunt for the card that did not come back.
+
+**Exporting the board.** **📷 PNG** writes the whole canvas to one image file:
+every pinned picture at full size, every run card with its checkpoints, and the
+lines that join them. It is a redraw rather than a screenshot, so the buttons,
+badges and hover highlights are not in it — and a picture whose file has been
+cleaned off the disk comes out as a labelled placeholder rather than silently
+missing.
+
+**Machine load.** The right-hand end of the board toolbar carries four small
+numbers for the machine *running LDS* — **CPU**, **GPU**, **VRAM**, **RAM** —
+refreshed every five seconds while the tab is in front. It answers the one
+question the board could not: whether a run that shows no new pictures is
+working or wedged. Every number carries a colour: green below 50 % of its
+resource, amber 50-80 %, red past 80 %; **▾** folds the readout away and stops
+the polling with it, and the choice is remembered. It is a glance, not a
+monitor: there is no history, no graph and
+no per-process breakdown. On a machine with no NVIDIA card (or with `nvidia-smi`
+unavailable, as in some containers) the GPU and VRAM numbers are simply absent
+rather than shown as zeros, and the row is hidden on phone-width screens.
+
+**Deleting a picture from the board.** A pinned image carries **✕** and **🗑**,
+and they are not the same thing. **✕** takes it off the board and remembers where
+it was, so re-pinning it from its gallery puts it back at the same spot and size.
+**🗑** deletes the image itself, through the same route (and the same
+recoverable-or-not setting) the gallery's own delete uses; it arms on the first
+press and deletes on the second, because a delete one tap away from ✕ on a small
+control is a delete that happens by accident.
+
+**Zoomed out.** Below 55 % zoom each run card carries its run number at a
+constant, readable size, and below 30 % the dataset name comes with it. A board
+of a dozen lanes is read at 30-40 %, where a card's own title is about four
+pixels tall.
 
 **Moving around.** Drag the background to pan, use the wheel (or two fingers) to
 zoom, and **Fit** puts the whole board back in view. The board only fits itself

@@ -102,8 +102,20 @@ export function mediumLimits(counts, classified) {
   const unsure = c.unsure || 0;
   const notes = [];
   if (unsure) {
-    notes.push(`${unsure} of ${total} came back “unsure” — the classifier `
-      + 'refuses a verdict rather than guessing one.');
+    let line = `${unsure} of ${total} came back “unsure” — the classifier `
+      + 'refuses a verdict rather than guessing one.';
+    // Only a PILE earns the second sentence (a handful needs no theory — and
+    // the sibling rule below already keeps small banks free of scary caveats).
+    // Its content is the measured reality, not a guess: sampled by eye on a
+    // real 36 921-image bank, the unsure rows were photographs whose SUBJECT
+    // reads as half-anime to CLIP — cosplay, heavy filters, screenshots —
+    // held back rather than mislabelled.
+    if (unsure >= 50 && unsure >= total * 0.05) {
+      line += ' On a photo bank these are mostly real photos it would not '
+        + 'certify: cosplay, heavy filters and screenshots read as half-anime '
+        + 'to the model.';
+    }
+    notes.push(line);
   }
   if ((c.anime || 0) > 0) {
     notes.push('“Anime” is the hardest call: a photo of somebody cosplaying an '

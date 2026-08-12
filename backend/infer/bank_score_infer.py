@@ -70,6 +70,12 @@ CACHE_EVERY = 50
 _AESTHETIC_URL = ('https://github.com/christophschuhmann/improved-aesthetic-predictor/'
                   'raw/main/sac+logos+ava1-l14-linearMSE.pth')
 _AESTHETIC_FILE = 'sac+logos+ava1-l14-linearMSE.pth'
+# The `l14` in that filename is ViT-L/14 AS OPENAI RELEASED IT, not a family:
+# the MLP was fitted on that one embedding space. Any other 768-d CLIP feeds it
+# without error and yields a plausible, meaningless score — so the pair lives
+# here, beside the checkpoint that requires it, and
+# tests/test_clip_text_model_contract.py fails if the scoring pass drifts off it.
+_AESTHETIC_EXPECTS = ('ViT-L-14', 'openai')
 _NSFW_MODEL = 'Marqo/nsfw-image-detection-384'
 
 

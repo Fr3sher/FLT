@@ -19,7 +19,7 @@ import test from 'node:test'
 
 import { renderToStaticMarkup, createElement } from './support/mountJsx.mjs'
 
-const { ProgressBar } = await import('../src/components/bank/BankWorkspace.jsx')
+const { ProgressBar } = await import('../src/components/bank/BankProgress.jsx')
 const { default: PassDialog } = await import('../src/components/bank/PassDialog.jsx')
 
 const text = (markup) => markup.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()

@@ -44,6 +44,20 @@ export const PICKER_PROFILES = {
       + 'in the interpreter — borrowing one downloads nothing and installs nothing. '
       + 'Setup ▸ Quality tools keeps installing into the app’s own environment.',
   },
+  watermark_detect: {
+    key: 'watermark_detect',
+    endpoint: '/api/watermark-python',
+    feature: 'the 🚩 watermark detector',
+    needs: 'PyTorch and a Transformers with both cascade halves (SigLIP classifier, Grounding-DINO locator)',
+    ariaLabel: 'Choose the Python that runs the watermark detector',
+    inputId: 'watermark-python-path',
+    // Same promise as SigLIP 2, and it needs saying for the same reason: the
+    // detector weights live under the app's models folder, not in the
+    // interpreter, so borrowing a CUDA Python re-downloads nothing.
+    extraNote: 'The detector weights live in the app’s models folder, not in '
+      + 'the interpreter — borrowing one downloads nothing and installs nothing. '
+      + 'Setup ▸ Quality tools keeps installing into the app’s own environment.',
+  },
 }
 
 export const DEFAULT_PICKER = PICKER_PROFILES.scoring

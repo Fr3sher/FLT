@@ -27,7 +27,8 @@ import {
   trainingRunSelection,
   trainFamilyLabel,
 } from '../../utils/checkpointBrowser';
-import { confirmableRetryFlag } from '../../utils/trainingRefusals';
+import { stepsRecipeRefreshDelay } from '../../utils/stepsRecipeRefresh';
+import { confirmableRetryFlag, postWithConfirmations } from '../../utils/trainingRefusals';
 import {
   deployedFilenamesOf,
   orphanImportedCheckpoints,
@@ -55,6 +56,7 @@ import { useToast } from '../common/Toast';
 import ContinueDialog from './ContinueDialog';
 import { graphContinueRefusal } from './lineageContinue.js';
 import RunLineageGraph from './RunLineageGraph';
+import { UseDatasetCaptionsButton } from './UseDatasetCaptionsButton';
 import TrainingProgress from './TrainingProgress';
 import PreflightModal from './PreflightModal';
 import { laneOfPayload, preflightUrl } from './preflightLane.js';
@@ -276,6 +278,9 @@ export function FullTransformerAdvancedRecipe({
   adv = null, saveAdv = null,
   samplePromptsText = '', setSamplePromptsText = null, saveSamplePrompts = null,
   samplePromptsDefault = [], maxSamplePrompts = 8,
+  // The dataset's own images (kept ones carry the captions the 🎲 button draws
+  // from) and the one callback that writes AND persists the textarea.
+  datasetImages = [], applySamplePrompts = null,
   quantizeTarget = null, suggestedQuantizePath = '',
   // The base the emitted config will actually carry. Computed, never a
   // literal: this card used to state "Official Krea 2 Raw" over a recipe that
@@ -341,7 +346,11 @@ export function FullTransformerAdvancedRecipe({
     }
     if (value !== warmup) patch({ dense_warmup: value });
   };
-  const controlClass = 'rounded border border-sky-300/40 bg-app/70 px-2 py-1 text-content tabular-nums disabled:opacity-50';
+  // min-w-0 on both the control and its label: a <select> sizes itself on its
+  // WIDEST option ("Sigmoid — favour…" is 303 px), and a flex item defaults to
+  // min-width:auto, so without this the row cannot shrink and spills off a
+  // 400 px screen instead of wrapping.
+  const controlClass = 'min-w-0 rounded border border-sky-300/40 bg-app/70 px-2 py-1 text-content tabular-nums disabled:opacity-50';
 
   return (
     <section aria-label="Krea 2 full-model recipe"
@@ -413,7 +422,7 @@ export function FullTransformerAdvancedRecipe({
         </label>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Learning rate</span>
             <input type="number" step="1e-7" min={lrMin} max={lrMax} value={lrDraft}
               onChange={(event) => setLrDraft(event.target.value)}
@@ -421,7 +430,7 @@ export function FullTransformerAdvancedRecipe({
               aria-label="Full-model learning rate"
               className={`w-[7rem] ${controlClass}`} />
           </label>
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Resolution</span>
             <select value={String(resolution)} disabled={disabled}
               onChange={(event) => patch({ dense_resolution: Number(event.target.value) })}
@@ -439,7 +448,7 @@ export function FullTransformerAdvancedRecipe({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Images per step</span>
             <select value={String(gradAccum)} disabled={disabled}
               onChange={(event) => patch({ dense_grad_accum: Number(event.target.value) })}
@@ -450,7 +459,7 @@ export function FullTransformerAdvancedRecipe({
               ))}
             </select>
           </label>
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Noise schedule</span>
             <select value={timestepType} disabled={disabled}
               onChange={(event) => patch({ dense_timestep_type: event.target.value })}
@@ -479,7 +488,7 @@ export function FullTransformerAdvancedRecipe({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Learning-rate schedule</span>
             <select value={lrSchedule} disabled={disabled}
               onChange={(event) => patch({ dense_lr_schedule: event.target.value })}
@@ -495,7 +504,7 @@ export function FullTransformerAdvancedRecipe({
           {/* Warmup steps only reach the trainer on the one schedule that
               accepts them; the server gates it the same way. */}
           {warmupApplies && (
-            <label className="flex items-center gap-2">
+            <label className="flex min-w-0 items-center gap-2">
               <span className="font-semibold">Warm up over</span>
               <input type="number" min={warmupMin} max={warmupMax} step={10} value={warmupDraft}
                 onChange={(event) => setWarmupDraft(event.target.value)}
@@ -513,7 +522,7 @@ export function FullTransformerAdvancedRecipe({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Checkpoint every</span>
             <input type="number" min={saveEveryMin} max={saveEveryMax} step={50} value={saveDraft}
               onChange={(event) => setSaveDraft(event.target.value)}
@@ -522,7 +531,7 @@ export function FullTransformerAdvancedRecipe({
               className={`w-[6rem] ${controlClass}`} />
             <span className="text-sky-100/80">steps</span>
           </label>
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Keep</span>
             <select value={String(keeps)} disabled={disabled}
               onChange={(event) => patch({ dense_max_step_saves: Number(event.target.value) })}
@@ -552,6 +561,8 @@ export function FullTransformerAdvancedRecipe({
               aria-label="Full-model preview prompts, one per line"
               className="w-full min-w-0 rounded border border-sky-300/40 bg-app/70 px-2 py-1 text-content text-[0.75rem] font-mono disabled:opacity-50" />
           </label>
+          <UseDatasetCaptionsButton images={datasetImages} max={maxSamplePrompts}
+            disabled={disabled} onPick={applySamplePrompts} className="mt-1" />
           <p className="m-0 mt-1 text-sky-200/70 text-[0.6875rem]">
             One per line, up to {maxSamplePrompts}. Empty = the generic defaults, which show nothing
             about this dataset — these images are the only way to judge the run while it costs money.
@@ -679,6 +690,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                                         navigationPanel = null,
                                         onNavigationStateChange,
                                         onPanelOpenChange,
+                                        // La section Training est-elle à l'écran ? Le panneau reste
+                                        // MONTÉ quand une autre section s'affiche (le poll de la file
+                                        // doit continuer), donc rien d'autre ne dit qu'on le regarde —
+                                        // et le barème de steps ne se rafraîchit que quand on le regarde.
+                                        sectionVisible = true,
                                         // « Continue anyway » ack from the readiness pastille: a
                                         // bypassable quality blocker was acknowledged → relax the
                                         // image-floor gate and carry allow_not_ready into the launch.
@@ -740,6 +756,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // {steps, kind, n_images, rationale} renvoyé par /train/checkpoints — le POURQUOI
   // du barème adaptatif, affiché avec le champ Steps (pédagogie, pas boîte noire).
   const [stepsInfo, setStepsInfo] = useState(null);
+  // Miroir en ref : le calcul du délai de refetch lit le barème AFFICHÉ sans en
+  // faire une dépendance de l'effet — sinon chaque réponse relancerait l'effet.
+  const stepsInfoRef = useRef(stepsInfo);
+  stepsInfoRef.current = stepsInfo;
   const [imported, setImported] = useState([]);
   const [enqErr, setEnqErr] = useState(null);
   // Base d'entraînement (officielle ou merge custom) + variante + conversion.
@@ -837,6 +857,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       requestHelpTip('dual-captions-advanced');
     }
   }, [advancedOpen, trainingMode]);
+
+  // Same problem for 🎲 Use dataset captions: it sits below the Preview-prompts
+  // textarea, in BOTH recipes, and nothing points at it. The TipHost shows one
+  // card at a time and does not mark the loser seen, so on the very first LoRA
+  // open dual-captions wins and this one arrives on the next open — in
+  // full-model mode, where dual captions does not apply, it shows right away.
+  useEffect(() => {
+    if (advancedOpen) requestHelpTip('sample-prompts-from-dataset');
+  }, [advancedOpen]);
 
   const togglePanel = (panelId, current, setter) => (event) => {
     event.preventDefault();
@@ -1187,11 +1216,22 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   useEffect(() => {
     setDifferentialGuidanceScaleDraft(String(adv?.differential_guidance_scale ?? 3));
   }, [adv?.differential_guidance_scale]);
-  const saveSamplePrompts = () => {
+  // Persist an EXPLICIT text. The blur handler below reads the state; the 🎲
+  // draw cannot — it has just called setSamplePromptsText, and the state it
+  // would read back is the previous render's, so it would save the old lines.
+  const persistSamplePrompts = (text) => {
     const stored = (adv?.sample_prompts ?? []).join('\n');
-    if (samplePromptsText === stored) return;      // no-op → skip the round-trip
-    saveAdv({ sample_prompts: samplePromptsText }); // server splits on newlines + trims
+    if (text === stored) return;                  // no-op → skip the round-trip
+    saveAdv({ sample_prompts: text });            // server splits on newlines + trims
   };
+  const saveSamplePrompts = () => persistSamplePrompts(samplePromptsText);
+  const applySamplePrompts = (text) => {
+    setSamplePromptsText(text);
+    persistSamplePrompts(text);
+  };
+  // Kept images carry the captions the 🎲 draw samples; the payload the panel
+  // already has is the only source, so the button costs no request.
+  const datasetImages = ds.data?.images || [];
   const saveDifferentialGuidanceScale = () => {
     const stored = String(adv?.differential_guidance_scale ?? 3);
     if (differentialGuidanceScaleDraft === stored) return;
@@ -1880,14 +1920,23 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
 
   // Le barème affiché dans Training suit uniquement la configuration Training,
   // jamais le filtre indépendant du navigateur de résultats.
+  // keptCount EST une dépendance : le barème est calculé serveur à partir du
+  // nombre d'images gardées, et ce panneau ne se démonte jamais (sections
+  // masquées, pas démontées) — sans lui, curer puis revenir sur Train affichait
+  // encore la recette calculée pour l'ancien compte, jusqu'à ce qu'un réglage
+  // d'entraînement soit touché. Voir utils/stepsRecipeRefresh.js pour le quand.
   useEffect(() => {
     if (!caps.training_visible || !ds.currentId || !baseInfo) return undefined;
+    const delay = stepsRecipeRefreshDelay(sectionVisible, stepsInfoRef.current, keptCount);
+    if (delay == null) return undefined;
     let alive = true;
-    ds.listCheckpoints(base, trainType, variant).then((data) => {
-      if (alive) setStepsInfo(data?.recommended_steps_info || null);
-    }).catch(() => { /* keep the last truthful rationale */ });
-    return () => { alive = false; };
-  }, [base, trainType, variant, ds.currentId, baseInfo, caps.training_visible]); // eslint-disable-line react-hooks/exhaustive-deps
+    const timer = setTimeout(() => {
+      ds.listCheckpoints(base, trainType, variant).then((data) => {
+        if (alive) setStepsInfo(data?.recommended_steps_info || null);
+      }).catch(() => { /* keep the last truthful rationale */ });
+    }, delay);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [base, trainType, variant, keptCount, sectionVisible, ds.currentId, baseInfo, caps.training_visible]); // eslint-disable-line react-hooks/exhaustive-deps
   const removeImported = async (filename, label) => {
     // Guard-rail: this LoRA may be the one the Studio's ★ best settings point to —
     // deleting it silently breaks the saved winning combo.
@@ -2132,12 +2181,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   }, [runActiveHere]); // eslint-disable-line react-hooks/exhaustive-deps
   // Multi-family parallelism is safe again: each cloud run's monitor builds its
   // job config from its OWN stamped family/variant, not the shared dataset row
-  // (backend _run_config_dataset — fix for the 2026-07-14 incident). So a Krea
-  // run and a Z-Image run may train the same dataset at once; the button is
-  // blocked only when a run of the SAME family is already active here.
+  // (backend _run_config_dataset — fix for the 2026-07-14 incident). A run of
+  // the SAME family no longer disables the button either: the server's
+  // PARALLEL_RUN: refusal is a confirmable question ("second pod, billed
+  // separately — launch anyway?") that postWithConfirmations relays, and a
+  // disable here made it unreachable — reported as "I still cannot run two
+  // trainings on the same dataset".
   // Single source of truth for WHY « ☁ Train in cloud » is disabled — most
   // fundamental cause first (family unsupported > custom weights > too few
-  // images > a run already active here > global limit). Drives BOTH the tooltip
+  // images > global limit). Drives BOTH the tooltip
   // AND the always-visible reason line below: a disabled button must state its
   // reason without a hover (the owner lost time guessing on a greyed SDXL button
   // whose only explanation lived in a title attribute).
@@ -2170,8 +2222,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       ? 'Convert the custom base first — the cloud lane pushes the converted copy to your Hugging Face account'
     : cloudTooFewImages
       ? `Only ${keptCount} image(s) kept — the cloud minimum for ${sliderOn ? 'a slider' : typeLabel} is ${trainMinFloor}`
-    : cloudActiveHere
-      ? `A ${typeLabel} cloud run is already active on this dataset`
     : cloudLimitReached
       ? `Cloud run limit reached (${actives.length}/${cloudStatus.limit || 1}) — stop one or raise the limit in Settings`
     : null;
@@ -2237,14 +2287,28 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       }),
       ...(allowNotReady ? { allow_not_ready: true } : {}),
     };
-    let d = await postJson(`/api/dataset/${ds.currentId}/train/cloud`, body);
-    for (let flag; d && d.ok === false && (flag = confirmableRetryFlag(d.error, 'Train anyway (force)')); ) {
-      if (flag === 'declined') { d = null; break; }  // the confirm WAS the answer
-      body = { ...body, [flag]: true };
-      d = await postJson(`/api/dataset/${ds.currentId}/train/cloud`, body);
-    }
-    if (d && d.ok === false) {
-      toastTrainError(d, 'Cloud training failed');
+    // postWithConfirmations, NOT a hand-rolled loop on `d.ok === false`.
+    //
+    // That loop could never run. Every confirmable refusal leaves the service as a
+    // RuntimeError, which the route maps to HTTP 409 with `{error: "..."}` -- a
+    // body carrying no `ok` key at all -- and postJson THROWS on any non-2xx
+    // rather than returning it. So the await raised, everything below it was dead
+    // code, and the user got the raw refusal text as an error toast with no way to
+    // answer the question it was asking. Reported on the parallel-run one: "I
+    // still cannot run two trainings on the same dataset", on an install whose
+    // backend supported it perfectly.
+    //
+    // This helper is what the Runs hub and the canvas already use for these same
+    // refusals: it catches, asks, and retries carrying the flag -- and refuses to
+    // ask twice for a flag it already sent, so a refusal that survives its own
+    // confirmation ends instead of looping.
+    let d;
+    try {
+      d = await postWithConfirmations(
+        (b) => postJson(`/api/dataset/${ds.currentId}/train/cloud`, b),
+        body, 'Train anyway (force)');
+    } catch (e) {
+      toastTrainError({ ...(e?.body || {}), error: e?.message }, 'Cloud training failed');
       return false;
     }
     // The dialog closes on success and the panel's own launch view only appears
@@ -2922,6 +2986,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               saveSamplePrompts={saveSamplePrompts}
               samplePromptsDefault={advSampleDefault}
               maxSamplePrompts={advMaxPrompts}
+              datasetImages={datasetImages}
+              applySamplePrompts={applySamplePrompts}
               quantizeTarget={denseQuantizeTarget(cloudLastHere || {})}
               suggestedQuantizePath={looksAbsoluteBase(base) ? String(base).trim() : ''}
               baseSummary={denseBaseSummary}
@@ -3336,6 +3402,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                   aria-label="Preview sample prompts, one per line"
                   className="px-2 py-1.5 rounded-lg border border-border bg-surface text-content text-[0.75rem] font-mono leading-relaxed resize-y placeholder:text-content-subtle" />
               </label>
+              <div className="flex items-center gap-1.5 mt-1">
+                <UseDatasetCaptionsButton images={datasetImages} max={advMaxPrompts}
+                  onPick={applySamplePrompts} />
+                <HelpBadge topic="training.sample_prompts_from_dataset" />
+              </div>
               <span className="text-content-subtle text-[0.6875rem] leading-relaxed">
                 <b className="text-content-muted font-medium">Why:</b> these are the test images ai-toolkit renders
                 during the run so you can watch the LoRA learn (and later pick the best epoch).

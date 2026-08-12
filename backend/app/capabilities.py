@@ -1985,6 +1985,14 @@ def probe(force=False) -> dict:
         # work, so this only ever unlocks a faster route, never blocks the old one.
         'watermark_detect': watermark_detect['ok'],
         'watermark_detect_detail': watermark_detect['detail'],
+        # Will the detector actually reach CUDA in ITS interpreter? The Setup
+        # install pins the app-managed CPU-torch venv, so on a machine with a
+        # card this is routinely False until the user picks a GPU Python — and
+        # nothing used to say so. Drives the 🚩 panel's CPU note + picker
+        # opener; only asked once the extra is installed (the probe imports
+        # torch in a subprocess, and a missing extra already answers it).
+        'watermark_detect_gpu': bool(watermark_detect['ok']
+                                     and watermark_detect_gpu_available()),
         # The measured flag threshold, published so the panel and the Settings
         # field quote the SAME number the pass will actually use.
         'watermark_detect_threshold': _watermark_detect_threshold(),

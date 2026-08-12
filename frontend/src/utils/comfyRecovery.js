@@ -98,6 +98,13 @@ function connectionFirstModel(recovery) {
     footnote,
     actionLabel: 'I restarted ComfyUI — clear it',
     canConfirm: recovery.can_confirm_restart !== false,
+    // Offered ONLY when the server says it could actually spawn ComfyUI — the
+    // same check its start route runs immediately before doing it. On every
+    // other install ComfyUI is not ours to run (Desktop, a hand-written .bat,
+    // another machine), and a button that fails on the one screen whose job is
+    // to unblock someone is worse than no button at all.
+    canStart: recovery.can_start_comfyui === true,
+    startLabel: '▶ Start ComfyUI',
     datasetId: recovery.dataset_id ?? null,
     datasetName: recovery.dataset_name ?? null,
   };
@@ -156,6 +163,13 @@ export function recoveryBannerModel(state, { now = Date.now() } = {}) {
     footnote: null,
     actionLabel: 'I restarted ComfyUI — clear it',
     canConfirm: recovery.can_confirm_restart !== false,
+    // Offered ONLY when the server says it could actually spawn ComfyUI — the
+    // same check its start route runs immediately before doing it. On every
+    // other install ComfyUI is not ours to run (Desktop, a hand-written .bat,
+    // another machine), and a button that fails on the one screen whose job is
+    // to unblock someone is worse than no button at all.
+    canStart: recovery.can_start_comfyui === true,
+    startLabel: '▶ Start ComfyUI',
     datasetId: recovery.dataset_id ?? null,
     datasetName: recovery.dataset_name ?? null,
   };

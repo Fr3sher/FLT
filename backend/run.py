@@ -1,3 +1,4 @@
+import atexit
 import sys, os
 import threading
 import time
@@ -54,6 +55,7 @@ ensure_pillow_consistent()
 
 from app import create_app
 from port_utils import find_available_port
+from single_instance import live_instance, refusal_message, release_lock, write_lock
 
 try:
     from app.config import get as cfg_get
@@ -93,6 +95,21 @@ def _announce_when_ready(url, open_browser=False, timeout=180):
 if __name__ == '__main__':
     host = os.environ.get('LDS_HOST') or cfg_get('server.host')
     requested_port = int(os.environ.get('LDS_PORT') or cfg_get('server.port'))
+    # One data folder, one server — checked BEFORE the port slide below, which
+    # is exactly how a double-launch used to become a second server on :5051
+    # sharing the first one's database (private in-memory job registries, a
+    # pass running in one process while the other swore the bank was idle).
+    # Instances on their OWN data folder (worktrees, proof instances with
+    # LDS_DATA_DIR) are untouched; LDS_ALLOW_SECOND_INSTANCE=1 overrides.
+    data_dir = app.config['LDS_DATA_DIR']
+    running = live_instance(data_dir)
+    if running:
+        print(refusal_message(running), flush=True)
+        if os.environ.get('LDS_OPEN_BROWSER') == '1':
+            # The double-click case: the person wanted the app on screen, and
+            # it exists already — open THAT one instead of printing at them.
+            webbrowser.open(f"http://127.0.0.1:{running['port']}/")
+        sys.exit(0)
     port = (requested_port if os.environ.get('LDS_AUTO_PORT') == '0'
             else find_available_port(host, requested_port))
     if port != requested_port:
@@ -128,6 +145,11 @@ if __name__ == '__main__':
     # reading cfg_get again there would lie about what's currently serving requests.
     app.config['LDS_BOUND_HOST'] = host
     app.config['LDS_BOUND_PORT'] = port
+    # Claim the data folder only once the port is settled, so the lock records
+    # the address the next double-launch should be pointed at. Released on
+    # clean exit; a crash leaves it behind, where the dead pid reads as stale.
+    write_lock(data_dir, host, port)
+    atexit.register(release_lock, data_dir)
     local_host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(host, host)
     if ':' in local_host and not local_host.startswith('['):
         local_host = f'[{local_host}]'

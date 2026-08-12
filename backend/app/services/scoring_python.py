@@ -89,6 +89,21 @@ SEMANTIC_DEPS = (
     {'module': 'PIL', 'pip': 'Pillow', 'label': 'Pillow'},
 )
 
+# Everything backend/infer/watermark_detect_infer.py imports: torch, transformers
+# for BOTH halves of the cascade — the SigLIP2 ranker (SiglipForImageClassification)
+# and the Grounding-DINO locator (AutoModelForZeroShotObjectDetection) — and
+# Pillow via the shared bank_image_guard. Both model classes are demanded as
+# SYMBOLS for the same reason the semantic list demands Siglip2Model: a 2024
+# transformers imports fine and then dies on the class, which is precisely the
+# false positive the probe exists to refuse.
+WATERMARK_DEPS = (
+    {'module': 'torch', 'pip': 'torch', 'label': 'PyTorch'},
+    {'module': 'transformers', 'pip': 'transformers', 'spec': 'transformers>=4.40',
+     'attrs': ('SiglipForImageClassification', 'AutoModelForZeroShotObjectDetection'),
+     'label': 'Transformers (SigLIP + Grounding-DINO capable)'},
+    {'module': 'PIL', 'pip': 'Pillow', 'label': 'Pillow'},
+)
+
 
 class InterpreterProfile(NamedTuple):
     """One feature's answer to "what must this Python be able to do, and where
@@ -106,6 +121,9 @@ PROFILES = {
     'semantic': InterpreterProfile(
         'semantic', 'bank_semantic.python', 'the SigLIP 2 semantic index',
         SEMANTIC_DEPS),
+    'watermark_detect': InterpreterProfile(
+        'watermark_detect', 'watermark_detect.python',
+        'the 🚩 watermark detector', WATERMARK_DEPS),
 }
 DEFAULT_PROFILE = PROFILES['scoring']
 
@@ -125,7 +143,7 @@ def get_profile(profile=None) -> InterpreterProfile:
 # The probe answers for the UNION of every profile: one subprocess, one cache,
 # both features served. Order follows SCORING_DEPS so the payload a Score client
 # already parses is byte-identical.
-_ALL_DEPS = SCORING_DEPS + SEMANTIC_DEPS
+_ALL_DEPS = SCORING_DEPS + SEMANTIC_DEPS + WATERMARK_DEPS
 _DEP_MODULES = tuple(dict.fromkeys(d['module'] for d in _ALL_DEPS))
 _DEP_ATTRS = tuple(sorted({(d['module'], attr) for d in _ALL_DEPS
                            for attr in d.get('attrs', ())}))
@@ -459,7 +477,10 @@ def default_python(profile=None) -> str:
     own resolver applies, not a guess. Kept next to the resolvers it mirrors so
     a divergence is one grep away (``bank_semantic_models.semantic_python``)."""
     prof = get_profile(profile)
-    if prof.key == 'semantic':
+    if prof.key in ('semantic', 'watermark_detect'):
+        # Both resolvers fall back to Score's interpreter before the app's own
+        # (``bank_semantic_models.semantic_python``,
+        #  ``watermark_detector.detector_python``).
         return (str(cfg.get('bank_scoring.python') or '').strip()
                 or sys.executable)
     return sys.executable

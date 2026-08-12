@@ -1,10 +1,14 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { BANK_PASSES } from './bankPasses.js';
 import { pipelineStepKeys } from './bankSemanticEngine.js';
 
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 const panel = fs.readFileSync(new URL('./DupGroupsPanel.jsx', import.meta.url), 'utf8');
 const dialog = fs.readFileSync(new URL('./LaunchAllDialog.jsx', import.meta.url), 'utf8');
 
@@ -27,14 +31,16 @@ test('the workspace renders both stages through the shared panel with distinct k
 test('the ✂ Find crops button gates on selected semantic readiness', () => {
   // The button opens its launch window; the endpoint is named once, in the pass
   // spec, and the shared runner builds the URL from it.
-  assert.match(ws, /onClick=\{\(\) => setPassOpen\('semantic_dedup'\)\}/);
+  assert.match(ws, /onClick=\{\(\) => onPassOpen\('semantic_dedup'\)\}/);
+  // The panel is handed the workspace's own opener — no second pass router.
+  assert.match(ws, /onPassOpen=\{setPassOpen\}/);
   const passes = fs.readFileSync(new URL('./bankPasses.js', import.meta.url), 'utf8');
   assert.match(passes, /endpoint: 'semantic-dedup'/);
   assert.match(ws, /\/api\/bank\/\$\{bankId\}\/\$\{spec\.endpoint\}/);
   // Score is a separate aesthetic count; only the selected engine readiness gates it.
-  assert.match(ws, /setPassOpen\('semantic_dedup'\)\} disabled=\{live \|\| !semanticReady\}/);
-  const button = ws.slice(ws.indexOf("setPassOpen('semantic_dedup')"),
-    ws.indexOf("setPassOpen('semantic_dedup')") + 900);
+  assert.match(ws, /onPassOpen\('semantic_dedup'\)\} disabled=\{live \|\| !semanticReady\}/);
+  const button = ws.slice(ws.indexOf("onPassOpen('semantic_dedup')"),
+    ws.indexOf("onPassOpen('semantic_dedup')") + 900);
   assert.doesNotMatch(button, /scored\s*[=>]/);
   assert.match(button, /semanticState\.label/);
 });

@@ -36,12 +36,18 @@ SECRET_KEYS = ('GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'HF_TOK
 # config.json, so a changed DEFAULTS value alone would never reach it. This
 # marker lets us distinguish that one-time profile migration from settings the
 # user changes after the new profile is available.
-KREA_CALIBRATION_VERSION = 3
+KREA_CALIBRATION_VERSION = 4
 _LEGACY_KREA_GROUNDING_PX = 1024.0
 _LEGACY_KREA_REF_BOOST = 4.0
 _PREVIOUS_KREA_GROUNDING_PX = 512.0
 _PREVIOUS_KREA_REF_BOOST = 1.0
 _PREVIOUS_KREA_STEPS = 10
+# v3 shipped 512 / 0.25 / 8 — a pair that matched NEITHER calibrated profile
+# (v1 = 1024/4.0, v2 = 512/1.0): the reference pull had drifted to a quarter of
+# v2's. v4 returns to the identity-first pair; see _migrate_krea_calibration.
+_V3_KREA_GROUNDING_PX = 512.0
+_V3_KREA_REF_BOOST = 0.25
+_V3_KREA_STEPS = 8
 
 DEFAULTS = {
     # host: '127.0.0.1' = this machine only ; '0.0.0.0' = reachable from the LAN
@@ -307,8 +313,15 @@ DEFAULTS = {
     # 🗃️ Image bank triage thresholds. Raw scores are persisted per image;
     # these thresholds only drive the FLAGS computed at read time — so tuning
     # them re-sorts an already-scanned bank instantly, no rescan needed.
-    # sharpness_min: Laplacian variance below this = flagged blurry (the classic
-    #   ~100 rule of thumb). noise_max: residual std above this = flagged noisy.
+    # sharpness_min: Laplacian variance below this = flagged blurry. ⚠️ On the
+    #   CURRENT scale — the p90 of per-tile variances (image_quality.py), not the
+    #   classic whole-frame "~100 rule of thumb" the old default came from.
+    #   Measured on a real 36 921-image bank: genuinely sharp photos score
+    #   ~4 000-9 600, a visible gaussian blur (r≈1.5) lands at ~170-920, a frank
+    #   blur (r≈2.5) at ~20-150 — and the LOWEST score in the whole bank was
+    #   103.9, so the old 100 could not flag a single image. 150 catches frank
+    #   blur only; raise it (the 🎚 threshold panel) to be pickier.
+    #   noise_max: residual std above this = flagged noisy.
     # uniformity_min: grayscale std below this = flagged flat/uniform (solid
     #   colors, empty screenshots). dup_distance: dHash Hamming distance (same
     #   64-bit hash as dataset imports) at or under which two images group as
@@ -326,7 +339,7 @@ DEFAULTS = {
     #   above which two scored images are flagged a SEMANTIC near-duplicate (stage 2:
     #   crops / re-compressed variants of the same shot a dHash misses). Higher than
     #   style_threshold on purpose — a crop is far closer than merely "same style".
-    'bank': {'sharpness_min': 100.0, 'noise_max': 15.0, 'uniformity_min': 12.0,
+    'bank': {'sharpness_min': 150.0, 'noise_max': 15.0, 'uniformity_min': 12.0,
              'dup_distance': 8, 'min_side': 768, 'face_threshold': 0.45,
              'aesthetic_min': 5.0, 'nsfw_max': 0.5, 'style_threshold': 0.6,
              'semantic_dup_threshold': 0.96,
@@ -585,6 +598,20 @@ DEFAULTS = {
               # Total pixel budget the source is rescaled to before sampling, so it
               # is the output resolution. 2 = the value hardcoded in the workflow.
               'improve_megapixels': 2.0},
+    # Dataset variations — what BOTH local engines share, rather than what each
+    # one does on its own. Its own namespace on purpose: a key under `klein` or
+    # `krea` would be a value one engine owns and the other happens to read, and
+    # the whole point of this one is that a dataset's shots come out the same
+    # size whichever local engine rendered them.
+    'variations': {
+        # Total pixels every generated variation is rendered at, in megapixels,
+        # on the CARD's ratio. 2.0 is Klein's historical hardcoded value, so an
+        # untouched install frames exactly as before; Krea used to cap this at
+        # the reference's own pixel count, which is what made its tiles smaller
+        # than Klein's in the same dataset. Clamped [0.5, 2.0] — 2.0 is where
+        # the edit models start to drift (output_geometry.MAX_OUTPUT_MP).
+        'output_megapixels': 2.0,
+    },
     # Krea 2 Identity Edit — the second LOCAL generation engine (services/
     # krea_edit_helper.py). Every value here is a RESOLUTION HINT or a sampler
     # knob, never a hardcoded machine path: blank/absent means "find it yourself"
@@ -619,15 +646,20 @@ DEFAULTS = {
         # reference is shown to the vision text-encoder at. LOW = follows the
         # PROMPT (more variety, weaker likeness); HIGH = RESEMBLES the reference
         # (stronger likeness, but it starts copying the pose and the outfit you
-        # asked it to change). 512 is the measured default for dataset poses: it
-        # keeps identity while giving the prompt room to move the pose.
-        'grounding_px': 512,
-        # Pack reference workflow values, measured working. cfg is pinned at 1.0
-        # in code (guidance-distilled model) and is deliberately NOT a setting.
-        'steps': 8,
+        # asked it to change). 1024 is the v4 profile: identity first. It pairs
+        # with ref_boost 4.0 — these two are ALWAYS shipped together, and the
+        # 512/0.25 of v3 matched neither calibrated pair.
+        'grounding_px': 1024,
+        # 12 = the value the v4 benchmark actually ran at (v3 shipped 8, the
+        # pack reference workflow's own). cfg is pinned at 1.0 in code
+        # (guidance-distilled model) and is deliberately NOT a setting.
+        'steps': 12,
         'identity_lora_strength': 1.0,
         # How hard the source latent is pushed back into the model each step.
-        'ref_boost': 0.25,
+        # 4.0 = the fidelity value the engine's own v1.2 notes give for strong
+        # face likeness, and the measured winner. See _migrate_krea_calibration
+        # for what that measurement does and does not establish.
+        'ref_boost': 4.0,
     },
     # The ✨ Upscale & improve pass — which engine runs it. Its own namespace
     # rather than a key under `klein`, because the whole point of the setting is
@@ -741,6 +773,10 @@ DEFAULTS = {
     # label shadowing a built-in one would hijack prompt/aspect/NSFW resolution.
     'custom_shots': {},
     'updates': {'repo': 'Fr3sher/FLT'},      # GitHub repo for the release feed
+    # ◉ LoRA Canvas: 🔌 external LoRA plugin nodes pinned on the board.
+    # Each: {filename (loras-relative), strength [0..2], x, y (board coords)}.
+    # Cap 16, deduped by filename — sanitized in the PUT route.
+    'canvas': {'external_loras': []},
 }
 
 _lock = threading.Lock()
@@ -823,7 +859,23 @@ def _migrate_krea_pose_profile(conf: dict, stored: dict, incoming: dict | None =
         and _number_is(stored_krea.get('ref_boost'), _PREVIOUS_KREA_REF_BOOST)
         and _number_is(stored_krea.get('steps', _PREVIOUS_KREA_STEPS),
                        _PREVIOUS_KREA_STEPS))
-    if is_v1_default or is_v2_default:
+    # v3 shipped 512 / 0.25 / 8 and v4 goes back to the identity-first pair
+    # 1024 / 4.0 / 12. What that rests on, stated plainly because it walks back a
+    # default this project moved away from TWICE on purpose: a benchmark on ONE
+    # reference, four scored images per profile, where 1024/4.0 led by +0.17 face
+    # similarity on bust framing with no overlap between the runs — and did so at
+    # a LOWER reference pull, so the extra likeness was not bought by recopying
+    # the pose. The face-framing cards were dominated by seed noise (0.26 spread
+    # between two images of the SAME profile) and measured nothing; body framings
+    # produced no score at all. It is a deliberate product choice, not a proven
+    # optimum. Whoever reconsiders it should widen the evidence to a second face
+    # before trusting the number.
+    is_v3_default = (
+        stored_version == 3
+        and _number_is(stored_krea.get('grounding_px'), _V3_KREA_GROUNDING_PX)
+        and _number_is(stored_krea.get('ref_boost'), _V3_KREA_REF_BOOST)
+        and _number_is(stored_krea.get('steps', _V3_KREA_STEPS), _V3_KREA_STEPS))
+    if is_v1_default or is_v2_default or is_v3_default:
         krea['grounding_px'] = DEFAULTS['krea']['grounding_px']
         krea['ref_boost'] = DEFAULTS['krea']['ref_boost']
         krea['steps'] = DEFAULTS['krea']['steps']
@@ -1200,6 +1252,24 @@ def dataset_images_root() -> Path:
     p = get('paths.dataset_images_root') or ''
     root = Path(p) if p else _data_dir() / 'datasets'
     root.mkdir(parents=True, exist_ok=True)
+    return root
+
+def dataset_thumbs_root(create=False) -> Path:
+    """Cached grid/board thumbnails of dataset images — pure derived data.
+
+    Deliberately NOT inside dataset_images_root(): that tree is the user's
+    dataset, it gets zipped on export, scanned on import and copied into a bank,
+    and a `thumbs/` folder sitting in it would end up in every one of those.
+    Under the app data dir it can be deleted wholesale at any time; the worst
+    outcome is one re-encode.
+
+    ``create=False`` for the READ path: a thumbnail request that finds nothing
+    must not leave a directory behind (the /img/ route is read-only for the same
+    reason), so the directory is created only when a file is about to be written.
+    """
+    root = _data_dir() / 'dataset_thumbs'
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 def cloud_runs_root(create=True) -> Path:

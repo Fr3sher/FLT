@@ -58,8 +58,14 @@ export default function ResultTile({ cell, row, strength, variant, datasetId, on
         <button type="button" onClick={() => onOpen(cell)}
           title={`${row.label} @ ${fmt(strength)} (${variant.aspect || '—'}) seed ${cell.seed}${cell.batch_lora ? ` · + ${cell.batch_lora}` : ''} — open larger`}
           className="block p-0 m-0 border-0 bg-transparent cursor-pointer">
-          <img src={`/api/dataset/${datasetId}/img/${encodeURIComponent(cell.filename)}`}
-            alt={`${row.label} strength ${fmt(strength)} ${variant.aspect || ''} seed ${cell.seed}`} loading="lazy"
+          {/* 80×112 CSS px — 256 covers it at 2× DPR with room to spare. The
+              sweep grid is the densest picture surface in the app (a checkpoint
+              × strength × seed matrix), so it is also the one where fetching
+              full-size PNGs cost the most; the lightbox this tile opens still
+              gets the file. */}
+          <img src={`/api/dataset/${datasetId}/thumb/${encodeURIComponent(cell.filename)}?s=256`}
+            alt={`${row.label} strength ${fmt(strength)} ${variant.aspect || ''} seed ${cell.seed}`}
+            loading="lazy" decoding="async"
             className="w-20 h-28 object-cover rounded-md border border-border" />
         </button>
       )}

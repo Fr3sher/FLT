@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -7,7 +11,7 @@ import {
   pickedCandidates, unscannedNotice,
 } from './autoRejectReadiness.js';
 
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 const dialog = fs.readFileSync(new URL('./LaunchAllDialog.jsx', import.meta.url), 'utf8');
 
 /* ── The defect, in one line ──────────────────────────────────────────────────

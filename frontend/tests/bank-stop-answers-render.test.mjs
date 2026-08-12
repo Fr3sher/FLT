@@ -23,7 +23,7 @@ import test from 'node:test'
 
 import { renderToStaticMarkup, createElement } from './support/mountJsx.mjs'
 
-const { ProgressBar } = await import('../src/components/bank/BankWorkspace.jsx')
+const { ProgressBar } = await import('../src/components/bank/BankProgress.jsx')
 
 const text = (markup) => markup.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
 const html = (activity) => renderToStaticMarkup(
