@@ -259,7 +259,7 @@ function Configure-Or-ValidateExternalComfy {
                 throw 'No external ComfyUI folder is configured. Run start-docker.bat once.'
             }
             Write-Host ''
-            Write-Host 'LoRA Dataset Studio needs the folder of your existing ComfyUI.'
+            Write-Host 'FLT - Fresh LoRa Trainer needs the folder of your existing ComfyUI.'
             Write-Host 'It will be mounted read-write; nothing is copied or started.'
             $result = Invoke-PowerShellHelper -ScriptPath $ComfyHelper -Sta -Arguments @(
                 '-Configure', '-OverridePath', $LocalExternalOverlay)
@@ -513,7 +513,7 @@ function Wait-ForStudio {
     param([string] $AppUrl)
 
     $attemptLimit = if ($Stack -eq 'gpu') { 300 } else { 120 }
-    Write-Host 'Waiting for LoRA Dataset Studio to become healthy...'
+    Write-Host 'Waiting for FLT - Fresh LoRa Trainer to become healthy...'
     for ($attempt = 0; $attempt -lt $attemptLimit; $attempt++) {
         $state = Get-ContainerHealth
         if ($state.State -in @('exited', 'dead', 'restarting', 'missing') -or
@@ -528,7 +528,7 @@ function Wait-ForStudio {
         }
         Start-Sleep -Seconds 5
     }
-    throw 'LoRA Dataset Studio did not become healthy before the startup timeout.'
+    throw 'FLT - Fresh LoRa Trainer did not become healthy before the startup timeout.'
 }
 
 function Stop-OwnedSidecar {
@@ -807,7 +807,7 @@ try {
             throw 'Docker Compose rejected the Studio configuration.'
         }
 
-        Write-Host 'Building and starting LoRA Dataset Studio...'
+        Write-Host 'Building and starting FLT - Fresh LoRa Trainer...'
         $upArguments = Get-ComposeArguments -Files $studioFiles
         $upArguments += @('up', '-d', '--build')
         if ($forceRecreate) {
@@ -816,7 +816,7 @@ try {
         $upArguments += 'studio'
         $upResult = Invoke-Docker -Arguments $upArguments
         if ($upResult.ExitCode -ne 0) {
-            throw 'Docker could not build or start LoRA Dataset Studio.'
+            throw 'Docker could not build or start FLT - Fresh LoRa Trainer.'
         }
 
         $inspection = Inspect-Container @inspectionParameters
@@ -841,13 +841,13 @@ try {
         # zero exit is what the updater commits its transaction on. Updater mode
         # will not wait for an Ollama deployment choice: that prompt needs a
         # person, and the update must not hang for 15 minutes without one.
-        Write-Host ('LoRA Dataset Studio is healthy at ' + $appUrl)
+        Write-Host ('FLT - Fresh LoRa Trainer is healthy at ' + $appUrl)
         Write-Host 'Updater mode will not wait for the browser or the Setup choices.'
         exit 0
     }
 
     Write-Host ''
-    Write-Host ('LoRA Dataset Studio is ready at ' + $appUrl)
+    Write-Host ('FLT - Fresh LoRa Trainer is ready at ' + $appUrl)
     if ($Stack -eq 'gpu') {
         Write-Host ('Private ComfyUI is ready at http://127.0.0.1:' + $comfyPort + '/')
     }

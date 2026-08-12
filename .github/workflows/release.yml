@@ -155,5 +155,5 @@ jobs:
           # Three releases shipped a preamble-only body before that was noticed.
           gh release create "$env:RELEASE_REF_NAME" `
             "packaging/dist/LoRA-Dataset-Studio-windows.zip" `
-            --title "LoRA Dataset Studio $env:RELEASE_REF_NAME" `
+            --title "FLT - Fresh LoRa Trainer $env:RELEASE_REF_NAME" `
             --notes-file release-notes.md

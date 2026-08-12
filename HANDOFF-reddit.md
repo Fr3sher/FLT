@@ -8,7 +8,7 @@
 
 ## 1. Goal
 
-Get the user a Reddit **installed-app** `client_id` so LoRA Dataset Studio's Reddit
+Get the user a Reddit **installed-app** `client_id` so FLT - Fresh LoRa Trainer's Reddit
 scraper stops rate-limiting (429 "Reddit is rate limiting requests, retry in Ns").
 The studio needs a **secret-less installed-app id** — a web-app/`script` id comes
 with a `client_secret` and the studio's anonymous login then fails with 401.
@@ -22,7 +22,7 @@ or commit it anywhere.**
 - User opened `https://www.reddit.com/prefs/apps` and clicked **create app** (bottom of page).
 - The form fields the user filled:
   - Type: **`Anwendung Installiert`** (installed app) — the required type
-  - Name: `LoRA Dataset Studio`
+  - Name: `FLT - Fresh LoRa Trainer`
   - Description: `Personal scraper for LoRA training datasets`
   - Link Info / about URL: `https://github.com` (valid — earlier `asdafasd` was invalid and that DID fail)
   - Redirect URI: `http://localhost` (never used, but the form requires it)
@@ -48,11 +48,11 @@ or commit it anywhere.**
    can silently fail. Check the account's email-verification status in settings.
 5. **App WAS actually created but not visible** — re-open `/prefs/apps` fresh;
    sometimes no toast shows. If an entry now exists under the name
-   "LoRA Dataset Studio", the id is the short ~22-char string under the name.
+   "FLT - Fresh LoRa Trainer", the id is the short ~22-char string under the name.
 
 ## 4. What success looks like
 
-After creation, on `/prefs/apps` there is an entry **"LoRA Dataset Studio"** whose
+After creation, on `/prefs/apps` there is an entry **"FLT - Fresh LoRa Trainer"** whose
 type is **installed app** (no secret shown — installed apps have none). The
 **`client_id`** is the short ~22-character string displayed directly under the app
 name. That id is what the user pastes into the studio.
@@ -60,7 +60,7 @@ name. That id is what the user pastes into the studio.
 ## 5. If you can create it (browser AI actions)
 
 - Navigate to `https://www.reddit.com/prefs/apps`, ensure logged-in.
-- Click **create app**; fill: type `installed app`, name `LoRA Dataset Studio`,
+- Click **create app**; fill: type `installed app`, name `FLT - Fresh LoRa Trainer`,
   description `Personal scraper for LoRA training datasets`, about URL
   `https://github.com`, redirect uri `http://localhost`.
 - Click **create app**; confirm an entry appears; copy the `client_id` and show it

@@ -1,6 +1,6 @@
 # Getting started
 
-LoRA Dataset Studio turns one reference photo into a trained, ranked LoRA —
+FLT - Fresh LoRa Trainer turns one reference photo into a trained, ranked LoRA —
 curation, captioning, face-scoring and training behind a single browser tab, on
 your own machine. The useful part of LoRA training isn't the training; it's
 building a clean, balanced, well-captioned image set. This app puts that whole
@@ -97,7 +97,7 @@ one line of `config.json` (reported by strouder, GitHub #19).
 
 | Component | Where | What it does | Port |
 |---|---|---|---|
-| **LoRA Dataset Studio** (Flask) | the folder you extracted, **its own `.venv`** | The UI you are reading this in. Curation, captioning, and the thing that **starts and stops training**. | **5050** |
+| **FLT - Fresh LoRa Trainer** (Flask) | the folder you extracted, **its own `.venv`** | The UI you are reading this in. Curation, captioning, and the thing that **starts and stops training**. | **5050** |
 | **ai-toolkit** (`run.py`) | the folder you point at in Settings, **its own venv — the one with `torch`** | The training **engine**. It is run as a command-line process; it has no UI of its own. | — |
 | ai-toolkit's Next.js UI (`ui/`) | inside the ai-toolkit folder | An **unrelated** web interface that ships with ai-toolkit. This app never launches it, never reads it, and never writes to it. | 8675 |
 
@@ -121,7 +121,7 @@ of running invisibly alongside the first.
 
 ### Supported Python versions {#python-versions}
 
-- **LoRA Dataset Studio: Python 3.10 – 3.12.** `start.bat` finds or downloads
+- **FLT - Fresh LoRa Trainer: Python 3.10 – 3.12.** `start.bat` finds or downloads
   one for you; the optional ML extras (insightface, onnxruntime, `numpy<2`)
   only publish wheels for those versions.
 - **ai-toolkit: Python 3.11 is the safe choice.** On **3.13** its pinned

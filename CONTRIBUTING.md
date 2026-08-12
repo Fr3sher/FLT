@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for wanting to make LoRA Dataset Studio better. This is a small, self-hosted, volunteer project — issues, ideas and pull requests are all welcome.
+Thanks for wanting to make FLT - Fresh LoRa Trainer better. This is a small, self-hosted, volunteer project — issues, ideas and pull requests are all welcome.
 
 ## Before you write code
 

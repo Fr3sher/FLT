@@ -10942,7 +10942,7 @@ def _dataset_info(ds, n, composition) -> str:
     family = (getattr(ds, 'train_type', None) or 'zimage').lower()
     kind = (getattr(ds, 'kind', None) or 'character').lower()
     lines = [
-        '# LoRA Dataset Studio export',
+        '# FLT - Fresh LoRa Trainer export',
         '',
         f'Dataset kind: {kind}',
         f'Training family: {_TRAIN_FAMILY_LABELS.get(family, family)}',

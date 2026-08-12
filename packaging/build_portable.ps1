@@ -1,11 +1,11 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Assemble the legacy local PyInstaller bundle of LoRA Dataset Studio.
+  Assemble the legacy local PyInstaller bundle of FLT - Fresh LoRa Trainer.
 
 .DESCRIPTION
   Produces packaging/dist/LoRA-Dataset-Studio-local-legacy-win64.zip: a self-contained folder the
-  end user extracts and runs by double-clicking "LoRA Dataset Studio.exe" — no Python
+  end user extracts and runs by double-clicking "FLT - Fresh LoRa Trainer.exe" — no Python
   install, no terminal. The heavy externals (ComfyUI, ai-toolkit, Ollama, ML extras)
   stay OUT of the bundle: the in-app Setup wizard installs them. This is why we ship a
   real standalone CPython (which HAS pip) instead of a single frozen exe — the wizard's
@@ -13,7 +13,7 @@
 
   Bundle layout (mirrors the repo so backend/config.py resolves REPO_ROOT/FRONTEND_DIST
   unchanged):
-      LoRA Dataset Studio.exe   python\   backend\   frontend\dist\   icon.ico   README.md
+      FLT - Fresh LoRa Trainer.exe   python\   backend\   frontend\dist\   icon.ico   README.md
 
 .NOTES
   Prereqs on the BUILD machine: PowerShell 5.1+, a host `python` (3.9-3.12) on PATH
@@ -108,11 +108,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 $ErrorActionPreference = $prevEAP
 & $HostPy -m PyInstaller --noconfirm --onefile --noconsole `
-  --name 'LoRA Dataset Studio' --icon (Join-Path $Here 'icon.ico') `
+  --name 'FLT - Fresh LoRa Trainer' --icon (Join-Path $Here 'icon.ico') `
   --distpath (Join-Path $Build 'launcher') --workpath (Join-Path $Build 'pyi') `
   --specpath $Build (Join-Path $Here 'launcher.py')
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
-Copy-Item -Force (Join-Path $Build 'launcher\LoRA Dataset Studio.exe') $Stage
+Copy-Item -Force (Join-Path $Build 'launcher\FLT - Fresh LoRa Trainer.exe') $Stage
 
 # 5) Zip the folder (extraction yields the LoRA-Dataset-Studio\ folder).
 Step 'Zipping the bundle'
@@ -120,4 +120,4 @@ Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Stage -DestinationPath $Zip
 $mb = [math]::Round((Get-Item $Zip).Length / 1MB, 1)
 Step "Done -> $Zip ($mb MB)"
-Write-Host '    Test it: extract the zip and double-click "LoRA Dataset Studio.exe".'
+Write-Host '    Test it: extract the zip and double-click "FLT - Fresh LoRa Trainer.exe".'

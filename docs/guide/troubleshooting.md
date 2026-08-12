@@ -15,7 +15,7 @@ loads the interface.
 `.js` value with `text/plain`; older LDS builds then served the bundle with
 that registry MIME type and browsers refused to execute it.
 
-**Fix:** update LoRA Dataset Studio and restart it. Current builds set the MIME
+**Fix:** update FLT - Fresh LoRa Trainer and restart it. Current builds set the MIME
 type of served assets themselves and do not trust the Windows registry. If an
 old build must be used temporarily, repair the `.js` Content Type to a
 JavaScript MIME type, then restart the browser. Updating is safer than making a

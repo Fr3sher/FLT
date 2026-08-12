@@ -1,7 +1,7 @@
 """Hugging Face authentication of the LOCAL training subprocess.
 
 Reported by SurpassHR on GitHub: training on Krea 2 (gated repo
-`krea/Krea-2-Turbo`) died with a 401 GatedRepoError *from LoRA Dataset Studio*,
+`krea/Krea-2-Turbo`) died with a 401 GatedRepoError *from FLT - Fresh LoRa Trainer*,
 while downloading the very same weights straight from ai-toolkit worked. The
 discriminating fact was the environment we hand the child process:
 

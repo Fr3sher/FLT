@@ -2729,7 +2729,7 @@ picture and decide it belongs on the board.
 - Closing forgets nothing. Pin the same image again and it comes back **exactly
   where you left it, at exactly the size you left it** — that is the point of the
   feature, not a side effect. The geometry lives with your card positions, on
-  your machine's LoRA Dataset Studio rather than in one browser, so it follows
+  your machine's FLT - Fresh LoRa Trainer rather than in one browser, so it follows
   the dataset.
 - **Keyboard:** focus a pinned image (Tab), then the arrow keys move it,
   Shift+arrows move it faster, **+** / **−** resize it and **Esc** closes it.

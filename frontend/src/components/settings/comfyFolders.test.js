@@ -87,9 +87,9 @@ test('a folder that exists, or nothing resolved, says nothing', () => {
 test('a folder that exists but cannot be written to is reported', () => {
   const warn = folderWarning({
     source: 'override', resolved: 'X:\\in', exists: true, usable: false,
-    problem: "ComfyUI's input folder is not writable from LoRA Dataset Studio: X:\\in "
+    problem: "ComfyUI's input folder is not writable from FLT - Fresh LoRa Trainer: X:\\in "
       + '(PermissionError). If ComfyUI runs in another container, in WSL or on another '
-      + 'machine, this folder must be a shared volume visible to LoRA Dataset Studio '
+      + 'machine, this folder must be a shared volume visible to FLT - Fresh LoRa Trainer '
       + 'at that exact path — pointing the app at ComfyUI’s URL is not enough.',
   })
   assert.match(warn, /not writable/)

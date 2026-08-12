@@ -34,9 +34,9 @@ def test_manual_command_ml_extras_is_scoped_to_this_interpreter():
 
 def test_manual_command_quotes_paths_with_spaces(monkeypatch):
     from app import setup_installer
-    monkeypatch.setattr(setup_installer.sys, 'executable', r'C:\LoRA Dataset Studio\python\python.exe')
+    monkeypatch.setattr(setup_installer.sys, 'executable', r'C:\FLT - Fresh LoRa Trainer\python\python.exe')
     cmd = setup_installer.manual_command('ml_extras')
-    assert '"C:\\LoRA Dataset Studio\\python\\python.exe"' in cmd
+    assert '"C:\\FLT - Fresh LoRa Trainer\\python\\python.exe"' in cmd
 
 def test_ollama_model_has_no_cli_fallback():
     from app import setup_installer

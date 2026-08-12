@@ -392,7 +392,7 @@ def push_base_to_hf(dataset_id, family, variant, base_model, token,
         raise HfPublishError('network', f'could not create the repo: {e}') from e
     _ensure_private(api, repo_id, None)
 
-    commit_message = f'Push custom {family} base (LoRA Dataset Studio)'
+    commit_message = f'Push custom {family} base (FLT - Fresh LoRa Trainer)'
     try:
         if payload['kind'] == 'folder':
             api.upload_folder(folder_path=payload['path'], repo_id=repo_id,

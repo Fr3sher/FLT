@@ -238,7 +238,7 @@ function NavBar() {
       <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3 sm:gap-6">
         <NavLink to="/datasets" title="Back to the datasets page" onClick={goHome}
           className="shrink-0 whitespace-nowrap bg-gradient-primary bg-clip-text text-base font-bold text-transparent no-underline">
-          LoRA Dataset Studio
+          FLT - Fresh LoRa Trainer
         </NavLink>
         {/* Desktop: workspaces on the left, utilities grouped into icon menus
             on the right (Guide/Help under ?, Setup/Settings under ⚙). */}

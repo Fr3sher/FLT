@@ -15,7 +15,7 @@ where.exe powershell.exe >nul 2>&1
 if errorlevel 1 goto :powershell_missing
 if not exist "%~dp0scripts\docker-launch.ps1" goto :launcher_missing
 
-title LoRA Dataset Studio + isolated ComfyUI - Docker GPU
+title FLT - Fresh LoRa Trainer + isolated ComfyUI - Docker GPU
 echo.
 echo This builds Studio with a fresh, isolated ComfyUI for NVIDIA GPUs.
 echo The first build is large and may take 20 minutes or more.

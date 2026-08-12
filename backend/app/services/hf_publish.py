@@ -183,7 +183,7 @@ def _kind_label(ds) -> str:
 def build_readme(ds, count, license, nfaa) -> str:
     """YAML front-matter (license / task_categories / tags) + a dataset card
     derived from the ⎘ Share-config pattern (kind, target family, image count,
-    trigger, 'built with LoRA Dataset Studio' + repo link). Fully redacted."""
+    trigger, 'built with FLT - Fresh LoRa Trainer' + repo link). Fully redacted."""
     fam = _FAMILY_LABEL.get(_target_family(ds), _target_family(ds))
     kind = _kind_label(ds)
     trigger = ds.trigger_word or ''
@@ -201,7 +201,7 @@ def build_readme(ds, count, license, nfaa) -> str:
         f'# {ds.name}',
         '',
         f'A LoRA training dataset built with '
-        f'**[LoRA Dataset Studio]({GITHUB_URL})**.',
+        f'**[FLT - Fresh LoRa Trainer]({GITHUB_URL})**.',
         '',
         '| | |',
         '|---|---|',
@@ -228,7 +228,7 @@ def build_readme(ds, count, license, nfaa) -> str:
     body += [
         '---',
         '',
-        f'Exported automatically with [LoRA Dataset Studio]({GITHUB_URL}) — an '
+        f'Exported automatically with [FLT - Fresh LoRa Trainer]({GITHUB_URL}) — an '
         'open-source tool for building character / style / concept LoRA datasets. '
         'The uploader is responsible for the rights to these images and for the '
         'consent of any identifiable person shown.',
@@ -364,7 +364,7 @@ def publish_to_hf(dataset_id, repo_id, private, nfaa, license, include_ref, toke
 
         try:
             api.upload_folder(folder_path=tmp, repo_id=repo_id, repo_type='dataset',
-                              commit_message=f'Add dataset (LoRA Dataset Studio v{APP_VERSION})')
+                              commit_message=f'Add dataset (FLT - Fresh LoRa Trainer v{APP_VERSION})')
         except Exception as e:
             status = _http_status(e)
             if status in (401, 403):

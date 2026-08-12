@@ -49,7 +49,7 @@ MAX_CANVAS_IMAGES = 100
 # Prompt is truncated to this many chars when the user opts to include it.
 _PROMPT_MAX_CHARS = 200
 
-FOOTER_TEXT = 'Made with LoRA Dataset Studio'
+FOOTER_TEXT = 'Made with FLT - Fresh LoRa Trainer'
 
 
 class GridExportEmpty(Exception):

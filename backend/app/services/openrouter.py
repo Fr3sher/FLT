@@ -63,7 +63,7 @@ DEFAULT_MODEL = 'google/gemini-3-pro-image'
 # Optional attribution headers OpenRouter uses for its app rankings. Public
 # project identity only — nothing about the machine or the user.
 _APP_URL = 'https://github.com/perfectgf/lora-dataset-studio'
-_APP_TITLE = 'LoRA Dataset Studio'
+_APP_TITLE = 'FLT - Fresh LoRa Trainer'
 
 _NO_KEY = ('no OpenRouter API key saved — add OPENROUTER_API_KEY in '
            'Settings > Image engines')

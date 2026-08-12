@@ -298,9 +298,9 @@ test('a valid ComfyUI folder the app cannot write into warns without blocking', 
   const v = comfyuiDirVerdict({
     status: 'valid', resolved: 'C:/Comfy',
     input_check: { path: 'C:/Comfy/input', ok: false,
-      problem: "ComfyUI's input folder is not writable from LoRA Dataset Studio: "
+      problem: "ComfyUI's input folder is not writable from FLT - Fresh LoRa Trainer: "
         + 'C:/Comfy/input. If ComfyUI runs in another container, in WSL or on another '
-        + 'machine, this folder must be a shared volume visible to LoRA Dataset Studio '
+        + 'machine, this folder must be a shared volume visible to FLT - Fresh LoRa Trainer '
         + 'at that exact path.' },
   });
   assert.equal(v.tone, 'ok');                 // still a valid install: NOT a blocker

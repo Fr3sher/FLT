@@ -17,7 +17,7 @@
    from the address the server actually bound (port 5050 may be taken). */
 module.exports = {
   version: "1.0",
-  title: "LoRA Dataset Studio",
+  title: "FLT - Fresh LoRa Trainer",
   description:
     "Build, curate, caption and clean LoRA training datasets in your browser, then train, compare and iterate — local Flask app, your files stay on your disk. https://github.com/perfectgf/lora-dataset-studio",
   icon: "icon.png",

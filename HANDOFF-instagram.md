@@ -1,4 +1,4 @@
-# HANDOFF — Instagram 429 / `_giules` scan (LoRA Dataset Studio)
+# HANDOFF — Instagram 429 / `_giules` scan (FLT - Fresh LoRa Trainer)
 
 For the next AI that has browser + shell access on this machine. Practical, no fluff.
 

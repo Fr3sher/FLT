@@ -746,7 +746,7 @@ def test_restore_route_rejects_garbage(app, client):
                     data={'file': (io.BytesIO(b'not a zip'), 'x.zip')},
                     content_type='multipart/form-data')
     assert r.status_code == 400
-    assert 'not a LoRA Dataset Studio backup' in r.get_json()['error']
+    assert 'not a FLT - Fresh LoRa Trainer backup' in r.get_json()['error']
 
 
 def test_download_route_validates_basename(app, client, tmp_path):

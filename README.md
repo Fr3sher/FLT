@@ -1,4 +1,4 @@
-# LoRA Dataset Studio
+# FLT - Fresh LoRa Trainer
 
 [![CI](https://github.com/perfectgf/lora-dataset-studio/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/perfectgf/lora-dataset-studio/actions/workflows/ci.yml) [![Join our Discord](https://img.shields.io/discord/1525908170331914411?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/j6hnJBFtXE) [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/perfectgf) [![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/perfectgf)
 
@@ -248,9 +248,9 @@ Directions, not dates. These are discussed openly on the project's Discord, and 
 
 ## Why this instead of ai-toolkit?
 
-"Instead of" is the wrong frame: this app is **not a competitor to [ai-toolkit](https://github.com/ostris/ai-toolkit) — it orchestrates it**. ai-toolkit is the training engine; LoRA Dataset Studio adds the work before, around and after a run.
+"Instead of" is the wrong frame: this app is **not a competitor to [ai-toolkit](https://github.com/ostris/ai-toolkit) — it orchestrates it**. ai-toolkit is the training engine; FLT - Fresh LoRa Trainer adds the work before, around and after a run.
 
-| Stage | ai-toolkit alone | LoRA Dataset Studio |
+| Stage | ai-toolkit alone | FLT - Fresh LoRa Trainer |
 |---|---|---|
 | Build from references | ❌ bring your own images | ✅ five engines, simultaneous multi-engine batches, subject-aware catalogs including Anime, reference edits and exact retries |
 | Build from the web | ❌ none | ✅ Reddit, Pexels, keyword search across the open web, and gallery/direct-media URL scans (through gallery-dl, which covers several hundred sites) into a dataset or Image Bank, with deduplication and explicit provider warnings |
@@ -476,7 +476,7 @@ Still stuck? **Guide → Getting help** generates a paste-safe diagnostic report
 
 ## Support the project
 
-LoRA Dataset Studio is free, open source, and has no paid tier, no telemetry and
+FLT - Fresh LoRa Trainer is free, open source, and has no paid tier, no telemetry and
 no upsell. It is built and maintained by one person, on personal time — every
 feature in the list above came out of somebody's evenings.
 
@@ -511,7 +511,7 @@ making it better.
 
 ### What this project is for
 
-LoRA Dataset Studio is intended for building datasets from imagery **you have the right to use**, specifically:
+FLT - Fresh LoRa Trainer is intended for building datasets from imagery **you have the right to use**, specifically:
 
 - **Yourself**, or
 - **Synthetic / AI-generated people** who do not exist (the demo person shown throughout this README is one such synthetic identity), or

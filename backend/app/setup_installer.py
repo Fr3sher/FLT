@@ -445,7 +445,7 @@ def _set_progress(action, done, total):
 
 def _quote(p: str) -> str:
     # Quote paths with spaces so the manual command is copy-paste-safe: the
-    # portable bundle can be extracted under e.g. C:\Users\...\LoRA Dataset Studio\.
+    # portable bundle can be extracted under e.g. C:\Users\...\FLT - Fresh LoRa Trainer\.
     return f'"{p}"' if ' ' in p else p
 
 

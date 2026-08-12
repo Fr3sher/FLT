@@ -156,7 +156,7 @@ else {
             [System.Windows.Forms.MessageBox]::Show(
                 $owner,
                 'Select the ComfyUI root containing main.py and models, or the portable parent that contains a ComfyUI folder.',
-                'LoRA Dataset Studio',
+                'FLT - Fresh LoRa Trainer',
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
             ) | Out-Null

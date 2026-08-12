@@ -1,6 +1,6 @@
 r"""The FILESYSTEM half of the ComfyUI contract must fail out loud.
 
-Reported on Discord by nofaceman: LoRA Dataset Studio in Docker, ComfyUI in a
+Reported on Discord by nofaceman: FLT - Fresh LoRa Trainer in Docker, ComfyUI in a
 SECOND container. Setup went green (URL + directory both accepted), then every
 generation answered a bare `500` with no detail — "probably no network access".
 

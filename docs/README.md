@@ -1,6 +1,6 @@
 # Documentation
 
-This is the documentation index for LoRA Dataset Studio. The root [README](../README.md) stays focused on capabilities and installation; detailed workflows and reference material live here.
+This is the documentation index for FLT - Fresh LoRa Trainer. The root [README](../README.md) stays focused on capabilities and installation; detailed workflows and reference material live here.
 
 ## Start here
 

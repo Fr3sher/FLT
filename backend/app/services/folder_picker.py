@@ -77,7 +77,7 @@ $ErrorActionPreference = 'Stop'
 $initial = $env:LDS_PICKER_INITIAL
 $mode = $env:LDS_PICKER_MODE            # '', 'auto', 'legacy', 'com'
 if (-not $mode) { $mode = 'auto' }
-$title = 'LoRA Dataset Studio - choose a folder'
+$title = 'FLT - Fresh LoRa Trainer - choose a folder'
 
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
 
@@ -225,7 +225,7 @@ namespace LdsPicker {
         dlg.SetOptions(before | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
         dlg.GetOptions(out after);
         bool flags = (after & FOS_PICKFOLDERS) != 0 && (after & FOS_FORCEFILESYSTEM) != 0;
-        dlg.SetTitle("LoRA Dataset Studio self-test");
+        dlg.SetTitle("FLT - Fresh LoRa Trainer self-test");
         string roundTrip = "(skipped)";
         if (!string.IsNullOrEmpty(probeFolder)) {
           Guid riid = IID_IShellItem;

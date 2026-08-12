@@ -2,7 +2,7 @@
 
 [← Documentation index](../README.md) · [Quick install](../../README.md#setup--install) · [Troubleshooting](troubleshooting.md)
 
-LoRA Dataset Studio provides two beginner Windows launchers:
+FLT - Fresh LoRa Trainer provides two beginner Windows launchers:
 
 | Launcher | Use it when | ComfyUI |
 |---|---|---|

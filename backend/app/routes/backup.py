@@ -123,7 +123,7 @@ def full_restore():
             return jsonify({'ok': False, 'error': str(exc)}), 400
         return jsonify({'ok': True, 'kind': 'single', 'id': ds.id, 'name': ds.name})
 
-    return jsonify({'ok': False, 'error': 'not a LoRA Dataset Studio backup'}), 400
+    return jsonify({'ok': False, 'error': 'not a FLT - Fresh LoRa Trainer backup'}), 400
 
 
 @bp.get('/full/restore/status')

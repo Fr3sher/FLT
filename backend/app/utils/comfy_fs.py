@@ -49,7 +49,7 @@ _KIND_LABELS = {'input': "ComfyUI's input folder", 'output': "ComfyUI's output f
 # way everywhere (staging error, Settings warning, Setup note) so it is recognisable.
 SHARED_FOLDER_HINT = (
     'If ComfyUI runs in another container, in WSL or on another machine, this folder '
-    'must be a shared volume visible to LoRA Dataset Studio at that exact path — '
+    'must be a shared volume visible to FLT - Fresh LoRa Trainer at that exact path — '
     'pointing the app at ComfyUI\'s URL is not enough.'
 )
 
@@ -98,11 +98,11 @@ def folder_problem(kind: str, path) -> str:
     if kind in WRITTEN_KINDS:
         err = _write_probe(path)
         if err:
-            return (f'{folder_label(kind)} is not writable from LoRA Dataset Studio: '
+            return (f'{folder_label(kind)} is not writable from FLT - Fresh LoRa Trainer: '
                     f'{shown} ({err}). ' + SHARED_FOLDER_HINT)
     else:
         if not os.access(path, os.R_OK):
-            return (f'{folder_label(kind)} is not readable from LoRA Dataset Studio: '
+            return (f'{folder_label(kind)} is not readable from FLT - Fresh LoRa Trainer: '
                     f'{shown}. ' + SHARED_FOLDER_HINT)
     return ''
 

@@ -1,6 +1,6 @@
 # Settings reference
 
-Every setting in LoRA Dataset Studio, explained: what it does, its default, when to change it, and the traps to avoid.
+Every setting in FLT - Fresh LoRa Trainer, explained: what it does, its default, when to change it, and the traps to avoid.
 
 ## How settings work
 

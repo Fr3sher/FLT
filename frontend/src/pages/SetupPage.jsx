@@ -1436,7 +1436,7 @@ export default function SetupPage() {
       <div className="mx-auto max-w-2xl space-y-6">
         <div className="text-center">
           <div className="text-3xl" aria-hidden="true">🧬</div>
-          <h1 className="mt-2 text-2xl font-bold text-content">Welcome to LoRA Dataset Studio</h1>
+          <h1 className="mt-2 text-2xl font-bold text-content">Welcome to FLT - Fresh LoRa Trainer</h1>
           <p className="mt-2 text-sm text-content-muted">
             Let's set up your machine. I'll scan what's already installed and help you install the rest —
             you can also start building a dataset from your own photos right now, no setup required.

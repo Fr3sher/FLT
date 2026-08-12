@@ -22,7 +22,7 @@ export function formatDiagnostic(d) {
 
   const L = []
   L.push('```')
-  L.push(`LoRA Dataset Studio diagnostic — v${d.app_version}${d.git_sha ? ` (${d.git_sha})` : ''}`)
+  L.push(`FLT - Fresh LoRa Trainer diagnostic — v${d.app_version}${d.git_sha ? ` (${d.git_sha})` : ''}`)
   L.push(`OS: ${d.os} · Python ${d.python}${pml.ml_supported === false ? ` (⚠ outside ML wheel range ${pml.ml_range})` : ''}`)
 
   L.push('── Engines ──')

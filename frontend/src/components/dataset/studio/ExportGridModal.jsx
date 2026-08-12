@@ -8,7 +8,7 @@
  * Sober set of options (not a factory): which format block (or all stacked),
  * include the prompt or not (default OFF — prompts can be personal/NSFW), tile
  * size (2 crans), file format (JPEG q90 default / PNG), and the discreet
- * « Made with LoRA Dataset Studio » footer toggle. The compose call is DB + PIL
+ * « Made with FLT - Fresh LoRa Trainer » footer toggle. The compose call is DB + PIL
  * only (no ComfyUI), so it works offline.
  */
 import { useMemo, useRef, useState } from 'react';
@@ -162,7 +162,7 @@ export default function ExportGridModal({ open, onClose, datasetId, family, run,
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" checked={footer}
             onChange={(e) => setFooter(e.target.checked)} />
-          <span className="text-[0.75rem] text-content">“Made with LoRA Dataset Studio” footer</span>
+          <span className="text-[0.75rem] text-content">“Made with FLT - Fresh LoRa Trainer” footer</span>
         </label>
 
         {willDownscale && (

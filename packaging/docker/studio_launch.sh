@@ -1,5 +1,5 @@
 #!/bin/bash
-# LoRA Dataset Studio, started inside the ComfyUI-Nvidia container.
+# FLT - Fresh LoRa Trainer, started inside the ComfyUI-Nvidia container.
 #
 # Installed as /userscripts_dir/50-lora-dataset-studio.sh, which upstream's
 # init.bash runs in sorted order as the `comfy` user — AFTER the WANTED_UID/GID

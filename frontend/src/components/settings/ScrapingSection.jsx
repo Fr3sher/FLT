@@ -26,7 +26,7 @@ function RedditClientIdGuide() {
           refuses the secret-less anonymous login this app uses (every scan would fail with 401).
         </li>
         <li>
-          Name: anything (e.g. “LoRA Dataset Studio”). Redirect uri:{' '}
+          Name: anything (e.g. “FLT - Fresh LoRa Trainer”). Redirect uri:{' '}
           <code className="rounded bg-surface px-1">http://localhost</code> — the form requires one,
           but it is never used here.
         </li>

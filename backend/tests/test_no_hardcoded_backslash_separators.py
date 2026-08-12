@@ -73,7 +73,7 @@ def test_no_source_file_rewrites_a_path_onto_a_backslash():
                 offenders.append(f'app/{rel}:{n}: {line.strip()}')
     assert not offenders, (
         'These lines force a Windows separator, which is correct on exactly one '
-        'operating system. On Linux this is what made LoRA Dataset Studio generate '
+        'operating system. On Linux this is what made FLT - Fresh LoRa Trainer generate '
         'NOTHING (GitHub #21, 1Tomber): every model widget was refused by ComfyUI, '
         'whose validator does an exact string match.\n  '
         + '\n  '.join(offenders)

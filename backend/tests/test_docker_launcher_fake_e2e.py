@@ -435,7 +435,7 @@ def test_update_rebuild_waits_for_health_and_skips_setup(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
-    assert "LoRA Dataset Studio is healthy at" in result.stdout
+    assert "FLT - Fresh LoRa Trainer is healthy at" in result.stdout
     assert ("Updater mode will not wait for the browser or the Setup choices."
             in result.stdout)
     health_calls = [call for call in calls if "--format" in call["args"]]
@@ -461,7 +461,7 @@ def test_update_rebuild_returns_nonzero_when_health_is_unhealthy(tmp_path):
     # for a reason that has nothing to do with the launcher. Assert the message,
     # not the spelling of the wrap.
     assert "exitedorbecameunhealthy" in re.sub(r"\s+", "", result.stderr)
-    assert "LoRA Dataset Studio is healthy at" not in result.stdout
+    assert "FLT - Fresh LoRa Trainer is healthy at" not in result.stdout
     assert "Choose the Ollama deployment mode" not in result.stdout
     assert not _compose_calls(calls, "up", "ollama")
 

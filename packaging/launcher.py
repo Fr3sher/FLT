@@ -1,11 +1,11 @@
-"""LoRA Dataset Studio - portable launcher.
+"""FLT - Fresh LoRa Trainer - portable launcher.
 
 Double-clicked by end users. Starts the bundled standalone Python running the Flask
 server (no console window), waits until it answers, opens the browser, and shows a
 tiny status window with Open / Quit. Everything writable (config.json, .env, the
 datasets) lives under data/ next to this launcher, so the bundle stays fully portable.
 
-Frozen with PyInstaller (--noconsole) into "LoRA Dataset Studio.exe" at the bundle root.
+Frozen with PyInstaller (--noconsole) into "FLT - Fresh LoRa Trainer.exe" at the bundle root.
 The APP runs under python/python.exe, which HAS pip -- that is the whole reason we ship
 a real standalone Python instead of one frozen single-exe: the in-app Setup wizard's
 `pip install -r backend/requirements-ml.txt` (face scoring, masks) keeps working.
@@ -13,7 +13,7 @@ a real standalone Python instead of one frozen single-exe: the in-app Setup wiza
 Bundle layout the launcher expects (mirrors the repo so backend/config.py's
 REPO_ROOT/FRONTEND_DIST resolve unchanged):
 
-    LoRA Dataset Studio.exe   <- this, frozen
+    FLT - Fresh LoRa Trainer.exe   <- this, frozen
     python/python.exe         <- standalone CPython + core deps (has pip)
     backend/run.py            <- Flask entrypoint
     frontend/dist/            <- prebuilt UI
@@ -29,7 +29,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-APP_NAME = "LoRA Dataset Studio"
+APP_NAME = "FLT - Fresh LoRa Trainer"
 PREFERRED_PORT = 5050          # matches start.bat; only changed if already taken
 CREATE_NO_WINDOW = 0x08000000  # Windows: no console window for the child server
 

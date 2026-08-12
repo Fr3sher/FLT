@@ -5,7 +5,7 @@ réimplémente pas l'entraîneur. Pause GPU via le flag system_state
 `training_in_progress` honoré par le superviseur ComfyUI.
 
 Lifted from the parent project's app/services/lora_training.py (1288 lines)
-for LoRA Dataset Studio: SRC's module-level AITOOLKIT_DIR/HF_HOME/DATASETS_DIR/
+for FLT - Fresh LoRa Trainer: SRC's module-level AITOOLKIT_DIR/HF_HOME/DATASETS_DIR/
 OUTPUT_DIR/LORA_DEST_DIR* constants become live `cfg.aitoolkit_path(...)` /
 `cfg.comfyui_dir(...)` accessors below, each raising a clean RuntimeError when
 its backend isn't configured yet (so config.json edits apply without a

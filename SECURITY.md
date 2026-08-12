@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-LoRA Dataset Studio ships as a rolling release. Only the **latest release** and the current **`main`** branch are supported — fixes land there, and the in-app update check nudges packaged installs toward the newest release. Please reproduce on an up-to-date checkout before reporting.
+FLT - Fresh LoRa Trainer ships as a rolling release. Only the **latest release** and the current **`main`** branch are supported — fixes land there, and the in-app update check nudges packaged installs toward the newest release. Please reproduce on an up-to-date checkout before reporting.
 
 ## The default threat model
 

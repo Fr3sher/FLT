@@ -1,6 +1,6 @@
 # CLAUDE.md — working rules for this repo
 
-Rules for AI agents (and humans) shipping changes to LoRA Dataset Studio.
+Rules for AI agents (and humans) shipping changes to FLT - Fresh LoRa Trainer.
 Public repo — everything here is visible; keep it free of personal data.
 
 ## Identity & privacy (non-negotiable)
