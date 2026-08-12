@@ -345,7 +345,16 @@ def test_stop_waits_until_launch_publishes_the_new_pid(
     launch_errors = []
     stop_results = []
 
-    def blocked_popen(_args, **kwargs):
+    def blocked_popen(args, **kwargs):
+        # launch_training runs an ai-toolkit interpreter probe (subprocess.run ->
+        # Popen, e.g. `python -c 'import torch'`) BEFORE it publishes the training
+        # identity and spawns the real trainer (`python run.py <config>`). That
+        # probe must not be mistaken for the training spawn: only the real spawn
+        # blocks and carries the run token. Pass the probe through as a success.
+        if 'run.py' not in args:
+            return SimpleNamespace(pid=0, returncode=0,
+                                   communicate=lambda *a, **k: (b'', b''),
+                                   __enter__=lambda s: s, __exit__=lambda *a: False)
         identity['token'] = lt.queue_manager._get_system_state(
             'training_run_token', None)
         popen_entered.set()
