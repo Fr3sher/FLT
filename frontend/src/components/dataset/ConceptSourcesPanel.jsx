@@ -18,6 +18,7 @@ import { useCapabilities } from '../../context/CapabilitiesContext';
 import InstallRunner from '../setup/InstallRunner';
 import { clearScraperScanState, loadScraperScanState, saveScraperScanState } from './scraperState';
 import { HelpBadge } from '../../help/HelpMode';
+import { Progress } from '@/components/ui/progress';
 import PexelsAttribution from './PexelsAttribution';
 import SettingsLink from '../common/SettingsLink';
 import KleinModelSetting from '../shared/KleinModelSetting';
@@ -116,6 +117,16 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   const [partial, setPartial] = useState(false);
   const [partialReason, setPartialReason] = useState(null);
   const [scanning, setScanning] = useState(false);
+  // Live elapsed-seconds while a scan is in flight, so a slow Instagram scan
+  // shows a ticking indicator (and an indeterminate bar) instead of a frozen
+  // "Scanning…" that looks like the app hung.
+  const [scanElapsed, setScanElapsed] = useState(0);
+  useEffect(() => {
+    if (!scanning) { setScanElapsed(0); return; }
+    setScanElapsed(0);
+    const t = setInterval(() => setScanElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [scanning]);
   // Gallery-listing scans (PornPics category/tag/search): OFF = one cover per
   // matched gallery (the keyword-relevant shot), ON = every photo of each gallery.
   const [fullAlbums, setFullAlbums] = useState(restoredScan.fullAlbums);
@@ -484,7 +495,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
               className="flex-1 min-w-[14rem] px-3 py-1.5 rounded-lg bg-surface-raised border border-border text-content text-sm placeholder:text-content-subtle focus:border-indigo-500 outline-none" />
             <button type="submit" disabled={scanning || !url.trim()}
               className="px-3 py-1.5 rounded-lg bg-surface border border-border text-content text-sm hover:bg-white/10 disabled:opacity-40">
-              {scanning ? 'Scanning…' : 'Scan URL'}
+              {scanning ? `Scanning… ${scanElapsed}s` : 'Scan URL'}
             </button>
             <HelpBadge topic="action-scrape-scan" className="self-center" />
           </form>
@@ -492,6 +503,16 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
             Use this for supported galleries and albums, or direct Pexels photos and collections.
             Normal Pexels keyword searches belong in the Pexels tab.
           </p>
+          {scanning && (
+            <div className="mt-2 rounded-lg border border-border bg-surface-raised p-3" role="status" aria-live="polite">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-sm text-content">Scanning the source…</span>
+                <span className="font-mono text-xs text-content-muted tabular-nums">{scanElapsed}s</span>
+              </div>
+              <Progress value={(scanElapsed * 7) % 100} aria-label="Scanning the source"
+                       className="w-full" />
+            </div>
+          )}
           {/pornpics\.com/i.test(url) && !/\/galleries\//i.test(url) && (
             <label className="flex items-center gap-2 text-[0.6875rem] text-content-muted cursor-pointer"
               title="Off: one listing cover per gallery. On: every photo from each matched gallery.">

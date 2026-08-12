@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { fileURLToPath, URL } from 'node:url'
 
 /* Where `npm run dev` sends /api.
  *
@@ -26,6 +27,12 @@ export default defineConfig(({ mode }) => {
     || DEFAULT_DEV_API_TARGET
   return {
     plugins: [react()],
+    resolve: {
+      alias: {
+        // shadcn/ui components import via '@/…' — resolve to the source root.
+        '@': fileURLToPath(new URL('./src', import.meta.url)),
+      },
+    },
     base: '/',
     build: {
       outDir: 'dist',
