@@ -70,6 +70,32 @@ def _by_name(client, bank_id):
     return {i['name']: i for i in d['images']}
 
 
+def test_create_bank_assigns_ids_in_sorted_relpath_order(app, tmp_path, monkeypatch):
+    """The default id order must not inherit an arbitrary filesystem walk order."""
+    from app.extensions import db
+    from app.models import BankImage
+    from app.services import image_bank_service as banks
+
+    source = tmp_path / 'unordered'
+    source.mkdir()
+    relpaths = ['z-last.png', 'a-first.png', os.path.join('middle', 'm.png')]
+    for relpath in relpaths:
+        path = source / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'not decoded during inventory')
+
+    monkeypatch.setattr(banks, '_walk_image_relpaths',
+                        lambda _folder: iter(relpaths))
+    with app.app_context():
+        bank, added = banks.create_bank('local', 'Ordered', str(source))
+        rows = (db.session.query(BankImage)
+                .filter_by(bank_id=bank.id)
+                .order_by(BankImage.id.asc()).all())
+
+    assert added == 3
+    assert [row.relpath for row in rows] == sorted(relpaths)
+
+
 # --- the safety property: a triaged bank survives a refresh ------------------
 def test_refresh_adds_new_files_and_never_touches_existing_triage(client, app, tmp_path):
     bank_id, src = _mkbank(client, tmp_path, {

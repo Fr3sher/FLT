@@ -1140,6 +1140,22 @@ def test_probe_aitoolkit_accepts_dot_venv_and_explicit_python(app, tmp_path, mon
         assert 'Python interpreter' in probe['detail']
 
 
+@pytest.mark.parametrize('relative_python', [
+    pathlib.Path('venv/Scripts/python.exe'),
+    pathlib.Path('venv/bin/python'),
+])
+def test_aitoolkit_derived_python_accepts_both_platform_layouts(
+        tmp_path, relative_python):
+    """A portable checkout can carry either venv shape regardless of this host."""
+    from app import config
+
+    interpreter = tmp_path / relative_python
+    interpreter.parent.mkdir(parents=True)
+    interpreter.touch()
+
+    assert config.aitoolkit_derived_python(tmp_path) == interpreter
+
+
 # --- ollama install detection (execution-independent) ---------------------
 
 def test_ollama_binary_found_on_path(app, monkeypatch):
