@@ -123,3 +123,21 @@ test('Pexels URL detection accepts only official web hosts over HTTP or HTTPS', 
   assert.equal(isPexelsUrl('https://www.pexels.com.evil.test/search/x/'), false);
   assert.equal(isPexelsUrl('https://pexels.com@evil.test/search/x/'), false);
 });
+
+test('an Instagram scan item forwards the direct CDN media in thumbnail', () => {
+  // Shape instagram.scan() actually returns: url is the page (/p/<shortcode>),
+  // thumbnail is the direct CDN media the import lane must fetch.
+  const scanItem = {
+    url: 'https://www.instagram.com/p/Cx123/',
+    title: 'A photo',
+    thumbnail: 'https://scontent.cdninstagram.test/v/t51.2885-15/abc.jpg',
+    type: 'image',
+    platform: 'instagram',
+  };
+  assert.deepEqual(scrapeItemToImportPayload(scanItem), {
+    url: 'https://www.instagram.com/p/Cx123/',
+    title: 'A photo',
+    platform: 'instagram',
+    thumbnail: 'https://scontent.cdninstagram.test/v/t51.2885-15/abc.jpg',
+  });
+});

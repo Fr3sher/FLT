@@ -6797,11 +6797,17 @@ def _save_small_scrape_pair(user_id, dataset_id, raw, prompt, source_metadata=No
 
 
 def _download_scrape_item(item):
-    """Télécharge UNE image d'un item de scan ({url,title}) en mémoire, durci
-    anti-SSRF (mêmes garanties que /thumb). Retourne (reason, data|None) où
-    reason ∈ {'ok','not_image','errors'}. Sûr hors app-context (thread pool)."""
+    """Télécharge UNE image d'un item de scan ({url,title,platform?}) en mémoire,
+    durci anti-SSRF (mêmes garanties que /thumb). Les items Instagram portent
+    l'URL CDN directe dans `thumbnail` et une URL de page (/p/<shortcode>) dans
+    `url` qui renvoie du HTML (échoue au magic test image) : on préfère donc
+    `thumbnail` pour Instagram. Les autres plateformes mettent une version plus
+    petite/dérivée dans `thumbnail` (pexels medium, picazor 300px) : on garde
+    `url`. Retourne (reason, data|None) où reason ∈ {'ok','not_image','errors'}.
+    Sûr hors app-context (thread pool)."""
     from ..scrape.netfetch import fetch_hardened_bytes, _validate_public_http_url
-    url = (item or {}).get('url')
+    item = item or {}
+    url = item.get('thumbnail') if item.get('platform') == 'instagram' else item.get('url')
     if not url:
         return ('errors', None)
     ok_url, _err = _validate_public_http_url(url)

@@ -84,6 +84,9 @@ export function scrapeItemToImportPayload(it) {
     return { ...base, platform: 'pexels', source_url: it.source_url,
       photographer: it.photographer, photographer_url: it.photographer_url };
   }
+  if (it.platform === 'instagram') {
+    return { ...base, platform: 'instagram', thumbnail: it.thumbnail || '' };
+  }
   if (it.platform === 'websearch') {
     return { ...base, platform: 'websearch', source_url: it.source_url };
   }

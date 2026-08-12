@@ -114,6 +114,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   // ran, not a durable property of the saved items; a stale "truncated" banner
   // surviving a page reload would be its own lie.
   const [partial, setPartial] = useState(false);
+  const [partialReason, setPartialReason] = useState(null);
   const [scanning, setScanning] = useState(false);
   // Gallery-listing scans (PornPics category/tag/search): OFF = one cover per
   // matched gallery (the keyword-relevant shot), ON = every photo of each gallery.
@@ -179,6 +180,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
       });
       setPaginated(!!body.paginated);
       setPartial(!!body.partial);
+      setPartialReason(body.partialReason || null);
       setPage(responsePage);
       if (isFreshScan) {
         setActiveScanUrl(target);
@@ -272,7 +274,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
     setPexelsKeyword(''); setPexelsLocale('fr-FR'); setPexelsOrientation('');
     setWebsearchKeyword(''); setWebsearchSafe(false);
     setActiveScanUrl(''); setActivePlatform(''); setItems([]); setPage(0);
-    setPaginated(false); setPartial(false); setFullAlbums(false); setRescueSmall(false);
+    setPaginated(false); setPartial(false); setPartialReason(null); setFullAlbums(false); setRescueSmall(false);
     setSelected(new Set()); setBroken(new Set());
   };
 
@@ -635,7 +637,9 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
             // still looks "final" otherwise, cf. the gdl.enumerate `from_albums`
             // note). Say so in plain English.
             <p className="text-[0.6875rem] text-amber-500">
-              This scan stopped before the end of the listing — some images may be missing.
+              {partialReason === 'capped'
+                ? 'Stopped at the built-in scan limit to stay fast — showing the most recent posts. Use “Load more” if the source supports paging.'
+                : 'This scan stopped before the end of the listing — some images may be missing.'}
             </p>
           )}
 

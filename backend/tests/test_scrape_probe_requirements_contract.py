@@ -23,6 +23,7 @@ _REQ = _ROOT / 'backend' / 'requirements-scrape.txt'
 _PYPI_TO_IMPORT = {
     'gallery-dl': 'gallery_dl',
     'instaloader': 'instaloader',
+    'browser-cookie3': 'browser_cookie3',
     'yt-dlp': 'yt_dlp',
     'curl_cffi': 'curl_cffi',
     'brotli': 'brotli',
@@ -92,3 +93,9 @@ def test_every_directly_imported_scrape_requirement_is_probed():
             'scrape stack, but probe_scrape_deps() does not check for it — an install '
             'missing only this package would still read "scrape deps OK".'
         )
+
+
+def test_instagram_cookie_fallback_is_declared_and_probed():
+    """The optional Instagram login fallback is part of the scrape install contract."""
+    assert 'browser_cookie3' in _requirements_import_names()
+    assert 'browser_cookie3' in _probed_modules()

@@ -35,6 +35,7 @@ class Match:
     source: object = None
     page: int = 0
     paginated: Optional[bool] = None
+    fresh: bool = False
 
 
 class ResultList(list):
@@ -69,6 +70,13 @@ class ResultList(list):
       `getattr(items, 'partial', False)`, sans connaître la source concrète."""
     from_albums = False
     partial = False
+    # Cause of a partial truncation, when known: 'capped' (the source hit its
+    # own hard item/page limit — expected, not a failure), 'interrupted'
+    # (iteration broke mid-way, e.g. a rate-limit during pagination), or
+    # 'timed_out'/'posts_failed'. None when unknown or not truncated. Lets the
+    # UI tell "stopped at the built-in limit" (calm) apart from "cut short by
+    # a problem" (alarming) instead of showing one generic banner for all.
+    partial_reason: Optional[str] = None
 
 
 class Source(ABC):

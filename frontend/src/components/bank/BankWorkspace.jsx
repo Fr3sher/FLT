@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, del, patchJson, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 // "This is configurable, here" — a deep link that lands ON the field, not on a tab.
@@ -634,7 +634,7 @@ function CoveragePanel({ coverage, semanticEngine, semanticLabel,
   )
 }
 
-function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
+function TileInner({ img, bankId, selected, onToggle, onReview, onTags, size }) {
   // `key` matters only for the flags list below (the one mapped array) — it was
   // missing and logged a React warning on every bank grid render.
   // The chips this image would actually offer. Computed HERE rather than asked of
@@ -647,7 +647,7 @@ function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
   )
   return (
     <li className={`relative overflow-hidden rounded-lg border border-border bg-surface ${STATUS_RING[img.status] || ''}`}>
-      <button type="button" onClick={onToggle}
+      <button type="button" onClick={() => onToggle(img.id)}
         title={`${img.name} — ${img.width || '?'}×${img.height || '?'}`
           + (img.blur_score != null ? ` · sharpness ${Math.round(img.blur_score)}` : '')
           + (img.aesthetic_score != null ? ` · aesthetic ${img.aesthetic_score.toFixed(1)}` : '')
@@ -726,7 +726,7 @@ function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
           on the pass row — a shipped feature that says nothing is indistinguishable
           from one that does not exist. */}
       {tagChips.length > 0 ? (
-        <button type="button" onClick={onTags}
+        <button type="button" onClick={() => onTags(img.id)}
           title={`Filter the bank by this image's tags — ${img.caption}`}
           aria-label={`Use the tags of ${img.name} as a filter`}
           className="absolute bottom-1 right-11 rounded bg-black/60 px-1 text-[11px] text-emerald-200 hover:bg-black/80">🏷️</button>
@@ -740,7 +740,7 @@ function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
             : 'Tags unavailable: this image has no caption yet'}
           className="absolute bottom-1 right-11 rounded bg-black/40 px-1 text-[11px] text-white/35">🏷️</span>
       )}
-      <button type="button" onClick={onReview}
+      <button type="button" onClick={() => onReview(img.id)}
         title="Review from this image — full size, one at a time, with Keep/Reject/Skip"
         aria-label={`Review from ${img.name}`}
         className="absolute bottom-1 right-6 rounded bg-black/60 px-1 text-[11px] text-white hover:bg-black/80">▶</button>
@@ -750,6 +750,14 @@ function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
     </li>
   )
 }
+
+// The bank grid renders up to PAGE_SIZE tiles. Without memo, ANY workspace
+// state change (a single selection toggle, a live-pass poll) re-runs every
+// tile — rebuilding each one's long tooltip string and badge list even though
+// nothing about that image changed. Memo keeps a tile on screen untouched until
+// its own `img` or `selected` actually moves, which is what makes triaging a
+// large bank stay responsive.
+const Tile = memo(TileInner)
 
 export default function BankWorkspace({ bankId, onBack, onGone }) {
   const toast = useToast()
@@ -1690,6 +1698,22 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       : im)),
   }))
   const closeReview = () => { setReview(null); refreshPayload(); refreshImages() }
+
+  // Stable per-tile handlers so the memoized Tile above only re-renders when its
+  // own image/selection moves, not on every workspace state change. openReview /
+  // openTagPicker are recreated each render, so the grid reads them through refs
+  // that always hold the current closure — the id-based callbacks stay stable.
+  const openReviewRef = useRef(openReview)
+  useEffect(() => { openReviewRef.current = openReview }, [openReview])
+  const openTagPickerRef = useRef(openTagPicker)
+  useEffect(() => { openTagPickerRef.current = openTagPicker }, [openTagPicker])
+  const toggleTile = useCallback((id) => setSelected((prev) => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  }), [])
+  const reviewTile = useCallback((id) => { openReviewRef.current(id) }, [])
+  const tagsTile = useCallback((id) => { openTagPickerRef.current(id) }, [])
 
   const selectAllCurrent = async () => {
     try {
@@ -3358,13 +3382,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             {page.images.map((img) => (
               <Tile key={img.id} img={img} bankId={bankId} size={tileSize}
                 selected={selected.has(img.id)}
-                onReview={() => openReview(img.id)}
-                onTags={() => openTagPicker(img)}
-                onToggle={() => setSelected((prev) => {
-                  const next = new Set(prev)
-                  if (next.has(img.id)) next.delete(img.id); else next.add(img.id)
-                  return next
-                })} />
+                onReview={reviewTile}
+                onTags={tagsTile}
+                onToggle={toggleTile} />
             ))}
           </ul>
           {page.total === 0 && (

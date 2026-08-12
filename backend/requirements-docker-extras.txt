@@ -1,0 +1,19 @@
+# In-process tools that must survive a Docker image rebuild.
+#
+# The full ML requirements file includes simple-lama-inpainting, which requires
+# Pillow<10. The API intentionally pins Pillow 12, so LaMa remains in its own
+# managed virtual environment under /data instead of appearing here.
+insightface
+onnxruntime
+rembg
+opencv-python-headless
+numpy
+
+# Video decode/export runs in the API process. Shot detection stays in the
+# existing shared scoring environment because it requires torch.
+av
+imageio-ffmpeg
+
+# Scrape sources are imported by the API process and need to be available after
+# container recreation as well.
+-r requirements-scrape.txt

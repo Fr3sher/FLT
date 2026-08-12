@@ -976,13 +976,13 @@ def probe_scrape_deps() -> dict:
     yt_dlp, the one `python -m` re-launches as a subprocess — same interpreter,
     same site-packages). curl_cffi + gallery_dl are the two hard requirements
     (picazor/civitai fetch, gallery enumeration); bs4/cloudscraper/instaloader/
-    ddgs/yt_dlp ride along in the same install. Every module the scrape stack
+    browser_cookie3/ddgs/yt_dlp ride along in the same install. Every module the scrape stack
     imports (directly or via `python -m`) belongs here: an omission reads as
     "installed" while the source that needs it still raises at runtime
     (instaloader did, until 2026-07; ddgs and yt_dlp did too, until this fix)."""
     import importlib.util
     missing = [m for m in ('curl_cffi', 'gallery_dl', 'bs4', 'cloudscraper', 'instaloader',
-                            'ddgs', 'yt_dlp')
+                            'browser_cookie3', 'ddgs', 'yt_dlp')
                if importlib.util.find_spec(m) is None]
     return {'ok': not missing,
             'detail': 'scrape deps OK' if not missing else f"missing: {', '.join(missing)}"}

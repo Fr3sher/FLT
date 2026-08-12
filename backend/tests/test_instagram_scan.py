@@ -236,3 +236,104 @@ def test_scan_profile_where_every_post_fails_conversion_is_a_failure_not_empty(m
     assert err is not None
     assert getattr(err, 'kind', None) != 'empty'
     assert 'none could be read' in err.lower()
+
+
+class _FakeResumableProfile:
+    """A profile with enough posts to exercise cursor-based auto-resume."""
+    def __init__(self, count):
+        self._count = count
+
+    def get_posts(self):
+        for i in range(self._count):
+            yield _FakeSimplePost(f'post{i}')
+
+
+def test_scan_profile_resume_returns_next_batch(monkeypatch):
+    """Auto-resume: after a first capped batch saved the cursor on post99, a
+    resume scan continues AFTER that post instead of re-collecting post0..99."""
+    monkeypatch.setattr(instagram, '_build_loader', lambda: SimpleNamespace(context=object()))
+    monkeypatch.setattr(instaloader.Profile, 'from_username',
+                        staticmethod(lambda context, username: _FakeResumableProfile(300)))
+    saved = {}
+    monkeypatch.setattr(instagram, '_load_cursor',
+                        staticmethod(lambda username: 'post99'))
+    monkeypatch.setattr(instagram, '_save_cursor',
+                        staticmethod(lambda username, shortcode: saved.update(shortcode=shortcode)))
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='resume', original_url=None)
+
+    items, err = instagram.scan(validation, resume=True, save_cursor=True)
+
+    assert err is None
+    assert len(items) == instagram.SCAN_LIMIT
+    assert getattr(items, 'partial', False) is True
+    # First item is the post AFTER the cursor, not the top of the profile.
+    assert 'post100' in items[0]['title']
+    # And the next cursor persisted points past this batch.
+    assert saved.get('shortcode') == 'post199'
+
+
+def test_scan_profile_resume_past_the_end_is_empty(monkeypatch):
+    """A cursor whose shortcode no longer exists (profile shrank / reordered)
+    means there is nothing left to return — kind='empty', not an error."""
+    monkeypatch.setattr(instagram, '_build_loader', lambda: SimpleNamespace(context=object()))
+    monkeypatch.setattr(instaloader.Profile, 'from_username',
+                        staticmethod(lambda context, username: _FakeProfileWithFewPosts()))
+    monkeypatch.setattr(instagram, '_load_cursor',
+                        staticmethod(lambda username: 'post5'))
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='small', original_url=None)
+
+    items, err = instagram.scan(validation, resume=True, save_cursor=True)
+
+    assert items is None
+    assert getattr(err, 'kind', None) == 'empty'
+
+
+def test_instagram_source_fresh_scan_resets_to_top(monkeypatch):
+    """`fresh=True` must ignore a persisted cursor and restart from the top of
+    the profile, so a user can re-merge / restart a dataset cleanly."""
+    monkeypatch.setattr(instagram, '_build_loader', lambda: SimpleNamespace(context=object()))
+    monkeypatch.setattr(instaloader.Profile, 'from_username',
+                        staticmethod(lambda context, username: _FakeResumableProfile(300)))
+    # A cursor exists on disk, but fresh must bypass it.
+    monkeypatch.setattr(instagram, '_load_cursor',
+                        staticmethod(lambda username: 'post199'))
+    saved = {}
+    monkeypatch.setattr(instagram, '_save_cursor',
+                        staticmethod(lambda username, shortcode: saved.update(shortcode=shortcode)))
+
+    match = instagram.Match(
+        url='https://www.instagram.com/someone/',
+        validation=SimpleNamespace(url_type=URLType.PROFILE, value='someone',
+                                   original_url=None),
+        fresh=True,
+    )
+    source = instagram.InstagramSource()
+    items, err = source.scan(match)
+
+    assert err is None
+    assert len(items) == instagram.SCAN_LIMIT
+    assert 'post0' in items[0]['title']
+    assert match.paginated is True
+
+
+def test_scan_profile_capped_still_persists_cursor(monkeypatch):
+    """A hard cap hit must still persist the cursor so the NEXT scan resumes
+    after the batch instead of restarting at the top."""
+    monkeypatch.setattr(instagram, '_build_loader', lambda: SimpleNamespace(context=object()))
+    monkeypatch.setattr(instaloader.Profile, 'from_username',
+                        staticmethod(lambda context, username: _FakeProfileWithManyPosts()))
+    saved = {}
+    monkeypatch.setattr(instagram, '_load_cursor',
+                        staticmethod(lambda username: None))
+    monkeypatch.setattr(instagram, '_save_cursor',
+                        staticmethod(lambda username, shortcode: saved.update(shortcode=shortcode)))
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='prolific', original_url=None)
+
+    items, err = instagram.scan(validation, resume=True, save_cursor=True)
+
+    assert err is None
+    assert len(items) == instagram.SCAN_LIMIT
+    assert getattr(items, 'partial', False) is True
+    assert getattr(items, 'partial_reason', None) == 'capped'
+    # Cursor persisted past the last collected post (post{SCAN_LIMIT-1}).
+    assert saved.get('shortcode') == f'post{instagram.SCAN_LIMIT - 1}'

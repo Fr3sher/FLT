@@ -537,14 +537,15 @@ def _app_pillow_spec() -> str:
 
 
 def _is_flask_venv(python: str) -> bool:
-    """True when `python` resolves to the app's OWN interpreter (the Flask venv) —
-    the environment whose Pillow must never be downgraded. Case/separator-insensitive
-    on Windows; never raises."""
-    try:
-        return os.path.samefile(python, sys.executable)
-    except OSError:
-        return (os.path.normcase(os.path.abspath(python))
-                == os.path.normcase(os.path.abspath(sys.executable)))
+    """True only when `python` is the app's own interpreter path.
+
+    Do not use :func:`os.path.samefile`: POSIX virtualenv launchers commonly
+    symlink to their base binary, which would misclassify every managed venv as
+    the Flask runtime and block its dedicated installer.  Normalize the logical
+    paths instead; this stays case-insensitive on Windows.
+    """
+    return (os.path.normcase(os.path.abspath(python))
+            == os.path.normcase(os.path.abspath(sys.executable)))
 
 
 def _flask_pillow_guard(python: str) -> list:

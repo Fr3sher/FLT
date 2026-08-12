@@ -25,8 +25,12 @@ L'`url` renvoyée est l'URL de la PAGE instagram.com (post/reel) : elle est
 stable et acceptée par /api/scrape/download (yt-dlp + cookies navigateur), au
 contraire des URLs CDN signées qui expirent vite.
 """
-import time
+import functools
+import json
 import logging
+import os
+import time
+import urllib.parse
 from pathlib import Path
 
 from .base import ResultList
@@ -46,17 +50,29 @@ except ImportError:  # pragma: no cover - dépendance absente
     browser_cookie3 = None
     BROWSER_COOKIE3_AVAILABLE = False
 
+try:
+    import curl_cffi.requests as cffi_requests
+    CURL_CFFI_AVAILABLE = True
+except ImportError:  # pragma: no cover - dépendance absente
+    cffi_requests = None
+    CURL_CFFI_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
 # Constantes (en dur — module autonome, aucune lecture de settings).
 # --------------------------------------------------------------------------- #
-SCAN_LIMIT = 50               # borne dure sur le nombre d'items retournés
+SCAN_LIMIT = 100              # borne dure sur le nombre d'items retournés
+_STALE_CURSOR_SKIP = SCAN_LIMIT * 5  # posts à dépasser avant d'abandonner un curseur périmé
 PROFILE_SCAN_TIMEOUT = 60     # secondes — plafond global d'un scan de profil
 SESSION_TIMEOUT = 10          # secondes — timeout HTTP de la session instaloader
 
 # Message d'erreur unique pour tout refus côté Instagram (auth / 403 / rate-limit).
 _AUTH_ERROR = "Instagram blocked access (login required / rate-limit)."
+
+# Cookie domaines réels capturés une fois depuis le jar requests d'origine
+# (le jar curl_cffi n'expose pas les domaines via get_dict). name -> domain.
+_CFFI_COOKIE_DOMAINS = {}
 
 # Sous-chaînes signalant un blocage anti-bot dans un message d'exception.
 _BLOCK_HINTS = ("429", "403", "forbidden", "too many", "login", "rate", "checkpoint")
@@ -118,6 +134,140 @@ def _auto_import_browser_cookies(loader):
     return False
 
 
+def _cffi_session_from(session, timeout):
+    """Clone un session requests/instaloader vers une session curl_cffi
+    (impersonation Chrome) en préservant headers + cookies."""
+    c = cffi_requests.Session(impersonate='chrome')
+    h = dict(session.headers.items()) if hasattr(session.headers, 'items') else dict(session.headers)
+    c.headers.update(h)
+    c.headers.setdefault('Connection', 'keep-alive')
+    # Cookies : le jar requests itère des objets ; le jar curl_cffi itère des
+    # chaînes (pas de .name/.domain) → on passe par get_dict() dans ce cas.
+    try:
+        ck_iter = list(session.cookies)
+    except Exception:
+        ck_iter = []
+    if ck_iter and not hasattr(ck_iter[0], 'name'):
+        for name, value in session.cookies.get_dict().items():
+            c.cookies.set(name, value, domain=_CFFI_COOKIE_DOMAINS.get(name, 'www.instagram.com'))
+    else:
+        for ck in ck_iter:
+            c.cookies.set(ck.name, ck.value, domain=ck.domain or _CFFI_COOKIE_DOMAINS.get(ck.name, 'www.instagram.com'))
+    c.request = functools.partial(c.request, timeout=timeout)
+    return c
+
+
+def _cffi_copy_session(session, request_timeout):
+    """Remplaçant de instaloader.context.copy_session — clone curl_cffi."""
+    return _cffi_session_from(session, request_timeout or SESSION_TIMEOUT)
+
+
+def _csrf_token(session):
+    """Lit le jeton csrftoken d'une session, quel que soit le type de cookies.
+
+    requests itère des objets (``c.name``/``c.value``) ; curl_cffi itère des
+    chaînes. On passe d'abord par ``cookies.get()`` (disponible dans les deux
+    cas), puis on retombe sur l'itération objets si besoin.
+    """
+    cookies = getattr(session, 'cookies', None)
+    get = getattr(cookies, 'get', None)
+    if get is not None:
+        try:
+            token = get('csrftoken')
+            if token:
+                return token
+        except Exception:
+            pass
+    try:
+        return next((c.value for c in cookies
+                     if c.name == 'csrftoken' and c.value), '')
+    except Exception:
+        return ''
+
+
+def _doc_id_graphql_query(self, doc_id, variables, referer=None):
+    """Replacement de InstaloaderContext.doc_id_graphql_query.
+
+    L'original fait ``next(c.value for c in self._session.cookies if c.name…)``
+    : avec une session curl_cffi, ``cookies`` itère des chaînes → AttributeError
+    ``'str' object has no attribute 'name'`` (le scan échoue sur get_posts()).
+    On lit le csrftoken via ``_csrf_token`` et on conserve le reste à l'identique.
+    """
+    import instaloader.instaloadercontext as ictx
+    csrf = _csrf_token(self._session)
+    if not csrf:
+        self._session.get('https://www.instagram.com/',
+                          timeout=self.request_timeout)
+        csrf = _csrf_token(self._session)
+    with ictx.copy_session(self._session, self.request_timeout) as tmpsession:
+        tmpsession.headers.update(self._default_http_header(empty_session_only=True))
+        del tmpsession.headers['Connection']
+        del tmpsession.headers['Content-Length']
+        tmpsession.headers['authority'] = 'www.instagram.com'
+        tmpsession.headers['scheme'] = 'https'
+        tmpsession.headers['accept'] = '*/*'
+        tmpsession.headers['x-csrftoken'] = csrf
+        if referer is not None:
+            tmpsession.headers['referer'] = urllib.parse.quote(referer)
+        variables_json = json.dumps(variables, separators=(',', ':'))
+        resp_json = self.get_json(
+            'graphql/query',
+            params={'variables': variables_json,
+                    'doc_id': doc_id,
+                    'server_timestamps': 'true'},
+            session=tmpsession,
+            use_post=True)
+    if 'status' not in resp_json:
+        self.error("GraphQL response did not contain a \"status\" field.")
+    return resp_json
+
+
+def _impersonate_loader(loader):
+    """Remplace la session requests du loader par une session curl_cffi
+    (TLS-fingerprint Chrome) et monkeypatche copy_session d'instaloader pour
+    que chaque requête GraphQL utilise la même impersonation.
+
+    Doit tourner APRÈS le chargement session/cookies (load_session_from_file
+    remplace self._session par une requests.Session neuve). Sans curl_cffi
+    installé : no-op, on garde le comportement actuel (requests simple).
+    """
+    if not CURL_CFFI_AVAILABLE:
+        return
+    src = loader.context._session
+    # Capture les vrais domaines une seule fois depuis le jar requests d'origine.
+    try:
+        for ck in src.cookies:
+            if hasattr(ck, 'name') and ck.domain:
+                _CFFI_COOKIE_DOMAINS[ck.name] = ck.domain
+    except Exception:
+        pass
+    loader.context._session = _cffi_session_from(
+        src, getattr(loader.context._session, "timeout", SESSION_TIMEOUT)
+    )
+    import instaloader.instaloadercontext as ictx
+    ictx.copy_session = _cffi_copy_session
+    ictx.InstaloaderContext.doc_id_graphql_query = _doc_id_graphql_query
+    logger.info("Instagram : session curl_cffi (impersonate chrome) active")
+
+
+class _FastRateController(instaloader.RateController):
+    """Rate-controller qui ne dort jamais 666 s sur un 429.
+
+    ``handle_429`` d'instaloader calcule ``query_waittime`` → 666 s
+    (``untracked_next_request_time`` = timestamp de la requête + 666) puis
+    appelle ``sleep(666)`` avant CHAQUE tentative, ``max_connection_attempts``
+    fois : c'est exactement ce qui pend un scan 13–16 min dès qu'Instagram
+    répond 429 (le premier hit, sur le fingerprint TLS non-impersonné, suffit).
+    On borne le sleep à ``MAX_BACKOFF`` pour ne jamais bloquer : un 429 est
+    retenté tout de suite au lieu d'attendre 11 min.
+    """
+
+    MAX_BACKOFF = 2.0  # secondes max de backoff par réponse 429
+
+    def sleep(self, secs):
+        time.sleep(min(secs, self.MAX_BACKOFF))
+
+
 def _build_loader():
     """Construit une instance Instaloader authentifiée (session ou cookies).
 
@@ -133,7 +283,8 @@ def _build_loader():
         save_metadata=False,
         compress_json=False,
         quiet=True,
-        max_connection_attempts=1,
+        rate_controller=lambda ctx: _FastRateController(ctx),
+        max_connection_attempts=3,
     )
     # Timeout HTTP court pour éviter qu'un scan ne pende indéfiniment.
     try:
@@ -161,7 +312,60 @@ def _build_loader():
             "Aucune session Instagram (ni fichier, ni cookies navigateur). "
             "Les profils privés / rate-limit échoueront."
         )
+    # 3) Impersonation curl_cffi (après chargement session/cookies) :
+    #    le TLS-fingerprint Chrome évite le 429 anti-bot d'Instagram.
+    try:
+        _impersonate_loader(loader)
+    except Exception as e:
+        logger.warning("Impersonation curl_cffi échouée : %s", e)
     return loader
+
+
+# --------------------------------------------------------------------------- #
+# Curseur de reprise (auto-resume des scans de profil).
+#
+# Le module est autonome (pas d'import `config`), on résout donc le répertoire
+# de données depuis l'environnement : `LDS_DATA_DIR` (le volume monté dans le
+# conteneur, cf. docker-compose), sinon `backend/`, sinon un défaut local. Le
+# curseur n'est qu'un point de reprise : un `shortcode` (dernier post renvoyé)
+# par nom de profil. Jamais levé — tout échec de lecture/écriture est absorbé
+# et le scan repart du haut.
+# --------------------------------------------------------------------------- #
+def _data_dir():
+    env = os.environ.get('LDS_DATA_DIR')
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parents[3] / 'data'
+
+
+def _cursor_path():
+    return _data_dir() / 'instagram_cursor.json'
+
+
+def _load_cursor(username):
+    try:
+        with open(_cursor_path(), 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get(username)
+    except Exception as e:
+        logger.debug("Lecture curseur Instagram échouée : %s", e)
+        return None
+
+
+def _save_cursor(username, shortcode):
+    try:
+        path = _cursor_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding='utf-8'))
+            except Exception:
+                data = {}
+        data[username] = shortcode
+        path.write_text(json.dumps(data), encoding='utf-8')
+    except Exception as e:
+        logger.debug("Écriture curseur Instagram échouée : %s", e)
 
 
 # --------------------------------------------------------------------------- #
@@ -241,12 +445,22 @@ def _looks_like_block(exc):
 # --------------------------------------------------------------------------- #
 # Scans par type d'URL.
 # --------------------------------------------------------------------------- #
-def _scan_profile(loader, username):
-    """Énumère les SCAN_LIMIT derniers médias d'un profil. Retourne (items, error)."""
+def _scan_profile(loader, username, resume_from=None, save_cursor=False):
+    """Énumère les SCAN_LIMIT derniers médias d'un profil. Retourne (items, error).
+
+    `resume_from` : shortcode d'un post déjà renvoyé lors d'un scan précédent —
+    on continue l'énumération APRÈS lui (auto-resume, pas de re-téléchargement
+    des posts déjà collectés). None = scan frais depuis le haut. `save_cursor` :
+    si True, on persiste le dernier shortcode renvoyé sur disque pour permettre
+    une reprise ultérieure."""
     try:
         profile = instaloader.Profile.from_username(loader.context, username)
     except instaloader.ProfileNotExistsException:
         return None, f"Instagram profile not found: {username}."
+    except instaloader.TooManyRequestsException:
+        logger.warning("Instagram rate-limit sur le profil %s", username)
+        return None, ("Instagram rate-limit: trop de requêtes. "
+                      "Attends ~10 min avant de relancer le scan.")
     except Exception as e:
         # ConnectionException / LoginRequired / Forbidden / TooManyRequests / ...
         logger.warning("Chargement profil %s échoué : %s", username, e)
@@ -258,8 +472,33 @@ def _scan_profile(loader, username):
     timed_out = False
     capped = False
     started = time.time()
+    posts_iter = profile.get_posts()
+    if resume_from:
+        # Avance l'itérateur jusqu'au post curseur (sans le renvoyer : le
+        # `break` le consomme, la boucle principale continue après lui). Seul
+        # `shortcode` est lu ici (champ node_dict bon marché, aucun appel réseau).
+        skipped = 0
+        resuming = True
+        for post in posts_iter:
+            if getattr(post, 'shortcode', None) == resume_from:
+                resuming = False
+                break
+            skipped += 1
+            if skipped > _STALE_CURSOR_SKIP:
+                break
+        if resuming:
+            if skipped > _STALE_CURSOR_SKIP:
+                # Curseur trop vieux (profil réorganisé / posts supprimés) : on
+                # repart proprement du haut plutôt que de boucler dans le vide.
+                logger.warning("Curseur Instagram %s périmé, reprise du haut.",
+                               resume_from)
+                posts_iter = profile.get_posts()
+            else:
+                # Le profil a moins de posts que le curseur : plus rien à renvoyer.
+                posts_iter = iter(())
     try:
-        for post in profile.get_posts():
+        last_shortcode = None
+        for post in posts_iter:
             if len(items) >= SCAN_LIMIT:
                 # Plafond SCAN_LIMIT atteint : on ne regarde jamais le post
                 # suivant, donc on ne peut pas savoir si le profil s'arrêtait
@@ -289,6 +528,7 @@ def _scan_profile(loader, username):
                 # comme un échec de post, pas comme « rien à ajouter ».
                 posts_failed += 1
                 continue
+            last_shortcode = post.shortcode
             for item in converted:
                 items.append(item)
                 if len(items) >= SCAN_LIMIT:
@@ -312,9 +552,15 @@ def _scan_profile(loader, username):
                            username, len(items), e)
             result = ResultList(items[:SCAN_LIMIT])
             result.partial = True
+            result.partial_reason = 'interrupted'
+            if save_cursor and last_shortcode:
+                _save_cursor(username, last_shortcode)
             return result, None
         logger.warning("Itération profil %s échouée : %s", username, e)
         return None, _AUTH_ERROR
+
+    if save_cursor and last_shortcode:
+        _save_cursor(username, last_shortcode)
 
     if not items:
         if timed_out:
@@ -354,6 +600,15 @@ def _scan_profile(loader, username):
         # changement côté route.
         result = ResultList(items[:SCAN_LIMIT])
         result.partial = True
+        # Priority: a timeout or conversion failures are real problems; the
+        # plain hard-cap (`capped`) is expected for any profile with more than
+        # SCAN_LIMIT posts, so the UI can show it calmly rather than as a fault.
+        if timed_out:
+            result.partial_reason = 'timed_out'
+        elif posts_failed:
+            result.partial_reason = 'posts_failed'
+        elif capped:
+            result.partial_reason = 'capped'
         return result, None
     return items[:SCAN_LIMIT], None
 
@@ -364,6 +619,10 @@ def _scan_single(loader, shortcode, original_url=None):
         post = instaloader.Post.from_shortcode(loader.context, shortcode)
     except instaloader.QueryReturnedNotFoundException:
         return None, f"Instagram post not found: {shortcode}."
+    except instaloader.TooManyRequestsException:
+        logger.warning("Instagram rate-limit sur le post %s", shortcode)
+        return None, ("Instagram rate-limit: trop de requêtes. "
+                      "Attends ~10 min avant de relancer.")
     except Exception as e:
         logger.warning("Chargement post %s échoué : %s", shortcode, e)
         return None, _AUTH_ERROR
@@ -389,11 +648,15 @@ def _scan_single(loader, shortcode, original_url=None):
 # --------------------------------------------------------------------------- #
 # Point d'entrée public.
 # --------------------------------------------------------------------------- #
-def scan(validation):
+def scan(validation, resume=False, save_cursor=False):
     """Énumère les médias téléchargeables d'une URL Instagram validée.
 
     `validation` : ValidationResult (champs utilisés : platform, url_type,
     value, original_url). Gère url_type PROFILE / POST / REEL.
+
+    `resume` : pour un PROFILE, reprend l'énumération après le dernier post
+    déjà renvoyé (curseur persistant) au lieu de repartir du haut. `save_cursor`
+    : si True, on persiste la position de reprise après le scan de profil.
 
     Retourne (items, error) :
       * items : list[dict] (≤ SCAN_LIMIT) au schéma commun, ou None si erreur ;
@@ -422,7 +685,9 @@ def scan(validation):
             return None, _AUTH_ERROR
 
         if url_type == URLType.PROFILE:
-            return _scan_profile(loader, value)
+            resume_from = _load_cursor(value) if resume else None
+            return _scan_profile(loader, value, resume_from=resume_from,
+                                 save_cursor=save_cursor)
         if url_type in (URLType.POST, URLType.REEL):
             return _scan_single(loader, value, original_url=original_url)
 
@@ -454,7 +719,13 @@ class InstagramSource(Source):
         return None
 
     def scan(self, match):
-        return scan(match.validation)
+        fresh = bool(getattr(match, 'fresh', False))
+        # Un scan de profil est toujours « paginable » : chaque appel continue
+        # après le dernier post renvoyé (auto-resume), sauf `fresh` qui repart
+        # du haut. On le signale à la route pour que le bouton « Charger plus »
+        # reste actif jusqu'au plafond de page.
+        match.paginated = True
+        return scan(match.validation, resume=not fresh, save_cursor=True)
 
 
 registry.register(InstagramSource())

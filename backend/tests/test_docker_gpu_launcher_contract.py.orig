@@ -9,31 +9,6 @@ def read(name):
     return (REPO_ROOT / name).read_text(encoding='utf-8')
 
 
-def test_api_image_includes_opencv_runtime_library():
-    """The ML extras import cv2; the slim base needs libGL.so.1 at runtime."""
-    assert 'libgl1' in read('Dockerfile')
-    assert 'libglib2.0-0' in read('Dockerfile')
-
-
-def test_api_image_bakes_the_safe_persistent_tool_extras():
-    """Recreating the API container must not erase installed quality tools."""
-    dockerfile = read('Dockerfile')
-    extras = read('backend/requirements-docker-extras.txt')
-    requirement_lines = [line.strip() for line in extras.splitlines()
-                         if line.strip() and not line.lstrip().startswith('#')]
-
-    assert 'COPY backend/requirements-docker-extras.txt backend/requirements-docker-extras.txt' in dockerfile
-    assert '-r backend/requirements-docker-extras.txt' in dockerfile
-    assert '-c backend/requirements-ml.txt' in dockerfile
-    for package in (
-        'insightface', 'onnxruntime', 'rembg', 'opencv-python-headless',
-        'numpy', 'av', 'imageio-ffmpeg', '-r requirements-scrape.txt',
-    ):
-        assert package in requirement_lines
-    # LaMa pins Pillow<10 and must remain in its existing dedicated environment.
-    assert not any(line.startswith('simple-lama-inpainting') for line in requirement_lines)
-
-
 def test_public_batch_files_are_small_space_safe_wrappers_without_ollama_menu():
     external = read('start-docker.bat')
     gpu = read('start-docker-gpu.bat')

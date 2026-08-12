@@ -13,8 +13,14 @@ Actually pulling the chosen images INTO a dataset is a separate, autonomous path
 (`POST /api/dataset/<id>/scrape-import` in routes/datasets.py → svc.scrape_import_urls).
 """
 from urllib.parse import urlparse
+from io import BytesIO
+from pathlib import Path
+import hashlib
+import os
+from time import time
 
 from flask import Blueprint, request, jsonify, Response
+from PIL import Image
 
 from ..scrape.netfetch import _validate_public_http_url
 
@@ -23,6 +29,63 @@ bp = Blueprint('scrape', __name__, url_prefix='/api')
 MAX_SCAN_PAGE = 50
 MAX_THUMB_BYTES = 12 * 1024 * 1024  # 12 MB
 _ALLOWED_THUMB_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'}
+
+# The CDN URL behind /scrape/thumb is often a FULL-RESOLUTION file (an Instagram
+# CDN link is a ~1-4 MB JPEG, not a thumbnail). Serving it unchanged means every
+# grid tile downloads megabytes and the page crawls the more tiles load. Resize
+# stills to a small webp (like the bank thumbs) and cache the result on disk, so
+# repeat fetches of the same URL neither re-download from the CDN nor re-resize.
+_THUMB_MAX_SIDE = 512
+_THUMB_CACHE_TTL = 7 * 24 * 3600  # seconds; CDN links carry an expiry, so cap reuse
+_THUMB_CACHE_DIR = None
+
+
+def _thumb_cache_dir():
+    global _THUMB_CACHE_DIR
+    if _THUMB_CACHE_DIR is None:
+        base = os.environ.get('LDS_DATA_DIR')
+        _THUMB_CACHE_DIR = Path(base) if base else Path(__file__).resolve().parents[3] / 'data'
+        _THUMB_CACHE_DIR = _THUMB_CACHE_DIR / 'scrape_thumbs'
+    return _THUMB_CACHE_DIR
+
+
+def _thumb_cache_path(url):
+    h = hashlib.sha1(url.encode('utf-8')).hexdigest()[:16]
+    return _thumb_cache_dir() / f'{h}.webp'
+
+
+def _resized_thumb_bytes(url, data):
+    """Return (bytes, content_type) for a small cached webp, or (None, None) if
+    the source can't be resized (then the caller serves the original)."""
+    try:
+        im = Image.open(BytesIO(data))
+        im.load()
+    except Exception:
+        return None, None
+    # Animated GIFs: resizing to a still webp would throw the animation away.
+    if getattr(im, 'is_animated', False):
+        return None, None
+    cache = _thumb_cache_path(url)
+    try:
+        if cache.is_file() and time() - cache.stat().st_mtime < _THUMB_CACHE_TTL:
+            return cache.read_bytes(), 'image/webp'
+    except Exception:
+        pass
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        if im.mode not in ('RGB', 'RGBA'):
+            im = im.convert('RGB')
+        im.thumbnail((_THUMB_MAX_SIDE, _THUMB_MAX_SIDE), Image.LANCZOS)
+        buf = BytesIO()
+        im.save(buf, 'WEBP', quality=72)
+        out = buf.getvalue()
+        try:
+            cache.write_bytes(out)
+        except Exception:
+            pass
+        return out, 'image/webp'
+    except Exception:
+        return None, None
 
 
 @bp.post('/scrape/scan')
@@ -64,6 +127,7 @@ def scrape_scan():
 
     match.page = page
     match.include_albums = bool(data.get('include_albums'))
+    match.fresh = bool(data.get('fresh'))
     items, err = match.source.scan(match)
     # `partial` (cf. gdl.enumerate / base.ResultList) : le budget de temps global a
     # coupé la récursion d'albums avant d'avoir tout exploré — les items présents
@@ -82,6 +146,10 @@ def scrape_scan():
     # une source qui n'implémente réellement aucune notion de troncature
     # (Pexels…) renvoie une liste ordinaire → `getattr` retombe alors sur False.
     partial = bool(getattr(items, 'partial', False))
+    # Optional cause of the truncation, when the source can say (see
+    # ResultList.partial_reason) — lets the UI phrase 'stopped at the built-in
+    # limit' calmly vs 'cut short by a problem'.
+    partial_reason = getattr(items, 'partial_reason', None)
     if err and getattr(err, 'kind', None) != 'empty':
         return jsonify({'error': err, 'platform': result.platform.value,
                         'url_type': result.url_type.value}), 502
@@ -121,6 +189,7 @@ def scrape_scan():
         # exactly like a complete one, with no "Load more" and no hint anything
         # was cut.
         'partial': partial,
+        'partialReason': partial_reason,
     })
 
 
@@ -168,7 +237,13 @@ def scrape_thumb():
         try: r.close()
         except Exception: pass
     # Hardened: no MIME sniffing, inline, locked-down CSP (defense in depth).
-    return Response(bytes(data), content_type=ctype, headers={
+    # Still images are resized + cached to a small webp; animated GIFs (and any
+    # image that can't be resized) are served as fetched.
+    resized, out_ctype = _resized_thumb_bytes(url, bytes(data))
+    if resized is not None:
+        data = resized
+        ctype = out_ctype
+    return Response(data, content_type=ctype, headers={
         'Cache-Control': 'public, max-age=86400',
         'X-Content-Type-Options': 'nosniff',
         'Content-Disposition': 'inline; filename="thumb"',

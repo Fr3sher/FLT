@@ -24,3 +24,16 @@ test('the truncation notice is gated on the partial flag, independently of pagin
   assert.match(source, /\{partial &&/);
   assert.doesNotMatch(source, /paginated && partial/);
 });
+
+test('the truncation cause is read from the response and reset with the scan', () => {
+  assert.match(source, /setPartialReason\(body\.partialReason \|\| null\);/);
+  assert.match(source, /setPartialReason\(null\)/);
+});
+
+test('a hard-cap truncation shows the calm message, distinct from the generic one', () => {
+  assert.match(source, /partialReason === 'capped'/);
+  // Both phrasings still live under the single `partial &&` gate.
+  assert.match(source, /\{partial &&/);
+  assert.match(source, /Stopped at the built-in scan limit/);
+  assert.match(source, /some images may be missing/);
+});

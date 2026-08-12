@@ -190,18 +190,6 @@ def test_delete_pexels_api_key_clears_runtime_secret_without_leak(client):
     assert pexels_api_key() is None
 
 
-def test_put_settings_accepts_canvas_section_from_full_setup_save(client):
-    response = client.put('/api/settings', json={'config': {'canvas': {}}})
-    assert response.status_code == 200, response.get_json()
-    assert response.get_json()['config']['canvas'] == {}
-
-
-def test_put_settings_accepts_variations_section_from_full_setup_save(client):
-    response = client.put('/api/settings', json={'config': {'variations': {}}})
-    assert response.status_code == 200, response.get_json()
-    assert response.get_json()['config']['variations'] == {}
-
-
 def test_put_rejects_unknown_section(client):
     assert client.put('/api/settings', json={'config': {'nope': 1}}).status_code == 400
 

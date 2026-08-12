@@ -4,9 +4,6 @@ services:
   studio:
     build: .
     image: lora-dataset-studio
-    # AI Toolkit uses PyTorch DataLoader worker queues.  Docker defaults this
-    # mount to 64 MiB, which is insufficient for Krea image batches.
-    shm_size: "16g"
     container_name: "${COMPOSE_PROJECT_NAME:-lora-dataset-studio}"
     restart: unless-stopped
     network_mode: host
@@ -15,7 +12,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["0", "1"]
+              device_ids: ["1"]
               capabilities: [gpu]
     labels:
       io.lora-dataset-studio.launch-mode: studio
@@ -23,13 +20,9 @@ services:
       - /home/timo/ai-toolkit:/home/timo/ai-toolkit
       - /home/timo/ComfyUI:/home/timo/ComfyUI
       - ${LDS_DATA:-./data-docker}:/data
-      - ${LDS_CONFIG_DIR:-~/.config}:/root/.config
       - ./.env:/app/.env
     environment:
-      # Explicitly expose both cards only because LDS launches its Krea trainer
-      # through Accelerate with two ranks below.
-      - NVIDIA_VISIBLE_DEVICES=0,1
-      - LDS_TRAINING_GPU_COUNT=2
+      - NVIDIA_VISIBLE_DEVICES=1
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - LDS_CONFIG=/data/config.json
       - LDS_HOST=0.0.0.0

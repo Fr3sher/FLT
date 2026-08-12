@@ -671,7 +671,15 @@ def create_app(config_object=None):
         # GET / cookie; no `secure` flag (the app is reached over plain http on
         # loopback/LAN). after_request runs BEFORE save_session, so a first-ever
         # session gets its csrf secret persisted alongside this cookie.
-        if request.path == '/' or request.path.startswith('/api'):
+        # Image responses (bank thumbs, full-size bank files, video clips) are
+        # pure <img>/media fetches that never send X-CSRFToken back. Planting a
+        # fresh token on them touches the Flask session, which makes the response
+        # carry Set-Cookie + Vary: Cookie — and a cookie that changes on every
+        # fetch defeats the browser cache even when the route answers with
+        # max-age=3600, so a 120-tile grid re-downloads and re-decodes every
+        # thumbnail instead of serving it from cache. Skip them.
+        if (request.path == '/' or request.path.startswith('/api')) \
+                and not (resp.mimetype or '').startswith('image/'):
             from flask_wtf.csrf import generate_csrf
             resp.set_cookie('csrf_token', generate_csrf(), samesite='Lax')
         return resp

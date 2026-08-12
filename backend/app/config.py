@@ -342,6 +342,11 @@ DEFAULTS = {
              #   reference bank (screenshots of videos, padded stills).
              'bars_max': 0.04},
     'masks': {'python': ''},
+    'canvas': {},
+    # Kept as an explicit empty section because Settings saves the complete
+    # client config. Older clients can still carry this UI-state namespace;
+    # accepting it keeps an unrelated secret save from failing closed.
+    'variations': {},
     # Bank ✨ Score pass interpreter (CLIP aesthetic/NSFW stack). Auto-provisioned
     # by the bank_scoring installer into its own venv — declared here so a
     # full-config Save round-trips it instead of failing "unknown config section".

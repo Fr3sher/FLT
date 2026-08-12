@@ -495,6 +495,28 @@ def _venv_python():
     return p
 
 
+def _training_gpu_count() -> int:
+    """Return the explicitly configured local training world size.
+
+    The container can expose several GPUs for other local tools. Training stays
+    on one process unless the operator opts in via ``LDS_TRAINING_GPU_COUNT``.
+    """
+    raw = (os.environ.get('LDS_TRAINING_GPU_COUNT') or '1').strip()
+    if raw not in {'1', '2'}:
+        raise ValueError(
+            'LDS_TRAINING_GPU_COUNT must be 1 or 2 for local training')
+    return int(raw)
+
+
+def aitoolkit_launch_command(config_path) -> list[str]:
+    """Build the local AI Toolkit command for the configured GPU world size."""
+    python = str(_venv_python())
+    if _training_gpu_count() == 2:
+        return [python, '-m', 'accelerate.commands.launch', '--multi_gpu',
+                '--num_processes', '2', 'run.py', str(config_path)]
+    return [python, 'run.py', str(config_path)]
+
+
 def _jobs_dir():
     d = cfg.aitoolkit_path('jobs')
     if not d:
@@ -1603,7 +1625,7 @@ _RES_CHOICES = {
     '1024': [1024],
     '768': [768],
 }
-_SAVE_CHOICES = (250, 500, 1000)
+_SAVE_CHOICES = (25, 50, 100, 200, 250, 500, 1000)
 # --- Expert levers (train_settings, ALL default to current behaviour when absent,
 #     so a newcomer who never touches them gets the exact same config as before) ---
 _DROPOUT_CHOICES = (0.05, 0.1, 0.15, 0.2, 0.3)          # LoRA network dropout ; absent = off
@@ -1627,6 +1649,9 @@ _OPTIMIZER_CHOICES = (
 _LR_SCHEDULER_CHOICES = ('constant', 'linear', 'cosine', 'cosine_with_restarts', 'constant_with_warmup')
 _WARMUP_CHOICES = (50, 100, 200, 500)          # num_warmup_steps ; UNIQUEMENT avec constant_with_warmup
 _GRAD_ACCUM_CHOICES = (1, 2, 4)
+# Per-device micro-batch. It is deliberately separate from gradient accumulation:
+# this allocates real activation memory and is limited to Krea LoRA below.
+_KREA_LORA_BATCH_SIZE_CHOICES = tuple(range(1, 13))
 # Network variant + EMA — both VÉRIFIÉS arch-génériques dans ai-toolkit installé :
 #   - network.type='lokr' : LoRASpecialNetwork choisit LokrModule pour TOUTE arch
 #     (toolkit/lora_special.py L384 `elif self.network_type.lower() == "lokr"`) et
@@ -2179,6 +2204,17 @@ def resolve_resume_lr(settings: dict, lr_factor) -> float | None:
 def _grad_accum(ds) -> int:
     g = _numeric_choice(_train_settings(ds).get('grad_accum'), _GRAD_ACCUM_CHOICES)
     return g if g is not None else 1
+
+
+def _krea_lora_batch_size(ds) -> int:
+    value = _train_settings(ds).get('batch_size')
+    return (value if type(value) is int and value in _KREA_LORA_BATCH_SIZE_CHOICES
+            else 1)
+
+
+def _krea_lora_gradient_checkpointing(ds) -> bool:
+    value = _train_settings(ds).get('gradient_checkpointing')
+    return value if isinstance(value, bool) else True
 
 
 def _lr_sched_fields(ds) -> dict:
@@ -2781,9 +2817,9 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
     snap['lr_scheduler'] = s.get('lr_scheduler') if s.get('lr_scheduler') in _LR_SCHEDULER_CHOICES else 'constant'
     snap['warmup'] = s.get('warmup') if s.get('warmup') in _WARMUP_CHOICES else 0
     snap['grad_accum'] = _grad_accum(ds)
-    # Fixed at 1 by every family's recipe today. Recorded anyway: the day it stops
-    # being 1, the runs on either side of the change have to be comparable.
-    snap['batch_size'] = 1
+    if fam == 'krea' and training_mode(ds) == 'lora':
+        snap['batch_size'] = _krea_lora_batch_size(ds)
+        snap['gradient_checkpointing'] = _krea_lora_gradient_checkpointing(ds)
     # Stamped EFFECTIVE, like `ema` and the memory keys: a recipe that caches text
     # embeddings cannot train a second caption (see _dual_captions_unsupported_reason),
     # so recording the preference there would make the run comparison claim two runs
@@ -2861,6 +2897,12 @@ def effective_train_settings(ds, family=None) -> dict:
             'warmup_choices': list(_WARMUP_CHOICES),
             'grad_accum': _numeric_choice(s.get('grad_accum'), _GRAD_ACCUM_CHOICES),   # None → 1
             'grad_accum_choices': list(_GRAD_ACCUM_CHOICES),
+            'batch_size': (_krea_lora_batch_size(ds)
+                           if fam == 'krea' and training_mode(ds) == 'lora' else None),
+            'batch_size_choices': (list(_KREA_LORA_BATCH_SIZE_CHOICES)
+                                   if fam == 'krea' and training_mode(ds) == 'lora' else []),
+            'gradient_checkpointing': (_krea_lora_gradient_checkpointing(ds)
+                                       if fam == 'krea' and training_mode(ds) == 'lora' else None),
             'network_type': s.get('network_type') if s.get('network_type') in _NETWORK_TYPE_CHOICES else None,  # None → lora
             'network_type_choices': list(_NETWORK_TYPE_CHOICES),
             # LoKr is arch-generic in ai-toolkit → offered on every family. The flag
@@ -3167,6 +3209,10 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
     # this validator keeps every acceptance/rejection rule identical while a
     # preset validates its complete replacement before making one DB write.
     cur = _train_settings(ds) if _settings is None else _settings
+    _krea_lora_performance_keys = {'batch_size', 'gradient_checkpointing'}
+    if (_krea_lora_performance_keys.intersection(patch)
+            and not (_train_type(ds) == 'krea' and training_mode(ds) == 'lora')):
+        raise ValueError('batch_size and gradient_checkpointing are available for Krea LoRA only')
     if 'rank' in patch:
         r = patch['rank']
         if r in (None, 'auto'):
@@ -3387,6 +3433,24 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
             cur['grad_accum'] = v
         else:
             raise ValueError(f'grad_accum must be one of {_GRAD_ACCUM_CHOICES} (or auto)')
+    if 'batch_size' in patch:
+        v = patch['batch_size']
+        if v in (None, 'auto') or (type(v) is int and v == 1):
+            cur.pop('batch_size', None)
+        elif type(v) is int and v in _KREA_LORA_BATCH_SIZE_CHOICES:
+            cur['batch_size'] = v
+        else:
+            raise ValueError(
+                'batch_size must be one of '
+                f'{_KREA_LORA_BATCH_SIZE_CHOICES} (or auto)')
+    if 'gradient_checkpointing' in patch:
+        v = patch['gradient_checkpointing']
+        if isinstance(v, bool):
+            cur['gradient_checkpointing'] = v
+        elif v in (None, 'auto', ''):
+            cur.pop('gradient_checkpointing', None)
+        else:
+            raise ValueError('gradient_checkpointing must be true, false or auto')
     if 'network_type' in patch:
         v = patch['network_type']
         if v in (None, 'auto', '', 'lora'):
@@ -3619,7 +3683,8 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
 TRAIN_SETTING_KEYS = ('rank', 'resolution', 'save_every', 'max_step_saves',
                       'sample_every', 'sample_prompts', 'dropout', 'alpha',
                       'timestep_type', 'optimizer', 'lr_scheduler', 'warmup',
-                      'grad_accum', 'network_type', 'lokr_factor',
+                      'grad_accum', 'batch_size', 'gradient_checkpointing',
+                      'network_type', 'lokr_factor',
                       'lokr_full_rank', 'conv', 'conv_alpha', 'ema',
                       'content_or_style', 'do_differential_guidance',
                       'differential_guidance_scale', 'dual_captions',
@@ -5433,7 +5498,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     **_mask_fields(dataset_folder),
                 }],
                 'train': {
-                    'batch_size': 1,
+                    'batch_size': _krea_lora_batch_size(ds),
                     'steps': steps,
                     'gradient_accumulation': _grad_accum(ds),
                     'train_unet': True,
@@ -5441,7 +5506,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     **({'unload_text_encoder': True}
                        if _dataset_cache_text_embeddings(
                            ds, default=True)['cache_text_embeddings'] else {}),
-                    'gradient_checkpointing': True,
+                    'gradient_checkpointing': _krea_lora_gradient_checkpointing(ds),
                     'noise_scheduler': 'flowmatch',
                     'timestep_type': _timestep_type_eff(ds, 'linear'),  # défaut canonique krea2 (options.ts)
                     'optimizer': _optimizer_eff(ds),
@@ -8345,7 +8410,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                     _state_resume_journal, run_token)
             logf = open(log_path, 'w', encoding='utf-8')
             proc = subprocess.Popen(
-                [str(_venv_python()), 'run.py', config_path],
+                aitoolkit_launch_command(config_path),
                 cwd=str(_aitoolkit_dir()), env=env, shell=False,
                 stdout=logf, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

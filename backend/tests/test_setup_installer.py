@@ -1024,6 +1024,30 @@ def test_flask_pillow_guard_only_for_flask_venv(monkeypatch):
     assert setup_installer._flask_pillow_guard('/some/other/ml/python') == []
 
 
+def test_flask_venv_detector_does_not_follow_managed_python_symlink(
+        monkeypatch, tmp_path):
+    """A managed venv launcher may symlink to the app Python on POSIX.
+
+    That still is a distinct environment: classifying it as the Flask runtime
+    prevents its dedicated installer from running.
+    """
+    from app import setup_installer
+
+    app_python = tmp_path / 'app' / 'python'
+    managed_python = tmp_path / 'managed' / 'python'
+    app_python.parent.mkdir(parents=True)
+    managed_python.parent.mkdir(parents=True)
+    app_python.touch()
+    try:
+        managed_python.symlink_to(app_python)
+    except (OSError, NotImplementedError):
+        pytest.skip('symlink support is unavailable')
+
+    monkeypatch.setattr(setup_installer.sys, 'executable', str(app_python))
+    assert setup_installer._is_flask_venv(str(app_python)) is True
+    assert setup_installer._is_flask_venv(str(managed_python)) is False
+
+
 def test_run_ml_extras_installs_flask_safe_set_and_pins_pillow(monkeypatch):
     """The core guarantee: ml_extras installs the safe subset into THIS interpreter
     with Pillow pinned, never the Pillow-incompatible extra — so a full Setup can't
