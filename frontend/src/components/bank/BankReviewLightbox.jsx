@@ -26,7 +26,7 @@ import {
   DETAIL_CAVEAT, PROVENANCE_FLAG_LABEL, detailSummary, originHint, originLabel,
 } from './bankProvenance.js'
 import BankWatermarkMaskDialog from './BankWatermarkMaskDialog'
-import { canEditMask } from './bankWatermarkMask.js'
+import { canEditMask, maskButtonLabel } from './bankWatermarkMask.js'
 import {
   REVIEW_SHORTCUT_HINT, ownsTypedKeys, reviewKeyAction,
 } from '../shared/reviewShortcuts.js'
@@ -313,9 +313,9 @@ export default function BankReviewLightbox({
             </button>
             {canEditMask(img) && (
               <button type="button" onClick={() => setMaskId(id)} disabled={busy}
-                title="Fix the watermark zones on this image (M) — decides nothing. 🧽 Inpaint then repaints exactly what you draw."
+                title="Draw the watermark zones on this image (M) — decides nothing. Works even when the scan found nothing: what you draw becomes the flag, and 🧽 Inpaint then repaints exactly that."
                 className="rounded-lg border border-amber-400/60 bg-amber-500/20 px-4 py-2 text-sm font-semibold text-amber-100 disabled:opacity-50 hover:bg-amber-500/30">
-                🚩 Edit mask{shortcut('M')}
+                🚩 {maskButtonLabel(img)}{shortcut('M')}
               </button>
             )}
             <button type="button" onClick={() => sendDecision('keep')} disabled={busy}

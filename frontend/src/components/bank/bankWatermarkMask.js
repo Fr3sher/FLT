@@ -13,12 +13,19 @@
  * "no mask, use the detected box", which would clean pixels the user chose to
  * keep.
  */
-import { cloneWatermarkRegions, serializeWatermarkRegions } from '../../utils/watermarkRegions.js'
+import {
+  cloneWatermarkRegions, serializeWatermarkRegions, watermarkMaskButtonLabel,
+} from '../../utils/watermarkRegions.js'
 
-/** Only a still-flagged image can be masked: on a cleaned/dismissed row the mask
- * is out of both cleaning levels' pool, so editing it would change nothing. */
+/** Re-exported, not re-implemented: the Dataset shows the same button for the
+ *  same act, and two copies of this sentence would drift. */
+export const maskButtonLabel = watermarkMaskButtonLabel
+
 export function canEditMask(img) {
-  return img?.watermark_state === 'detected'
+  // Everything except an image already cleaned. Drawing a zone IS the flag now,
+  // so gating this on 'detected' would leave the detector's misses unanswerable
+  // — the server accepts the same set (set_watermark_regions).
+  return !!img && img.watermark_state !== 'cleaned'
 }
 
 /** What the editor opens on: the boxes to draw, and whether they are the user's

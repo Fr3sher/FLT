@@ -8513,7 +8513,20 @@ def normalize_watermark_regions(value, *, allow_null=True) -> list[list[float]] 
 
 
 def set_watermark_regions(user_id, dataset_id, image_id, regions) -> dict | None:
-    """Atomically replace a detected image's manual watermark-region override."""
+    """Atomically replace an image's manual watermark-region override — and, when
+    the row was not flagged, make the drawn zone the flag itself.
+
+    The detector is a classifier, not an oracle: a mark tiled across a stock photo
+    can sit under the threshold however far it is lowered. While this refused
+    anything but 'detected', the hand-drawn mask — the only tool able to answer a
+    miss — was reachable solely from images the detector had already found, which
+    is the exact inverse of the need.
+
+    'dismissed' is included deliberately. It means the MACHINE must stop asking;
+    it was never meant to stop the user drawing the mark themselves. 'cleaned' is
+    the one refusal left: those pixels were already replaced, so geometry drawn
+    now would describe an image that no longer exists — ↩ Undo is the way back.
+    """
     _guard_not_bank_export(dataset_id)
     owned_query = (FaceDatasetImage.query
                    .join(FaceDataset, FaceDatasetImage.dataset_id == FaceDataset.id)
@@ -8523,18 +8536,29 @@ def set_watermark_regions(user_id, dataset_id, image_id, regions) -> dict | None
     img = owned_query.one_or_none()
     if not img:
         return None
-    if img.watermark_state != 'detected':
-        raise RuntimeError('image is no longer detected')
+    if img.watermark_state == 'cleaned':
+        raise RuntimeError('this image was already cleaned — undo the cleaning '
+                           'before masking it again')
     normalized = normalize_watermark_regions(regions)
     stored = json.dumps(normalized) if normalized is not None else None
+    fields = {'watermark_regions': stored, 'watermark_state': 'detected'}
+    # Say WHO flagged it. Only when the detector had not: editing the box of a row
+    # it did find leaves its verdict (and its provenance) alone.
+    if img.watermark_state != 'detected':
+        fields['watermark_source'] = 'manual'
+    # Same race guard as before, re-aimed at the new rule: a clean landing between
+    # the check and the write must not have its geometry overwritten.
     updated = (FaceDatasetImage.query
-               .filter_by(id=img.id, watermark_state='detected')
-               .update({'watermark_regions': stored}, synchronize_session=False))
+               .filter(FaceDatasetImage.id == img.id,
+                       db.or_(FaceDatasetImage.watermark_state.is_(None),
+                              FaceDatasetImage.watermark_state != 'cleaned'))
+               .update(fields, synchronize_session=False))
     if updated != 1:
         db.session.rollback()
         if owned_query.one_or_none() is None:
             return None
-        raise RuntimeError('image is no longer detected')
+        raise RuntimeError('this image was already cleaned — undo the cleaning '
+                           'before masking it again')
     db.session.commit()
     return _watermark_regions_payload(img)
 
