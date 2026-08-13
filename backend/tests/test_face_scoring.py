@@ -1012,3 +1012,52 @@ def test_score_faces_shortcircuits_when_refs_or_images_missing(app, monkeypatch)
         # no images, non-quality -> short circuit
         assert fsim.score_faces([im], []) == ({}, None)
     assert called['n'] == 0
+
+
+# --- score_faces lenient (identity-matching) mode ----------------------------
+
+def test_score_faces_lenient_forwarded_in_payload(app, monkeypatch):
+    """lenient=True must reach the scorer so small/posed faces are embedded and
+    compared, not just clean 'scorable' ones."""
+    from app.services import face_similarity as fsim
+    monkeypatch.setattr(fsim, 'is_available', lambda: True)
+    captured = {}
+
+    def _fake_run(*args, **kwargs):
+        captured['input'] = args[1]
+        return _scorer(json.dumps({"ref_ok": True, "results": {}}))
+
+    monkeypatch.setattr('app.services.face_similarity._run_scorer', _fake_run)
+    with app.app_context():
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            r1 = os.path.join(d, 'r1.png'); im = os.path.join(d, 'im.png')
+            for p in (r1, im):
+                with open(p, 'wb') as fh:
+                    fh.write(_png())
+            fsim.score_faces([r1], [im], lenient=True)
+    payload = json.loads(captured['input'])
+    assert payload['lenient'] is True
+
+
+def test_score_faces_lenient_defaults_off(app, monkeypatch):
+    """Default stays strict (dataset quality flow): lenient absent/False in payload."""
+    from app.services import face_similarity as fsim
+    monkeypatch.setattr(fsim, 'is_available', lambda: True)
+    captured = {}
+
+    def _fake_run(*args, **kwargs):
+        captured['input'] = args[1]
+        return _scorer(json.dumps({"ref_ok": True, "results": {}}))
+
+    monkeypatch.setattr('app.services.face_similarity._run_scorer', _fake_run)
+    with app.app_context():
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            r1 = os.path.join(d, 'r1.png'); im = os.path.join(d, 'im.png')
+            for p in (r1, im):
+                with open(p, 'wb') as fh:
+                    fh.write(_png())
+            fsim.score_faces([r1], [im])
+    payload = json.loads(captured['input'])
+    assert payload['lenient'] is False

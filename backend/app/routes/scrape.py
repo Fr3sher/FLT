@@ -444,8 +444,11 @@ def scrape_face_filter():
             except Exception: pass
         return jsonify({'error': 'none of the images could be fetched'}), 502
 
+    # Lenient identity-matching: score every detected face (small/posed/low-det
+    # included). A full-body Instagram shot with a small face is still the same
+    # person and should be kept — only the threshold decides what matches now.
     try:
-        results, err = score_faces(ref_paths, cand_paths)
+        results, err = score_faces(ref_paths, cand_paths, lenient=True)
     except Exception as e:
         return jsonify({'error': f'face scoring failed: {e}'}), 502
 
@@ -459,7 +462,9 @@ def scrape_face_filter():
         if not u: continue
         state = r.get('state')
         sim = r.get('sim')
-        match = bool(state == 'scorable' and sim is not None and sim >= threshold)
+        # Any embedded face (scorable or small/posed) with a similarity at/above
+        # the threshold is a match. no_face/unreadable have no embedding -> no sim.
+        match = bool(sim is not None and sim >= threshold)
         out[u] = {'match': match, 'sim': sim, 'state': state}
 
     for p in cand_paths + ref_paths:

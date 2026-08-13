@@ -126,8 +126,8 @@ def score_dataset_faces(ref_path, image_paths, timeout: int | None = None,
     return data.get('results') or {}, None
 
 
-def score_faces(ref_paths, image_paths, quality_only=False, timeout=None,
-                on_progress=None):
+def score_faces(ref_paths, image_paths, quality_only=False, lenient=False,
+                timeout=None, on_progress=None):
     """Score images against one or more reference faces, or just return per-image
     face quality when ``quality_only``.
 
@@ -136,6 +136,12 @@ def score_faces(ref_paths, image_paths, quality_only=False, timeout=None,
     single fragile reference. ``quality_only=True`` skips the reference entirely
     and returns each image's state/det/bbox_frac/yaw -- what the "suggest good
     reference candidates" flow needs.
+
+    ``lenient=True`` switches to identity-matching mode: ANY detected face (small,
+    low-det, posed) is embedded and compared, not just clean 'scorable' ones. The
+    scrape face filter wants this -- a full-body Instagram shot with a small face
+    is still the same person and should be kept. The dataset quality flow keeps the
+    strict default (only 'scorable' faces score).
 
     Returns ({path: {state, det, bbox_frac, yaw, sim?}}, error|None); error kinds
     mirror score_dataset_faces ('unavailable' | 'failed' | 'ref_unusable')."""
@@ -155,6 +161,7 @@ def score_faces(ref_paths, image_paths, quality_only=False, timeout=None,
         timeout = default_timeout(n)
     payload = json.dumps({"refs": ref_paths, "images": image_paths,
                           "quality_only": bool(quality_only),
+                          "lenient": bool(lenient),
                           "models_root": cfg.get('face_scoring.models_root') or None})
     try:
         stdout, stderr_lines, returncode, timed_out = _run_scorer(

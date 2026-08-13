@@ -51,6 +51,10 @@ def main() -> int:
         refs.insert(0, str(ref))
     images = [str(p) for p in (req.get("images") or [])]
     quality_only = bool(req.get("quality_only"))
+    # lenient = identity-matching mode (scrape face filter): ANY detected face —
+    # including small / low-det / posed ones — is embedded and compared. The
+    # strict mode (dataset quality flow) only scores clean 'scorable' faces.
+    lenient = bool(req.get("lenient"))
     models_root = req.get("models_root") or None
     if not images or (not quality_only and not refs):
         print(json.dumps({"ref_ok": False, "results": {}, "error": "missing refs/images"})); return 1
@@ -115,7 +119,7 @@ def main() -> int:
         for rp in refs:
             rr = analyze(rp)
             e = rr.pop("_emb", None)
-            if rr.get("state") == "scorable" and e is not None:
+            if e is not None and (lenient or rr.get("state") == "scorable"):
                 embs.append(e)
             else:
                 _log(f"[face] ref {os.path.basename(rp)} unusable: {rr.get('state')}")
@@ -130,7 +134,7 @@ def main() -> int:
     for i, p in enumerate(images, 1):
         try:
             r = analyze(p); emb = r.pop("_emb", None)
-            if not quality_only and r["state"] == "scorable" and emb is not None:
+            if not quality_only and emb is not None and (lenient or r["state"] == "scorable"):
                 r["sim"] = round(float(np.dot(centroid, emb)), 4)
             results[p] = r
             _log(f"[face] {i}/{len(images)} {r['state']} sim={r.get('sim')}")
