@@ -14,6 +14,7 @@ import {
   improveEngineBlockedReason,
 } from '../../utils/improveEngines';
 import { useCapabilities } from '../../context/CapabilitiesContext';
+import useBatchThumbs from '../../hooks/useBatchThumbs';
 import { useToast } from '../common/Toast';
 import { autoTriageAvailable } from './faceScoringGate.js';
 import { bulkActionMessage, createBulkActionGate } from './bulkActionGate.js';
@@ -379,6 +380,15 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
   const selectable = images.filter((i) => i.filename && !isSmallImageRescueRow(i));
   // What is actually mounted. Everything below still reasons about `images`.
   const view = pageSlice(images, page, GRID_PAGE_SIZE);
+  // Batch-prefetch the visible page's tile thumbnails so a high-RTT link pays
+  // one round trip per batch, not one per tile. `rev` re-materialises a fresh
+  // batch when an in-place crop bumps a tile's nonce (same filename, new bytes).
+  const pageFiles = view.items.map((img) => img.filename).filter(Boolean);
+  const { getBlobUrl: thumbUrlFor } = useBatchThumbs(
+    pageFiles,
+    (files) => ({ url: `/api/dataset/${datasetId}/thumbs?s=512`, body: JSON.stringify({ files }) }),
+    { rev: view.items.map((img) => (nonces && nonces[img.id]) || 0).join(',') },
+  );
   const goToPage = (next) => {
     setPage(clampPage(next, images.length));
     // Land at the top of the grid: the tiles under the cursor are now different
@@ -563,7 +573,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
       <GridPager view={view} onGo={goToPage} where="top" />
       <div className={`grid ${TILE_SIZE_COLS[tileSize]} gap-2`}>
         {view.items.map((img) => (
-          <DatasetGridItem key={img.id} img={img} datasetId={datasetId} onStatus={onStatus} onCaption={onCaption}
+          <DatasetGridItem key={img.id} img={img} datasetId={datasetId} thumbUrlFor={thumbUrlFor} onStatus={onStatus} onCaption={onCaption}
             improvementState={improvementStates.get(img.id)}
             onCrop={onCrop} onDelete={onDelete} onMirror={onMirror}
             mirrorBusy={Boolean(mirroringIds?.has(img.id))} busy={bulkBusy}
