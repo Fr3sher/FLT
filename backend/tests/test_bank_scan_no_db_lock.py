@@ -254,13 +254,32 @@ def test_the_duplicate_regrouping_lets_other_writers_through(file_db):
         f'unusable for its whole duration: {pressure.failures[0]}')
     # And the WORST wait, because that is the shape of this failure: the old code
     # blocked one writer for 626 ms and let the rest through afterwards, so a
-    # median would have shrugged at it. Measured margin: 24 ms here against 626 ms
-    # for the shape the test below reproduces.
+    # median would have shrugged at it.
+    #
+    # Expressed as a FRACTION of the phase, not in milliseconds. An absolute
+    # budget measures how fast the machine is, not whether the lock is parked:
+    # calibrated here (24 ms of a 0.25 s phase) it failed on a CI runner ~23x
+    # slower, which measured 554 ms of a 5.7 s phase — the very same 0.10 share,
+    # and a green property reported as a regression. The shape this guards
+    # against is not slow, it is PARKED: the old code held the lock for 626 ms
+    # of a 0.9 s phase, a share of 0.70. A 0.25 line sits clear of both by a wide
+    # margin on any hardware. Sensitivity does not rest on this number anyway —
+    # test_the_regrouping_really_did_lock_the_database_before proves the probe
+    # catches the old shape deterministically, with no timing at all.
     worst = max(pressure.waits)
-    assert worst < 0.4, (
-        f'a writer waited {worst * 1000:.0f} ms during the regrouping '
-        f'({elapsed:.1f} s, {pressure.attempts} attempts) — the lock is still '
+    share = worst / elapsed if elapsed > 0 else 0.0
+    assert share < 0.25, (
+        f'a writer waited {worst * 1000:.0f} ms of a {elapsed:.1f} s regrouping '
+        f'({share:.0%} of it, {pressure.attempts} attempts) — the lock is still '
         'being parked')
+    # A second, deliberately loose ceiling: a share stays green if the whole
+    # phase inflates, and a multi-second stall is felt by the user whatever the
+    # ratio says. Generous enough that a slow runner never trips it (CI's worst
+    # measurement clears this by ~4x).
+    assert worst < 2.0, (
+        f'a writer waited {worst * 1000:.0f} ms during the regrouping '
+        f'({elapsed:.1f} s) — too long to leave the app unusable, whatever '
+        'share of the phase that is')
 
 
 def test_the_regrouping_really_did_lock_the_database_before(file_db):
