@@ -63,11 +63,13 @@ test('each decision is one immediate POST for one image', () => {
   assert.match(lightbox, /postJson\(`\/api\/bank\/\$\{bankId\}\/images\/status`, \{ ids: \[target\], status \}\)/)
 })
 
-test('a failed decision surfaces an error and does NOT advance', () => {
+test('a decision advances immediately (optimistic) and steps back only if the save fails', () => {
   const send = lightbox.match(/const sendDecision = useCallback\(([\s\S]*?)\n  \}, \[/)[1]
   const [tryPart, catchPart] = send.split('} catch (e) {')
+  // Advances before the save round-trip completes so a slow RTT never freezes review
   assert.match(tryPart, /setSession\(\(s\) => decide\(s, status\)\)/)
-  assert.doesNotMatch(catchPart, /setSession/)
+  // ... and only comes back (so the decision is never lost) when the save failed
+  assert.match(catchPart, /setSession\(\(s\) => back\(s\)\)/)
   assert.match(catchPart, /setError\(/)
 })
 
@@ -79,8 +81,12 @@ test('the lightbox renders the full-resolution image as a cached WebP, never the
   assert.doesNotMatch(lightbox, /\/api\/bank\/\$\{bankId\}\/file\/\$\{id\}/)
 })
 
-test('the review prefetches the whole set as BATCHES so a high-RTT link pays one round trip per batch', () => {
-  assert.match(lightbox, /\(session\.order \|\| \[\]\)\.slice\(session\.pos \+ 1\)/)
+test('the review prefetches the immediate next individually and the long tail as BATCHES', () => {
+  // immediate next-2 as single fast requests so advancing is never a round trip
+  assert.match(lightbox, /ahead\.slice\(0, 2\)\.forEach/)
+  assert.match(lightbox, /new Image\(\)/)
+  // the long tail as one round trip per batch, parsed into blob URLs
+  assert.match(lightbox, /order\.slice\(session\.pos \+ 1\)/)
   assert.match(lightbox, /review-batch\?ids=/)
   assert.match(lightbox, /URL\.createObjectURL\(/)
   assert.match(lightbox, /blobUrls\[id\] \|\|/)

@@ -155,12 +155,24 @@ export default function BankReviewLightbox({
   // URLs, so when the cursor reaches an image it renders instantly from memory.
   // Fetched in order (nearest first), concurrency 2; runs once per review set.
   useEffect(() => {
-    const remaining = (session.order || []).slice(session.pos + 1)
+    const order = session.order || []
+    const ahead = order.slice(session.pos + 1)
       .filter((x) => !prefetched.current.has(x))
-    if (!remaining.length) return
+    if (!ahead.length) return
+    // Prioritise the immediate next 2 as single requests (small, fast) so that
+    // advancing is never a round trip even before a slow batch lands.
+    ahead.slice(0, 2).forEach((id) => {
+      prefetched.current.add(id)
+      const u = new Image()
+      u.src = `/api/bank/${bankId}/review-file/${id}`
+    })
+    // Then fetch the long tail as BATCHES so a high-RTT link pays one round trip
+    // per batch, parsed into blob URLs for instant rendering when reached.
+    const rest = ahead.slice(2)
+    if (!rest.length) return
     const BATCH = 16
     const batches = []
-    for (let i = 0; i < remaining.length; i += BATCH) batches.push(remaining.slice(i, i + BATCH))
+    for (let i = 0; i < rest.length; i += BATCH) batches.push(rest.slice(i, i + BATCH))
     let bi = 0
     let active = 0
     const pump = () => {
@@ -196,13 +208,16 @@ export default function BankReviewLightbox({
     if (target == null || busy) return
     setBusy(true)
     setError(null)
+    // Optimistic: show the next image immediately and save the decision in the
+    // background, so a slow RTT doesn't freeze the review on every click. If the
+    // save fails we step back to this same image so a decision is never lost.
+    setMeta((prev) => (prev[target] ? { ...prev, [target]: { ...prev[target], status } } : prev))
+    setSession((s) => decide(s, status))
+    onDecided?.(target, status)
     try {
       await postJson(`/api/bank/${bankId}/images/status`, { ids: [target], status })
-      setMeta((prev) => (prev[target] ? { ...prev, [target]: { ...prev[target], status } } : prev))
-      setSession((s) => decide(s, status))
-      onDecided?.(target, status)
     } catch (e) {
-      // Stay on this image: a lost decision is worse than a stalled one.
+      setSession((s) => back(s))
       setError(e?.message || 'Could not save that decision — it was NOT recorded.')
     } finally {
       setBusy(false)
