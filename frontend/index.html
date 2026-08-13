@@ -17,11 +17,14 @@
          main thread parses the large JS bundle on a slow link. */
       #boot-spinner{width:44px;height:44px;border-radius:50%;border:4px solid #27272a;border-top-color:#818cf8;animation:bootspin .8s linear infinite;will-change:transform;transform:translateZ(0)}
       @keyframes bootspin{to{transform:rotate(360deg)}}
-      /* Indeterminate "it's working" bar — no JS, pure CSS, survives the slow
-         boot. The indicator sweeps left-to-right across the track. */
-      #boot-track{position:relative;width:min(240px,70vw);height:3px;border-radius:9999px;background:#27272a;overflow:hidden}
+      /* Progress track. Indeterminate sweep until real download progress is known,
+         then .boot-determinate switches to an honest, width-driven fill. */
+      #boot-track{position:relative;width:min(260px,74vw);height:3px;border-radius:9999px;background:#27272a;overflow:hidden}
       #boot-bar{position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;background:#6366f1;animation:bootbar 1.25s ease-in-out infinite;will-change:transform;transform:translateZ(0)}
+      #boot-bar.boot-determinate{animation:none;width:0;transition:width .35s ease;will-change:width;transform:none}
       @keyframes bootbar{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}
+      #boot-label{font-size:14px;margin:0}
+      #boot-pct{font-variant-numeric:tabular-nums;color:#818cf8;min-width:2.4em;display:inline-block;text-align:right}
     </style>
 
   </head>
@@ -29,10 +32,83 @@
     <div id="root">
       <div id="boot-splash" role="status" aria-live="polite">
         <div id="boot-spinner" aria-hidden="true"></div>
-        <div id="boot-track" aria-hidden="true"><div id="boot-bar"></div></div>
-        <p style="font-size:14px;margin:0">Loading FLT…</p>
+        <div id="boot-track"><div id="boot-bar"></div></div>
+        <p id="boot-label">Loading FLT… <span id="boot-pct" aria-hidden="true"></span></p>
       </div>
     </div>
+    <script>
+      /* Real boot progress: fill the bar as the page's actual critical assets
+         (CSS, module script, modulepreloads) finish downloading, read from
+         Resource Timing. Every increment is a resource that truly completed —
+         no fake timer. Capped at 90%: the last 10% is React mounting, which
+         replaces this splash. Kept as one small inline script (no CSP blocks
+         it here) and guarded so it's a no-op if it ever can't run. */
+      (function () {
+        var bar = document.getElementById('boot-bar');
+        var pctEl = document.getElementById('boot-pct');
+        if (!bar || !pctEl) return;
+
+        // The critical resources this document depends on (same-origin assets).
+        var critical = [];
+        function add(url) {
+          if (url && critical.indexOf(url) === -1) critical.push(url);
+        }
+        var links = document.querySelectorAll(
+          'link[rel="stylesheet"][href], link[rel="modulepreload"][href]');
+        for (var i = 0; i < links.length; i++) add(links[i].href);
+        var scripts = document.querySelectorAll('script[src]');
+        for (var j = 0; j < scripts.length; j++) add(scripts[j].src);
+        if (critical.length === 0) return; // nothing to measure — stay indeterminate
+
+        var done = {};
+        var started = false;
+
+        function paint() {
+          var n = 0;
+          for (var k = 0; k < critical.length; k++) if (done[critical[k]]) n++;
+          var pct = Math.min(90, Math.round((n / critical.length) * 100));
+          if (!started) {
+            started = true;
+            bar.className = 'boot-determinate';
+          }
+          bar.style.width = pct + '%';
+          pctEl.textContent = pct + '%';
+        }
+
+        function mark(url) {
+          if (done[url] || critical.indexOf(url) === -1) return;
+          done[url] = true;
+          paint();
+        }
+
+        // Mark a stylesheet/module script done on its load (or error) event.
+        function watch(el) {
+          if (!el || !el.href) return;
+          el.addEventListener('load', function () { mark(el.href); }, { once: true });
+          el.addEventListener('error', function () { mark(el.href); }, { once: true });
+        }
+        for (var a = 0; a < links.length; a++) watch(links[a]);
+        for (var b = 0; b < scripts.length; b++) watch(scripts[b]);
+
+        // Poll Resource Timing as a backstop for modulepreloads (which don't
+        // fire load events) and for resources already cached before this ran.
+        var timer = null;
+        function poll() {
+          try {
+            var res = performance.getEntriesByType('resource');
+            for (var m = 0; m < res.length; m++) {
+              var e = res[m];
+              if (e && e.transferSize > 0) mark(e.name);
+            }
+          } catch (err) {}
+          var allDone = true;
+          for (var c = 0; c < critical.length; c++) if (!done[critical[c]]) { allDone = false; break; }
+          if (allDone || !document.getElementById('boot-splash')) return; // stop
+          timer = setTimeout(poll, 150);
+        }
+        timer = setTimeout(poll, 300);
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
