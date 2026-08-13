@@ -932,3 +932,83 @@ def test_analyze_image_face_never_persists_after_pixel_edit(
         row = svc.db.session.get(FaceDatasetImage, image_id)
         assert (row.face_state, row.face_score) == (None, None)
         assert (row.content_sig, row.content_sig_stat) == (None, None)
+
+
+# --- score_faces (multi-reference centroid + quality_only) -------------------
+
+def test_score_faces_builds_centroid_payload(app, monkeypatch):
+    """score_faces forwards refs[] (multi) + images[] and reads sim back; a single
+    legacy ref is folded into refs by the endpoint, not here."""
+    from app.services import face_similarity as fsim
+    monkeypatch.setattr(fsim, 'is_available', lambda: True)
+    captured = {}
+
+    def _fake_run(*args, **kwargs):
+        captured['input'] = args[1]
+        return _scorer(json.dumps({"ref_ok": True, "results": {}}))
+
+    monkeypatch.setattr('app.services.face_similarity._run_scorer', _fake_run)
+    with app.app_context():
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            r1 = os.path.join(d, 'r1.png'); r2 = os.path.join(d, 'r2.png')
+            im = os.path.join(d, 'im.png')
+            for p in (r1, r2, im):
+                with open(p, 'wb') as fh:
+                    fh.write(_png())
+            fsim.score_faces([r1, r2], [im])
+    payload = json.loads(captured['input'])
+    assert payload['refs'] == [r1, r2]
+    assert payload['images'] == [im]
+    assert payload['quality_only'] is False
+    assert 'ref' not in payload
+
+
+def test_score_faces_quality_only_payload(app, monkeypatch):
+    """quality_only=True skips refs entirely and flags the scorer accordingly."""
+    from app.services import face_similarity as fsim
+    monkeypatch.setattr(fsim, 'is_available', lambda: True)
+    captured = {}
+
+    def _fake_run(*args, **kwargs):
+        captured['input'] = args[1]
+        return _scorer(json.dumps({"ref_ok": True, "results": {}}))
+
+    monkeypatch.setattr('app.services.face_similarity._run_scorer', _fake_run)
+    with app.app_context():
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            im = os.path.join(d, 'im.png')
+            with open(im, 'wb') as fh:
+                fh.write(_png())
+            fsim.score_faces([], [im], quality_only=True)
+    payload = json.loads(captured['input'])
+    assert payload['quality_only'] is True
+    assert payload['refs'] == []
+    assert payload['images'] == [im]
+
+
+def test_score_faces_shortcircuits_when_refs_or_images_missing(app, monkeypatch):
+    """Non-quality_only mode needs >=1 scorable ref and >=1 image; quality_only
+    needs >=1 image. Missing pieces return ({}, None) without spawning a child."""
+    from app.services import face_similarity as fsim
+    monkeypatch.setattr(fsim, 'is_available', lambda: True)
+    called = {'n': 0}
+
+    def _fake_run(*args, **kwargs):
+        called['n'] += 1
+        return _scorer(json.dumps({"ref_ok": True, "results": {}}))
+
+    monkeypatch.setattr('app.services.face_similarity._run_scorer', _fake_run)
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        im = os.path.join(d, 'im.png')
+        with open(im, 'wb') as fh:
+            fh.write(_png())
+        # no refs, non-quality -> short circuit
+        assert fsim.score_faces([], [im]) == ({}, None)
+        # no images, quality_only -> short circuit
+        assert fsim.score_faces([], [], quality_only=True) == ({}, None)
+        # no images, non-quality -> short circuit
+        assert fsim.score_faces([im], []) == ({}, None)
+    assert called['n'] == 0

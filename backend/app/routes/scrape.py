@@ -17,6 +17,7 @@ from io import BytesIO
 from pathlib import Path
 import hashlib
 import os
+import tempfile
 import threading
 from time import time
 
@@ -288,3 +289,181 @@ def scrape_thumb():
         'Content-Disposition': 'inline; filename="thumb"',
         'Content-Security-Policy': "default-src 'none'; sandbox",
     })
+
+
+# --------------------------------------------------------------------------- #
+# Face filter: "keep only this person" against a reference scraped image.
+# --------------------------------------------------------------------------- #
+def _fetch_image_to_temp(url):
+    """Fetch `url` (a scraped image / thumbnail) to a temp file, return its path.
+    None on failure (unfetchable / unsupported / too large). Reuses the same
+    curl_cffi + size-cap machinery as scrape_thumb."""
+    from curl_cffi import requests as cf_requests
+    host = urlparse(url).hostname or ''
+    try:
+        r = cf_requests.get(url, impersonate='chrome', timeout=15, stream=True,
+                            allow_redirects=False,
+                            headers={'Referer': f'https://{host}/', 'Accept': 'image/*,*/*'})
+    except Exception:
+        return None
+    ctype = (r.headers.get('content-type') or '').split(';')[0].strip().lower()
+    if r.status_code != 200 or ctype not in _ALLOWED_THUMB_TYPES:
+        try: r.close()
+        except Exception: pass
+        return None
+    data = bytearray()
+    try:
+        for chunk in r.iter_content(8192):
+            if not chunk: continue
+            data += chunk
+            if len(data) > MAX_THUMB_BYTES:
+                break
+    finally:
+        try: r.close()
+        except Exception: pass
+    if not data:
+        return None
+    # Prefer the cached resized WebP (already on disk from the grid) to avoid
+    # re-hitting Instagram; 512 px is plenty for a face embedding.
+    try:
+        from PIL import Image as _PIL, ImageFile
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        cache = _thumb_cache_path(url)
+        if cache.is_file() and time() - cache.stat().st_mtime < _THUMB_CACHE_TTL:
+            return str(cache)
+    except Exception:
+        pass
+    fd, path = tempfile.mkstemp(suffix='.img')
+    os.close(fd)
+    try:
+        with open(path, 'wb') as fh:
+            fh.write(bytes(data))
+        return path
+    except Exception:
+        try: os.unlink(path)
+        except Exception: pass
+        return None
+
+
+
+@bp.post('/scrape/face-filter')
+def scrape_face_filter():
+    """Score each scraped image against one or more REFERENCE images and say which
+    are the same person, OR suggest the best-quality face candidates.
+
+    Body:
+      {reference_urls: [...], urls: [...], threshold}      -> centroid match
+      {reference_url, urls, threshold}                    -> single ref (back-compat)
+      {suggest_best: true, urls: [...], top_n}             -> quality ranking only
+    Returns {reference_ok, threshold, results: {url: {match, sim, state}}} for the
+    match mode, or {suggestions: [{url, state, det, bbox_frac, yaw, score}]} for the
+    suggest_best mode. The frontend auto-selects `match`-true URLs (or highlights the
+    top quality candidates) so you only import the target person's face shots."""
+    data = request.get_json(silent=True) or {}
+    urls = [u for u in (data.get('urls') or []) if isinstance(u, str) and u.strip()]
+    if not urls:
+        return jsonify({'error': 'urls required'}), 400
+
+    suggest_best = bool(data.get('suggest_best'))
+    if suggest_best:
+        try:
+            top_n = max(1, int(data.get('top_n', 20)))
+        except (TypeError, ValueError):
+            top_n = 20
+    else:
+        ref_urls = [u for u in (data.get('reference_urls') or [])
+                    if isinstance(u, str) and u.strip()]
+        # Back-compat: a single reference_url is folded into reference_urls.
+        single = (data.get('reference_url') or '').strip()
+        if single and single not in ref_urls:
+            ref_urls.append(single)
+        if not ref_urls:
+            return jsonify({'error': 'reference_urls (or reference_url) required'}), 400
+        try:
+            threshold = float(data.get('threshold', 0.45))
+        except (TypeError, ValueError):
+            threshold = 0.45
+
+    from ..services.face_similarity import score_faces
+
+    def _fetch(u):
+        return _fetch_image_to_temp(u)
+
+    if suggest_best:
+        # Fetch candidates to temp, score quality only, rank, clean up.
+        paths, by_path = [], {}
+        for u in urls:
+            p = _fetch(u)
+            if p is not None:
+                paths.append(p); by_path[p] = u
+        if not paths:
+            return jsonify({'error': 'none of the images could be fetched'}), 502
+        try:
+            results, _err = score_faces([], paths, quality_only=True)
+        except Exception as e:
+            return jsonify({'error': f'face scoring failed: {e}'}), 502
+        ranked = []
+        for p, r in (results or {}).items():
+            u = by_path.get(p)
+            if not u: continue
+            state = r.get('state')
+            # Quality rank: usable face first, then larger/more frontal beats small/posed.
+            if state == 'scorable':
+                base = 1.0
+            elif state in ('low_det', 'too_small', 'extreme_pose'):
+                base = 0.5
+            else:
+                base = 0.0
+            score = round(base + float(r.get('det') or 0) * 0.3
+                          + float(r.get('bbox_frac') or 0) * 0.2
+                          - min(1.0, abs(float(r.get("yaw") or 0)) / 40.0) * 0.1, 3)
+            ranked.append({'url': u, 'state': state,
+                           'det': r.get('det'), 'bbox_frac': r.get('bbox_frac'),
+                           'yaw': r.get('yaw'), 'score': score})
+        ranked.sort(key=lambda x: x['score'], reverse=True)
+        for p in paths:
+            try: os.unlink(p)
+            except Exception: pass
+        return jsonify({'suggestions': ranked[:top_n]})
+
+    # Match mode: fetch refs + candidates, score against centroid.
+    ref_paths, cand_paths, by_path = [], [], {}
+    for u in ref_urls:
+        p = _fetch(u)
+        if p is not None:
+            ref_paths.append(p)
+    if not ref_paths:
+        return jsonify({'error': 'reference image could not be fetched'}), 502
+    for u in urls:
+        p = _fetch(u)
+        if p is not None:
+            cand_paths.append(p); by_path[p] = u
+    if not cand_paths:
+        for p in ref_paths:
+            try: os.unlink(p)
+            except Exception: pass
+        return jsonify({'error': 'none of the images could be fetched'}), 502
+
+    try:
+        results, err = score_faces(ref_paths, cand_paths)
+    except Exception as e:
+        return jsonify({'error': f'face scoring failed: {e}'}), 502
+
+    if err is not None:
+        return jsonify({'error': err.get('detail') or 'face scoring failed',
+                        'reference_ok': False}), 502
+
+    out = {}
+    for p, r in (results or {}).items():
+        u = by_path.get(p)
+        if not u: continue
+        state = r.get('state')
+        sim = r.get('sim')
+        match = bool(state == 'scorable' and sim is not None and sim >= threshold)
+        out[u] = {'match': match, 'sim': sim, 'state': state}
+
+    for p in cand_paths + ref_paths:
+        try: os.unlink(p)
+        except Exception: pass
+
+    return jsonify({'reference_ok': True, 'threshold': threshold, 'results': out})

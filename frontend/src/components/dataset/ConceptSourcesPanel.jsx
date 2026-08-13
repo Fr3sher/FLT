@@ -138,6 +138,15 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   // URLs whose thumbnail failed to load (dead/expired source links). Hidden from
   // the grid so you only ever see & pick live images — dead galleries are common.
   const [broken, setBroken] = useState(() => new Set());
+  // Face filter (auto-select this person): pick one result as the reference,
+  // score the rest against it, keep only matches.
+  const [faceRefs, setFaceRefs] = useState(() => new Set());
+  const [pickingRef, setPickingRef] = useState(false);
+  const [faceFilterBusy, setFaceFilterBusy] = useState(false);
+  const [suggestBestBusy, setSuggestBestBusy] = useState(false);
+  const [faceThreshold, setFaceThreshold] = useState(0.45);
+  // Suggested quality reference candidates (from "Suggest best references").
+  const [suggested, setSuggested] = useState(() => new Set());
   // Preview tile size (px). A category scrape returns whole galleries (many
   // off-concept frames) → larger previews speed up eyeballing. Persisted.
   const [tile, setTile] = useState(() => {
@@ -255,6 +264,53 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
       if (next.has(u)) next.delete(u); else next.add(u);
       return next;
     });
+  };
+
+  const runFaceFilter = async () => {
+    const candidates = items
+      .filter((it) => !broken.has(it.url))
+      .map((it) => it.thumbnail || it.url);
+    if (faceRefs.size === 0 || candidates.length === 0 || faceFilterBusy) return;
+    setFaceFilterBusy(true);
+    try {
+      const d = await postJson('/api/scrape/face-filter',
+        { reference_urls: [...faceRefs], urls: candidates, threshold: faceThreshold });
+      if (!d || !d.results) { toast.error('Face filter failed.'); return; }
+      const keep = new Set();
+      for (const [u, r] of Object.entries(d.results)) if (r.match) keep.add(u);
+      setSelected(keep);
+      if (keep.size === 0) {
+        toast.info('No photos matched — pick clearer references or lower the threshold.');
+      } else if (keep.size < candidates.length) {
+        toast.success(`Kept ${keep.size} of ${candidates.length} — the rest were deselected.`);
+      }
+    } catch { toast.error('Face filter failed.'); }
+    finally { setFaceFilterBusy(false); }
+  };
+
+  // Suggest the most usable face shots as references (no comparison, just quality).
+  const suggestBestRefs = async () => {
+    const candidates = items
+      .filter((it) => !broken.has(it.url))
+      .map((it) => it.thumbnail || it.url);
+    if (candidates.length === 0 || suggestBestBusy) return;
+    setSuggestBestBusy(true);
+    try {
+      const d = await postJson('/api/scrape/face-filter', { suggest_best: true, urls: candidates });
+      if (!d || !d.suggestions) { toast.error('Face suggestion failed.'); return; }
+      const good = new Set(
+        d.suggestions.filter((s) => s.state === 'scorable').slice(0, 12).map((s) => s.url)
+      );
+      setSuggested(good);
+      setFaceRefs(good);
+      setPickingRef(false);
+      if (good.size === 0) {
+        toast.info('No clearly usable faces found — try a clearer set of photos.');
+      } else {
+        toast.success(`Suggested ${good.size} reference photos — add/remove, then Keep matches.`);
+      }
+    } catch { toast.error('Face suggestion failed.'); }
+    finally { setSuggestBestBusy(false); }
   };
 
   // Thumbnail failed → the source image is dead/expired. Hide it and un-select it.
@@ -589,6 +645,41 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                 Clear
               </button>
             )}
+            <button type="button"
+              onClick={() => setPickingRef((p) => !p)}
+              disabled={items.length === 0 || faceFilterBusy}
+              title="Pick reference photos of the person, then FLT keeps only photos matching their face"
+              className={`px-2 py-0.5 rounded border hover:text-content ${pickingRef ? 'border-indigo-400 text-indigo-300' : 'border-border'}`}>
+              🎯 {pickingRef ? 'Click photos of the person…' : 'Auto-select this person'}
+            </button>
+            <button type="button"
+              onClick={suggestBestRefs}
+              disabled={items.length === 0 || suggestBestBusy}
+              title="Auto-suggest the most usable face shots as references"
+              className="px-2 py-0.5 rounded border border-border hover:text-content disabled:opacity-40">
+              {suggestBestBusy ? 'Finding…' : '✨ Suggest best refs'}
+            </button>
+            {faceRefs.size > 0 && (
+              <>
+                <span className="text-xs text-content-subtle tabular-nums" title="Reference photos selected">
+                  {faceRefs.size} ref{faceRefs.size === 1 ? '' : 's'}
+                </span>
+                <label className="flex items-center gap-1.5" title="Similarity threshold — lower keeps more, higher is stricter">
+                  <span aria-hidden>🎚️</span>
+                  <input type="range" min="0.20" max="0.75" step="0.01" value={faceThreshold}
+                    onChange={(e) => setFaceThreshold(parseFloat(e.target.value))}
+                    aria-label="Face similarity threshold"
+                    className="w-24 accent-indigo-500 cursor-pointer" />
+                  <span className="tabular-nums">{faceThreshold.toFixed(2)}</span>
+                </label>
+                <button type="button" onClick={runFaceFilter} disabled={faceFilterBusy}
+                  className="px-2 py-0.5 rounded border border-indigo-400 bg-surface-raised hover:bg-white/10">
+                  {faceFilterBusy ? 'Filtering…' : `Keep matches`}
+                </button>
+                <button type="button" onClick={() => { setFaceRefs(new Set()); setSuggested(new Set()); setPickingRef(false); }}
+                  title="Clear references" className="px-1.5 rounded border border-border hover:text-content">✕</button>
+              </>
+            )}
             <label className="flex items-center gap-1.5" title="Preview size — enlarge to judge images faster">
               <span aria-hidden>🔍</span>
               <input type="range" min="72" max="300" step="4" value={tile}
@@ -628,7 +719,12 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                   ? `Pexels photo by ${it.photographer}` : 'scraped image');
               return (
                 <div key={it.url} className="min-w-0">
-                  <button type="button" onClick={() => toggle(it.url)}
+                  <button type="button" onClick={() =>
+                    pickingRef
+                      ? setFaceRefs((prev) => prev.has(it.thumbnail || it.url)
+                          ? (prev.delete(it.thumbnail || it.url), new Set(prev))
+                          : new Set(prev).add(it.thumbnail || it.url))
+                      : toggle(it.url)}
                     aria-pressed={on}
                     aria-label={`${on ? 'Deselect' : 'Select'} ${imageLabel}`}
                     title={imageLabel}
@@ -641,6 +737,12 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                         ${on ? 'bg-indigo-500 text-white' : 'bg-black/50 text-white/70'}`}>
                       {on ? '✓' : ''}
                     </span>
+                    {faceRefs.has(it.thumbnail || it.url) && (
+                      <span aria-hidden
+                        className="absolute bottom-1 left-1 px-1 rounded bg-indigo-500 text-white text-[0.625rem] font-bold">
+                        REF
+                      </span>
+                    )}
                   </button>
                   <PexelsAttribution metadata={it}
                     className="mt-1 block px-0.5 text-[0.625rem] leading-tight text-content-subtle" />

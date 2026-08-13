@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-13-scrape-face-filter',
+    date: '2026-08-13',
+    title: 'Auto-keep only the person you want from a scrape',
+    blurb:
+      'After scanning, pick a few clear face shots (or let FLT suggest the best ones) and FLT keeps only the photos of that same person — so your Instagram/Reddit scrape lands as a clean reference set, not a pile of strangers. Multiple references are averaged for a more forgiving match, and nothing needs the full-res originals.',
+    to: '/datasets?section=scrape&panel=scan',
+  },
+  {
     id: '2026-08-12-snappier-loading',
     date: '2026-08-12',
     title: 'FLT opens fast even on a slow connection',

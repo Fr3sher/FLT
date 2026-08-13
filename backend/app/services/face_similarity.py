@@ -124,3 +124,56 @@ def score_dataset_faces(ref_path, image_paths, timeout: int | None = None,
         return {}, {'kind': 'ref_unusable',
                     'detail': data.get('error') or 'no usable face in the reference photo'}
     return data.get('results') or {}, None
+
+
+def score_faces(ref_paths, image_paths, quality_only=False, timeout=None,
+                on_progress=None):
+    """Score images against one or more reference faces, or just return per-image
+    face quality when ``quality_only``.
+
+    Multiple references are averaged into a normalised identity centroid in the
+    scorer, so the similarity is against the centroid (robust) rather than a
+    single fragile reference. ``quality_only=True`` skips the reference entirely
+    and returns each image's state/det/bbox_frac/yaw -- what the "suggest good
+    reference candidates" flow needs.
+
+    Returns ({path: {state, det, bbox_frac, yaw, sim?}}, error|None); error kinds
+    mirror score_dataset_faces ('unavailable' | 'failed' | 'ref_unusable')."""
+    image_paths = [p for p in (image_paths or []) if p and os.path.isfile(p)]
+    if quality_only:
+        if not image_paths:
+            return {}, None
+    else:
+        ref_paths = [p for p in (ref_paths or []) if p and os.path.isfile(p)]
+        if not ref_paths or not image_paths:
+            return {}, None
+    if not is_available():
+        return {}, {'kind': 'unavailable',
+                    'detail': 'face scoring is not installed (Quality tools step in Setup)'}
+    n = len(image_paths) + (0 if quality_only else len(ref_paths))
+    if timeout is None:
+        timeout = default_timeout(n)
+    payload = json.dumps({"refs": ref_paths, "images": image_paths,
+                          "quality_only": bool(quality_only),
+                          "models_root": cfg.get('face_scoring.models_root') or None})
+    try:
+        stdout, stderr_lines, returncode, timed_out = _run_scorer(
+            _scoring_python(), payload, timeout, on_progress)
+    except OSError as e:
+        return {}, {'kind': 'failed', 'detail': str(e)}
+    if timed_out:
+        return {}, {'kind': 'failed',
+                    'detail': f'face scoring timed out after {timeout}s ({n} image(s))'}
+    line = next((ln for ln in reversed((stdout or '').splitlines())
+                 if ln.strip().startswith('{')), '')
+    if not line:
+        return {}, {'kind': 'failed',
+                    'detail': _stderr_tail(stderr_lines) or 'scorer produced no output'}
+    try:
+        data = json.loads(line)
+    except json.JSONDecodeError as e:
+        return {}, {'kind': 'failed', 'detail': f'unreadable scorer output: {e}'}
+    if not data.get('ref_ok'):
+        return {}, {'kind': 'ref_unusable',
+                    'detail': data.get('error') or 'no usable face in the reference photos'}
+    return data.get('results') or {}, None
