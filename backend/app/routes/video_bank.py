@@ -14,8 +14,9 @@ that could be refused is refused synchronously before a dataset exists.
 """
 import logging
 import os
+import struct
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, Response, current_app, jsonify, request, send_file
 
 from ..config import LOCAL_USER
 from ..services import bank_jobs
@@ -288,6 +289,32 @@ def video_bank_clip_thumb(bank_id, clip_id):
     if not path.is_file():
         return jsonify({'error': 'no thumbnail for this clip yet'}), 404
     return send_file(str(path), mimetype='image/jpeg')
+
+
+@bp.post('/video-bank/<int:bank_id>/clip-thumbs')
+def video_bank_clip_thumbs_batch(bank_id):
+    """Grid thumbnails for MANY clips in ONE response so a high-RTT link pays
+    one round trip per batch, not one per tile. Same JPEGs as the single
+    `video_bank_clip_thumb`; body is the shared index-keyed binary container
+    [u32 position][u32 length][bytes] — clips with no thumbnail yet are simply
+    skipped (the grid draws a placeholder on those either way)."""
+    data = request.get_json(silent=True) or {}
+    ids = [int(x) for x in (data.get('ids') or []) if str(x).isdigit()]
+    if not ids:
+        return jsonify({'error': 'ids required'}), 400
+    if svc.get_bank(LOCAL_USER, bank_id) is None:
+        return _missing(bank_id)
+    out = bytearray()
+    for pos, cid in enumerate(ids):
+        path = svc.thumb_path(bank_id, cid)
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        out += struct.pack('>II', pos, len(data))
+        out += data
+    return Response(bytes(out), mimetype='application/octet-stream',
+                    headers={'Cache-Control': 'public, max-age=604800',
+                             'X-Content-Type-Options': 'nosniff'})
 
 
 # --- passes --------------------------------------------------------------------

@@ -742,3 +742,32 @@ def test_re_detecting_a_file_never_destroys_a_hand_made_cut(client, tmp_path, se
     rows = _clips(client, bank_id)
     assert [c for c in rows if c['detector'] == 'manual']
     assert len([c for c in rows if c['detector'] == 'transnetv2']) == 2
+
+
+def test_clip_thumbs_batch_returns_an_index_keyed_container(client, tmp_path, seams):
+    """The grid pays one round trip per batch of clip thumbs, not one per tile.
+    Same shared index-keyed container [u32 position][u32 length][bytes]; clips
+    without a thumbnail are skipped (placeholder) rather than erroring."""
+    import struct
+    bank_id = _make_bank(client, tmp_path)
+    assert client.post(f'/api/video-bank/{bank_id}/probe', json={}).status_code == 202
+    assert client.post(f'/api/video-bank/{bank_id}/detect', json={}).status_code == 202
+    ids = client.get(f'/api/video-bank/{bank_id}/clips?ids_only=1').get_json()['ids']
+    assert ids
+    # Materialise a real thumbnail for one clip so the batch has payloads.
+    from app.services import video_bank_service as svc
+    with client.application.app_context():
+        path = svc.thumb_path(bank_id, ids[0])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01')  # tiny JPEG header
+    resp = client.post(f'/api/video-bank/{bank_id}/clip-thumbs',
+                       json={'ids': [ids[0], ids[1]]})
+    assert resp.status_code == 200
+    assert resp.mimetype == 'application/octet-stream'
+    body = resp.get_data()
+    # ids[1] has no thumb -> only position 0 present, cleanly terminated.
+    pos, ln = struct.unpack_from('>II', body, 0)
+    assert pos == 0
+    assert len(body) == 8 + ln
+    # Missing ids -> 400.
+    assert client.post(f'/api/video-bank/{bank_id}/clip-thumbs', json={}).status_code == 400

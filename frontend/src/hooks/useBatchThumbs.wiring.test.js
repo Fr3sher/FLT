@@ -11,6 +11,7 @@ const bankTile = readFileSync(new URL('../components/bank/BankTile.jsx', import.
 const resultsGrid = readFileSync(new URL('../components/dataset/studio/ResultsGrid.jsx', import.meta.url), 'utf8');
 const resultTile = readFileSync(new URL('../components/dataset/studio/ResultTile.jsx', import.meta.url), 'utf8');
 const concept = readFileSync(new URL('../components/dataset/ConceptSourcesPanel.jsx', import.meta.url), 'utf8');
+const videoGrid = readFileSync(new URL('../components/videobank/VideoClipGrid.jsx', import.meta.url), 'utf8');
 
 test('bank grid batches its thumbs through /bank/<id>/thumbs', () => {
   assert.match(bankWs, /import useBatchThumbs/);
@@ -36,4 +37,11 @@ test('concept-source picker batches scraped thumbs through /scrape/thumbs', () =
   assert.match(concept, /\/api\/scrape\/thumbs/);
   assert.match(concept, /useBatchThumbs\(/);
   assert.match(concept, /getScrapeThumb\(it\.thumbnail \|\| it\.url\) \|\| thumbFor\(it\)/);
+});
+
+test('video bank grid batches clip thumbs through /video-bank/<id>/clip-thumbs', () => {
+  assert.match(videoGrid, /import useBatchThumbs/);
+  assert.match(videoGrid, /\/api\/video-bank\/\$\{bankId\}\/clip-thumbs/);
+  assert.match(videoGrid, /useBatchThumbs\(/);
+  assert.match(videoGrid, /thumbUrlFor\(clip\.id\) \|\| videoClipThumbUrl/);
 });
