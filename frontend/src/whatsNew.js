@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-13-loading-progress',
+    date: '2026-08-13',
+    title: 'A live progress bar while FLT loads',
+    blurb:
+      'The loading screen now shows an animated progress sweep and a spinner that keeps turning even on a slow connection — so you always know the app is working instead of frozen on a black page.',
+  },
+  {
     id: '2026-08-13-scrape-face-filter',
     date: '2026-08-13',
     title: 'Auto-keep only the person you want from a scrape',

@@ -528,6 +528,33 @@
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* Indeterminate "it's working" bar: the indicator sweeps left-to-right across
+   an overflow-hidden track. Used by LoadingScreen and boot-splash so a slow
+   lazy-chunk load never looks frozen. GPU-composited (translateZ) so it keeps
+   moving even while the main thread is busy parsing a large bundle. */
+.boot-indeterminate {
+  position: relative;
+  height: 3px;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: var(--surface-raised, #27272a);
+}
+.boot-indeterminate::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 40%;
+  border-radius: 9999px;
+  background: var(--primary, #6366f1);
+  animation: bootbar 1.25s ease-in-out infinite;
+  will-change: transform;
+  transform: translateZ(0);
+}
+@keyframes bootbar {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
 .profile-spinner {
   animation: spin 1s linear infinite;
 }
