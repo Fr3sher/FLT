@@ -7,7 +7,8 @@ embeds the live job. 409 = a job is already running on this bank.
 import logging
 import os
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, Response, current_app, jsonify, request, send_file
+import struct
 
 from ..config import LOCAL_USER
 from ..models import BankImage
@@ -1222,6 +1223,36 @@ def bank_review_file(bank_id, image_id):
         return jsonify({'error': 'unreadable'}), 404
     return send_file(path, mimetype='image/webp',
                      max_age=7 * 24 * 3600)  # cache a reviewed image for a week
+
+
+@bp.get('/bank/<int:bank_id>/review-batch')
+def bank_review_batch(bank_id):
+    """Return several review-size WebPs in ONE response so a high-RTT link isn't
+    charged a round trip per image. Body is a tiny binary container (no base64
+    overhead): for each requested id, [u32 id][u32 length][webp bytes] in the
+    order given. Missing/unreadable ids are simply skipped, so the response may
+    hold fewer images than requested. Cached 7d like the single review-file."""
+    ids = [int(x) for x in (request.args.get('ids') or '').split(',')
+           if x.strip().isdigit()]
+    if not ids:
+        return jsonify({'error': 'ids required'}), 400
+    bank = banks.get_bank(LOCAL_USER, bank_id)
+    if not bank:
+        return jsonify({'error': 'not found'}), 404
+    out = bytearray()
+    for iid in ids:
+        row = BankImage.query.filter_by(id=iid, bank_id=bank_id).first()
+        if row is None:
+            continue
+        p = banks.ensure_review_image(bank, row)
+        if not p or not os.path.isfile(p):
+            continue
+        data = p.read_bytes()
+        out += struct.pack('>II', iid, len(data))
+        out += data
+    return Response(bytes(out), mimetype='application/octet-stream',
+                    headers={'Cache-Control': 'public, max-age=604800',
+                             'X-Content-Type-Options': 'nosniff'})
 
 
 @bp.get('/bank/<int:bank_id>/file/<int:image_id>')

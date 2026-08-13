@@ -79,10 +79,11 @@ test('the lightbox renders the full-resolution image as a cached WebP, never the
   assert.doesNotMatch(lightbox, /\/api\/bank\/\$\{bankId\}\/file\/\$\{id\}/)
 })
 
-test('the review prefetches the whole set, throttled, so navigation is instant', () => {
-  assert.match(lightbox, /\(session\.order \|\| \[\]\)\.filter\(\(x\) => !prefetched\.current\.has\(x\)\)/)
-  assert.match(lightbox, /CONCURRENCY = 3/)
-  assert.match(lightbox, /new Image\(\)/)
+test('the review prefetches the whole set as BATCHES so a high-RTT link pays one round trip per batch', () => {
+  assert.match(lightbox, /\(session\.order \|\| \[\]\)\.slice\(session\.pos \+ 1\)/)
+  assert.match(lightbox, /review-batch\?ids=/)
+  assert.match(lightbox, /URL\.createObjectURL\(/)
+  assert.match(lightbox, /blobUrls\[id\] \|\|/)
 })
 
 test('the end-of-pool state is explicit and closable', () => {

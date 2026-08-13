@@ -119,6 +119,8 @@ export default function BankReviewLightbox({
   const requested = useRef(new Set())
   // ids whose image BYTES we've already asked for (prefetch), so we never re-hit them
   const prefetched = useRef(new Set())
+  // id -> blob URL of a prefetched review WebP (instant, no network when reached)
+  const [blobUrls, setBlobUrls] = useState({})
 
   // Hand the trap over while the mask editor is open — two live traps fight over
   // the focus and the editor's own controls become unreachable.
@@ -147,26 +149,43 @@ export default function BankReviewLightbox({
       .catch(() => { /* facts are an aid, not a gate — the image still shows */ })
   }, [bankId, id, session.order, session.pos, meta])
 
-  // Prefetch the WHOLE review set's image bytes in the background (throttled, in
-  // order) so advancing through the one-by-one review is instant over a slow link:
-  // each WebP is both encoded and downloaded before the cursor reaches it, and the
-  // 7-day cache makes the later <img> a cache hit. Runs once per review set; the
-  // server derives rotation/cleaning from the row so the clean URL is right for
-  // every image.
+  // Prefetch the WHOLE review set's image bytes as BATCHES so a high-RTT link pays
+  // ONE round trip per batch, not one per image. Each batch is a tiny binary
+  // container of review WebPs (u32 id, u32 length, bytes, ...) parsed into blob
+  // URLs, so when the cursor reaches an image it renders instantly from memory.
+  // Fetched in order (nearest first), concurrency 2; runs once per review set.
   useEffect(() => {
-    const remaining = (session.order || []).filter((x) => !prefetched.current.has(x))
+    const remaining = (session.order || []).slice(session.pos + 1)
+      .filter((x) => !prefetched.current.has(x))
     if (!remaining.length) return
-    let i = 0
+    const BATCH = 16
+    const batches = []
+    for (let i = 0; i < remaining.length; i += BATCH) batches.push(remaining.slice(i, i + BATCH))
+    let bi = 0
     let active = 0
-    const CONCURRENCY = 3   // enough to keep ahead without slamming a slow link or the encoder
     const pump = () => {
-      while (i < remaining.length && active < CONCURRENCY) {
-        const id = remaining[i++]
-        prefetched.current.add(id)
-        const u = new Image()
-        u.onload = u.onerror = () => { active -= 1; pump() }
-        u.src = `/api/bank/${bankId}/review-file/${id}`
+      while (bi < batches.length && active < 2) {
+        const ids = batches[bi++]
+        ids.forEach((x) => prefetched.current.add(x))
         active += 1
+        fetch(`/api/bank/${bankId}/review-batch?ids=${ids.join(',')}`)
+          .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('batch'))))
+          .then((buf) => {
+            const got = {}
+            const dv = new DataView(buf)
+            let off = 0
+            while (off + 8 <= buf.byteLength) {
+              const iid = dv.getUint32(off); off += 4
+              const len = dv.getUint32(off); off += 4
+              if (off + len > buf.byteLength) break
+              got[iid] = URL.createObjectURL(
+                new Blob([new Uint8Array(buf, off, len)], { type: 'image/webp' }))
+              off += len
+            }
+            if (Object.keys(got).length) setBlobUrls((prev) => ({ ...prev, ...got }))
+          })
+          .catch(() => { /* leave that image for the on-demand fallback */ })
+          .finally(() => { active -= 1; pump() })
       }
     }
     pump()
@@ -306,7 +325,8 @@ export default function BankReviewLightbox({
               previous shot under the new one's buttons. */}
           {/* ?r= busts the browser cache after a turn — the bytes at this URL
               change while the URL itself does not. */}
-          <img key={id} src={`/api/bank/${bankId}/review-file/${id}${img?.rotation ? `?r=${img.rotation}` : ''}`}
+          <img key={id}
+            src={blobUrls[id] || `/api/bank/${bankId}/review-file/${id}${img?.rotation ? `?r=${img.rotation}` : ''}`}
             alt={img?.name || `Bank image ${id}`}
             className="max-h-full max-w-full select-none object-contain" />
         </div>
