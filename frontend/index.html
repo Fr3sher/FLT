@@ -15,7 +15,9 @@
       #boot-splash{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;background:#09090b;color:#a1a1aa;font-family:Inter,system-ui,sans-serif;z-index:9999}
       /* GPU-composited spinner (translateZ) so it keeps turning even while the
          main thread parses the large JS bundle on a slow link. */
-      #boot-spinner{width:44px;height:44px;border-radius:50%;border:4px solid #27272a;border-top-color:#818cf8;animation:bootspin .8s linear infinite;will-change:transform;transform:translateZ(0)}
+      /* Two-tone ring + glow so rotation is unmistakable; JS (requestAnimationFrame)
+         drives the spin so it turns even under prefers-reduced-motion. */
+      #boot-spinner{width:48px;height:48px;border-radius:50%;border:5px solid #1e293b;border-top-color:#818cf8;border-right-color:#6366f1;box-shadow:0 0 20px rgba(99,102,241,.35);will-change:transform}
       @keyframes bootspin{to{transform:rotate(360deg)}}
       /* Progress track. Indeterminate sweep until real download progress is known,
          then .boot-determinate switches to an honest, width-driven fill. */
@@ -36,6 +38,24 @@
         <p id="boot-label">Loading FLT… <span id="boot-pct" aria-hidden="true"></span></p>
       </div>
     </div>
+    <script>
+      /* Drive the boot spinner with requestAnimationFrame so it always turns,
+         even under prefers-reduced-motion or if CSS animations are disabled.
+         A loading indicator must show life. Stops once React replaces the splash. */
+      (function () {
+        var sp = document.getElementById('boot-spinner');
+        if (!sp) return;
+        var t0 = null;
+        function spin(t) {
+          if (!document.getElementById('boot-splash')) return;
+          if (t0 === null) t0 = t;
+          var deg = ((t - t0) * 0.36) % 360; // 360deg/s ≈ 1 full turn per second
+          sp.style.transform = 'rotate(' + deg + 'deg)';
+          requestAnimationFrame(spin);
+        }
+        requestAnimationFrame(spin);
+      })();
+    </script>
     <script>
       /* Real boot progress: fill the bar as the page's actual critical assets
          (CSS, module script, modulepreloads) finish downloading, read from
