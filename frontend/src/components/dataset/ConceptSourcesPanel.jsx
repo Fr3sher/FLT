@@ -271,6 +271,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
       .filter((it) => !broken.has(it.url))
       .map((it) => it.thumbnail || it.url);
     if (faceRefs.size === 0 || candidates.length === 0 || faceFilterBusy) return;
+    setPickingRef(false);
     setFaceFilterBusy(true);
     try {
       const d = await postJson('/api/scrape/face-filter',
@@ -309,11 +310,11 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
       );
       setSuggested(good);
       setFaceRefs(good);
-      setPickingRef(false);
+      setPickingRef(true);
       if (good.size === 0) {
         toast.info('No clearly usable faces found — try a clearer set of photos.');
       } else {
-        toast.success(`Suggested ${good.size} reference photos — add/remove, then Keep matches.`);
+        toast.success(`Suggested ${good.size} reference photos. Click any tile to add or remove, then press “Done picking refs”.`);
       }
     } catch { toast.error('Face suggestion failed.'); }
     finally { setSuggestBestBusy(false); }
@@ -665,6 +666,13 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
               className="px-2 py-0.5 rounded border border-border hover:text-content disabled:opacity-40">
               {suggestBestBusy ? 'Finding…' : '✨ Suggest best refs'}
             </button>
+            {pickingRef && (
+              <button type="button" onClick={() => setPickingRef(false)}
+                title="Stop adding/removing references and go back to normal selection"
+                className="px-2 py-0.5 rounded border border-indigo-400 bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25">
+                ✓ Done picking refs
+              </button>
+            )}
             {faceRefs.size > 0 && (
               <>
                 <span className="text-xs text-content-subtle tabular-nums" title="Reference photos selected">
@@ -716,6 +724,13 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
             </a>
           )}
 
+          {pickingRef && (
+            <p className="rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-1.5 text-[0.6875rem] text-indigo-200">
+              Click photos to {faceRefs.size > 0 ? 'add or remove' : 'choose'} references — a <b>REF</b> badge marks each
+              reference. When the set looks right, press <b>Done picking refs</b>.
+            </p>
+          )}
+
           <div className="grid gap-1.5 overflow-y-auto max-h-[34rem] pr-1"
             style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${tile}px, 1fr))` }}>
             {liveItems.map((it) => {
@@ -734,8 +749,9 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                     aria-pressed={on}
                     aria-label={`${on ? 'Deselect' : 'Select'} ${imageLabel}`}
                     title={imageLabel}
-                    className={`relative aspect-square w-full rounded-lg overflow-hidden border-2 transition-all
-                      ${on ? 'border-indigo-400' : 'border-transparent hover:border-border-strong'}`}>
+                    className={`relative aspect-square w-full rounded-lg overflow-hidden transition-all
+                      ${on ? 'border-2 border-indigo-400' : 'border-2 border-transparent hover:border-border-strong'}
+                      ${faceRefs.has(it.thumbnail || it.url) ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-zinc-950' : ''}`}>
                     <img src={thumbFor(it)} alt="" loading="lazy" onError={() => markBroken(it.url)}
                       className="w-full h-full object-cover" />
                     <span aria-hidden
