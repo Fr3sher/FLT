@@ -276,8 +276,14 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
       const d = await postJson('/api/scrape/face-filter',
         { reference_urls: [...faceRefs], urls: candidates, threshold: faceThreshold });
       if (!d || !d.results) { toast.error('Face filter failed.'); return; }
+      // The backend keys results by the candidate URL we sent (thumbnail || page),
+      // but grid selection + import use the item's page URL. Map matches back so
+      // the kept photos actually light up for review before importing.
       const keep = new Set();
-      for (const [u, r] of Object.entries(d.results)) if (r.match) keep.add(u);
+      for (const it of items) {
+        const key = it.thumbnail || it.url;
+        if (d.results[key]?.match) keep.add(it.url);
+      }
       setSelected(keep);
       if (keep.size === 0) {
         toast.info('No photos matched — pick clearer references or lower the threshold.');

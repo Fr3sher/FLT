@@ -37,3 +37,14 @@ test('a hard-cap truncation shows the calm message, distinct from the generic on
   assert.match(source, /Stopped at the built-in scan limit/);
   assert.match(source, /some images may be missing/);
 });
+
+test('face-filter matches are re-keyed to the page URL so they light up for review', () => {
+  // The backend keys results by the candidate URL we sent (thumbnail || page),
+  // but grid selection and import read `selected` by the item's page URL. If we
+  // add the candidate key directly, nothing shows as selected and import is empty.
+  assert.match(source, /const key = it\.thumbnail \|\| it\.url;/);
+  assert.match(source, /if \(d\.results\[key\]\?\.match\) keep\.add\(it\.url\);/);
+  // the pre-fix behaviour (adding the candidate key straight to `selected`)
+  assert.doesNotMatch(source,
+    /for \(const \[u, r\] of Object\.entries\(d\.results\)\) if \(r\.match\) keep\.add\(u\);/);
+});
