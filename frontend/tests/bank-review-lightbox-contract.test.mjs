@@ -79,6 +79,12 @@ test('the lightbox renders the full-resolution image as a cached WebP, never the
   assert.doesNotMatch(lightbox, /\/api\/bank\/\$\{bankId\}\/file\/\$\{id\}/)
 })
 
+test('the review prefetches the whole set, throttled, so navigation is instant', () => {
+  assert.match(lightbox, /\(session\.order \|\| \[\]\)\.filter\(\(x\) => !prefetched\.current\.has\(x\)\)/)
+  assert.match(lightbox, /CONCURRENCY = 3/)
+  assert.match(lightbox, /new Image\(\)/)
+})
+
 test('the end-of-pool state is explicit and closable', () => {
   assert.match(lightbox, /All \{p\.total\.toLocaleString\(\)\} image/)
   assert.match(lightbox, /Back to the grid/)

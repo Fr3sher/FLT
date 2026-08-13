@@ -117,6 +117,8 @@ export default function BankReviewLightbox({
   const [maskId, setMaskId] = useState(null)
   const dialogRef = useRef(null)
   const requested = useRef(new Set())
+  // ids whose image BYTES we've already asked for (prefetch), so we never re-hit them
+  const prefetched = useRef(new Set())
 
   // Hand the trap over while the mask editor is open — two live traps fight over
   // the focus and the editor's own controls become unreachable.
@@ -144,6 +146,31 @@ export default function BankReviewLightbox({
       }))
       .catch(() => { /* facts are an aid, not a gate — the image still shows */ })
   }, [bankId, id, session.order, session.pos, meta])
+
+  // Prefetch the WHOLE review set's image bytes in the background (throttled, in
+  // order) so advancing through the one-by-one review is instant over a slow link:
+  // each WebP is both encoded and downloaded before the cursor reaches it, and the
+  // 7-day cache makes the later <img> a cache hit. Runs once per review set; the
+  // server derives rotation/cleaning from the row so the clean URL is right for
+  // every image.
+  useEffect(() => {
+    const remaining = (session.order || []).filter((x) => !prefetched.current.has(x))
+    if (!remaining.length) return
+    let i = 0
+    let active = 0
+    const CONCURRENCY = 3   // enough to keep ahead without slamming a slow link or the encoder
+    const pump = () => {
+      while (i < remaining.length && active < CONCURRENCY) {
+        const id = remaining[i++]
+        prefetched.current.add(id)
+        const u = new Image()
+        u.onload = u.onerror = () => { active -= 1; pump() }
+        u.src = `/api/bank/${bankId}/review-file/${id}`
+        active += 1
+      }
+    }
+    pump()
+  }, [bankId, session.order])
 
   const sendDecision = useCallback(async (status) => {
     const target = currentId(session)
