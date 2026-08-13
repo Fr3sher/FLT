@@ -6331,6 +6331,102 @@ _SEMANTIC_SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'bank_semantic_infer.py')
 _SEMANTIC_PROGRESS_RE = re.compile(r'\[semantic\] (\d+)/(\d+)')
 
 
+def _match_person_job(bank_id, ref_id, threshold):
+    """Score every non-rejected bank image against ONE reference face and
+    auto-decide it: matches → keep, no face / different person → reject.
+
+    Reuses the same insightface identity matcher as the scrape face filter
+    (score_faces lenient=True) so a small/posed face is still scored. Only
+    'pending' rows are flipped — a manual keep/reject is never overridden.
+    The reference itself is the anchor and is kept."""
+    def run(job):
+        import os as _os
+        from .face_similarity import score_faces
+        bank = db.session.get(ImageBank, bank_id)
+        if not bank:
+            bank_jobs.fail(job, 'bank not found')
+            return
+        ref = db.session.get(BankImage, ref_id)
+        if ref is None or ref.bank_id != bank_id:
+            bank_jobs.fail(job, 'reference image not found in this bank')
+            return
+        ref_path = analysis_image_path(bank, ref)
+        if not ref_path or not _os.path.isfile(ref_path):
+            bank_jobs.fail(job, 'reference image is missing on disk')
+            return
+        rows = (BankImage.query.filter_by(bank_id=bank_id)
+                .filter(BankImage.status != 'reject', BankImage.id != ref_id)
+                .order_by(BankImage.id.asc()).all())
+        by_id, paths = {}, []
+        for r in rows:
+            p = analysis_image_path(bank, r)
+            if p and _os.path.isfile(p) and p not in by_id:
+                by_id[p] = r.id
+                paths.append(p)
+        bank_jobs.progress(job, done=0, total=len(paths),
+                           detail='matching faces to the reference')
+        if not paths:
+            bank_jobs.progress(job, detail='no candidates to match')
+            return
+        _release_db_before_inference()
+        try:
+            results, err = score_faces([ref_path], paths, lenient=True)
+        except Exception as e:
+            bank_jobs.fail(job, f'face matching failed: {e}')
+            return
+        if err:
+            bank_jobs.fail(job, err.get('detail') or 'face matching failed')
+            return
+        if ref.status == 'pending':
+            ref.status = 'keep'
+        keeps = no_face = different = 0
+        for p, r in (results or {}).items():
+            image_id = by_id.get(p)
+            if not image_id:
+                continue
+            row = db.session.get(BankImage, image_id)
+            if row is None or row.status != 'pending':
+                continue
+            sim = r.get('sim')
+            state = r.get('state')
+            if sim is not None and sim >= threshold:
+                row.status = 'keep'
+                keeps += 1
+            else:
+                reason = ('no_face' if state in ('no_face', 'unreadable', 'error')
+                          else 'different_person')
+                row.status, row.reject_reason = 'reject', reason
+                if reason == 'no_face':
+                    no_face += 1
+                else:
+                    different += 1
+        db.session.commit()
+        bank_jobs.progress(job, done=len(paths), total=len(paths),
+                           detail=f'done — {keeps} kept, {no_face} no face, '
+                                  f'{different} different person')
+    return run
+
+
+def start_match_person(app, user_id, bank_id, ref_id, threshold=0.5):
+    """Launch the 'keep only the target person' pass. ``ref_id`` is a bank image
+    used as the identity anchor; every other non-rejected image is matched to it
+    and auto-rejected when the target is absent (no face) or the face is a
+    different person. Only 'pending' rows are decided. Raises BankJobBusy when a
+    job is already live, ValueError when the bank or reference is unknown."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    ref = db.session.get(BankImage, int(ref_id))
+    if ref is None or ref.bank_id != bank_id:
+        raise ValueError('reference image not found in this bank')
+    total = (BankImage.query.filter_by(bank_id=bank_id)
+             .filter(BankImage.status != 'reject', BankImage.id != int(ref_id))
+             .count())
+    return bank_jobs.start(app, bank_id, 'match_person',
+                           _match_person_job(bank_id, int(ref_id), float(threshold)),
+                           total=total)
+
+
 def start_semantic_index(app, user_id, bank_id, rescan=False):
     """Build/resume the selected image space; CLIP delegates to Score exactly."""
     from ..capabilities import probe_bank_siglip2

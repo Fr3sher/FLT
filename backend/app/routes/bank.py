@@ -448,6 +448,24 @@ def bank_faces(bank_id):
     return _start(banks.start_faces, _app(), LOCAL_USER, bank_id)
 
 
+@bp.post('/bank/<int:bank_id>/match-person')
+def bank_match_person(bank_id):
+    """'Keep only the target person': score every non-rejected image against one
+    reference face ({ref_id}) and auto-decide it — matches → keep, no face /
+    different person → reject. Only 'pending' rows are decided. 202/409/503."""
+    data = request.get_json(silent=True) or {}
+    try:
+        ref_id = int(data.get('ref_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'ref_id (a bank image id) is required'}), 400
+    try:
+        threshold = float(data.get('threshold', 0.5))
+    except (TypeError, ValueError):
+        threshold = 0.5
+    return _start(banks.start_match_person, _app(), LOCAL_USER, bank_id,
+                  ref_id=ref_id, threshold=threshold)
+
+
 @bp.post('/bank/<int:bank_id>/score')
 def bank_score(bank_id):
     """Aesthetic + NSFW + style scoring pass (bank-scoring extra). 202/409/503.

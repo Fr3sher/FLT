@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-13-bank-keep-this-person',
+    date: '2026-08-13',
+    title: 'Auto-shrink a bank to just one person',
+    blurb:
+      'Select one clear face shot in the bank and hit “Keep this person”: FLT scores every image against it and auto-rejects the shots with no face or a different person, leaving you a clean reference set to review instead of hundreds to triage by hand.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-13-loading-progress',
     date: '2026-08-13',
     title: 'A live progress bar while FLT loads',

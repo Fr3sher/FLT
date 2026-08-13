@@ -284,6 +284,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [balanceResult, setBalanceResult] = useState(null)
   const [similarN, setSimilarN] = useState(60)
   const [similarBusy, setSimilarBusy] = useState(false)
+  // 🎯 Keep this person — auto-decide the bank against one reference face.
+  const [matchPersonBusy, setMatchPersonBusy] = useState(false)
+  const [matchThreshold, setMatchThreshold] = useState(0.5)
   // 🔤 Text search. `textStatus` is the BEFORE-the-click truth (available? model
   // already warm? would it download?), `textResult` the AFTER-the-click one that
   // keeps the ranking legible once the grid has switched to it.
@@ -1278,6 +1281,29 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     }
   }
 
+  // 🎯 Keep this person — score the whole bank against ONE selected reference face
+  // (insightface identity, not the semantic index) and auto-decide: matches are
+  // kept, no-face and different-person shots are auto-rejected. Only 'pending'
+  // rows are decided. The bank's poll refreshes the grid when the pass finishes.
+  const keepThisPerson = async () => {
+    const ref = [...selected][0]
+    if (ref == null || matchPersonBusy) return
+    setMatchPersonBusy(true)
+    try {
+      const d = await postJson(`/api/bank/${bankId}/match-person`,
+        { ref_id: ref, threshold: matchThreshold })
+      if (d?.ok) {
+        toast.success('Matching the bank to that person — non-matches auto-rejected, grid refreshes when done.')
+      } else {
+        toast.error(d?.error || 'Match pass failed to start.')
+      }
+    } catch (e) {
+      toast.error(e?.message || 'Match pass failed.')
+    } finally {
+      setMatchPersonBusy(false)
+    }
+  }
+
   // 🔤 Text search — same engine as 🎯 Similar, with the reference vector coming
   // from words instead of a picture. Opening the panel asks the backend what it
   // is about to cost (model warm? weights present?) so a slow FIRST search is
@@ -2161,6 +2187,40 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   <button type="button" onClick={findSimilar} disabled={similarBusy}
                     className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
                     {similarBusy ? 'Ranking…' : `Select ${similarN} most similar`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="relative">
+            <button type="button"
+              disabled={live || selected.size !== 1 || matchPersonBusy}
+              onClick={() => setCurateOpen((v) => (v === 'match' ? null : 'match'))}
+              aria-expanded={curateOpen === 'match'}
+              title={selected.size === 1
+                ? 'Auto-decide the whole bank against this one selected face: matches are kept; no-face and different-person shots are auto-rejected.'
+                : 'Select exactly one Liza face to use as the reference'}
+              className={CURATE_BTN}>
+              🎯 Keep this person{matchPersonBusy && ' (matching…)'}
+            </button>
+            {curateOpen === 'match' && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
+                <div className="absolute z-50 mt-1 w-72 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2">
+                  <p className="text-xs text-content-muted">
+                    Scores every non-rejected image against your one selected face (InsightFace identity — not the
+                    semantic index) and auto-decides: matches are kept; no-face and different-person shots are
+                    auto-rejected. Only 'pending' images are touched; your manual keep/reject is never overridden.
+                  </p>
+                  <label className="flex items-center gap-2 text-sm text-content">
+                    Similarity ≥
+                    <input type="number" min={0.2} max={0.9} step={0.05} value={matchThreshold}
+                      onChange={(e) => setMatchThreshold(Math.max(0.2, Math.min(0.9, Number(e.target.value) || 0.5)))}
+                      className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
+                  </label>
+                  <button type="button" onClick={keepThisPerson} disabled={matchPersonBusy}
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
+                    {matchPersonBusy ? 'Matching…' : 'Auto-decide the bank'}
                   </button>
                 </div>
               </>
