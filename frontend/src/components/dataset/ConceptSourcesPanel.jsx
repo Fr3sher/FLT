@@ -13,6 +13,7 @@
  */
 import { useState, useCallback, useEffect } from 'react';
 import { useToast } from '../common/Toast';
+import useBatchThumbs from '../../hooks/useBatchThumbs';
 import { postJson } from '../../hooks/useDataset';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import InstallRunner from '../setup/InstallRunner';
@@ -138,6 +139,14 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   // URLs whose thumbnail failed to load (dead/expired source links). Hidden from
   // the grid so you only ever see & pick live images — dead galleries are common.
   const [broken, setBroken] = useState(() => new Set());
+  // Batch-prefetch the scraped thumbnails so a high-RTT link pays one round
+  // trip per batch, not one per tile (see useBatchThumbs). `items` (not the
+  // render-time `liveItems` filter) so the hook lives at top level; broken
+  // sources simply produce no blob and fall back to the on-demand <img>.
+  const { getBlobUrl: getScrapeThumb } = useBatchThumbs(
+    items.map((it) => it.thumbnail || it.url),
+    (urls) => ({ url: '/api/scrape/thumbs', body: JSON.stringify({ urls }) }),
+  );
   // Face filter (auto-select this person): pick one result as the reference,
   // score the rest against it, keep only matches.
   const [faceRefs, setFaceRefs] = useState(() => new Set());
@@ -752,7 +761,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                     className={`relative aspect-square w-full rounded-lg overflow-hidden transition-all
                       ${on ? 'border-2 border-indigo-400' : 'border-2 border-transparent hover:border-border-strong'}
                       ${faceRefs.has(it.thumbnail || it.url) ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-zinc-950' : ''}`}>
-                    <img src={thumbFor(it)} alt="" loading="lazy" onError={() => markBroken(it.url)}
+                    <img src={getScrapeThumb(it.thumbnail || it.url) || thumbFor(it)} alt="" loading="lazy" onError={() => markBroken(it.url)}
                       className="w-full h-full object-cover" />
                     <span aria-hidden
                       className={`absolute top-1 right-1 w-4 h-4 rounded-full text-[0.625rem] leading-4 text-center font-bold

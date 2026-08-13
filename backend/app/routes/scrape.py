@@ -17,6 +17,7 @@ from io import BytesIO
 from pathlib import Path
 import hashlib
 import os
+import struct
 import tempfile
 import threading
 from time import time
@@ -289,6 +290,71 @@ def scrape_thumb():
         'Content-Disposition': 'inline; filename="thumb"',
         'Content-Security-Policy': "default-src 'none'; sandbox",
     })
+
+
+@bp.post('/scrape/thumbs')
+def scrape_thumbs_batch():
+    """Thumbnail proxy for MANY URLs in ONE response so a high-RTT link isn't
+    charged a round trip per tile. Same per-URL machinery as `scrape_thumb`
+    (cached resized webp via _resized_thumb_bytes, upstream semaphore, SSRF
+    guard); body is the shared index-keyed binary container [u32 position]
+    [u32 length][bytes]. Already-cached thumbs are returned with no upstream
+    hit; failures are simply skipped."""
+    data = request.get_json(silent=True) or {}
+    urls = [str(u).strip() for u in (data.get('urls') or []) if str(u).strip()]
+    if not urls:
+        return jsonify({'error': 'urls required'}), 400
+    try:
+        from curl_cffi import requests as cf_requests
+    except ImportError:
+        return jsonify({'error': 'curl_cffi unavailable'}), 503
+    out = bytearray()
+    for pos, url in enumerate(urls):
+        ok, _ = _validate_public_http_url(url)
+        if not ok:
+            continue
+        cache = _thumb_cache_path(url)
+        try:
+            if cache.is_file() and time() - cache.stat().st_mtime < _THUMB_CACHE_TTL:
+                out += struct.pack('>II', pos, len(cache.read_bytes()))
+                out += cache.read_bytes()
+                continue
+        except Exception:
+            pass
+        if _is_failed(url):
+            continue
+        host = urlparse(url).hostname or ''
+        try:
+            with _UPSTREAM_SEMAPHORE:
+                r = cf_requests.get(url, impersonate='chrome', timeout=_UPSTREAM_TIMEOUT,
+                                    stream=True, allow_redirects=False,
+                                    headers={'Referer': f'https://{host}/', 'Accept': 'image/*,*/*'})
+        except Exception:
+            _mark_failed(url)
+            continue
+        try:
+            if r.status_code != 200 or (r.headers.get('content-type') or '').split(';')[0].strip().lower() not in _ALLOWED_THUMB_TYPES:
+                try: r.close()
+                except Exception: pass
+                _mark_failed(url)
+                continue
+            data = bytearray()
+            for chunk in r.iter_content(8192):
+                if not chunk:
+                    continue
+                data += chunk
+                if len(data) > MAX_THUMB_BYTES:
+                    break
+        finally:
+            try: r.close()
+            except Exception: pass
+        resized, _ = _resized_thumb_bytes(url, bytes(data))
+        payload = resized if resized is not None else bytes(data)
+        out += struct.pack('>II', pos, len(payload))
+        out += payload
+    return Response(bytes(out), mimetype='application/octet-stream',
+                    headers={'Cache-Control': 'public, max-age=86400',
+                             'X-Content-Type-Options': 'nosniff'})
 
 
 # --------------------------------------------------------------------------- #

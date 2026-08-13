@@ -9,9 +9,10 @@ import contextlib
 import logging
 import os
 import tempfile
+import struct
 import uuid
 
-from flask import Blueprint, request, jsonify, send_file, send_from_directory, current_app
+from flask import Blueprint, request, jsonify, send_file, send_from_directory, current_app, Response
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import safe_join
 
@@ -1927,6 +1928,36 @@ def dataset_image_thumb(dataset_id, filename):
         return send_from_directory(folder, filename)
     return send_file(thumb, mimetype='image/webp', max_age=0,
                      conditional=True)
+
+
+@bp.post('/dataset/<int:dataset_id>/thumbs')
+def dataset_thumbs_batch(dataset_id):
+    """Grid thumbnails for MANY dataset images in ONE response (one round trip
+    per batch on a high-RTT link, not one per tile). Same cached tile WebPs as
+    `dataset_image_thumb`; body is the shared index-keyed binary container:
+    [u32 position][u32 length][webp bytes], rows with no cached thumb skipped.
+    `?s=` hints the tile side exactly as the single route's ladder."""
+    data = request.get_json(silent=True) or {}
+    files = [str(f) for f in (data.get('files') or []) if str(f)]
+    if not files:
+        return jsonify({'error': 'files required'}), 400
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    folder = dataset_path(dataset_id)
+    side = dataset_thumbs.clamp_thumb_side(request.args.get('s'))
+    out = bytearray()
+    for pos, filename in enumerate(files):
+        src = safe_join(folder, filename)
+        thumb = (dataset_thumbs.ensure_thumb(dataset_id, src, filename, side)
+                 if src else None)
+        if thumb is None or not os.path.isfile(thumb):
+            continue
+        d = thumb.read_bytes()
+        out += struct.pack('>II', pos, len(d))
+        out += d
+    return Response(bytes(out), mimetype='application/octet-stream',
+                    headers={'Cache-Control': 'public, max-age=604800',
+                             'X-Content-Type-Options': 'nosniff'})
 
 
 # ---------------------------------------------------------------------------

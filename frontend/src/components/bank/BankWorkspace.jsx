@@ -3,6 +3,7 @@ import { apiFetch, del, patchJson, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import { useCapabilities } from '../../context/CapabilitiesContext'
 import { useConnectionStatus } from '../../hooks/useConnectionStatus'
+import useBatchThumbs from '../../hooks/useBatchThumbs'
 import DupGroupsPanel from './DupGroupsPanel'
 // ── The pieces this screen used to define inline ────────────────────────────
 // Split out by the Encre redesign: the top bar, the filter rail, the passes
@@ -204,6 +205,15 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [preflight, setPreflight] = useState(null)
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState({ images: [], total: 0 })
+  // Batch-prefetch the current page's grid thumbnails so a high-RTT link pays
+  // one round trip per batch, not one per tile (see useBatchThumbs).
+  const { getBlobUrl: getThumb } = useBatchThumbs(
+    page.images.map((img) => img.id),
+    (ids) => ({ url: `/api/bank/${bankId}/thumbs`, body: JSON.stringify({ ids }) }),
+    // A rotation re-materialises the thumb bytes server-side, so let the grid
+    // know to refetch that page instead of showing the pre-turn orientation.
+    { rev: page.images.map((img) => img.rotation || 0).join(',') },
+  )
   const [selected, setSelected] = useState(() => new Set())
   const [promoteOpen, setPromoteOpen] = useState(false)
   const [deleteRejectedOpen, setDeleteRejectedOpen] = useState(false)
@@ -2429,6 +2439,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               : 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8'}`}>
               {page.images.map((img) => (
                 <Tile key={img.id} img={img} bankId={bankId} size={tileSize}
+                  thumbSrc={getThumb(img.id)}
                   selected={selected.has(img.id)}
                   onReview={() => openReview(img.id)}
                   onTags={() => openTagPicker(img)}

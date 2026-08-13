@@ -1209,6 +1209,36 @@ def bank_thumb(bank_id, image_id):
     return send_file(tpath, mimetype='image/webp', max_age=3600)
 
 
+@bp.post('/bank/<int:bank_id>/thumbs')
+def bank_thumbs_batch(bank_id):
+    """Grid thumbnails for MANY images in ONE response, so a high-RTT link pays
+    one round trip per batch instead of one per tile. Same bytes as the single
+    `bank_thumb` (tile-size cached WebP via ensure_thumb); body is the shared
+    index-keyed binary container: [u32 position][u32 length][webp bytes] in the
+    order the caller asked, unreadable/missing rows simply skipped."""
+    data = request.get_json(silent=True) or {}
+    ids = [int(x) for x in (data.get('ids') or []) if str(x).isdigit()]
+    if not ids:
+        return jsonify({'error': 'ids required'}), 400
+    bank = banks.get_bank(LOCAL_USER, bank_id)
+    if not bank:
+        return jsonify({'error': 'not found'}), 404
+    out = bytearray()
+    for pos, iid in enumerate(ids):
+        row = BankImage.query.filter_by(id=iid, bank_id=bank_id).first()
+        if row is None:
+            continue
+        tpath = banks.ensure_thumb(bank, row)
+        if not tpath or not os.path.isfile(tpath):
+            continue
+        data = tpath.read_bytes()
+        out += struct.pack('>II', pos, len(data))
+        out += data
+    return Response(bytes(out), mimetype='application/octet-stream',
+                    headers={'Cache-Control': 'public, max-age=604800',
+                             'X-Content-Type-Options': 'nosniff'})
+
+
 @bp.get('/bank/<int:bank_id>/review-file/<int:image_id>')
 def bank_review_file(bank_id, image_id):
     """The ▶ Review lightbox image: a cached mid-size WebP (REVIEW_MAX_SIDE),

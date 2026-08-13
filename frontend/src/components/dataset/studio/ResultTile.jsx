@@ -6,7 +6,7 @@
  *
  * La clé `key={cell.id}` est posée par le PARENT (ResultCell) lors du `.map`.
  */
-export default function ResultTile({ cell, row, strength, variant, datasetId, onRate, onOpen, fmt }) {
+export default function ResultTile({ cell, row, strength, variant, datasetId, thumbUrlFor, onRate, onOpen, fmt }) {
   const isGenerating = cell.queue_status === 'generating';
   // Current rows remain `pending` while their queue is stalled so Cancel/Resume
   // continues to target the same run. Accept `status: stalled` too: older or
@@ -63,7 +63,7 @@ export default function ResultTile({ cell, row, strength, variant, datasetId, on
               × strength × seed matrix), so it is also the one where fetching
               full-size PNGs cost the most; the lightbox this tile opens still
               gets the file. */}
-          <img src={`/api/dataset/${datasetId}/thumb/${encodeURIComponent(cell.filename)}?s=256`}
+          <img src={thumbUrlFor?.(cell.filename) || `/api/dataset/${datasetId}/thumb/${encodeURIComponent(cell.filename)}?s=256`}
             alt={`${row.label} strength ${fmt(strength)} ${variant.aspect || ''} seed ${cell.seed}`}
             loading="lazy" decoding="async"
             className="w-20 h-28 object-cover rounded-md border border-border" />
