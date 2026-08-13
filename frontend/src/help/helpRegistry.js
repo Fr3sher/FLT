@@ -1736,7 +1736,7 @@ const TOPICS = [
       text: 'New: if your card is bigger than 24 GB you can switch quantisation and low-VRAM streaming off (Advanced options → Memory saving) for a faster, more precise run.' } },
   // server
   setting('server.port', 'server', 'server-port', 'Server port',
-    ['server', 'port', 'bind', 'network', '5050']),
+    ['server', 'port', 'bind', 'network', '5051']),
   setting('server.lan', 'server', 'server-lan', 'Available on the local network',
     ['lan', 'network', 'remote', 'phone', 'wifi', 'host', 'bind']),
   setting('server.require_token', 'server', 'server-require-token', 'Require an access token',

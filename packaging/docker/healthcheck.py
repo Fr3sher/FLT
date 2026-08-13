@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 
 TARGETS = (
-    ('studio', f"http://127.0.0.1:{os.environ.get('LDS_PORT', '5050')}/api/health"),
+    ('studio', f"http://127.0.0.1:{os.environ.get('LDS_PORT', '5051')}/api/health"),
     ('comfyui', 'http://127.0.0.1:8188/system_stats'),
 )
 

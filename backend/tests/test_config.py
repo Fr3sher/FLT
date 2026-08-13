@@ -28,7 +28,7 @@ def _fresh(monkeypatch, tmp_path):
 
 def test_defaults_when_no_file(tmp_path, monkeypatch):
     config = _fresh(monkeypatch, tmp_path)
-    assert config.get('server.port') == 5050
+    assert config.get('server.port') == 5051
     assert config.get('engines.default') == 'chatgpt'
     assert config.is_configured() is False
 
@@ -36,7 +36,7 @@ def test_save_and_reload_deep_merge(tmp_path, monkeypatch):
     config = _fresh(monkeypatch, tmp_path)
     config.save_config({'comfyui': {'api_url': 'http://10.0.0.2:8188'}})
     assert config.get('comfyui.api_url') == 'http://10.0.0.2:8188'
-    assert config.get('server.port') == 5050          # untouched default survives
+    assert config.get('server.port') == 5051          # untouched default survives
     assert config.is_configured() is True
     on_disk = json.loads((tmp_path / 'config.json').read_text(encoding='utf-8'))
     assert on_disk['comfyui']['api_url'] == 'http://10.0.0.2:8188'
@@ -126,7 +126,7 @@ def test_load_config_returns_defensive_copy(tmp_path, monkeypatch):
     config = _fresh(monkeypatch, tmp_path)
     cfg = config.load_config()
     cfg['server']['port'] = 9999          # caller mutation must not corrupt the cache
-    assert config.get('server.port') == 5050
+    assert config.get('server.port') == 5051
 
 
 def test_legacy_krea_default_pair_migrates_on_read_and_persists_on_next_save(tmp_path, monkeypatch):

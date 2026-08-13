@@ -250,7 +250,7 @@ test('the accessible name names the field AND the value it would write', () => {
   // It STARTS with the visible text verbatim (WCAG 2.5.3 label-in-name: a voice
   // user says what they can read), then disambiguates among a dozen identical
   // buttons on one page.
-  for (const [label, def] of [['Steps', 4], ['Port', 5050], ['Enabled engines', ['a', 'b']]]) {
+  for (const [label, def] of [['Steps', 4], ['Port', 5051], ['Enabled engines', ['a', 'b']]]) {
     assert.ok(resetAriaLabel(label, def).startsWith(RESET_TO_DEFAULT_TEXT));
   }
 });

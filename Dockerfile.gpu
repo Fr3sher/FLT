@@ -93,11 +93,11 @@ RUN install -D -m 755 packaging/docker/studio_launch.sh \
 ENV LDS_DATA_DIR=/data \
     LDS_CONFIG=/data/config.json \
     LDS_HOST=0.0.0.0 \
-    LDS_PORT=5050 \
+    LDS_PORT=5051 \
     LDS_RUNTIME=docker-gpu \
     LDS_RESTART_MODE=supervisor \
     LDS_BIND_MANAGED=1
-EXPOSE 5050
+EXPOSE 5051
 EXPOSE 8188
 # Long start period on purpose: the first boot creates ComfyUI's venv and installs
 # torch, which on a cold cache takes many minutes. A shorter one would only produce

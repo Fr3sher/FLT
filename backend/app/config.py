@@ -52,13 +52,14 @@ _V3_KREA_STEPS = 8
 DEFAULTS = {
     # host: '127.0.0.1' = this machine only ; '0.0.0.0' = reachable from the LAN
     # (phone, tablet, another PC) — the Settings "Server" card's LAN toggle just
-    # flips this. Port defaults to 5050 to match start.bat's default bind (so the
+    # flips this. Port defaults to 5051 to match the Docker/Caddy runtime (Caddy owns
+    # 5050 on the host; the backend must sit on 5051).
     # Settings port field shows what's actually running, not a phantom mismatch).
     # require_token (default OFF): a home LAN is trusted, so LAN access is open by
     # default — no token to type on a phone. Turn it ON to demand a token from
     # remote devices (access_token is then generated + persisted here so it
     # survives restarts and is copyable from Settings). Loopback never needs it.
-    'server': {'host': '127.0.0.1', 'port': 5050, 'require_token': False, 'access_token': ''},
+    'server': {'host': '127.0.0.1', 'port': 5051, 'require_token': False, 'access_token': ''},
     # Every path here means "'' = the default under DATA_DIR". Storing the
     # resolved path instead would freeze today's disk into config.json and make
     # a later DATA_DIR move silently wrong, so blank stays blank.

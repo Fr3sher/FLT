@@ -19,9 +19,9 @@ test('managed access uses the browser origin instead of container addresses', ()
     bindManaged: true,
     browserOrigin: 'http://studio-host.local:8080',
     configHost: '0.0.0.0',
-    configPort: 5050,
+    configPort: 5051,
     runtimeLanIp: '172.19.0.2',
-    runtimePort: 5050,
+    runtimePort: 5051,
   })
 
   assert.deepEqual(access, {
@@ -47,7 +47,7 @@ test('managed loopback origins never claim LAN availability', () => {
       bindManaged: true,
       browserOrigin: origin,
       configHost: '0.0.0.0',
-      configPort: 5050,
+      configPort: 5051,
       runtimeLanIp: '172.19.0.2',
     })
 
@@ -62,7 +62,7 @@ test('managed mapped non-loopback IPv4 origins remain network addresses', () => 
     bindManaged: true,
     browserOrigin: 'http://[::ffff:192.168.1.10]:8080',
     configHost: '0.0.0.0',
-    configPort: 5050,
+    configPort: 5051,
     runtimeLanIp: '172.19.0.2',
   })
 
@@ -80,9 +80,9 @@ test('loopback classification does not rewrite the browser origin used for links
 test('managed loopback keeps token controls available without offering a QR link', () => {
   const access = resolveServerAccess({
     bindManaged: true,
-    browserOrigin: 'http://127.0.0.1:5050',
+    browserOrigin: 'http://127.0.0.1:5051',
     configHost: '0.0.0.0',
-    configPort: 5050,
+    configPort: 5051,
     runtimeLanIp: '172.19.0.2',
   })
 
@@ -102,7 +102,7 @@ test('managed browser-origin fallback is safe when no HTTP origin exists', () =>
     bindManaged: true,
     browserOrigin: null,
     configHost: '0.0.0.0',
-    configPort: 5050,
+    configPort: 5051,
     runtimeLanIp: '172.19.0.2',
   }), {
     origin: null,
@@ -118,12 +118,12 @@ test('desktop access behavior still uses saved bind and detected host address', 
     bindManaged: false,
     browserOrigin: 'http://unrelated.example:8080',
     configHost: '0.0.0.0',
-    configPort: 5050,
+    configPort: 5051,
     runtimeLanIp: '192.168.1.25',
   }), {
     origin: null,
     host: '0.0.0.0',
-    port: 5050,
+    port: 5051,
     lan: true,
     lanIp: '192.168.1.25',
   })
@@ -132,7 +132,7 @@ test('desktop access behavior still uses saved bind and detected host address', 
     bindManaged: false,
     browserOrigin: 'http://studio-host.local:8080',
     configHost: '127.0.0.1',
-    configPort: 5050,
+    configPort: 5051,
     runtimeLanIp: '192.168.1.25',
   }).lan, false)
 })

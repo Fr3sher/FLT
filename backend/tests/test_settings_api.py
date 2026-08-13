@@ -913,7 +913,7 @@ def test_put_settings_saves_chatgpt_auth_mode(client):
 # --- Server settings (host/port/LAN/access token) ----------------------------
 def test_settings_payload_includes_server_defaults(client):
     cfg = client.get('/api/settings').get_json()['config']
-    assert cfg['server'] == {'host': '127.0.0.1', 'port': 5050,
+    assert cfg['server'] == {'host': '127.0.0.1', 'port': 5051,
                              'require_token': False, 'access_token': ''}
 
 
@@ -1051,7 +1051,7 @@ def test_settings_restart_triggers_schedule_restart(client, monkeypatch):
     assert len(called) == 1
     assert called[0]['block_during_update'] is True
     assert called[0]['environment_updates']['LDS_HOST'] == '127.0.0.1'
-    assert called[0]['environment_updates']['LDS_PORT'] == '5050'
+    assert called[0]['environment_updates']['LDS_PORT'] == '5051'
 
 
 def test_update_apply_defers_changed_requirements_to_restart(client, monkeypatch):
