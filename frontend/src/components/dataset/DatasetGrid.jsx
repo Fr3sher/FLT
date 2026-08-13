@@ -17,6 +17,7 @@ import { useCapabilities } from '../../context/CapabilitiesContext';
 import useBatchThumbs from '../../hooks/useBatchThumbs';
 import { useToast } from '../common/Toast';
 import { autoTriageAvailable } from './faceScoringGate.js';
+import { isAutoTriagable, autoTriageDecision } from '../../utils/faceTriageGate.js';
 import { bulkActionMessage, createBulkActionGate } from './bulkActionGate.js';
 import { READS_STAY_OPEN, datasetBusyReason } from './datasetBusyReason.js';
 import {
@@ -33,7 +34,7 @@ const DEFAULT_GREEN = 0.50;
 const AUTO_TRIAGE_HELP = [
   'Marks the UNDECIDED, face-scored images: keep when the face similarity is ≥ the threshold, reject below it.',
   'It never deletes anything and never touches your manual ✓/✕ — those are left as-is and drop out of a Re-apply.',
-  'Images with no score (face too small / no face detected) are skipped — judge those by eye.',
+  'Non-scorable verdicts are auto-decided by FIDELITY: face-only datasets reject too-small / low-det / no-face; body-fidelity datasets keep too-small / low-det / profile shots but still reject no-face (no face at all can never contribute identity).',
   'After an Apply, move the slider and Re-apply to re-sort everything it triaged this session at the new threshold.',
 ];
 
@@ -68,7 +69,7 @@ const TILE_SIZE_TITLE = {
    the same batch endpoint as the manual multi-select, which already allows a
    direct keep<->reject switch (no backend change). */
 function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy,
-                         applying, onApplyingChange }) {
+                         applying, onApplyingChange, bodyFid = false }) {
   const autoTriageRunGateRef = useRef(null);
   if (!autoTriageRunGateRef.current) {
     autoTriageRunGateRef.current = createAutoTriageRunGate(datasetId);
@@ -98,13 +99,14 @@ function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasetId]);
 
-  const isScorable = (i) => i.filename && i.face_state === 'scorable' && i.face_score != null;
-  // Always-eligible: the undecided scorable images.
+  // Always-eligible: the undecided, auto-decidable verdicts — scorable (threshold)
+  // plus the fidelity-gated non-scorable states (too_small / no_face / low_det /
+  // extreme_pose). Unscored rows stay manual.
   const pending = useMemo(
-    () => images.filter((i) => i.status === 'pending' && isScorable(i)), [images]);
-  // Still owned by auto-triage: present, scorable, and status unchanged since we set it.
+    () => images.filter((i) => i.status === 'pending' && isAutoTriagable(i)), [images]);
+  // Still owned by auto-triage: present, decidable, and status unchanged since we set it.
   const ownedImgs = useMemo(
-    () => images.filter((i) => isScorable(i) && owned[i.id] != null && i.status === owned[i.id]),
+    () => images.filter((i) => isAutoTriagable(i) && owned[i.id] != null && i.status === owned[i.id]),
     [images, owned]);
   // Replay scope = new undecided ∪ still-owned (disjoint: a 'pending' status can
   // never equal an owned 'keep'/'reject').
@@ -114,8 +116,8 @@ function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy,
   if (!replay.length) return null;
 
   const isReplay = lastRun != null; // at least one Apply already happened this session
-  const keepTargets = replay.filter((i) => i.face_score >= t);
-  const rejectTargets = replay.filter((i) => i.face_score < t);
+  const keepTargets = replay.filter((i) => autoTriageDecision(i, t, bodyFid) === 'keep');
+  const rejectTargets = replay.filter((i) => autoTriageDecision(i, t, bodyFid) === 'reject');
   // Only flip the images that aren't already at their target status (no-op churn).
   const keepIds = keepTargets.filter((i) => i.status !== 'keep').map((i) => i.id);
   const rejectIds = rejectTargets.filter((i) => i.status !== 'reject').map((i) => i.id);
@@ -199,7 +201,7 @@ function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy,
           : ` (of ${replay.length} undecided)`}
       </span>
       <button type="button" onClick={apply} disabled={busy || applying || nothingToDo}
-        title="Marks only scored images — your manual ✓/✕ choices are never changed"
+        title="Marks scored images by threshold and fidelity-gates the rest — your manual ✓/✕ choices are never changed"
         className="ml-auto px-3 py-1 rounded-lg bg-surface-raised border border-border text-content text-xs font-semibold disabled:opacity-40 hover:bg-surface">
         {applying ? 'Applying…' : isReplay ? 'Re-apply' : 'Apply'}
       </button>
@@ -253,6 +255,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
                                       onImproveBatch, kleinAvailable = false,
                                       eligibilityImages, dualCaptions = false,
                                       subjectType = '',
+                                      bodyFid = false,
                                       // Server's reason why face scoring can't run here
                                       // (string) or null — auto-triage acts on face
                                       // scores, so it stands down when they can't be
@@ -476,7 +479,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
       {onBatch && autoTriageAvailable(faceScoringBlocked) && (
         <AutoTriageBar images={images.filter((image) => !isSmallImageRescueRow(image))}
           datasetId={datasetId} faceThresholds={faceThresholds} onBatch={onBatch}
-          busy={bulkBusy} applying={autoTriageApplying} onApplyingChange={setAutoTriageRun} />
+          busy={bulkBusy} applying={autoTriageApplying} onApplyingChange={setAutoTriageRun} bodyFid={bodyFid} />
       )}
       <div id="ds-images-bulk" tabIndex={-1}
         className="flex items-center gap-2 flex-wrap text-xs scroll-mt-20">

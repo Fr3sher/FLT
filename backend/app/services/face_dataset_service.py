@@ -9569,6 +9569,17 @@ def generate_variations_krea(user_id, dataset_id, variations, multiplier,
     # always-on stack (that is what "always-on" means), and one config read is
     # enough. Unknown/blank name -> [] (fail-closed, see the resolver).
     run_loras = keh.resolve_generation_lora_preset(generation_lora_preset)
+    # Auto-apply the dataset's OWN trained LoRA so identity comes from the learned
+    # model, not just the single reference. The Identity Edit reference stays
+    # primary; this is a reinforcement chained after it (krea.train_lora_strength
+    # > 0 opts it in). Resolved per-run, newest deployed krea checkpoint wins.
+    if keh.train_lora_strength() > 0:
+        from . import lora_test_studio as _lts
+        trained = _lts.latest_trained_lora(ds, 'krea')
+        if trained:
+            run_loras = [{'file': trained,
+                          'strength': keh.train_lora_strength()},
+                         *(run_loras or [])]
     mult = max(1, int(multiplier))
     total = len(variations) * mult
     if total > MAX_FANOUT:

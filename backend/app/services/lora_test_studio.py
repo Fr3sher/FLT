@@ -525,6 +525,28 @@ def list_test_checkpoints(ds, family=None) -> list[dict]:
     return _trigger_match_checkpoints(ds, family)
 
 
+def latest_trained_lora(ds, family=None):
+    """The NEWEST deployed trained LoRA for `ds` in `family`, in LoraLoader form
+    ('krea\\lora_G1_AI_...safetensors'), or None when the dataset has no deployed
+    checkpoint there. Used to auto-apply the dataset's own learned identity during
+    Krea variation generation. Newest by file mtime, so a re-trained/re-imported
+    LoRA supersedes an older one; None when nothing is deployed."""
+    matches = _trigger_match_checkpoints(ds, family)
+    if not matches:
+        return None
+    best = None
+    best_mtime = -1.0
+    for m in matches:
+        p = _resolve_lora_abs_path(m['filename'])
+        if not p or not os.path.isfile(p):
+            continue
+        mt = os.path.getmtime(p)
+        if mt > best_mtime:
+            best_mtime = mt
+            best = m['filename']
+    return best
+
+
 def available_families(ds) -> list[dict]:
     """Familles (pipelines) sous lesquelles CE dataset a effectivement été entraîné =
     celles dont le pool contient ≥1 checkpoint testable (trigger match).

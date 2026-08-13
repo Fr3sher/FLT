@@ -637,6 +637,13 @@ DEFAULTS = {
         # is no migration and no save carve-out — _deep_merge preserves a list
         # the incoming partial doesn't mention.
         'generation_lora_presets': [],
+        # Auto-apply the dataset's OWN trained LoRA to every variation generation
+        # (identity from the learned model, not just the single reference). The
+        # Krea Identity Edit reference is primary, so this is a reinforcement,
+        # not a replacement: a strength > 0 chains the latest deployed krea LoRA
+        # for the dataset after the identity-edit slot; 0 = off (the historical
+        # reference-only behaviour). Clamped to [0, 1.5].
+        'train_lora_strength': 0.6,
         # Krea's own starting preset for the run panel — the twin of
         # klein.default_generation_lora_preset, and deliberately a SEPARATE key:
         # the two preset lists are independent, so one name can name two

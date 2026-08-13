@@ -1258,7 +1258,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   eligibilityImages={images}
                   nonces={ds.nonces} faceThresholds={d.face_thresholds} datasetKind={d.kind || 'character'}
                   faceScoringBlocked={d.face_scoring_blocked}
-                  dualCaptions={Boolean(d.dual_captions)} />
+                  bodyFid={bodyFid} dualCaptions={Boolean(d.dual_captions)} />
               )}
             </div>
           </div>
