@@ -1208,6 +1208,22 @@ def bank_thumb(bank_id, image_id):
     return send_file(tpath, mimetype='image/webp', max_age=3600)
 
 
+@bp.get('/bank/<int:bank_id>/review-file/<int:image_id>')
+def bank_review_file(bank_id, image_id):
+    """The ▶ Review lightbox image: a cached mid-size WebP (REVIEW_MAX_SIDE),
+    not the raw source — a fraction of the bytes over a slow link, and cached
+    so an already-reviewed image isn't re-downloaded. Built from the resolved
+    path so a watermark-cleaned or rotated image shows its current state."""
+    bank, row = _row_or_404(bank_id, image_id)
+    if not bank or not row:
+        return jsonify({'error': 'not found'}), 404
+    path = banks.ensure_review_image(bank, row)
+    if not path or not os.path.isfile(path):
+        return jsonify({'error': 'unreadable'}), 404
+    return send_file(path, mimetype='image/webp',
+                     max_age=7 * 24 * 3600)  # cache a reviewed image for a week
+
+
 @bp.get('/bank/<int:bank_id>/file/<int:image_id>')
 def bank_file(bank_id, image_id):
     """The full-size image. Serves the watermark-cleaned version when one exists;

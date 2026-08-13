@@ -279,7 +279,7 @@ export default function BankReviewLightbox({
               previous shot under the new one's buttons. */}
           {/* ?r= busts the browser cache after a turn — the bytes at this URL
               change while the URL itself does not. */}
-          <img key={id} src={`/api/bank/${bankId}/file/${id}${img?.rotation ? `?r=${img.rotation}` : ''}`}
+          <img key={id} src={`/api/bank/${bankId}/review-file/${id}${img?.rotation ? `?r=${img.rotation}` : ''}`}
             alt={img?.name || `Bank image ${id}`}
             className="max-h-full max-w-full select-none object-contain" />
         </div>

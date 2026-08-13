@@ -71,9 +71,12 @@ test('a failed decision surfaces an error and does NOT advance', () => {
   assert.match(catchPart, /setError\(/)
 })
 
-test('the lightbox renders the FULL file, never the grid thumbnail', () => {
-  assert.match(lightbox, /\/api\/bank\/\$\{bankId\}\/file\/\$\{id\}/)
+test('the lightbox renders the full-resolution image as a cached WebP, never the grid thumbnail', () => {
+  // review-file serves the SAME pixels as /file but re-encoded WebP + cached, so
+  // one-at-a-time triage over a slow link doesn't ship the raw source every turn.
+  assert.match(lightbox, /\/api\/bank\/\$\{bankId\}\/review-file\/\$\{id\}/)
   assert.doesNotMatch(lightbox, /\/thumb\//)
+  assert.doesNotMatch(lightbox, /\/api\/bank\/\$\{bankId\}\/file\/\$\{id\}/)
 })
 
 test('the end-of-pool state is explicit and closable', () => {

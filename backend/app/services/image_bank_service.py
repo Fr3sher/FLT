@@ -87,6 +87,10 @@ IMG_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
 # been background jobs with their own progress bar.
 BANK_MAX_FILES = 200_000
 THUMB_MAX_SIDE = 320
+# ▶ Review lightbox: a mid-size cached WebP (bigger than the grid thumb, far
+# smaller than the raw source) so one-at-a-time triage over a slow link doesn't
+# ship full-resolution files every turn.
+REVIEW_MAX_SIDE = 1280
 _COMMIT_EVERY = 25          # scan DB flush cadence
 _PROMOTE_CHUNK = 20         # files per import_images call (bounded memory)
 _SQL_IN_CHUNK = 500         # SQLite bound-variable ceiling is 999
@@ -254,6 +258,20 @@ def _bank_dir(bank_id) -> Path:
 
 def _thumbs_dir(bank_id) -> Path:
     return _bank_dir(bank_id) / 'thumbs'
+
+
+def _review_dir(bank_id) -> Path:
+    return _bank_dir(bank_id) / 'review'
+
+
+def _review_path(bank_id, row: BankImage) -> Path:
+    """Where this image's review-size cached WebP lives. Mirrors _thumb_path:
+    a watermark-cleaned or turned image gets its own file, keyed the same way, so
+    the review never shows a stale pre-clean crop or a sideways shot."""
+    suffix = f'.{row.watermark_clean_method}' if row.watermark_clean_method else ''
+    if getattr(row, 'rotation', None):
+        suffix += f'.r{int(row.rotation)}'
+    return _review_dir(bank_id) / f'{row.id}{suffix}.webp'
 
 
 def _face_cache_path(bank_id) -> Path:
@@ -2949,6 +2967,30 @@ def ensure_thumb(bank: ImageBank, row: BankImage) -> Path | None:
             im.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE), Image.LANCZOS)
             im.save(tpath, 'WEBP', quality=72)
         return tpath
+    except (OSError, ValueError, MemoryError, Image.DecompressionBombError,
+            Image.DecompressionBombWarning):
+        return None
+
+
+def ensure_review_image(bank: ImageBank, row: BankImage) -> Path | None:
+    """The ▶ Review lightbox image: the FULL-RESOLUTION source re-encoded as a
+    cached WebP (quality 85) — same pixels, a fraction of the bytes, cached so an
+    already-reviewed image isn't re-downloaded over a slow link. No downscaling:
+    the source is already ~1-2 MP, so the win is compression + cache, not losing
+    the detail you're deciding on. Built from the RESOLVED path (a cleaned or
+    turned image shows its current state)."""
+    rpath = _review_path(bank.id, row)
+    if rpath.is_file():
+        return rpath
+    src = resolved_image_path(bank, row)
+    if not src or not os.path.isfile(src):
+        return None
+    try:
+        rpath.parent.mkdir(parents=True, exist_ok=True)
+        with safe_bank_source(src, label='bank review image') as im:
+            im = im.convert('RGB')
+            im.save(rpath, 'WEBP', quality=85, method=6)
+        return rpath
     except (OSError, ValueError, MemoryError, Image.DecompressionBombError,
             Image.DecompressionBombWarning):
         return None
