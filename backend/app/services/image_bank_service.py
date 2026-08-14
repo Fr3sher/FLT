@@ -8147,15 +8147,23 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None):
 @_serialized_bank_mutation('watermark_regions')
 def set_watermark_regions(user_id, bank_id, image_id, regions, *,
                           _bank_lease=None) -> dict | None:
-    """Replace one flagged image's hand-drawn watermark mask (reported missing in
-    the Bank by Qeeyana on Reddit — the Dataset had it, the Bank did not).
+    """Replace one image's hand-drawn watermark mask — and, when the row was not
+    flagged, make the drawn zone the flag itself (reported missing in the Bank by
+    Qeeyana on Reddit; the miss case by vvilams on Discord).
 
     ``regions`` is None (drop the override, go back to the detected box) or a list
     of normalized boxes — validated by the DATASET's validator, deliberately: one
     definition of a legal mask means the two lanes cannot drift apart. Returns the
     same payload shape the dataset route returns, None when the bank/image is
-    unknown, ValueError on an illegal mask and RuntimeError when the image is no
-    longer flagged (already cleaned/dismissed — an edit there would be a no-op).
+    unknown, ValueError on an illegal mask.
+
+    Only 'cleaned' still refuses: those pixels were already replaced, so geometry
+    drawn now describes an image that no longer exists (↩ Undo is the way back).
+    'dismissed' does NOT refuse — it means the machine must stop re-flagging the
+    image, never that the user cannot draw the mark after a second look. The
+    detector is a classifier, and a mark it scores under the threshold used to
+    have no manual recourse at all, because the one tool for it was reachable
+    only from images the detector had already found.
 
     The mask is NOT cleared when a clean succeeds, unlike the dataset: the Bank's
     ↩ Undo is a first-class action (it only deletes our own blob), and handing an
@@ -8166,14 +8174,23 @@ def set_watermark_regions(user_id, bank_id, image_id, regions, *,
     row = owned.one_or_none()
     if not row:
         return None
-    if row.watermark_state != 'detected':
-        raise RuntimeError('this image is no longer flagged — nothing to mask')
+    if row.watermark_state == 'cleaned':
+        raise RuntimeError('this image was already cleaned — undo the cleaning '
+                           'before masking it again')
+    was_detected = row.watermark_state == 'detected'
     normalized = normalize_watermark_regions(regions)
     import json as _json
     stored = _json.dumps(normalized) if normalized is not None else None
     bank = db.session.get(ImageBank, bank_id)
     raw_path = abs_image_path(bank, row) if bank else None
-    expected_raw_fingerprint = row.watermark_fingerprint
+    # A row no scan ever reached carries no attestation. That is the FIRST one,
+    # not a changed file: measure it now and let _prepare_watermark_write bind it
+    # (its `watermark_fingerprint is None` branch). Passing the stored NULL would
+    # fail the validity gate and read as "the source image changed" — a refusal
+    # that would keep this dead end shut for anyone who never ran the pass.
+    expected_raw_fingerprint = (
+        row.watermark_fingerprint
+        or bank_transfer_metadata.content_fingerprint_path(raw_path))
     if not _prepare_watermark_write(
             row, raw_path, expected_raw_fingerprint):
         # Keep the fail-closed invalidation performed by the authority check.
@@ -8183,6 +8200,10 @@ def set_watermark_regions(user_id, bank_id, image_id, regions, *,
         raise RuntimeError('the source image changed — scan it again before masking')
     row.watermark_state = 'detected'
     row.watermark_regions = stored
+    if not was_detected:
+        # Say WHO flagged it. Editing the box of a row the detector did find
+        # leaves its verdict — and its provenance — alone.
+        row.watermark_source = 'manual'
     db.session.commit()
     return _watermark_regions_payload(row)
 

@@ -50,6 +50,15 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+
+    id: '2026-08-13-mark-a-watermark-the-scan-missed',
+    date: '2026-08-13',
+    title: 'Mark a watermark the scan missed, yourself',
+    blurb:
+      'The watermark detector is very good, but it is a classifier — some marks, especially the ones stock sites tile across a whole photo, score under any threshold you set. Until now that was a dead end: the mask editor only opened on images the scan had already flagged. Now you can open it on any image you are looking at, in a Dataset or a Bank, and the zones you draw become the flag — 🧽 Clean then repaints exactly what you drew. Changed your mind about an image you had ruled a false positive? Drawing on it takes that back too.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-13-bank-keep-this-person',
     date: '2026-08-13',
     title: 'Auto-shrink a bank to just one person',

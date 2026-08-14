@@ -1964,6 +1964,14 @@ STUDIO_NODE_PACKS = {
         'url': 'https://github.com/nova452/ComfyUI-Conditioning-Rebalance',
         'search': 'Krea 2 Conditioning',
     },
+    # Detail Daemon sampler (node 57 of image_real_HQ.json, the SDXL family's pass
+    # 2) — EVERY fresh SDXL Studio install needs this pack, so its absence must
+    # name the pack, not just the class (GitHub #36, KingyWolf).
+    'DetailDaemonSamplerNode': {
+        'pack': 'ComfyUI-Detail-Daemon',
+        'url': 'https://github.com/Jonseed/ComfyUI-Detail-Daemon',
+        'search': 'Detail Daemon',
+    },
 }
 
 

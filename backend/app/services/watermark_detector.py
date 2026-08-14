@@ -11,9 +11,14 @@ what makes a threshold (and therefore a measured calibration) possible.
 
 The cascade is deliberately two models with two licences we checked at the source
 (``backend/infer/watermark_detect_infer.py`` lists every dependency's licence):
-SigLIP2 ranks, Florence-2 locates only what the ranker flagged. `ultralytics` is
-never used — it claims AGPL-3.0 over trained weights and would contaminate this
-public repository.
+SigLIP2 ranks, Grounding DINO locates only what the ranker flagged. The research
+picked Florence-2 for that second stage and this build does NOT use it: its
+modelling code ships in its own repo and no longer loads on current transformers,
+and pinning transformers down would endanger the bank-scoring stack that shares
+the environment — the full reason is recorded in ``watermark_detect_infer.py``,
+where a test keeps it alive so the next reader does not "fix" it back.
+`ultralytics` is never used — it claims AGPL-3.0 over trained weights and would
+contaminate this public repository.
 
 Contract with the caller: `scan()` is a GENERATOR yielding one result per image,
 in input order, as they arrive. That shape is not decoration — the Bank pass

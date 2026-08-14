@@ -43,9 +43,14 @@ test('every edit is persisted to the bank route, and a failure says so', () => {
   assert.match(dialog, /is NOT saved/)             // and the user is told
 })
 
-test('the review lightbox offers the editor on flagged images only', () => {
+test('the review lightbox offers the editor on any image it can still act on', () => {
   assert.match(lightbox, /canEditMask\(img\) && \(/)
-  assert.match(lightbox, /🚩 Edit mask/)
+  // The label is COMPUTED, never hardcoded: on an image the detector cleared or
+  // never saw there is no box to "edit", and promising one is how the miss stayed
+  // unanswerable. What each state reads is asserted on the helper's VALUES in
+  // src/components/bank/bankWatermarkMask.test.js.
+  assert.match(lightbox, /🚩 \{maskButtonLabel\(img\)\}/)
+  assert.doesNotMatch(lightbox, /🚩 Edit mask/)
   // M is the Bank's OWN key, read off the same event once the shared review
   // grammar (K/R/S, ← , Esc) has declined it — and still behind the same
   // "does this field own the keystroke?" guard.
@@ -66,7 +71,7 @@ test('the feature is announced and documented', () => {
   assert.match(entry.blurb, /Qeeyana/)             // credit where it is due
   const topic = getHelpTopic('bank-edit-watermark-mask')
   assert.ok(topic, 'help topic bank-edit-watermark-mask is missing')
-  assert.equal(topic.guide.anchor, 'fix-a-watermark-mask-in-a-bank')
+  assert.equal(topic.guide.anchor, 'fix-a-watermark-mask-or-mark-one-the-scan-missed')
 })
 
 test('the dialog is usable with a thumb at 400 px', () => {
