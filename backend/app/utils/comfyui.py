@@ -1909,7 +1909,17 @@ def resolve_checkpoint_ckpt_name(name):
     The separator is the one of the tree we WALKED (os.sep), never a hardcoded
     backslash: it used to be, and on Linux that made every subfoldered checkpoint
     unloadable (GitHub #21, 1Tomber). `queue_prompt_to_comfyui` has the last word
-    and respells this against the target install's published list."""
+    and respells this against the target install's published list.
+
+    The walk covers every checkpoints root the PICKER lists from — the default
+    tree plus each root declared in extra_model_paths.yaml — because the picker
+    offers all of them as bare basenames. Walking only the default tree meant a
+    checkpoint in a SUBFOLDER of an extra root fell through to the bare-name
+    fallback, the preflight then looked for models/checkpoints/<basename> and
+    raised a 409 naming a path the file never lived at (GitHub #36, KingyWolf).
+    Matching is case-insensitive with the ON-DISK spelling returned — same
+    contract as _resolve_lora_rel_by_basename, and disk casing is what ComfyUI
+    publishes. Additive: no yaml -> the historical single-tree walk, unchanged."""
     if not name:
         return name
     if "\\" in name or "/" in name:
@@ -1917,13 +1927,26 @@ def resolve_checkpoint_ckpt_name(name):
     out_dir = _out_dir()
     if not out_dir:
         return name
+    roots = []
     try:
-        ck_dir = os.path.normpath(os.path.join(out_dir, "..", "models", "checkpoints"))
-        for root, _dirs, files in os.walk(ck_dir):
-            if name in files:
-                return os.path.relpath(os.path.join(root, name), ck_dir)
+        roots.append(os.path.normpath(os.path.join(out_dir, "..", "models", "checkpoints")))
     except OSError:
         pass
+    try:
+        from ..services import comfy_model_paths
+        roots += [r for r in comfy_model_paths.extra_roots("checkpoints")
+                  if r not in roots]
+    except Exception:
+        pass
+    target = name.lower()
+    for ck_dir in roots:
+        try:
+            for root, _dirs, files in os.walk(ck_dir):
+                hit = next((f for f in files if f.lower() == target), None)
+                if hit:
+                    return os.path.relpath(os.path.join(root, hit), ck_dir)
+        except OSError:
+            continue
     return name
 
 
