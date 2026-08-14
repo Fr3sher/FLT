@@ -460,7 +460,7 @@ const TOPICS = [
      'bbox', 'wrong box', 'missed', 'second logo', 'draw', 'redraw', 'correct',
      'manual', 'by hand', 'inpaint', 'repaint', 'crop', 'clean', 'review',
      'bank', 'triage'],
-    '/bank', 'using-the-app', 'fix-a-watermark-mask-in-a-bank'),
+    '/bank', 'using-the-app', 'fix-a-watermark-mask-or-mark-one-the-scan-missed'),
   action('bank-undo-bulk', 'Undo the last bulk decision in a bank',
     ['undo', 'undo last', 'revert', 'take back', 'go back', 'step back', 'oops',
      'mistake', 'wrong threshold', 'bad filter', 'rejected everything',

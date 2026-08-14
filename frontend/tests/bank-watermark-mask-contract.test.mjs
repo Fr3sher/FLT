@@ -71,7 +71,7 @@ test('the feature is announced and documented', () => {
   assert.match(entry.blurb, /Qeeyana/)             // credit where it is due
   const topic = getHelpTopic('bank-edit-watermark-mask')
   assert.ok(topic, 'help topic bank-edit-watermark-mask is missing')
-  assert.equal(topic.guide.anchor, 'fix-a-watermark-mask-in-a-bank')
+  assert.equal(topic.guide.anchor, 'fix-a-watermark-mask-or-mark-one-the-scan-missed')
 })
 
 test('the dialog is usable with a thumb at 400 px', () => {
