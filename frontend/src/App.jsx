@@ -24,6 +24,7 @@ const CanvasPage = lazy(() => import('./pages/CanvasPage'))
 import { recommendedMet } from './hooks/useSetupSteps'
 import { HelpModeProvider, useHelpMode, TipHost } from './help/HelpMode'
 import HeaderMenu from './components/common/HeaderMenu'
+import QuicIndicator from './components/common/QuicIndicator'
 import { versionLabel } from './utils/versionLabel'
 import { useTrainingActivity } from './hooks/useTrainingActivity'
 import { activityLabel } from './utils/trainingActivity'
@@ -240,6 +241,7 @@ function NavBar() {
           className="shrink-0 whitespace-nowrap bg-gradient-primary bg-clip-text text-base font-bold text-transparent no-underline">
           FLT - Fresh LoRa Trainer
         </NavLink>
+        <QuicIndicator />
         {/* Desktop: workspaces on the left, utilities grouped into icon menus
             on the right (Guide/Help under ?, Setup/Settings under ⚙). */}
         {/* The workspace row is its own flex-wrap box, not a run of direct nav

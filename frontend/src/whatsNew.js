@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-14-quic-indicator',
+    date: '2026-08-14',
+    title: 'A lightning bolt lights up when you are already on the fast lane',
+    blurb:
+      'When your browser and this app are talking over QUIC (HTTP/3) — usually because a reverse proxy or CDN in front of FLT supports it — a small bolt emblem next to the FLT name turns green and says “QUIC”, so you can see the fast, encrypted lane is the one you are actually on. No server change or configuration needed; the app simply reads the protocol your browser already negotiated.',
+  },
+  {
     id: '2026-08-12-snappier-loading',
     date: '2026-08-12',
     title: 'FLT opens fast even on a slow connection',
