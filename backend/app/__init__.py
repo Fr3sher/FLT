@@ -658,7 +658,12 @@ def create_app(config_object=None):
 
     @app.get('/assets/<path:filename>')
     def assets(filename):
-        return send_from_directory(FRONTEND_DIST / 'assets', filename)
+        resp = send_from_directory(FRONTEND_DIST / 'assets', filename)
+        # Vite emits content-hashed filenames, so these assets are immutable:
+        # the URL changes when the file changes, so a long cache is safe and
+        # makes repeat visits cheap even over a slow network path.
+        resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        return resp
 
     @app.after_request
     def _refresh_csrf_cookie(resp):
