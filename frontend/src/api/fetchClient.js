@@ -95,8 +95,32 @@ export const CONNECTION_BACK_MESSAGE = 'Back online.';
  *   Everything else keeps today's behaviour, so no existing call site changes
  *   meaning by staying silent about the flag; only pollers opt in.
  */
+const inFlightGets = new Map();
+
+/** Coalesce concurrent GETs for the same URL: while a request is in flight,
+ *  callers asking for the same URL share the same promise instead of opening a
+ *  second network request. The map is cleared when the shared promise settles,
+ *  so the next poll after completion starts fresh. */
+function dedupeGet(url, run) {
+  const existing = inFlightGets.get(url);
+  if (existing) return existing;
+  const promise = run();
+  inFlightGets.set(url, promise);
+  promise.finally(() => {
+    if (inFlightGets.get(url) === promise) inFlightGets.delete(url);
+  }).catch(() => {});
+  return promise;
+}
+
 export async function apiFetch(url, options = {}) {
   const { background = false, ...init } = options;
+  if ((init.method || 'GET').toUpperCase() === 'GET') {
+    return dedupeGet(url, () => doApiFetch(url, init, background));
+  }
+  return doApiFetch(url, init, background);
+}
+
+async function doApiFetch(url, init, background) {
   let res;
   try {
     res = await fetchWithCsrfRetry(url, init);
