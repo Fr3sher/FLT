@@ -103,3 +103,33 @@ test('a background 503 closes the outage without becoming a toast', async () => 
   // Reachable again — that is worth the one recovery line, and nothing else.
   assert.deepEqual(seen, [['success', CONNECTION_BACK_MESSAGE]]);
 });
+
+
+test('concurrent GETs for the same URL share one network request', async () => {
+  let fetchCount = 0;
+  let resolve;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return new Promise((r) => { resolve = r; });
+  };
+
+  const p1 = apiFetch('/api/capabilities', { background: true });
+  const p2 = apiFetch('/api/capabilities', { background: true });
+
+  // The first call starts its fetch synchronously; the second must reuse it.
+  assert.equal(fetchCount, 1);
+
+  resolve(response(200, { ok: true }));
+  const [r1, r2] = await Promise.all([p1, p2]);
+  assert.deepEqual(r1, { ok: true });
+  assert.deepEqual(r2, { ok: true });
+});
+
+test('a settled GET allows the next poll to start a fresh request', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return response(200, { ok: true }); };
+
+  await apiFetch('/api/train/activity', { background: true });
+  await apiFetch('/api/train/activity', { background: true });
+  assert.equal(calls, 2);
+});
