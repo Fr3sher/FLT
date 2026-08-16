@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-16-bank-upload-local-folder',
+    date: '2026-08-16',
+    title: 'Point an Image Bank at a folder on your own computer',
+    blurb:
+      'The Bank’s folder picker used to see only folders on the machine running FLT. Now you can pick a folder on the computer you are browsing from and FLT uploads the images into a new bank, subfolders included — no need for the folder to exist on the server first.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-14-quic-indicator',
     date: '2026-08-14',
     title: 'A lightning bolt lights up when you are already on the fast lane',
