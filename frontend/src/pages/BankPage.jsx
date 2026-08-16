@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { apiFetch, del, postJson } from '../api/fetchClient'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { apiFetch, del, postForm, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { HelpBadge } from '../help/HelpMode'
 import BankWorkspace from '../components/bank/BankWorkspace'
@@ -97,6 +97,8 @@ export default function BankPage() {
   const [name, setName] = useState('')
   const [folder, setFolder] = useState('')
   const [creating, setCreating] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef(null)
   const [relocating, setRelocating] = useState(null)   // the bank being repointed
   // Dataset storage folders, so a folder that belongs to a dataset can be named
   // as such WHILE it is typed. The server refuses it either way — this only
@@ -176,6 +178,34 @@ export default function BankPage() {
     }
   }
 
+  const uploadFolder = async (e) => {
+    const files = Array.from(e.target.files || [])
+    e.target.value = '' // allow re-selecting the same folder
+    if (!files.length || uploading) return
+    let finalName = name.trim()
+    if (!finalName) {
+      const first = files[0].webkitRelativePath || files[0].name || ''
+      finalName = first.split('/')[0] || 'Uploaded bank'
+    }
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('name', finalName)
+      for (const f of files) {
+        // Preserve the folder structure so subfolders land correctly on the server.
+        fd.append('files', f, f.webkitRelativePath || f.name)
+      }
+      const d = await postForm('/api/bank/upload-folder', fd)
+      toast.success(`Bank created — ${d.added} image(s) uploaded.`)
+      setName(''); setFolder('')
+      open(d.id)
+    } catch (err) {
+      toast.error(err?.message || 'Could not upload the folder.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const remove = async (bank) => {
     // eslint-disable-next-line no-alert
     if (!window.confirm(`Remove the bank “${bank.name}”?\n\nOnly the triage data (decisions, scores, thumbnails) is deleted — the source folder and its images are NOT touched.`)) return
@@ -222,6 +252,14 @@ export default function BankPage() {
             value={folder} onChange={setFolder} required
             placeholder="C:\path\to\unsorted-images (subfolders included)" />
         </div>
+        <input ref={fileInputRef} type="file" webkitdirectory="" multiple="" className="hidden"
+          onChange={uploadFolder} />
+        <button type="button" onClick={() => fileInputRef.current?.click()}
+          disabled={uploading || creating || !!folderNotice}
+          title="Pick a folder on this computer and upload its images into a new bank"
+          className="rounded-md border border-border bg-surface-raised px-4 py-2 text-sm font-semibold text-content hover:bg-surface disabled:opacity-50">
+          {uploading ? 'Uploading…' : '⬆ Upload folder'}
+        </button>
         <button type="submit" disabled={creating || !!folderNotice}
           title={folderNotice ? 'That folder belongs to a dataset' : undefined}
           className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
