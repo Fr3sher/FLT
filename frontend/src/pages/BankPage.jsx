@@ -216,12 +216,10 @@ export default function BankPage() {
           await uploadOne(f)
         }
       }
-      const complete = new FormData()
-      complete.append('name', finalName)
-      complete.append('upload_id', uploadId)
       const res = await fetch('/api/bank/upload-folder/complete', {
         method: 'POST',
-        body: complete,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: finalName, upload_id: uploadId }),
         credentials: 'include',
       })
       const data = await res.json().catch(() => ({}))
