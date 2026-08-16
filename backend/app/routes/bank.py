@@ -13,6 +13,7 @@ from flask import Blueprint, Response, current_app, jsonify, request, send_file
 import struct
 
 from ..config import LOCAL_USER
+from ..extensions import csrf
 from ..models import BankImage
 from ..services import bank_jobs, dataset_activity
 from ._common import _map_error
@@ -153,6 +154,7 @@ def _safe_upload_rel(raw):
 
 
 @bp.post('/bank/upload-folder')
+@csrf.exempt
 def bank_upload_folder():
     """Upload a local folder straight into a bank.
 
