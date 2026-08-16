@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { apiFetch, del, postForm, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { HelpBadge } from '../help/HelpMode'
@@ -98,7 +98,6 @@ export default function BankPage() {
   const [folder, setFolder] = useState('')
   const [creating, setCreating] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const fileInputRef = useRef(null)
   const [relocating, setRelocating] = useState(null)   // the bank being repointed
   // Dataset storage folders, so a folder that belongs to a dataset can be named
   // as such WHILE it is typed. The server refuses it either way — this only
@@ -252,14 +251,14 @@ export default function BankPage() {
             value={folder} onChange={setFolder} required
             placeholder="C:\path\to\unsorted-images (subfolders included)" />
         </div>
-        <input ref={fileInputRef} type="file" webkitdirectory="" multiple="" className="hidden"
-          onChange={uploadFolder} />
-        <button type="button" onClick={() => fileInputRef.current?.click()}
-          disabled={uploading || creating || !!folderNotice}
-          title="Pick a folder on this computer and upload its images into a new bank"
-          className="rounded-md border border-border bg-surface-raised px-4 py-2 text-sm font-semibold text-content hover:bg-surface disabled:opacity-50">
+        <label title="Pick a folder on this computer and upload its images into a new bank"
+          className={`inline-flex items-center gap-1 rounded-md border border-border bg-surface-raised px-4 py-2 text-sm font-semibold text-content hover:bg-surface ${
+            uploading || creating ? 'pointer-events-none opacity-50' : 'cursor-pointer'
+          }`}>
+          <input type="file" webkitdirectory="" multiple="" className="sr-only"
+            onChange={uploadFolder} />
           {uploading ? 'Uploading…' : '⬆ Upload folder'}
-        </button>
+        </label>
         <button type="submit" disabled={creating || !!folderNotice}
           title={folderNotice ? 'That folder belongs to a dataset' : undefined}
           className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
