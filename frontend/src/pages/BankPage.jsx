@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { apiFetch, del, postForm, postJson } from '../api/fetchClient'
+import { apiFetch, del, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { HelpBadge } from '../help/HelpMode'
 import BankWorkspace from '../components/bank/BankWorkspace'
@@ -194,11 +194,21 @@ export default function BankPage() {
         // Preserve the folder structure so subfolders land correctly on the server.
         fd.append('files', f, f.webkitRelativePath || f.name)
       }
-      const d = await postForm('/api/bank/upload-folder', fd)
-      toast.success(`Bank created — ${d.added} image(s) uploaded.`)
+      // Plain fetch: CSRF is now exempt for this endpoint, and bypassing
+      // apiFetch keeps its generic "Connection lost" toast from hiding the
+      // real error if something fails in the browser.
+      const res = await fetch('/api/bank/upload-folder', {
+        method: 'POST',
+        body: fd,
+        credentials: 'include',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`)
+      toast.success(`Bank created — ${data.added} image(s) uploaded.`)
       setName(''); setFolder('')
-      open(d.id)
+      open(data.id)
     } catch (err) {
+      console.error('Upload folder failed:', err)
       toast.error(err?.message || 'Could not upload the folder.')
     } finally {
       setUploading(false)
