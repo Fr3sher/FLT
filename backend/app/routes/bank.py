@@ -6,6 +6,8 @@ embeds the live job. 409 = a job is already running on this bank.
 """
 import logging
 import os
+import secrets
+from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request, send_file
 
@@ -128,6 +130,70 @@ def bank_create():
     # Nested folders mean two banks over the same files: harmless while triaging
     # (statuses are per bank), but 🗑 Delete rejected in one amputates the other.
     # Say it now, once, rather than at the destructive click only.
+    return jsonify({'ok': True, 'id': bank.id, 'added': added,
+                    'overlaps': banks.overlapping_banks(LOCAL_USER, bank.id)})
+
+
+def _safe_upload_rel(raw):
+    """Normalise a browser-supplied relative path ('folder/sub/a.jpg' or
+    'folder\\sub\\a.jpg') and collapse any '..' so an upload cannot escape
+    the bank folder it is being written into."""
+    rel = (raw or '').replace('\\', '/')
+    parts = []
+    for p in rel.split('/'):
+        if p in ('', '.'):
+            continue
+        if p == '..':
+            if parts:
+                parts.pop()
+            continue
+        parts.append(p)
+    return os.path.join(*parts) if parts else None
+
+
+@bp.post('/bank/upload-folder')
+def bank_upload_folder():
+    """Upload a local folder straight into a bank.
+
+    The browser sends one multipart entry per file, each named with its
+    webkitRelativePath so subfolders are preserved. Files land in a fresh
+    folder under the app data dir, then the regular create_bank inventory runs
+    over it — so the rest of the bank pipeline (scan, score, promote) is
+    unchanged.
+
+    A folder of images routinely exceeds the app-wide 64 MiB JSON/multipart
+    ceiling, so this route lifts the request cap to 2 GiB before the body is
+    parsed."""
+    request.max_content_length = 2 * 1024 * 1024 * 1024
+    name = (request.form.get('name') or '').strip()
+    files = request.files.getlist('files')
+    if not name:
+        return jsonify({'error': 'name is required'}), 400
+    if not files:
+        return jsonify({'error': 'no files selected'}), 400
+
+    data_dir = Path(current_app.config['LDS_DATA_DIR'])
+    uploads_root = data_dir / 'bank_uploads'
+    uploads_root.mkdir(parents=True, exist_ok=True)
+    target = uploads_root / (name.replace(os.sep, '_') + '-' + secrets.token_hex(4))
+    target.mkdir(parents=True, exist_ok=True)
+
+    saved = 0
+    for f in files:
+        rel = _safe_upload_rel(f.filename)
+        if not rel:
+            continue
+        dest = target / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        f.save(str(dest))
+        saved += 1
+    if saved == 0:
+        return jsonify({'error': 'no valid files were uploaded'}), 400
+
+    try:
+        bank, added = banks.create_bank(LOCAL_USER, name, str(target))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'id': bank.id, 'added': added,
                     'overlaps': banks.overlapping_banks(LOCAL_USER, bank.id)})
 
