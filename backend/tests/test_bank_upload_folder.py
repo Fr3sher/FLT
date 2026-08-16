@@ -28,3 +28,27 @@ def test_upload_folder_requires_name(client):
                        content_type='multipart/form-data')
     assert resp.status_code == 400
     assert resp.get_json()['error']
+
+
+def test_per_file_upload_flow(client):
+    upload_id = 'testupload123'
+    files = [
+        ('myfolder/sub/a.jpg', b'fake-jpeg-a'),
+        ('myfolder/b.png', b'fake-jpeg-b'),
+    ]
+    for rel, content in files:
+        name = rel.split('/')[-1]
+        resp = client.post('/api/bank/upload-file', data={
+            'name': 'PerFile',
+            'upload_id': upload_id,
+            'path': rel,
+            'file': (io.BytesIO(content), name),
+        }, content_type='multipart/form-data')
+        assert resp.status_code == 200, resp.get_json()
+
+    resp = client.post('/api/bank/upload-folder/complete',
+                       json={'name': 'PerFile', 'upload_id': upload_id})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['ok'] is True
+    assert body['added'] == 2
