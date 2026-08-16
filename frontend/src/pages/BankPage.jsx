@@ -188,27 +188,42 @@ export default function BankPage() {
     }
     setUploading(true)
     try {
-      const fd = new FormData()
-      fd.append('name', finalName)
+      // Upload file-by-file: a single giant multipart POST was getting reset
+      // mid-flight on flaky network paths. Small per-file requests are far more
+      // robust; /bank/upload-folder/complete then inventories them into a bank.
+      const uploadId = Date.now().toString(36) + Math.random().toString(36).slice(2)
+      const uploadOne = async (f) => {
+        const fd = new FormData()
+        fd.append('name', finalName)
+        fd.append('upload_id', uploadId)
+        fd.append('path', f.webkitRelativePath || f.name)
+        fd.append('file', f, f.name)
+        const res = await fetch('/api/bank/upload-file', {
+          method: 'POST',
+          body: fd,
+          credentials: 'include',
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || `Upload failed (HTTP ${res.status})`)
+        }
+      }
       for (const f of files) {
-        // Preserve the folder structure so subfolders land correctly on the server.
-        fd.append('files', f, f.webkitRelativePath || f.name)
+        try {
+          await uploadOne(f)
+        } catch (err) {
+          console.error('File upload failed, retrying once:', f.name, err)
+          await uploadOne(f)
+        }
       }
-      // Plain fetch: CSRF is now exempt for this endpoint, and bypassing
-      // apiFetch keeps its generic "Connection lost" toast from hiding the
-      // real error if something fails in the browser.
-      const url = '/api/bank/upload-folder'
-      const opts = { method: 'POST', body: fd, credentials: 'include' }
-      let res
-      try {
-        res = await fetch(url, opts)
-      } catch (err) {
-        // A stale Alt-Svc entry can make the FIRST attempt go over HTTP/3,
-        // which has been flaky on this deployment. Retry once — the failed
-        // h3 attempt makes Chrome fall back to HTTP/2, which works.
-        console.error('Upload folder failed (attempt 1), retrying:', err)
-        res = await fetch(url, opts)
-      }
+      const complete = new FormData()
+      complete.append('name', finalName)
+      complete.append('upload_id', uploadId)
+      const res = await fetch('/api/bank/upload-folder/complete', {
+        method: 'POST',
+        body: complete,
+        credentials: 'include',
+      })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`)
       toast.success(`Bank created — ${data.added} image(s) uploaded.`)

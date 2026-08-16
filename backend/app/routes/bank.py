@@ -201,6 +201,54 @@ def bank_upload_folder():
                     'overlaps': banks.overlapping_banks(LOCAL_USER, bank.id)})
 
 
+@bp.post('/bank/upload-file')
+@csrf.exempt
+def bank_upload_file():
+    """One file of a folder upload. The browser sends each file separately so
+    a single large multipart request can't be reset mid-flight on a flaky path.
+    Files land under data_dir/bank_uploads/<upload_id>/ preserving the relative
+    path, then /bank/upload-folder/complete inventories them into a bank."""
+    request.max_content_length = 1024 * 1024 * 1024
+    name = (request.form.get('name') or '').strip()
+    upload_id = (request.form.get('upload_id') or '').strip()
+    rel = _safe_upload_rel(request.form.get('path') or '')
+    f = request.files.get('file')
+    if not name or not upload_id or not rel or f is None:
+        return jsonify({'error': 'name, upload_id, path and file are required'}), 400
+
+    data_dir = Path(current_app.config['LDS_DATA_DIR'])
+    uploads_root = data_dir / 'bank_uploads'
+    uploads_root.mkdir(parents=True, exist_ok=True)
+    target = uploads_root / upload_id
+    target.mkdir(parents=True, exist_ok=True)
+    dest = target / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    f.save(str(dest))
+    return jsonify({'ok': True})
+
+
+@bp.post('/bank/upload-folder/complete')
+@csrf.exempt
+def bank_upload_folder_complete():
+    """Inventory an uploaded staging folder (see /bank/upload-file) into a bank."""
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    upload_id = (data.get('upload_id') or '').strip()
+    if not name or not upload_id:
+        return jsonify({'error': 'name and upload_id are required'}), 400
+
+    data_dir = Path(current_app.config['LDS_DATA_DIR'])
+    target = data_dir / 'bank_uploads' / upload_id
+    if not target.is_dir():
+        return jsonify({'error': 'upload session not found'}), 404
+    try:
+        bank, added = banks.create_bank(LOCAL_USER, name, str(target))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'id': bank.id, 'added': added,
+                    'overlaps': banks.overlapping_banks(LOCAL_USER, bank.id)})
+
+
 @bp.post('/bank/from-dataset')
 def bank_from_dataset():
     """Reverse of promote: build a NEW bank from a dataset's kept images, under a
