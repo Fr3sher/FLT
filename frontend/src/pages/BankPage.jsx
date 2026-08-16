@@ -197,11 +197,18 @@ export default function BankPage() {
       // Plain fetch: CSRF is now exempt for this endpoint, and bypassing
       // apiFetch keeps its generic "Connection lost" toast from hiding the
       // real error if something fails in the browser.
-      const res = await fetch('/api/bank/upload-folder', {
-        method: 'POST',
-        body: fd,
-        credentials: 'include',
-      })
+      const url = '/api/bank/upload-folder'
+      const opts = { method: 'POST', body: fd, credentials: 'include' }
+      let res
+      try {
+        res = await fetch(url, opts)
+      } catch (err) {
+        // A stale Alt-Svc entry can make the FIRST attempt go over HTTP/3,
+        // which has been flaky on this deployment. Retry once — the failed
+        // h3 attempt makes Chrome fall back to HTTP/2, which works.
+        console.error('Upload folder failed (attempt 1), retrying:', err)
+        res = await fetch(url, opts)
+      }
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`)
       toast.success(`Bank created — ${data.added} image(s) uploaded.`)
