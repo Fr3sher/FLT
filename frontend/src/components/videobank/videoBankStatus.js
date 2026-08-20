@@ -53,6 +53,10 @@ export const PASS_LABELS = {
   caption: 'Describe shots',
   dedup: '✂ Duplicates',
   watermark: '🔖 Watermarks',
+  safezone: '🔳 Safe zone',
+  defects: '🩻 Defects',
+  aicheck: '🤖 AI check',
+  camera: '🎥 Camera',
   pipeline: 'Run everything',
   promote: 'Build the dataset',
 }
@@ -67,6 +71,18 @@ export const PASS_RUNNING_LABELS = {
   caption: 'Describing shots',
   dedup: 'Comparing shots',
   watermark: 'Looking for watermarks',
+  safezone: 'Measuring the safe zone',
+  // "Sweeping files", not "shots": this pass advances one FILE at a time while
+  // its progress bar counts clips, and a participle that promised shots would
+  // make a bar standing still for a whole rush look stuck.
+  defects: 'Sweeping files',
+  // "Checking how shots move", not "Detecting AI": the participle a user reads
+  // for twenty minutes must describe the measurement, not promise the verdict.
+  aicheck: 'Checking how shots move',
+  // "Reading the camera", not "Detecting pans": this pass labels rather than
+  // finds, and a participle promising a find makes a shot that turns out static
+  // look like a miss.
+  camera: 'Reading the camera',
   pipeline: 'Running everything',
   promote: 'Building the dataset',
 }
@@ -269,6 +285,42 @@ export function sourceGeometry(source) {
   return parts.join(' · ')
 }
 
+/** "High · 5.2 Mb/s · 0.215 bpp" — how hard this file was squeezed, or ''.
+ *
+ * ITS OWN LINE on the card, not appended to `sourceGeometry`. That line already
+ * carries three facts, and a fourth, fifth and sixth would wrap into three lines
+ * at 400 px wide — the width every card in this app has to survive.
+ *
+ * BITS PER PIXEL is the number worth reading and the reason the other two are
+ * shown at all: a bitrate means nothing without a resolution to divide it by
+ * (5 Mb/s is generous at 480p and starving at 4K), while bits per pixel per
+ * frame is comparable across a mixed bank. Roughly, under 0.05 is visibly
+ * damaged and over 0.15 is comfortable for ordinary 8-bit H.264.
+ *
+ * INFORMATIVE, never a cut, and that is a deliberate refusal rather than an
+ * omission: bits per pixel PREDICTS compression damage, and the 🩻 Defects pass
+ * MEASURES it. Offering a threshold on the prediction while the measurement sits
+ * one panel away would be the app guessing in front of its own answer.
+ *
+ * Silent when the container did not say — MKV and WebM routinely carry no
+ * per-stream bitrate, so a dash there is a property of the file rather than a
+ * pass nobody ran, and inventing a number from the file size would fold the
+ * audio track into a video statistic.
+ */
+export function sourceEncoding(source) {
+  const s = source || {}
+  const parts = []
+  if (s.profile) parts.push(String(s.profile))
+  const rate = Number(s.bit_rate)
+  if (Number.isFinite(rate) && rate > 0) {
+    parts.push(rate >= 1e6 ? `${(rate / 1e6).toFixed(1)} Mb/s`
+      : `${Math.round(rate / 1e3)} kb/s`)
+  }
+  const bpp = Number(s.bits_per_pixel)
+  if (Number.isFinite(bpp) && bpp > 0) parts.push(`${bpp.toFixed(3)} bpp`)
+  return parts.join(' · ')
+}
+
 /** The state chip on a source row.
  *
  * "Not scanned yet" and "could not be read" are DIFFERENT and used to look the
@@ -284,6 +336,14 @@ export function sourceState(source) {
   }
   if (s.detect_state === 'error') {
     return { tone: 'error', label: 'Detection failed', title: 'This file was read, but shot detection failed on it.' }
+  }
+  if (s.detect_state === 'single') {
+    // Its own badge and not "1 shot": the number is the same, the meaning is
+    // not. This file was DECLARED a single take, which is why the bank-wide
+    // re-cut and the detection pass both walk past it — and someone wondering
+    // why it never changes has to be able to see the reason on the card.
+    return { tone: 'info', label: 'Single shot',
+             title: 'You marked this file as one continuous take. Bulk passes leave it alone; ↻ Re-detect this file is the way back.' }
   }
   if (s.detect_state === 'ok') {
     const clips = n(s.clips)

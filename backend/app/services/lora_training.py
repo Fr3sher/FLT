@@ -4553,8 +4553,9 @@ def _custom_combo_hash(ds, base_model=_PERSISTED, family=None) -> str:
 # silently replaced A's LoRA). Cloud runs tag with their CloudTrainingRun id
 # (`_rc49`), local runs with their TrainingRunRecord id (`_rl12`) — matching the
 # ☁/💻 #N chips on the Runs page. Parsed back out (parse_deployed_run) so the
-# "in ComfyUI" list can show each file's source run. It is stripped from display
-# labels (comfyui._parse_trained_stem) so it reads as a chip, not name noise.
+# "in ComfyUI" list can show each file's source run. Display labels also keep
+# the raw `rcN`/`rlN` token (comfyui.format_trained_lora_label) so Test Studio
+# can tell two same-version runs apart where no chip is shown.
 _DEPLOYED_RUN_TAG_RE = re.compile(r'_r([cl])(\d+)(?:_v\d+)?(?:\.[^.]+)?$')
 
 
@@ -6487,6 +6488,60 @@ def list_imported_checkpoints(user_id, dataset_id, family=None) -> list[dict]:
     return out
 
 
+def list_all_deployed_checkpoints(user_id) -> list[dict]:
+    """EVERY LoRA this app has deployed into ComfyUI — across every dataset and
+    every family — so one screen can undeploy a pile of them in one pass.
+
+    WHY THIS EXISTS. Undeploying was reachable one pill at a time, buried in a
+    node's popover, with no way to see how many were deployed at all. Asked for
+    by the maintainer: "a button that lists every deployed LoRA and lets me tick
+    the ones to undeploy, to make it faster."
+
+    WHY IT DELEGATES INSTEAD OF SCANNING THE FOLDERS ITSELF, which would be a
+    dozen lines shorter: `list_imported_checkpoints` is the one place that knows
+    which file in `loras/<family>/` BELONGS TO THIS APP — the `lora_<trigger>`
+    boundary plus the cloud runs' own staging prefixes. A plain directory scan
+    would also return the LoRA the user downloaded from Civitai and dropped in
+    the same folder, and this list feeds a DELETE button. Offering someone their
+    own files to remove, in a screen labelled "undeploy what the app deployed",
+    is the one failure this must not have.
+
+    Cost: one call per (dataset, family). Each returns [] immediately when the
+    family folder does not exist, which is the common case — a machine trains one
+    or two families, not six.
+
+    Entries carry their dataset so the caller can address the undeploy route,
+    which is dataset-scoped: {dataset_id, dataset_name, family, filename, label}
+    plus whatever `list_imported_checkpoints` already stamps (run_id/run_source,
+    arch_mismatch).
+    """
+    out, seen = [], set()
+    for ds in fds.list_datasets(user_id) or []:
+        if ds.id is None:
+            continue
+        for fam in _FAMILY_SUBDIR:
+            try:
+                rows = list_imported_checkpoints(user_id, ds.id, family=fam)
+            except Exception:
+                # One unreadable family folder must not empty the whole list —
+                # the other five are still actionable.
+                logger.exception('deployed list: dataset %s family %s failed',
+                                 ds.id, fam)
+                continue
+            for row in rows:
+                # ONE row per file on disk. Two datasets sharing a trigger word
+                # both claim the same deployed file (the boundary match is on the
+                # name, and the name is all there is); listing it twice would
+                # offer the same removal twice and fail the second click.
+                key = (fam, os.path.normcase(row.get('filename') or ''))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({**row, 'dataset_id': ds.id,
+                            'dataset_name': ds.name, 'family': fam})
+    return out
+
+
 def lora_deploy_dir(user_id, dataset_id, family=None) -> str:
     """Absolute ComfyUI loras deploy folder for this dataset's FAMILY. Raises
     RuntimeError when ComfyUI is unconfigured (the caller — the full-backup
@@ -6513,6 +6568,25 @@ def deployed_lora_paths(user_id, dataset_id, family=None) -> list[str]:
         if p:
             out.append(p)
     return out
+
+
+def deployed_file_present(user_id, dataset_id, filename, family=None) -> bool:
+    """Is this deployed name still a real file in the family's loras folders?
+
+    `delete_imported_checkpoint` answers 'unknown checkpoint' to two situations
+    that are NOT the same thing for the person who clicked: the file was deleted
+    by hand since the list was drawn (nothing to do — they already have the
+    outcome they wanted), or the name is not one this app deployed (a refusal
+    they should see). The whitelist alone cannot tell them apart, because a file
+    that is gone drops out of the whitelist too. The disk can.
+    """
+    ds = fds.get_dataset(user_id, dataset_id)
+    if not ds:
+        return False
+    try:
+        return bool(_resolve_deployed_path(_train_type(ds, family), filename))
+    except Exception:
+        return False
 
 
 def delete_imported_checkpoint(user_id, dataset_id, filename, family=None) -> str:

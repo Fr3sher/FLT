@@ -198,6 +198,40 @@ def test_restore_rebuilds_datasets_on_clean_db(app, tmp_path):
         assert os.path.isfile(os.path.join(d, alice_imgs[0].filename))
 
 
+def test_restore_preserves_a_manually_marked_watermark(app, tmp_path):
+    """A hand-drawn watermark box sets FaceDatasetImage.watermark_source='manual'
+    (face_dataset_service.mask_watermark_region). The backup import validator's
+    allow-list only knew 'detector'/'vision', so every dataset carrying a
+    manually marked image was rejected whole on restore with "invalid backup
+    image watermark_source" — reported by firebird4579 (Discord), master-archive
+    restore on Python 3.10.6."""
+    from app.config import LOCAL_USER
+    from app.services import face_dataset_service as svc
+    from app.services import full_backup as fb
+    from app.models import FaceDatasetImage
+
+    with app.app_context():
+        _dataset_with_image(svc, LOCAL_USER, 'Liza', 'liza')
+        img = FaceDatasetImage.query.filter_by(
+            dataset_id=svc.list_datasets(LOCAL_USER)[0].id).one()
+        img.watermark_state = 'detected'
+        img.watermark_source = 'manual'
+        svc.db.session.commit()
+
+        out = str(tmp_path / 'master.zip')
+        fb.build_full_backup(LOCAL_USER, out)
+        for ds in list(svc.list_datasets(LOCAL_USER)):
+            svc.delete_dataset(LOCAL_USER, ds.id)
+
+        report = fb.restore_full_backup(LOCAL_USER, out)
+        assert report['ok'] and report['restored'] == 1
+        assert report['skipped'] == [], report['skipped']
+
+        restored_img = FaceDatasetImage.query.filter_by(
+            dataset_id=svc.list_datasets(LOCAL_USER)[0].id).one()
+        assert restored_img.watermark_source == 'manual'
+
+
 def test_restore_name_collision_gets_a_suffix(app, tmp_path):
     from app.config import LOCAL_USER
     from app.services import face_dataset_service as svc
@@ -739,6 +773,46 @@ def test_restore_route_detects_single_vs_master(app, client, tmp_path):
         time.sleep(0.02)
     assert st['state'] == 'done', st
     assert st['result']['restored'] == 1
+
+
+def test_uploaded_stream_wraps_an_object_missing_the_seekable_attribute(app):
+    """Werkzeug spools a large upload into tempfile.SpooledTemporaryFile, which
+    on Python < 3.11 does not expose `.seekable` at all — zipfile.ZipFile.open()
+    reads it as a bare attribute and crashes with AttributeError (reported by
+    firebird4579 on Discord, Python 3.10.6, on /api/backup/full/restore). A
+    stream that seek()/tell() already prove seekable but that lacks the
+    attribute must still be openable by zipfile."""
+    from app.routes.backup import _uploaded_stream
+
+    class _NoSeekableAttr:
+        """Same read/seek/tell surface as SpooledTemporaryFile before Python
+        3.11 — deliberately WITHOUT a `seekable` attribute."""
+        def __init__(self, data):
+            self._buf = io.BytesIO(data)
+
+        def seek(self, *a, **kw):
+            return self._buf.seek(*a, **kw)
+
+        def tell(self):
+            return self._buf.tell()
+
+        def read(self, *a, **kw):
+            return self._buf.read(*a, **kw)
+
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, 'w') as z:
+        z.writestr('hello.txt', 'world')
+
+    class _FileStorage:
+        stream = _NoSeekableAttr(payload.getvalue())
+
+    with app.app_context(), app.test_request_context():
+        stream = _uploaded_stream(_FileStorage())
+
+    assert not hasattr(_NoSeekableAttr, 'seekable')
+    assert stream.seekable() is True
+    with zipfile.ZipFile(stream) as z:
+        assert z.read('hello.txt') == b'world'
 
 
 def test_restore_route_rejects_garbage(app, client):

@@ -47,13 +47,23 @@ export function summarizeBankScrapeImport(totals) {
   return bits.join(' · ');
 }
 
+export const BANK_SCRAPE_ENDPOINT = '/api/bank/scrape-import';
+
 /**
  * Run the whole import. `post(url, body)` is the caller's JSON POST (injected so
  * this is testable without a server). Returns
  * {ok, bankId, created, saved, alreadyThere, added, skipped, error}.
+ *
+ * `endpoint` and `batchSize` exist for the 🎬 video lane, whose route answers the
+ * SAME shape under another address and bounds a request at fewer items (a clip is
+ * two orders of magnitude bigger than a photo). Everything that makes this
+ * function worth pinning — only the first batch may create the bank, every later
+ * one resumes into the id that came back — is identical on both, so it is one
+ * function rather than two that drift.
  */
-export async function runBankScrapeImport({ items, destination, post, onBatch }) {
-  const batches = bankScrapeBatches(items);
+export async function runBankScrapeImport({ items, destination, post, onBatch,
+  endpoint = BANK_SCRAPE_ENDPOINT, batchSize = BANK_SCRAPE_BATCH }) {
+  const batches = bankScrapeBatches(items, batchSize);
   const totals = { saved: 0, alreadyThere: 0, added: 0, skipped: {} };
   let bankId = destination?.bank_id ?? null;
   let created = false;
@@ -66,8 +76,22 @@ export async function runBankScrapeImport({ items, destination, post, onBatch })
     const body = bankId ? { items: batches[i], bank_id: bankId }
       : { items: batches[i], ...destination };
     onBatch?.({ index: i, count: batches.length, total: items.length });
-    // eslint-disable-next-line no-await-in-loop
-    const d = await post('/api/bank/scrape-import', body);
+    let d;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      d = await post(endpoint, body);
+    } catch (e) {
+      // The REAL post (fetchClient.postJson) THROWS on any non-2xx — it never
+      // resolves to {ok:false}. Without this catch every server refusal (a 400
+      // "dataset folder", a 409 "bank busy") escaped as an unhandled rejection:
+      // no toast, the batches already imported uncounted, and the panel's
+      // carefully written error branch dead code. The refusal becomes the same
+      // envelope a soft failure uses, with the totals the earlier batches
+      // actually earned.
+      return { ok: false, bankId, created,
+        error: e?.body?.error || e?.message || 'Unexpected error',
+        status: e?.status, ...totals };
+    }
     if (!d?.ok) {
       return { ok: false, bankId, created,
         error: d?.error || 'Unexpected error', ...totals };
@@ -77,6 +101,10 @@ export async function runBankScrapeImport({ items, destination, post, onBatch })
     totals.saved += d.saved || 0;
     totals.alreadyThere += d.already_there || 0;
     totals.added += d.added || 0;
+    // Files stored but the folder walk failed — the batch is not a failure
+    // (the bytes are on disk) but the summary must not read as the perfect
+    // run. Last one wins; the video lane's summary turns it into a sentence.
+    if (d.sync_error) totals.syncError = d.sync_error;
     for (const [k, v] of Object.entries(d.skipped || {})) {
       totals.skipped[k] = (totals.skipped[k] || 0) + v;
     }

@@ -714,12 +714,41 @@ const TOPICS = [
       'video unavailable', 'video extra', 'which piece is missing'],
     guide: { chapter: 'using-the-app', anchor: 'the-video-bank-turn-a-folder-of-rushes-into-shots' },
     app: { route: '/video-bank' } },
+  // Searched for by what people TRIED and could not do: they pasted a RedGifs or
+  // TikTok link into the image scraper and got "no images found", or they
+  // downloaded clips by hand into a folder because nothing else was on offer.
+  action('video-bank-scrape', 'Scrape the web into a video bank',
+    ['scrape', 'scraper', 'scrape video', 'scrape videos', 'scrape into video bank',
+     'download videos', 'download a clip', 'video from the web', 'videos from a url',
+     'redgifs', 'tiktok', 'erome', 'picazor', 'x videos', 'twitter video',
+     'no videos found', 'my video link is ignored', 'video items dropped',
+     'fill a video bank', 'video bank without a folder', 'no folder',
+     'new video bank from the web', 'add more clips', 'resume scrape',
+     // People search for where the files END UP, and for the reassurance: the
+     // scrape is the one thing in this lane that adds to a folder of your own.
+     'where do the clips go', 'which folder', 'add to my own bank',
+     'scrape into an existing bank', 'add clips to my rushes folder',
+     'does it write to my folder', 'my rushes folder',
+     'bank not in the list', 'dataset folder'],
+    '/video-bank', 'using-the-app', 'the-video-bank-turn-a-folder-of-rushes-into-shots'),
   action('video-bank-passes', 'Scan, find shots, make thumbnails',
     ['scan files', 'find shots', 'make thumbnails', 'run everything', 'video passes',
      'order of passes', 'nothing was detected', 'no shots found', '0 shots',
      'why is my bank empty', 'next step', 'cancel a pass', 'stop', 'busy',
      'already running', 'rescan folder', 'new videos'],
     '/video-bank', 'using-the-app', 'the-video-bank-turn-a-folder-of-rushes-into-shots'),
+  // Nobody searches "burst mode" until they have seen it. They search the
+  // SYMPTOM of not having it — "triage faster", "too many clicks" — or the
+  // thing they just pressed and nothing happened ("K does nothing").
+  action('video-burst-triage', 'Triage shots from the keyboard (burst mode)',
+    ['burst', 'burst mode', 'keyboard', 'keyboard shortcuts', 'shortcuts',
+     'hotkeys', 'keys', 'triage faster', 'faster triage', 'too many clicks',
+     'one key per shot', 'k keep', 'r reject', 'keep reject keyboard',
+     'auto-advance', 'auto advance', 'next untriaged', 'skip a shot',
+     'undo', 'undo a decision', 'i rejected the wrong shot', 'take it back',
+     'p untriaged', 'reset a shot', 'cursor', 'which shot is selected',
+     'k does nothing', 'shortcuts do not work', 'shortcut while typing'],
+    '/video-bank', 'using-the-app', 'triage-a-video-bank-from-the-keyboard'),
   action('video-quality-cuts', 'Measure shots and set quality cuts',
     ['measure quality', 'quality cuts', 'flags', 'flagged shots', 'amber flag',
      'still clip', 'barely moves', 'frozen', 'freeze', 'black frames',
@@ -731,7 +760,13 @@ const TOPICS = [
      'tiny clips', 'tiny shots', 'flash cut', 'flash cuts', '0.6 second shots',
      'half second shots', 'very short clips', 'shots too short',
      'minimum length', 'minimum duration', 'duration filter',
-     'hide short clips', 'too many clips'],
+     'hide short clips', 'too many clips',
+     // The look score arrives with 🔎 Find scenes but is READ here, and people
+     // search for it by the judgement ("ugly shots") or by the model's name,
+     // never by "aesthetic_floor".
+     'aesthetic', 'aesthetic floor', 'low aesthetic', 'ugly shots',
+     'pretty shots', 'nice looking', 'look score', 'laion', 'laion score',
+     'aesthetic score on video', 'rate how shots look'],
     '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
   // People search for the SYMPTOM ("the cut is one second too early", "half my
   // clip is frozen"), and — since it is the discovery this tool folds in — for
@@ -749,6 +784,30 @@ const TOPICS = [
      'thumbnail disappeared', 'lost my thumbnail', 'thumbnail gone after trimming',
      'redetect deleted my cuts', 're-detect', 'lost my manual cuts'],
     '/video-bank', 'using-the-app', 'retouch-a-cut-trim-split-or-draw-a-shot-by-hand'),
+  // The symptoms this one answers are the loudest in the whole lane: "it cut my
+  // video into 60 pieces" and "it missed every cut". Both are the SAME control,
+  // and until it was exposed the honest answer was "you cannot change that".
+  action('video-shot-threshold', 'Change how often a rush gets cut',
+    ['threshold', 'sensitivity', 'cut sensitivity', 'too many shots',
+     'too many clips', 'cut into pieces', 'chopped up', 'over-detected',
+     'over detection', 'false cuts', 'invented cuts', 'not enough shots',
+     'missed every cut', 'one shot only', 'under-detected', 'find shots again',
+     're-cut', 'recut', 're-cut a bank', 'redetect from cache', 'instant',
+     'preview shots', 'how many shots', 'dry run shots', 'shot_detect.threshold',
+     'per file threshold', 'per bank threshold', '0.5', 'transnetv2'],
+    '/video-bank', 'using-the-app', 'change-how-often-a-rush-gets-cut'),
+  action('video-single-shot', 'Mark a file as one single take',
+    ['single shot', 'single take', 'one take', 'one shot', 'no cuts',
+     'this file has no cuts', 'do not cut this file', 'whole file as one clip',
+     'stop splitting this video', 'undo single shot', 'redetect this file',
+     're-detect this file', 'keep the whole file'],
+    '/video-bank', 'using-the-app', 'change-how-often-a-rush-gets-cut'),
+  action('video-transition-kind', 'Cut or dissolve: what the chip on a shot means',
+    ['dissolve', 'cross fade', 'crossfade', 'fade', 'transition', 'hard cut',
+     'dissolve 18f', 'amber chip', 'what is that chip', 'transition type',
+     'clip starts on a fade', 'first frames are a fade', 'trim dissolves',
+     'shot_detect.trim_dissolves', 'shot_detect.dissolve_min_frames'],
+    '/video-bank', 'using-the-app', 'change-how-often-a-rush-gets-cut'),
   // The symptoms: a search that cannot find an action, a dataset that trained on
   // nothing, and "why did my caption come back after I fixed it" (it must not).
   action('video-captions', 'Describe shots, and search what happens',
@@ -813,6 +872,82 @@ const TOPICS = [
      'watermark score', 'watermark cut', 'watermark detector', 'detector weights',
      'not downloaded', 'ambassador frame'],
     '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  // Arrived at from the SYMPTOM in almost every case — "my LoRA writes
+  // subtitles", "black bars in every generation" — long before anyone goes
+  // looking for a control named after the measurement. The install question
+  // ("bands only") is here too: it is the one capability in the app whose
+  // absence downgrades a pass instead of blocking it, so the sentence a user
+  // meets is unlike every other missing-extra sentence.
+  action('video-safe-zone', 'Bands and burned-in text (🔳 Safe zone)',
+    ['safe zone', 'safezone', 'letterbox', 'letterboxed', 'pillarbox',
+     'black bars', 'bars', 'padding', 'padded video', 'vertical video padded',
+     'burned in text', 'burned-in text', 'subtitles', 'subtitle', 'captions in the picture',
+     'hardsub', 'hardsubs', 'chyron', 'lower third', 'text watermark',
+     'my lora writes text', 'my lora draws subtitles', 'gibberish text',
+     'text coverage', 'usable frame', 'crop', 'how much can i crop',
+     'bands only', 'rapidocr', 'ocr', 'text extra not installed'],
+    '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  // Reached from the SYMPTOM in every case — "my LoRA output looks mushy",
+  // "everything I generate has blocks in it", "this 1080p file does not look
+  // like 1080p" — and from the one question this pass exists to answer that
+  // nothing else in the app can: whether a file was upscaled. The sharpness
+  // floor measures a small analysis copy and cannot see it, so a user who has
+  // already set that cut and still gets soft output arrives here next.
+  action('video-defect-sweep', 'Duplicated frames, blocks and soft edges (🩻 Defects)',
+    ['defects', 'defect sweep', 'duplicated frames', 'duplicate frames',
+     'repeated frames', 'same frame twice', 'pulldown', '24fps in 30fps',
+     'frame rate conversion', 'compression blocks', 'blocky', 'blocking',
+     'macroblock', 'macroblocks', 'artifacts', 'artefacts', 'squeezed',
+     'blurred edges', 'blurry', 'soft at full size', 'upscaled', 'upscale',
+     'fake 1080p', 'fake 4k', 'not really hd', 'reencoded', 're-encoded',
+     'reuploaded', 'bitrate', 'bits per pixel', 'bpp', 'codec profile',
+     'block max', 'blur max', 'dup frames max', 'needs ffmpeg'],
+    '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  // Reached from the WORRY as much as from the feature name — "is this clip
+  // real", "my scrape is full of AI slop" — and from the two questions the
+  // hedge provokes the moment somebody sees the chip: how sure is it, and why
+  // does the Bank say "AI" about a still while this says "may be". The keywords
+  // carry both spellings of the cut, because its polarity is the thing people
+  // get wrong.
+  action('video-ai-check', 'Shots that may be AI-generated (🤖 AI check)',
+    ['ai check', 'aicheck', 'ai generated', 'ai-generated', 'is this real',
+     'synthetic video', 'generated video', 'ai slop', 'deepfake', 'fake video',
+     'sora', 'veo', 'kling', 'runway', 'generated clips in my bank',
+     'motion irregularity', 'motion irregularity floor', 'too smooth',
+     'suspiciously smooth', 'd3', 'second order', 'how accurate is the ai check',
+     'may be ai generated', 'why does the bank say ai and the video says maybe'],
+    '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  // 🎥 Two things people will search for and one they will complain about. The
+  // complaint is the missing "tilt up" — the trainer's own vocabulary has it and
+  // this pass never emits it — so the keywords carry the words nobody will find
+  // as chips, and the Guide section says why they are absent rather than
+  // leaving someone convinced the detection is broken.
+  action('video-camera-motion', 'Label what the camera did (🎥 Camera)',
+    ['camera motion', 'camera movement', 'camera pass', 'pan', 'pan left',
+     'pan right', 'pan up', 'pan down', 'tilt', 'tilt up', 'tilt down',
+     'zoom in', 'zoom out', 'dolly', 'truck', 'orbit', 'around left',
+     'arc shot', 'roll', 'rolling', 'dutch angle', 'handheld', 'handheld shot',
+     'shaky', 'shaky footage', 'camera shake', 'camera shake max', 'wobble',
+     'tripod', 'static shot', 'locked off', 'slideshow', 'ken burns',
+     'still image panned', 'subject moves', 'subject motion',
+     'why is there no tilt label', 'why is my pan called a slideshow',
+     'motiondirector', 'hunyuan camera', 'filter by camera'],
+    '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  // 🔗 Two searches to serve and one misconception to head off. People will look
+  // for this by the SYMPTOM ("two scenes in one clip", "the detector missed a
+  // cut") rather than by the number's name, so those phrases carry the keywords.
+  // The misconception is the one the calibration refuted: someone will assume a
+  // near-1 coherence means "nothing moves" and go looking for a still filter
+  // here — the keywords bring them to a section that says where stillness
+  // actually lives.
+  action('video-temporal-coherence', 'Spot a shot that is really two (🔗 coherence)',
+    ['scene coherence', 'coherence floor', 'temporal coherence', 'missed cut',
+     'cut inside the shot', 'two scenes in one clip', 'shot contains a cut',
+     'detector missed a cut', 'dissolve not cut', 'match cut', 'shot is really two',
+     'scene changes mid shot', 'why is my long take flagged',
+     'coherence says 1 but the shot moves', 'does coherence detect still shots',
+     'split a shot the detector missed'],
+    '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
   action('video-flag-chips', 'Filter the gallery by a quality flag',
     ['flag chips', 'filter by flag', 'flagged shots', 'select flagged',
      'reject all flagged', 'amber chips', 'show only flagged', 'counts loaded',
@@ -875,6 +1010,12 @@ const TOPICS = [
       'where did this lora come from', 'history', 'overview'],
     guide: { chapter: 'using-the-app', anchor: 'the-lora-canvas-every-run-on-one-board' },
     app: { route: '/canvas' } },
+  action('canvas-undeploy-bulk', 'Undeploy several LoRAs from ComfyUI at once',
+    ['undeploy', 'undeployed', 'remove lora', 'remove from comfyui', 'uninstall lora',
+     'delete lora', 'clean loras', 'loras folder', 'full folder', 'too many loras',
+     'deployed', 'deployed loras', 'list deployed', 'bulk', 'batch', 'tick',
+     'checkboxes', 'select all', 'free space', 'tidy comfyui', 'canvas'],
+    '/canvas', 'using-the-app', 'undeploy-several-loras-at-once'),
   action('canvas-arrange', 'Move run cards & ✦ Tidy up',
     ['move a run', 'drag a card', 'arrange the canvas', 'rearrange', 'layout',
      'tidy up', 'reset the layout', 'positions', 'long press', 'pick up a card',
@@ -1786,6 +1927,35 @@ const TOPICS = [
      'watermark source', 'detector', 'vision model', 'why is this flagged',
      'watermark score', 'sensitivity', 'threshold', 'false positive'],
     '/bank', 'using-the-app', 'clean-the-watermarks-a-bank-found'),
+  /* ✂ and ✨ share one guide section but get a topic EACH, for the same reason
+     🎨 Medium and ⤢ Angle do below: they are two different gestures asked about
+     in two different vocabularies ("how do I crop in the bank?" vs "can I
+     upscale before promoting?"), and one topic would only ever be found by half
+     the people looking. ↩ Revert gets its own because it is what people search
+     for in a hurry, after the edit they regret. */
+  action('action-image-repair', 'Repaint one detail without regenerating the image',
+    ['repair', 'repaint', 'inpaint', 'inpainting', 'fix a detail', 'small fix',
+     'remove jewelry', 'necklace', 'earrings', 'skin', 'blemish', 'imperfection',
+     'custom prompt', 'free prompt', 'mask', 'zone', 'without regenerating',
+     'keep the rest', 'byte identical', 'klein', 'dataset'],
+    '/datasets', 'using-the-app', 'repaint-one-detail-without-regenerating-the-image'),
+  action('action-bank-crop', 'Crop an image inside a bank',
+    ['crop', 'cropping', 'reframe', 'reframing', 'framing', 'cut', 'trim',
+     'zoom in', 'recadrer', 'bank', 'review', 'lightbox', 'box', 'ratio',
+     'aspect', 'square', 'resample', 'resolution', 'no resize', 'without dataset',
+     'before promoting', 'edit image', 'C key'],
+    '/bank', 'using-the-app', 'crop-and-upscale-inside-a-bank'),
+  action('action-bank-improve', 'Upscale & improve images inside a bank',
+    ['upscale', 'upscaling', 'improve', 'enhance', 'sharpen', 'super resolution',
+     'super-resolution', 'klein', 'seedvr2', 'seedvr', 'low resolution', 'small',
+     'blurry', 'soft', 'quality', 'gpu', 'comfyui', 'bank', 'batch', 'pass',
+     'before promoting', 'without dataset', 'stop'],
+    '/bank', 'using-the-app', 'crop-and-upscale-inside-a-bank'),
+  action('action-bank-revert-edits', 'Undo a crop or an upscale made in a bank',
+    ['revert', 'undo crop', 'undo upscale', 'undo improve', 'restore', 'original',
+     'back to original', 'cancel edit', 'remove edit', 'edits', 'mistake',
+     'wrong crop', 'redo', 'improve again', 'run it again', 'bank'],
+    '/bank', 'using-the-app', 'crop-and-upscale-inside-a-bank'),
   // 🎨 Medium and ⤢ Angle share one guide section but get a topic EACH: they are
   // two separate chip rows, asked about in two very different words ("is this
   // anime?" vs "where are my profile shots?"), and one topic would only ever be
@@ -1939,11 +2109,13 @@ const TOPICS = [
      'gallery lightbox', 'improve a test image', 'improve a render',
      'gallery did not update', 'upscale not showing'],
     '/canvas', 'using-the-app', 'upscale-a-picture-straight-from-the-board'),
-  action('action-grid-sort', 'Sort the dataset grid by face similarity',
+  action('action-grid-sort', 'Sort the dataset grid, or group it by shot type',
     ['sort', 'order', 'ordering', 'reorder', 'rank', 'ranking', 'best first',
      'worst first', 'face similarity', 'similarity', 'resemblance', 'looks like',
      'face score', 'closest', 'least alike', 'review faster', 'grid', 'unscored',
-     'not scored', 'analyze faces'],
+     'not scored', 'analyze faces', 'group', 'grouping', 'shot type', 'shot types',
+     'framing', 'face bust body back', 'compare', 'side by side', 'mixed up',
+     'all mixed', 'which to keep'],
     '/datasets?section=images', 'using-the-app', 'sort-a-grid-to-review-faster'),
   action('action-classify-framing', 'Classify framing of imported images',
     ['framing', 'classify', 'classify framing', 'shot type', 'shot types', 'unknown framing',
@@ -1964,7 +2136,9 @@ const TOPICS = [
      'angles', 'camera angle', 'view', 'lighting', 'outfit', 'clothes',
      'expression', 'setting', 'background', 'overfit', 'overfitting',
      'baked in', 'generalise', 'generalize', 'only makes one', 'captions',
-     'caption keywords', 'composition green', 'target reached'],
+     'caption keywords', 'composition green', 'target reached',
+     'show me those', 'which images', 'click a chip', 'filter by caption',
+     'see the profiles', 'find the ones'],
     '/datasets?section=add', 'dataset-guide', '9-coverage-what-your-set-never-showed'),
   // Krea's Fit path applies the selected card's frame to a reference that still
   // anchors identity. Keep the stable id/anchor so old help links continue to land.

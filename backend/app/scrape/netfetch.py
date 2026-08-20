@@ -29,9 +29,12 @@ DOWNLOAD_TIMEOUT = 180  # secondes
 # Timeout socket interne yt-dlp (par requête réseau).
 SOCKET_TIMEOUT = 30  # secondes
 
-# Plancher de version yt-dlp (CVE-2024-38519). WARNING non bloquant — un assert
+# Plancher de version yt-dlp. Relevé 2026-08-18 : l'ancien plancher (2024.07.01,
+# CVE-2024-38519) avait DEUX ans et DEUX CVE de retard — CVE-2026-50019 (fuite de
+# cookies, corrigée en 2026.06.09) et CVE-2026-55404 (injection de commande via
+# --write-link, corrigée en 2026.07.04). WARNING non bloquant — un assert
 # dur sur une version briquerait Flask au démarrage.
-YTDLP_VERSION_FLOOR = (2024, 7, 1)
+YTDLP_VERSION_FLOOR = (2026, 7, 4)
 _version_checked = False
 
 _ffmpeg_checked = None
@@ -67,7 +70,7 @@ def _check_ytdlp_version():
         _version_checked = True
         try:
             current_app.logger.warning(
-                "yt-dlp %s < plancher %s recommandé (CVE-2024-38519). "
+                "yt-dlp %s < plancher %s recommandé (CVE-2026-50019/55404). "
                 "Mettre à jour : python -m pip install -U yt-dlp",
                 ver, YTDLP_VERSION_FLOOR,
             )
@@ -246,6 +249,47 @@ def _looks_like_image(path):
     return False
 
 
+def _looks_like_video(path):
+    """True si `path` commence par une signature vidéo connue
+    (mp4/mov/m4v, mkv/webm, avi, gif, mpeg PS/ES/TS).
+
+    Miroir local de la validation vidéo de l'app source : elle vivait dans un
+    module `upload` qui n'existe pas ici, et l'import fantôme faisait lever
+    ImportError à CHAQUE appel réel (les tests mockaient en amont, ils ne l'ont
+    jamais vu). Extension et content-type seuls sont falsifiables — on lit les
+    octets, jamais plus que l'en-tête.
+
+    ATTENTION : `ftyp` couvre toute la famille ISO-BMFF, AVIF/HEIC compris, et
+    `GIF8` est aussi une signature raster — cette fonction répond donc 'vidéo'
+    sur une image AVIF ou un GIF. C'est assumé (maintenir la liste exhaustive
+    des marques ISO-BMFF images est perdu d'avance) : tout appelant qui accepte
+    AUSSI les images doit tester l'image D'ABORD, cf. `_validate_media_file`.
+    """
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(512)   # 512 o : couvre les 3 octets de synchro TS (0, 188, 376)
+    except OSError:
+        return False
+    if len(head) < 12:
+        return False
+    if head[4:8] == b'ftyp':                              # mp4 / mov / m4v / 3gp (ISO-BMFF)
+        return True
+    if head[:4] == b'\x1a\x45\xdf\xa3':                   # EBML : mkv / webm
+        return True
+    if head[:4] == b'RIFF' and head[8:12] == b'AVI ':     # avi
+        return True
+    if head[:4] == b'GIF8':                               # gif
+        return True
+    if head[:4] in (b'\x00\x00\x01\xba',                  # mpeg program stream (pack header)
+                    b'\x00\x00\x01\xb3'):                 # mpeg-1/2 video (sequence header)
+        return True
+    # mpeg-ts : pas de magic en tête, mais une synchro 0x47 tous les 188 octets.
+    # Un seul 0x47 ne prouve rien (tout fichier commençant par 'G') — on en exige trois.
+    if len(head) > 376 and head[0] == 0x47 and head[188] == 0x47 and head[376] == 0x47:
+        return True
+    return False
+
+
 import os as _os
 import glob as _glob
 
@@ -263,7 +307,6 @@ def download_via_ytdlp(url, dest_base):
             try: _os.remove(stray)
             except OSError: pass
         return False, None, err
-    from ..upload.routes import _looks_like_video
     produced = sorted(_glob.glob(_os.path.join(dest_dir, f'{uid}.*')))
     final = None
     for p in produced:
@@ -365,11 +408,11 @@ def _validate_media_file(path, *, allow_image=True):
     l'extension de l'URL. `allow_image=False` => seules les vidéos passent
     (chemin driver SCAIL, vidéo-only)."""
     # On teste l'image AVANT la vidéo : _looks_like_video matche tout 'ftyp'
-    # (y compris AVIF) → sans cet ordre une image AVIF serait classée 'video'.
+    # (y compris AVIF) et aussi 'GIF8' → sans cet ordre une image AVIF, ou un
+    # GIF, serait classé 'video'. Pinné par test_netfetch_video_magic.py.
     if _looks_like_image(path):
         return (True, 'image') if allow_image else (False, None)
-    # Réutilise la validation vidéo durcie de l'upload (mp4/mov/webm/mkv/avi/gif/mpeg).
-    from ..upload.routes import _looks_like_video
+    # Validation vidéo durcie, locale (mp4/mov/webm/mkv/avi/gif/mpeg).
     if _looks_like_video(path):
         return True, 'video'
     return False, None

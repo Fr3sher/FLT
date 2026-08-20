@@ -38,7 +38,12 @@ export const VIDEO_PIECES = [
   {
     key: 'encode',
     label: 'Cutting clips',
-    blurb: 'Re-encoding the shots you kept into a training set. Only promotion needs this.',
+    // "Only promotion needs this" was true for four waves and stopped being
+    // true when 🩻 Defects landed: that pass hands whole files to the same
+    // binary. A blurb that still said "only promotion" would send someone
+    // without ffmpeg looking for a different reason their sweep button is grey.
+    blurb: 'Re-encoding the shots you kept into a training set, and sweeping '
+      + 'your files for compression damage. Promotion and 🩻 Defects need this.',
     fix: 'Install ffmpeg, or put it on your PATH.',
   },
 ]
@@ -75,6 +80,32 @@ export const PASS_REQUIREMENTS = {
   // detector's own environment and weights are a separate install step, checked
   // server-side with its own sentence — the same split as embed and caption.
   watermark: ['decode'],
+  // 🔳 Safe zone decodes three frames per shot, so `decode` and nothing else.
+  // Its OCR engine is deliberately NOT listed here, and it is the only pass in
+  // this table whose second dependency is left out on purpose: without it the
+  // pass still measures letterbox and pillarbox bands on every shot and says so.
+  // Requiring it would grey out a button that works — the exact mistake this
+  // table exists to avoid, in the opposite direction.
+  safezone: ['decode'],
+  // 🩻 Defects is the ONLY reading pass that needs `encode` — and it needs
+  // nothing else, which is the mirror image of every row above. The three
+  // measurements are ffmpeg filters running inside ffmpeg's own decode loop, so
+  // the file is never opened here: an install with `av` and no ffmpeg cannot
+  // run it, and an install with ffmpeg and no `av` can. Listing `decode` too
+  // would grey out a button that works, and listing `encode` on the others
+  // would grey out ones that never touch the binary.
+  defects: ['encode'],
+  // 🤖 AI check decodes sixteen frames per shot with PyAV, so `decode` and
+  // nothing else. The encoder runs in the ✨ Score interpreter — the same split
+  // as embed, caption and watermark, checked server-side with its own sentence,
+  // because that environment is a different install step and not one of the
+  // three video pieces.
+  aicheck: ['decode'],
+  // 🎥 Camera tracks frames it decodes itself, in the app's own interpreter, so
+  // `decode` and nothing else. Note that the decode probe now imports cv2 and
+  // numpy alongside av for exactly this pass — the capability is one row on the
+  // Setup screen and one install button, so it stays one requirement here.
+  camera: ['decode'],
   pipeline: ['decode', 'detect'],
   promote: ['encode'],
 }

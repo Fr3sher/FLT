@@ -14,12 +14,12 @@ work.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import threading
 
 from .. import config as cfg
+from . import infer_env
 from .clip_text_encoder import TextEncodeError, _readline_with_timeout
 
 _SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'video_caption_infer.py')
@@ -101,8 +101,8 @@ class CaptionWorker:
 
     def _start(self):
         python = cfg.get('bank_scoring.python') or sys.executable
-        env = dict(os.environ)
-        env['PYTHONUTF8'] = '1'
+        # No user site-packages, and the same for the probe - see infer_env.
+        env = infer_env.worker_env(python, PYTHONUTF8='1')
         if not self.use_gpu:
             # Belt and braces with the child, which hides CUDA again before it
             # imports torch. Two locks on the same door because the failure —
@@ -110,7 +110,8 @@ class CaptionWorker:
             env['CUDA_VISIBLE_DEVICES'] = ''
         try:
             proc = subprocess.Popen(
-                [python, _SCRIPT], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                infer_env.worker_argv(python, _SCRIPT),
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
                 errors='replace', bufsize=1, env=env,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -142,7 +143,7 @@ class CaptionWorker:
         self._proc = proc
         return proc
 
-    def caption(self, frame_paths, prompt):
+    def caption(self, frame_paths, prompt, span_s=None):
         """The caption for one shot, or '' when the model refused THIS shot.
 
         '' rather than an exception for a per-clip refusal, so the caller stores
@@ -155,9 +156,13 @@ class CaptionWorker:
             if proc is None:
                 proc = self._start()
             try:
-                proc.stdin.write(json.dumps({
-                    'frames': [str(p) for p in frame_paths],
-                    'prompt': str(prompt)}) + '\n')
+                req = {'frames': [str(p) for p in frame_paths],
+                       'prompt': str(prompt)}
+                if span_s:
+                    # Seconds the frames span — lets the child stamp honest
+                    # timestamps instead of transformers' 24 fps default.
+                    req['span_s'] = float(span_s)
+                proc.stdin.write(json.dumps(req) + '\n')
                 proc.stdin.flush()
                 data = json.loads(_readline_with_timeout(proc, CAPTION_TIMEOUT))
             except TextEncodeError:

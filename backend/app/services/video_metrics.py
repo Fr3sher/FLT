@@ -23,6 +23,11 @@ EVERY frame, so the useful question is rarely "what is the average?":
               thrashing?" are different questions and cannot share a number.
   freeze    → the SHARE of near-still frames. A frozen second inside a lively shot
               leaves the mean perfectly healthy; only the share reveals it.
+  aesthetic → MEAN, and it is the one entry here that does NOT follow the rule
+              above. See `aesthetic_of` for the argument: it is the only quantity
+              in this list that barely moves inside a shot, so its per-frame
+              readings are noise around one value rather than moments the model
+              learns separately.
 
 WHY RAW SCORES ARE STORED AND VERDICTS ARE NOT. Same philosophy as the image
 bank: retuning a threshold then re-sorts the bank with no rescan. It matters more
@@ -77,7 +82,61 @@ SHARPNESS_KEY = 'sharpness_p90'
 # scan, which rewrites the blob wholesale, must carry them across rather than
 # erase a dedup or watermark verdict every time somebody re-measures a bank.
 ADVISORY_KEYS = ('duplicate_group', 'duplicate_of',
-                 'watermark_score', 'watermark_state')
+                 'watermark_score', 'watermark_state',
+                 # 🎨 The look score. Produced from the search vectors, so a
+                 # re-measure (which decodes frames and knows nothing about
+                 # CLIP) must carry it across rather than silently drop it and
+                 # send the whole bank back through the aesthetic pass.
+                 'aesthetic_score',
+                 # 🔳 The safe zone. Bands, burned-in text and what is left of
+                 # the frame — three decoded frames and a CPU OCR per shot, the
+                 # most expensive advisory pass in the lane, so dropping it on a
+                 # re-measure would be the costliest silence of the five. Pinned
+                 # against video_safe_zone.OWNED_KEYS by a test: a key that pass
+                 # writes and this list does not carry is erased by the next
+                 # quality scan with nothing anywhere to see.
+                 'safe_zone_state', 'safe_zone_frames', 'safe_bands',
+                 'bars_ratio', 'text_coverage', 'safe_rect', 'safe_area',
+                 # 🩻 The defect sweep. Produced by ONE ffmpeg pass over the
+                 # whole source file, so re-measuring a single clip cannot
+                 # reproduce them — dropping them here would send the entire
+                 # bank back through a decode of every file it holds, which is
+                 # the most expensive silence of the six. Pinned against
+                 # video_defect_sweep.OWNED_KEYS by a test.
+                 'defect_state', 'defect_frames', 'dup_frame_ratio',
+                 'block_score', 'blur_score',
+                 # 🤖 The AI check. Sixteen contiguous frames decoded, cropped
+                 # and pushed through a vision transformer per shot — 0.83 s
+                 # each, measured, so a bank of a few thousand is tens of
+                 # minutes. Dropping it on a re-measure would be the most
+                 # expensive silence in this list after the defect sweep's, and
+                 # unlike that one it would also lose the STATE that says why a
+                 # shot has no score. Pinned against
+                 # video_ai_check.OWNED_KEYS by a test.
+                 'ai_check_state', 'ai_check_frames', 'motion_irregularity',
+                 # 🎥 Camera motion. Every frame of every shot decoded and
+                 # tracked — dropping these would send a whole bank back through
+                 # that decode, and it would also lose the STATE that says why a
+                 # shot has no rates. Ten keys and not one summary, because the
+                 # LABELS are derived from the rates at read time: keeping only
+                 # a verdict would freeze the vocabulary into the database and
+                 # make every threshold adjustment a rescan. Pinned against
+                 # video_camera_motion.OWNED_KEYS by a test.
+                 'camera_state', 'camera_steps',
+                 'camera_pan_rate', 'camera_tilt_rate', 'camera_zoom_rate',
+                 'camera_roll_rate', 'camera_travel', 'camera_shake',
+                 'camera_coverage', 'camera_residual',
+                 # 🔗 Temporal coherence. The cheapest reading in this list —
+                 # dot products over vectors 🔎 Find scenes already cached — but
+                 # dropping it would still send a whole bank back through a pass
+                 # AND lose the STATE that says why a shot has no numbers. Four
+                 # numbers and not one verdict, for the reason every advisory
+                 # pass here keeps its rates: the flag is derived at read time,
+                 # so freezing a verdict into the database would make every
+                 # threshold adjustment a rescan. Pinned against
+                 # video_temporal_coherence.OWNED_KEYS by a test.
+                 'coherence_state', 'coherence_frames', 'coherence_span',
+                 'coherence_min', 'coherence_span_s')
 
 
 def merge_advisory(previous, summary):
@@ -159,6 +218,44 @@ def summarise_audio(windows):
     }
 
 
+def aesthetic_of(frame_scores):
+    """Collapse a shot's per-frame LAION aesthetic ratings (~1..10) into ONE
+    number — the score `video_aesthetic` stores and `aesthetic_floor` cuts on.
+
+    MEAN, and it is the only aggregation in this module NOT chosen by "which
+    moment does the model also learn". Exposure takes the MIN because half a
+    second of black IS in the training data; sharpness takes p90 because
+    legitimate motion blur must not sink a clip that is sharp somewhere. Look is
+    a different KIND of quantity: framing, lighting, palette and subject barely
+    move inside one shot — a cut is precisely where they change, which is why
+    shots exist at all. Three readings of one shot are therefore three noisy
+    measurements of ONE value, and the mean is what reduces that noise.
+
+    THE HONEST LIMIT, and why the two obvious alternatives are worse HERE. The
+    public curation pipelines this head comes from sample ~1 fps; this lane
+    embeds three frames chosen by POSITION and by SHARPNESS, and that biased
+    sample is what makes the choice:
+
+      * MIN would mostly report an EDGE frame. 'start' and 'end' sit
+        EDGE_MARGIN_S (0.25 s) inside the bounds — close enough to a cut that
+        dissolves and half-faded frames land there disproportionately, which is
+        the very reason that margin exists. A min would answer "how ugly is the
+        worst boundary" rather than "how does this shot look".
+      * MAX would collapse onto the 'key' frame, which IS the metrics pass's
+        ambassador — the sharpest sanely-exposed frame of the shot. That would
+        quietly turn this into a second reading of sharpness_p90 instead of an
+        independent signal.
+
+    None for an empty list, never 0.0: nothing was measured, and a 0 on a 1..10
+    scale is the strongest possible claim that a shot is hideous. Same rule as
+    `percentile` above, and the same reason.
+    """
+    values = [float(s) for s in (frame_scores or []) if s is not None]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
 def summarise(frames, fps, audio=UNMEASURED):
     """Collapse per-frame readings into the numbers stored on a clip.
 
@@ -231,7 +328,11 @@ def summarise(frames, fps, audio=UNMEASURED):
 THRESHOLD_KEYS = ('min_duration_s', 'motion_floor', 'motion_ceiling',
                   'luma_floor', 'freeze_max', 'sharpness_floor',
                   'first_frame_floor', 'silence_max', 'audio_floor',
-                  'watermark_max')
+                  'watermark_max', 'aesthetic_floor',
+                  'bars_max', 'text_coverage_max', 'safe_area_min',
+                  'dup_frames_max', 'block_max', 'blur_max',
+                  'motion_irregularity_floor', 'camera_shake_max',
+                  'coherence_floor')
 
 
 def verdicts(scores, thresholds, duration_s=None):
@@ -339,6 +440,152 @@ def verdicts(scores, thresholds, duration_s=None):
     mark_max = thresholds.get('watermark_max')
     if mark is not None and mark_max is not None and mark > mark_max:
         flags.add('watermark')
+
+    # 🎨 Look. The LAION aesthetic head over the frame vectors 🔎 Find scenes
+    # cached — the SAME head, the same weights and the same 1..10 scale the image
+    # bank's ✨ Score pass puts on a still, so the flag wears the image lane's
+    # name (`low_aesthetic`) because it means the same thing on both surfaces.
+    # A shot the aesthetic pass never scored carries NO key at all and is never
+    # flagged: no measurement, no verdict, exactly like every rule above.
+    look = scores.get('aesthetic_score')
+    look_floor = thresholds.get('aesthetic_floor')
+    if look is not None and look_floor is not None and look < look_floor:
+        flags.add('low_aesthetic')
+
+    # ── 🔳 The safe zone: three cuts on three different findings ─────────────
+    # They are deliberately NOT one. A padded clip, a subtitled clip and a clip
+    # with nothing croppable left are three states with three different
+    # remedies — crop it, drop it, forget it — and a single number could only
+    # ever recommend the last one. Same split as freeze vs still, and as quiet
+    # vs silent. All three obey the rule every cut above obeys: no measurement,
+    # no flag, so a bank measured without the OCR engine (which stores its bands
+    # and NO text keys) can never be flagged for text it was never shown.
+
+    # Container. `bars_ratio` is the same arithmetic the image bank's own
+    # `bars_ratio` column carries, so the number a user calibrated on stills
+    # means the same thing here.
+    bars = scores.get('bars_ratio')
+    bars_max = thresholds.get('bars_max')
+    if bars is not None and bars_max is not None and bars > bars_max:
+        flags.add('letterboxed')
+
+    # Burned-in text — subtitles, chyrons, lower thirds. Only zones that held
+    # still ACROSS the shot's frames feed this; a shop sign is scene content and
+    # never counted (see video_safe_zone_geometry.structural_text).
+    text = scores.get('text_coverage')
+    text_max = thresholds.get('text_coverage_max')
+    if text is not None and text_max is not None and text > text_max:
+        flags.add('burned_text')
+
+    # What is LEFT once both are cut away, as a share of the frame. The one cut
+    # here whose published numbers are worth quoting: HunyuanVideo 1.5 discards
+    # a clip whose crop keeps under 60 % of the frame. Quoted in the hint, and
+    # in no default — that figure was set for a web-scale crawl.
+    area = scores.get('safe_area')
+    area_min = thresholds.get('safe_area_min')
+    if area is not None and area_min is not None and area < area_min:
+        flags.add('small_safe_zone')
+
+    # ── 🩻 The defect sweep: three cuts on what a re-encode left behind ──────
+    # One ffmpeg pass per SOURCE FILE produced all three (video_defect_sweep),
+    # and they are three flags rather than one for the same reason the safe
+    # zone's are: three findings with three different remedies — re-cut around
+    # the stall, drop the file, or find a better copy of it. All three obey the
+    # rule every cut above obeys: no measurement, no flag, so a bank swept
+    # before this shipped, or a shot too short to have been sampled, is never
+    # flagged for something nothing looked at.
+
+    # Frames delivered twice. NOT the same finding as `freeze`, and the two must
+    # not be collapsed: that one reads motion vectors and says nothing MOVED,
+    # this one says the same picture ARRIVED twice. A 24-into-30 pulldown
+    # produces the second with no trace of the first, and it is the single most
+    # common thing wrong with re-uploaded footage.
+    dup = scores.get('dup_frame_ratio')
+    dup_max = thresholds.get('dup_frames_max')
+    if dup is not None and dup_max is not None and dup > dup_max:
+        flags.add('dup_frames')
+
+    # The macroblock grid showing through. Never legitimate — no camera, lens or
+    # light produces one — so unlike every other cut here the only question is
+    # how much of it the user will tolerate.
+    block = scores.get('block_score')
+    block_max = thresholds.get('block_max')
+    if block is not None and block_max is not None and block > block_max:
+        flags.add('blocky')
+
+    # Wide edges at FULL SIZE, which is the half `soft` cannot see: that flag
+    # reads a Laplacian computed on a 160-pixel-wide analysis copy, and footage
+    # upscaled from something smaller is identical to the real thing at 160
+    # pixels (measured: three files, 354.35 / 353.69 / 353.72). Deliberately its
+    # own flag rather than more evidence for `soft` — a clip can be sharp at
+    # analysis size and mush at full size, and only one of the two is worth
+    # re-downloading a better copy over.
+    blur = scores.get('blur_score')
+    blur_max = thresholds.get('blur_max')
+    if blur is not None and blur_max is not None and blur > blur_max:
+        flags.add('blurry')
+
+    # ── 🤖 The AI check: the one cut here whose polarity is inverted ─────────
+    # A LOW score is the suspicious one. `motion_irregularity` measures how
+    # erratically a shot's motion changes over two seconds, and the finding the
+    # method rests on is that real footage is erratic while a generated clip is
+    # smoother than the world — so this is a FLOOR, like `sharpness_floor` and
+    # `aesthetic_floor`, and raising it flags more shots. Writing it as a `_max`
+    # would flag every handheld shot in the bank and clear every generated one.
+    #
+    # `maybe_generated`, and the hedge in the name is the honest part rather
+    # than politeness: on re-encoded material — which a scraped bank is by
+    # construction — the best blind-evaluated detector in the field scores about
+    # three in four. Advisory, in no default, and no code path anywhere rejects
+    # or deletes on it. A shot the pass could not measure (too short for the
+    # window, frames unreadable) carries a STATE and no score, and is therefore
+    # never flagged — the same rule as every cut above.
+    smooth = scores.get('motion_irregularity')
+    smooth_floor = thresholds.get('motion_irregularity_floor')
+    if (smooth is not None and smooth_floor is not None
+            and smooth < smooth_floor):
+        flags.add('maybe_generated')
+
+    # ── 🎥 Camera motion: the ONE cut of a pass that otherwise only labels ───
+    # The camera pass describes rather than judges, and its eight motion labels
+    # are deliberately not flags: a pan is not a defect, and the shake one
+    # person is filtering OUT is what the next person is training ON. This is
+    # the single exception, and it earns it — an unwanted wobble is the one
+    # camera property that is a quality problem for the user who did not ask for
+    # it, and `camera_shake` separates cleanly enough to cut on (measured:
+    # 1.16 on forged tremor against at most 0.10 on every smoothly-moved clip).
+    #
+    # It is NOT the same number as the `handheld_shot` LABEL, and the panel hint
+    # says so. The label fires at a fixed internal floor because it describes;
+    # this cut fires wherever the user puts it because it rejects. A clip can be
+    # labelled handheld and not flagged, or flagged and not labelled, and both
+    # are correct — one is what the shot IS, the other is what this user wants.
+    shake = scores.get('camera_shake')
+    shake_max = thresholds.get('camera_shake_max')
+    if shake is not None and shake_max is not None and shake > shake_max:
+        flags.add('shaky')
+
+    # ── 🔗 Temporal coherence: the shot that is actually two ─────────────────
+    # A FLOOR, and the polarity is the one the physics gives rather than the one
+    # the note that specified this gave: a LOW similarity between a shot's first
+    # and last embedded frame means the picture CHANGED across the span, which on
+    # material a detector already cut means it changed into another scene. High
+    # similarity is the ordinary case and is not a finding — the "nothing moved"
+    # half of Panda-70M's rule was measured against this bank's own motion
+    # readings and refuted (it tracks shot LENGTH, not motion), so no second flag
+    # exists here and `still` and `slideshow` keep that ground alone. See
+    # video_temporal_coherence's docstring for the numbers.
+    #
+    # An HONEST 0.72 rather than a classifier: duration-matched, a cut at 0.80
+    # catches about a third of the missed cuts for one honest shot in seven. So
+    # it ships in no default, it is a ranking aid rather than a verdict, and a
+    # shot with no vectors — or one too short to hold two embedded frames —
+    # carries no reading and is never flagged, like every cut above.
+    coherence = scores.get('coherence_span')
+    coherence_floor = thresholds.get('coherence_floor')
+    if (coherence is not None and coherence_floor is not None
+            and coherence < coherence_floor):
+        flags.add('missed_cut')
 
     return flags
 

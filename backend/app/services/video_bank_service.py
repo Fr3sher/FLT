@@ -10,9 +10,15 @@ wrong one — cutting 340 shots to keep 128 pays 212 encodes for files nobody as
 for, and it would put media in a container whose contract says it holds decisions.
 So `ffmpeg` runs exactly once per KEPT clip, at promotion, and never before.
 
-THE SOURCE FOLDER IS READ-ONLY, LITERALLY. Nothing here opens a file in the user's
-rushes folder for writing, ever. Thumbnails go to ``video_banks_root()``, clips go
-to ``video_datasets_root()``.
+NO PASS EVER WRITES TO THE SOURCE FOLDER. Probing, detection, thumbnailing and
+promotion never open a file in the user's rushes folder for writing: thumbnails go
+to ``video_banks_root()``, clips go to ``video_datasets_root()``. That is what
+makes it safe to point a bank at an archive of originals and press every button.
+
+THE ONE THING THAT DOES ADD FILES THERE IS 🕸 SCRAPE, and only because you sent it
+somewhere: picking a destination bank is the consent, and what it downloads is
+added to the folder that bank follows. It is an errand, not a pass. Everything
+else in this file still reads.
 
 WHY FOUR SEAMS. Probing, shot detection, thumbnailing and encoding each need
 something the app cannot assume is installed (PyAV, torch, ffmpeg). They are the
@@ -28,17 +34,25 @@ cannot see. Hence ``job_key()`` — the registry itself is happily reused.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
+import shutil
 import subprocess
+import tempfile
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .. import config as cfg
 from ..extensions import db
 from ..models import (VideoBank, VideoClip, VideoDataset, VideoDatasetClip,
                       VideoSource)
-from . import bank_jobs, video_metrics, ffmpeg_tools, path_guard, video_clip_export, video_targets
+from . import (bank_jobs, video_metrics, video_camera_motion, ffmpeg_tools,
+               path_guard, video_clip_export, video_targets)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +73,16 @@ BANK_MAX_FILES = 5000
 PIPELINE_STEPS = ('probe', 'detect', 'thumbs')
 
 TRIAGE_STATUSES = ('pending', 'keep', 'reject')
+
+# A third value for VideoSource.detect_state, next to 'ok' and 'error': the user
+# declared this file a single take, and its clips were decided by hand rather
+# than found. Every BULK pass — the detection pass and the bank-wide re-cut —
+# skips a source in this state, which is the whole point: without it, a slider
+# moved once would quietly lay three detected clips back on top of the single
+# one and the declaration would mean nothing. Stored as a state rather than a
+# new column because that is exactly what it is, and because the source list
+# already reads this field.
+SINGLE_SHOT_STATE = 'single'
 
 # The shortest span a hand-cut shot may hold. Not a UI nicety: the shortest target
 # in the catalogue still asks for a fraction of a second of real footage, and a
@@ -178,14 +202,18 @@ def _probe_file(path):
     return video_probe.probe(path)
 
 
-def _detect_shots(path, fps_native=None):
-    """The shot boundaries of one file, as dicts carrying PTS seconds.
+def _detect_source(path, fps_native=None, **options):
+    """One file through the detector: its clips AND the vector that produced them.
 
     Imported lazily and by name so an install with no detection extra fails HERE,
     per file, into detect_state='error' — rather than at import time, which would
-    take the whole app down for a capability it may never use."""
+    take the whole app down for a capability it may never use.
+
+    Returns the dict services/shot_detect.detect_source documents. The
+    probabilities in it are what the pass persists, and they are the reason a
+    threshold change afterwards costs no GPU at all."""
     from . import shot_detect
-    return shot_detect.detect_shots(path, fps_native=fps_native)
+    return shot_detect.detect_source(path, fps_native=fps_native, **options)
 
 
 def _is_detector_unavailable(exc) -> bool:
@@ -309,20 +337,28 @@ def create_bank(user_id, name, folder):
     return bank, len(rels)
 
 
-def _insert_sources(bank_id, folder, rels) -> int:
+def _insert_sources(bank_id, folder, rels, source_metadata_by_relpath=None) -> int:
+    """INSERT one row per relpath. ``source_metadata_by_relpath`` carries the
+    ALREADY-VALIDATED provenance JSON of files the app itself just downloaded
+    (see ``scrape_import_to_video_bank``), so a scraped rush is born WITH its
+    origin instead of the walk having no way to attach one to a bare file it
+    found on disk. Every other caller omits it and the column stays NULL."""
+    provenance = source_metadata_by_relpath or {}
     rows = []
     for rel in rels:
         try:
             size = os.path.getsize(os.path.join(folder, rel))
         except OSError:
             size = None
-        rows.append({'bank_id': bank_id, 'relpath': rel, 'file_size': size})
+        rows.append({'bank_id': bank_id, 'relpath': rel, 'file_size': size,
+                     'source_metadata': provenance.get(rel)})
     for i0 in range(0, len(rows), _INSERT_CHUNK):
         db.session.execute(VideoSource.__table__.insert(), rows[i0:i0 + _INSERT_CHUNK])
     return len(rows)
 
 
-def refresh_bank(user_id, bank_id, force=False) -> dict | None:
+def refresh_bank(user_id, bank_id, force=False, *,
+                 source_metadata_by_relpath=None, _bank_lease=None) -> dict | None:
     """Re-inventory the source folder.
 
     STRICTLY ADDITIVE, exactly like the image lane: the only write is an INSERT of
@@ -330,8 +366,35 @@ def refresh_bank(user_id, bank_id, force=False) -> dict | None:
     an unplugged drive or a renamed folder would otherwise wipe a triage worked
     over days in one silent pass, and the user would have no way to know why.
 
+    SERIALISED like the image lane's walk, and the race it closes is concrete:
+    the scrape intake holds the bank's lease for up to several minutes of
+    downloads, and opening the bank's workspace fires a forced refresh. Without
+    a lease here that concurrent walk inventoried the freshly-moved files FIRST,
+    without their provenance (`_insert_sources` never updates a known row), and
+    the scrape's own walk then found nothing left to add — provenance silently
+    lost and `added` reporting zero. When the bank is busy the walk is simply
+    skipped ({'busy': True}); the owner of the lease will run it.
+
     Returns {'added', 'missing', 'unavailable', 'error'}, or None when the bank is
-    unknown. ``force`` is accepted for symmetry with the image lane's cooldown."""
+    unknown. ``force`` is accepted for symmetry with the image lane's cooldown.
+    ``source_metadata_by_relpath`` — see ``_insert_sources`` — is threaded through
+    only by the scrape intake; it is what keeps THIS walk the single inventory
+    path instead of the scrape growing one of its own."""
+    key = job_key(bank_id)
+    if _bank_lease is None:
+        if bank_jobs.running(key):
+            return {'added': 0, 'missing': 0, 'unavailable': False,
+                    'error': None, 'busy': True}
+        try:
+            with bank_jobs.mutation_lease(key, 'folder_sync') as lease:
+                return refresh_bank(
+                    user_id, bank_id, force,
+                    source_metadata_by_relpath=source_metadata_by_relpath,
+                    _bank_lease=lease)
+        except bank_jobs.BankJobBusy:
+            return {'added': 0, 'missing': 0, 'unavailable': False,
+                    'error': None, 'busy': True}
+    bank_jobs.require_reservation(_bank_lease, key)
     bank = get_bank(user_id, bank_id)
     if bank is None:
         return None
@@ -351,7 +414,7 @@ def refresh_bank(user_id, bank_id, force=False) -> dict | None:
     new = [r for r in rels if r not in known]
     out['missing'] = len(known - on_disk)
     if new:
-        _insert_sources(bank.id, bank.source_path, new)
+        _insert_sources(bank.id, bank.source_path, new, source_metadata_by_relpath)
         db.session.commit()
         out['added'] = len(new)
     return out
@@ -389,7 +452,11 @@ def _counts(bank_id) -> dict:
         'sources': src.count(),
         'probed': src.filter(VideoSource.probe_state.isnot(None)).count(),
         'unreadable': src.filter_by(probe_state='unreadable').count(),
-        'detected': src.filter_by(detect_state='ok').count(),
+        # A file the user declared a single take counts as DONE. It is not
+        # waiting for anything, and leaving it out would make the workspace's
+        # next-step line keep offering a detection pass over a decision.
+        'detected': src.filter(VideoSource.detect_state
+                               .in_(('ok', SINGLE_SHOT_STATE))).count(),
         'detect_errors': src.filter_by(detect_state='error').count(),
         'clips': clips.count(),
         'pending': clips.filter_by(status='pending').count(),
@@ -425,6 +492,18 @@ def _bank_row(bank: VideoBank) -> dict:
         'id': bank.id, 'name': bank.name, 'source_path': bank.source_path,
         'created_at': bank.created_at.isoformat() if bank.created_at else None,
         'counts': _counts(bank.id),
+        # Whether 🕸 scrape may DOWNLOAD into this bank's folder. Now true for
+        # nearly every bank — picking a bank IS the consent — and false only for
+        # the one case no consent can fix: a folder that belongs to a dataset,
+        # where new files would land inside training material. Surfaced so the
+        # picker can offer what would actually be accepted instead of letting the
+        # user choose and be refused after the click.
+        'scrapable': not _dataset_folder_refusal(bank.source_path),
+        # Whether the APP created this folder (a bank born of a scrape) or the
+        # user pointed the bank at a folder of their own. Not a permission — it
+        # decides whether the picker has something to warn about, because adding
+        # files to a folder you assembled yourself is the surprising half.
+        'app_folder': is_app_owned_scrape_folder(bank.source_path),
     }
 
 
@@ -453,7 +532,30 @@ def bank_payload(user_id, bank_id) -> dict | None:
     # theirs — and so a machine that does not have it yet learns that before
     # pressing the button rather than twenty minutes into a download.
     payload['caption_model'] = caption_model_info()
+    # The cut settings in force, so the Find shots panel opens on the truth
+    # rather than on a blank field that would read as "no threshold set".
+    payload['shot_detect'] = shot_detect_info(bank)
     return payload
+
+
+def shot_detect_info(bank: VideoBank) -> dict:
+    """What the Find shots panel needs: this bank's threshold, the global one it
+    would fall back to, and how many of its files could be re-cut instantly.
+
+    `threshold` is the bank's own override or None (inherit) — never the
+    resolved value, so the field can show empty instead of a number nobody
+    typed. `default` is what None means today."""
+    shot = _shot_config()
+    cached = (VideoSource.query.filter_by(bank_id=bank.id, probs_state='ok')
+              .count())
+    return {
+        'threshold': bank.shot_threshold,
+        'default': shot.threshold_default(),
+        'min_shot_seconds': shot.min_shot_seconds_default(),
+        'short_shot_policy': shot.short_shot_policy_default(),
+        'trim_dissolves': shot.trim_dissolves_default(),
+        'cached_sources': cached,
+    }
 
 
 def caption_model_info() -> dict:
@@ -476,17 +578,32 @@ def caption_model_info() -> dict:
 def _capability() -> dict:
     """Decode / detect / encode reported SEPARATELY — they fail independently and
     are fixed differently, and a single "video unavailable" is how a user
-    reinstalls the wrong thing."""
+    reinstalls the wrong thing.
+
+    `video_text` rides along as a FOURTH field rather than joining the three,
+    because it is not one of them: those three decide whether a pass can run at
+    all, while this one decides whether 🔳 Safe zone measures burned-in text on
+    top of the bands it measures regardless. The workspace uses it for a tooltip,
+    never to disable a button — see PASS_REQUIREMENTS in videoCapability.js.
+    """
     try:
         from .. import capabilities
-        return capabilities.probe_video()
+        out = dict(capabilities.probe_video())
+        text = capabilities.probe_video_text()
+        out['video_text'] = bool(text.get('ok'))
+        out['video_text_detail'] = text.get('detail')
+        return out
     except Exception as e:                  # noqa: BLE001 — never 500 the payload
         logger.warning('video capability probe failed: %s', e)
         return {'ok': False, 'detail': 'could not probe the video extra',
-                'decode': False, 'detect': False, 'encode': False}
+                'decode': False, 'detect': False, 'encode': False,
+                'video_text': False, 'video_text_detail': None}
 
 
 def sources_payload(user_id, bank_id) -> list:
+    # Local, like every other reference to this module here: it is the decode
+    # seam's neighbour and the convention keeps `av` out of import time.
+    from . import video_probe
     rows = (VideoSource.query.filter_by(bank_id=bank_id)
             .order_by(VideoSource.relpath.asc()).all())
     clip_counts = dict(
@@ -496,8 +613,25 @@ def sources_payload(user_id, bank_id) -> list:
         'id': s.id, 'relpath': s.relpath, 'file_size': s.file_size,
         'duration_s': s.duration_s, 'fps_native': s.fps_native,
         'width': s.width, 'height': s.height, 'codec': s.codec,
+        # How hard this file was squeezed. `bits_per_pixel` is DERIVED here
+        # rather than stored — it is a pure function of the four values above it
+        # and a stored copy would go stale the day a re-probe corrects the frame
+        # rate. All three are shown and none is cut on: the 🩻 defect sweep
+        # measures the damage these predict.
+        'bit_rate': s.bit_rate, 'profile': s.profile,
+        'bits_per_pixel': video_probe.bits_per_pixel(
+            s.bit_rate, s.width, s.height, s.fps_native),
         'probe_state': s.probe_state, 'detect_state': s.detect_state,
         'clips': clip_counts.get(s.id, 0),
+        # Whether this file can be re-cut INSTANTLY. Read from the column and
+        # not from the disk: this runs for every source on every poll, and a
+        # stat() per file per two seconds over a bank of hundreds is a cost the
+        # answer does not justify.
+        'has_probs': s.probs_state == 'ok',
+        # This file's own override, or None when it inherits. The UI needs the
+        # raw value, not the resolved one, to show an empty field rather than a
+        # number the user never typed.
+        'shot_threshold': s.shot_threshold,
     } for s in rows]
 
 
@@ -552,6 +686,20 @@ def _clip_row(clip: VideoClip, relpaths: dict, thresholds=None) -> dict:
         'promoted_dataset_id': clip.promoted_dataset_id,
         'metrics': metrics if metrics and metrics.get('metrics_state') == 'ok' else None,
         'flags': flags,
+        # 🎥 The camera labels, derived here beside the flags and for the same
+        # reason — from the RAW rates, at read time, never stored — but kept in
+        # their own field rather than folded into `flags`. A flag is something
+        # the user chose to cut on; a pan is a description, and putting the two
+        # in one list would make the grid's amber ⚑ badge announce "your shot
+        # pans right" as if it were a defect. Off the WHOLE blob, like the
+        # flags, because this pass writes its state whether or not the metrics
+        # pass ever ran.
+        'camera': video_camera_motion.labels(metrics or {}),
+        # Cut or dissolve at each end, when the detector's second head measured
+        # it. None throughout for a hand-made cut and for anything detected
+        # before that head was kept — no label rather than a guessed one.
+        'transition': (json.loads(clip.transition_json)
+                       if clip.transition_json else None),
     }
 
 
@@ -851,6 +999,13 @@ def _probe_job(bank_id, reprobe):
                 src.height = info.get('height')
                 codec = info.get('codec')
                 src.codec = str(codec)[:24] if codec else None
+                # Both may legitimately be None — a container that does not
+                # carry a per-stream bit rate is not a failed probe — so they
+                # are written unconditionally rather than guarded, which is what
+                # lets a RE-probe clear a value that is no longer true.
+                src.bit_rate = info.get('bit_rate')
+                profile = info.get('profile')
+                src.profile = str(profile)[:32] if profile else None
                 ok += 1
             else:
                 bad += 1
@@ -875,21 +1030,42 @@ def start_detect(app, user_id, bank_id, redetect=False):
 
 def _detect_job(bank_id, redetect):
     def run(job):
-        q = VideoSource.query.filter_by(bank_id=bank_id, probe_state='ok')
+        q = (VideoSource.query.filter_by(bank_id=bank_id, probe_state='ok')
+             # Never a file the user declared a single take, in EITHER mode —
+             # see SINGLE_SHOT_STATE. "Re-detect everything" is a bulk gesture
+             # and a declaration is not something a bulk gesture may overrule.
+             .filter(db.or_(VideoSource.detect_state.is_(None),
+                            VideoSource.detect_state != SINGLE_SHOT_STATE)))
         if not redetect:
             q = q.filter(VideoSource.detect_state.is_(None))
         rows = q.order_by(VideoSource.id.asc()).all()
         bank = db.session.get(VideoBank, bank_id)
         bank_jobs.progress(job, done=0, total=len(rows), detail='detecting shots')
-        made = failed = 0
+        made = failed = cached = 0
         for src in rows:
             if bank_jobs.cancelled(job):
                 break
             path = _abs_source_path(bank, src.relpath) if bank else None
+            reuse = _reusable_probs(bank_id, src, path) if redetect else None
+            if reuse is not None:
+                # The expensive half of this pass is DECODING, and it has
+                # already been paid for this file. Re-cutting from the stored
+                # vector gives byte-identical bounds at the same threshold and
+                # takes milliseconds, so "Find shots again" over a bank that has
+                # already been through it once is now instant.
+                _drop_clips_of(bank_id, src.id, replace_manual=False)
+                made += _insert_clips(bank_id, src, reuse)
+                cached += 1
+                src.detect_state = 'ok'
+                db.session.commit()
+                bank_jobs.bump(job)
+                continue
             try:
                 if path is None:
                     raise OSError('source file is outside the bank folder')
-                shots = _detect_shots(path, src.fps_native)
+                result = _detect_source(path, src.fps_native,
+                                        threshold=shot_threshold_for(bank_id, src))
+                shots = result.get('clips') or []
             except Exception as e:      # noqa: BLE001 — one bad file, not the pass
                 if _is_detector_unavailable(e):
                     # A fact about the INSTALL, not about these files. Stamping
@@ -908,31 +1084,53 @@ def _detect_job(bank_id, redetect):
                 bank_jobs.bump(job)
                 continue
             if redetect:
-                # Only clips nobody has promoted: a re-detect must not silently
-                # revoke the provenance of a dataset already built.
-                #
-                # And never a HAND-MADE cut. A manual bound is the one thing in this
-                # bank the detector cannot reproduce — re-running it would wipe an
-                # afternoon of retouching behind a checkbox labelled "re-detect",
-                # with no warning and nothing to undo. The manual clips then sit
-                # alongside the freshly detected ones and may overlap them; that is
-                # the honest outcome, and the grid shows both.
-                (VideoClip.query
-                 .filter_by(bank_id=bank_id, source_id=src.id)
-                 .filter(VideoClip.promoted_dataset_id.is_(None))
-                 .filter(db.or_(VideoClip.detector.is_(None),
-                                VideoClip.detector != 'manual'))
-                 .delete(synchronize_session=False))
+                _drop_clips_of(bank_id, src.id, replace_manual=False)
             made += _insert_clips(bank_id, src, shots)
+            _remember_probs(bank_id, src, result.get('probs'))
             src.detect_state = 'ok'
             db.session.commit()
             bank_jobs.bump(job)
         detail = f'done — {made} clips found'
+        if cached:
+            detail += f', {cached} re-cut from cache'
         if failed:
             detail += f', {failed} files failed detection'
         bank_jobs.progress(job, detail=detail)
-        return {'clips': made, 'failed': failed}
+        return {'clips': made, 'failed': failed, 'from_cache': cached}
     return run
+
+
+def _reusable_probs(bank_id, src: VideoSource, path):
+    """The clips a cached vector would give for this file — or None to decode it.
+
+    WHY THIS IS GUARDED BY THE FILE SIZE. A bank points at a LIVE folder: people
+    keep dropping files into it, and they also re-export and overwrite them. A
+    cache keyed on nothing but the source id would then re-cut the NEW file at
+    the OLD file's boundaries and report a clean run — bounds that describe
+    footage nobody has any more, which is the one failure this whole lane is
+    built to avoid. The size recorded by the probe is a cheap, honest tripwire:
+    it does not catch a same-size re-encode, and a genuinely changed file
+    virtually never keeps its byte count.
+
+    Anything unresolvable — no cache, no probed rate, no size on record, a size
+    that moved — falls through to a real pass, which re-decodes and refills the
+    cache. Being wrong in that direction costs time; being wrong in the other
+    costs correctness.
+    """
+    from . import shot_probs
+    if not src.fps_native or not src.file_size or not path:
+        return None
+    try:
+        if os.path.getsize(path) != src.file_size:
+            return None
+    except OSError:
+        return None
+    probs = shot_probs.load_probs(bank_id, src.id)
+    if not probs or not probs.get('single'):
+        return None
+    return _shot_config().clips_from_probs(
+        probs, fps_native=src.fps_native,
+        threshold=shot_threshold_for(bank_id, src))
 
 
 def _insert_clips(bank_id, src: VideoSource, shots) -> int:
@@ -950,17 +1148,326 @@ def _insert_clips(bank_id, src: VideoSource, shots) -> int:
             continue
         if end_s <= start_s:
             continue
+        transition = shot.get('transition')
         rows.append({
             'bank_id': bank_id, 'source_id': src.id,
             'start_s': start_s, 'end_s': end_s,
             'start_frame': shot.get('start_frame'),
             'end_frame': shot.get('end_frame'),
             'detector': (shot.get('detector') or 'transnetv2')[:16],
+            'transition_json': (json.dumps(transition)
+                                if transition and any(transition.values())
+                                else None),
             'status': 'pending',
         })
     for i0 in range(0, len(rows), _INSERT_CHUNK):
         db.session.execute(VideoClip.__table__.insert(), rows[i0:i0 + _INSERT_CHUNK])
     return len(rows)
+
+
+# --- re-cutting a file without re-running the detector ---------------------------
+#
+# THE ONE IDEA UNDER ALL OF THIS: the detector's per-frame probabilities are now
+# kept (services/shot_probs), so the threshold stopped being a decision baked
+# into a GPU pass and became a value that can be argued with. A slider over a
+# cached vector is the same gesture DaVinci Resolve offers over its own
+# confidence graph, and it is the reason 0.5 could stay the default honestly —
+# nobody ever measured it, and now nobody has to live with it either.
+#
+# WHY A PER-FILE OVERRIDE AND NOT JUST A PER-BANK ONE. The corpus is mixed
+# INSIDE one folder: an untouched single take and a tightly edited scene sit
+# next to each other, and no bank-level number is right for both. The ladder is
+# file, then bank, then global — and NULL at any level means "inherit", never
+# zero, because 0.0 is a real threshold that cuts on every frame.
+
+class ShotProbsMissing(RuntimeError):
+    """This source has no cached probabilities, so it cannot be re-cut instantly.
+
+    Not an error about the file — it is a fact about when it was detected. The
+    caller's answer is to offer a real detection pass, never to report the file
+    as broken."""
+
+
+def _shot_config():
+    from . import shot_detect
+    return shot_detect
+
+
+def shot_threshold_for(bank_id, source):
+    """The threshold that applies to ONE file: its own, else its bank's, else
+    the global default. Clamped on the way out — read on a hot path, so a
+    nonsense stored value degrades rather than aborting a pass."""
+    from . import shot_boundaries
+    bank = db.session.get(VideoBank, int(bank_id))
+    src = (source if isinstance(source, VideoSource)
+           else db.session.get(VideoSource, int(source)))
+    return shot_boundaries.resolve_threshold(
+        getattr(src, 'shot_threshold', None),
+        getattr(bank, 'shot_threshold', None),
+        _shot_config().threshold_default())
+
+
+def _validated_threshold(value):
+    """None (inherit) or a number inside [0, 1]. REFUSED rather than clamped:
+    the read path clamps because it must never abort a pass already running,
+    but a write has somebody there to be told they typed something wrong."""
+    if value is None or value == '':
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError('the threshold must be a number between 0 and 1') from None
+    if number != number or not (0.0 <= number <= 1.0):
+        raise ValueError('the threshold must be a number between 0 and 1')
+    return round(number, 3)
+
+
+def set_bank_shot_threshold(user_id, bank_id, value) -> dict | None:
+    """Set (or clear, with None) the whole bank's threshold. Cuts nothing by
+    itself — re-cutting is a separate, explicit gesture, because changing a
+    number must not silently rewrite hundreds of rows."""
+    bank = get_bank(user_id, bank_id)
+    if bank is None:
+        return None
+    bank.shot_threshold = _validated_threshold(value)
+    db.session.commit()
+    return {'threshold': bank.shot_threshold}
+
+
+def set_source_shot_threshold(user_id, bank_id, source_id, value) -> dict | None:
+    if get_bank(user_id, bank_id) is None:
+        return None
+    src = VideoSource.query.filter_by(id=int(source_id), bank_id=bank_id).first()
+    if src is None:
+        return None
+    src.shot_threshold = _validated_threshold(value)
+    db.session.commit()
+    return {'threshold': src.shot_threshold,
+            'effective': shot_threshold_for(bank_id, src)}
+
+
+def _remember_probs(bank_id, src: VideoSource, probs):
+    """Persist one source's probability vectors, or record that it has none.
+
+    Never fatal: a bank on a full disk must still finish its detection pass and
+    keep its clips. The only thing lost is the instant re-cut, and the source
+    row says so rather than pretending."""
+    if not probs or not probs.get('single'):
+        src.probs_state = None
+        return
+    try:
+        from . import shot_probs
+        shot_probs.save_probs(bank_id, src.id, probs.get('single'),
+                              probs.get('all'))
+        src.probs_state = 'ok'
+    except Exception as error:      # noqa: BLE001 — a cache write never sinks a pass
+        logger.warning('video bank %s: could not cache the shot probabilities '
+                       'of source %s: %s', bank_id, src.id, error)
+        src.probs_state = None
+
+
+def _load_probs_or_raise(bank_id, source_id):
+    from . import shot_probs
+    probs = shot_probs.load_probs(bank_id, source_id)
+    if not probs or not probs.get('single'):
+        raise ShotProbsMissing(
+            'this file has no cached shot probabilities — run Find shots on it '
+            'once and every later threshold change is instant')
+    return probs
+
+
+def _drop_clips_of(bank_id, source_id, *, replace_manual) -> dict:
+    """Delete the clips a re-cut is about to replace, and everything that
+    described them.
+
+    PROMOTED CLIPS ARE NEVER TOUCHED, at either level: a dataset already built
+    keeps its provenance, and revoking it behind a slider would make the badge
+    on those clips a lie.
+
+    HAND-MADE CUTS depend on the gesture, and the asymmetry is the design.
+    A bank-wide pass spares them — an afternoon of retouching must not vanish
+    behind a checkbox. A per-FILE re-cut replaces them, because it is a
+    deliberate action on a file the user picked out by name, and it is the only
+    way back from "this file is a single take". The count is reported so the UI
+    can say what it is about to do before doing it.
+
+    THE THUMBNAILS GO WITH THE ROWS. A thumbnail is a measurement OF A SPAN; the
+    grid points an <img> at a URL that serves whatever is on disk, so a leftover
+    file keeps showing a frame no clip contains. The search vectors are left in
+    the bank's .npz on purpose (rewriting tens of megabytes inside a click), and
+    are unreachable the moment their row is gone — the same trade
+    `_forget_measurements` documents for a trim.
+    """
+    query = (VideoClip.query.filter_by(bank_id=bank_id, source_id=int(source_id))
+             .filter(VideoClip.promoted_dataset_id.is_(None)))
+    if not replace_manual:
+        query = query.filter(db.or_(VideoClip.detector.is_(None),
+                                    VideoClip.detector != 'manual'))
+    doomed = query.all()
+    manual = sum(1 for clip in doomed if clip.detector == 'manual')
+    for clip in doomed:
+        try:
+            thumb_path(bank_id, clip.id).unlink(missing_ok=True)
+        except OSError:     # noqa: BLE001 — a locked thumbnail is not worth a 500
+            logger.info('video bank %s: could not remove the thumbnail of clip '
+                        '%s', bank_id, clip.id)
+        db.session.delete(clip)
+    db.session.flush()
+    return {'removed': len(doomed), 'replaced_manual': manual}
+
+
+def recut_source(user_id, bank_id, source_id, threshold=None) -> dict | None:
+    """Re-cut ONE file from its cached probabilities. No decode, no GPU.
+
+    This is also the way back from "this file is a single take": it replaces
+    hand-made cuts on this one file, which a bank-wide re-cut never does. See
+    `_drop_clips_of` for why the two levels differ."""
+    if get_bank(user_id, bank_id) is None:
+        return None
+    src = VideoSource.query.filter_by(id=int(source_id), bank_id=bank_id).first()
+    if src is None:
+        return None
+    probs = _load_probs_or_raise(bank_id, src.id)
+    thr = (_validated_threshold(threshold) if threshold is not None
+           else shot_threshold_for(bank_id, src))
+    fps = src.fps_native
+    if not fps:
+        raise ValueError('this file has not been probed, so its frame rate is '
+                         'unknown — run Probe first')
+    clips = _shot_config().clips_from_probs(probs, fps_native=fps, threshold=thr)
+    dropped = _drop_clips_of(bank_id, src.id, replace_manual=True)
+    made = _insert_clips(bank_id, src, clips)
+    src.detect_state = 'ok'
+    db.session.commit()
+    return {'clips': made, 'threshold': thr, 'counts': _counts(bank_id),
+            **dropped}
+
+
+def recut_bank(user_id, bank_id, threshold=None) -> dict | None:
+    """Re-cut every source that HAS a cached vector, sparing hand-made cuts.
+
+    Synchronous on purpose, unlike every heavy pass in this lane: there is no
+    decode here, only arithmetic over a few hundred KB per file, and putting it
+    behind the job queue would make an instant operation look like a slow one
+    and would lock the bank against the very next click."""
+    if get_bank(user_id, bank_id) is None:
+        return None
+    rows = (VideoSource.query.filter_by(bank_id=bank_id)
+            .order_by(VideoSource.id.asc()).all())
+    from . import shot_probs
+    done = made = skipped = single = 0
+    for src in rows:
+        if src.detect_state == SINGLE_SHOT_STATE:
+            single += 1
+            continue
+        probs = shot_probs.load_probs(bank_id, src.id)
+        if not probs or not probs.get('single') or not src.fps_native:
+            # Detected before the cache existed, or never probed. Counted and
+            # reported — never left with its old cuts as if it had been re-cut.
+            skipped += 1
+            continue
+        thr = (_validated_threshold(threshold) if threshold is not None
+               else shot_threshold_for(bank_id, src))
+        clips = _shot_config().clips_from_probs(probs, fps_native=src.fps_native,
+                                                threshold=thr)
+        _drop_clips_of(bank_id, src.id, replace_manual=False)
+        made += _insert_clips(bank_id, src, clips)
+        done += 1
+    db.session.commit()
+    # `single_shot` is counted apart from `skipped`: one is "this file has no
+    # cache and needs a real pass", the other is "you told me not to". Merging
+    # them would offer the user a fix for something that is not broken.
+    return {'sources': done, 'clips': made, 'skipped': skipped,
+            'single_shot': single, 'counts': _counts(bank_id)}
+
+
+def shot_dry_run(user_id, bank_id, source_id=None, thresholds=None) -> dict | None:
+    """"At threshold X you would get N shots" — for one file or the whole bank.
+
+    Reads the cache and writes nothing, exactly like the metrics dry run: the
+    point of a preview is to be able to change your mind after seeing it."""
+    if get_bank(user_id, bank_id) is None:
+        return None
+    from . import shot_boundaries, shot_probs
+    query = VideoSource.query.filter_by(bank_id=bank_id)
+    if source_id is not None:
+        query = query.filter_by(id=int(source_id))
+    rows = query.order_by(VideoSource.id.asc()).all()
+    if not rows:
+        return None
+    # Which value the ladder marks as "in force". For ONE file that is the
+    # file's own resolved threshold; for the whole bank it is the BANK's, with
+    # per-file overrides deliberately ignored — reading the first source's
+    # would mark a row nothing bank-wide actually uses, and that row is the one
+    # every other row's "8 fewer than now" is measured against.
+    if source_id is not None:
+        current = shot_threshold_for(bank_id, rows[0])
+    else:
+        bank = db.session.get(VideoBank, int(bank_id))
+        current = shot_boundaries.resolve_threshold(
+            None, getattr(bank, 'shot_threshold', None),
+            _shot_config().threshold_default())
+    ladder = ([_validated_threshold(t) for t in thresholds] if thresholds
+              else shot_boundaries.suggested_thresholds(current))
+    ladder = [t for t in ladder if t is not None]
+    totals = {t: 0 for t in ladder}
+    answered = skipped = single = 0
+    for src in rows:
+        if source_id is None and src.detect_state == SINGLE_SHOT_STATE:
+            # A bank-wide preview must count what the bank-wide RE-CUT would
+            # produce, and that pass walks past a declared single take. Counting
+            # it here promised two shots for a file that would keep its one —
+            # a preview that does not match the action it previews is worse than
+            # no preview. Asked about that file BY NAME the answer is different:
+            # the per-file re-cut does apply to it, and is the way back from the
+            # declaration.
+            single += 1
+            continue
+        probs = shot_probs.load_probs(bank_id, src.id)
+        if not probs or not probs.get('single') or not src.fps_native:
+            skipped += 1
+            continue
+        answered += 1
+        for row in _shot_config().sweep_probs(probs, fps_native=src.fps_native,
+                                              thresholds=ladder):
+            totals[row['threshold']] = totals.get(row['threshold'], 0) + row['shots']
+    return {'rows': [{'threshold': t, 'shots': totals.get(t, 0)} for t in ladder],
+            'sources': answered, 'skipped': skipped, 'single_shot': single,
+            'current': current}
+
+
+def mark_single_shot(user_id, bank_id, source_id) -> dict | None:
+    """"This file is one single take" — replace its clips with ONE, full length.
+
+    NO TOOL STUDIED OFFERS THIS, and a single-take corpus needs it more than any
+    slider: the failure mode there is not a missed cut, it is a file quietly
+    chopped into six fragments that each train on a third of a gesture. The
+    result is stamped `detector='manual'`, so a bank-wide re-cut leaves it
+    alone; the dedicated per-file re-cut is the way back.
+
+    Needs a probed duration, and says so rather than guessing: `ffmpeg -ss` past
+    the end of a file does not fail, it writes a one-frame clip, and the mistake
+    would only surface at promotion."""
+    if get_bank(user_id, bank_id) is None:
+        return None
+    src = VideoSource.query.filter_by(id=int(source_id), bank_id=bank_id).first()
+    if src is None:
+        return None
+    duration = src.duration_s
+    if not duration or duration <= 0:
+        raise ValueError('this file has not been probed, so its length is '
+                         'unknown — run Probe first')
+    if duration < MIN_CLIP_S:
+        raise ValueError(f'this file lasts {duration:.2f}s, less than the '
+                         f'{MIN_CLIP_S}s a clip needs')
+    dropped = _drop_clips_of(bank_id, src.id, replace_manual=True)
+    clip = VideoClip(bank_id=bank_id, source_id=src.id, start_s=0.0,
+                     end_s=round(float(duration), 3), detector='manual',
+                     status='pending')
+    db.session.add(clip)
+    src.detect_state = SINGLE_SHOT_STATE
+    db.session.commit()
+    return {'clips': 1, 'counts': _counts(bank_id), **dropped}
 
 
 def start_measure(app, user_id, bank_id, remeasure=False):
@@ -1072,12 +1579,113 @@ def _embed_job(bank_id, reembed, use_gpu):
                 bank_id, reembed, use_gpu=use_gpu,
                 on_clip=lambda: bank_jobs.bump(job),
                 should_stop=lambda: bank_jobs.cancelled(job))
+        if out.get('aborted'):
+            # The pass gave up because the MACHINE was failing, not the footage.
+            # Nothing after this runs: the look score and the coherence check
+            # both read the vectors this pass did not produce, and a run of
+            # "0 shot(s) rated" underneath would bury the one line that matters.
+            # It is a detail rather than a raise for the reason the watermark
+            # pass gives: everything embedded before the failure is committed and
+            # keeps its verdicts.
+            bank_jobs.progress(job, detail=f'stopped — {out["aborted"]}')
+            return out
+        out.update(_rate_the_look(job, bank_id, reembed))
+        out.update(_check_coherence(job, bank_id, reembed))
         detail = f'done — {out["embedded"]} shot(s) searchable'
         if out['unreadable']:
             detail += f', {out["unreadable"]} could not be read'
+        if out.get('rated'):
+            detail += f' — {out["rated"]} rated for look'
+        if out.get('unrated'):
+            detail += (f' — {out["unrated"]} shot(s) not rated '
+                       '(vectors missing from the store)')
+        if out.get('aesthetic_error'):
+            # Said out loud and NOT as a failure: the embedding run succeeded,
+            # and a head that could not be fetched is a different problem with a
+            # different fix. Silence here would leave a bank whose look cut flags
+            # nothing, with nothing to explain why.
+            detail += f' — look score unavailable ({out["aesthetic_error"]})'
+        if out.get('coherence_unmeasured'):
+            # Same silence `unrated` exists to break, and it is the SAME store
+            # that caused it — reported separately anyway, because the two passes
+            # can disagree (the look score needs a subprocess this one does not)
+            # and one number for both would hide which of them fell over.
+            detail += (f' — {out["coherence_unmeasured"]} shot(s) not checked '
+                       'for scene changes (vectors missing from the store)')
         bank_jobs.progress(job, detail=detail)
         return out
     return run
+
+
+def _rate_the_look(job, bank_id, reembed):
+    """🎨 The look score, riding the pass that produced the vectors it reads.
+
+    AFTER the GPU window closes, deliberately: this is CPU arithmetic over an
+    .npz and holding the card through it would leave it idle AND unavailable.
+
+    Over the WHOLE bank rather than over what this run embedded: a bank embedded
+    before the score existed must not need hours of re-decoding to gain a number
+    it can get from vectors already on disk, so re-clicking 🔎 Find scenes IS the
+    retrofit. ``reembed`` carries through as ``rescore`` — rewritten vectors are
+    different vectors, and a stale rating beside them would be a verdict about
+    footage that has moved.
+
+    Skipped on cancel: a stopped pass has already kept everything it earned, and
+    charging it a torch import on the way out is not what Stop means.
+    """
+    from . import video_aesthetic
+    if bank_jobs.cancelled(job):
+        return {}
+    if not video_aesthetic.pending_clips(bank_id, bool(reembed)):
+        return {}
+    bank_jobs.progress(job, detail='rating how each shot looks')
+    out = video_aesthetic.run_aesthetic(
+        bank_id, rescore=bool(reembed),
+        should_stop=lambda: bank_jobs.cancelled(job))
+    # `unrated` rides along — run_aesthetic's docstring promises it is "reported
+    # rather than folded into a total", and dropping it here was exactly the
+    # silence it warns about: a store missing half its vectors read as a clean
+    # run, and those shots re-queued (and re-paid a torch import) on every
+    # subsequent pass with nothing anywhere saying why.
+    return {'rated': out['rated'], 'unrated': out['unrated'],
+            'aesthetic_error': out['error']}
+
+
+def _check_coherence(job, bank_id, reembed):
+    """🔗 Does one shot hold ONE scene, riding the pass that produced the vectors.
+
+    LAST, after the look score, and the order is deliberate rather than
+    incidental: 🎨 pays a torch import and a possible 13 MB download, this pays a
+    few dot products in this very process. Putting the cheap certainty behind the
+    expensive uncertainty means a machine with no egress still gets its coherence
+    reading, because ``_rate_the_look`` returns its failure as a RESULT rather
+    than raising.
+
+    Over the WHOLE bank rather than over what this run embedded, for the same
+    reason the look score is: a bank embedded before this shipped must not need
+    hours of re-decoding to gain a number it can get from vectors already on
+    disk, so re-clicking 🔎 Find scenes IS the retrofit — and here that retrofit
+    costs nothing at all, not even an interpreter start. ``reembed`` carries
+    through as ``recheck``: rewritten vectors are different vectors, and a stale
+    reading beside them would be a verdict about footage that has moved.
+
+    Skipped on cancel, like the look score — a stopped pass has already kept
+    everything it earned.
+    """
+    from . import video_temporal_coherence
+    if bank_jobs.cancelled(job):
+        return {}
+    if not video_temporal_coherence.pending_clips(bank_id, bool(reembed)):
+        return {}
+    bank_jobs.progress(job, detail='checking each shot holds one scene')
+    out = video_temporal_coherence.run_coherence(
+        bank_id, recheck=bool(reembed),
+        should_stop=lambda: bank_jobs.cancelled(job))
+    # Namespaced rather than merged into the embed run's own keys: `measured`
+    # already means something else in half this module's results, and a caller
+    # reading one dictionary must not have to know which pass wrote which word.
+    return {'coherence_measured': out['measured'],
+            'coherence_unmeasured': out['unmeasured']}
 
 
 def start_dedup(app, user_id, bank_id, threshold=None):
@@ -1172,6 +1780,269 @@ def _watermark_job(bank_id, rescan, use_gpu):
         # own would read as a clean bank.
         if out['error']:
             detail = f'stopped — {out["error"]} ({out["scanned"]} shot(s) judged)'
+        bank_jobs.progress(job, detail=detail)
+        return out
+    return run
+
+
+def start_safe_zone(app, user_id, bank_id, rescan=False):
+    """🔳 Measure the container and the burned-in text of each shot.
+
+    NEVER refused for a missing OCR engine, and that is the one thing that makes
+    it different from every other capability-bearing pass here. 🔖 Watermarks and
+    🗣 Describe have nothing to offer without their model, so they refuse up
+    front rather than deliver a 202 and a job that dies on an import. This pass
+    has two halves and only one of them needs an install: with no RapidOCR it
+    still measures letterbox and pillarbox bands on every shot, records
+    `safe_zone_state: 'bars_only'` so nothing can mistake that for "no text
+    found", and reports the missing extra in the job's own detail line.
+
+    No GPU window either. Decoding is PyAV and the OCR is CPU onnxruntime by
+    construction, so this can run while a training run owns the card — which is
+    most of the point of building the text half on onnxruntime rather than on
+    the torch detector that was already here.
+    """
+    _require_free_bank(user_id, bank_id)
+    return bank_jobs.start(app, job_key(bank_id), 'safezone',
+                           _safe_zone_job(bank_id, bool(rescan)))
+
+
+def _safe_zone_job(bank_id, rescan):
+    def run(job):
+        from . import video_safe_zone
+        total = len(video_safe_zone.pending_clips(bank_id, rescan))
+        bank_jobs.progress(job, done=0, total=total,
+                           detail='measuring the safe zone')
+
+        def on_text_progress(done, frames):
+            # Called from the reader thread of the OCR child — bank_jobs is
+            # lock-guarded, which is why this is allowed to touch it. A chunk is
+            # 40 shots and over a minute of OCR, so without this the bar stands
+            # still long enough to read as a hang.
+            bank_jobs.progress(job, detail=f'reading burned-in text '
+                                           f'({done}/{frames} frames)')
+
+        out = video_safe_zone.run_safe_zone(
+            bank_id, rescan,
+            on_clip=lambda: bank_jobs.bump(job),
+            should_stop=lambda: bank_jobs.cancelled(job),
+            on_text_progress=on_text_progress)
+        detail = f'done — {out["measured"]} shot(s) measured'
+        if out['letterboxed']:
+            detail += f', {out["letterboxed"]} with bands'
+        if out['unreadable']:
+            detail += f', {out["unreadable"]} could not be read'
+        if out['error']:
+            # Said out loud and NOT as a failure: the bands ARE measured, on
+            # every shot this run touched. Silence here would leave a bank whose
+            # text cut flags nothing and nothing anywhere saying why.
+            detail += f' — {out["error"]}'
+        bank_jobs.progress(job, detail=detail)
+        return out
+    return run
+
+
+def start_defects(app, user_id, bank_id, rescan=False):
+    """🩻 Sweep each source file for duplicated frames, blocks and soft edges.
+
+    ITS OWN BUTTON, and not a phase of Measure, which is the obvious-looking
+    place for it. Three reasons, in order of how much they cost to get wrong:
+
+      * Different UNIT. Measure decodes one clip at a time through PyAV; this
+        decodes one FILE at a time through ffmpeg, because all three defects are
+        properties of the encode and the macroblock grid does not change at a
+        cut. Folded in, it would either decode each file once per shot — losing
+        the entire argument — or turn one progress bar into a count of two
+        different things.
+      * Different DEPENDENCY. Measure needs `av` and runs perfectly on an
+        install with no ffmpeg, which the lane explicitly supports ("with no
+        encoder you can scan, detect and triage"). Folding this in would either
+        make the quality pass refuse without a binary it has never needed, or
+        add a silent half that skips — and a pass that quietly does less than
+        its name is the failure this codebase keeps a whole vocabulary of states
+        to avoid.
+      * Different COST, and it is not small. Measured on 1080p25: ~9 s per
+        minute of source, which on a four-hour bank is a little over half an
+        hour of CPU on top of what Measure already costs. Bundling it would
+        multiply a button people press often, with no way to decline.
+
+    🔳 Safe zone's docstring already wrote the test this passes: a pass earns its
+    own button when it CONSUMES nothing, and this one consumes nothing — a file
+    is sweepable the moment it has probed and been cut. 🎨 Look and ✂ Duplicates
+    ride other passes because they read what those passes cached; there is no
+    such order to protect here.
+
+    Refused up front, with the Setup sentence, when ffmpeg is not usable — a 202
+    followed by a job that dies on a missing binary is the same news delivered
+    later and harder to read. NO GPU window: ffmpeg filters run on the CPU, so
+    this can sweep while a training run owns the card.
+    """
+    from .video_defect_sweep import unavailable_reason
+    _require_free_bank(user_id, bank_id)
+    reason = unavailable_reason()
+    if reason:
+        raise RuntimeError(reason)
+    return bank_jobs.start(app, job_key(bank_id), 'defects',
+                           _defects_job(bank_id, bool(rescan)))
+
+
+def _defects_job(bank_id, rescan):
+    def run(job):
+        from . import video_defect_sweep
+        pending = video_defect_sweep.pending_sources(bank_id, rescan)
+        # Progress counts CLIPS while the work advances one FILE at a time, so
+        # the bar can stand still for a whole file. The detail line names the
+        # file being swept for exactly that reason — a minute of silence on a
+        # long rush reads as a hang otherwise.
+        total = sum(len(clips) for _src, clips in pending)
+        bank_jobs.progress(job, done=0, total=total, detail='sweeping for defects')
+        out = video_defect_sweep.run_defects(
+            bank_id, rescan,
+            on_clip=lambda: bank_jobs.bump(job),
+            on_file=lambda relpath: bank_jobs.progress(
+                job, detail=f'sweeping {os.path.basename(relpath)}'),
+            should_stop=lambda: bank_jobs.cancelled(job))
+        detail = (f'done — {out["measured"]} shot(s) swept '
+                  f'across {out["files"]} file(s)')
+        if out['unreadable']:
+            detail += f', {out["unreadable"]} with no frames in range'
+        if out['error']:
+            # Said out loud and NOT as a failure: every file swept before it is
+            # real and kept. Silence here leaves a bank whose defect cuts flag
+            # nothing and nothing anywhere saying which file was skipped.
+            detail += f' — last problem: {out["error"]}'
+        bank_jobs.progress(job, detail=detail)
+        return out
+    return run
+
+
+def start_ai_check(app, user_id, bank_id, recheck=False):
+    """🤖 Measure how erratically each shot moves, and flag the too-smooth ones.
+
+    Refused up front with the Setup sentence when no interpreter here can run
+    the encoder — a 202 followed by a job that dies on an import is the same
+    news, twenty minutes later and harder to read. Same refusal as 🔖 Watermarks
+    and 🗣 Describe, and the same environment as 🎨 Look: the ✨ Score
+    interpreter, which already carries torch and transformers.
+
+    ITS OWN BUTTON, and the two reasons are the two this lane already uses.
+    Different SAMPLING, which is the deciding one: this needs sixteen CONTIGUOUS
+    frames at 8 fps in colour at 224 px, and not one of the four decodes in this
+    lane produces anything like it — 🔎 embeds three frames spread across the
+    whole shot, 🗣 samples eight across the span, 🔳 takes three at 768 px, and
+    Measure reads the clip in greyscale at 160 px wide. A temporal statistic
+    over a spread sample would measure the gaps between moments instead of the
+    movement inside one, so there is nothing here to ride. And it CONSUMES
+    nothing — a shot is checkable the moment it has been cut — which is 🔳 Safe
+    zone's own test for a pass that earns a button rather than a queue position.
+
+    NO GPU WINDOW, unlike 🔖 Watermarks which takes one. That pass is a few
+    seconds; this one is tens of minutes over a bank, and holding the card that
+    long — unloading ComfyUI, blocking a training start — for an advisory flag
+    is the wrong trade. Running on the CPU is what lets it check a bank while a
+    training owns the card.
+    """
+    from .video_ai_check import unavailable_reason
+    _require_free_bank(user_id, bank_id)
+    reason = unavailable_reason()
+    if reason:
+        raise RuntimeError(reason)
+    return bank_jobs.start(app, job_key(bank_id), 'aicheck',
+                           _ai_check_job(bank_id, bool(recheck)))
+
+
+def _ai_check_job(bank_id, recheck):
+    def run(job):
+        from . import video_ai_check
+        total = len(video_ai_check.pending_clips(bank_id, recheck))
+        # The download warning rides in the detail the user is already watching,
+        # before the first shot: the encoder is a first-run download of several
+        # hundred megabytes, and a bar sitting at 0/900 while it arrives is
+        # indistinguishable from a hang.
+        notice = video_ai_check.model_download_notice()
+        bank_jobs.progress(job, done=0, total=total,
+                           detail=notice or 'checking how each shot moves')
+        out = video_ai_check.run_ai_check(
+            bank_id, recheck,
+            on_clip=lambda: bank_jobs.bump(job),
+            should_stop=lambda: bank_jobs.cancelled(job))
+        detail = f'done — {out["measured"]} shot(s) checked'
+        if out['too_short']:
+            # Named rather than folded into a total: these shots are not a
+            # failure and re-running will never fix them — the window needs
+            # about two and a half seconds and their cut is shorter than that.
+            detail += (f', {out["too_short"]} too short for the window '
+                       f'(under {video_ai_check.min_duration_s():.2f} s)')
+        if out['unreadable']:
+            detail += f', {out["unreadable"]} could not be read'
+        if out['error']:
+            # Said out loud and NOT as a failure: every shot checked before it
+            # is real and kept. Silence here leaves a bank whose cut flags
+            # nothing and nothing anywhere saying why.
+            detail = f'stopped — {out["error"]} ({out["measured"]} shot(s) checked)'
+        bank_jobs.progress(job, detail=detail)
+        return out
+    return run
+
+
+def start_camera(app, user_id, bank_id, rescan=False):
+    """🎥 Read how the camera moved in every shot — pan, zoom, roll, handheld.
+
+    Refused up front with the Setup sentence when the decode extra is missing,
+    like 🔍 Measure and 🤖 AI check: this pass cannot degrade, every number it
+    produces comes out of frames it decoded itself.
+
+    ITS OWN BUTTON, and this one had a real candidate to ride so the argument is
+    worth stating. 🩻 Defects already runs ONE ffmpeg pass per source file and
+    `vidstabdetect` would bolt onto its filter chain for a fifth of a second —
+    tempting, and wrong twice over. The unit is wrong: defects are properties of
+    the FILE (a macroblock grid does not change at a cut) while camera motion is
+    a property of the SHOT, so the readings would have to be cut back apart
+    afterwards. And the tool is wrong: vidstab writes local motion vectors at
+    whole-pixel precision with no rotation, no scale and no inlier ratio, which
+    is three of the four things this pass reports plus the guard that keeps it
+    honest — video_camera_motion's docstring has the measurements.
+
+    Nothing else in the lane decodes what this needs either: it wants EVERY
+    frame of a shot at 384 px, and the four existing decodes sample three, eight,
+    three and 160-px-wide-everything respectively. A trajectory with gaps is not
+    a smaller sample, it is a series whose steps mean different things.
+
+    NO GPU WINDOW. It is OpenCV on the CPU at 0.07 s per second of source, so a
+    bank can be read while a training owns the card — the same property 🤖 AI
+    check chose deliberately, here for free.
+    """
+    from .video_camera_motion import unavailable_reason
+    _require_free_bank(user_id, bank_id)
+    reason = unavailable_reason()
+    if reason:
+        raise RuntimeError(reason)
+    return bank_jobs.start(app, job_key(bank_id), 'camera',
+                           _camera_job(bank_id, bool(rescan)))
+
+
+def _camera_job(bank_id, rescan):
+    def run(job):
+        from . import video_camera_motion
+        total = len(video_camera_motion.pending_clips(bank_id, rescan))
+        bank_jobs.progress(job, done=0, total=total,
+                           detail='reading how the camera moved')
+        out = video_camera_motion.run_camera_motion(
+            bank_id, rescan,
+            on_clip=lambda: bank_jobs.bump(job),
+            should_stop=lambda: bank_jobs.cancelled(job))
+        detail = f'done — {out["measured"]} shot(s) read'
+        if out['too_short']:
+            # Named rather than folded into a total: re-running will never fix
+            # these. A trajectory needs a few frames to have a rate at all, and
+            # their cut is shorter than that.
+            detail += f', {out["too_short"]} too short to have a trajectory'
+        if out['unreadable']:
+            detail += f', {out["unreadable"]} could not be read'
+        if out['error']:
+            # The LAST per-clip failure, said out loud and not as a failure of
+            # the run: every shot read before it is real and kept.
+            detail += f' (last error: {out["error"]})'
         bank_jobs.progress(job, detail=detail)
         return out
     return run
@@ -1843,3 +2714,602 @@ def delete_video_dataset(user_id, dataset_id) -> bool:
         logger.warning('video dataset %s: could not dispose its folder: %s',
                        dataset_id, e)
     return True
+
+
+# --- 🕸 scrape → VIDEO BANK -----------------------------------------------------
+#
+# The scraper already listed videos: `/api/scrape/scan` returns items carrying
+# `type: 'video'` from RedGifs, Erome, Picazor, TikTok, X, Civitai and every
+# gallery-dl backed source. Nothing consumed them — the picker dropped them on
+# the floor and the only way to get a scraped clip into a bank was to download it
+# by hand, into a folder, and point a bank at it.
+#
+# This is the image lane's `image_bank_service.scrape_import_to_bank` adapted to
+# video, and it keeps ALL of its invariants deliberately:
+#
+#   1. ONE inventory path. Files are downloaded into the bank's folder and the
+#      ORDINARY walk (`refresh_bank`) registers them. No second insert.
+#   2. No quality judgement at intake. Short, still, tiny or duplicated is what
+#      the metrics pass and the triage exist to rule on; a clip refused at
+#      download time is one nobody can review.
+#   3. Content-hash naming, so re-importing the same bytes overwrites nothing and
+#      reports `already_there` — file identity, never a "duplicate" verdict.
+#   4. The lease is re-checked AFTER the downloads (which are slow) and before the
+#      first write, so a stale reservation can never publish under a newer owner.
+#
+# WHERE THE SOURCE FOLDER'S READ-ONLY RULE STANDS, AND WHERE IT DOES NOT. Every
+# PASS in this module still refuses to touch the folder a bank points at: probing,
+# detection, thumbnails and promotion write to `video_banks_root()` and
+# `video_datasets_root()`, never to your footage. A scrape is not a pass — it is
+# an errand you sent, at a destination you named — and it adds the files it
+# brings back to the folder that bank follows, your own included.
+#
+# This shipped the other way round for one wave: only a folder the app had itself
+# created could receive a scrape. It was defensible and it was wrong, because it
+# answered a question nobody had asked ("may the app write here?") instead of the
+# one they had ("put these clips in THAT bank"). CHOOSING THE BANK IS THE
+# CONSENT — there is no second opt-in, and the UI says plainly, at the moment of
+# choosing, when the chosen folder is one of yours. The image bank has always
+# worked exactly like this.
+#
+# What is still refused is the one thing consent cannot fix: a folder that belongs
+# to a DATASET. Files landing there would sit inside training material, get
+# trained on, and be attributed to a dataset nobody added them to.
+
+# Per REQUEST cap. Far below the image outlet's 60 for a reason that is arithmetic
+# rather than taste: one image is capped at 12 MB and 20 s, one video at 200 MB
+# and 180 s (netfetch.MAX_DRIVER_BYTES / DOWNLOAD_TIMEOUT). Six items over two
+# workers bounds a request at three download rounds — the same order of magnitude
+# as the image outlet's worst case, instead of an order beyond it. Bigger
+# selections are not refused: the client sends them as successive batches, the way
+# it already does for images.
+SCRAPE_VIDEO_IMPORT_MAX = 6
+
+# Two, not the image lane's six. A video download saturates the link on its own;
+# more of them in flight does not make the pipe wider, it only multiplies the peak
+# disk of half-finished files and the number of sources one request can annoy.
+_SCRAPE_VIDEO_DL_WORKERS = 2
+
+_SCRAPE_VIDEO_TIMEOUT = 180        # wall clock of ONE direct-file fetch, = netfetch's
+_SCRAPE_VIDEO_CHUNK = 256 * 1024
+
+_SCRAPE_FOLDER_SAFE = re.compile(r'[^A-Za-z0-9 _-]')
+
+# URL extensions that mean "this IS the media" — fetch the bytes directly rather
+# than paying a yt-dlp subprocess to rediscover what the link already says. Wider
+# than VIDEO_EXTS on purpose: what is STORED is decided by the file's own magic
+# (see `_video_extension_from_magic`), so recognising `.m4v` here costs nothing
+# and simply routes it away from the resolver.
+_DIRECT_VIDEO_URL_EXTS = ('.mp4', '.m4v', '.webm', '.mov', '.mkv', '.avi', '.ts')
+
+# ISO-BMFF brands that are NOT video, listed rather than guessed: the container
+# is shared by MP4, the whole HEIF picture family and M4A audio, so `ftyp` alone
+# proves nothing. Everything else with an `ftyp` is treated as MP4 — unknown
+# brands there are overwhelmingly MP4 profiles, and the probe pass is the honest
+# place for a file that turns out to hold no video stream.
+_NON_VIDEO_BMFF_BRANDS = frozenset((
+    b'avif', b'avis',                                    # AVIF stills / sequences
+    b'heic', b'heix', b'heim', b'heis',                  # HEIF pictures
+    b'hevc', b'hevx', b'hevm', b'hevs',                  # HEIF sequences
+    b'mif1', b'msf1',                                    # HEIF generic
+    b'M4A ', b'M4B ', b'M4P ',                           # audio-only
+))
+
+
+def is_app_owned_scrape_folder(path) -> bool:
+    """Whether the APP created ``path`` — i.e. it sits under
+    ``video_bank_sources_root()`` because a scrape made a bank of its own.
+
+    NOT a permission. It used to be one, and gating on it was the mistake this
+    module now documents at length; a bank you pointed at your own footage takes
+    a scrape like any other. What it is still good for, both of them load-bearing:
+
+    * it is the containment test behind the only ``rmtree`` in this lane
+      (``_discard_unlaunched_scrape_bank``) — that one MUST stay incapable of
+      deleting a folder the user assembled;
+    * it tells the UI whether the destination is a folder of the user's own, which
+      is the only case worth a sentence before they click.
+
+    Same containment test as ``_contained_path``: both sides realpath'd, and the
+    separator carried so `/x/rushes-2` cannot pass for a folder under
+    `/x/rushes`."""
+    if not path:
+        return False
+    try:
+        root = os.path.realpath(str(cfg.video_bank_sources_root()))
+        full = os.path.realpath(str(path))
+    except OSError:
+        return False
+    return os.path.normcase(full).startswith(os.path.normcase(root + os.sep))
+
+
+def _dataset_folder_refusal(folder) -> str | None:
+    """The sentence refusing a folder that belongs to a dataset, or None.
+
+    BOTH roots, exactly like ``create_bank``: the image lane's (harmless today,
+    but the rule is the rule) and the video lane's own, which is the real trap —
+    downloading into a folder a bank points at, when that folder is also a video
+    dataset's output, would make the bank list its own training clips as source
+    material and re-promote them on the next pass.
+
+    This is the ONE refusal that survived the move to "picking the bank is the
+    consent": consent cannot make files landing inside training material safe."""
+    if not folder:
+        return None
+    for root in (None, cfg.video_datasets_root()):
+        try:
+            conflict = path_guard.dataset_folder_conflict(folder, datasets_root=root)
+        except OSError:      # an unreachable root is not a conflict
+            continue
+        if conflict:
+            return ('This bank points at a dataset\'s own folder, so scraping into '
+                    f'it would drop files inside the dataset. {conflict["message"]}')
+    return None
+
+
+def _scrape_folder_for(name: str) -> str:
+    """A fresh, unused folder for a scraped bank. Suffixes -2, -3… rather than
+    reusing one: two scrapes of the same name must never silently merge into a
+    single pile. Creation IS the reservation (``os.mkdir``, not exists-then-make),
+    so two concurrent imports cannot end up sharing one folder."""
+    stem = _SCRAPE_FOLDER_SAFE.sub('_', name or '').strip() or 'bank'
+    root = cfg.video_bank_sources_root()
+    candidate = root / stem
+    i = 2
+    while True:
+        try:
+            os.mkdir(candidate)
+            return os.path.realpath(str(candidate))
+        except FileExistsError:
+            candidate = root / f'{stem}-{i}'
+            i += 1
+
+
+def _stage_scrape_video_bank(user_id, name) -> VideoBank:
+    """Reserve the private folder and FLUSH the still-uncommitted bank row, so its
+    id can be reserved in ``bank_jobs`` before the row is visible elsewhere."""
+    folder = _scrape_folder_for(name)
+    try:
+        bank = VideoBank(user_id=user_id, name=name, source_path=folder)
+        db.session.add(bank)
+        db.session.flush()
+        return bank
+    except Exception:
+        db.session.rollback()
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+
+
+def _discard_unlaunched_scrape_bank(user_id, bank_id, folder):
+    """Remove a staged/committed destination whose import never got anywhere.
+
+    "Never got anywhere" is checked, not assumed: the caller's guard
+    (`bank_jobs.launched`) is structurally always False on this synchronous
+    path — nothing ever calls `bank_jobs.start` here — so ANY exception used to
+    reach this cleanup, including one raised AFTER the downloads had landed
+    (a `refresh_bank` commit failing under a transient SQLite lock). Deleting
+    the folder then destroys up to six freshly-downloaded videos to clean up a
+    DB hiccup. A folder that already holds files is an import that DID get
+    somewhere: keep the bank and the files, let the next walk inventory them,
+    and let the error surface on its own."""
+    try:
+        db.session.rollback()
+    except Exception:  # noqa: BLE001 — cleanup must not mask the original failure
+        logger.warning('video bank scrape: rollback failed', exc_info=True)
+    try:
+        landed = bool(folder) and os.path.isdir(folder) and bool(os.listdir(folder))
+    except OSError:
+        landed = True   # cannot PROVE it is empty — never delete on a guess
+    if landed:
+        logger.warning('video bank scrape: bank %s kept — its folder already '
+                       'holds downloaded files', bank_id)
+        return
+    if bank_id is not None and get_bank(user_id, bank_id) is not None:
+        try:
+            delete_bank(user_id, bank_id)
+        except Exception:  # noqa: BLE001
+            logger.warning('video bank scrape: could not discard bank %s', bank_id,
+                           exc_info=True)
+    # `folder` came from _scrape_folder_for; re-check containment anyway so a
+    # future caller passing another path cannot turn this into a delete tool.
+    # THIS CHECK IS NOT DECORATION any more: a scrape can now be aimed at a folder
+    # of the user's own, and the only thing standing between a failed import and
+    # an `rmtree` of someone's rushes is that this cleanup only ever removes a
+    # folder the app itself created.
+    if folder and is_app_owned_scrape_folder(folder):
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _video_extension_from_magic(head: bytes) -> str | None:
+    """The extension a downloaded blob gets, read from its own first bytes.
+
+    THE EXTENSION IS NOT COPIED FROM THE URL, for a reason that would otherwise
+    bite silently: the walk only inventories ``VIDEO_EXTS``, so a `.m4v` (or a
+    query-string URL with no extension at all) would land in the folder, be
+    ignored by the walk, and the import would report files nobody can see. Reading
+    the container settles both questions at once — is this really a video, and
+    under which of the five names the walk knows.
+
+    None when the bytes are not a container we store, and that verdict is the
+    intake's OWN — it is deliberately stricter than what brought the file here.
+    `netfetch.download_via_ytdlp` keeps anything with a broad video signature,
+    GIF included, because its own caller (a driver video) can use one. This bank
+    cannot: a `.gif` in the folder is a file the walk never lists, so it would sit
+    there for ever, counted by nobody. Refusing here — and letting the staging
+    folder take the file away with it — is what keeps "downloaded" and
+    "inventoried" the same set."""
+    if not isinstance(head, (bytes, bytearray)) or len(head) < 12:
+        return None
+    head = bytes(head)
+    if head[4:8] == b'ftyp':
+        brand = head[8:12]
+        # AVIF/HEIF are ISO-BMFF too, and so is an M4A. They are a picture and a
+        # sound file — refuse rather than store one under a video name (the same
+        # ordering trap netfetch documents) and leave the probe pass to discover
+        # it has no video stream.
+        if brand in _NON_VIDEO_BMFF_BRANDS:
+            return None
+        return '.mov' if brand == b'qt  ' else '.mp4'
+    if head[:4] == b'\x1a\x45\xdf\xa3':          # EBML — Matroska family
+        # WebM is a Matroska profile; the DocType string sits in the header and is
+        # the only honest way to tell the two apart.
+        return '.webm' if b'webm' in head[:64] else '.mkv'
+    if head[:4] == b'RIFF' and head[8:12] == b'AVI ':
+        return '.avi'
+    return None
+
+
+def _video_blob_name(path) -> str | None:
+    """The name a downloaded video takes in the bank folder: its own content hash.
+
+    Same two consequences as the image lane's `_scrape_blob_name` — a re-download
+    of the SAME bytes writes the same name (idempotent, with nobody having to
+    decide what a duplicate is), while a re-encode or another resolution keeps a
+    name of its own and reaches the bank, where the shot metrics and the triage
+    are the one place that rules on them.
+
+    None when the file is not a container this lane stores. OSError propagates:
+    "the bytes are not a video" and "the file could not be read back" must not
+    collapse into one word, because the first is about the FILE and the second is
+    about the machine (an antivirus lock right after writing is a measured
+    reality here) — the caller counts them under different reasons."""
+    with open(path, 'rb') as fh:
+        head = fh.read(64)
+        ext = _video_extension_from_magic(head)
+        if ext is None:
+            return None
+        digest = hashlib.sha256()
+        digest.update(head)
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return f'{digest.hexdigest()[:24]}{ext}'
+
+
+def _scrape_video_route(url) -> str:
+    """'direct' when the URL IS the file, 'resolve' when a page has to be read.
+
+    gallery-dl backed sources hand back a CDN media URL (`.../clip.mp4`) — asking
+    yt-dlp to open that is a subprocess and a second request for bytes we can
+    simply stream. RedGifs, TikTok, X and friends hand back a WATCH PAGE, where
+    yt-dlp is exactly the right tool. The extension is the discriminator because
+    it is the only thing both shapes agree to expose."""
+    try:
+        from urllib.parse import urlparse
+        path = (urlparse(str(url or '')).path or '').lower()
+    except Exception:  # noqa: BLE001 — an unparseable URL is simply not direct
+        return 'resolve'
+    return 'direct' if path.endswith(_DIRECT_VIDEO_URL_EXTS) else 'resolve'
+
+
+def _stream_video_to_disk(url, dest_path) -> str:
+    """Fetch a direct media URL STRAIGHT TO DISK. Returns the skip reason
+    ('ok' | 'not_video' | 'too_large' | 'no_curl' | 'errors').
+
+    Deliberately not `netfetch.fetch_hardened_bytes`: that one builds the whole
+    body in memory, which is right for a 12 MB photo and wrong for a 200 MB clip.
+    Every one of its guards is kept: anti-SSRF validation of the URL,
+    `allow_redirects=False` (a 3xx toward an internal IP would walk around the
+    validation that just ran), a content-type allow-list, and the byte cap
+    enforced DURING the stream rather than after it."""
+    from ..scrape.netfetch import MAX_DRIVER_BYTES, _validate_public_http_url
+    ok_url, err = _validate_public_http_url(url)
+    if not ok_url:
+        logger.warning('video bank scrape: URL refused by the SSRF guard: %s', err)
+        return 'errors'
+    try:
+        from curl_cffi import requests as cf_requests
+    except ImportError:
+        # Every direct-file item fails on an install without the scrape extras —
+        # a dedicated reason (same word as `fetch_hardened_bytes`) so the client
+        # can say "install the scrape extras" instead of blaming the network.
+        logger.warning('video bank scrape: curl_cffi is not installed — '
+                       'direct-file downloads need the scrape extras')
+        return 'no_curl'
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or ''
+    try:
+        r = cf_requests.get(url, impersonate='chrome', timeout=_SCRAPE_VIDEO_TIMEOUT,
+                            stream=True, allow_redirects=False,
+                            headers={'Referer': f'https://{host}/',
+                                     'Accept': 'video/*,*/*'})
+    except Exception:  # noqa: BLE001 — a network failure is a skipped item
+        logger.warning('video bank scrape: fetch failed for host %s', host,
+                       exc_info=True)
+        return 'errors'
+    try:
+        if r.status_code != 200:
+            logger.warning('video bank scrape: host %s answered %s', host,
+                           r.status_code)
+            return 'errors'
+        ctype = (r.headers.get('content-type') or '').split(';')[0].strip().lower()
+        if not ctype.startswith('video/'):
+            # A content-type that is not video/* is html, a login wall or a
+            # mislabelled blob. The magic check would catch it later anyway; not
+            # spending 200 MB of bandwidth to find out is the point.
+            return 'not_video'
+        # The library's `timeout` does NOT bound a streaming body — with
+        # stream=True it degrades to a connect timeout plus a low-speed guard, so
+        # a server trickling one byte per second holds this thread (and the
+        # bank's lease) open indefinitely. The wall clock below is the actual
+        # 180 s promise the constant's comment makes.
+        deadline = time.monotonic() + _SCRAPE_VIDEO_TIMEOUT
+        written = 0
+        with open(dest_path, 'wb') as fh:
+            for chunk in r.iter_content(_SCRAPE_VIDEO_CHUNK):
+                if time.monotonic() > deadline:
+                    logger.warning('video bank scrape: host %s exceeded the '
+                                   '%ss wall clock', host, _SCRAPE_VIDEO_TIMEOUT)
+                    return 'errors'
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > MAX_DRIVER_BYTES:
+                    return 'too_large'
+                fh.write(chunk)
+        if written == 0:
+            # A 200 with an empty body is a broken download, not a verdict about
+            # the file — 'not_video' here would send someone to inspect a clip
+            # that never arrived.
+            logger.warning('video bank scrape: host %s sent an empty body', host)
+            return 'errors'
+    except OSError:
+        logger.warning('video bank scrape: could not write the download',
+                       exc_info=True)
+        return 'errors'
+    finally:
+        try:
+            r.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return 'ok'
+
+
+def _download_scrape_video(item, staging_dir) -> tuple:
+    """Bring ONE scan item down into ``staging_dir``. Returns (reason, path|None).
+
+    Staging, not the bank folder: the stored name is the content hash, which is
+    only known once the bytes are in hand — and a half-written .mp4 sitting in the
+    bank folder is a file the walk would happily inventory as a rush."""
+    url = (item or {}).get('url')
+    if not url:
+        return ('errors', None)
+    uid = uuid.uuid4().hex
+    if _scrape_video_route(url) == 'direct':
+        dest = os.path.join(staging_dir, uid)
+        reason = _stream_video_to_disk(url, dest)
+        return (reason, dest if reason == 'ok' else None)
+    from ..scrape.netfetch import (MAX_DRIVER_BYTES, download_via_ytdlp,
+                                   _validate_public_http_url)
+    ok_url, err = _validate_public_http_url(url)
+    if not ok_url:
+        logger.warning('video bank scrape: URL refused by the SSRF guard: %s', err)
+        return ('errors', None)
+    try:
+        ok, filename, error = download_via_ytdlp(url, os.path.join(staging_dir, uid))
+    except Exception:  # noqa: BLE001 — the resolver is a subprocess plus optional
+        # imports; whatever it fails on, this item is skipped and the rest of the
+        # batch continues.
+        logger.warning('video bank scrape: resolver failed', exc_info=True)
+        return ('errors', None)
+    if not ok or not filename:
+        logger.warning('video bank scrape: resolver kept nothing: %s',
+                       error or 'no file produced')
+        return ('errors', None)
+    path = os.path.join(staging_dir, filename)
+    # The 200 MB promise is only enforced by yt-dlp's plain-HTTP downloader; the
+    # fragmented ones (HLS/DASH — what a watch page usually serves) ignore
+    # `--max-filesize` entirely. The direct branch counts its bytes during the
+    # stream; this is the resolver branch's equivalent, after the fact.
+    try:
+        if os.path.getsize(path) > MAX_DRIVER_BYTES:
+            os.remove(path)
+            logger.warning('video bank scrape: resolver output exceeded the '
+                           '%s-byte cap', MAX_DRIVER_BYTES)
+            return ('too_large', None)
+    except OSError:
+        logger.warning('video bank scrape: could not size the resolver output',
+                       exc_info=True)
+        return ('errors', None)
+    return ('ok', path)
+
+
+def scrape_import_to_video_bank(user_id, items, bank_id=None, name=None, *,
+                                _bank_lease=None, _created=False) -> dict:
+    """🕸 Scrape → VIDEO BANK: the scraper's third destination.
+
+    Downloads the SELECTED scanned videos ({'url','title',…}) into a bank's source
+    folder, then lets the ordinary folder walk inventory them — the same single
+    inventory path every other video bank uses. Two modes: ``bank_id`` appends to
+    an EXISTING bank — any of them, including one you pointed at your own rushes
+    (a bank follows a live folder, so a second scrape resumes the pile) — and
+    ``name`` creates one under ``video_bank_sources_root()``.
+
+    PICKING THE BANK IS THE CONSENT. There is no opt-in beside it: naming a
+    destination is not something a user does by accident, and a second
+    confirmation would only train them to click through it. The clips are added
+    to the folder that bank follows, and the picker says so, with the path, when
+    that folder is one of theirs. The only destination still refused is a folder
+    that belongs to a DATASET — see ``_dataset_folder_refusal``.
+
+    Nothing is judged at intake — length, motion, sharpness and duplicates are
+    verdicts the metrics pass produces, with thresholds the user moves. Provenance
+    goes through the SAME validation gate as the image lane
+    (`normalize_source_metadata`), so what is stored is never the client's raw
+    claim; a platform that gate does not recognise stores nothing rather than a
+    guess.
+
+    Returns {'bank_id', 'name', 'created', 'saved', 'already_there', 'added',
+    'skipped': {...}} — ``added`` is what the walk actually inventoried. Raises
+    ValueError (bad input) or BankJobBusy (a pass owns the bank)."""
+    items = [it for it in (items or []) if isinstance(it, dict) and it.get('url')]
+    if not items:
+        raise ValueError('no items')
+    if len(items) > SCRAPE_VIDEO_IMPORT_MAX:
+        raise ValueError(f'max {SCRAPE_VIDEO_IMPORT_MAX} videos per import')
+
+    if bank_id is not None:
+        key = job_key(bank_id)
+        if _bank_lease is None:
+            # The quick advisory 409 first (it is what gives the UI a `busy_kind`
+            # to name), then the atomic lease, which is the authority if this read
+            # raced a new owner.
+            if bank_jobs.running(key):
+                snap = bank_jobs.get(key) or {}
+                raise bank_jobs.BankJobBusy(snap.get('kind') or 'background')
+            with bank_jobs.mutation_lease(key, 'scrape_import') as lease:
+                return scrape_import_to_video_bank(
+                    user_id, items, bank_id=bank_id, name=name,
+                    _bank_lease=lease, _created=_created)
+        bank_jobs.require_reservation(_bank_lease, key)
+        bank = get_bank(user_id, bank_id)
+        if bank is None:
+            raise ValueError('video bank not found')
+        folder = bank.source_path
+        if not folder or not os.path.isdir(folder):
+            raise ValueError("this bank's folder is unavailable right now")
+        # A folder of the user's own is a legitimate destination — they named it.
+        # A DATASET's folder is not, and no amount of naming makes it one.
+        refusal = _dataset_folder_refusal(folder)
+        if refusal:
+            raise ValueError(refusal)
+    else:
+        name = (name or '').strip()
+        if not name:
+            raise ValueError('name is required')
+        bank = reservation = None
+        folder = None
+        try:
+            # The row becomes visible only once its reservation is installed,
+            # exactly like the image lane's background import paths.
+            bank = _stage_scrape_video_bank(user_id, name)
+            folder = bank.source_path
+            reservation = bank_jobs.reserve(job_key(bank.id), 'scrape_import')
+            db.session.commit()
+            return scrape_import_to_video_bank(
+                user_id, items, bank_id=bank.id, name=name,
+                _bank_lease=reservation, _created=True)
+        except Exception:
+            if bank is not None and not bank_jobs.launched(reservation):
+                _discard_unlaunched_scrape_bank(user_id, bank.id, folder)
+            raise
+        finally:
+            bank_jobs.abort(reservation)
+
+    from flask import current_app, has_app_context
+    app = current_app._get_current_object() if has_app_context() else None
+    staging = tempfile.mkdtemp(prefix='vbank_scrape_')
+
+    def _fetch(item):
+        # The resolver logs through `current_app`; a worker thread has no context
+        # of its own, and without this a yt-dlp failure would surface as an
+        # unrelated RuntimeError instead of the reason it actually failed.
+        if app is None:
+            return _download_scrape_video(item, staging)
+        with app.app_context():
+            return _download_scrape_video(item, staging)
+
+    try:
+        with ThreadPoolExecutor(max_workers=_SCRAPE_VIDEO_DL_WORKERS) as pool:
+            # Kept paired with its item: the blob name is only known once the
+            # bytes are in hand, and the pairing is also the only way back to the
+            # provenance a given file owns.
+            downloaded = list(zip(items, pool.map(_fetch, items)))
+        # Downloads are slow. Re-assert the capability before the first write so a
+        # stale or purged lease can never publish beside a newer bank owner.
+        bank_jobs.require_reservation(_bank_lease, job_key(bank.id))
+
+        from .face_dataset_service import _source_metadata_storage
+
+        skipped: dict[str, int] = {}
+        saved = already_there = 0
+        # blob name (== relpath: scraped files land FLAT in the bank folder) ->
+        # validated provenance JSON, handed to the walk so a freshly inventoried
+        # row is born WITH its source instead of the walk having no way to attach
+        # one to a bare file it just found.
+        source_metadata_by_relpath: dict[str, str] = {}
+        for item, (reason, path) in downloaded:
+            if reason != 'ok' or not path:
+                skipped[reason] = skipped.get(reason, 0) + 1
+                continue
+            try:
+                blob = _video_blob_name(path)
+            except OSError:
+                # The file arrived but cannot be read back (antivirus lock, lost
+                # handle). That is a machine problem, not a verdict about the
+                # clip — 'not_video' here would be a lie about a valid file.
+                logger.warning('video bank scrape: downloaded file unreadable',
+                               exc_info=True)
+                skipped['errors'] = skipped.get('errors', 0) + 1
+                continue
+            if blob is None:
+                skipped['not_video'] = skipped.get('not_video', 0) + 1
+                continue
+            stored = _source_metadata_storage(item, image_url=item.get('url'))
+            if stored:
+                source_metadata_by_relpath[blob] = stored
+            dest = os.path.join(folder, blob)
+            if os.path.exists(dest):
+                already_there += 1
+                continue
+            # Publish in two steps. `shutil.move` across volumes (staging lives
+            # in %TEMP%, the bank's folder often does not) degrades to a
+            # progressive copy INTO the destination name — a crash mid-copy
+            # would leave a truncated file under its final content-hash name,
+            # which the walk then inventories and which no re-import of the same
+            # bytes ever repairs (the hash "already exists"). The `.part` name is
+            # invisible to the walk (not in VIDEO_EXTS); `os.replace` on the same
+            # volume is atomic.
+            part = dest + '.part'
+            try:
+                shutil.move(path, part)
+                os.replace(part, dest)
+            except OSError:
+                logger.warning('video bank scrape: could not store %s', blob,
+                               exc_info=True)
+                try:
+                    if os.path.exists(part):
+                        os.remove(part)
+                except OSError:
+                    pass
+                skipped['errors'] = skipped.get('errors', 0) + 1
+                continue
+            saved += 1
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    # ONE inventory path, the same walk that picks up files dropped in the folder
+    # by hand. No third insert.
+    sync = refresh_bank(user_id, bank.id, force=True, _bank_lease=_bank_lease,
+                        source_metadata_by_relpath=source_metadata_by_relpath) or {}
+    out = {'bank_id': bank.id, 'name': bank.name, 'created': _created,
+           'saved': saved, 'already_there': already_there,
+           'added': sync.get('added', 0), 'skipped': skipped}
+    if sync.get('error'):
+        # Files downloaded but the walk could not inventory them is NOT the
+        # success it used to read as: without this field the client shows the
+        # perfect-run sentence while `added` is silently zero.
+        out['sync_error'] = sync['error']
+    return out

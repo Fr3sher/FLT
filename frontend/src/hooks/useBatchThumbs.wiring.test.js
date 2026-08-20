@@ -36,7 +36,9 @@ test('concept-source picker batches scraped thumbs through /scrape/thumbs', () =
   assert.match(concept, /import useBatchThumbs/);
   assert.match(concept, /\/api\/scrape\/thumbs/);
   assert.match(concept, /useBatchThumbs\(/);
-  assert.match(concept, /getScrapeThumb\(it\.thumbnail \|\| it\.url\) \|\| thumbFor\(it\)/);
+  assert.match(concept, /getScrapeThumb\(thumbSource\)/);
+  assert.match(concept, /const displayThumb = batchedThumb \|\|/);
+  assert.match(concept, /scrapeItemMediaKind\(it\) === 'image' \? it\.url : null/);
 });
 
 test('video bank grid batches clip thumbs through /video-bank/<id>/clip-thumbs', () => {

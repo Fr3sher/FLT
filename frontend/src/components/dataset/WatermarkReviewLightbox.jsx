@@ -34,6 +34,7 @@ import {
   deleteSelectedWatermarkRegion,
 } from '../../utils/watermarkRegions';
 import WatermarkRegionEditor from './WatermarkRegionEditor';
+import RepairDialog from '../shared/RepairDialog';
 
 // The action Clean WILL take, per backend route (watermark_route in the payload).
 const ROUTE_LABEL = {
@@ -92,7 +93,7 @@ function isInteractiveShortcutTarget(target) {
 
 export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces = {},
                                                   onSaveRegions, onClean, onRestore, onDismiss,
-                                                  onReject, onClose }) {
+                                                  onReject, onRepair, onUndoRepair, onClose }) {
   const initialReviewStateRef = useRef(null);
   if (!initialReviewStateRef.current) {
     initialReviewStateRef.current = buildWatermarkReviewState(queue);
@@ -117,6 +118,26 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
   // of the old catch-all that blamed ComfyUI + the weights in every case.
   const kleinReason = kleinReady ? null : localEngineUnavailableReason('klein', caps);
   const [method, setMethod] = useState('lama');
+  /* ✦ What the drawn zone should become, when the user wants something OTHER
+     than a watermark reconstruction. Empty = the 🧽 lane, untouched.
+     (mr.arrow: jewelry / skin imperfections; .samexit: fix one detail.) */
+  const [repairOpen, setRepairOpen] = useState(false);
+  /* PHONE ONLY. This bar carries four groups that SET UP a clean — the zone
+     editor, crop-vs-inpaint, the engine, the model — and four that PERFORM one:
+     🧽 Clean, ✓ Not a watermark, ✕ Reject, and the arrows. On a wide screen they
+     coexist; at 400 px they wrap to a dozen full-width rows and the picture you
+     are supposed to be judging is a thumbnail above them.
+     The split is not a guess: the actions that already carry a KEYBOARD
+     SHORTCUT (c / r / d / x / ← →, printed in the legend below) are exactly the
+     ones that stay — a shortcut is what this screen already calls a main move.
+     The setup groups fold behind one button — `sm:contents` makes the
+     wrapper vanish from the layout above 640 px, so the desktop bar is
+     byte-for-byte the one that was there before. */
+  const [toolsOpen, setToolsOpen] = useState(false);
+  /* Which images were repaired in THIS session — the ↩ undo is one step deep
+     and the server is the authority, but the button must not appear on an image
+     nobody has touched. */
+  const [repairedIds, setRepairedIds] = useState(() => new Set());
   // Per-image crop-vs-inpaint choice (id -> 'crop' | 'inpaint'). Only offered when a
   // SAFE border crop exists for the image (watermark_route === 'crop') and no manual
   // zones are drawn. Unset entries fall back to the persisted "Allow auto-crop" default.
@@ -337,6 +358,29 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
     void persistRegions(item.id, job.payload, job.visible, job.manual).catch(() => undefined);
   }, [item, persistRegions]);
 
+  /* ✦ Repair — the SAME drawn zones, repainted from the user's own sentence.
+     It rides the existing `run` machinery so it inherits the save-first guard,
+     the busy lock and the note surface; only the call and the wording differ.
+     The zones must be SAVED first for the same reason cleaning needs it: the
+     server repaints what it has stored, not what is on screen. */
+  /* The dialog hands back the zones AND the sentence, so nothing has to be saved
+     server-side first — unlike 🧽 Clean, which repaints what the server stored. */
+  const submitRepair = useCallback(async ({ boxes, mask, prompt }) => {
+    if (!item || !onRepair) return { ok: false, error: 'not ready' };
+    const d = await onRepair(item.id, prompt, boxes, mask);
+    if (d && d.ok !== false) setRepairedIds((prev) => new Set(prev).add(item.id));
+    return d;
+  }, [item, onRepair]);
+
+  const submitUndoRepair = useCallback(async () => {
+    if (!item || !onUndoRepair) return { ok: false };
+    const d = await onUndoRepair(item.id);
+    if (d && d.undone) {
+      setRepairedIds((prev) => { const n = new Set(prev); n.delete(item.id); return n; });
+    }
+    return d;
+  }, [item, onUndoRepair]);
+
   const doClean = useCallback(() => {
     if (!item || outcome === 'cleaned' || !regions.length || manualLamaMissing) return;
     const activeSave = saveJobsRef.current[item.id];
@@ -410,6 +454,10 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
   useEffect(() => {
     const onKey = (e) => {
       if (isInteractiveShortcutTarget(e.target)) return;
+      // Escape peels ONE layer: while ✦ Repair is up it belongs to the dialog,
+      // which has its own window listener. Both firing closed the dialog AND the
+      // review underneath — the keyboard twin of the backdrop-click defect.
+      if (repairOpen) return;
       if (e.key === 'Escape') { e.preventDefault(); close(); return; }
       if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); return; }
       if (e.key === 'ArrowRight') { e.preventDefault(); go(1); return; }
@@ -421,7 +469,7 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [close, go, doClean, doRestore, doDismiss, doReject]);
+  }, [close, go, doClean, doRestore, doDismiss, doReject, repairOpen]);
 
   if (!total) return null;
 
@@ -461,6 +509,7 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
     : oc?.text;
   const cleaning = working && workingKind === 'clean';   // navigation is held while true, so this always tracks `item`
   const restoring = working && workingKind === 'restore';
+  const repairing = working && workingKind === 'repair';
   // A real pixel edit ran (cleanDetail set on crop/inpaint/Klein) → a .orig exists to
   // undo. The "nothing to do" cleaned fallback sets no detail, so Restore stays hidden.
   const restorable = outcome === 'cleaned' && Boolean(cleanDetail[item?.id]);
@@ -482,6 +531,11 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
     : saveState.status === 'failed' ? 'text-red-300' : 'text-emerald-300';
 
   const btn = 'flex-1 min-w-[7rem] min-h-[3rem] px-3 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40';
+  /* `contents` and not a wrapper box: these groups sit in three different
+     parents (a wrap row, the column) and each already carries its own spacing.
+     A real element around them would add a box to every one of those layouts;
+     `display: contents` adds none, so above `sm` nothing about this bar changes. */
+  const foldable = `${toolsOpen ? 'contents' : 'hidden'} sm:contents`;
 
   return (
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Review flagged watermarks"
@@ -554,6 +608,17 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
           <span className="text-white/70 tabular-nums">
             {regions.length} correction zone{regions.length === 1 ? '' : 's'}
           </span>
+          {/* The one control that appears ONLY on a phone. It says what it opens
+              rather than showing a bare chevron: the groups behind it are the
+              difference between a crop and a repaint, which is not something to
+              discover by poking. */}
+          <button type="button" onClick={() => setToolsOpen((v) => !v)}
+            aria-expanded={toolsOpen}
+            title="Show the zone editor, the crop-or-repaint choice and the engine for this image"
+            className="min-h-9 rounded-lg border border-white/20 bg-white/10 px-3 text-xs font-semibold text-white hover:bg-white/20 sm:hidden">
+            {toolsOpen ? '▴ Hide tools' : '▾ Zones & engine'}
+          </button>
+          <div className={foldable}>
           <button type="button" aria-pressed={addMode}
             onClick={() => setAddModeFor(item.id, !addMode)}
             disabled={editorDisabled || Boolean(oc?.terminal) || atRegionLimit}
@@ -578,6 +643,7 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
           <span aria-live="polite" className={`font-semibold ${saveCls}`}>
             {saveState.status === 'saved' ? '✓ ' : saveState.status === 'failed' ? '⚠ ' : ''}{saveLabel}
           </span>
+          </div>
         </div>
 
         {saveState.status === 'failed' && (
@@ -625,6 +691,7 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
             Crop cuts the band off (invents no pixel); Inpaint repaints the mark with the
             chosen engine. Overrides the persisted "Allow auto-crop" default for this one. */}
         {canCrop && !(oc && oc.terminal) && (
+          <div className={foldable}>
           <div role="group" aria-label="Removal method"
             className="flex items-center justify-center gap-1 text-xs">
             <span className="text-white/50">Method:</span>
@@ -645,12 +712,14 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
               </button>
             </div>
           </div>
+          </div>
         )}
 
         {/* Inpaint engine for THIS image: Klein is the only one that can clean an
             on-subject ('review') mark, so it makes those actionable. Greyed until
             ComfyUI + the Klein models are ready, or while Crop is the chosen method
             (a crop uses no engine). */}
+        <div className={foldable}>
         <div role="group" aria-label="Inpaint method"
           className="flex items-center justify-center gap-1 text-xs">
           <span className={useCrop ? 'text-white/30' : 'text-white/50'}>Engine:</span>
@@ -674,12 +743,15 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
             </button>
           </div>
         </div>
+        </div>
         {/* Cleaning this image overwrites it, so which model repaints it is not a
             detail — and it is the dataset's model, the same one improve uses.
             Named here, changeable here, only while Klein is the engine. */}
         {kleinSelected && !useCrop && (
-          <KleinModelSetting datasetId={datasetId}
-            className="mx-auto w-full max-w-md text-center" />
+          <div className={foldable}>
+            <KleinModelSetting datasetId={datasetId}
+              className="mx-auto w-full max-w-md text-center" />
+          </div>
         )}
 
         <div className="flex gap-2 flex-wrap">
@@ -704,6 +776,19 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
                 : "Apply this image's watermark removal now (crop / inpaint / manual review) — shortcut c"}
               className={`${btn} bg-amber-500/20 border border-amber-400/50 text-amber-100 hover:bg-amber-500/30`}>
               {cleaning ? '🧽 Cleaning…' : <>🧽 Clean <kbd className="text-[10px] text-white/50">c</kbd></>}
+            </button>
+          )}
+          {/* ✦ REPAIR opens the SAME fullscreen dialog the generated-image lane
+              uses. It used to be an inline text field plus two buttons right
+              here — a permanent input in a control bar, which on a 400 px screen
+              stole a whole row from the picture and showed up even for someone
+              who only came to clean a watermark. One button now; the drawing,
+              the sentence and ↩ Undo live in the dialog, where there is room. */}
+          {onRepair && !(oc && oc.terminal) && (
+            <button type="button" onClick={() => setRepairOpen(true)} disabled={actionBlocked}
+              title="Repaint an area from your own description — draw the zone, say what should be there, and everything outside it stays byte-identical"
+              className={`${btn} bg-sky-500/20 border border-sky-400/50 text-sky-100 hover:bg-sky-500/30`}>
+              ✦ Repair
             </button>
           )}
           <HelpBadge topic="action-watermark-restore" className="self-center" />
@@ -738,6 +823,12 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
           )}
         </div>
       </div>
+      {/* Mounted INSIDE the overlay: a sibling would need a fragment and would
+          sit under it. */}
+      <RepairDialog open={repairOpen && !!url} src={url} alt={alt}
+        onClose={() => setRepairOpen(false)}
+        onSubmit={submitRepair}
+        onUndo={onUndoRepair && repairedIds.has(item?.id) ? submitUndoRepair : null} />
     </div>
   );
 }

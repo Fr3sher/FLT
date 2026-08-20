@@ -545,7 +545,7 @@ def test_clean_large_mark_needs_review_no_edit(app, monkeypatch):
         assert svc.db.session.get(FaceDatasetImage, img.id).watermark_state == 'detected'
 
 
-def test_clean_manual_regions_force_one_composite_inpaint_at_edge_and_clear_on_success(
+def test_clean_manual_regions_force_one_composite_inpaint_at_edge_and_survive(
         app, monkeypatch):
     from app.services import face_dataset_service as svc
     from app.services import watermark_lama
@@ -588,7 +588,15 @@ def test_clean_manual_regions_force_one_composite_inpaint_at_edge_and_clear_on_s
         row = svc.db.session.get(FaceDatasetImage, img.id)
         assert row.watermark_state == 'cleaned'
         assert json.loads(row.watermark_bbox) == legacy_bbox
-        assert row.watermark_regions is None
+        # ...and the hand-drawn zones survive it too. These two lines used to
+        # disagree: the DETECTED bbox was kept and the user's CORRECTION of it
+        # deleted — backwards, since the zones exist only because that bbox was
+        # wrong (here it "would take the legacy crop route"). ↩ Restore original
+        # puts the watermarked pixels back and re-flags the row 'detected' to be
+        # re-cleaned, usually with the other engine; the zones the retry needs
+        # have to still be there. Nothing draws them meanwhile — the review
+        # screen hides its editor on a terminal outcome (`showEditor`).
+        assert json.loads(row.watermark_regions) == regions
 
 
 def test_clean_empty_manual_override_needs_review_without_touching_pixels(app, monkeypatch):
@@ -1720,7 +1728,9 @@ def _stub_klein(monkeypatch, *, available=True, result=(True, None), recorder=No
 
     def _fake(user_id, path, boxes, **kwargs):
         if recorder is not None:
-            recorder.append({'path': path, 'boxes': boxes})
+            # kwargs too: the free prompt of the ✦ repair lane lives there, and a
+            # recorder blind to it cannot prove what Klein was actually asked.
+            recorder.append({'path': path, 'boxes': boxes, **kwargs})
         return result
 
     monkeypatch.setattr(wk, 'inpaint_watermark_klein', _fake)
@@ -1762,7 +1772,7 @@ def test_clean_klein_makes_the_review_route_actionable(app, monkeypatch):
         assert svc.db.session.get(FaceDatasetImage, img.id).watermark_state == 'cleaned'
 
 
-def test_clean_klein_uses_manual_regions_and_clears_them(app, monkeypatch):
+def test_clean_klein_uses_manual_regions_and_keeps_them(app, monkeypatch):
     from app.services import face_dataset_service as svc
     from app.config import LOCAL_USER
     from app.models import FaceDatasetImage
@@ -1777,7 +1787,10 @@ def test_clean_klein_uses_manual_regions_and_clears_them(app, monkeypatch):
         assert len(calls) == 1 and calls[0]['boxes'] == regions
         assert calls[0]['path'] != svc._img_path(img) and not os.path.exists(calls[0]['path'])
         row = svc.db.session.get(FaceDatasetImage, img.id)
-        assert row.watermark_state == 'cleaned' and row.watermark_regions is None
+        # Kept — see the LaMa lane above for why. The engine differs; what the
+        # user drew does not belong to either of them.
+        assert row.watermark_state == 'cleaned'
+        assert json.loads(row.watermark_regions) == regions
 
 
 def test_clean_klein_unavailable_skips_and_leaves_detected(app, monkeypatch):
@@ -1997,6 +2010,53 @@ def test_run_klein_job_wires_workflow_and_returns_filled(app, monkeypatch, tmp_p
     assert wf['6']['inputs']['text'] == wk.KLEIN_INPAINT_PROMPT
     # the input crop was cleaned up after the run
     assert not list(tmp_path.glob('wmklein_*'))
+
+
+def test_run_klein_job_takes_a_free_prompt_without_moving_the_cleaning_lane(
+        app, monkeypatch, tmp_path):
+    """The masked repaint can be STEERED, and the watermark lane must not notice.
+
+    The mask + byte-exact composite machinery was only ever reachable with one
+    frozen sentence, so "repaint exactly this box, but paint THIS" was
+    impossible — the only prompted lane (✦ Edit) re-renders the whole image and
+    drifts outside the zone. Asked for by mr.arrow (remove jewelry / skin
+    imperfections) and .samexit (fix one detail of a fresh generation) on
+    Discord, independently.
+
+    Two halves, both asserted: a caller that says nothing still sends the exact
+    reconstruction prompt the cleaner has always sent, and a caller that says
+    something gets it in node 6 AND on the queue row (which is what the user
+    reads back in the job list).
+    """
+    from app.services import watermark_klein as wk
+    from app.services import klein_edit_helper as keh
+
+    monkeypatch.setattr(wk, '_comfy_input_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(wk, '_comfy_output_dir', lambda: None)
+    monkeypatch.setattr(keh, 'resolve_klein_unet', lambda selected=None: 'klein\\unet.safetensors')
+    monkeypatch.setattr(keh, 'resolve_klein_vae', lambda: 'flux2-vae.safetensors')
+    monkeypatch.setattr(keh, 'resolve_klein_text_encoder', lambda: 'qwen_3_8b_fp8mixed.safetensors')
+    monkeypatch.setattr(keh, 'klein_missing_assets', lambda: [])
+    captured = {}
+    monkeypatch.setattr(wk.queue_manager, 'add_job',
+                        lambda **kw: captured.update(kw) or kw['job_id'])
+    monkeypatch.setattr(wk, '_wait_for_job',
+                        lambda job_id, timeout: ('completed', 'wmklein_out.png', None))
+    monkeypatch.setattr(wk, '_read_comfy_output', lambda filename: _img_bytes(size=(64, 64)))
+
+    with app.app_context():
+        crop = Image.new('RGB', (64, 64), (10, 20, 30))
+        wk._run_klein_job('local', crop, seed=7, prompt='remove the necklace')
+        assert captured['workflow_data']['6']['inputs']['text'] == 'remove the necklace'
+        assert captured['prompt'] == 'remove the necklace'
+
+        # Blank / whitespace is NOT a prompt: it falls back rather than sending an
+        # empty conditioning, which would repaint the box with nothing in mind.
+        for blank in (None, '', '   '):
+            captured.clear()
+            wk._run_klein_job('local', crop, seed=7, prompt=blank)
+            assert captured['workflow_data']['6']['inputs']['text'] == wk.KLEIN_INPAINT_PROMPT
+            assert captured['prompt'] == wk.KLEIN_INPAINT_PROMPT
 
 
 def test_run_klein_job_raises_when_required_asset_missing(app, monkeypatch, tmp_path):
@@ -2345,3 +2405,174 @@ def test_a_cleaned_image_still_refuses_a_zone(app):
                 LOCAL_USER, ds.id, img.id, [[0.1, 0.1, 0.2, 0.2]])
 
         assert img.watermark_state == 'cleaned'
+
+
+# --- ✦ Repair a drawn box from a FREE prompt (the masked lane, unfrozen) -------
+
+def test_repair_sends_the_users_prompt_and_stamps_no_watermark_verdict(app, monkeypatch):
+    """Asked for independently by mr.arrow (jewelry, skin imperfections) and
+    .samexit (fix one detail instead of regenerating a whole image).
+
+    Two things are asserted because both were missing before: the prompt reaches
+    Klein, and the repair does NOT touch `watermark_state`. Stamping one would
+    make the flag lie in both directions — an image nobody said was watermarked
+    would read as cleaned.
+    """
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+    calls = []
+    _stub_klein(monkeypatch, recorder=calls)
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'R', 'r')
+        img = _kept_image(svc, ds.id, 'shot.webp', state=None)
+        out = svc.repair_image_region(LOCAL_USER, ds.id, img.id,
+                                      [[0.3, 0.3, 0.2, 0.2]], 'remove the necklace')
+        assert out == {'ok': True}
+        assert len(calls) == 1
+        assert calls[0]['prompt'] == 'remove the necklace'
+        svc.db.session.refresh(img)
+        assert img.watermark_state is None
+
+
+def test_repair_refuses_a_blank_prompt_and_touches_nothing(app, monkeypatch):
+    """A blank prompt must NOT fall back to the watermark reconstruction
+    sentence: the caller asked for a prompted repair, and repainting the box
+    with an intention nobody expressed is worse than refusing."""
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+    calls = []
+    _stub_klein(monkeypatch, recorder=calls)
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'R', 'r')
+        img = _kept_image(svc, ds.id, 'shot.webp', state=None)
+        before = open(svc._img_path(img), 'rb').read()
+        for blank in (None, '', '   '):
+            with pytest.raises(ValueError):
+                svc.repair_image_region(LOCAL_USER, ds.id, img.id,
+                                        [[0.3, 0.3, 0.2, 0.2]], blank)
+        assert calls == [], 'nothing may reach the GPU without a prompt'
+        assert open(svc._img_path(img), 'rb').read() == before
+
+
+def test_repair_leaves_the_file_untouched_when_klein_fails(app, monkeypatch):
+    """The master is preserved BEFORE anything is written, so a failed repair
+    costs the user nothing — the same guarantee the cleaning lane gives."""
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+    _stub_klein(monkeypatch, result=(False, {'kind': 'failed', 'detail': 'boom'}))
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'R', 'r')
+        img = _kept_image(svc, ds.id, 'shot.webp', state=None)
+        before = open(svc._img_path(img), 'rb').read()
+        with pytest.raises(ValueError):
+            svc.repair_image_region(LOCAL_USER, ds.id, img.id,
+                                    [[0.3, 0.3, 0.2, 0.2]], 'remove the necklace')
+        assert open(svc._img_path(img), 'rb').read() == before
+
+
+def test_repair_hides_an_unknown_or_foreign_image(app, monkeypatch):
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+    _stub_klein(monkeypatch)
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'R', 'r')
+        with pytest.raises(LookupError):
+            svc.repair_image_region(LOCAL_USER, ds.id, 999999,
+                                    [[0.3, 0.3, 0.2, 0.2]], 'x')
+        with pytest.raises(LookupError):
+            svc.repair_image_region('another-user', ds.id, 1,
+                                    [[0.3, 0.3, 0.2, 0.2]], 'x')
+
+
+# --- ↩ Undo a repair (asked for on Discord right after ✦ Repair shipped) -------
+
+def test_undo_puts_the_pre_repair_pixels_back(app, monkeypatch):
+    """"If the repair makes things worse than before, a quick undo option to
+    change the prompt would be welcome." An inpaint is a dice roll, so iterating
+    on the sentence has to be cheap — and before this each attempt overwrote the
+    file with no way back."""
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+
+    def _fake_inpaint(user_id, path, boxes, **kw):
+        with open(path, 'wb') as fh:      # the "repair" visibly changes the file
+            fh.write(_img_bytes(color=(1, 2, 3)))
+        return True, None
+
+    from app.services import watermark_klein as wk
+    monkeypatch.setattr(wk, 'is_available', lambda: True)
+    monkeypatch.setattr(wk, 'inpaint_watermark_klein', _fake_inpaint)
+
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'U', 'u')
+        img = _kept_image(svc, ds.id, 'shot.webp', state=None)
+        path = svc._img_path(img)
+        before = open(path, 'rb').read()
+
+        svc.repair_image_region(LOCAL_USER, ds.id, img.id,
+                                [[0.3, 0.3, 0.2, 0.2]], 'remove the necklace')
+        assert open(path, 'rb').read() != before, 'the repair did not change the file'
+
+        out = svc.undo_image_repair(LOCAL_USER, ds.id, img.id)
+        assert out == {'ok': True, 'undone': True}
+        assert open(path, 'rb').read() == before
+
+        # ONE step deep, and the snapshot is consumed: a second press cannot
+        # silently revert something the user did after the first undo.
+        assert svc.undo_image_repair(LOCAL_USER, ds.id, img.id)['undone'] is False
+
+
+def test_undo_does_not_claim_anything_about_watermarks(app, monkeypatch):
+    """restore_watermark_original re-flags the image as 'detected' because it
+    undoes a 🧽 Clean. A repair never said anything about a watermark, so undoing
+    one must not either."""
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+    _stub_klein(monkeypatch)
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'U', 'u')
+        img = _kept_image(svc, ds.id, 'shot.webp', state=None)
+        svc.repair_image_region(LOCAL_USER, ds.id, img.id,
+                                [[0.3, 0.3, 0.2, 0.2]], 'remove it')
+        svc.undo_image_repair(LOCAL_USER, ds.id, img.id)
+        svc.db.session.refresh(img)
+        assert img.watermark_state is None
+
+
+def test_undo_of_a_repair_never_reaches_the_write_once_original(app, monkeypatch):
+    """The .orig sibling holds the pixels from before the FIRST edit ever made to
+    this file. Undoing a repair with it would also throw away a watermark clean
+    the user made earlier and still wants — so the undo uses its own one-step
+    snapshot and leaves .orig alone."""
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+    _stub_klein(monkeypatch)
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'U', 'u')
+        img = _kept_image(svc, ds.id, 'shot.webp', state=None)
+        path = svc._img_path(img)
+        svc.repair_image_region(LOCAL_USER, ds.id, img.id,
+                                [[0.3, 0.3, 0.2, 0.2]], 'remove it')
+        stem, ext = os.path.splitext(path)
+        orig = f'{stem}.orig{ext}'
+        assert os.path.exists(orig)
+        orig_bytes = open(orig, 'rb').read()
+        svc.undo_image_repair(LOCAL_USER, ds.id, img.id)
+        assert open(orig, 'rb').read() == orig_bytes, 'the undo touched .orig'
+
+
+def test_every_dataset_file_writer_keeps_its_ingest_guard(app):
+    """REGRESSION GUARD, and it is not hypothetical: inserting a function just
+    above restore_watermark_original silently STOLE its @_serialize_dataset_ingest
+    decorator — the function kept working and lost both its per-dataset write lock
+    and the refusal to write while a bank export is landing in that dataset.
+
+    Every service function that overwrites a dataset image in place must carry it.
+    """
+    import inspect
+    from app.services import face_dataset_service as svc
+    for name in ('restore_watermark_original', 'repair_image_region', 'undo_image_repair'):
+        fn = getattr(svc, name)
+        src = inspect.getsource(fn)
+        # @wraps keeps __wrapped__ on the decorated function; a bare function has none.
+        assert hasattr(fn, '__wrapped__'), f'{name} lost its @_serialize_dataset_ingest'

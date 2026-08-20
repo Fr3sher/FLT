@@ -1,7 +1,10 @@
+import { useEffect, useRef } from 'react'
 import { videoClipThumbUrl } from './videoBankApi'
 import useBatchThumbs from '../../hooks/useBatchThumbs'
 import { clipLabel } from './videoClipFragment'
 import { FLAG_LABELS } from './videoMetricsFilter'
+import { cameraBadge } from './videoCameraMotion'
+import { transitionChip } from './videoShotCuts'
 
 /** 🎬 The shot gallery — JPEG thumbnails, and NOT ONE <video>.
  *
@@ -17,9 +20,15 @@ import { FLAG_LABELS } from './videoMetricsFilter'
  * of scroll, on someone else's machine, with no message.
  *
  * `loading="lazy"` on every tile: an off-screen thumbnail costs nothing.
+ *
+ * ⌨ In burst mode one tile carries the CURSOR. It is marked three ways on
+ * purpose — a ring, a ▸ badge and `aria-current` — because a ring alone is a
+ * colour, and the whole run depends on knowing which shot the next keystroke
+ * will hit. The tile is also scrolled back into view whenever the cursor moves,
+ * since auto-advance can walk it off the bottom of the page in three keys.
  */
 export default function VideoClipGrid({
-  bankId, clips, selected, onToggle, onOpen, emptyMessage, matchLines,
+  bankId, clips, selected, onToggle, onOpen, emptyMessage, matchLines, cursorId,
 }) {
   // Batch-prefetch the grid's clip thumbnails so a high-RTT link pays one round
   // trip per batch, not one per tile. Clips without a thumb are skipped server-
@@ -28,6 +37,13 @@ export default function VideoClipGrid({
     clips.map((c) => c.id),
     (ids) => ({ url: `/api/video-bank/${bankId}/clip-thumbs`, body: JSON.stringify({ ids }) }),
   );
+  const cursorRef = useRef(null)
+  // `block: 'nearest'` and nothing more: it must bring the tile back when it has
+  // left the viewport and stay perfectly still when it has not — a centred
+  // scroll on every keystroke makes the whole grid twitch under the hand.
+  useEffect(() => {
+    cursorRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [cursorId])
   if (!clips.length) {
     return (
       <p className="rounded-xl border border-dashed border-border bg-app/30 px-4 py-8 text-center text-sm text-content-muted">
@@ -42,10 +58,18 @@ export default function VideoClipGrid({
     <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
       {clips.map((clip) => {
         const isChosen = chosen.has(clip.id)
+        // Only dissolves get one. Hard cuts are the vast majority, and a chip on
+        // every tile is a chip nobody reads — the same rule the flags follow.
+        const fade = transitionChip(clip)
+        const isCursor = cursorId != null && clip.id === cursorId
         return (
           <li key={clip.id}
+            ref={isCursor ? cursorRef : null}
+            aria-current={isCursor ? 'true' : undefined}
             className={`relative flex min-w-0 flex-col overflow-hidden rounded-lg border bg-surface transition-colors ${
-              isChosen ? 'border-primary ring-1 ring-inset ring-primary/60' : 'border-border'}`}>
+              isCursor
+                ? 'border-amber-400 ring-2 ring-amber-400'
+                : (isChosen ? 'border-primary ring-1 ring-inset ring-primary/60' : 'border-border')}`}>
             <button type="button" onClick={(e) => onOpen(clip, e)}
               aria-label={`Play the shot at ${clipLabel(clip.start_s, clip.end_s)} of ${clip.relpath}`}
               className="relative block aspect-video w-full bg-surface-raised">
@@ -86,8 +110,44 @@ export default function VideoClipGrid({
                   ⚑ {clip.flags.length > 1 ? clip.flags.length : (FLAG_LABELS[clip.flags[0]] || clip.flags[0])}
                 </span>
               )}
+              {/* 🎥 What the camera did. SLATE, not amber, and that is the whole
+                  point of it being a separate badge: amber in this grid means
+                  "a cut flagged this", and a pan is not a fault. It sits bottom-
+                  RIGHT so it never collides with the flag badge on the left,
+                  and it shows the first label with a count when there are more,
+                  the same shape the flag badge uses for the same reason. */}
+              {(clip.camera || []).length > 0 && (
+                <span
+                  title={cameraBadge(clip)}
+                  className="pointer-events-none absolute bottom-1 right-1 rounded bg-slate-800/85 px-1 text-[0.625rem] font-semibold text-slate-100">
+                  🎥 {clip.camera.length > 1 ? clip.camera.length : cameraBadge(clip)}
+                </span>
+              )}
+              {/* The kind of boundary this shot sits between, read from the
+                  detector's second head. Amber like every other advisory mark,
+                  and top-centre so it never lands on the flags or the duration.
+                  It means "the first or last frames here are a cross-fade of
+                  the neighbouring shot" — worth knowing before training on it. */}
+              {fade && (
+                <span title={fade.title}
+                  className="pointer-events-none absolute left-1/2 top-1 -translate-x-1/2 rounded bg-amber-500/90 px-1 text-[0.625rem] font-bold text-black">
+                  {fade.label}
+                </span>
+              )}
             </button>
             <div className="flex min-w-0 items-center gap-1.5 px-1.5 py-1">
+              {/* The cursor marker lives in the FOOTER, not over the thumbnail:
+                  every corner up there is already taken (status, promoted,
+                  flags, camera, dissolve, duration) and a badge that lands on
+                  another badge is worse than no badge. It is here because the
+                  ring is a colour, and the whole run depends on knowing which
+                  shot the next keystroke will hit. */}
+              {isCursor && (
+                <span title="The next keystroke decides this shot"
+                  className="shrink-0 rounded bg-amber-400 px-1 text-[0.625rem] font-bold leading-tight text-black">
+                  ▸ next
+                </span>
+              )}
               <input type="checkbox" checked={isChosen}
                 onChange={(e) => onToggle(clip.id, e)}
                 aria-label={`Select the shot at ${clipLabel(clip.start_s, clip.end_s)}`}

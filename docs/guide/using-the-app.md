@@ -1563,9 +1563,23 @@ the other way round at all.
 opens the way you were reviewing it; other banks keep their own. Pick **Default**
 to forget the preference.
 
-In a **dataset** (above the grid, next to the decision chips): **Face similarity
-↓ / ↑**, the ArcFace cosine against your reference photo computed by **🎭 Analyze
-faces**. ↓ is "who looks most like my subject", ↑ is the shortlist to cut.
+In a **dataset** (above the grid, next to the decision chips) there are two
+kinds of entry, and they answer different questions:
+
+- **Face similarity ↓ / ↑** — the ArcFace cosine against your reference photo
+  computed by **🎭 Analyze faces**. ↓ is "who looks most like my subject", ↑ is
+  the shortlist to cut. This *ranks* the whole grid.
+- **Shot type** — face, then bust, then body, then back, in the order the
+  composition bar counts them. This *groups*: it ranks nothing, it puts every
+  shot of one kind in a single run so you can compare like with like. A grid in
+  arrival order interleaves the four kinds, which is the wrong arrangement for
+  the question you are actually asking — *do I have too many of these, not
+  enough of those, and which of these near-identical ones do I keep?* The shot
+  type is the one the **📐 Classify framing** pass wrote (and the one the shot
+  card carried, for a generated image).
+- **Shot type, then face similarity ↓** — the same grouping, with the closest to
+  your reference at the head of each kind. This is the order for curating: walk
+  down a run and the ones to cut are at its end.
 
 Two things worth knowing:
 
@@ -1882,6 +1896,113 @@ right way up.
 One caveat worth stating: the analysis passes (👤 Subject, ✨ Score, 📐 Framing)
 still read the original file, so turning an image does **not** re-run them. Turn
 first, then run the passes if you want them to see it upright.
+
+## Crop and upscale inside a bank
+
+A bank is where the filtering and the curation happen, but reframing or
+upscaling a shot used to mean leaving it: promote into a dataset, edit there,
+export into a **new** bank, and start curating again. Both edits now happen in
+the bank itself, so the loop is *curate → edit → re-analyse → promote*, in one
+place. (Asked for by nofaceman on Discord, backed by mr.arrow.)
+
+**✂ Crop** is per image, in **▶ Review** — the only place a bank shows a picture
+big enough to draw a box on. Open Review (or press ▶ on a tile), then click
+**✂ Crop** or press `C`. Drag the box, or snap it to a ratio, and confirm.
+Cropping decides nothing: the image stays under your cursor so you can judge it
+once it is framed properly.
+
+**Nothing is resampled here**, and that is the one real difference from the crop
+inside a dataset. A dataset crop rescales the box you drew to a 1024 px long
+side, because a dataset image is training material and that is its size. A bank
+sits *upstream* of that choice — shrinking here would pick your training
+resolution before you have even picked a dataset, and would do it silently. So a
+bank crop is a pure cut: it keeps the pixels inside the box, and the dataset
+still decides the size when it imports.
+
+**✨ Upscale & improve** is a pass, on the **✂ Edits** panel (⚙ Passes). It takes
+the same kept / undecided / unkept / selection scope as everything else, which
+matters more here than anywhere: this one spends GPU-minutes **per image**. Pick
+the engine on the panel — **Klein** re-renders detail from a prompt (sharper, and
+skin and colour can shift) or **SeedVR2** resolves detail and leaves the original
+look alone — then launch. It runs in the background with a progress bar, and ⏹
+Stop ends it between two images, keeping everything already done. Unlike the
+dataset version, there is no candidate to validate: a bank *is* the review, so
+the result replaces what the bank shows.
+
+**Your own files are never written to.** Both edits land in a copy the app keeps
+next to the bank, exactly like the watermark cleaning. **↩ Revert** on the ✂
+Edits panel throws those copies away — for the selection, or for the whole bank —
+and gives you back the image it started from, including any rotation the edit had
+absorbed. In ▶ Review, **↩ Revert edit** does it for the image on screen.
+
+Two consequences worth knowing. First, an edit **clears every measurement taken
+from the old pixels**, so ✨ Score, 📐 Framing and the rest pass over those images
+again — which is the point: a sharpness score read off the shot before you cropped
+it describes an image the bank no longer holds. Second, ✨ Upscale & improve does
+not re-run on an image it has already improved; ↩ Revert is how you ask for a
+second attempt, and it is one click.
+
+## Repaint one detail without regenerating the image
+
+Two people asked for this from opposite directions on the same week: one wanted
+the watermark remover pointed at a necklace and some skin blemishes, the other
+wanted to fix a small glitch in a fresh picture without regenerating the whole
+thing. Same hole.
+
+The app already had the hard part. **🧽 Clean** repaints exactly the box you draw
+and leaves every pixel outside it **byte-identical** — but its instruction was
+frozen on "reconstruct a clean, natural image", so it could only ever be aimed at
+a watermark. **✦ Edit**, the other lane, takes any instruction but re-renders the
+**whole** image, which drifts outside the area you cared about.
+
+**✦ Repair** is the first lane with both. Open the image (click its tile) and press
+**✦ Repair** in the action bar. Draw the zone, type what should be there —
+*"remove the necklace"* — and press **✦ Repair** again. Only that zone is
+repainted. Everything outside it comes back exactly as it was, to the byte.
+
+**Two shapes, one button.** Inside that dialog you choose how to point at the
+area:
+
+- **▭ Box** — drag a rectangle. The app crops a square around it and works on
+  that crop, so it is quick and its memory use does not depend on how large the
+  photo is. Right for a mark in a corner.
+- **🖌 Brush** — paint over the thing itself, with a size slider, an eraser and
+  Clear. The *whole* picture goes to the model together with what you painted,
+  so it reconstructs while seeing the face around the necklace instead of only a
+  square of skin. Right for jewelry, glasses, straps — anything a rectangle
+  would only enclose by taking a lot of its surroundings with it. Very large
+  photos are scaled down for this pass; the result is composited back at full
+  size, and pixels you did not paint are copied from your file either way.
+
+Both work under a finger, so this is usable from a phone. The brush was
+contributed by OneCodingDude on GitHub.
+
+The 🚩 button next to it opens the same editor from the other intention — you
+spotted a watermark the scan missed. Same screen, same zones; what differs is
+whether you press 🧽 Clean or ✦ Repair once you are there.
+
+A few things worth knowing:
+
+- **It says nothing about watermarks.** A repair does not flag, clear or stamp
+  anything: the image keeps whatever watermark state it had. It is an edit you
+  asked for, not a verdict.
+- **Your original is preserved first.** The master is copied aside *before*
+  anything is written, so a repair that fails costs you nothing — the file is
+  left exactly as it was.
+- **An empty description is refused**, on purpose. Falling back to the watermark
+  sentence would repaint your zone with an intention you never expressed.
+- **↩ Undo puts the previous image back**, one step deep, so trying another
+  description costs nothing — which is the normal way to use this: look, not
+  right, change the sentence, go again. The dialog stays open after a repair for
+  exactly that. The undo is consumed once used, and it never reaches the
+  write-once original kept for ↩ Undo cleaning — undoing a repair must not throw
+  away a watermark clean you made earlier and still want.
+- It runs on Klein through ComfyUI, one round-trip per repair.
+
+**On a picture you just generated, too.** Open a generated image full size — on
+the Canvas, or from a checkpoint gallery — and press **✦ Repair** next to ⬇ and
+✨. Same gesture, same guarantee: a stray finger or an unwanted object no longer
+means throwing away the render you liked and rolling the dice again.
 
 ## Clean the watermarks a bank found
 
@@ -2261,7 +2382,32 @@ can judge; the three hundred shots inside it are.
 
 1. **Create it** — name it, point it at the folder. Every `.mp4`, `.mov`, `.mkv`,
    `.webm` and `.avi` under it (subfolders included) is inventoried in place.
-   Nothing is copied and the folder is never modified.
+   Nothing is copied, and **no pass ever modifies your files** — scanning,
+   cutting and building all write elsewhere. The one thing that adds to that
+   folder is a scrape you send to this bank yourself (next step).
+1bis. **🕸 Scrape the web into a video bank** — you don't need a folder of rushes
+   you assembled by hand. Unfold **🕸 Scrape the web into a video bank** on the
+   video bank list, choose a destination, then scan a URL and pick clips exactly
+   as you would pick images. The scanner has always listed videos — RedGifs,
+   Erome, Picazor, TikTok, X, Civitai and the gallery sources all return them —
+   and the picker now shows them, with a ▶ badge and their length. They are
+   downloaded, inventoried on the spot, and cut into shots when you run the
+   passes above.
+
+   Two things are worth knowing:
+
+   - **Nothing is judged on the way in**, exactly like the image bank. Length,
+     motion, sharpness and near-duplicates are verdicts the **📊 Measure
+     quality** pass produces, with thresholds you move. A clip refused at
+     download time is one you could never have reviewed.
+   - **Any bank can receive them, and the picker says where they will land.**
+     A **new bank** gets a folder of its own under the app's own storage. **Add
+     to an existing bank** offers every bank you have, including one you pointed
+     at your own footage — the clips are simply added to the folder that bank
+     follows, and the picker prints that folder's path before you start.
+     Choosing the bank is the whole confirmation; there is no second checkbox.
+     The one destination that is refused is a bank sitting on a *dataset's* own
+     folder, where new files would end up inside training material.
 2. **▶ Run everything** chains the three passes in the only order that works:
    **scan** reads what each file is (length, size, frame rate), **find shots**
    cuts it at its shot boundaries, and **make thumbnails** grabs one frame from
@@ -2270,7 +2416,9 @@ can judge; the three hundred shots inside it are.
    order and each simply finds nothing to do and reports success.
 3. **Triage** — the grid is thumbnails, and only thumbnails. Click one to watch
    exactly that shot, `←`/`→` to move, `K` to keep, `R` to reject. Filter by
-   status, or click a file in the **Files** list to see only its shots.
+   status, or click a file in the **Files** list to see only its shots. For a
+   whole bank at speed, **⌨ Burst mode** judges shots straight from the grid,
+   one keystroke each — see *Triage a video bank from the keyboard* below.
 4. **🎬 Build the dataset** encodes what you kept. This is the only step that
    writes video.
 
@@ -2283,6 +2431,60 @@ than a preview.
 independent things: reading files, finding shots, and encoding clips. The app
 says which one is missing and what still works — with no ffmpeg, for example, you
 can scan, cut, watch and triage an entire bank, and only the final build waits.
+
+## Triage a video bank from the keyboard
+
+A rush of two hours becomes three hundred shots, and judging them by clicking a
+tile, clicking ✓ or ✕, then coming back to the grid is three gestures each. **⌨
+Burst mode**, above the gallery, makes it one keystroke.
+
+Turn it on and one tile carries the cursor — an amber ring and a **▸ next**
+marker under the thumbnail. From there:
+
+| Key | What it does |
+| --- | --- |
+| `K` | Keep this shot |
+| `R` | Reject this shot |
+| `P` | Put it back to untriaged |
+| `S` or `→` | Move on without deciding |
+| `←` | Move back one shot |
+| `U` | Undo the last decision, and go to that shot |
+| `Home` | Jump to the first untriaged shot |
+| `?` | Show or hide the shortcut panel |
+| `Esc` | Leave burst mode |
+
+They are the same keys as the image bank's **▶ Review** — `K` keep, `R` reject,
+`S` skip, `←` back, `Esc` out — because a reflex that is right on one screen and
+wrong on the next is worse than no reflex. `P`, `U` and `Home` are this lane's
+own: a video bank has three verdicts where the image review has two.
+
+Four things are worth knowing before you lean on it:
+
+- **The cursor jumps to the next shot you have not judged yet**, not simply the
+  next tile. On a half-triaged bank that is most of the speed. Untick
+  **Auto-advance** and the cursor stays put instead, so `K` then `R` corrects
+  the same shot — useful when you are being careful rather than fast.
+- **It never wraps.** When nothing untriaged is left ahead of the cursor, the
+  bar says so — and says how many are still sitting *behind* it, with `Home` to
+  go back to the first. A run that silently looped back to the top would put
+  your next keystroke on a shot you did not expect.
+- **Undo goes back one step at a time, and shows you what it fixed.** The bar
+  always names the decision it would take back (*"↩ U undoes ✕ Reject on 0:12 –
+  0:15"*) and how many steps are left in the net — ten. Each `U` restores what
+  the shot actually was before, so undoing a reject on a shot you had already
+  kept puts the **keep** back, not a blank. The offer sits in the bar rather
+  than in a toast on purpose: at one keystroke a second a toast is replaced
+  before it can be read.
+- **Your keystrokes never wait for the network.** The tile flips and the cursor
+  moves at once; the decisions are sent behind you, one request at a time, and a
+  run of identical verdicts goes out as a single batch. The bar shows *saving
+  N…* while anything is still unacknowledged — a run that has ended is not the
+  same thing as a run that is saved. If a save does fail, nothing is guessed:
+  the grid is reloaded from the bank and the message says how many decisions did
+  not land.
+
+Shortcuts never fire while you are typing in the search box or a threshold
+field, and the mode and the auto-advance setting are remembered for next time.
 
 ## Measure your shots, and choose your own cuts
 
@@ -2342,6 +2544,334 @@ Three states are kept apart here, and it matters:
   Measure again with re-measure** to fill them in; the pass otherwise skips
   everything it has already done.
 
+### 🔳 Safe zone — the bands and the text you cannot see at thumbnail size
+
+Two things eat a frame without ever showing up in a 90 px grid, and both are
+perfectly consistent across every clip that came out of the same file — which is
+exactly what a LoRA learns first:
+
+- **Bands.** Letterbox, pillarbox, a vertical video somebody padded into 16:9, a
+  4:3 broadcast scanned into a wide container. They survive a training crop.
+- **Burned-in text.** Subtitles, chyrons, lower thirds, a text watermark. A model
+  trained on subtitled footage does not learn the words — it learns that the
+  bottom sixth of a picture is a place where letters live, and then it draws
+  letter-shaped gibberish there forever.
+
+**🔳 Safe zone** decodes three frames of each shot and measures both, then
+works out the rectangle that excludes them — the *safe zone* — and how much of
+the frame that rectangle keeps. Three cuts read those numbers: **Letterbox
+share**, **Burned-in text share** and **Usable frame floor**. Like every cut in
+this panel they are empty by default and applied at read time, so moving one
+re-sorts the bank with nothing rescanned.
+
+**Only what holds still across the three frames counts.** That is the whole
+discrimination and it goes both ways: a band has to be on all three frames to be
+called structural, so a fade-out never invents one; and a text zone needs a
+partner in another frame, so a subtitle, a chyron and a station logo are caught
+while a shop sign in a pan and a newspaper someone holds up for a second are left
+alone as scene content.
+
+**Text in the MIDDLE of a frame is the case worth understanding.** It is small,
+so the text share barely moves — but there is no crop that removes it, so the
+usable frame collapses. That is what the third cut is for, and its answer to "can
+I save this clip by cropping" is an honest no.
+
+**Reading text needs one small extra**, *Burned-in text* in Setup (RapidOCR, CPU
+only, no GPU, and its weights ride inside the package so it works offline).
+Without it the pass still runs and still measures the bands — it reports **bands
+only** and stores no text reading at all, so the two text cuts flag nothing
+rather than quietly clearing every shot. This is the only pass in the app that
+works at half strength instead of refusing; the button stays enabled and says so
+in its tooltip.
+
+It is its own button rather than part of another pass, because unlike ✂ Duplicates
+and 🎨 Look it consumes nothing: a shot can be measured the moment its file has
+been scanned. It decodes three frames per shot and reads them on the CPU, so a
+big bank takes real time — and it never touches the GPU, so it can run while a
+training is going.
+
+### 🩻 Defects — what a re-encode left behind
+
+The passes above measure your *footage*: how it moves, how it is lit, how sharp
+it is. This one measures the *file* — what happened to it between the camera and
+your disk. Material that was uploaded, transcoded and re-uploaded a few times
+carries damage that no thumbnail shows and that sits identically on every frame
+of every shot from that file, which is precisely the kind of thing a LoRA learns
+first and fastest.
+
+**🩻 Defects** hands each source file to ffmpeg once and reads three things back:
+
+- **Duplicated frames.** Frames that are near-copies of the one before them. This
+  is what 24 fps material uploaded as 30 fps looks like — one frame in five is a
+  repeat — and it is *not* the frozen-stretch flag: that one says nothing moved,
+  this one says the same picture was delivered twice. A shot can be full of
+  movement and full of duplicates at the same time.
+- **Compression blocks.** The 8×8 macroblock grid showing through a hard squeeze.
+  Nothing legitimate produces one: no camera, no lens, no lighting.
+- **Blurred edges, at full size.** Edges that stay wide even in the shot's
+  sharpest moments.
+
+**That last one is the reason this pass exists**, because it is the one thing
+nothing else in the app can see. The **Sharpness floor** above reads a Laplacian
+computed on a 160-pixel-wide analysis copy — deliberately, since that measurement
+over a full frame costs more than decoding it — and at 160 pixels, footage
+upscaled from 480p and the genuine 1080p **are the same picture**. Measured on
+three files carrying identical footage, the sharpness score read 354.35, 353.69
+and 353.72 for native, 480p-upscaled and 320p-upscaled. Indistinguishable. This
+pass reads the edges at full resolution instead and separates them.
+
+It reads the *sharpest* tenth of each shot rather than the blurriest, and that is
+on purpose: softness is sometimes a choice — a fast pan, a shallow depth of
+field, a deliberate rack focus — so asking "is it soft even at its sharpest" is
+the only form of the question that does not flag exactly the shots with the most
+interesting movement.
+
+Three cuts read the numbers: **Duplicated frames**, **Compression blocks** and
+**Blurred edges**. Empty by default like everything else here, and applied at
+read time, so moving one re-sorts the bank with nothing rescanned. **The block
+score deserves one warning the others do not:** its absolute value depends on
+what is in the frame nearly as much as on the damage — measured here, one scene
+from a good encode to a ruined one moved from 13 to 43, while four *different*
+scenes at one fixed quality spanned 1 to 25 000. Preview a value, look at what it
+caught, move it. Do not carry a number over from somebody else's bank.
+
+**Each file card now also shows how hard the file was squeezed** — its codec
+profile, its bitrate, and *bits per pixel per frame*, which is the comparable one
+(5 Mb/s is generous at 480p and starving at 4K). Roughly, under 0.05 is visibly
+damaged and over 0.15 is comfortable. It is shown and never cut on, because it
+only *predicts* the damage that the block score actually *measures* — and some
+containers, MKV and WebM in particular, carry no bitrate at all, in which case
+the line simply says less rather than inventing a number.
+
+It is its own button, like 🔳 Safe zone and for the same reason: it consumes
+nothing, so there is no order to protect. Two things are worth knowing before you
+press it. It is the only reading pass that needs **ffmpeg** rather than the
+decode extra — the video extra installs it, and without it this one button is
+greyed with the reason in its tooltip while everything else keeps working. And it
+costs real time: roughly **nine seconds per minute of 1080p source**, on the CPU,
+never touching the GPU. A four-hour bank is a little over half an hour. Stopping
+is safe and a re-run picks up at the first file it had not reached.
+
+### 🤖 AI check — shots that may have been generated rather than filmed
+
+Every pass above measures something the camera did. This one asks whether there
+was a camera. A scrape in 2026 brings back generated clips mixed in with real
+footage, and they are invisible at thumbnail size — a clean, well-lit,
+well-framed synthetic clip passes the quality scan, the safe zone, the defect
+sweep and the look score without a mark on it. It is worth finding: the published
+curation work behind several open video models reports that even a small
+minority of synthetic material in a corpus — under a tenth of it — measurably
+degrades what a model trained on that corpus learns.
+
+**🤖 AI check** decodes two contiguous seconds from the middle of each shot and
+measures **how erratically the motion changes**. Not how much a shot moves — how
+much the *rate* of movement varies from instant to instant. Real footage is full
+of small irregularities: a hand shakes, a subject accelerates unevenly, light
+flickers, the sensor is noisy. Generated footage, on the evidence the method was
+built on, tends to be smoother than the world.
+
+The number is stored per shot and read by one cut in **🎚 Quality cuts**,
+**Motion irregularity floor** — the one threshold in the panel that works the
+other way round from the rest. **A LOW score is the suspicious one**, so this is
+a floor and raising it flags *more* shots; a shot below it wears a **May be
+AI-generated** chip in the grid like any other flag. Set it as a `_max` in your
+head and you will flag every handheld shot in the bank and clear every generated
+one.
+
+#### How much to trust it — read this before you use it
+
+Not much, and the pass is built around saying so.
+
+- **About three shots in four**, on material like yours. The SAFE Challenge
+  evaluated AI-video detectors *blind*, on footage the entrants had never seen:
+  the best system in the field scored **0.86** balanced accuracy on untouched
+  video and **0.74** once that video had been post-processed. Re-compression
+  alone moved AUC from 0.88 to 0.77. Anything scraped has been re-compressed by
+  definition, so 0.74–0.75 is the honest figure — not the high nineties a
+  detector's own paper reports on its own benchmark.
+- **It has never been measured against a 2025-or-later generator.** The method
+  was evaluated across forty subsets of 2023–24 output — ModelScope, Gen2, Pika,
+  LaVie, Sora, CogVideoX, OpenSora and a dozen more. Its whole thesis is that
+  *the generators of that moment* could not render second-order motion. That is
+  exactly the kind of claim that decays, and nothing here says anything about
+  Sora 2, Veo 3, Kling or Wan 2.5.
+- **It is worst on the cheapest fakes.** On one generator whose output is
+  incoherent and flickery, the reference implementation scores *below chance* —
+  chaotic generation reads as *more* real than clean generation. Heavily
+  stylised material and a hard cut inside the two-second window do the same
+  thing.
+
+So this is an **advisory** flag with a hedge built into its name. It ships with
+no default, nothing in the app rejects or deletes a shot because of it, and the
+chip says *may be*. Use it to decide what to look at, not what to throw away.
+
+#### The mechanics
+
+- Shots shorter than about **2.4 seconds** are not measured at all — the window
+  needs sixteen frames at 8 fps plus a margin at each end so a dissolve never
+  lands inside it. Those shots carry "too short" and no score, and they are
+  never flagged. Re-running will not change that; re-cutting them would.
+- **There is no value to type.** The method reports only rank metrics and its
+  reference implementation contains no threshold anywhere, so no published
+  number exists and nobody else's would transfer — the score's scale moves with
+  the encoder and with the frame count. Use **Preview** against your own bank,
+  look at what a value caught, move it.
+- It runs on the **CPU**, deliberately, at roughly **0.8 seconds per shot** —
+  about forty minutes for a three-thousand-shot bank. That is slower than the
+  card would be, and it is the trade that lets you check a bank *while a
+  training owns your GPU*. Stopping is safe; a re-run picks up where it left off.
+- It needs the same **✨ Score interpreter** the look score uses, and downloads
+  its encoder once on the first run.
+
+#### It is not the same claim the image bank makes
+
+The 🗃️ Bank already tells you whether a still is AI, and the two answers are
+**different in kind**, which is why they are worded differently. The image
+lane's `AI` verdict reads **metadata** — a generator's own prompt block inside
+the PNG, an A1111 parameter string, a C2PA mark — and that is *proof* when it is
+present. It is also absent from almost everything scraped, and its silence means
+"unknown", never "not AI". This pass reads **the pixels** and infers, so it is
+never proof and it is never silent. The image lane says *AI*; this one says *may
+be*. Neither is evidence for the other.
+
+### 🎥 Camera — what the camera did, as a label rather than a verdict
+
+Every other pass on this page measures whether a shot is **good**. This one
+measures what it **is**, and it never rejects anything. That is not politeness:
+a video LoRA learns camera language along with the subject, and the two people
+training on the same bank want opposite halves of it. One is building a
+locked-off product shot and every wobble is contamination; the other is training
+a handheld look, and the wobble *is* the target. So **🎥 Camera** labels, and you
+decide which half you wanted.
+
+Press it after the shots are cut. It tracks every frame of every shot — about
+fifteen times real time on the CPU, so it can run while a training owns your card
+— and stores the raw rates on each clip. The labels are worked out from those
+rates when the gallery is drawn, so nothing is ever rescanned.
+
+#### The labels
+
+Eight of them are **the video trainer's own words**, not this app's. They come
+from the vocabulary Hunyuan's camera classifier uses, which matters for one
+practical reason: a label here will mean the same thing to the model you train
+as it does to you.
+
+| Label | What it means |
+| --- | --- |
+| **Pan left / right / up / down** | The frame moves across the scene in that direction. |
+| **Zoom in / out** | The framing tightens or widens. |
+| **Static shot** | Nothing moved enough to name — a tripod, a clamp, or very steady hands. |
+| **Handheld** | The movement has a high-frequency part nobody is steering. |
+
+Three more are **this app's own**, and the gallery marks them with a small `ᐩ` so
+you never carry one into a caption expecting the trainer to recognise it:
+
+| Label | What it means |
+| --- | --- |
+| **Rolling** `ᐩ` | The horizon turns — the camera rotates about its own axis. Absent from the trainer's fourteen, and measured here because it is the one movement a language model reading the footage reliably gets wrong. |
+| **Slideshow** `ᐩ` | The whole frame moved as one rigid picture, which is what a photograph panned across does — a Ken Burns move, not a camera. |
+| **Subject moves** `ᐩ` | Something in the shot moved more than the camera did, so no direction could be read at all. |
+
+A shot carries **several** labels where several apply: a handheld pan that also
+zooms is all three, and the filter row lets you pick any one of them.
+
+#### Why there is no "tilt", and no orbit
+
+You will look for **tilt up** and **tilt down**, because the trainer's vocabulary
+has them and this app never shows them. They are missing on purpose. A camera
+that **pivots** and a camera that **slides** put exactly the same movement on the
+sensor — the difference between them is depth, and depth is not in a flat
+picture. Rather than guess at a coin flip, everything in that family is reported
+as **pan**, which is the honest superset.
+
+**Around left / around right** are missing for the same reason, harder. An orbit
+is a movement along an arc, and recovering it means reconstructing the scene in
+three dimensions. The published benchmark for this (CameraBench, 2025) puts the
+best geometric system at roughly **half** the answers correct, at *minutes* per
+clip. So the choice is not between cheap and accurate — it is between fast and
+expensive-but-still-a-coin-flip. Not offered.
+
+#### When the reading cannot be trusted
+
+The measurement finds the **dominant** motion in the frame. When a subject fills
+enough of it, the dominant motion *is* the subject, and the result is a confident
+description of a camera move that never happened — measured on a test clip whose
+camera was a tripod and whose subject crossed a third of the frame, the raw fit
+reported a brisk pan *and* a zoom.
+
+So the pass checks how much of the frame its answer actually explains, and when
+that falls too low it reports **Subject moves** and **no direction at all**. A
+shot labelled that way is not a failure; it means the camera reading would have
+been fiction, and the app would rather say nothing.
+
+**One more honest limit.** *Slideshow* is detected by the frame moving as one
+perfectly rigid picture, which is what a photograph does. A real pan across a
+scene with **no depth** — a flat wall, a horizon, a distant skyline — has no
+parallax either, and can land in the same bucket. If a shot you filmed yourself
+is labelled a slideshow, that is why.
+
+#### Filtering, and the one cut
+
+The labels appear on each thumbnail (slate, bottom right — never amber, because
+amber in this gallery means *a cut flagged this* and a pan is not a fault) and as
+a **🎥 Camera** row of filters above the grid. It composes with the ⚑ flag chips,
+so *"shaky shots that also pan right"* is one click each.
+
+If you do want to **cut** on camera movement, 🎚 Quality cuts gains
+**`camera_shake_max`**. It is empty by default like every other cut, and it is
+deliberately **not** the same threshold as the *Handheld* label: the label fires
+at a fixed internal floor and describes, the cut fires wherever you put it and
+rejects. A shot can be labelled handheld without being flagged, or the reverse,
+and both are correct.
+
+### 🔗 Does each shot hold one scene — the cut the detector missed
+
+Shot detection cuts on a change big enough to see. The ones it misses are the
+soft changes — a dissolve, a match cut, a new angle inside the same room — and
+what they leave behind is a "shot" that is really two. That clip is the worst
+kind of training example: it teaches the model a transition nobody asked for, and
+you cannot spot it by scrolling, because its thumbnail is one of its two halves
+and looks perfectly fine.
+
+**It runs by itself, at the end of 🔎 Find scenes, and costs nothing.** That pass
+already embedded three frames of every shot. Comparing a shot's first frame to
+its last is a handful of multiplications over numbers that are already on disk —
+no decoding, no model, no button. A bank you embedded before this existed gets
+its reading by clicking **🔎 Find scenes** again, and that click costs nothing for
+the shots already embedded.
+
+Each shot gains a **scene coherence** number: **1.00** means its first and last
+frames are the same picture, and lower means the picture changed across the shot.
+🎚 Quality cuts gains a **Scene coherence floor**, empty by default, that flags
+anything below it as **Cut inside the shot**. The remedy is the next section:
+open the shot and **✂ Split here**.
+
+**How much to trust it — read this before you set the cut.** This is a *ranking*,
+not a verdict. Measured on real footage, against shots of the same length, a cut
+at **0.80** catches about a third of the genuinely double shots while flagging
+about one honest shot in seven; **0.75** catches a fifth for one in ten. Use it to
+decide which shots to *look* at first, and expect to keep some of what it flags.
+
+**Why a long shot scores lower.** The number falls with elapsed time whether or
+not anything was cut — a twenty-second locked-off take can read 0.84 with no cut
+in it at all, simply because the light moved and people walked about. Short shots
+score high for the opposite non-reason. If your bank is mostly long takes, set
+the floor lower than the figures above suggest.
+
+**What it is not.** A shot whose reading is near 1.00 is *not* flagged as still,
+and this pass deliberately says nothing about stillness. The obvious other half
+of the idea — "nothing changed, so nothing moved" — was measured against this
+app's own motion readings and does not hold: the number tracks how *long* a shot
+is far more than whether anything moves in it, and genuinely motionless shots
+read no higher than ordinary ones. Stillness stays with **Barely moves**, which
+reads the codec's own motion vectors, and with the **Slideshow** camera label,
+which reads how rigidly the frame moves. Two measurements that look at the real
+thing.
+
+Shots with no vectors (you have not run 🔎 Find scenes) and shots **under a
+second** — too short for the embed pass to take more than one frame — carry no
+reading at all and are never flagged.
+
 ## Retouch a cut: trim, split, or draw a shot by hand
 
 Shot detection is good and it is not right. It cuts a slow dissolve a second
@@ -2384,6 +2914,82 @@ Re-detecting a file deletes the shots the detector drew and **never** the ones y
 cut by hand; those stay, and may overlap the fresh ones. And editing a shot that
 is already in a built dataset is allowed: the dataset stored its own copy of the
 bounds when it was encoded, so nothing already on disk changes.
+
+## Change how often a rush gets cut
+
+Shot detection does not find cuts. It scores every frame — *how likely is a
+transition here* — and the shot list is a **threshold** applied to that score
+afterwards. The number that was applied for you is 0.5, which comes from the
+detector's own paper, where it is never justified. It is a convention.
+
+That mattered because disagreeing with it used to cost a full pass over the
+file. It no longer does: the scores are kept next to the bank, so changing the
+threshold and re-cutting an entire folder happens with no decoding and no GPU at
+all. Unfold **🎬 Find shots — cut sensitivity** above the gallery.
+
+- **👁 Preview** counts what each threshold would actually leave you — on *your*
+  files, floor included — and says how each one differs from the value in force.
+  "4 shots" means nothing on its own; "8 fewer than now" is a decision.
+- **Save** stores the number and cuts nothing. **Save & re-cut this bank** does
+  both, in seconds.
+- **Leave the field empty to inherit** the app default. Empty is not zero — zero
+  is a threshold that fires on every single frame and shatters a rush into
+  hundreds of fragments.
+
+**Which way to move it.** Higher cuts less often: fewer, longer shots, and far
+fewer cuts invented inside footage that never had any. Lower catches the
+boundaries a slow dissolve hides, and finds more of them everywhere else too. If
+your folder is mostly single takes, 0.6–0.7 is the direction; if it is edited
+material, stay at 0.5 or go under it. Nobody has measured the right answer for
+amateur footage — that is exactly why the preview exists.
+
+**One folder is rarely one kind of footage**, so a single file can carry its own
+threshold and be re-cut on its own: **↻ Re-detect this file**, on the file's card
+under **Files**.
+
+### This file is one single take
+
+Some rushes have no cuts at all, and the failure there is not a missed
+boundary — it is a file quietly chopped into six fragments that each train on a
+third of a gesture. **▣ Single shot**, on the file's card, replaces every shot of
+that file with one covering the whole thing.
+
+It sticks. The bank-wide re-cut and the detection pass both walk past a file
+marked this way, and the card says **Single shot** so you can see why it never
+changes. The way back is **↻ Re-detect this file** on that same card.
+
+**↻ on a single file replaces hand-made cuts, and the bank-wide re-cut never
+does.** That asymmetry is deliberate — it is what makes ↻ the way back from ▣ —
+and both gestures ask before they act. Shots already promoted into a dataset are
+kept in every case; the dataset stored its own copy of the bounds when it was
+built.
+
+### Cut, or dissolve
+
+The detector produces a second output describing how *wide* each transition is,
+which the app used to compute and discard. It is now read, and a shot whose
+first or last frames are a cross-fade of its neighbour carries an amber
+**dissolve 18f** chip on its tile — the frame count is the width of the fade.
+
+No other tool in this space shows this, and it is worth knowing before you train
+on a clip: a shot that opens on a cross-fade of another shot teaches a model to
+open on a cross-fade. The chip is advisory, exactly like the quality flags — it
+changes nothing about the cut, and the width-to-kind rule is a reading of how the
+network was trained, not something anyone has measured on amateur footage.
+
+**🎬 Find shots again is instant too, now.** Re-running the pass over a bank it
+has already been through re-cuts from the stored scores instead of decoding
+again, and the progress line says how many files it reused. It falls back to a
+real pass for any file whose size on disk no longer matches what the scan
+recorded — you re-exported it, so its old boundaries describe footage that is not
+there any more.
+
+**Two limits worth saying out loud.** A file detected before this shipped has no
+stored scores, so it cannot be re-cut instantly — the panel says so and offers
+🎬 Find shots, which fills them in on the way past. And a re-cut replaces shots,
+so the replaced ones lose their thumbnails and quality scores: those measured
+bounds that no longer exist. Run 🖼 Make thumbnails once when you are done
+cutting, not after every change.
 
 ## Find scenes in a video bank by typing a word
 
@@ -3005,6 +3611,34 @@ sits above the board, and hovering a pill spells it out in words.
 The graph embedded in a dataset's *Checkpoints & LoRAs* panel is unchanged and
 still holds the per-checkpoint actions (download, deploy, continue from here,
 inline previews). The canvas is a second way in, not a replacement.
+
+## Undeploy several LoRAs at once
+
+Deploying a checkpoint copies it into ComfyUI's `loras` folder so you can use it
+in a workflow. Over a few months of training that folder fills up, and taking
+LoRAs back out used to be a one-at-a-time errand: open a run's checkpoint pill,
+open its popover, press ⏏ Undeploy, repeat. Nothing anywhere even told you how
+many were deployed.
+
+**⏏ Undeploy…** at the top of the **Canvas** page opens the whole list at once —
+every LoRA this app has put into ComfyUI, across *all* your datasets and all
+families, grouped by dataset. Tick the ones you want gone, press the button, and
+they go in one pass. **Select all** is there for the clear-out.
+
+**Only what the app deployed is listed.** A LoRA you downloaded yourself and
+dropped in the same folder never appears, and is never touched — the list is
+built from the app's own record of what it imported, not from a directory scan.
+That distinction matters because this screen deletes files.
+
+**It is the reversible half.** Your *training saves* are kept: every LoRA you
+undeploy can be deployed again from its checkpoint whenever you want. The
+removed copies go to the trash, recoverable until you empty it in
+**Settings ▸ Maintenance**.
+
+The run reports what it actually did, in three parts, because they are not the
+same thing: how many were **removed**, how many were **already gone** (you had
+deleted the file by hand — no error, you have the outcome you asked for), and how
+many were **refused**, each named so you can act on it.
 
 ## Upscale a picture straight from the board
 

@@ -240,6 +240,89 @@ def video_bank_source_clip_create(bank_id, source_id):
                  data.get('start_s'), data.get('end_s'))
 
 
+# --- Find shots: the threshold, the preview, and the re-cut ---------------------
+#
+# Every route below rides the same `_edit` envelope as a trim, and for the same
+# reason: they change BOUNDS, which is what every later pass and the encoder
+# read. They are refused while a pass owns the bank.
+#
+# None of them is a 202. A re-cut reads a cached vector and does arithmetic —
+# there is no decode anywhere in it — so putting it behind the job queue would
+# make an instant operation look slow AND lock the bank against the next click.
+
+@bp.post('/video-bank/<int:bank_id>/shot-threshold')
+def video_bank_shot_threshold(bank_id):
+    """Body {threshold: 0..1 | null}. null CLEARS the override — the bank falls
+    back to the global default, which is not the same as setting 0.
+
+    Saves the number and cuts nothing. Re-cutting is a separate click on
+    purpose: changing a value must not silently rewrite hundreds of rows."""
+    data = request.get_json(silent=True) or {}
+    return _edit(bank_id, svc.set_bank_shot_threshold, LOCAL_USER, bank_id,
+                 data.get('threshold'))
+
+
+@bp.post('/video-bank/<int:bank_id>/source/<int:source_id>/shot-threshold')
+def video_bank_source_shot_threshold(bank_id, source_id):
+    """Body {threshold: 0..1 | null} for ONE file. A mixed corpus is mixed
+    inside one folder, and no bank-level number is right for every file in it."""
+    data = request.get_json(silent=True) or {}
+    return _edit(bank_id, svc.set_source_shot_threshold, LOCAL_USER, bank_id,
+                 source_id, data.get('threshold'))
+
+
+@bp.post('/video-bank/<int:bank_id>/shot-dry-run')
+def video_bank_shot_dry_run(bank_id):
+    """Body {source_id?, thresholds?} → "at X you would get N shots", per
+    threshold, from the cache. Writes nothing — the point of a preview is being
+    able to change your mind after seeing it."""
+    data = request.get_json(silent=True) or {}
+    return _edit(bank_id, svc.shot_dry_run, LOCAL_USER, bank_id,
+                 data.get('source_id'), data.get('thresholds'))
+
+
+@bp.post('/video-bank/<int:bank_id>/recut')
+def video_bank_recut(bank_id):
+    """Body {threshold?} — re-cut every file that has a cached vector.
+
+    Spares hand-made cuts, promoted clips, and any file declared a single take.
+    Answers with what it did, INCLUDING what it left alone: a bank where half
+    the sources predate the cache must say so rather than report a clean run."""
+    data = request.get_json(silent=True) or {}
+    return _edit(bank_id, svc.recut_bank, LOCAL_USER, bank_id,
+                 data.get('threshold'))
+
+
+@bp.post('/video-bank/<int:bank_id>/source/<int:source_id>/recut')
+def video_bank_source_recut(bank_id, source_id):
+    """Body {threshold?} — re-cut ONE file, replacing hand-made cuts on it too.
+
+    That is the difference from the bank-wide route, and it is deliberate: this
+    is a gesture on a file the user picked by name, and it is the only way back
+    from "this file is a single take". `replaced_manual` in the answer says how
+    many hand-made cuts went, so the UI can warn BEFORE rather than apologise
+    after.
+
+    503, not 400, when the file has no cached vector: it is a fact about when
+    the file was detected, and the fix is running Find shots on it once."""
+    data = request.get_json(silent=True) or {}
+    try:
+        return _edit(bank_id, svc.recut_source, LOCAL_USER, bank_id, source_id,
+                     data.get('threshold'))
+    except svc.ShotProbsMissing as e:
+        return jsonify({'error': str(e)}), 503
+
+
+@bp.post('/video-bank/<int:bank_id>/source/<int:source_id>/single-shot')
+def video_bank_source_single_shot(bank_id, source_id):
+    """This file is ONE take: replace its clips with a single full-length one.
+
+    Nothing else in this space offers it, and a single-take corpus needs it more
+    than any slider — there the failure is not a missed cut, it is a file
+    quietly chopped into six fragments that each train on a third of a gesture."""
+    return _edit(bank_id, svc.mark_single_shot, LOCAL_USER, bank_id, source_id)
+
+
 #: Container → MIME. `mimetypes.guess_type` is registry-driven on Windows and
 #: answers None for .mkv/.webm on plenty of installs; send_file RAISES on an
 #: unguessable name, which would turn "this player cannot decode Matroska" into
@@ -430,6 +513,79 @@ def video_bank_watermark(bank_id):
                   rescan=bool(data.get('rescan')))
 
 
+@bp.post('/video-bank/<int:bank_id>/safezone')
+def video_bank_safe_zone(bank_id):
+    """🔳 Measure bands and burned-in text on each shot. Body {rescan?}.
+
+    ONE 503, not two, and that is the difference from the watermark route above:
+    without the decode extra there is no frame to look at and the pass is
+    impossible, but without the OCR engine HALF of it still works. Refusing here
+    on a missing RapidOCR would withhold a letterbox measurement that costs
+    nothing and needs nothing — so the missing extra travels as a state on every
+    shot and a sentence in the job detail instead of as a status code.
+    """
+    from .. import capabilities
+    cap = capabilities.probe_video()
+    if not cap['decode']:
+        return jsonify({'error': cap['detail']}), 503
+    data = request.get_json(silent=True) or {}
+    return _start(bank_id, svc.start_safe_zone, _app(), LOCAL_USER, bank_id,
+                  rescan=bool(data.get('rescan')))
+
+
+@bp.post('/video-bank/<int:bank_id>/defects')
+def video_bank_defects(bank_id):
+    """🩻 Sweep each source file for duplicated frames, blocks and soft edges.
+    Body {rescan?}.
+
+    ONE 503 and it names ffmpeg, not the decode extra — the opposite split from
+    every pass above. Those decode frames with PyAV and check `cap['decode']`;
+    this one hands the whole file to the ffmpeg binary and never opens it here,
+    so an install with `av` and no ffmpeg must be refused for the binary it is
+    actually missing. The service owns that sentence (it is the same
+    ffmpeg_ready() verdict the Setup row shows), so the two can never drift into
+    telling the user to install different things.
+    """
+    data = request.get_json(silent=True) or {}
+    return _start(bank_id, svc.start_defects, _app(), LOCAL_USER, bank_id,
+                  rescan=bool(data.get('rescan')))
+
+
+@bp.post('/video-bank/<int:bank_id>/camera')
+def video_bank_camera(bank_id):
+    """🎥 How the camera moved in every shot — pan, tilt, zoom, roll, handheld.
+    Body {rescan?: bool}. Refused with the missing piece named when the decode
+    extra is absent: this pass tracks frames it decodes itself and has no
+    degraded form. The service refuses a second time on the same sentence, so a
+    direct call cannot start a job that dies on an import."""
+    from .. import capabilities
+    cap = capabilities.probe_video()
+    if not cap['decode']:
+        return jsonify({'error': cap['detail']}), 503
+    data = request.get_json(silent=True) or {}
+    return _start(bank_id, svc.start_camera, _app(), LOCAL_USER, bank_id,
+                  rescan=bool(data.get('rescan')))
+
+
+@bp.post('/video-bank/<int:bank_id>/aicheck')
+def video_bank_ai_check(bank_id):
+    """🤖 Measure how erratically each shot moves. Body {recheck?}.
+
+    Two 503s that are NOT the same sentence, the same split as 🔖 Watermarks and
+    🗣 Describe: the decode extra is missing (no frames to encode at all), or no
+    interpreter here can run the model. Collapsing them is how somebody installs
+    the wrong thing twice. The second one is raised by the service, which owns
+    the ✨ Score sentence 🎨 Look already uses.
+    """
+    from .. import capabilities
+    cap = capabilities.probe_video()
+    if not cap['decode']:
+        return jsonify({'error': cap['detail']}), 503
+    data = request.get_json(silent=True) or {}
+    return _start(bank_id, svc.start_ai_check, _app(), LOCAL_USER, bank_id,
+                  recheck=bool(data.get('recheck')))
+
+
 @bp.patch('/video-bank/<int:bank_id>/clip/<int:clip_id>/caption')
 def video_bank_clip_caption(bank_id, clip_id):
     """Store the caption a HUMAN wrote for one shot. Body {caption}.
@@ -565,3 +721,40 @@ def video_bank_promote(bank_id):
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 503
     return jsonify({'ok': True, **out}), 202
+
+
+# --- 🕸 scrape → video bank ------------------------------------------------------
+
+@bp.post('/video-bank/scrape-import')
+def video_bank_scrape_import():
+    """Download the picked scan items into a video bank.
+
+    Body: {items:[{url,title,…}], bank_id?} to APPEND to any existing bank, or
+    {items, name} to create one. The SAME contract as the image lane's
+    `/api/bank/scrape-import`, on purpose — the two destinations answer
+    {'ok','bank_id','name','created','saved','already_there','added','skipped'}
+    so one client helper drives both.
+
+    Synchronous, like the image outlet: the per-request cap
+    (`SCRAPE_VIDEO_IMPORT_MAX`) is what bounds it, and a big selection arrives as
+    successive batches. 400 on bad input — including the one destination that is
+    refused however explicitly it was picked: a bank sitting on a dataset's own
+    folder, where the clips would land inside training material. 409 when a pass
+    already owns the bank."""
+    data = request.get_json(silent=True) or {}
+    raw_bank_id = data.get('bank_id')
+    bank_id = None
+    if raw_bank_id is not None:
+        try:
+            bank_id = int(raw_bank_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'bank_id must be a number'}), 400
+    try:
+        res = svc.scrape_import_to_video_bank(LOCAL_USER, data.get('items'),
+                                              bank_id=bank_id,
+                                              name=data.get('name'))
+    except bank_jobs.BankJobBusy as e:
+        return _busy(e)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **res})

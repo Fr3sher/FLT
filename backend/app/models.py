@@ -522,6 +522,28 @@ class BankImage(db.Model):
     # and four quarter turns cost zero (the row is back at 0 and the copy is
     # dropped). Additive column — existing banks carry NULL and behave as before.
     rotation = db.Column(Integer, nullable=True)
+    # Manual pixel edit made in the BANK itself: NULL = none | 'crop' (the ✂ crop
+    # editor) | 'improve' (the ✨ Upscale & improve pass). Same principle as
+    # `rotation` and `watermark_clean_method` — the user's file is never written
+    # to, the result is a separate blob in the bank's own working directory
+    # (image_bank_service.edited_image_path) and the ONE resolver prefers it.
+    # It sits ABOVE the watermark clean in that chain: an edit is made from what
+    # the user was LOOKING at, which is the cleaned version when there is one.
+    # (Requested by nofaceman on Discord: curate, crop and re-analyse without
+    # the Bank → Dataset → export → Bank round-trip.)
+    edit_method = db.Column(String(16), nullable=True)
+    # Which generation of the edited blob is current, counting from 1. It is part
+    # of the blob's FILE NAME and of the grid's cache-busting URL: re-cropping the
+    # same image must not have to overwrite a file the previous response may still
+    # hold open (Windows), and a thumbnail cached for an hour must not survive the
+    # edit that replaced it. NULL whenever edit_method is NULL.
+    edit_generation = db.Column(Integer, nullable=True)
+    # The manual turn that was BAKED INTO the edited blob. A crop box is drawn on
+    # the turned image, so the turn has to be applied before the box means
+    # anything — after which `rotation` goes back to NULL (re-applying it would
+    # turn the pixels twice). Kept here so reverting the edit gives the user their
+    # rotation back instead of silently discarding it.
+    edit_baked_rotation = db.Column(Integer, nullable=True)
     # Triage decision — same words as dataset images (pending|keep|reject).
     # reject_reason: blur|noise|uniform|small|duplicate|unreadable|manual
     #                |low_aesthetic|nsfw|watermark (the V2 score-derived flags)
@@ -1215,11 +1237,14 @@ class CanvasLayoutPreset(db.Model):
 class VideoBank(db.Model):
     """A triage bank over a folder of SOURCE VIDEOS, referenced in place.
 
-    Same promise as the image bank: the source folder is never written to. The
-    video bank keeps that promise more literally than one might expect — it
-    stores no media at all beyond thumbnails, because cutting a clip means
-    re-encoding it, and we only pay that at promotion, for the clips actually
-    kept. What lives here is bounds and decisions."""
+    Same promise as the image bank, and the same exception: no PASS ever writes
+    to the source folder — probing, detection, thumbnails and promotion all write
+    elsewhere — while a scrape you aim at this bank adds what it brings back to
+    the folder the bank follows. The video bank keeps the passes' half more
+    literally than one might expect: it stores no media at all beyond thumbnails,
+    because cutting a clip means re-encoding it, and we only pay that at
+    promotion, for the clips actually kept. What lives here is bounds and
+    decisions."""
     __tablename__ = 'video_bank'
     id = db.Column(Integer, primary_key=True)
     user_id = db.Column(String(36), nullable=False, index=True, default='local')
@@ -1228,6 +1253,14 @@ class VideoBank(db.Model):
     # Persisted summary of the last pipeline run (JSON), same role as
     # ImageBank.pipeline_report: the outcome is still there tomorrow morning.
     pipeline_report = db.Column(Text, nullable=True)
+    # This bank's shot-detection threshold, or NULL to inherit the global one.
+    # NULL is "inherit" and 0.0 is a threshold that cuts everywhere — they are
+    # not the same value and the column is nullable so they never collapse into
+    # one. A bank of single takes and a bank of tight edits want different
+    # numbers, and no global default can be right for both; see
+    # services/shot_boundaries for why 0.5 was never measured in the first
+    # place. Additive — see _SCHEMA_ADDITIONS.
+    shot_threshold = db.Column(Float, nullable=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
     updated_at = db.Column(DateTime, default=db.func.current_timestamp(),
                            onupdate=db.func.current_timestamp())
@@ -1257,12 +1290,46 @@ class VideoSource(db.Model):
     width = db.Column(Integer, nullable=True)
     height = db.Column(Integer, nullable=True)
     codec = db.Column(String(24), nullable=True)
+    # What the container says about the squeeze: the video stream's bit rate in
+    # bits per second, and the codec profile ('High', 'Main', 'Profile 0'…).
+    # Both are DISPLAYED, never cut on — the 🩻 defect sweep measures the damage
+    # they only predict. Additive and nullable (see _SCHEMA_ADDITIONS): a file
+    # probed before these existed simply has nothing to show, and MKV/WebM
+    # legitimately carry no per-stream bit rate at all, so NULL here is a
+    # property of the container as often as it is an age.
+    bit_rate = db.Column(Integer, nullable=True)
+    profile = db.Column(String(32), nullable=True)
     # NULL = not probed yet | 'ok' | 'unreadable'. Mirrors BankImage.quality_state's
     # vocabulary so "the file is broken" reads the same in both lanes.
     probe_state = db.Column(String(12), nullable=True)
     # NULL = shot detection has not run on this file | 'ok' | 'error'. Separate from
     # probe_state because a file can be perfectly readable and still fail detection.
     detect_state = db.Column(String(12), nullable=True)
+    # Where this file came from, when the app is the one that brought it in
+    # (🕸 scrape → video bank), as the same validated JSON the image lane stores
+    # on BankImage.source_metadata — one vocabulary for provenance across both
+    # lanes. NULL on every file the user pointed the bank at themselves: nobody
+    # recorded an origin for those and inventing one would be a claim. Additive
+    # column (see _SCHEMA_ADDITIONS).
+    source_metadata = db.Column(Text, nullable=True)
+    # NULL = no per-frame probabilities are cached for this file | 'ok'. Only
+    # the STATE lives here; the two vectors are an .npz next to the bank's
+    # thumbnails (services/shot_probs), for the same reason the search lane
+    # keeps its vectors out of SQLite — a hundred thousand floats per file is a
+    # blob store, not a column, and every reader wants the whole vector at once.
+    # The state is here because it is what the payload and the "instant re-cut"
+    # affordance read, and both must be answerable without touching numpy.
+    #
+    # The PATH is derived (shot_probs.probs_path), never stored: an absolute
+    # path in a row survives a move of the app's data folder as a lie, and this
+    # file is derived data whose home is already decided by the bank id.
+    # Additive — see _SCHEMA_ADDITIONS.
+    probs_state = db.Column(String(12), nullable=True)
+    # This FILE's shot-detection threshold, or NULL to inherit its bank's (which
+    # may itself inherit the global default). The per-file level exists because
+    # a mixed corpus is mixed inside one folder: the single take and the tightly
+    # edited scene sit side by side, and no bank-level number is right for both.
+    shot_threshold = db.Column(Float, nullable=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
 
     def __repr__(self):
@@ -1314,6 +1381,16 @@ class VideoClip(db.Model):
     # unit, and adding a metric to the scan must not need a migration.
     # NULL = the scan has not reached this clip. Additive — see _SCHEMA_ADDITIONS.
     metrics_json = db.Column(Text, nullable=True)
+    # What KIND of transition sits at each end of this shot, as JSON:
+    # {'start': {'kind': 'cut'|'dissolve', 'width': int}|null, 'end': ...}.
+    # Read from the detector's SECOND head (all_frame_pred), which the worker
+    # used to compute and throw away — its width is the only signal anywhere
+    # that tells a hard cut from a slow dissolve. NULL means nobody measured it:
+    # a hand-made cut, or a file detected before the head was persisted. One
+    # JSON column rather than four scalars, same argument as metrics_json — it
+    # is written and read as a unit and gaining a field must not need a
+    # migration. Advisory, like every other flag in this bank. Additive.
+    transition_json = db.Column(Text, nullable=True)
     # 🔎 Search pass: NULL = never embedded | 'ok' | 'unreadable'. Only the STATE
     # lives here; the vectors themselves are a .npz next to the bank's thumbnails
     # (services/video_clip_search), for the same reason the image lane keeps its

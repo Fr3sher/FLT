@@ -146,14 +146,17 @@ function GridStatusFilter({ value, counts, onChange }) {
   );
 }
 
-/* Order the grid on what was MEASURED instead of by arrival date — asked for by
-   nofaceman (Discord). A dataset row carries exactly one such number, the face
-   similarity to the reference, so that is the only thing offered here (the
-   aesthetic/sharpness scores live on bank images, which have their own sort).
+/* Two ways to arrange the grid, and they answer different questions.
+   MEASURED (face similarity to the reference — asked for by nofaceman, Discord)
+   ranks the whole grid best-to-worst; CATEGORICAL (shot type — asked for by
+   .samexit, Discord) does not rank anything, it puts every face shot in one run,
+   every bust in the next, so near-identical images can be compared side by side
+   instead of scattered through the arrival order. Nothing else is offered: the
+   aesthetic/sharpness scores live on bank images, which have their own sort.
    Sorting NARROWS nothing: it composes with both grid filters, and since the
    grid derives its tiles AND its "select all" from the same list, the selection
-   follows the order on screen. Unscored images go last, both ways; while nothing
-   is scored the options are greyed out naming the pass to run, rather than
+   follows the order on screen. Images a pass never reached go last, both ways;
+   an entry whose pass has not run is greyed out naming that pass, rather than
    silently reordering nothing. `shrink-0` + a bounded width keep it usable when
    the toolbar wraps at 400 px. */
 function GridSortSelect({ value, images, onChange }) {
@@ -162,7 +165,7 @@ function GridSortSelect({ value, images, onChange }) {
       Sort
       <select value={value} onChange={(e) => onChange(e.target.value)}
         aria-label="Sort the grid"
-        title="Order the images by face similarity to your reference. Unscored images sink to the end."
+        title="Order the images by face similarity to your reference, or group them by shot type. Images the pass never reached sink to the end."
         className="max-w-[13rem] rounded-md border border-border bg-surface px-2 py-0.5 text-[0.6875rem] text-content">
         {datasetSortOptions(images).map((o) => (
           <option key={o.id} value={o.id} disabled={o.disabled} title={o.title}>
@@ -181,8 +184,8 @@ function GridSortSelect({ value, images, onChange }) {
    "showing N of M" count, and a one-click "clear all". Session-only state lives
    in the parent workspace (transient view, not persisted). */
 function GridFilterBar({
-  excludes, includes, statusLabel, shown, total,
-  onRemoveExclude, onRemoveInclude, onRemoveStatus, onClearAll,
+  excludes, includes, statusLabel, coverageLabel, shown, total,
+  onRemoveExclude, onRemoveInclude, onRemoveStatus, onRemoveCoverage, onClearAll,
 }) {
   return (
     <div role="status"
@@ -199,6 +202,15 @@ function GridFilterBar({
             <button type="button" onClick={onRemoveStatus}
               aria-label="Show images with any decision again"
               className="w-4 h-4 grid place-items-center rounded-full hover:bg-amber-500/30">✕</button>
+          </span>
+        )}
+        {coverageLabel && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-emerald-400/50 bg-emerald-500/15 pl-2 pr-1 py-0.5 text-[0.6875rem] text-emerald-100">
+            <span aria-hidden>🔍</span> {coverageLabel}
+            <button type="button" onClick={onRemoveCoverage}
+              aria-label="Stop showing only the images from that coverage chip"
+              className="w-4 h-4 grid place-items-center rounded-full hover:bg-emerald-500/30">✕</button>
           </span>
         )}
         {excludes.map((t) => (
@@ -246,6 +258,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
     capsLoading,
   });
   const [cropImg, setCropImg] = useState(null);
+  // 🔍 The coverage chip the user clicked, or null. Session-only like the tag
+  // filters: it is a way of LOOKING at the set, not a property of it, and one
+  // that would be actively misleading to restore days later against a dataset
+  // whose captions have since been rewritten. {key, label, ids}.
+  const [coverageFilter, setCoverageFilter] = useState(null);
   const [captionOptionsOpen, setCaptionOptionsOpen] = useState(false);
   // Frozen snapshot of the flagged queue when review mode opens (null = closed).
   const [reviewQueue, setReviewQueue] = useState(null);
@@ -609,10 +626,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
   const toggleInclude = toggleTag(setIncludeTags, setExcludeTags);
   const clearFilters = () => {
     setExcludeTags([]); setIncludeTags([]); setStatusFilter(DEFAULT_GRID_STATUS_FILTER);
+    setCoverageFilter(null);
   };
   const tagFiltersActive = excludeTags.length > 0 || includeTags.length > 0;
   const statusFilterActive = statusFilter !== DEFAULT_GRID_STATUS_FILTER;
-  const filtersActive = tagFiltersActive || statusFilterActive;
+  const filtersActive = tagFiltersActive || statusFilterActive || !!coverageFilter;
   const statusFilterLabel = GRID_STATUS_FILTERS.find((f) => f.id === statusFilter)?.label || '';
   const statusFilterOpts = { unresolvedRescueIds };
   const statusCounts = gridStatusFilterCounts(rescueGridImages, statusFilterOpts);
@@ -622,10 +640,20 @@ export default function DatasetWorkspace({ ds, onBack }) {
   // Decision filter first, tag filter on top — the two compose, order-independent.
   // The sort runs LAST and only reorders: membership is entirely the filters'
   // business, so "shown / total" and every bulk action keep meaning what they say.
-  const gridImages = sortDatasetImages(filterImages(
+  const filteredGridImages = filterImages(
     filterImagesByStatus(rescueGridImages, statusFilter, statusFilterOpts),
     { excludes: excludeTags, includes: includeTags, mode: effCaptionMode },
-  ), gridSort);
+  );
+  // 🔍 A coverage chip narrows to the exact images that bucket counted. It is an
+  // id list rather than a re-run of the lexicon in the browser: the panel and the
+  // grid then cannot disagree about what "profile 3" means, and the app keeps ONE
+  // place where a caption is read for variety (services/caption_coverage.py).
+  // Third filter, same rank as the other two — so it also narrows what select-all
+  // and every bulk action see, which is the point of picking a bucket.
+  const coverageIds = coverageFilter ? new Set(coverageFilter.ids) : null;
+  const gridImages = sortDatasetImages(coverageIds
+    ? filteredGridImages.filter((i) => coverageIds.has(i.id))
+    : filteredGridImages, gridSort);
   // Outcome tally for the refusal notice below the progress banner. Counted from
   // the rows already polled — no extra request, and it survives a page reload
   // because it reads the stored fail_kind rather than a one-shot end-of-batch
@@ -784,7 +812,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
           // Passes that DON'T claim "ComfyUI is paused": the CPU ones, plus
           // 'generate' (engine-dependent — Nano Banana / ChatGPT don't touch
           // ComfyUI, and the Klein case is obvious from the tiles appearing).
-          const cpu = act.kind === 'analyze_faces'
+          // 'analyze_faces' is CPU by default and then claims nothing — but it
+          // has a GPU lane (face_scoring.device), and THAT one really does hold
+          // the exclusive window. The pass advertises its engine so this line
+          // never has to guess.
+          const cpu = (act.kind === 'analyze_faces' && act.engine !== 'cuda')
             || (act.kind === 'watermark_clean' && !String(act.detail || '').includes('GPU'))
             || act.kind === 'generate'
             // Same reasoning as 'generate': the improve batch feeds ComfyUI, and
@@ -1227,9 +1259,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
               {filtersActive && (
                 <GridFilterBar excludes={excludeTags} includes={includeTags}
                   statusLabel={statusFilterActive ? statusFilterLabel : ''}
+                  coverageLabel={coverageFilter ? coverageFilter.label : ''}
                   shown={gridImages.length} total={rescueGridImages.length}
                   onRemoveExclude={toggleExclude} onRemoveInclude={toggleInclude}
                   onRemoveStatus={() => setStatusFilter(DEFAULT_GRID_STATUS_FILTER)}
+                  onRemoveCoverage={() => setCoverageFilter(null)}
                   onClearAll={clearFilters} />
               )}
               {filtersActive && gridImages.length === 0 ? (
@@ -1301,7 +1335,13 @@ export default function DatasetWorkspace({ ds, onBack }) {
                       fully green on a set that is the same pose, one outfit, one
                       light — none of which it counts. This is that second
                       question, read from the captions already written. */}
-                  <CoveragePanel datasetId={d.id} refreshKey={images.length} />
+                  {/* A chip is a place to go, not only a number: clicking one
+                      narrows the grid to exactly the images it counted and jumps
+                      to it — the panel lives in Add images, the grid in Images,
+                      and a filter applied to a screen you cannot see would look
+                      like nothing happened. */}
+                  <CoveragePanel datasetId={d.id} refreshKey={images.length}
+                    onPick={(pick) => { setCoverageFilter(pick); setSection('images'); }} />
                   {/* Images imported WITHOUT head-crop have no shot type, so they count
                       for nothing in the bar above (the default on body-fidelity datasets:
                       a whole drag-and-drop import can leave it at 0). The vision pass that
@@ -2162,6 +2202,15 @@ export default function DatasetWorkspace({ ds, onBack }) {
           onMarkWatermark={viewImgLive._rescueReviewPreview
             ? undefined
             : ((image) => { setViewImg(null); setReviewQueue([image]); })}
+          /* ✦ Repair acts HERE now, without the detour through the watermark
+             review. Same call the review screen makes, so both surfaces share
+             one lane, one undo and one set of refusals. */
+          onRepair={viewImgLive._rescueReviewPreview
+            ? undefined
+            : ((id, prompt, boxes, mask) => ds.repairImageRegion(id, prompt, boxes, mask))}
+          onUndoRepair={viewImgLive._rescueReviewPreview
+            ? undefined
+            : ((id) => ds.undoImageRepair(id))}
           improvePending={viewImgImproving}
           improveReady={viewImgImprovementReady}
           busy={ds.busy || gridBulkBusy}
@@ -2205,6 +2254,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
           onRestore={(id) => ds.restoreWatermarkImage(id)}
           onDismiss={(id) => ds.dismissWatermarks([id])}
           onReject={(id) => ds.setStatus(id, 'reject')}
+          onRepair={(id, prompt, boxes, mask) => ds.repairImageRegion(id, prompt, boxes, mask)}
+          onUndoRepair={(id) => ds.undoImageRepair(id)}
           onClose={(recap) => {
             setReviewQueue(null);
             const summary = recap || buildWatermarkRecap({});

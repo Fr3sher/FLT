@@ -11,6 +11,7 @@
  * stability guarantees.
  */
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
+import RepairDialog from '../shared/RepairDialog';
 import KleinImproveNote from './KleinImproveNote';
 import { lightboxImproveButtons } from '../../utils/improveEngines';
 import { useCapabilities } from '../../context/CapabilitiesContext';
@@ -168,6 +169,16 @@ export default function DatasetLightbox({
   // Opens the watermark mask editor on THIS image, flagged or not. Optional like
   // the rest: a caller that does not pass it simply shows no button.
   onMarkWatermark,
+  /* ✦ Repair, in ONE click. It used to hand the image to onMarkWatermark, which
+     closed this lightbox and reopened the WATERMARK REVIEW filtered to it — so
+     repainting a necklace meant pressing "✦ Repair", landing on a screen about
+     watermarks, and pressing a second button of the same name. Two hops and a
+     misleading destination for the gesture people actually asked for.
+     Now it opens the dialog here. That also earns 🚩 its separate existence:
+     until now both buttons went to the same place, which is the definition of a
+     button too many. (imageId, prompt, boxes, mask) -> the repair call. */
+  onRepair,
+  onUndoRepair,
   busy = false,
   // The sentence a refused write shows (which pass holds this dataset, where it
   // is, what to do). Opening, zooming and comparing never consult it: they read
@@ -213,7 +224,7 @@ export default function DatasetLightbox({
      slot the guarantee is structural: a foreign stamp yields a fresh state, so
      moving image closes the comparison with no reset effect to get right. */
   const {
-    full, compareMode, improving, actionsOpen, deciding,
+    full, compareMode, improving, actionsOpen, repairOpen, deciding,
   } = lightboxImageState(storedState, imageId);
   /* Which image is on screen when a setter actually RUNS — a ref, because the
      `finally` of an improve resolves long after the render that created its
@@ -346,6 +357,12 @@ export default function DatasetLightbox({
   const prev = nav.prev;
   useEffect(() => {
     const onKey = (e) => {
+      /* ✦ Repair is a layer above this overlay. Both listen on `window`, so
+         without standing down, every letter here is a verdict on the picture
+         underneath the dialog — R rejected it while the user was drawing a
+         zone. Escape-only was not enough: watermark review already returns on
+         every key for the same reason, and the Bank does it for crop/mask. */
+      if (repairOpen) return;
       const action = reviewKeyAction(e);
       /* Escape peels ONE layer: an open actions panel first, the lightbox only
          once it is closed. Closing everything at once would throw the user out
@@ -371,7 +388,7 @@ export default function DatasetLightbox({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onNavigate, onStatus, decide, prev, nextImage, panelOpen, closePanel]);
+  }, [onClose, onNavigate, onStatus, decide, prev, nextImage, panelOpen, closePanel, repairOpen]);
   useEffect(() => { closeRef.current?.focus(); }, []);
   /* No "close the comparison when the image changes" effect on purpose: the id
      stamp above already guarantees it, for BOTH comparison modes, without a
@@ -701,6 +718,20 @@ export default function DatasetLightbox({
             🚩 {watermarkMaskButtonLabel(img)}
           </button>
         )}
+        {/* ✦ TWO INTENTIONS, TWO BUTTONS — AND NOW TWO DESTINATIONS. 🚩 above
+            flags a watermark the scan missed and sends you to the review screen
+            that acts on watermarks. This one repaints anything you can describe,
+            and opens the repair dialog right here: box or brush, a sentence, and
+            only the area you pointed at changes. They shared one destination
+            until now, which made the pair look like a duplicate. */}
+        {onRepair && (
+          <button type="button" onClick={() => patchImageState({ repairOpen: true })} disabled={busy}
+            title={refused || 'Repaint part of this image from your own description — draw a box or paint over the thing with the brush, say what should be there ("remove the necklace"), and everything outside it stays byte-identical.'}
+            aria-label={refused || 'Repair an area of this image'}
+            className="min-h-9 px-3 py-1.5 rounded-lg bg-sky-500/25 hover:bg-sky-500/35 text-sky-50 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+            ✦ Repair
+          </button>
+        )}
         {onMirror && (
           <button type="button" onClick={mirror} disabled={busy || mirrorBusy}
             aria-busy={mirrorBusy}
@@ -789,6 +820,13 @@ export default function DatasetLightbox({
 
       </div>
       </ActionsHost>
+      {/* Mounted INSIDE the root so it inherits the stacking context; the dialog
+          stops its own clicks, which matters here because this root closes on a
+          backdrop click. */}
+      <RepairDialog open={repairOpen && !!img?.filename} src={url} alt={alt}
+        onClose={() => patchImageState({ repairOpen: false })}
+        onSubmit={({ boxes, mask, prompt }) => onRepair(img.id, prompt, boxes, mask)}
+        onUndo={onUndoRepair ? () => onUndoRepair(img.id) : null} />
     </div>
   );
 }

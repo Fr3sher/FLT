@@ -50,11 +50,217 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-20-coverage-chips-show-their-images',
+    date: '2026-08-20',
+    title: 'Click a coverage chip to see exactly those images',
+    blurb:
+      'The 🔍 Coverage panel could tell you that three captions mention a profile. It could not tell you WHICH three, so acting on it meant scrolling a grid of two hundred looking for them — the panel was easy to read and hard to use. Every chip with a count is now a button: click frontal 35, or nude 7, or backlit 1, and the grid opens showing exactly those images, with 🔍 profile — camera view in the filter bar and clear all beside it. It composes with everything already there, so filter to the profiles and Sort ▸ Shot type puts what is left in order. The images you get are the ones the number counted and no others: rejected and failed pictures are outside the panel, so they stay outside its filter. A chip showing zero stays a plain chip, because there is nothing to show you and the answer to that gap is generating, not filtering. Still advice only: it changes what you are looking at, never what your images are. (Asked for by .samexit on Discord.)',
+    to: '/datasets?section=add&panel=generate',
+  },
+  {
+    id: '2026-08-20-group-the-grid-by-shot-type',
+    date: '2026-08-20',
+    title: 'Compare like with like: group the grid by shot type',
+    blurb:
+      'The grid shows your images in the order they arrived, which means a face shot, then a back shot, then two bodies, then another face — and every question you actually ask at that point is about ONE kind at a time: do I have too many of these, not enough of those, and which of these near-identical ones do I keep? The Sort menu above the grid has two new entries. Shot type puts every face shot in one run, then the busts, then the bodies, then the backs, in the same order the Composition bar counts them; images the 📐 Classify framing pass never reached gather at the end rather than in the middle. Shot type, then face similarity ↓ is the same grouping with the closest to your reference at the head of each run, so you walk down a kind and the ones to cut are waiting at its end. Like every sort here it only reorders: the filters still decide which images are shown, the counts do not move, and select-all and the ⟨ ⟩ arrows follow what is on screen. (Asked for by .samexit on Discord.)',
+    to: '/datasets?section=images&panel=review',
+  },
+  {
+    id: '2026-08-20-edit-a-custom-shot',
+    date: '2026-08-20',
+    title: 'Edit a custom shot instead of retyping it',
+    blurb:
+      'A ✨ Custom shot is a whole sentence you wrote — outfit, pose, setting, light — and until now the only way to change one word of it was to delete the card and type the other forty again. Worse, the card that came back was a different card: it landed at the end of the row, unselected, so a typo cost you your place in a selection you had spent minutes building. Every custom card now has an ✏️ next to its ✕. Press it and the words come back into the ✨ Custom shot box below, with the framing you picked; change what you want and Save puts the card back exactly where it was, still selected. Cancel leaves it untouched. The one thing that does not carry over is the ✓×N tally on the card, and on purpose: those images were generated from the words you just replaced. (Asked for by .samexit on Discord.)',
+    to: '/datasets?section=add&panel=generate',
+  },
+  {
+    id: '2026-08-19-video-burst-triage',
+    date: '2026-08-19',
+    title: 'Triage a video bank one keystroke per shot',
+    blurb:
+      'A two-hour rush becomes three hundred shots, and until now judging them meant three gestures each: click a tile, click ✓ or ✕, come back to the grid. The 🎬 Video bank has a new ⌨ Burst mode above the gallery. Turn it on and one tile carries a cursor — K keeps it, R rejects it, P puts it back to untriaged, S or → moves on without deciding, ← steps back. They are the same keys as the image bank\'s ▶ Review, so the reflex you already have works here. The cursor then jumps to the next shot you have NOT judged yet, which on a half-triaged bank is most of the speed; untick Auto-advance and it stays put so K then R corrects the same shot. It never wraps silently: when nothing untriaged is left ahead, the bar says how many are still behind you and Home goes back to the first. U undoes the last decision and moves the cursor onto that shot so you can see what it fixed, ten steps deep, always restoring what the shot actually was before — undoing a reject on a shot you had kept puts the keep back. The offer sits in the bar rather than in a toast, because at one keystroke a second a toast is replaced before it can be read. Your keys never wait for the network either: the tile flips at once and the decisions are sent behind you, one request at a time, with a run of identical verdicts going out as a single batch and a "saving N…" counter so a run that has ended is never mistaken for a run that is saved. Press ? for the full list, and nothing fires while you are typing in the search box or a threshold field.',
+  },
+  {
+    id: '2026-08-19-video-temporal-coherence',
+    date: '2026-08-19',
+    title: 'Find the shots that are secretly two shots',
+    blurb:
+      'Shot detection cuts on a change big enough to see. The ones it misses are the soft ones — a dissolve, a match cut, a new angle inside the same room — and each one leaves behind a “shot” that is really two scenes. It is the worst kind of training example, because it teaches the model a transition nobody asked for, and you cannot catch it by scrolling: the thumbnail is one of the two halves and looks perfectly fine. The 🎬 Video bank now checks every shot for this by itself, at the end of 🔎 Find scenes, and it costs nothing at all — no decoding, no model, no GPU, no button. It compares a shot’s first frame to its last using vectors that pass already cached, so a bank you embedded weeks ago gets its reading by clicking 🔎 Find scenes again. Each shot gains a scene coherence number (1.00 means its ends are the same picture), and 🎚 Quality cuts gains a Scene coherence floor that flags anything below it as “Cut inside the shot” — then ✂ Split here does the repair. Empty by default, and the Guide is blunt about why: this is a ranking, not a verdict. Measured against shots of the same length, a cut at 0.80 catches about a third of the double shots and flags about one honest shot in seven, so use it to choose what to look at first. Long takes score lower whether or not anything was cut, which the panel says out loud.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-19-video-camera-motion',
+    date: '2026-08-19',
+    title: 'Sort your shots by what the camera did',
+    blurb:
+      'A video LoRA learns camera language along with everything else, and until now there was no way to see any of it: a bank of a thousand shots gave you no answer to “which of these are locked off” or “where are the handheld ones”. The 🎬 Video bank has a new 🎥 Camera pass. It tracks every frame of every shot and labels what the camera did — pan left, pan right, pan up, pan down, zoom in, zoom out, static shot, handheld shot — using the same words the video trainer itself uses, so a label here means the same thing there. Three more are ours: rolling, slideshow (a photograph panned across rather than filmed) and subject moves. The labels appear on each thumbnail and as a new 🎥 Camera row of filters above the gallery, which composes with the ⚑ flag chips — “shaky shots that also pan right” is one click each. Nothing is ever rejected: these are descriptions, not faults, because the wobble one person is filtering out is exactly what the next person is training on. If you do want to cut on it, 🎚 Quality cuts gains a Camera shake threshold, empty by default like the rest. The pass runs on the CPU at about fifteen times real time and needs only the video decode extra, which now installs OpenCV alongside PyAV — press Install on the video row in Setup if it shows a ✗. Honest limits, stated in the app too: a pivot and a slide look identical in a flat picture so both are called a pan, orbits are not detected at all, and a real pan across a wall or a horizon can read as a slideshow because it has no depth either.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-19-video-ai-check',
+    date: '2026-08-19',
+    title: 'See which shots may have been generated rather than filmed',
+    blurb:
+      'A scrape in 2026 brings back generated video mixed in with the real thing, and it is invisible at thumbnail size — a clean, well-lit, well-framed synthetic clip passes every other check in the bank. It is worth finding: published curation work reports that even under a tenth of a corpus being synthetic measurably degrades what a model learns from it. The 🎬 Video bank has a new 🤖 AI check: it looks at two contiguous seconds of each shot and measures how erratically the motion changes, because real footage is full of small irregularities and generated footage tends to be smoother than the world. Shots that come out suspiciously smooth get a “May be AI-generated” chip, against a new cut in 🎚 Quality cuts that is empty by default and applied as you move it with nothing rescanned. Read as a hint and never as a verdict: on re-compressed material — which anything scraped is — the best blind-evaluated detectors in the field are right about three times in four, and this one has never been measured against 2025-and-later generators. Nothing is ever rejected or deleted on it. Runs on the CPU, so it can check a bank while a training owns your card, and it needs the same ✨ Score interpreter the look score already uses.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-18-video-defect-sweep',
+    date: '2026-08-18',
+    title: 'Spot the footage that has already been through the mill',
+    blurb:
+      'A clip that was uploaded, re-encoded and re-uploaded three times carries damage a thumbnail cannot show you — and a LoRA learns it first, because it sits identically on every frame of every shot from that file. The 🎬 Video bank has a new 🩻 Defects pass: one sweep per source file finds frames that were simply delivered twice (what 24 fps material uploaded as 30 fps looks like), the macroblock grid showing through a hard squeeze, and edges that stay soft at FULL size. That last one is the important one — the sharpness floor measures a small analysis copy, where footage upscaled from 480p and the genuine 1080p are the same picture, so until now nothing in the app could tell them apart. Three new cuts in 🎚 Quality cuts, all empty by default, all applied as you move them with nothing rescanned. Each file card also shows how hard it was squeezed, in bits per pixel. Needs ffmpeg, which the video extra already installs.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-18-video-safe-zone',
+    date: '2026-08-18',
+    title: 'See the black bars and the subtitles before your LoRA learns them',
+    blurb:
+      'A subtitle sits in the same rectangle of every frame of every clip from the same source, so it is among the first things a LoRA learns to draw — and at thumbnail size you cannot see it. Neither are the letterbox bars on a vertical video somebody padded into 16:9. The 🎬 Video bank has a new 🔳 Safe zone pass: it looks at three frames of each shot, measures the flat bands on all four sides, reads any text that HOLDS STILL across those frames (a passing shop sign is scene content and is left alone), and works out how much of the frame a crop would leave you. Three new cuts in the thresholds panel — letterbox share, burned-in text share, usable frame floor — all empty by default, all applied as you move them with nothing rescanned. Reading text needs one small CPU package from Setup; without it the pass still measures the bands and says so rather than pretending it found none.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-18-canvas-one-grid-per-checkpoint',
+    date: '2026-08-18',
+    title: 'Pinned batches land as one grid per LoRA',
+    blurb:
+      'Generate a batch on the Canvas with several LoRAs selected and pin the results: each LoRA now gets its own grid on the board instead of everything fusing into one strip where the batches were indistinguishable. The epochs of one LoRA still share its grid — that side-by-side is the point — and prompts and separate launches keep their own grids too. Boards pinned before this keep drawing exactly what they drew.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-18-the-app-gets-back-up-after-a-crash',
+    date: '2026-08-18',
+    title: 'The app gets itself back up after a crash',
+    blurb:
+      'Some deaths are not something the app can catch: an antivirus hook faulting inside an image library, or a native crash in one of the GPU extensions, kills the whole process outright — no error, no message, and until now it simply stayed down until you noticed and started it again. Launched from start.bat, it now comes back on its own, says in the console that it crashed rather than pretending nothing happened, and gives up after a few deaths in a row so an app that is broken at startup cannot loop forever. Set LDS_SUPERVISE=0 to run without it.',
+  },
+  {
+    id: '2026-08-18-scrape-videos-into-a-video-bank',
+    date: '2026-08-18',
+    title: 'Fill a video bank straight from the web',
+    blurb:
+      'The scraper could already SEE videos — RedGifs, Erome, Picazor, TikTok, X, Civitai all list them — and the picker threw every one of them away, so the only way to triage a clip you found online was to download it by hand, drop it in a folder and point a bank at that folder. 🎬 Video bank now has its own 🕸 Scrape the web panel: paste a link, pick the clips, and they land in a bank ready to be cut into shots. Nothing is judged on the way in — length, motion and sharpness stay for the bank’s own passes, exactly like the image side. Send them to a brand new bank, which gets a folder of its own, or to any bank you already have — including one pointed at your own footage, where the clips are simply added to that folder. The picker names the folder before you start.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-18-video-look-score',
+    date: '2026-08-18',
+    title: 'Your shots now carry a look score — for free',
+    blurb:
+      'The video bank could tell you a shot was sharp, lit and moving; it could not tell you it was ugly. 🔎 Find scenes now also rates how each shot LOOKS, using the same LAION aesthetic model — and the same ~1–10 scale — the image Bank’s ✨ Score puts on a still. It costs nothing extra: the rating is read off the frame vectors that pass already caches, so no video is decoded twice and your GPU is never touched. Already embedded a bank? Click 🔎 Find scenes again and it rates the whole thing in seconds, without re-reading a single file. The new Aesthetic floor sits in 🎚 Quality cuts, empty by default — preview 4 against your own bank first; the published LAION cuts (4 casual, 4.75 strict) were set for filtering a web crawl, and real rushes sit well above them. A shot with no rating is never flagged.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-18-cleaning-keeps-the-zones-you-drew',
+    date: '2026-08-18',
+    title: 'The zones you draw by hand survive a clean',
+    blurb:
+      'When 🚩 Find watermarks missed a mark, you could draw the zone yourself — and a successful 🧽 Clean then deleted what you had drawn. Nothing said so, and it only cost you later: ↩ Restore original brings the watermarked picture back so you can clean it again, usually with the other engine, but the retry no longer had your zones and quietly fell back to the box the detector got wrong in the first place. Your zones now survive both steps, so a second attempt starts exactly where you left off. (The Bank already worked this way.)',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-18-face-analysis-can-use-the-gpu',
+    date: '2026-08-18',
+    title: 'Analyze faces can use your GPU — and says when it is working',
+    blurb:
+      'Two fixes to the same screen. 🎭 Analyze faces spent its first stretch fingerprinting every image before it told you anything, so a big dataset looked frozen and the banner fell back to claiming your GPU was busy and ComfyUI paused — neither of which was true. It now names itself and counts from the first second. And it can finally use the GPU: the Image bank’s face pass already could, this one was pinned to CPU. One setting now governs both (Settings ▸ face scoring device, `auto` by default), and a GPU run goes through the same exclusive window as every other GPU pass, so it can never compete with a training. Nothing changes unless you install `onnxruntime-gpu` into the face interpreter — the standard install ships the CPU build and stays on CPU, exactly as before.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-18-auto-triage-says-why-its-empty',
+    date: '2026-08-18',
+    title: 'Auto-triage stops vanishing without a word',
+    blurb:
+      'The 🎯 Auto-triage bar used to disappear entirely whenever it had nothing to do — and four completely different situations looked identical: you had never run 🎭 Analyze faces, the pass could not score any of your images, you had already decided every one of them, or a decision filter was simply hiding the undecided ones. It now stays put and tells you which of the four it is, including how many scored images your current filter is hiding, so "nothing happens" is never left for you to guess at.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-18-analyze-faces-in-wider-shots',
+    date: '2026-08-18',
+    title: 'Face scores for your full-body and bust shots, not just the close-ups',
+    blurb:
+      '🎭 Analyze faces used to skip almost every wide shot: it asked the head to fill 6% of the frame, which describes your camera rather than the face — the same head passed on a small photo and failed on a big one. It now judges the head in actual pixels, and when a head is small in frame it takes a second look zoomed in on it, at the photo\'s own resolution, instead of at the shrunk-down copy the detector normally sees. Full-body and bust shots get a real score, so 🎯 Auto-triage and the “Face similarity” sort finally cover them. True profiles are still left unscored on purpose — a turned head can\'t be compared honestly, so it stays your call. (Reported by .samexit on Discord.)',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-18-repair-with-a-brush',
+    date: '2026-08-18',
+    title: 'Paint over what should go, instead of boxing it',
+    blurb:
+      'A rectangle is the wrong shape for a necklace, a pair of glasses or a bra strap — it hands the model a square full of face it was never asked to touch. ✦ Repair now has a 🖌 Brush next to its ▭ Box: paint over the thing, say what should be there, and the whole picture goes to Klein with your painted mask, so it reconstructs while actually seeing the face around it. The box is still there and still the default — it is quicker, and better for a mark in a corner. Everything outside what you painted keeps its original bytes, exactly as before. (Contributed by OneCodingDude on GitHub.)',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-17-watermark-review-on-a-phone',
+    date: '2026-08-17',
+    title: 'Review watermarks from your phone without squinting',
+    blurb:
+      'Opened on a phone, the watermark review gave the photo about a third of the screen and spent the rest on controls — including a model picker and a permanent text field — so the one thing you were there to judge was the smallest thing on screen. The picture now gets the screen: 🧽 Clean, ✓ Not a watermark, ✕ Reject and the arrows stay put, and the setup controls (zone editor, crop-or-repaint, engine, model) fold behind one “Zones & engine” button. Nothing moves on a desktop, and anything explaining why a button is greyed out stays visible at every size.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-17-undo-a-repair',
+    date: '2026-08-17',
+    title: 'Undo a repair, and try another description',
+    blurb:
+      'An inpaint is a dice roll, so the normal way to use ✦ Repair is: look at it, decide it is not right, change the sentence, go again. That was expensive — each attempt overwrote the image with no way back. Now the dialog stays open after a repair so you can repair again straight away, and ↩ Undo puts back the picture from just before it. One step deep, and it deliberately never touches the original kept for ↩ Undo cleaning, so undoing a repair cannot throw away a watermark clean you made earlier. (Suggested by a user on Discord the day ✦ Repair shipped.)',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-17-repair-a-generated-image',
+    date: '2026-08-17',
+    title: 'Fix one detail of a render instead of regenerating it',
+    blurb:
+      'A stray finger, an object you did not ask for — until now that meant throwing away the picture you liked and rolling the dice again, because the only prompted lane re-renders everything and gives you a different image. Open a generated image full size (on the Canvas, or from a checkpoint gallery) and press ✦ Repair next to ⬇ and ✨: draw the zone, say what should be there, and only that zone is repainted. Everything outside it comes back byte-identical, and your picture is preserved before anything is written, so a repair that fails costs you nothing. (Asked for by .samexit on Discord.)',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-17-repair-a-detail-free-prompt',
+    date: '2026-08-17',
+    title: 'Repaint one detail — and only that detail',
+    blurb:
+      'Until now the app had two halves of this and neither was the whole thing. 🧽 Clean repaints exactly the box you draw and leaves every pixel outside it byte-identical, but its instruction was frozen on watermark reconstruction. ✦ Edit takes any instruction but re-renders the whole image, drifting outside the part you cared about. ✦ Repair is the first lane with both: open an image, press ✦ Repair in the action bar, draw the zone, type what should be there ("remove the necklace"), and only that zone is repainted — the rest comes back to the byte. It stamps no watermark verdict, refuses an empty description rather than guessing, and preserves your original before writing anything, so a failed repair costs you nothing. (Asked for independently by mr.arrow and .samexit on Discord.)',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-17-vast-do-not-rent-this-machine-again',
+    date: '2026-08-17',
+    title: 'Stopping a cloud run can now blacklist the machine',
+    blurb:
+      'The app already refuses to re-rent a vast host when it can see the failure — a boot that never completes, a pod that stops progressing, a checkpoint it cannot serve. What it cannot see is a machine that boots perfectly and then simply trains at half speed: no failure happens, so nothing gets banned and the picker can rent it straight back. Stopping a run from the Runs page now offers "Do not rent this machine again", which puts that host on the same blacklist for the same few days. It is a tick box, not a rule: a stop can just as easily mean you changed your mind, and that says nothing about the machine. (Asked for by mr.arrow on Discord.)',
+    to: '/cloud',
+  },
+  {
+    id: '2026-08-17-canvas-bulk-undeploy',
+    date: '2026-08-17',
+    title: 'Undeploy a pile of LoRAs in one go',
+    blurb:
+      'Taking LoRAs back out of ComfyUI was a one-at-a-time errand buried in a checkpoint popover, and nothing anywhere told you how many were deployed. ⏏ Undeploy… at the top of the Canvas now opens the whole list — every LoRA the app has put into ComfyUI, across all your datasets and families, grouped by dataset. Tick what goes, press once, done; Select all is there for the clear-out. Only what the app deployed is listed, so a LoRA you downloaded into the same folder is never shown and never touched. Your training saves are kept — anything you undeploy can be deployed again from its checkpoint — and the removed copies go to the trash. The result is reported in three parts rather than a flat "done": removed, already gone, and refused (each one named).',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-17-caption-draw-from-a-bank',
+    date: '2026-08-17',
+    title: 'Draw a test prompt from a bank, not just a dataset',
+    blurb:
+      'The 🎲 Caption shortcut — the one that fills a test prompt with a real caption instead of something you invent — could only read datasets. But a bank is captioned by the 🏷️ Caption pass long before anything is promoted, so the biggest pile of real captions on your machine was the one it could not reach. The picker now lists your banks alongside your datasets, in their own section (a bank and the dataset it promotes into often share a name, so they are never mixed into one list). Your existing locked choice is untouched.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-16-bank-upload-local-folder',
     date: '2026-08-16',
     title: 'Point an Image Bank at a folder on your own computer',
     blurb:
       'The Bank’s folder picker used to see only folders on the machine running FLT. Now you can pick a folder on the computer you are browsing from and FLT uploads the images into a new bank, subfolders included — no need for the folder to exist on the server first.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-16-bank-crop-and-upscale',
+    date: '2026-08-16',
+    title: 'Crop and upscale without leaving the Bank',
+    blurb:
+      'Reframing or upscaling a shot used to mean taking it out of the Bank: promote it into a dataset, edit it there, export the result into a NEW bank, and start curating all over again. Both now happen in the Bank itself. ✂ Crop is in ▶ Review — press C, drag the box, done; it decides nothing, so you can frame an image and then judge it. Nothing is resampled, unlike a dataset crop: a Bank sits upstream of the training resolution, so the cut keeps its pixels and the dataset still decides the size when it imports. ✨ Upscale & improve is a proper pass on the new ✂ Edits panel, with a scope, a progress bar and ⏹ Stop, running on Klein or SeedVR2. Your own files are never touched: both edits land in a copy the app keeps, ↩ Revert throws it away, and every measurement taken from the old pixels is cleared so the analysis passes re-read the image you are actually keeping. (Asked for by nofaceman on Discord, backed by mr.arrow.)',
     to: '/bank',
   },
   {
@@ -71,36 +277,6 @@ export const WHATS_NEW = [
     blurb:
       'The watermark detector is very good, but it is a classifier — some marks, especially the ones stock sites tile across a whole photo, score under any threshold you set. Until now that was a dead end: the mask editor only opened on images the scan had already flagged. Now you can open it on any image you are looking at, in a Dataset or a Bank, and the zones you draw become the flag — 🧽 Clean then repaints exactly what you drew. Changed your mind about an image you had ruled a false positive? Drawing on it takes that back too.',
     to: '/bank',
-  },
-  {
-    id: '2026-08-13-bank-keep-this-person',
-    date: '2026-08-13',
-    title: 'Auto-shrink a bank to just one person',
-    blurb:
-      'Select one clear face shot in the bank and hit “Keep this person”: FLT scores every image against it and auto-rejects the shots with no face or a different person, leaving you a clean reference set to review instead of hundreds to triage by hand.',
-    to: '/bank',
-  },
-  {
-    id: '2026-08-13-loading-progress',
-    date: '2026-08-13',
-    title: 'A live progress bar while FLT loads',
-    blurb:
-      'The loading screen now shows an animated progress sweep and a spinner that keeps turning even on a slow connection — so you always know the app is working instead of frozen on a black page.',
-  },
-  {
-    id: '2026-08-13-scrape-face-filter',
-    date: '2026-08-13',
-    title: 'Auto-keep only the person you want from a scrape',
-    blurb:
-      'After scanning, pick a few clear face shots (or let FLT suggest the best ones) and FLT keeps only the photos of that same person — so your Instagram/Reddit scrape lands as a clean reference set, not a pile of strangers. Multiple references are averaged for a more forgiving match, and nothing needs the full-res originals.',
-    to: '/datasets?section=scrape&panel=scan',
-  },
-  {
-    id: '2026-08-12-snappier-loading',
-    date: '2026-08-12',
-    title: 'FLT opens fast even on a slow connection',
-    blurb:
-      'The app shell now loads in a fraction of the old time — pages load lazily as you need them instead of all at once, and the big bundled libraries are split so your browser caches the pieces it already has. The server also runs on a production web server that keeps slow connections from blocking the rest of the UI.',
   },
   {
     id: '2026-08-11-bank-rail-status-curate',
@@ -374,6 +550,57 @@ export const WHATS_NEW = [
     title: 'Every Krea build on your disk is offered, warning and all',
     blurb:
       'A checkpoint measured to render noise under the identity-edit LoRA used to be removed from every Krea list, so a file sitting in your own Krea folder was simply absent, with nothing on screen saying it existed or why it had gone. Choosing is yours: those builds are listed again and you can select them. What the app still will not do is pick one FOR you when nothing is pinned, because a base chosen in silence has already sent a run onto the wrong model without anyone noticing until the output was wrong. It is only elected automatically when it is the only Krea build you have, which beats refusing to run at all.',
+  },
+  {
+    id: '2026-08-08-shot-threshold-recut',
+    date: '2026-08-08',
+    title: 'Cut a rush again at another sensitivity, in seconds instead of minutes',
+    blurb:
+      'Shot detection never found cuts — it scored every frame, and the shot list was '
+      + 'a threshold applied to that score. The threshold was 0.5, it comes from the '
+      + 'detector paper where it is never justified, and disagreeing with it cost a '
+      + 'full pass over the file. The scores are kept now, so the new 🎬 Find shots '
+      + 'panel previews how many shots each threshold would give you on YOUR footage, '
+      + 'and re-cuts a whole folder with no decoding and no GPU at all. Per bank, and '
+      + 'per file for the folder that holds both a single take and a tight edit.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-08-single-shot-file',
+    date: '2026-08-08',
+    title: 'Tell the app a video has no cuts, and it will stop inventing them',
+    blurb:
+      'On footage that is one continuous take, the failure was never a missed cut — '
+      + 'it was a file quietly chopped into six fragments that each trained on a third '
+      + 'of a gesture. ▣ Single shot, on any file card, replaces its shots with one '
+      + 'covering the whole file, and every bulk pass leaves that file alone '
+      + 'afterwards. ↻ Re-detect this file is the way back.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-08-dissolve-chip',
+    date: '2026-08-08',
+    title: 'A shot that opens on a cross-fade now says so',
+    blurb:
+      'The detector always produced a second reading describing how wide each '
+      + 'transition was, and the app computed it and threw it away. Shots sitting '
+      + 'against a slow dissolve now carry an amber “dissolve 18f” chip, so you can '
+      + 'see before training that a clip’s first frames are a fade of the previous '
+      + 'shot — a model trained on those learns to open on a fade.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-08-min-shot-seconds',
+    date: '2026-08-08',
+    title: 'The shortest-shot floor is a duration now, not a frame count',
+    blurb:
+      'The old floor was 5 frames, which is 0.2 s on a 25 fps rush and 0.08 s on a '
+      + '60 fps one — nobody chose that, and it meant something different on every '
+      + 'file in a mixed folder. It is 0.6 s by default now, converted through each '
+      + 'file’s own rate. A short shot can also be glued onto its neighbour instead '
+      + 'of dropped, which keeps the footage. If you had set the old key by hand, it '
+      + 'still wins.',
+    to: '/video-bank',
   },
   {
     id: '2026-08-08-phone-lightbox-image-first',

@@ -20,6 +20,7 @@ import requests
 
 from . import config as cfg
 from .services import ffmpeg_tools
+from .services import infer_env
 from .utils import comfy_fs
 
 _CACHE_TTL = 30
@@ -38,11 +39,27 @@ _UNKNOWN_TTL = 60
 # answered 'CUDA' to one probe and 'no answer' to the other.
 _IMPORT_TIMEOUT = 90
 _import_cache = {}  # key -> (ts, ok|None)  — None = unknown, kept briefly
-# These two probes guard workers that are deliberately launched with ``python
-# -s``.  Keep the isolation scoped: Face, Masks and Watermark still honour their
-# configured interpreter's normal site policy, so probing them with different
-# argv would create a false negative.
-_NO_USER_SITE_IMPORT_KEYS = frozenset(('bank_scoring', 'bank_scoring_gpu'))
+# EVERY probe that vouches for a ``backend/infer/*`` worker runs in the exact
+# environment that worker runs in — isolated from the process owner's user
+# site-packages (``services.infer_env``). The two must move together: a probe
+# isolated while its worker is not reports ✓ against an environment the worker
+# never sees, and the failure then lands per ITEM, hours later, as if the data
+# were at fault. That asymmetry is what turned an unrelated package left in a
+# user site-packages into a bank of 861 shots marked permanently unreadable.
+#
+# `infer_env.is_borrowed` draws the first line and states why: OUR interpreter
+# keeps its user site, because on a system-Python install that directory is
+# where pip actually put torch. These keys draw the second one — probes whose
+# real launch we do not shape, and which must therefore not be sanitised either:
+#   * ai-toolkit's TRAINING venv ('aitoolkit_torch' / 'aitoolkit_alive'). Note
+#     that JoyCaption runs in that SAME venv and IS isolated: the rule is MATCH
+#     THE LAUNCH, not "whose environment is it" — JoyCaption's script is ours and
+#     we build its argv, while the training bridge hands the venv over untouched.
+#   * the interpreter probed for PyAV/cv2 ('video_decode'): that decode happens
+#     in-process, inside Flask, which has no ``-s`` of its own — so even a
+#     configured `video.python` must be asked the unisolated question.
+_USER_SITE_IMPORT_KEYS = frozenset((
+    'aitoolkit_torch', 'aitoolkit_alive', 'video_decode'))
 
 _ZIMAGE_RE = re.compile(r'z[ -]?image', re.IGNORECASE)
 # Aligned with klein_edit_helper / utils.comfyui (was missing '.sft', so the
@@ -102,15 +119,19 @@ def _import_ok(python, module_expr: str, timeout=_IMPORT_TIMEOUT):
     DLLs: measured ~20 s cold vs ~1 s warm — a 20 s timeout read as False showed
     'Person masks ✗' for 10 min right after a SUCCESSFUL install.
 
-    ``python`` is normally one executable path.  The cache layer may pass an
-    argv prefix such as ``(python, '-s')`` when that feature's real worker uses
-    the same isolated contract.
+    ``python`` is normally one executable path.  The cache layer passes an argv
+    prefix such as ``(python, '-s')`` for every feature whose real worker uses
+    the isolated contract — every BORROWED interpreter but the ones named in
+    ``_USER_SITE_IMPORT_KEYS``.  ``env`` then carries the inherited half of the
+    same instruction, so the probe and the worker see one environment, not two.
     """
     try:
         prefix = (list(python) if isinstance(python, (tuple, list))
                   else [python])
+        isolated = infer_env.NO_USER_SITE_FLAG in prefix[1:]
         result = subprocess.run(
-            [*prefix, '-c', module_expr], capture_output=True, timeout=timeout)
+            [*prefix, '-c', module_expr], capture_output=True, timeout=timeout,
+            env=infer_env.worker_env(prefix[0]) if isolated else None)
         return result.returncode == 0
     except subprocess.TimeoutExpired:
         return None
@@ -137,8 +158,9 @@ def _cached_import_state(key: str, python: str, module_expr: str):
         ttl = _IMPORT_TTL if cached[1] is not None else _UNKNOWN_TTL
         if now - cached[0] < ttl:
             return cached[1]
-    probe_python = ((python, '-s')
-                    if key in _NO_USER_SITE_IMPORT_KEYS else python)
+    probe_python = (python if (key in _USER_SITE_IMPORT_KEYS
+                               or not infer_env.is_borrowed(python))
+                    else (python, infer_env.NO_USER_SITE_FLAG))
     ok = _import_ok(probe_python, module_expr)
     _import_cache[cache_key] = (now, ok)
     return ok
@@ -691,7 +713,22 @@ def probe_vast() -> dict:
 CAPABILITY_IMPORTS = {
     'face_scoring': 'import insightface, onnxruntime',
     'masks': 'import rembg',
-    'bank_scoring': 'import torch, open_clip, transformers',
+    # numpy and PIL are named even though nothing pip-installs them directly:
+    # they arrive transitively (torchvision, which open_clip_torch and timm both
+    # require, hard-requires both) and BOTH workers that run in this interpreter
+    # import them on any real call — infer/bank_score_infer.py reaches PIL at load
+    # time through bank_image_guard and numpy inside its scoring path, and
+    # infer/video_ai_check_infer.py imports both in _preprocess. Not at module
+    # scope in every case, which changes WHEN it fails and not whether: a probe
+    # that names only the headline packages reports ✓ while the feature dies on
+    # the first call, which is issue #24's exact shape; this entry under-imported
+    # for four waves and the AI check is what surfaced it.
+    # `from PIL import Image` rather than `import PIL`, because the bare package
+    # imports without its submodules and would pass on a broken install.
+    # setup_installer._verify_bank_scoring_import runs THIS string, so the
+    # install's honesty gate cannot fall behind the probe again.
+    'bank_scoring': ('import torch, open_clip, transformers, numpy; '
+                     'from PIL import Image'),
     'bank_siglip2': ('import torch, transformers, numpy; from PIL import Image; '
                      'from transformers import Siglip2Model, AutoProcessor'),
     'watermark_inpaint': 'import simple_lama_inpainting',
@@ -708,10 +745,26 @@ CAPABILITY_IMPORTS = {
     # already manages — the same call the watermark detector made, for the same
     # ~2.5 GB reason. ffmpeg is not an import at all and is resolved separately
     # (services/ffmpeg_tools).
-    'video': 'import av',
+    # cv2 and numpy are named because the camera-motion pass tracks corners and
+    # fits a similarity transform IN THIS PROCESS, on the frames PyAV hands it —
+    # so a probe that names only `av` reports the video extra ready and then the
+    # pass dies on its first clip. Issue #24's exact shape, and the second time
+    # this list has under-imported: the AI check surfaced the same omission in
+    # `bank_scoring`. setup_installer's 'video' package tuple installs both.
+    'video': 'import av, cv2, numpy',
     # av: the worker decodes with PyAV in this same environment — a probe that
     # skips it answers "ready" about a detector that cannot open a single file.
     'shot_detect': 'import torch, transnetv2_pytorch, av',
+    # 🔳 Burned-in text, for the video lane's safe-zone pass. BOTH names, because
+    # infer/video_text_infer.py imports both: cv2 is how it reads a frame and
+    # learns its size (the boxes come back normalised, which needs one), and
+    # rapidocr_onnxruntime is the engine. cv2 arrives as a DEPENDENCY of the
+    # engine rather than in its own right, which is exactly the shape that made
+    # issue #24 — a probe importing only the headline module reports ✓ while the
+    # feature dies on the first call. There is nothing else: no torch, no
+    # transformers, and no model download (the 1.4.x wheels carry the PP-OCRv4
+    # ONNX files, ~16 MB, so this works offline the day it is installed).
+    'video_text': 'import rapidocr_onnxruntime, cv2',
 }
 
 
@@ -732,6 +785,24 @@ def face_gpu_available() -> bool:
         'face_gpu', python,
         "import onnxruntime,sys; "
         "sys.exit(0 if 'CUDAExecutionProvider' in onnxruntime.get_available_providers() else 1)")
+
+
+def resolve_face_device():
+    """(device, use_gpu) for a face pass — the SINGLE answer both surfaces use.
+
+    The Bank pass and the dataset scorer ask the identical question ("may I put
+    InsightFace on the GPU for this run?"), so they must not answer it apart:
+    a divergence here is invisible until someone notices one surface is ten
+    times slower than the other. See the Bank/Dataset parity rule in CLAUDE.md.
+
+    `face_scoring.device`: 'auto' (default - GPU when truly available) | 'cpu'
+    | 'cuda'. A 'cuda' request on an interpreter without CUDA still degrades to
+    CPU here, so the caller never opens the GPU-exclusive window for a pass that
+    is going to run on CPU anyway.
+    """
+    pref = str(cfg.get('face_scoring.device') or 'auto').lower()
+    use_gpu = pref in ('auto', 'cuda') and face_gpu_available()
+    return ('cuda' if use_gpu else 'cpu'), use_gpu
 
 
 def bank_scoring_gpu_available() -> bool:
@@ -779,6 +850,22 @@ def probe_masks() -> dict:
     python = cfg.get('masks.python') or sys.executable
     ok = _cached_import('masks', python, CAPABILITY_IMPORTS['masks'])
     return {'ok': ok, 'detail': 'rembg import OK' if ok else 'import failed'}
+
+
+def probe_video_text() -> dict:
+    """Can this install read burned-in text? Used by 🔳 Safe zone.
+
+    Deliberately NOT folded into `probe_video`'s three pieces. Those three are
+    what the LANE needs to exist at all — without decoding there is no bank —
+    while this one gates HALF of one optional pass: with no OCR engine the safe
+    zone still measures letterbox and pillarbox bands and says so on every shot.
+    Folding it in would grey out buttons that work.
+    """
+    python = cfg.get('video_text.python') or sys.executable
+    ok = _cached_import('video_text', python, CAPABILITY_IMPORTS['video_text'])
+    return {'ok': ok,
+            'detail': 'RapidOCR import OK' if ok
+                      else 'install the burned-in text extra from Setup'}
 
 
 def probe_video() -> dict:
@@ -1687,6 +1774,7 @@ def probe(force=False) -> dict:
     watermark_inpaint = probe_watermark_inpaint()
     watermark_detect = probe_watermark_detect()
     video = probe_video()
+    video_text = probe_video_text()
     scrape_deps = probe_scrape_deps()
     joycaption = probe_joycaption(aitoolkit)
     models = _scan_models()
@@ -2006,6 +2094,12 @@ def probe(force=False) -> dict:
         'video_decode': video['decode'],
         'video_detect': video['detect'],
         'video_encode': video['encode'],
+        # 🔳 The safe-zone pass's OCR half, published on its own because it is
+        # the only capability in this app whose absence downgrades a pass instead
+        # of blocking it: the bands are still measured. The workspace uses it to
+        # say "bands only" on the button rather than greying it out.
+        'video_text': video_text['ok'],
+        'video_text_detail': video_text['detail'],
         # Klein-inpaint (V2, quality) readiness = same as the Klein engine (ComfyUI
         # reachable + Klein models on disk). The custom-node preflight is a clean-time
         # 409. Greys the batch's "Klein (quality)" option when False.

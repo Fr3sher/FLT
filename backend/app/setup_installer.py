@@ -64,6 +64,7 @@ import requests
 from . import capabilities
 from . import config as cfg
 from .utils.redact import redact_user_paths
+from .services import infer_env
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,7 @@ INSTALL_ACTIONS = ('ml_extras', 'scrape_extras', 'ollama_model',
                    'face_scoring', 'masks', 'watermark_inpaint',
                    'bank_scoring', 'bank_siglip2',
                    'watermark_detect',
-                   'video', 'shot_detect') + tuple(_MODEL_DOWNLOADS) + tuple(_NODE_PACKS)
+                   'video', 'shot_detect', 'video_text') + tuple(_MODEL_DOWNLOADS) + tuple(_NODE_PACKS)
 
 _ML_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-ml.txt'
 _SCRAPE_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-scrape.txt'
@@ -334,8 +335,30 @@ _CAPABILITY_PACKAGES = {
     #               decode seam. Without this line the install reported success
     #               and the capability stayed off — the probe imports av, so it
     #               kept failing in an environment nothing had put av into.
-    'video': ('imageio-ffmpeg', 'av'),
+    #   video  `opencv-python-headless` and `numpy` are named for the camera
+    #          pass, which tracks and fits in the app's own interpreter. The
+    #          HEADLESS variant for the reason video_text names it below — the
+    #          desktop `opencv-python` drags a GUI stack onto a server — and
+    #          numpy explicitly because a scoped install must resolve it even
+    #          when the headline package's metadata is vague.
+    'video': ('imageio-ffmpeg', 'av', 'opencv-python-headless', 'numpy'),
     'shot_detect': ('transnetv2-pytorch', 'av'),
+    #   video_text  RapidOCR, for the safe-zone pass's burned-in-text half. It
+    #               lands in the SAME interpreter as face_scoring and masks (the
+    #               app's own by default) because it is the same kind of extra:
+    #               CPU onnxruntime, no torch, no second 2.5 GB copy of anything.
+    #               `onnxruntime` and `numpy` are named here for the reason the
+    #               masks line names them — a scoped install must resolve them
+    #               even when the headline package's own metadata is vague, and
+    #               _drop_provided_onnxruntime() still keeps this from stepping
+    #               on a GPU build the user installed themselves.
+    #               `opencv-python-headless` is named because RapidOCR depends on
+    #               the DESKTOP `opencv-python`, which drags a GUI stack onto a
+    #               server: naming the headless variant makes pip prefer it, the
+    #               same trick face_scoring and masks already use for the same
+    #               transitive dependency.
+    'video_text': ('rapidocr-onnxruntime', 'onnxruntime', 'numpy',
+                   'opencv-python-headless'),
     #   bank_scoring  has its own worker and its own package tuple
     #                 (_BANK_SCORING_PKGS); only the ONE package whose version
     #                 floor matters is declared in requirements-ml.txt, so it is
@@ -345,7 +368,7 @@ _CAPABILITY_PACKAGES = {
 }
 # The capabilities served by the GENERIC per-capability pip worker
 # (_run_ml_capability). watermark_inpaint keeps its own worker, so it's excluded.
-_CAPABILITY_ML_ACTIONS = ('face_scoring', 'masks', 'video')
+_CAPABILITY_ML_ACTIONS = ('face_scoring', 'masks', 'video', 'video_text')
 
 # Actions whose success makes a NEW importable package appear -> the probe
 # import-cache must be dropped so the capability flips without waiting out the
@@ -1401,9 +1424,12 @@ def _verify_watermark_import(action, python) -> bool:
     _append(action, 'verifying the install (first import — this also warms it, so the '
                     'capability turns green without a restart)…')
     try:
-        proc = subprocess.run([python, '-c', 'import simple_lama_inpainting'],
+        proc = subprocess.run(
+                              infer_env.worker_argv(
+                                  python, '-c', 'import simple_lama_inpainting'),
                               capture_output=True, text=True, encoding='utf-8',
                               errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
+                              env=infer_env.worker_env(python),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         _append(action, 'still warming up (the first import is slow on a fresh machine) — '
@@ -1562,19 +1588,31 @@ def _run_bank_scoring(action) -> int:
 
 
 def _verify_bank_scoring_import(action, python) -> bool:
-    """Import torch/open_clip/transformers in the target env once pip reports done —
-    HONESTY (a torch/torchvision mismatch fails only at import) and WARMING (a heavy
-    cold import that would time out the 60 s capability probe fired right after). A
-    timeout is 'still warming', never a failure. Mirrors _verify_watermark_import."""
-    if not os.path.isfile(python):
+    """Run the bank-scoring PROBE's own import in the target env once pip reports
+    done — HONESTY (a torch/torchvision mismatch fails only at import) and WARMING
+    (a heavy cold import that would time out the 60 s capability probe fired right
+    after). A timeout is 'still warming', never a failure. Mirrors
+    _verify_watermark_import.
+
+    The expression is `capabilities.CAPABILITY_IMPORTS['bank_scoring']`, literally
+    the one the probe runs, for the reason `_verify_capability_import` gives at
+    length: a gate that checks a SHORTER list than the probe reports "ready" and
+    is then contradicted by a ✗ with no reason anywhere. That is not theoretical
+    here — this list was the headline three while the probe grew numpy and PIL
+    under it. Kept separate from that generic gate only because it reports a different
+    sentence; both now run the worker's own isolated argv (`services.infer_env`).
+    """
+    expr = capabilities.CAPABILITY_IMPORTS.get('bank_scoring')
+    if not expr or not os.path.isfile(python):
         return True
-    _append(action, 'verifying the install (first import — this also warms it, so the '
-                    'capability turns green without a restart)…')
+    _append(action, 'verifying the install (running the same import the capability '
+                    'check runs — this also warms it, so it turns green without a '
+                    'restart)…')
     try:
-        proc = subprocess.run([python, '-s', '-c',
-                               'import torch, open_clip, transformers'],
+        proc = subprocess.run(infer_env.worker_argv(python, '-c', expr),
                               capture_output=True, text=True, encoding='utf-8',
                               errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
+                              env=infer_env.worker_env(python),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         _append(action, 'still warming up (the first import is slow on a fresh machine) — '
@@ -1766,9 +1804,12 @@ def _verify_watermark_detect_import(action, python) -> bool:
         return True
     _append(action, 'verifying the install (first import — this also warms it)…')
     try:
-        proc = subprocess.run([python, '-c', 'import torch, transformers'],
+        proc = subprocess.run(
+                              infer_env.worker_argv(
+                                  python, '-c', 'import torch, transformers'),
                               capture_output=True, text=True, encoding='utf-8',
                               errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
+                              env=infer_env.worker_env(python),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         _append(action, 'still warming up — the capability turns green on its own '
@@ -1946,9 +1987,11 @@ def _verify_capability_import(action, python) -> bool:
     _append(action, 'verifying the install (running the same import the capability '
                     'check runs — this also warms it, so it turns green without a restart)…')
     try:
-        proc = subprocess.run([python, '-c', expr], capture_output=True, text=True,
+        proc = subprocess.run(infer_env.worker_argv(python, '-c', expr),
+                              capture_output=True, text=True,
                               encoding='utf-8', errors='replace',
                               timeout=_WARM_IMPORT_TIMEOUT,
+                              env=infer_env.worker_env(python),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         _append(action, 'still warming up (the first import is slow on a fresh machine) — '
@@ -2741,9 +2784,12 @@ def _verify_shot_detect_import(action, python) -> bool:
         return True
     _append(action, 'verifying the install (first import — this also warms it)…')
     try:
-        proc = subprocess.run([python, '-c', 'import torch, transnetv2_pytorch, av'],
+        proc = subprocess.run(
+                              infer_env.worker_argv(
+                                  python, '-c', 'import torch, transnetv2_pytorch, av'),
                               capture_output=True, text=True, encoding='utf-8',
                               errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
+                              env=infer_env.worker_env(python),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         _append(action, 'still warming up — the capability turns green on its own '

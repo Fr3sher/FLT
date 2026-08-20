@@ -336,6 +336,13 @@ _SCHEMA_ADDITIONS = (
     # Manual quarter-turn of a bank image (degrees clockwise, NULL = untouched).
     # Additive: a database that never gains it simply has no rotated images.
     ('bank_image', 'rotation', 'INTEGER'),
+    # ✂ Crop / ✨ Upscale & improve made in the Bank itself: which edit produced
+    # the current derived blob, which generation of it is on disk, and the turn
+    # that was baked into it. Additive — a database that never gains them simply
+    # has no bank-side edits and resolves images exactly as before.
+    ('bank_image', 'edit_method', 'VARCHAR(16)'),
+    ('bank_image', 'edit_generation', 'INTEGER'),
+    ('bank_image', 'edit_baked_rotation', 'INTEGER'),
     # Where a face_cluster id came from: NULL = the embeddings pass computed it
     # (what every existing row means), 'asserted' = a "this subfolder is one
     # person" declaration wrote it with no inference. Additive: a database that
@@ -385,6 +392,33 @@ _SCHEMA_ADDITIONS = (
     # model became configurable read NULL, which is honest — nobody recorded it.
     ('video_clip', 'caption_model', 'VARCHAR(120)'),
     ('video_clip', 'caption_style', 'VARCHAR(16)'),
+    # 🕸 Scrape → video bank: where a downloaded rush came from. Additive, and
+    # NULL is the honest value for every file a user pointed a bank at by hand —
+    # their origin was never recorded and must not be invented.
+    ('video_source', 'source_metadata', 'TEXT'),
+    # 🎬 Find shots v2: the detector's threshold, overridable per bank and per
+    # file. NULL means "inherit", which is deliberately NOT the same as 0.0 —
+    # every bank that predates this simply keeps the global default it was cut
+    # with, and nothing is re-cut behind anyone's back.
+    ('video_bank', 'shot_threshold', 'REAL'),
+    ('video_source', 'shot_threshold', 'REAL'),
+    # Whether this file's per-frame probabilities are cached on disk. A source
+    # detected before the cache existed reads NULL, which is exactly right: it
+    # cannot be re-cut instantly and the UI offers it a real pass instead.
+    ('video_source', 'probs_state', 'VARCHAR(12)'),
+    # 🩻 What the container says about the squeeze — the video stream's bit rate
+    # and codec profile, read by the same probe that reads the geometry. Both
+    # additive and nullable: a bank probed before these existed keeps every
+    # number it had and shows a dash for these two until it is re-probed, which
+    # is the honest state. NULL is also the CORRECT permanent answer for a
+    # container that carries no per-stream bit rate (MKV and WebM routinely do
+    # not), so nothing may ever read a NULL here as "not probed yet".
+    ('video_source', 'bit_rate', 'INTEGER'),
+    ('video_source', 'profile', 'VARCHAR(32)'),
+    # Cut or dissolve, and how wide, at each end of a shot. NULL on every clip
+    # cut before the detector's second head was kept — no label rather than a
+    # guessed one.
+    ('video_clip', 'transition_json', 'TEXT'),
 )
 
 # Indexes that only a FRESH database ever got. `index=True` on a model column is

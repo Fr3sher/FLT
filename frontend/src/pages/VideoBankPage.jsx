@@ -4,6 +4,7 @@ import { useToast } from '../components/common/Toast'
 import { HelpBadge } from '../help/HelpMode'
 import FolderPickerField from '../components/common/FolderPicker'
 import BankLaneTabs from '../components/videobank/BankLaneTabs'
+import VideoBankScrapePanel from '../components/videobank/VideoBankScrapePanel'
 import VideoBankWorkspace from '../components/videobank/VideoBankWorkspace'
 import VideoCapabilityStrip from '../components/videobank/VideoCapabilityStrip'
 import { countsSummary } from '../components/videobank/videoBankStatus'
@@ -139,13 +140,20 @@ export default function VideoBankPage() {
           <FolderPickerField id="video-bank-folder" label="Folder on this computer"
             value={folder} onChange={setFolder} required
             placeholder="path\to\rushes (subfolders included)"
-            hint="Reads .mp4, .mov, .mkv, .webm and .avi. The folder is never modified." />
+            hint="Reads .mp4, .mov, .mkv, .webm and .avi. No pass ever modifies your files: scanning, cutting and building all write elsewhere. The one thing that adds to this folder is a scrape you send to this bank yourself." />
         </div>
         <button type="submit" disabled={creating}
           className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
           {creating ? 'Inventorying…' : '➕ Create video bank'}
         </button>
       </form>
+
+      {/* Second way in: the scraper's own destination. A video bank no longer
+          needs a folder of rushes you assembled by hand — you can fill one
+          straight from the web. A new bank gets a folder of its own; an existing
+          one receives the clips into the folder it already follows, and the
+          picker names that folder when it is one of yours. */}
+      <VideoBankScrapePanel banks={banks} onDone={() => refresh()} />
 
       {banks == null ? (
         <p className="text-sm text-content-muted">Loading…</p>

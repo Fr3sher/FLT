@@ -2422,6 +2422,18 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
         /* ✨ only where it means something: a picture with a library row that is
            not itself an improvement (canvasImprove.js states both reasons). */
         onImprove={canImproveCanvasImage(pinnedZoom) ? handleImproveCanvasImage : undefined}
+        /* ✦ Fix ONE part of a render instead of regenerating it (.samexit,
+           Discord). Offered on the same pictures ✨ is: a board image with a
+           library row behind it — that row's id is what the route addresses. */
+        onRepair={canImproveCanvasImage(pinnedZoom) ? {
+          submit: (imageId, boxes, prompt, mask) =>
+            postJson(`/api/studio/image/${imageId}/repair`, { boxes, prompt, mask }),
+          done: () => onRefetchDataset?.(pinnedZoom?.dataset_id),
+        } : undefined}
+        /* ↩ One step back, so trying another description costs nothing. */
+        onRepairUndo={canImproveCanvasImage(pinnedZoom)
+          ? () => postJson(`/api/studio/image/${pinnedZoom.id}/repair/undo`, {})
+          : undefined}
         datasetId={pinnedZoom?.dataset_id ?? null} />
 
       {/* 🪪 The lane's reference face, full size — and only that. A reference
