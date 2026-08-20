@@ -307,13 +307,13 @@ jobs:
         run: docker build --tag lds-ci:${{ github.sha }} .
 
       - name: Start container
-        run: docker run --detach --name lds-ci --publish 5050:5050 lds-ci:${{ github.sha }}
+        run: docker run --detach --name lds-ci --publish 5051:5051 lds-ci:${{ github.sha }}
 
       - name: Wait for API health
         shell: bash
         run: |
           deadline=$((SECONDS + 120))
-          until curl --fail --silent --show-error http://127.0.0.1:5050/api/health >/dev/null; do
+          until curl --fail --silent --show-error http://127.0.0.1:5051/api/health >/dev/null; do
             if (( SECONDS >= deadline )); then
               echo "::error::Docker API did not become healthy within 120 seconds"
               exit 1

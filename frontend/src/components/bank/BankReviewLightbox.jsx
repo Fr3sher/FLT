@@ -26,7 +26,7 @@ import {
   DETAIL_CAVEAT, PROVENANCE_FLAG_LABEL, detailSummary, originHint, originLabel,
 } from './bankProvenance.js'
 import BankWatermarkMaskDialog from './BankWatermarkMaskDialog'
-import { canEditMask } from './bankWatermarkMask.js'
+import { canEditMask, maskButtonLabel } from './bankWatermarkMask.js'
 import {
   REVIEW_SHORTCUT_HINT, ownsTypedKeys, reviewKeyAction,
 } from '../shared/reviewShortcuts.js'
@@ -117,6 +117,10 @@ export default function BankReviewLightbox({
   const [maskId, setMaskId] = useState(null)
   const dialogRef = useRef(null)
   const requested = useRef(new Set())
+  // ids whose image BYTES we've already asked for (prefetch), so we never re-hit them
+  const prefetched = useRef(new Set())
+  // id -> blob URL of a prefetched review WebP (instant, no network when reached)
+  const [blobUrls, setBlobUrls] = useState({})
 
   // Hand the trap over while the mask editor is open — two live traps fight over
   // the focus and the editor's own controls become unreachable.
@@ -145,18 +149,75 @@ export default function BankReviewLightbox({
       .catch(() => { /* facts are an aid, not a gate — the image still shows */ })
   }, [bankId, id, session.order, session.pos, meta])
 
+  // Prefetch the WHOLE review set's image bytes as BATCHES so a high-RTT link pays
+  // ONE round trip per batch, not one per image. Each batch is a tiny binary
+  // container of review WebPs (u32 id, u32 length, bytes, ...) parsed into blob
+  // URLs, so when the cursor reaches an image it renders instantly from memory.
+  // Fetched in order (nearest first), concurrency 2; runs once per review set.
+  useEffect(() => {
+    const order = session.order || []
+    const ahead = order.slice(session.pos + 1)
+      .filter((x) => !prefetched.current.has(x))
+    if (!ahead.length) return
+    // Prioritise the immediate next 2 as single requests (small, fast) so that
+    // advancing is never a round trip even before a slow batch lands.
+    ahead.slice(0, 2).forEach((id) => {
+      prefetched.current.add(id)
+      const u = new Image()
+      u.src = `/api/bank/${bankId}/review-file/${id}`
+    })
+    // Then fetch the long tail as BATCHES so a high-RTT link pays one round trip
+    // per batch, parsed into blob URLs for instant rendering when reached.
+    const rest = ahead.slice(2)
+    if (!rest.length) return
+    const BATCH = 16
+    const batches = []
+    for (let i = 0; i < rest.length; i += BATCH) batches.push(rest.slice(i, i + BATCH))
+    let bi = 0
+    let active = 0
+    const pump = () => {
+      while (bi < batches.length && active < 2) {
+        const ids = batches[bi++]
+        ids.forEach((x) => prefetched.current.add(x))
+        active += 1
+        fetch(`/api/bank/${bankId}/review-batch?ids=${ids.join(',')}`)
+          .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('batch'))))
+          .then((buf) => {
+            const got = {}
+            const dv = new DataView(buf)
+            let off = 0
+            while (off + 8 <= buf.byteLength) {
+              const iid = dv.getUint32(off); off += 4
+              const len = dv.getUint32(off); off += 4
+              if (off + len > buf.byteLength) break
+              got[iid] = URL.createObjectURL(
+                new Blob([new Uint8Array(buf, off, len)], { type: 'image/webp' }))
+              off += len
+            }
+            if (Object.keys(got).length) setBlobUrls((prev) => ({ ...prev, ...got }))
+          })
+          .catch(() => { /* leave that image for the on-demand fallback */ })
+          .finally(() => { active -= 1; pump() })
+      }
+    }
+    pump()
+  }, [bankId, session.order])
+
   const sendDecision = useCallback(async (status) => {
     const target = currentId(session)
     if (target == null || busy) return
     setBusy(true)
     setError(null)
+    // Optimistic: show the next image immediately and save the decision in the
+    // background, so a slow RTT doesn't freeze the review on every click. If the
+    // save fails we step back to this same image so a decision is never lost.
+    setMeta((prev) => (prev[target] ? { ...prev, [target]: { ...prev[target], status } } : prev))
+    setSession((s) => decide(s, status))
+    onDecided?.(target, status)
     try {
       await postJson(`/api/bank/${bankId}/images/status`, { ids: [target], status })
-      setMeta((prev) => (prev[target] ? { ...prev, [target]: { ...prev[target], status } } : prev))
-      setSession((s) => decide(s, status))
-      onDecided?.(target, status)
     } catch (e) {
-      // Stay on this image: a lost decision is worse than a stalled one.
+      setSession((s) => back(s))
       setError(e?.message || 'Could not save that decision — it was NOT recorded.')
     } finally {
       setBusy(false)
@@ -279,7 +340,8 @@ export default function BankReviewLightbox({
               previous shot under the new one's buttons. */}
           {/* ?r= busts the browser cache after a turn — the bytes at this URL
               change while the URL itself does not. */}
-          <img key={id} src={`/api/bank/${bankId}/file/${id}${img?.rotation ? `?r=${img.rotation}` : ''}`}
+          <img key={id}
+            src={blobUrls[id] || `/api/bank/${bankId}/review-file/${id}${img?.rotation ? `?r=${img.rotation}` : ''}`}
             alt={img?.name || `Bank image ${id}`}
             className="max-h-full max-w-full select-none object-contain" />
         </div>
@@ -313,9 +375,9 @@ export default function BankReviewLightbox({
             </button>
             {canEditMask(img) && (
               <button type="button" onClick={() => setMaskId(id)} disabled={busy}
-                title="Fix the watermark zones on this image (M) — decides nothing. 🧽 Inpaint then repaints exactly what you draw."
+                title="Draw the watermark zones on this image (M) — decides nothing. Works even when the scan found nothing: what you draw becomes the flag, and 🧽 Inpaint then repaints exactly that."
                 className="rounded-lg border border-amber-400/60 bg-amber-500/20 px-4 py-2 text-sm font-semibold text-amber-100 disabled:opacity-50 hover:bg-amber-500/30">
-                🚩 Edit mask{shortcut('M')}
+                🚩 {maskButtonLabel(img)}{shortcut('M')}
               </button>
             )}
             <button type="button" onClick={() => sendDecision('keep')} disabled={busy}

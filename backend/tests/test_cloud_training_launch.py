@@ -1434,6 +1434,36 @@ def test_continue_from_done_calls_launch_with_resume_params(ct, app, seeded_data
     assert res['resumed_from'] == 750 and res['target_steps'] == 1250
 
 
+def test_continue_stamps_the_topology_it_folded_into_the_snapshot(
+        ct, app, seeded_dataset, monkeypatch, tmp_path):
+    """The staging guard compares the dataset's training options against this
+    run's frozen copy. A continue does not freeze that column verbatim — it
+    re-serialises it with the parent checkpoint's topology folded in — so the
+    guard must be told which keys came from the resume rather than from the
+    user. Without this stamp every continue on a dataset with rank/alpha left
+    on auto was refused as "the Dataset training options changed" (cloud run
+    16, reported 2026-08-12)."""
+    staging = tmp_path / 'stamp_topo'
+    staging.mkdir()
+    topology = {'rank': 16, 'alpha': 16, 'network_type': 'lora'}
+    captured = {}
+    monkeypatch.setattr(ct, 'launch_cloud_training',
+                        lambda user_id, dataset_id, **kw:
+                        (captured.update(kw), {'ok': True})[1])
+    with app.app_context():
+        src = _seed_done_run(
+            ct, seeded_dataset, staging, variant='base', train_type='krea',
+            train_settings_snapshot=json.dumps({'resolution': '768'}))
+        _record_cloud_topology(ct, src, topology)
+        ct.continue_cloud_run('local', src.id, extra_steps=500)
+
+    assert captured['resume_topology'] == topology
+    # And the stamp describes the snapshot actually sent: the keys it names are
+    # the ones the fold added on top of the user's own settings.
+    assert json.loads(captured['train_settings_snapshot']) == {
+        'resolution': '768', **topology}
+
+
 def test_cloud_to_cloud_refuses_legacy_lokr_without_full_rank(
         ct, app, seeded_dataset, monkeypatch, tmp_path):
     """A LoKr source missing this topology bit cannot be safely rebuilt."""

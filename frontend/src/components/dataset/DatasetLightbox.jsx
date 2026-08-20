@@ -28,6 +28,7 @@ import {
   REVIEW_SHORTCUT_HINT, reviewKeyAction,
 } from '../shared/reviewShortcuts';
 import ShortcutKey from '../shared/ShortcutKey';
+import { watermarkMaskButtonLabel } from '../../utils/watermarkRegions';
 
 const COMPARE_HELP = 'Show the original this image was made from, next to it, at the same scale.';
 /* The verdict this image currently carries, in the SAME words and the same
@@ -164,6 +165,9 @@ export default function DatasetLightbox({
   onMirror,
   onRotate,
   onImprove,
+  // Opens the watermark mask editor on THIS image, flagged or not. Optional like
+  // the rest: a caller that does not pass it simply shows no button.
+  onMarkWatermark,
   busy = false,
   // The sentence a refused write shows (which pass holds this dataset, where it
   // is, what to do). Opening, zooming and comparing never consult it: they read
@@ -681,6 +685,20 @@ export default function DatasetLightbox({
             aria-label={refused || 'Open the crop editor for this image'}
             className="min-h-9 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
             ✂ Crop
+          </button>
+        )}
+        {/* The answer to a detector MISS. 🚩 Find watermarks is a classifier, and
+            a mark it scores under the threshold used to be unanswerable: the mask
+            editor only opened on images it had already flagged. Here the gesture
+            starts from what the user can SEE, so drawing the zone is what flags
+            the image. Hidden on an already-cleaned row — those pixels are gone,
+            and ↩ Undo is the way back. */}
+        {onMarkWatermark && img?.watermark_state !== 'cleaned' && (
+          <button type="button" onClick={() => onMarkWatermark(img)} disabled={busy}
+            title={refused || 'Draw the watermark zones on this image — works even when the scan found nothing. What you draw becomes the flag, and 🧽 Clean then repaints exactly that.'}
+            aria-label={refused || watermarkMaskButtonLabel(img)}
+            className="min-h-9 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+            🚩 {watermarkMaskButtonLabel(img)}
           </button>
         )}
         {onMirror && (

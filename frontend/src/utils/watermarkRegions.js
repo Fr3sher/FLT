@@ -11,6 +11,14 @@ function automaticDetectionRegions(item) {
     : [];
 }
 
+/** What the mask button promises, in either workspace. There is nothing to
+ *  "edit" on an image the detector cleared or never saw — there the gesture is
+ *  to REPORT a mark it missed, and saying "Edit mask" would point at a box that
+ *  does not exist. Shared so the two lanes cannot word the same act differently. */
+export function watermarkMaskButtonLabel(img) {
+  return img?.watermark_state === 'detected' ? 'Edit mask' : 'Mark a watermark';
+}
+
 export function buildWatermarkReviewState(queue) {
   const state = {
     regionsById: {},

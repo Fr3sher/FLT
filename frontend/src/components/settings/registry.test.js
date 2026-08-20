@@ -66,7 +66,7 @@ test('Pexels key and attribution markup stay wired without nested controls', () 
   assert.match(attributionSource, /rel="noopener noreferrer"/);
 
   const selectionButton = panelSource.match(
-    /<button type="button" onClick=\{\(\) => toggle\(it\.url\)\}[\s\S]*?<\/button>/);
+    /<button type="button" onClick=\{\(\) =>[^{]*?toggle\(it\.url\)[\s\S]*?<\/button>/);
   assert.ok(selectionButton, 'selection button markup must remain present');
   assert.doesNotMatch(selectionButton[0], /<a\b/i,
     'Pexels credit links must remain siblings of the selection button');

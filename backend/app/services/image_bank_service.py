@@ -87,6 +87,10 @@ IMG_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
 # been background jobs with their own progress bar.
 BANK_MAX_FILES = 200_000
 THUMB_MAX_SIDE = 320
+# ▶ Review lightbox: a mid-size cached WebP (bigger than the grid thumb, far
+# smaller than the raw source) so one-at-a-time triage over a slow link doesn't
+# ship full-resolution files every turn.
+REVIEW_MAX_SIDE = 1280
 _COMMIT_EVERY = 25          # scan DB flush cadence
 _PROMOTE_CHUNK = 20         # files per import_images call (bounded memory)
 _SQL_IN_CHUNK = 500         # SQLite bound-variable ceiling is 999
@@ -254,6 +258,20 @@ def _bank_dir(bank_id) -> Path:
 
 def _thumbs_dir(bank_id) -> Path:
     return _bank_dir(bank_id) / 'thumbs'
+
+
+def _review_dir(bank_id) -> Path:
+    return _bank_dir(bank_id) / 'review'
+
+
+def _review_path(bank_id, row: BankImage) -> Path:
+    """Where this image's review-size cached WebP lives. Mirrors _thumb_path:
+    a watermark-cleaned or turned image gets its own file, keyed the same way, so
+    the review never shows a stale pre-clean crop or a sideways shot."""
+    suffix = f'.{row.watermark_clean_method}' if row.watermark_clean_method else ''
+    if getattr(row, 'rotation', None):
+        suffix += f'.r{int(row.rotation)}'
+    return _review_dir(bank_id) / f'{row.id}{suffix}.webp'
 
 
 def _face_cache_path(bank_id) -> Path:
@@ -2949,6 +2967,30 @@ def ensure_thumb(bank: ImageBank, row: BankImage) -> Path | None:
             im.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE), Image.LANCZOS)
             im.save(tpath, 'WEBP', quality=72)
         return tpath
+    except (OSError, ValueError, MemoryError, Image.DecompressionBombError,
+            Image.DecompressionBombWarning):
+        return None
+
+
+def ensure_review_image(bank: ImageBank, row: BankImage) -> Path | None:
+    """The ▶ Review lightbox image: the FULL-RESOLUTION source re-encoded as a
+    cached WebP (quality 85) — same pixels, a fraction of the bytes, cached so an
+    already-reviewed image isn't re-downloaded over a slow link. No downscaling:
+    the source is already ~1-2 MP, so the win is compression + cache, not losing
+    the detail you're deciding on. Built from the RESOLVED path (a cleaned or
+    turned image shows its current state)."""
+    rpath = _review_path(bank.id, row)
+    if rpath.is_file():
+        return rpath
+    src = resolved_image_path(bank, row)
+    if not src or not os.path.isfile(src):
+        return None
+    try:
+        rpath.parent.mkdir(parents=True, exist_ok=True)
+        with safe_bank_source(src, label='bank review image') as im:
+            im = im.convert('RGB')
+            im.save(rpath, 'WEBP', quality=85, method=6)
+        return rpath
     except (OSError, ValueError, MemoryError, Image.DecompressionBombError,
             Image.DecompressionBombWarning):
         return None
@@ -6331,6 +6373,102 @@ _SEMANTIC_SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'bank_semantic_infer.py')
 _SEMANTIC_PROGRESS_RE = re.compile(r'\[semantic\] (\d+)/(\d+)')
 
 
+def _match_person_job(bank_id, ref_id, threshold):
+    """Score every non-rejected bank image against ONE reference face and
+    auto-decide it: matches → keep, no face / different person → reject.
+
+    Reuses the same insightface identity matcher as the scrape face filter
+    (score_faces lenient=True) so a small/posed face is still scored. Only
+    'pending' rows are flipped — a manual keep/reject is never overridden.
+    The reference itself is the anchor and is kept."""
+    def run(job):
+        import os as _os
+        from .face_similarity import score_faces
+        bank = db.session.get(ImageBank, bank_id)
+        if not bank:
+            bank_jobs.fail(job, 'bank not found')
+            return
+        ref = db.session.get(BankImage, ref_id)
+        if ref is None or ref.bank_id != bank_id:
+            bank_jobs.fail(job, 'reference image not found in this bank')
+            return
+        ref_path = analysis_image_path(bank, ref)
+        if not ref_path or not _os.path.isfile(ref_path):
+            bank_jobs.fail(job, 'reference image is missing on disk')
+            return
+        rows = (BankImage.query.filter_by(bank_id=bank_id)
+                .filter(BankImage.status != 'reject', BankImage.id != ref_id)
+                .order_by(BankImage.id.asc()).all())
+        by_id, paths = {}, []
+        for r in rows:
+            p = analysis_image_path(bank, r)
+            if p and _os.path.isfile(p) and p not in by_id:
+                by_id[p] = r.id
+                paths.append(p)
+        bank_jobs.progress(job, done=0, total=len(paths),
+                           detail='matching faces to the reference')
+        if not paths:
+            bank_jobs.progress(job, detail='no candidates to match')
+            return
+        _release_db_before_inference()
+        try:
+            results, err = score_faces([ref_path], paths, lenient=True)
+        except Exception as e:
+            bank_jobs.fail(job, f'face matching failed: {e}')
+            return
+        if err:
+            bank_jobs.fail(job, err.get('detail') or 'face matching failed')
+            return
+        if ref.status == 'pending':
+            ref.status = 'keep'
+        keeps = no_face = different = 0
+        for p, r in (results or {}).items():
+            image_id = by_id.get(p)
+            if not image_id:
+                continue
+            row = db.session.get(BankImage, image_id)
+            if row is None or row.status != 'pending':
+                continue
+            sim = r.get('sim')
+            state = r.get('state')
+            if sim is not None and sim >= threshold:
+                row.status = 'keep'
+                keeps += 1
+            else:
+                reason = ('no_face' if state in ('no_face', 'unreadable', 'error')
+                          else 'different_person')
+                row.status, row.reject_reason = 'reject', reason
+                if reason == 'no_face':
+                    no_face += 1
+                else:
+                    different += 1
+        db.session.commit()
+        bank_jobs.progress(job, done=len(paths), total=len(paths),
+                           detail=f'done — {keeps} kept, {no_face} no face, '
+                                  f'{different} different person')
+    return run
+
+
+def start_match_person(app, user_id, bank_id, ref_id, threshold=0.5):
+    """Launch the 'keep only the target person' pass. ``ref_id`` is a bank image
+    used as the identity anchor; every other non-rejected image is matched to it
+    and auto-rejected when the target is absent (no face) or the face is a
+    different person. Only 'pending' rows are decided. Raises BankJobBusy when a
+    job is already live, ValueError when the bank or reference is unknown."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    ref = db.session.get(BankImage, int(ref_id))
+    if ref is None or ref.bank_id != bank_id:
+        raise ValueError('reference image not found in this bank')
+    total = (BankImage.query.filter_by(bank_id=bank_id)
+             .filter(BankImage.status != 'reject', BankImage.id != int(ref_id))
+             .count())
+    return bank_jobs.start(app, bank_id, 'match_person',
+                           _match_person_job(bank_id, int(ref_id), float(threshold)),
+                           total=total)
+
+
 def start_semantic_index(app, user_id, bank_id, rescan=False):
     """Build/resume the selected image space; CLIP delegates to Score exactly."""
     from ..capabilities import probe_bank_siglip2
@@ -8009,15 +8147,23 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None):
 @_serialized_bank_mutation('watermark_regions')
 def set_watermark_regions(user_id, bank_id, image_id, regions, *,
                           _bank_lease=None) -> dict | None:
-    """Replace one flagged image's hand-drawn watermark mask (reported missing in
-    the Bank by Qeeyana on Reddit — the Dataset had it, the Bank did not).
+    """Replace one image's hand-drawn watermark mask — and, when the row was not
+    flagged, make the drawn zone the flag itself (reported missing in the Bank by
+    Qeeyana on Reddit; the miss case by vvilams on Discord).
 
     ``regions`` is None (drop the override, go back to the detected box) or a list
     of normalized boxes — validated by the DATASET's validator, deliberately: one
     definition of a legal mask means the two lanes cannot drift apart. Returns the
     same payload shape the dataset route returns, None when the bank/image is
-    unknown, ValueError on an illegal mask and RuntimeError when the image is no
-    longer flagged (already cleaned/dismissed — an edit there would be a no-op).
+    unknown, ValueError on an illegal mask.
+
+    Only 'cleaned' still refuses: those pixels were already replaced, so geometry
+    drawn now describes an image that no longer exists (↩ Undo is the way back).
+    'dismissed' does NOT refuse — it means the machine must stop re-flagging the
+    image, never that the user cannot draw the mark after a second look. The
+    detector is a classifier, and a mark it scores under the threshold used to
+    have no manual recourse at all, because the one tool for it was reachable
+    only from images the detector had already found.
 
     The mask is NOT cleared when a clean succeeds, unlike the dataset: the Bank's
     ↩ Undo is a first-class action (it only deletes our own blob), and handing an
@@ -8028,14 +8174,23 @@ def set_watermark_regions(user_id, bank_id, image_id, regions, *,
     row = owned.one_or_none()
     if not row:
         return None
-    if row.watermark_state != 'detected':
-        raise RuntimeError('this image is no longer flagged — nothing to mask')
+    if row.watermark_state == 'cleaned':
+        raise RuntimeError('this image was already cleaned — undo the cleaning '
+                           'before masking it again')
+    was_detected = row.watermark_state == 'detected'
     normalized = normalize_watermark_regions(regions)
     import json as _json
     stored = _json.dumps(normalized) if normalized is not None else None
     bank = db.session.get(ImageBank, bank_id)
     raw_path = abs_image_path(bank, row) if bank else None
-    expected_raw_fingerprint = row.watermark_fingerprint
+    # A row no scan ever reached carries no attestation. That is the FIRST one,
+    # not a changed file: measure it now and let _prepare_watermark_write bind it
+    # (its `watermark_fingerprint is None` branch). Passing the stored NULL would
+    # fail the validity gate and read as "the source image changed" — a refusal
+    # that would keep this dead end shut for anyone who never ran the pass.
+    expected_raw_fingerprint = (
+        row.watermark_fingerprint
+        or bank_transfer_metadata.content_fingerprint_path(raw_path))
     if not _prepare_watermark_write(
             row, raw_path, expected_raw_fingerprint):
         # Keep the fail-closed invalidation performed by the authority check.
@@ -8045,6 +8200,10 @@ def set_watermark_regions(user_id, bank_id, image_id, regions, *,
         raise RuntimeError('the source image changed — scan it again before masking')
     row.watermark_state = 'detected'
     row.watermark_regions = stored
+    if not was_detected:
+        # Say WHO flagged it. Editing the box of a row the detector did find
+        # leaves its verdict — and its provenance — alone.
+        row.watermark_source = 'manual'
     db.session.commit()
     return _watermark_regions_payload(row)
 

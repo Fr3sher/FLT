@@ -70,8 +70,21 @@ const esbuild = loadEsbuild()
 // The same list, and the same order, as Vite's `resolve.extensions`.
 const EXTENSIONS = ['.jsx', '.js', '.mjs', '/index.jsx', '/index.js']
 
+// shadcn/ui imports via the `@/` alias (e.g. `@/components/ui/progress`),
+// which Vite resolves to <frontend>/src/… but Node does not. Map it here so a
+// component that imports a shadcn primitive still mounts under node --test.
+const SRC_ROOT = fileURLToPath(new URL('../../src/', import.meta.url))
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith('@/')) {
+      const base = pathToFileURL(SRC_ROOT + specifier.slice(2)).href
+      try { return nextResolve(base, context) } catch { /* try extensions below */ }
+      for (const ext of EXTENSIONS) {
+        try { return nextResolve(base + ext, context) } catch { /* next */ }
+      }
+      // fall through to the normal error path below
+    }
     try {
       return nextResolve(specifier, context)
     } catch (err) {

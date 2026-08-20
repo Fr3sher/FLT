@@ -13,11 +13,13 @@
  */
 import { useState, useCallback, useEffect } from 'react';
 import { useToast } from '../common/Toast';
+import useBatchThumbs from '../../hooks/useBatchThumbs';
 import { postJson } from '../../hooks/useDataset';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import InstallRunner from '../setup/InstallRunner';
 import { clearScraperScanState, loadScraperScanState, saveScraperScanState } from './scraperState';
 import { HelpBadge } from '../../help/HelpMode';
+import { Progress } from '@/components/ui/progress';
 import PexelsAttribution from './PexelsAttribution';
 import SettingsLink from '../common/SettingsLink';
 import KleinModelSetting from '../shared/KleinModelSetting';
@@ -116,6 +118,16 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   const [partial, setPartial] = useState(false);
   const [partialReason, setPartialReason] = useState(null);
   const [scanning, setScanning] = useState(false);
+  // Live elapsed-seconds while a scan is in flight, so a slow Instagram scan
+  // shows a ticking indicator (and an indeterminate bar) instead of a frozen
+  // "Scanning…" that looks like the app hung.
+  const [scanElapsed, setScanElapsed] = useState(0);
+  useEffect(() => {
+    if (!scanning) { setScanElapsed(0); return; }
+    setScanElapsed(0);
+    const t = setInterval(() => setScanElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [scanning]);
   // Gallery-listing scans (PornPics category/tag/search): OFF = one cover per
   // matched gallery (the keyword-relevant shot), ON = every photo of each gallery.
   const [fullAlbums, setFullAlbums] = useState(restoredScan.fullAlbums);
@@ -127,6 +139,23 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   // URLs whose thumbnail failed to load (dead/expired source links). Hidden from
   // the grid so you only ever see & pick live images — dead galleries are common.
   const [broken, setBroken] = useState(() => new Set());
+  // Batch-prefetch the scraped thumbnails so a high-RTT link pays one round
+  // trip per batch, not one per tile (see useBatchThumbs). `items` (not the
+  // render-time `liveItems` filter) so the hook lives at top level; broken
+  // sources simply produce no blob and fall back to the on-demand <img>.
+  const { getBlobUrl: getScrapeThumb } = useBatchThumbs(
+    items.map((it) => it.thumbnail || it.url),
+    (urls) => ({ url: '/api/scrape/thumbs', body: JSON.stringify({ urls }) }),
+  );
+  // Face filter (auto-select this person): pick one result as the reference,
+  // score the rest against it, keep only matches.
+  const [faceRefs, setFaceRefs] = useState(() => new Set());
+  const [pickingRef, setPickingRef] = useState(false);
+  const [faceFilterBusy, setFaceFilterBusy] = useState(false);
+  const [suggestBestBusy, setSuggestBestBusy] = useState(false);
+  const [faceThreshold, setFaceThreshold] = useState(0.45);
+  // Suggested quality reference candidates (from "Suggest best references").
+  const [suggested, setSuggested] = useState(() => new Set());
   // Preview tile size (px). A category scrape returns whole galleries (many
   // off-concept frames) → larger previews speed up eyeballing. Persisted.
   const [tile, setTile] = useState(() => {
@@ -244,6 +273,60 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
       if (next.has(u)) next.delete(u); else next.add(u);
       return next;
     });
+  };
+
+  const runFaceFilter = async () => {
+    const candidates = items
+      .filter((it) => !broken.has(it.url))
+      .map((it) => it.thumbnail || it.url);
+    if (faceRefs.size === 0 || candidates.length === 0 || faceFilterBusy) return;
+    setPickingRef(false);
+    setFaceFilterBusy(true);
+    try {
+      const d = await postJson('/api/scrape/face-filter',
+        { reference_urls: [...faceRefs], urls: candidates, threshold: faceThreshold });
+      if (!d || !d.results) { toast.error('Face filter failed.'); return; }
+      // The backend keys results by the candidate URL we sent (thumbnail || page),
+      // but grid selection + import use the item's page URL. Map matches back so
+      // the kept photos actually light up for review before importing.
+      const keep = new Set();
+      for (const it of items) {
+        const key = it.thumbnail || it.url;
+        if (d.results[key]?.match) keep.add(it.url);
+      }
+      setSelected(keep);
+      if (keep.size === 0) {
+        toast.info('No photos matched — pick clearer references or lower the threshold.');
+      } else if (keep.size < candidates.length) {
+        toast.success(`Kept ${keep.size} of ${candidates.length} — the rest were deselected.`);
+      }
+    } catch { toast.error('Face filter failed.'); }
+    finally { setFaceFilterBusy(false); }
+  };
+
+  // Suggest the most usable face shots as references (no comparison, just quality).
+  const suggestBestRefs = async () => {
+    const candidates = items
+      .filter((it) => !broken.has(it.url))
+      .map((it) => it.thumbnail || it.url);
+    if (candidates.length === 0 || suggestBestBusy) return;
+    setSuggestBestBusy(true);
+    try {
+      const d = await postJson('/api/scrape/face-filter', { suggest_best: true, urls: candidates });
+      if (!d || !d.suggestions) { toast.error('Face suggestion failed.'); return; }
+      const good = new Set(
+        d.suggestions.filter((s) => s.state === 'scorable').slice(0, 12).map((s) => s.url)
+      );
+      setSuggested(good);
+      setFaceRefs(good);
+      setPickingRef(true);
+      if (good.size === 0) {
+        toast.info('No clearly usable faces found — try a clearer set of photos.');
+      } else {
+        toast.success(`Suggested ${good.size} reference photos. Click any tile to add or remove, then press “Done picking refs”.`);
+      }
+    } catch { toast.error('Face suggestion failed.'); }
+    finally { setSuggestBestBusy(false); }
   };
 
   // Thumbnail failed → the source image is dead/expired. Hide it and un-select it.
@@ -484,7 +567,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
               className="flex-1 min-w-[14rem] px-3 py-1.5 rounded-lg bg-surface-raised border border-border text-content text-sm placeholder:text-content-subtle focus:border-indigo-500 outline-none" />
             <button type="submit" disabled={scanning || !url.trim()}
               className="px-3 py-1.5 rounded-lg bg-surface border border-border text-content text-sm hover:bg-white/10 disabled:opacity-40">
-              {scanning ? 'Scanning…' : 'Scan URL'}
+              {scanning ? `Scanning… ${scanElapsed}s` : 'Scan URL'}
             </button>
             <HelpBadge topic="action-scrape-scan" className="self-center" />
           </form>
@@ -492,6 +575,16 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
             Use this for supported galleries and albums, or direct Pexels photos and collections.
             Normal Pexels keyword searches belong in the Pexels tab.
           </p>
+          {scanning && (
+            <div className="mt-2 rounded-lg border border-border bg-surface-raised p-3" role="status" aria-live="polite">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-sm text-content">Scanning the source…</span>
+                <span className="font-mono text-xs text-content-muted tabular-nums">{scanElapsed}s</span>
+              </div>
+              <Progress value={(scanElapsed * 7) % 100} aria-label="Scanning the source"
+                       className="w-full" />
+            </div>
+          )}
           {/pornpics\.com/i.test(url) && !/\/galleries\//i.test(url) && (
             <label className="flex items-center gap-2 text-[0.6875rem] text-content-muted cursor-pointer"
               title="Off: one listing cover per gallery. On: every photo from each matched gallery.">
@@ -568,6 +661,48 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                 Clear
               </button>
             )}
+            <button type="button"
+              onClick={() => setPickingRef((p) => !p)}
+              disabled={items.length === 0 || faceFilterBusy}
+              title="Pick reference photos of the person, then FLT keeps only photos matching their face"
+              className={`px-2 py-0.5 rounded border hover:text-content ${pickingRef ? 'border-indigo-400 text-indigo-300' : 'border-border'}`}>
+              🎯 {pickingRef ? 'Click photos of the person…' : 'Auto-select this person'}
+            </button>
+            <button type="button"
+              onClick={suggestBestRefs}
+              disabled={items.length === 0 || suggestBestBusy}
+              title="Auto-suggest the most usable face shots as references"
+              className="px-2 py-0.5 rounded border border-border hover:text-content disabled:opacity-40">
+              {suggestBestBusy ? 'Finding…' : '✨ Suggest best refs'}
+            </button>
+            {pickingRef && (
+              <button type="button" onClick={() => setPickingRef(false)}
+                title="Stop adding/removing references and go back to normal selection"
+                className="px-2 py-0.5 rounded border border-indigo-400 bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25">
+                ✓ Done picking refs
+              </button>
+            )}
+            {faceRefs.size > 0 && (
+              <>
+                <span className="text-xs text-content-subtle tabular-nums" title="Reference photos selected">
+                  {faceRefs.size} ref{faceRefs.size === 1 ? '' : 's'}
+                </span>
+                <label className="flex items-center gap-1.5" title="Similarity threshold — lower keeps more, higher is stricter">
+                  <span aria-hidden>🎚️</span>
+                  <input type="range" min="0.20" max="0.75" step="0.01" value={faceThreshold}
+                    onChange={(e) => setFaceThreshold(parseFloat(e.target.value))}
+                    aria-label="Face similarity threshold"
+                    className="w-24 accent-indigo-500 cursor-pointer" />
+                  <span className="tabular-nums">{faceThreshold.toFixed(2)}</span>
+                </label>
+                <button type="button" onClick={runFaceFilter} disabled={faceFilterBusy}
+                  className="px-2 py-0.5 rounded border border-indigo-400 bg-surface-raised hover:bg-white/10">
+                  {faceFilterBusy ? 'Filtering…' : `Keep matches`}
+                </button>
+                <button type="button" onClick={() => { setFaceRefs(new Set()); setSuggested(new Set()); setPickingRef(false); }}
+                  title="Clear references" className="px-1.5 rounded border border-border hover:text-content">✕</button>
+              </>
+            )}
             <label className="flex items-center gap-1.5" title="Preview size — enlarge to judge images faster">
               <span aria-hidden>🔍</span>
               <input type="range" min="72" max="300" step="4" value={tile}
@@ -598,6 +733,13 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
             </a>
           )}
 
+          {pickingRef && (
+            <p className="rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-1.5 text-[0.6875rem] text-indigo-200">
+              Click photos to {faceRefs.size > 0 ? 'add or remove' : 'choose'} references — a <b>REF</b> badge marks each
+              reference. When the set looks right, press <b>Done picking refs</b>.
+            </p>
+          )}
+
           <div className="grid gap-1.5 overflow-y-auto max-h-[34rem] pr-1"
             style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${tile}px, 1fr))` }}>
             {liveItems.map((it) => {
@@ -607,19 +749,31 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                   ? `Pexels photo by ${it.photographer}` : 'scraped image');
               return (
                 <div key={it.url} className="min-w-0">
-                  <button type="button" onClick={() => toggle(it.url)}
+                  <button type="button" onClick={() =>
+                    pickingRef
+                      ? setFaceRefs((prev) => prev.has(it.thumbnail || it.url)
+                          ? (prev.delete(it.thumbnail || it.url), new Set(prev))
+                          : new Set(prev).add(it.thumbnail || it.url))
+                      : toggle(it.url)}
                     aria-pressed={on}
                     aria-label={`${on ? 'Deselect' : 'Select'} ${imageLabel}`}
                     title={imageLabel}
-                    className={`relative aspect-square w-full rounded-lg overflow-hidden border-2 transition-all
-                      ${on ? 'border-indigo-400' : 'border-transparent hover:border-border-strong'}`}>
-                    <img src={thumbFor(it)} alt="" loading="lazy" onError={() => markBroken(it.url)}
+                    className={`relative aspect-square w-full rounded-lg overflow-hidden transition-all
+                      ${on ? 'border-2 border-indigo-400' : 'border-2 border-transparent hover:border-border-strong'}
+                      ${faceRefs.has(it.thumbnail || it.url) ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-zinc-950' : ''}`}>
+                    <img src={getScrapeThumb(it.thumbnail || it.url) || thumbFor(it)} alt="" loading="lazy" onError={() => markBroken(it.url)}
                       className="w-full h-full object-cover" />
                     <span aria-hidden
                       className={`absolute top-1 right-1 w-4 h-4 rounded-full text-[0.625rem] leading-4 text-center font-bold
                         ${on ? 'bg-indigo-500 text-white' : 'bg-black/50 text-white/70'}`}>
                       {on ? '✓' : ''}
                     </span>
+                    {faceRefs.has(it.thumbnail || it.url) && (
+                      <span aria-hidden
+                        className="absolute bottom-1 left-1 px-1 rounded bg-indigo-500 text-white text-[0.625rem] font-bold">
+                        REF
+                      </span>
+                    )}
                   </button>
                   <PexelsAttribution metadata={it}
                     className="mt-1 block px-0.5 text-[0.625rem] leading-tight text-content-subtle" />

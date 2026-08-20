@@ -1950,12 +1950,24 @@ could not place it — stay flagged and are counted separately in the pass's rep
 Draw a zone on them with **🚩 Edit mask** below, or leave them as a filter.
 
 
-## Fix a watermark mask in a bank
+## Fix a watermark mask — or mark one the scan missed
 
 The detector draws **one** box, and it is a guess: it can miss a second logo,
-swallow half the face, or land beside the mark. Open **▶ Review**, walk to a
-flagged image and press **🚩 Edit mask** (shortcut `M`) — the same zone editor
-the datasets use, on the bank image, right there.
+swallow half the face, or land beside the mark. Open **▶ Review**, walk to the
+image and press **🚩 Edit mask** (shortcut `M`) — the same zone editor the
+datasets use, on the bank image, right there.
+
+It also opens on an image the scan flagged **nothing** on, where the button reads
+**🚩 Mark a watermark** instead. This is the answer to a miss: the detector is a
+classifier, and a mark tiled across a whole stock photo can score under any
+sensitivity you set. **The zones you draw become the flag**, so the cleaning
+steps below can act on an image the scan cleared. It works the same way in a
+dataset, from the image viewer.
+
+Drawing on an image you had **dismissed** as a false positive takes that ruling
+back. The one image that refuses is one already **cleaned** — its pixels have
+been replaced, so a zone drawn now would describe a picture that no longer
+exists; use **↩ Undo cleaning** first.
 
 - **+ Add zone**, then drag on the photo to draw a rectangle over the mark. Up
   to 32 zones; drag a zone to move it, its corners to resize.

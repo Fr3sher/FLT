@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { fileURLToPath, URL } from 'node:url'
 
 /* Where `npm run dev` sends /api.
  *
@@ -18,7 +19,7 @@ import react from '@vitejs/plugin-react'
  * Prefixed LDS_ rather than VITE_ on purpose: VITE_* variables are inlined into
  * the CLIENT bundle, and this is a dev-server setting that has no business
  * shipping in built output. */
-const DEFAULT_DEV_API_TARGET = 'http://127.0.0.1:5050'
+const DEFAULT_DEV_API_TARGET = 'http://127.0.0.1:5051'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), ['LDS_'])
@@ -26,6 +27,12 @@ export default defineConfig(({ mode }) => {
     || DEFAULT_DEV_API_TARGET
   return {
     plugins: [react()],
+    resolve: {
+      alias: {
+        // shadcn/ui components import via '@/…' — resolve to the source root.
+        '@': fileURLToPath(new URL('./src', import.meta.url)),
+      },
+    },
     base: '/',
     build: {
       outDir: 'dist',

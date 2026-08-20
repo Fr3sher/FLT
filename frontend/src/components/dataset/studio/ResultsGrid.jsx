@@ -11,10 +11,32 @@
  * prompt — `showPromptLabels` n'ajoute la ligne que lorsqu'il y a plusieurs
  * prompts à distinguer.
  */
+import { useMemo } from 'react';
 import ResultCell from './ResultCell';
+import useBatchThumbs from '../../../hooks/useBatchThumbs';
 import { promptLabel } from './resultKeys';
 
 export default function ResultsGrid({ gridRows, gridCols, variantsInData, showPromptLabels, cellList, scoreMap, best, datasetId, onRate, onOpen, fmt }) {
+  // Batch-prefetch every finished tile's thumbnail so the densest surface in the
+  // app pays one round trip per batch on a high-RTT link, not one per tile.
+  // Done filenames are unique per dataset, so a plain list is a safe key.
+  const doneFiles = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (const list of cellList.values()) {
+      for (const c of list) {
+        if (c.status === 'done' && c.filename && !seen.has(c.filename)) {
+          seen.add(c.filename);
+          out.push(c.filename);
+        }
+      }
+    }
+    return out;
+  }, [cellList]);
+  const { getBlobUrl: thumbUrlFor } = useBatchThumbs(
+    doneFiles,
+    (files) => ({ url: `/api/dataset/${datasetId}/thumbs?s=256`, body: JSON.stringify({ files }) }),
+  );
   return variantsInData.map((variant) => (
     <div key={variant.key} className="flex flex-col gap-1">
       {showPromptLabels && variant.prompt && (
@@ -55,7 +77,7 @@ export default function ResultsGrid({ gridRows, gridCols, variantsInData, showPr
                 {gridCols.map((s) => (
                   <ResultCell key={s} row={row} strength={s} variant={variant}
                     cellList={cellList} scoreMap={scoreMap} best={best} datasetId={datasetId}
-                    onRate={onRate} onOpen={onOpen} fmt={fmt} />
+                    thumbUrlFor={thumbUrlFor} onRate={onRate} onOpen={onOpen} fmt={fmt} />
                 ))}
               </tr>
             ))}

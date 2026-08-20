@@ -1198,6 +1198,19 @@ def test_studio_missing_node_hints_names_krea_pack():
     assert 'github.com' in h['url'] and h['search']
 
 
+def test_studio_missing_node_hints_names_detail_daemon_pack():
+    """DetailDaemonSamplerNode is wired into image_real_HQ.json's pass 2, so EVERY
+    fresh SDXL Studio install trips over it — its 409 must name the pack to install
+    (GitHub #36), not just the bare class."""
+    from app.services import lora_test_studio as lts
+    hints = lts.studio_missing_node_hints(['DetailDaemonSamplerNode'])
+    assert len(hints) == 1
+    h = hints[0]
+    assert h['class_type'] == 'DetailDaemonSamplerNode'
+    assert h['pack'] == 'ComfyUI-Detail-Daemon'
+    assert 'github.com' in h['url'] and h['search']
+
+
 def test_preflight_family_passes_when_everything_present(app, tmp_path, monkeypatch):
     from app.services import lora_test_studio as lts
     with app.app_context():

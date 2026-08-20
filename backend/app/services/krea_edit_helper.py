@@ -727,6 +727,14 @@ def _identity_strength():
     return _clamp(cfg.get('krea.identity_lora_strength'), 0.0, 1.5, 1.0)
 
 
+def train_lora_strength():
+    """Auto-apply the dataset's own trained LoRA to Krea variation generation.
+    0 = reference-only (historical). > 0 chains the latest deployed krea LoRA
+    for the dataset after the identity-edit slot — a reinforcement of the learned
+    identity, clamped so a bad config value degrades the pass, never crashes it."""
+    return _clamp(cfg.get('krea.train_lora_strength'), 0.0, 1.5, 0.0)
+
+
 def _ref_boost():
     return _clamp(cfg.get('krea.ref_boost'), 0.0, 10.0, 0.25)
 

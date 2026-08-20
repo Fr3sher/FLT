@@ -2,17 +2,23 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  canEditMask, initialMask, maskStatus, maskPayload, applyMaskResponse,
+  canEditMask, maskButtonLabel, initialMask, maskStatus, maskPayload,
+  applyMaskResponse,
 } from './bankWatermarkMask.js'
 
 const BBOX = [0.1, 0.02, 0.4, 0.06]
 const DRAWN = [[0.05, 0.02, 0.2, 0.08], [0.44, 0.46, 0.52, 0.53]]
 
-test('only a still-flagged image can be masked', () => {
-  assert.equal(canEditMask({ watermark_state: 'detected' }), true)
-  for (const state of ['cleaned', 'dismissed', 'none', 'error', null, undefined]) {
-    assert.equal(canEditMask({ watermark_state: state }), false, `state ${state}`)
+test('any image the user is looking at can be masked, cleaned ones aside', () => {
+  // The detector is a classifier, not an oracle. Gating this on 'detected' meant
+  // the one tool able to answer a MISS was reachable only from images it had not
+  // missed (reported by vvilams on Discord, stock marks under any threshold).
+  for (const state of ['detected', 'dismissed', 'none', 'error', null, undefined]) {
+    assert.equal(canEditMask({ watermark_state: state }), true, `state ${state}`)
   }
+  // The one refusal left: those pixels are already replaced, so a zone drawn now
+  // describes an image that no longer exists. ↩ Undo is the way back.
+  assert.equal(canEditMask({ watermark_state: 'cleaned' }), false)
   assert.equal(canEditMask(null), false)
 })
 
@@ -111,4 +117,14 @@ test('the server answer is what the editor re-renders from', () => {
   // A malformed/failed answer changes nothing rather than wiping the mask.
   assert.deepEqual(applyMaskResponse(next, null), next)
   assert.deepEqual(applyMaskResponse(next, { ok: false, error: 'nope' }), next)
+})
+
+test('the button says MARK when there is nothing to edit yet', () => {
+  // Opening this on an image the detector cleared is now the point, so the label
+  // has to stop promising an edit of a box that does not exist.
+  assert.equal(maskButtonLabel({ watermark_state: 'detected' }), 'Edit mask')
+  for (const state of ['none', 'dismissed', 'error', null, undefined]) {
+    assert.equal(maskButtonLabel({ watermark_state: state }), 'Mark a watermark',
+      `state ${state}`)
+  }
 })

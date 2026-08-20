@@ -164,20 +164,17 @@ class _WriterPressure:
     """A second connection writing over and over, for as long as the pass runs.
     Records every refusal and the longest wait it ever had to sit through."""
 
-    def __init__(self, db_path, timeout=0.4):
-        # `timeout` is SQLite's own busy-handler window: a writer that has to
-        # wait more than this much *database busy time* is refused with
-        # "database is locked". 0.4 s is the 400 ms lock contract the test
-        # asserts below, so "no write was refused" is exactly "no write waited
-        # longer than the contract" — measured by SQLite, not by a stopwatch.
+    def __init__(self, db_path, timeout=0.5):
         self.db_path, self.timeout = db_path, timeout
-        self.failures, self.attempts = [], 0
+        self.failures, self.waits, self.attempts = [], [], 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
 
     def _loop(self):
         while not self._stop.is_set():
+            t0 = time.perf_counter()
             err = _concurrent_write(self.db_path, self.timeout)
+            self.waits.append(time.perf_counter() - t0)
             self.attempts += 1
             if err:
                 self.failures.append(err)
@@ -255,16 +252,34 @@ def test_the_duplicate_regrouping_lets_other_writers_through(file_db):
         f'{len(pressure.failures)} of {pressure.attempts} writes were refused '
         f'while the duplicate regrouping ran ({elapsed:.1f} s) — the app is '
         f'unusable for its whole duration: {pressure.failures[0]}')
-    # The 400 ms contract is carried by SQLite's own busy handler above
-    # (`timeout=0.4`) plus the no-refusal assertion: a writer whose *database
-    # busy wait* exceeded 400 ms would have been refused and failed the test.
-    # We deliberately do NOT assert the worst wall-clock duration around the
-    # background thread: wall-clock time folds in Windows CI runner scheduling
-    # delay — the thread can be descheduled for 400+ ms while the DB busy-wait
-    # itself is single-digit ms (measured ~24 ms here vs 626 ms for the old
-    # one-transaction shape). Scheduling delay is not database-lock time, and a
-    # stopwatch around the loop is a flaky proxy for a property SQLite can
-    # enforce deterministically.
+    # And the WORST wait, because that is the shape of this failure: the old code
+    # blocked one writer for 626 ms and let the rest through afterwards, so a
+    # median would have shrugged at it.
+    #
+    # Expressed as a FRACTION of the phase, not in milliseconds. An absolute
+    # budget measures how fast the machine is, not whether the lock is parked:
+    # calibrated here (24 ms of a 0.25 s phase) it failed on a CI runner ~23x
+    # slower, which measured 554 ms of a 5.7 s phase — the very same 0.10 share,
+    # and a green property reported as a regression. The shape this guards
+    # against is not slow, it is PARKED: the old code held the lock for 626 ms
+    # of a 0.9 s phase, a share of 0.70. A 0.25 line sits clear of both by a wide
+    # margin on any hardware. Sensitivity does not rest on this number anyway —
+    # test_the_regrouping_really_did_lock_the_database_before proves the probe
+    # catches the old shape deterministically, with no timing at all.
+    worst = max(pressure.waits)
+    share = worst / elapsed if elapsed > 0 else 0.0
+    assert share < 0.25, (
+        f'a writer waited {worst * 1000:.0f} ms of a {elapsed:.1f} s regrouping '
+        f'({share:.0%} of it, {pressure.attempts} attempts) — the lock is still '
+        'being parked')
+    # A second, deliberately loose ceiling: a share stays green if the whole
+    # phase inflates, and a multi-second stall is felt by the user whatever the
+    # ratio says. Generous enough that a slow runner never trips it (CI's worst
+    # measurement clears this by ~4x).
+    assert worst < 2.0, (
+        f'a writer waited {worst * 1000:.0f} ms during the regrouping '
+        f'({elapsed:.1f} s) — too long to leave the app unusable, whatever '
+        'share of the phase that is')
 
 
 def test_the_regrouping_really_did_lock_the_database_before(file_db):

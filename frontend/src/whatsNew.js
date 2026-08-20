@@ -65,6 +65,37 @@ export const WHATS_NEW = [
       'When your browser and this app are talking over QUIC (HTTP/3) — usually because a reverse proxy or CDN in front of FLT supports it — a small bolt emblem next to the FLT name turns green and says “QUIC”, so you can see the fast, encrypted lane is the one you are actually on. No server change or configuration needed; the app simply reads the protocol your browser already negotiated.',
   },
   {
+    id: '2026-08-13-mark-a-watermark-the-scan-missed',
+    date: '2026-08-13',
+    title: 'Mark a watermark the scan missed, yourself',
+    blurb:
+      'The watermark detector is very good, but it is a classifier — some marks, especially the ones stock sites tile across a whole photo, score under any threshold you set. Until now that was a dead end: the mask editor only opened on images the scan had already flagged. Now you can open it on any image you are looking at, in a Dataset or a Bank, and the zones you draw become the flag — 🧽 Clean then repaints exactly what you drew. Changed your mind about an image you had ruled a false positive? Drawing on it takes that back too.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-13-bank-keep-this-person',
+    date: '2026-08-13',
+    title: 'Auto-shrink a bank to just one person',
+    blurb:
+      'Select one clear face shot in the bank and hit “Keep this person”: FLT scores every image against it and auto-rejects the shots with no face or a different person, leaving you a clean reference set to review instead of hundreds to triage by hand.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-13-loading-progress',
+    date: '2026-08-13',
+    title: 'A live progress bar while FLT loads',
+    blurb:
+      'The loading screen now shows an animated progress sweep and a spinner that keeps turning even on a slow connection — so you always know the app is working instead of frozen on a black page.',
+  },
+  {
+    id: '2026-08-13-scrape-face-filter',
+    date: '2026-08-13',
+    title: 'Auto-keep only the person you want from a scrape',
+    blurb:
+      'After scanning, pick a few clear face shots (or let FLT suggest the best ones) and FLT keeps only the photos of that same person — so your Instagram/Reddit scrape lands as a clean reference set, not a pile of strangers. Multiple references are averaged for a more forgiving match, and nothing needs the full-res originals.',
+    to: '/datasets?section=scrape&panel=scan',
+  },
+  {
     id: '2026-08-12-snappier-loading',
     date: '2026-08-12',
     title: 'FLT opens fast even on a slow connection',
@@ -4292,4 +4323,3 @@ export function isValidTarget(to) {
   // Everything else must be a bare, param-less top-level route.
   return TOP_LEVEL_ROUTES.has(path) && !section && !panel;
 }
-

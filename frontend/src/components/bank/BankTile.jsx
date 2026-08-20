@@ -14,7 +14,7 @@ import { detailSummary } from './bankProvenance.js'
 import { captionChips } from './bankTags.js'
 import { captionOriginTooltipLine } from '../../utils/captionOrigin.js'
 
-export default function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
+export default function Tile({ img, bankId, thumbSrc, selected, onToggle, onReview, onTags, size }) {
   // `key` matters only for the flags list below (the one mapped array) — it was
   // missing and logged a React warning on every bank grid render.
   // The chips this image would actually offer. Computed HERE rather than asked of
@@ -53,7 +53,7 @@ export default function Tile({ img, bankId, selected, onToggle, onReview, onTags
         {/* ?r= is a cache buster, not a parameter the server reads: the thumb
             route answers with max-age=3600, so a turned image would keep showing
             its old orientation for an hour and read as "the button did nothing". */}
-        <img src={`/api/bank/${bankId}/thumb/${img.id}${img.rotation ? `?r=${img.rotation}` : ''}`}
+        <img src={thumbSrc || `/api/bank/${bankId}/thumb/${img.id}${img.rotation ? `?r=${img.rotation}` : ''}`}
           alt={img.rotation ? `${img.name} (rotated ${img.rotation}°)` : img.name} loading="lazy"
           className={`w-full object-cover ${size === 'S' ? 'h-24' : 'h-36'}`} />
       </button>

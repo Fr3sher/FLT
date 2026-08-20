@@ -1,4 +1,5 @@
 import { videoClipThumbUrl } from './videoBankApi'
+import useBatchThumbs from '../../hooks/useBatchThumbs'
 import { clipLabel } from './videoClipFragment'
 import { FLAG_LABELS } from './videoMetricsFilter'
 
@@ -20,6 +21,13 @@ import { FLAG_LABELS } from './videoMetricsFilter'
 export default function VideoClipGrid({
   bankId, clips, selected, onToggle, onOpen, emptyMessage, matchLines,
 }) {
+  // Batch-prefetch the grid's clip thumbnails so a high-RTT link pays one round
+  // trip per batch, not one per tile. Clips without a thumb are skipped server-
+  // side and keep their placeholder.
+  const { getBlobUrl: thumbUrlFor } = useBatchThumbs(
+    clips.map((c) => c.id),
+    (ids) => ({ url: `/api/video-bank/${bankId}/clip-thumbs`, body: JSON.stringify({ ids }) }),
+  );
   if (!clips.length) {
     return (
       <p className="rounded-xl border border-dashed border-border bg-app/30 px-4 py-8 text-center text-sm text-content-muted">
@@ -42,7 +50,7 @@ export default function VideoClipGrid({
               aria-label={`Play the shot at ${clipLabel(clip.start_s, clip.end_s)} of ${clip.relpath}`}
               className="relative block aspect-video w-full bg-surface-raised">
               {clip.thumb_state === 'ok' ? (
-                <img src={videoClipThumbUrl(bankId, clip.id)} alt="" loading="lazy"
+                <img src={thumbUrlFor(clip.id) || videoClipThumbUrl(bankId, clip.id)} alt="" loading="lazy"
                   onError={(e) => { e.currentTarget.style.visibility = 'hidden' }}
                   className="h-full w-full object-cover" />
               ) : (

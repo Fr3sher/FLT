@@ -330,3 +330,61 @@ def test_zimage_merge_still_refuses_traversal_across_extra_roots(app, tmp_path):
         assert zc._resolve_merge(os.path.join('..', '..', 'outside', 'evil.safetensors')) is None
         assert zc._resolve_merge(str(outside)) is None
         assert zc._resolve_merge('') is None
+
+
+# --- Hole 3 (GitHub #36): the Studio's ckpt_name resolver ---------------------
+#
+# The Test Studio picker lists checkpoints from every extra root (recursively),
+# flattened to basenames — but resolve_checkpoint_ckpt_name mapped a basename
+# back to a loader-relative path by walking ONLY <base>/models/checkpoints. A
+# checkpoint in a SUBFOLDER of an extra root fell through to the bare basename,
+# the preflight looked for models/checkpoints/<basename>, and the run 409'd
+# naming a path the file never lived at.
+
+def test_studio_ckpt_name_resolves_subfolder_in_an_extra_root(app, tmp_path):
+    """RED before the fix: returned the bare basename."""
+    from app import config as cfg
+    from app.utils import comfyui
+    with app.app_context():
+        base = _comfy(tmp_path, cfg)
+        (base / 'output').mkdir(parents=True, exist_ok=True)
+        (base / 'models' / 'checkpoints').mkdir(parents=True, exist_ok=True)
+        shared = tmp_path / 'Shared'
+        _write(shared / 'ckpts' / 'flux-auditie' / 'Shuttle3Diffusion_fp8.safetensors')
+        _yaml(base, f"other:\n  checkpoints: {(shared / 'ckpts').as_posix()}\n")
+        # Casing deliberately differs from disk: the match must be tolerant, the
+        # RETURN must be the on-disk spelling (what ComfyUI publishes).
+        got = comfyui.resolve_checkpoint_ckpt_name('shuttle3diffusion_fp8.safetensors')
+        assert got == os.path.join('flux-auditie', 'Shuttle3Diffusion_fp8.safetensors')
+
+
+def test_studio_ckpt_resolved_name_passes_the_preflight(app, tmp_path):
+    """The 409 itself: with the subfolder restored, _model_file_present must see the
+    file under the extra root — the exact check that raised StudioAssetsMissing."""
+    from app import config as cfg
+    from app.services import lora_test_studio as lts
+    from app.utils import comfyui
+    with app.app_context():
+        base = _comfy(tmp_path, cfg)
+        (base / 'output').mkdir(parents=True, exist_ok=True)
+        (base / 'models' / 'checkpoints').mkdir(parents=True, exist_ok=True)
+        shared = tmp_path / 'Shared'
+        _write(shared / 'ckpts' / 'flux-auditie' / 'shuttle3Diffusion_fp8.safetensors')
+        _yaml(base, f"other:\n  checkpoints: {(shared / 'ckpts').as_posix()}\n")
+        rel = comfyui.resolve_checkpoint_ckpt_name('shuttle3Diffusion_fp8.safetensors')
+        assert rel == os.path.join('flux-auditie', 'shuttle3Diffusion_fp8.safetensors')
+        assert lts._model_file_present(str(base / 'models'), ('checkpoints',), rel)
+
+
+def test_studio_ckpt_name_without_yaml_is_unchanged(app, tmp_path):
+    """Anti-regression pin: no yaml -> the historical single-tree walk, including
+    the bare-name fallback for a file that is nowhere."""
+    from app import config as cfg
+    from app.utils import comfyui
+    with app.app_context():
+        base = _comfy(tmp_path, cfg)
+        (base / 'output').mkdir(parents=True, exist_ok=True)
+        _write(base / 'models' / 'checkpoints' / 'Biglove' / 'photo5.safetensors')
+        assert comfyui.resolve_checkpoint_ckpt_name('photo5.safetensors') == \
+            os.path.join('Biglove', 'photo5.safetensors')
+        assert comfyui.resolve_checkpoint_ckpt_name('ghost.safetensors') == 'ghost.safetensors'

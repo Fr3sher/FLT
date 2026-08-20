@@ -37,8 +37,8 @@ services:
       # range still picks a port a non-Docker process holds and then fails to
       # bind. The Windows launcher probes the host and publishes ONE resolved
       # port; a manual Compose launch keeps 5050 / 8188.
-      - target: 5050
-        published: "${LDS_HOST_PORT:-5050}"
+      - target: 5051
+        published: "${LDS_HOST_PORT:-5051}"
         host_ip: "${LDS_BIND_ADDRESS:-127.0.0.1}"
         protocol: tcp
       - target: 8188
@@ -90,7 +90,7 @@ services:
       - LDS_DATA_DIR=/data
       - LDS_CONFIG=/data/config.json
       - LDS_HOST=0.0.0.0
-      - LDS_PORT=5050
+      - LDS_PORT=5051
       # The app cannot replace image files or own its bind address here. Restart
       # exits back to studio_launch.sh, whose supervisor respawns it immediately.
       - LDS_RUNTIME=docker-gpu

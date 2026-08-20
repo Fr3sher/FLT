@@ -100,6 +100,11 @@ _TRAIN_SETTINGS_SNAPSHOT = 'train_settings_snapshot'
 # into a plain LoRA (same immutability contract as _TRAIN_SETTINGS_SNAPSHOT —
 # see _RunConfigDataset / incident 2026-07-14).
 _TRAIN_SLIDER_SNAPSHOT = 'train_slider_snapshot'
+# The checkpoint topology a RESUME folded into the snapshot above (empty/absent
+# on a fresh launch). Stamped rather than re-derived at staging time: it records
+# what was actually merged at launch, which is the only thing the drift guard
+# can fairly excuse. See _train_settings_drifted.
+_RESUME_TOPOLOGY = 'resume_topology'
 _FULL_TRANSFORMER_ARTIFACT = 'full_transformer'
 _CONFIRMATION_FLAGS = (
     'allow_caption_mismatch',
@@ -1663,6 +1668,7 @@ def retry_cloud_run(user_id, run_id) -> dict:
                          'instead')
     _assert_recipe_replayable(p, 'retry')
     snapshot = p.get(_TRAIN_SETTINGS_SNAPSHOT, _UNSET)
+    topology = {}
     if p.get('resume_ckpt_path'):
         # A retry with a seed is still a continuation: its checkpoint topology
         # comes from the original parent record, not a modern default inferred
@@ -1689,7 +1695,8 @@ def retry_cloud_run(user_id, run_id) -> dict:
                    if p.get('resume_hf_repo_id') else None),
         resume_step=p.get('resume_step'),
         train_settings_snapshot=snapshot,
-        train_slider_snapshot=p.get(_TRAIN_SLIDER_SNAPSHOT, _UNSET))
+        train_slider_snapshot=p.get(_TRAIN_SLIDER_SNAPSHOT, _UNSET),
+        resume_topology=topology)
 
 
 _CLOUD_FULL_STATE_REASON = (
@@ -2017,6 +2024,43 @@ def _resume_snapshot_with_recorded_topology(user_id, dataset_id, snapshot, topol
     return _merge_resume_overrides(fallback, topology) if topology else snapshot
 
 
+def _train_settings_drifted(observed, snapshot, topology) -> bool:
+    """Did the Dataset's training options move after this run was requested?
+
+    Compared as VALUES, not as text: `train_settings` is a Text column, and a
+    continue does not carry the column verbatim — it re-serialises it with the
+    parent checkpoint's recorded topology folded in (see
+    `_resume_snapshot_with_recorded_topology`). Key order and those injected
+    keys are therefore differences in the blob that are NOT changes by the user,
+    and the raw `!=` this replaces read them as such: every cloud continue on a
+    dataset with rank/alpha left on auto was refused with "the Dataset training
+    options changed" on a dataset nobody had touched.
+
+    Tolerating an injected key is not ignoring it: it is dropped from the
+    expectation only while the dataset stays silent on it (still on auto). Pin
+    `rank` to 32 against a checkpoint trained at 16 and that is a real, and
+    still reported, divergence. Anything unparseable falls back to the text
+    comparison — fail closed rather than wave a blob through.
+    """
+    def _as_dict(blob):
+        if blob in (None, ''):
+            return {}
+        try:
+            parsed = json.loads(blob)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    expected = _as_dict(snapshot)
+    current = _as_dict(observed)
+    if expected is None or current is None:
+        return observed != snapshot
+    for key, value in (topology or {}).items():
+        if key not in current and expected.get(key) == value:
+            expected.pop(key, None)
+    return expected != current
+
+
 def _require_cloud_weights_only(resume_mode='weights_only', state_bundle_id=None):
     """Validate the resume contract before any cloud-side effect.
 
@@ -2211,6 +2255,7 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
         resume_step=chosen['step'],
         train_settings_snapshot=snapshot,
         train_slider_snapshot=p.get(_TRAIN_SLIDER_SNAPSHOT, _UNSET),
+        resume_topology=_parent_topology,
         parent_record_id=(_parent.id if _parent else None),
         resumed_from=chosen['step'])
     res['resumed_from'] = chosen['step']
@@ -2477,7 +2522,7 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                           resume_hf=None,
                           auto_retry_count=0, auto_retry_of=None,
                           strict_gpu=False, train_settings_snapshot=_UNSET,
-                          train_slider_snapshot=_UNSET,
+                          train_slider_snapshot=_UNSET, resume_topology=None,
                           parent_record_id=None, resumed_from=None,
                           training_mode='lora') -> dict:
     if not cfg.secret('VAST_API_KEY'):
@@ -2856,6 +2901,10 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         if train_slider_snapshot is _UNSET:
             train_slider_snapshot = getattr(ds, 'train_slider', None)
         params[_TRAIN_SLIDER_SNAPSHOT] = train_slider_snapshot
+        # Which of the snapshot's keys the RESUME put there rather than the
+        # user. Only a continuation has any, and only the drift guard reads it.
+        if resume_topology:
+            params[_RESUME_TOPOLOGY] = dict(resume_topology)
         if gpu_name:
             params['requested_gpu'] = str(gpu_name)
         if auto_retry_count:
@@ -2998,6 +3047,7 @@ def _maybe_auto_retry(run, error):
                            run.id)
             return None
         resume_snapshot = params.get(_TRAIN_SETTINGS_SNAPSHOT, _UNSET)
+        topology = {}
         if params.get('resume_ckpt_path'):
             # A pod retry that re-seeds a checkpoint is a continuation, not a
             # fresh run. Refuse an ambiguous legacy LoKr source before claiming
@@ -3067,7 +3117,8 @@ def _maybe_auto_retry(run, error):
                 auto_retry_of=run.id,
                 strict_gpu=bool(gpu_name),
                 train_settings_snapshot=resume_snapshot,
-                train_slider_snapshot=params.get(_TRAIN_SLIDER_SNAPSHOT, _UNSET))
+                train_slider_snapshot=params.get(_TRAIN_SLIDER_SNAPSHOT, _UNSET),
+                resume_topology=topology)
         except Exception as retry_error:
             params['auto_retry_pending'] = False
             params['auto_retry_error'] = str(retry_error)[:300]
@@ -3139,10 +3190,11 @@ def _prepare_staging(run):
                 'Nothing was uploaded or trained; launch a new run from the '
                 'current Dataset.')
         current_ds = current['ds']
-        if (getattr(current_ds, 'train_settings', None)
-                != params.get(_TRAIN_SETTINGS_SNAPSHOT)
-                or getattr(current_ds, 'train_slider', None)
-                != params.get(_TRAIN_SLIDER_SNAPSHOT)):
+        if (_train_settings_drifted(getattr(current_ds, 'train_settings', None),
+                                    params.get(_TRAIN_SETTINGS_SNAPSHOT),
+                                    params.get(_RESUME_TOPOLOGY))
+                or _train_settings_drifted(getattr(current_ds, 'train_slider', None),
+                                           params.get(_TRAIN_SLIDER_SNAPSHOT), None)):
             raise RuntimeError(
                 'The Dataset training options changed after this cloud run was '
                 'requested. Nothing was uploaded or trained; launch a new run.')

@@ -59,7 +59,7 @@ def test_start_publishes_the_url_it_actually_bound():
     assert '{{input.event[1]}}' in src
     assert 'Ready on' in src
     assert '[LDS] Ready on ' in (ROOT / 'backend' / 'run.py').read_text(encoding='utf-8')
-    assert 'LDS_PORT: "5050"' in src
+    assert 'LDS_PORT: "5051"' in src
     # run.py re-execs into a sibling .venv when it finds one; under Pinokio the
     # active interpreter is env/, so that hijack must stay disabled.
     assert 'LDS_NO_REEXEC: "1"' in src

@@ -1258,7 +1258,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   eligibilityImages={images}
                   nonces={ds.nonces} faceThresholds={d.face_thresholds} datasetKind={d.kind || 'character'}
                   faceScoringBlocked={d.face_scoring_blocked}
-                  dualCaptions={Boolean(d.dual_captions)} />
+                  bodyFid={bodyFid} dualCaptions={Boolean(d.dual_captions)} />
               )}
             </div>
           </div>
@@ -2154,6 +2154,14 @@ export default function DatasetWorkspace({ ds, onBack }) {
              Curation, and a status written behind its back would decide half
              of a decision it owns. */
           onStatus={viewImgLive._rescueReviewPreview ? null : ds.setStatus}
+          /* 🚩 Mark a watermark — the answer to a detector MISS, opened from the
+             image the user is looking at rather than from the flagged queue they
+             are precisely NOT in. It reuses the review overlay on a one-image
+             queue: same editor, same Clean/Dismiss afterwards, nothing forked.
+             The rescue-review preview is excluded like every other write. */
+          onMarkWatermark={viewImgLive._rescueReviewPreview
+            ? undefined
+            : ((image) => { setViewImg(null); setReviewQueue([image]); })}
           improvePending={viewImgImproving}
           improveReady={viewImgImprovementReady}
           busy={ds.busy || gridBulkBusy}

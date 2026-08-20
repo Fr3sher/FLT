@@ -356,3 +356,69 @@ def test_a_legacy_flag_with_no_box_becomes_cleanable_once_masked_by_hand(
     assert client.post(f'/api/bank/{bank_id}/watermark/inpaint',
                        json={'method': 'lama'}).status_code == 202
     assert seen == [EDITED]
+
+
+# --- Marking a mark the detector MISSED -------------------------------------
+# The other half of the same debt. Editing a wrong box was recoverable; a box
+# that was never drawn at all was not — masking refused anything the detector
+# had not already flagged, so a classifier miss (reported by vvilams on Discord
+# with stock photos whose tiled mark scores under any threshold) had no manual
+# recourse whatsoever. Drawing the zone is now itself the flag.
+
+def test_drawing_a_zone_on_an_image_judged_clean_flags_it(client, app, tmp_path):
+    bank_id, _ = _mkbank(client, tmp_path, {'a.jpg': _photo()}, name='WM-miss')
+    image_id = _flag(app, bank_id, None, state='none')
+
+    r = client.put(f'/api/bank/{bank_id}/image/{image_id}/watermark-regions',
+                   json={'regions': [OFFCENTER_MARK]})
+
+    assert r.status_code == 200, r.get_json()
+    state, _method = _row(app, image_id)
+    assert state == 'detected', 'the zone the user drew IS the flag'
+    assert json.loads(_regions(app, image_id)) == [OFFCENTER_MARK]
+
+
+def test_drawing_a_zone_on_a_dismissed_image_takes_the_ruling_back(client, app, tmp_path):
+    """'dismissed' stops the MACHINE re-flagging it; it never meant the user
+    could not draw the mark themselves after a second look."""
+    bank_id, _ = _mkbank(client, tmp_path, {'a.jpg': _photo()}, name='WM-undismiss')
+    image_id = _flag(app, bank_id, None, state='dismissed')
+
+    r = client.put(f'/api/bank/{bank_id}/image/{image_id}/watermark-regions',
+                   json={'regions': [OFFCENTER_MARK]})
+
+    assert r.status_code == 200, r.get_json()
+    assert _row(app, image_id)[0] == 'detected'
+
+
+def test_a_cleaned_image_still_refuses_a_zone(client, app, tmp_path):
+    """Its pixels were already replaced — geometry drawn now describes an image
+    that no longer exists. ↩ Undo is the way back."""
+    bank_id, _ = _mkbank(client, tmp_path, {'a.jpg': _photo()}, name='WM-cleaned')
+    image_id = _flag(app, bank_id, TOP_MARK, state='cleaned')
+
+    r = client.put(f'/api/bank/{bank_id}/image/{image_id}/watermark-regions',
+                   json={'regions': [OFFCENTER_MARK]})
+
+    assert r.status_code == 409, r.get_json()
+    assert _row(app, image_id)[0] == 'cleaned'
+
+
+def test_drawing_a_zone_on_a_never_scanned_image_flags_it(client, app, tmp_path):
+    """No scan has ever run, so the row carries no source attestation at all.
+    That is the FIRST attestation, not a changed file — refusing it here would
+    have kept the dead end shut for anyone who simply never ran the pass."""
+    from app.extensions import db
+    from app.models import BankImage
+    bank_id, _ = _mkbank(client, tmp_path, {'a.jpg': _photo()}, name='WM-virgin')
+    with app.app_context():
+        row = BankImage.query.filter_by(bank_id=bank_id).one()
+        image_id = row.id
+        assert row.watermark_state is None and row.watermark_fingerprint is None
+        db.session.commit()
+
+    r = client.put(f'/api/bank/{bank_id}/image/{image_id}/watermark-regions',
+                   json={'regions': [OFFCENTER_MARK]})
+
+    assert r.status_code == 200, r.get_json()
+    assert _row(app, image_id)[0] == 'detected'

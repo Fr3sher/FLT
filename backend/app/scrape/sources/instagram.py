@@ -64,8 +64,8 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 SCAN_LIMIT = 100              # borne dure sur le nombre d'items retournés
 _STALE_CURSOR_SKIP = SCAN_LIMIT * 5  # posts à dépasser avant d'abandonner un curseur périmé
-PROFILE_SCAN_TIMEOUT = 60     # secondes — plafond global d'un scan de profil
-SESSION_TIMEOUT = 10          # secondes — timeout HTTP de la session instaloader
+PROFILE_SCAN_TIMEOUT = 120     # secondes — plafond global d'un scan de profil
+SESSION_TIMEOUT = 20          # secondes — timeout HTTP de la session instaloader
 
 # Message d'erreur unique pour tout refus côté Instagram (auth / 403 / rate-limit).
 _AUTH_ERROR = "Instagram blocked access (login required / rate-limit)."

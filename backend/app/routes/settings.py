@@ -693,7 +693,7 @@ def settings_restart():
         in {'1', 'true', 'yes', 'on'}
     environment_updates = None if bind_managed else {
         'LDS_HOST': str(cfg.get('server.host') or '127.0.0.1'),
-        'LDS_PORT': str(cfg.get('server.port') or 5050),
+        'LDS_PORT': str(cfg.get('server.port') or 5051),
     }
     try:
         updater.schedule_restart(block_during_update=True,

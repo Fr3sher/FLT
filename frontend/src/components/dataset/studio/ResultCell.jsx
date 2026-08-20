@@ -10,7 +10,7 @@
 import ResultTile from './ResultTile';
 import { cellKeyFor } from './resultKeys';
 
-export default function ResultCell({ row, strength, variant, cellList, scoreMap, best, datasetId, onRate, onOpen, fmt }) {
+export default function ResultCell({ row, strength, variant, cellList, scoreMap, best, datasetId, thumbUrlFor, onRate, onOpen, fmt }) {
   // La MÊME fonction que celle qui a indexé `cellList` (cf. resultKeys) : la clé
   // était écrite à la main des deux côtés, et un axe ajouté d'un seul côté ne
   // produit pas d'erreur — juste des cases vides. Le contrat est testé.
@@ -30,7 +30,7 @@ export default function ResultCell({ row, strength, variant, cellList, scoreMap,
       <div className="flex items-start gap-1">
         {list.map((c) => (
           <ResultTile key={c.id} cell={c} row={row} strength={strength} variant={variant}
-            datasetId={datasetId} onRate={onRate} onOpen={onOpen} fmt={fmt} />
+            datasetId={datasetId} thumbUrlFor={thumbUrlFor} onRate={onRate} onOpen={onOpen} fmt={fmt} />
         ))}
       </div>
       {/* Score agrégé PAR CONFIG (toutes seeds/runs confondus) + confiance. */}

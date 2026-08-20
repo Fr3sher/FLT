@@ -1032,8 +1032,11 @@ def test_set_watermark_regions_rechecks_detected_state_at_write(app, monkeypatch
         original_normalize = svc.normalize_watermark_regions
 
         def change_state_between_check_and_write(value, *, allow_null=True):
+            # 'cleaned' rather than 'dismissed': a user may now take a dismissal
+            # back by drawing the mark, so the only landing that must still lose
+            # the race is the one whose pixels have already been replaced.
             current = svc.db.session.get(FaceDatasetImage, img_id)
-            current.watermark_state = 'dismissed'
+            current.watermark_state = 'cleaned'
             svc.db.session.commit()
             return original_normalize(value, allow_null=allow_null)
 
@@ -1041,21 +1044,42 @@ def test_set_watermark_regions_rechecks_detected_state_at_write(app, monkeypatch
             svc, 'normalize_watermark_regions', change_state_between_check_and_write,
         )
 
-        with pytest.raises(RuntimeError, match='no longer detected'):
+        with pytest.raises(RuntimeError, match='cleaned'):
             svc.set_watermark_regions(
                 LOCAL_USER, ds.id, img_id, [[0.2, 0.2, 0.3, 0.3]],
             )
 
         current = svc.db.session.get(FaceDatasetImage, img_id)
-        assert current.watermark_state == 'dismissed'
+        assert current.watermark_state == 'cleaned'
         assert current.watermark_regions is None
 
 
-def test_watermark_regions_route_returns_409_when_image_not_detected(client, app):
+def test_watermark_regions_route_accepts_a_zone_on_an_image_judged_clean(client, app):
+    """Over the wire too: a mark the detector missed can be drawn, and drawing it
+    is what flags the image. This route used to answer 409 here — that refusal WAS
+    the dead end, not a safeguard."""
     from app.services import face_dataset_service as svc
     ds_id = _create(client, 'Clean image', 'clean-image').get_json()['id']
     with app.app_context():
         img_id = _kept_image(svc, ds_id, 'clean.webp', state='none').id
+
+    response = client.put(
+        f'/api/dataset/{ds_id}/image/{img_id}/watermark-regions',
+        json={'regions': [[0.2, 0.2, 0.3, 0.3]]},
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        from app.models import FaceDatasetImage
+        assert svc.db.session.get(FaceDatasetImage, img_id).watermark_state == 'detected'
+
+
+def test_watermark_regions_route_returns_409_on_an_already_cleaned_image(client, app):
+    """The refusal that remains: its pixels are already replaced."""
+    from app.services import face_dataset_service as svc
+    ds_id = _create(client, 'Cleaned image', 'cleaned-image').get_json()['id']
+    with app.app_context():
+        img_id = _kept_image(svc, ds_id, 'done.webp', state='cleaned').id
 
     response = client.put(
         f'/api/dataset/{ds_id}/image/{img_id}/watermark-regions',
@@ -2250,3 +2274,74 @@ def test_watermark_restore_route_404_when_image_missing(client):
     ds_id = _create(client, 'X', 'x').get_json()['id']
     resp = client.post(f'/api/dataset/{ds_id}/image/999999/watermark-restore', json={})
     assert resp.status_code == 404
+
+
+# --- Marking a watermark the detector missed --------------------------------
+# The detector is a classifier, not an oracle: a mark tiled across a stock photo
+# can score under the threshold no matter how far it is lowered (reported by
+# vvilams on Discord). Until now the hand-drawn mask — the one tool that could
+# have answered it — was reachable only from an image the detector had ALREADY
+# flagged, so a miss had no recourse at all. Drawing a zone is now itself the
+# flag.
+
+def test_drawing_a_zone_on_a_clean_image_flags_it(app):
+    """The gap: the detector said 'none', the user can see the mark."""
+    from app.config import LOCAL_USER
+    from app.services import face_dataset_service as svc
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'Missed mark', 'missed-mark')
+        img = _kept_image(svc, ds.id, 'missed.webp', state='none')
+
+        payload = svc.set_watermark_regions(
+            LOCAL_USER, ds.id, img.id, [[0.1, 0.8, 0.9, 0.95]])
+
+        assert payload is not None
+        assert img.watermark_state == 'detected', (
+            'a zone the user drew IS the flag — otherwise nothing downstream '
+            'can act on it')
+        assert img.watermark_source == 'manual', (
+            'the row must say a human flagged it, not a detector that did not')
+
+
+def test_drawing_a_zone_on_a_never_scanned_image_flags_it(app):
+    """No scan run at all is the same situation as a miss, from the user's side."""
+    from app.config import LOCAL_USER
+    from app.services import face_dataset_service as svc
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'Unscanned', 'unscanned-mark')
+        img = _kept_image(svc, ds.id, 'unscanned.webp', state=None)
+
+        svc.set_watermark_regions(LOCAL_USER, ds.id, img.id, [[0.0, 0.0, 0.2, 0.1]])
+
+        assert img.watermark_state == 'detected'
+
+
+def test_drawing_a_zone_on_a_dismissed_image_takes_the_ruling_back(app):
+    """'dismissed' means the machine must stop asking — not that the user may
+    never change their mind by drawing the mark themselves."""
+    from app.config import LOCAL_USER
+    from app.services import face_dataset_service as svc
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'Second thoughts', 'second-thoughts')
+        img = _kept_image(svc, ds.id, 'dismissed.webp', state='dismissed')
+
+        svc.set_watermark_regions(LOCAL_USER, ds.id, img.id, [[0.4, 0.4, 0.6, 0.6]])
+
+        assert img.watermark_state == 'detected'
+
+
+def test_a_cleaned_image_still_refuses_a_zone(app):
+    """The one state that must still say no: its pixels were already replaced,
+    so geometry drawn now describes an image that no longer exists. ↩ Undo is
+    the way back, and it is a first-class action."""
+    from app.config import LOCAL_USER
+    from app.services import face_dataset_service as svc
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'Already cleaned', 'already-cleaned')
+        img = _kept_image(svc, ds.id, 'cleaned.webp', state='cleaned')
+
+        with pytest.raises(RuntimeError, match='cleaned'):
+            svc.set_watermark_regions(
+                LOCAL_USER, ds.id, img.id, [[0.1, 0.1, 0.2, 0.2]])
+
+        assert img.watermark_state == 'cleaned'

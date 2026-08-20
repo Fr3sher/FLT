@@ -37,3 +37,32 @@ test('a hard-cap truncation shows the calm message, distinct from the generic on
   assert.match(source, /Stopped at the built-in scan limit/);
   assert.match(source, /some images may be missing/);
 });
+
+test('face-filter matches are re-keyed to the page URL so they light up for review', () => {
+  // The backend keys results by the candidate URL we sent (thumbnail || page),
+  // but grid selection and import read `selected` by the item's page URL. If we
+  // add the candidate key directly, nothing shows as selected and import is empty.
+  assert.match(source, /const key = it\.thumbnail \|\| it\.url;/);
+  assert.match(source, /if \(d\.results\[key\]\?\.match\) keep\.add\(it\.url\);/);
+  // the pre-fix behaviour (adding the candidate key straight to `selected`)
+  assert.doesNotMatch(source,
+    /for \(const \[u, r\] of Object\.entries\(d\.results\)\) if \(r\.match\) keep\.add\(u\);/);
+});
+
+test('suggesting refs drops the user into picking mode so they can adjust', () => {
+  // After "Suggest best refs", the user must be able to immediately click tiles
+  // to add/remove references (pickingRef stays true) instead of being stranded.
+  assert.match(source, /setFaceRefs\(good\);\n\s*setPickingRef\(true\);/);
+});
+
+test('there is a clear way to finish picking references', () => {
+  // A "Done picking refs" affordance must exist so picking mode isn't a trap.
+  assert.match(source, /Done picking refs/);
+  assert.match(source, /onClick=\{\(\) => setPickingRef\(false\)\}/);
+});
+
+test('Keep matches leaves picking mode so review clicks toggle selection', () => {
+  // After the filter runs, clicking a tile should select/deselect for import
+  // review, not keep adding references.
+  assert.match(source, /setPickingRef\(false\);\n\s*setFaceFilterBusy\(true\);/);
+});

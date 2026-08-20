@@ -90,7 +90,7 @@ const WATERMARK_BADGE = {
  * files still refuses, and `busyReason` is the sentence it shows instead of
  * going quietly grey.
  */
-export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, onCrop, onDelete,
+export default function DatasetGridItem({ img, datasetId, thumbUrlFor, onStatus, onCaption, onCrop, onDelete,
                                           onMirror, mirrorBusy = false, busy = false,
                                           busyReason = null,
                                           onScoreFace, scoreFaceBusy = false, faceScoringBusy = false, faceScoringBlocked = null,
@@ -192,7 +192,7 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
                 lightboxActionPlacement.js reads to open with its actions already
                 on the correct side instead of committing them once the image
                 paints. */}
-            <img src={datasetThumbUrl(url, 512)} alt={displayLabel(img.variation_label)}
+            <img src={thumbUrlFor?.(img.filename) || datasetThumbUrl(url, 512)} alt={displayLabel(img.variation_label)}
               loading="lazy" decoding="async"
               onLoad={(e) => rememberImageRatio(
                 img.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}

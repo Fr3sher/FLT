@@ -9,7 +9,8 @@ import os
 import secrets
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, request, send_file
+from flask import Blueprint, Response, current_app, jsonify, request, send_file
+import struct
 
 from ..config import LOCAL_USER
 from ..extensions import csrf
@@ -562,6 +563,24 @@ def bank_faces(bank_id):
     """Face embeddings + person clustering. Takes NO scope on purpose: the
     clusters are one numbering of the whole bank (400 if one is sent anyway)."""
     return _start(banks.start_faces, _app(), LOCAL_USER, bank_id)
+
+
+@bp.post('/bank/<int:bank_id>/match-person')
+def bank_match_person(bank_id):
+    """'Keep only the target person': score every non-rejected image against one
+    reference face ({ref_id}) and auto-decide it — matches → keep, no face /
+    different person → reject. Only 'pending' rows are decided. 202/409/503."""
+    data = request.get_json(silent=True) or {}
+    try:
+        ref_id = int(data.get('ref_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'ref_id (a bank image id) is required'}), 400
+    try:
+        threshold = float(data.get('threshold', 0.5))
+    except (TypeError, ValueError):
+        threshold = 0.5
+    return _start(banks.start_match_person, _app(), LOCAL_USER, bank_id,
+                  ref_id=ref_id, threshold=threshold)
 
 
 @bp.post('/bank/<int:bank_id>/score')
@@ -1304,6 +1323,82 @@ def bank_thumb(bank_id, image_id):
     if not tpath:
         return jsonify({'error': 'unreadable'}), 404
     return send_file(tpath, mimetype='image/webp', max_age=3600)
+
+
+@bp.post('/bank/<int:bank_id>/thumbs')
+def bank_thumbs_batch(bank_id):
+    """Grid thumbnails for MANY images in ONE response, so a high-RTT link pays
+    one round trip per batch instead of one per tile. Same bytes as the single
+    `bank_thumb` (tile-size cached WebP via ensure_thumb); body is the shared
+    index-keyed binary container: [u32 position][u32 length][webp bytes] in the
+    order the caller asked, unreadable/missing rows simply skipped."""
+    data = request.get_json(silent=True) or {}
+    ids = [int(x) for x in (data.get('ids') or []) if str(x).isdigit()]
+    if not ids:
+        return jsonify({'error': 'ids required'}), 400
+    bank = banks.get_bank(LOCAL_USER, bank_id)
+    if not bank:
+        return jsonify({'error': 'not found'}), 404
+    out = bytearray()
+    for pos, iid in enumerate(ids):
+        row = BankImage.query.filter_by(id=iid, bank_id=bank_id).first()
+        if row is None:
+            continue
+        tpath = banks.ensure_thumb(bank, row)
+        if not tpath or not os.path.isfile(tpath):
+            continue
+        data = tpath.read_bytes()
+        out += struct.pack('>II', pos, len(data))
+        out += data
+    return Response(bytes(out), mimetype='application/octet-stream',
+                    headers={'Cache-Control': 'public, max-age=604800',
+                             'X-Content-Type-Options': 'nosniff'})
+
+
+@bp.get('/bank/<int:bank_id>/review-file/<int:image_id>')
+def bank_review_file(bank_id, image_id):
+    """The ▶ Review lightbox image: a cached mid-size WebP (REVIEW_MAX_SIDE),
+    not the raw source — a fraction of the bytes over a slow link, and cached
+    so an already-reviewed image isn't re-downloaded. Built from the resolved
+    path so a watermark-cleaned or rotated image shows its current state."""
+    bank, row = _row_or_404(bank_id, image_id)
+    if not bank or not row:
+        return jsonify({'error': 'not found'}), 404
+    path = banks.ensure_review_image(bank, row)
+    if not path or not os.path.isfile(path):
+        return jsonify({'error': 'unreadable'}), 404
+    return send_file(path, mimetype='image/webp',
+                     max_age=7 * 24 * 3600)  # cache a reviewed image for a week
+
+
+@bp.get('/bank/<int:bank_id>/review-batch')
+def bank_review_batch(bank_id):
+    """Return several review-size WebPs in ONE response so a high-RTT link isn't
+    charged a round trip per image. Body is a tiny binary container (no base64
+    overhead): for each requested id, [u32 id][u32 length][webp bytes] in the
+    order given. Missing/unreadable ids are simply skipped, so the response may
+    hold fewer images than requested. Cached 7d like the single review-file."""
+    ids = [int(x) for x in (request.args.get('ids') or '').split(',')
+           if x.strip().isdigit()]
+    if not ids:
+        return jsonify({'error': 'ids required'}), 400
+    bank = banks.get_bank(LOCAL_USER, bank_id)
+    if not bank:
+        return jsonify({'error': 'not found'}), 404
+    out = bytearray()
+    for iid in ids:
+        row = BankImage.query.filter_by(id=iid, bank_id=bank_id).first()
+        if row is None:
+            continue
+        p = banks.ensure_review_image(bank, row)
+        if not p or not os.path.isfile(p):
+            continue
+        data = p.read_bytes()
+        out += struct.pack('>II', iid, len(data))
+        out += data
+    return Response(bytes(out), mimetype='application/octet-stream',
+                    headers={'Cache-Control': 'public, max-age=604800',
+                             'X-Content-Type-Options': 'nosniff'})
 
 
 @bp.get('/bank/<int:bank_id>/file/<int:image_id>')
