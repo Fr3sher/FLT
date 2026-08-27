@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Camera, Palette, Plug } from 'lucide-react';
 import { buildLineageGraph, CARD_W } from '../../utils/lineageGraph';
 import {
   LANE_HEADER_H, MAX_SCALE, MIN_SCALE,
@@ -25,6 +26,7 @@ import {
   pruneCanvasSelection, refreshCanvasSelection, toggleCanvasCheckpoint,
 } from '../../utils/canvasGeneration';
 import { apiFetch, postJson, putJson } from '../../api/fetchClient';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import LineageDetailPanel from '../dataset/LineageDetailPanel';
 import LineageDiffPanel from '../dataset/LineageDiffPanel';
 import CheckpointActionsPopover from '../dataset/CheckpointActionsPopover';
@@ -40,6 +42,7 @@ import GeneratedImageLightbox from '../shared/GeneratedImageLightbox';
 import { clampPopoverToViewport, POPOVER_H, POPOVER_W } from '../dataset/checkpointPopover.js';
 import { useCheckpointActions } from '../../hooks/useCheckpointActions';
 import { useCanvasImageImprove } from '../../hooks/useCanvasImageImprove';
+import { useRestoreImproveSettings } from '../../hooks/useRestoreImproveSettings';
 import { useCanvasRun } from '../../hooks/useCanvasRun';
 import {
   canvasRunDatasetIds, describeCanvasRun, readyImageCount, runPinCandidates,
@@ -48,7 +51,7 @@ import { isNodeControlTarget, nodePointerIntent } from '../../utils/canvasNodeCh
 import { showsZoomLabels, zoomLabelScale, zoomLabelText } from '../../utils/canvasZoomLegibility';
 import {
   pinBatchAnnouncement, pinBatchPendingAcrossLanes, placeImageBatch,
-  groupPinnedBatchBySource, groupPinnedBatchTogether, laneStackEntries,
+  groupPinnedBatchBySource, laneStackEntries,
 } from '../../utils/canvasPinBatch';
 import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
 import { galleryDeleteSummary } from '../../utils/gallerySelection';
@@ -392,7 +395,7 @@ const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose,
             className="bg-indigo-300" aria-hidden />
           <span style={{ position: 'absolute', left: 0, top: -22 / Math.max(boardScale, 0.05),
             fontSize: Math.max(9, 11 / Math.max(boardScale, 0.05)) }}
-            className="whitespace-nowrap rounded bg-indigo-500 px-1.5 py-0.5 font-semibold text-white">
+            className="whitespace-nowrap rounded bg-indigo-500 px-1.5 py-0.5 font-semibold text-gray-950">
             Join — {hint.count} images side by side
           </span>
         </div>
@@ -407,7 +410,10 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   // datasets are shown is the page's question, but the answer belongs on the
   // board it changes -- and the canvas should not have to know what a dataset
   // filter is to give it a place to live.
-  filterSlot = null }) {
+  filterSlot = null,
+  // ⏏ The page's install-wide action, handed down so the ⋯ shelf can carry it
+  // below `lg` — where the page header that normally holds it is not drawn.
+  onOpenUndeploy = null }) {
   const toast = useToast();
   // ▶ Continue's LOCAL lane guard (is ai-toolkit set up at all) — the app's own
   // capability probe, already loaded app-wide: no second request for it.
@@ -1052,6 +1058,9 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       }
     }
     frameRef.current?.classList.add('is-grabbing');
+    // localPoint lit des refs via frameRect() : identite neuve a chaque
+    // rendu, la lister recreerait ce handler en boucle pour rien.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [beginDrag, beginImage, refreshRect]);
 
   const onPointerMove = useCallback((e) => {
@@ -1147,6 +1156,8 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     const p = localPoint(e);
     applyView(panBy({ ...viewRef.current, tx: pan.current.tx, ty: pan.current.ty },
       p.x - pan.current.x, p.y - pan.current.y));
+    // Meme raison : localPoint est volontairement hors deps (refs vivantes).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyView]);
 
   const endPointer = useCallback((e) => {
@@ -1309,21 +1320,84 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const [picks, setPicks] = useState([]);
   const [panelOpen, setPanelOpen] = useState(false);
 
-  /* 📱 Is the gesture help asked for? Below `lg` this used to be a `<details>`
-     INSIDE the toolbar pill, and that is the whole bug: an open `<details>`
-     grows the box it sits in, so tapping ☝ Gestures took the bottom bar from
-     213 px to 380 px of an 800-px phone — the board it documents disappeared
-     behind its own documentation, and the only way back was to find the same
-     chip again in a row that had moved. React state instead of the browser's
-     own disclosure so the sheet can be a SIBLING of the pill, floating over
-     the board, with a × and Escape to close it. */
+
+  /* 📱 ⋯ — the toolbar's second shelf, and the actual answer to "there is no
+     room to work on this board".
+
+     Measured at 412x780 and again at 904x750 (a phone, and a Fold opened): the
+     bottom bar wrapped to TWO rows and the filter bar above it to two more, so
+     232 px of a 780-px screen were chrome FLOATING ON the board — more than the
+     board had left between them. Shrinking the buttons had already been tried
+     (40-px targets, labels dropped at `sm`); it bought one row back and then ran
+     out, because the row was never RANKED. Everything on it was equally
+     important, so everything stayed on it, so it wrapped.
+
+     The rank the bar carries now, every threshold of it measured on a real
+     board rather than chosen:
+       - always inline: zoom, Fit, 🎨 Generate, ⋯ — the ones you reach for while
+         reading the board, and the only ones it cannot be used without;
+       - `lg` and up inline, in ⋯ below: ✦ Tidy up, 💾 Layouts, 📷 PNG, 🔌 +LoRA
+         — real actions, taken a handful of times per session, not per minute.
+         Measured: inline at 768 they take the bar to two rows, at 1024 they fit
+         on one, so the threshold is 1024 and not "md, that sounds about right";
+       - `2xl` and up inline, in ⋯ below: the colour key and CPU/GPU/VRAM.
+         READOUTS — nothing here is a control, and a whole row of a phone was
+         going to "GPU 0 %";
+       - in ⋯ at EVERY width: the gesture line. It is ~500 characters, so it has
+         never fitted beside anything: measured with it inline the bar is two
+         rows at 1440 AND at 1920, which is where the desktop bar's second row
+         had been coming from all along. It is the board's documentation, read
+         once and then never again — the last thing that should be costing the
+         board a permanent row.
+     Three tiers and not one because they are three different questions: an
+     action behind ⋯ costs a tap, a readout behind ⋯ costs nothing until asked
+     for, and a manual behind ⋯ costs a tap as well — it is FOLDED inside the
+     sheet, not printed in it. Read "costs nothing at all" here once, and it was
+     wrong: unfolded, the sentence is ten lines at 400 px, so opening ⋯ for a
+     button buried the button under the manual. Being one box further out than
+     the toolbar it no longer grew the BAR, which is what the previous pass was
+     measuring — and is why the regression looked like a fix.
+
+     Each control is rendered EXACTLY ONCE — inline or in the sheet, never both
+     (see useMediaQuery: Tailwind can hide a chip at a width, it cannot move
+     one, and two copies of a chip drift the first time one gains a prop). */
+  const [moreOpen, setMoreOpen] = useState(false);
+  /* …and the manual in a bubble of its OWN. ⚠️ Not the same question as
+     `moreOpen`, which is why it is not the same state: ⋯ is "show me the
+     tools", ⓘ is "remind me how the board works", and answering the first with
+     340 px of the second is what made the shelf unusable on a phone.
+
+     Deliberately NOT reset when the shelf closes. The bubble is opened from
+     inside the shelf and then read AGAINST the board — closing ⋯ to see what
+     the sentence is talking about is the obvious next move, and a bubble that
+     vanished with its opener would make that impossible. It closes by its own
+     ×, by ⓘ again, or by Escape. */
   const [gesturesOpen, setGesturesOpen] = useState(false);
+  const inlineActions = useMediaQuery('(min-width: 1024px)');
+  /* 📏 The fold has a HEIGHT, and every rule on this board was written about
+     its width. Measured at 844×390 — a phone held sideways, which is how a
+     board gets looked at one-handed — the fixed chrome came to 214 px of the
+     390 there are: 55 %, leaving 176 px of actual board. The same chrome is
+     27 % of an 800-px fold and had always passed.
+     500 px is the line because it is under every phone held upright (the
+     shortest common one is 800) and over every phone held sideways. */
+  const tallFold = useMediaQuery('(min-height: 500px)');
+  const inlineReadouts = useMediaQuery('(min-width: 1536px)');
   useEffect(() => {
-    if (!gesturesOpen) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') setGesturesOpen(false); };
+    if (!moreOpen && !gesturesOpen) return undefined;
+    /* Escape takes the TOP layer, not everything. The ⓘ bubble is drawn over
+       the shelf and is the thing you opened last; pulling the shelf out from
+       under it on the first press would leave a bubble on screen whose opener
+       had gone, and a second press would then be needed anyway. One press, one
+       layer, innermost first — the order every stacked overlay uses. */
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (gesturesOpen) setGesturesOpen(false);
+      else setMoreOpen(false);
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [gesturesOpen]);
+  }, [moreOpen, gesturesOpen]);
 
   const isPicked = useCallback(
     (dsId, recId, step) => isCanvasCheckpointSelected(picks, dsId, recId, step), [picks]);
@@ -1481,8 +1555,6 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       .catch(() => setContinueRuns({}));
   }, [toast]);
 
-  const continueSteps = useMemo(
-    () => canvasContinueSteps(continueTarget?.node), [continueTarget]);
   const continueRow = useMemo(
     () => canvasContinueRow(continueTarget?.node,
       [...(continueRuns?.actives || []), ...(continueRuns?.recent || [])]),
@@ -1654,6 +1726,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      resolves a `face_dataset_image`, so a second copy that reached for the wrong
      one would improve an unrelated picture and report success. */
   const handleImproveCanvasImage = useCanvasImageImprove();
+  const restoreImproveSettings = useRestoreImproveSettings();
 
   /* 📌 Pin ALL of a finished run's images, in one click.
      A lot spanning four checkpoints used to mean opening four galleries and
@@ -1709,7 +1782,9 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
         remembered: laneMap,
       });
       if (!res.placed.length) continue;
-      const grouped = groupPinnedBatchTogether({
+      // The SAME grouper the one-picture gallery pin uses: a lot joins the grid
+      // its checkpoint already has on this lane instead of starting a rival one.
+      const grouped = groupPinnedBatchBySource({
         nodes: Object.values(laneMap), placed: res.placed, graph: lane?.graph,
       });
       placedTotal += res.placed.length;
@@ -1920,6 +1995,132 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     return typeDef ? { ...acc, ...typeDef.payload(store.nodes, store.checked) } : acc;
   }, {});
 
+  /* ⋯ shelf, tier 1 — the board's real ACTIONS. Inline from `lg`, behind ⋯
+     below it. Written once and placed by `inlineActions`: the same chips, in
+     the toolbar on a laptop and in the sheet on a phone. */
+  const boardActions = (
+    <>
+      {/* The way out of an arrangement that got away from you. Twenty runs
+          later a hand-tidied board can be a knot, and "move them all back by
+          hand" is not an answer — this drops every remembered position, hands
+          the board to the automatic tree again, and brings every picture back
+          beside the run that made it, however far it was dragged. */}
+      <button type="button" onClick={handleTidyUp} disabled={!arranged}
+        title={arranged
+          ? 'Forget every moved card, rebuild the automatic tree, and bring '
+            + 'every pinned image back beside its run'
+          : 'Nothing has been moved yet'}
+        className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
+        <span aria-hidden>✦</span> Tidy up
+      </button>
+      <HelpBadge topic="canvas-arrange" />
+      {/* 💾 Keep this arrangement, and put a kept one back. Next to ✦ Tidy
+          up on purpose: they are the two ends of the same question — Tidy
+          up throws an arrangement away, and until now that was the ONLY
+          way out of one. */}
+      <CanvasLayoutPresets positions={positions} imageNodes={allImageNodes}
+        datasetIds={shown.map((e) => e.datasetId)}
+        onRestored={onReloadLayout} toast={toast} />
+      {/* 📷 The board as a file. What it exports is stated before the
+          click, not after: the pictures and the trees, not the buttons. */}
+      <button type="button" onClick={exportPng} disabled={exporting || empty}
+        data-testid="canvas-export-png"
+        title={empty
+          ? 'There is nothing on the board to export yet'
+          : 'Save the whole board as a PNG — every pinned picture and every run '
+            + 'card, at full size. Buttons and badges are not drawn.'}
+        className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
+        <Camera aria-hidden="true" className="h-3.5 w-3.5" /> {exporting ? 'Exporting…' : 'PNG'}
+      </button>
+      {/* 🔌 A LoRA that never trained on this board — pinned as a node instead
+          of a pill, and stacked on top of the next run when checked. See
+          ExternalLoraNodes.jsx for the popover and the node cards. */}
+      <button type="button" onClick={() => setExtPickerOpen((v) => !v)}
+        aria-pressed={extPickerOpen}
+        /* The popover closes on a press anywhere else; this button is the
+           one exception, or the press would shut it and this click would
+           toggle it straight back open — leaving no way to close it here. */
+        data-canvas-ext-lora-toggle
+        title="Add an external LoRA to the board"
+        className={'flex h-10 items-center gap-1 rounded-md border px-2 sm:px-3 text-[0.6875rem] font-semibold lg:h-9 '
+          + (extPickerOpen
+            ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100 '
+            : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
+        <Plug aria-hidden="true" className="h-3.5 w-3.5" /> + LoRA
+        {extNodes.length > 0 && (
+          <span className="rounded-full bg-cyan-500/40 px-1.5 tabular-nums">{extNodes.length}</span>
+        )}
+      </button>
+      <HelpBadge topic="canvas-external-loras" />
+      {/* ⏏ An install-wide action, and on a desktop it lives on the PAGE
+          header where it belongs. Below `lg` that header is gone — 67 px of a
+          780-px screen for a title the nav already highlights — so the button
+          it carried comes down here rather than being lost. Rendered only when
+          the page actually handed one over. */}
+      {onOpenUndeploy && (
+        <button type="button" onClick={onOpenUndeploy}
+          data-testid="canvas-undeploy-more"
+          title="List every LoRA this app deployed into ComfyUI and remove the ones you tick. Your training saves are kept — each one can be deployed again."
+          className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content lg:hidden">
+          <span aria-hidden>⏏</span> Undeploy…
+        </button>
+      )}
+      {/* …and the page's own ? badge with it. The header that carried it is not
+          drawn below `lg`, and "the ? next to the title explains this page at
+          every width" was a promise the page made in its own comments — a
+          promise that folding the header would have quietly broken. */}
+      {onOpenUndeploy && <HelpBadge topic="page-canvas" />}
+    </>
+  );
+
+  /* ⋯ shelf, tier 2 — READOUTS. Nothing here is a control, and that is exactly
+     why they fold last and cost the toolbar nothing until asked for: a whole
+     row of a phone was going to "GPU 0 %". Inline from `xl`. */
+  const boardReadouts = (
+    <>
+      {/* The colour key. A colour with no legend is a guess, and this one
+          answers the question asked most often on this board: "which of these
+          can I generate from RIGHT NOW?". Each state carries a shape as well
+          as a colour (filled disc vs hollow ring), because roughly one man in
+          twelve reads red and green alike and the theme is dark graphite.
+          It renders from utils/checkpointDeployState, the same source the
+          pills read, so the key cannot drift from what it explains. */}
+      <span data-testid="canvas-deploy-legend"
+        className="flex items-center gap-2 text-content-subtle text-[0.625rem]">
+        {DEPLOY_LEGEND.map((l) => (
+          <span key={l.tone} className="flex items-center gap-1 whitespace-nowrap">
+            {/* The swatch is the pill's OWN bar class, so the key is drawn by
+                the thing it explains and cannot drift from it. */}
+            <span aria-hidden className={`inline-block h-3 w-0 ${DEPLOY_BAR_CLASS[l.tone]}`} />
+            {/* 📱 Short below `sm`, in full from there up. */}
+            <span className="sm:hidden">{l.short}</span>
+            <span className="hidden sm:inline">{l.label}</span>
+          </span>
+        ))}
+      </span>
+      <CanvasSystemStats />
+    </>
+  );
+
+  /* ⓘ The door to the board's manual — written ONCE and PLACED, like every
+     other control in this overlay (see useMediaQuery: Tailwind can hide a chip
+     at a width, it cannot move one, and two copies drift the first time one
+     gains a prop). It rides with the action chips while they are in the shelf
+     and joins the readouts once they are inline, so it never occupies a row of
+     its own. */
+  const gestureChip = (
+    <button type="button" data-testid="canvas-gestures-info"
+      onClick={() => setGesturesOpen((v) => !v)}
+      aria-expanded={gesturesOpen}
+      aria-label="How the board is driven"
+      title="How the board is driven — mouse, trackpad and touch"
+      className={'flex h-10 shrink-0 items-center gap-1.5 rounded-md border border-border px-2 '
+        + 'text-[0.6875rem] font-semibold sm:px-3 lg:h-9 '
+        + (gesturesOpen ? 'bg-indigo-500/15 text-content' : 'bg-app/60 text-content-muted hover:text-content')}>
+      <span aria-hidden>ⓘ</span> How this board works
+    </button>
+  );
+
   return (
     <>
       {/* The edge gradients + glow, defined ONCE for the whole page: every lane's
@@ -1974,6 +2175,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
            at any z-index, can paint over a sibling overlay: two independent
            guarantees instead of one, for the controls the user cannot afford to
            lose. It sits at z-0 so every overlay above it (z-20) still wins. */
+        data-probe-world="board"
         className="lds-canvas-frame relative isolate z-0 min-h-[320px] w-full flex-1 select-none touch-none overflow-hidden rounded-xl border border-border bg-app/40"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -2066,8 +2268,19 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
               an opaque pill. Same tokens, deliberately — the two bars are the
               same kind of object and were never meant to be one solid and one
               made of glass. */}
+          {/* 📱 …and it STANDS DOWN while the ⋯ shelf is open on a short fold.
+              Not a cut: the filter is what you use to decide WHAT the board
+              shows, and the shelf is what you use to act on what it is already
+              showing — nobody needs both in the same second, and on a 390-px
+              fold the two of them plus the toolbar left 176 px of board. It
+              comes straight back when the shelf closes, and nothing changes at
+              any height a phone is held upright at.
+              The run tracker below does NOT stand down with it: a generation in
+              flight is the one thing you opened the board to watch. */}
           {filterSlot ? (
-            <div className="pointer-events-auto rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg">
+            <div data-probe-chrome="filter"
+              className={'pointer-events-auto rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg'
+                + (moreOpen && !tallFold ? ' hidden' : '')}>
               {filterSlot}
             </div>
           ) : null}
@@ -2091,7 +2304,8 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
               at once there, and the desktop layout is not what this pass is
               about. */}
           {runPhase !== 'idle' && (
-          <div className={'pointer-events-auto rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg'
+          <div data-probe-chrome="tracker"
+            className={'pointer-events-auto rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg'
             + (panelOpen && runPhase === 'working' ? ' hidden lg:block' : '')}>
         {/* 🎨 The generation in flight, ON the board. Visible with the settings
             panel closed, and after a reload — which is the whole point: a launch
@@ -2116,31 +2330,124 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
         {/* BOTTOM — what you DO to the board. Bottom edge on purpose: it is
             thumb-height on a phone, and it is the corner a board has least to
             say in. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-2 sm:p-3">
-          {/* ☝ The gesture help, ON the board instead of IN the toolbar. A
-              SIBLING of the pill and only while asked for: it floats over the
-              board it explains, closes with its × or Escape, and the bar keeps
-              the exact height it had — which is the whole difference between
-              help you can call up and help that has taken the screen. */}
+        {/* 📏 A flex COLUMN with a ceiling, and both halves are load-bearing.
+            The ceiling reserves the top chrome — measured at 844×390, a phone
+            held sideways, where the ⓘ bubble grew upward until it lay 448×54 px
+            ON TOP of the dataset filter at the far end of the screen. Being a
+            floating sibling stops this stack from pushing the toolbar; nothing
+            stopped it from covering what is above it.
+            The COLUMN is what makes the ceiling work without arithmetic: the
+            bubble is the only shrinkable child (`min-h-0`), so flexbox hands it
+            whatever is left after the shelf and the bar have taken their
+            height — at any shelf height, on any screen. A `max-h` in rem would
+            have had to guess at a shelf that is 106 px on one phone and 281 on
+            another. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex max-h-[calc(100%-4.5rem)] flex-col justify-end p-2 sm:p-3">
+          {/* ⋯ The second shelf, ON the board instead of IN the toolbar. A
+              SIBLING of the pill and only while asked for: whatever this width
+              cannot hold floats over the board, closes with its Close button or
+              Escape, and the bar keeps the exact height it had — which is the
+              whole difference between tools you can call up and tools that have
+              taken the screen. (Learnt the hard way once already: the gesture
+              help used to be a `<details>` INSIDE the pill, and an open
+              `<details>` grows the box it is in — 213 px of bar became 380 px of
+              an 800-px phone.) */}
+          {/* ⓘ The board's manual, in a BUBBLE of its own.
+
+              It used to be printed in the ⋯ sheet, and that was the bug: ~500
+              characters wrap to ten lines at 400 px — ~340 px of an 800-px
+              screen — so opening ⋯ to reach a BUTTON handed you a wall of text
+              with the buttons pushed off under it. A manual is not a tool and
+              does not belong in the tool shelf; it belongs behind an ⓘ you go
+              and press when you want it.
+
+              A SIBLING of the sheet, for the same reason the sheet is a sibling
+              of the pill: growing it cannot add a row to anything below it. It
+              is the third rung of the same ladder — pill, then shelf, then this
+              — and each one floats over the board instead of pushing it. */}
           {gesturesOpen && (
-            <div data-testid="canvas-gestures-sheet"
-              className="pointer-events-auto mb-1.5 flex max-w-full items-start gap-2 rounded-xl border border-border bg-surface-overlay/95 p-2.5 shadow-xl backdrop-blur lg:hidden">
-              <p className="m-0 min-w-0 flex-1 text-content-subtle text-[0.6875rem] leading-relaxed">
+            <div data-testid="canvas-gestures-bubble" data-probe-chrome="bubble"
+              data-probe-reading role="dialog"
+              aria-label="How the board is driven"
+              /* 📏 CAPPED, and it scrolls inside its own cap. Measured at
+                 844×390 — a phone held sideways — the bubble grew upward until
+                 it lay 448×54 px ON TOP of the dataset filter at the other end
+                 of the screen. Being a floating sibling stops it pushing the
+                 toolbar; nothing stopped it from covering what is above it.
+                 `13rem` is the toolbar, the shelf and the filter bar it must
+                 not reach.
+                 ⚠️ A scroll container is safe HERE and would not be in the ⋯
+                 shelf: this box holds one paragraph, and a scroller CLIPS its
+                 children — which is exactly how a 354-px menu once showed as a
+                 20-px sliver inside the filter bar. Nothing in here opens. */
+              /* ⚠️ `min-h-0` is what lets the column above shrink this box at
+                 all — a flex child's default `min-height:auto` refuses to go
+                 below its content, which is precisely how it grew off the top
+                 of a landscape screen. A scroll container is safe HERE and
+                 would not be in the ⋯ shelf: this box holds one paragraph, and
+                 a scroller CLIPS its children — which is how a 354-px menu once
+                 showed as a 20-px sliver inside the filter bar. Nothing in here
+                 opens. */
+              className="pointer-events-auto mb-1.5 min-h-0 max-w-full overflow-y-auto rounded-xl border border-border bg-surface-overlay/95 p-2.5 shadow-xl backdrop-blur sm:max-w-md">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-content text-[0.6875rem] font-semibold">
+                  <span aria-hidden>ⓘ</span> How this board works
+                </span>
+                <button type="button" onClick={() => setGesturesOpen(false)}
+                  aria-label="Close the board help"
+                  /* 40 px below `lg`, like every control in this overlay. It
+                     shipped at 28 — the way OUT of the bubble, and the smallest
+                     thing on it. Found by scripts/responsiveProbe.mjs the first
+                     time it opened the bubble and measured what was inside. */
+                  className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content lg:h-7 lg:w-7">×</button>
+              </div>
+              <p className="m-0 text-content-subtle text-[0.6875rem] leading-relaxed">
                 {BOARD_GESTURES}
               </p>
-              <button type="button" onClick={() => setGesturesOpen(false)}
-                title="Close" aria-label="Close the gesture help"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content">×</button>
             </div>
           )}
-          <div className="pointer-events-auto inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg">
+          {moreOpen && (
+            <div data-testid="canvas-more-sheet" data-probe-chrome="shelf" data-probe-panel="shelf"
+              className="pointer-events-auto mb-1.5 flex max-w-full flex-col gap-2 rounded-xl border border-border bg-surface-overlay/95 p-2 shadow-xl backdrop-blur">
+              {/* ⚠️ TWO rows, and which control sits in which one MOVES with the
+                  width. Not cosmetics — measured by scripts/responsiveProbe.mjs,
+                  which is where this rule came from: the shelf used to stack
+                  four rows, two of them holding a single small chip in a
+                  900-px box (23 % and 8 % full). Every box was inside every
+                  other box and every source-level test was green; it simply
+                  read as broken, and it cost 47 % of a 360-px fold.
+
+                  The rule is that a row must EARN its line. ⓘ is a chip, so it
+                  travels with the chips — and when the chips are inline in the
+                  toolbar (`lg` and up) it has no row to belong to, so it joins
+                  the readouts instead of sitting alone. Close is pushed to the
+                  far edge of whatever row it lands in: it is the way out, and
+                  the way out belongs at the end. */}
+              {!inlineActions && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {boardActions}
+                  {gestureChip}
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                {!inlineReadouts && boardReadouts}
+                {inlineActions && gestureChip}
+                <button type="button" onClick={() => setMoreOpen(false)}
+                  aria-label="Close the board tools"
+                  className="ml-auto flex h-10 items-center rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content lg:h-9">
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
+          <div data-probe-chrome="toolbar"
+            className="pointer-events-auto inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg">
         {/* 📱 The board's controls, on a phone.
             Every target here is 40 px up to `lg` and the familiar 36 px above it.
             Not cosmetics: this row is the ONLY way to zoom without a wheel, and a
             36-px button is under the ~40 px a finger actually lands on — a miss on
             − or + lands on the board and pans it, which reads as "the zoom buttons
-            are unreliable". The row already wrapped; it now wraps into rows a thumb
-            can use. Desktop keeps the exact sizes it has always had. */}
+            are unreliable". Desktop keeps the exact sizes it has always had. */}
         {/* `contents`: the pill above is the flex container now. Keeping a
             second flex box here would nest a wrap inside a wrap, and its old
             `mb-2` would push a gap under a bar that no longer has anything
@@ -2151,7 +2458,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
               disabled={view.scale <= MIN_SCALE + 1e-9}
               title="Zoom out" aria-label="Zoom out"
               className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content disabled:opacity-40 lg:h-9 lg:w-9">−</button>
-            <span className="min-w-[3.25rem] text-center text-content-muted text-[0.6875rem] tabular-nums">{pct}%</span>
+            <span className="min-w-[2.5rem] sm:min-w-[3.25rem] text-center text-content-muted text-[0.6875rem] tabular-nums">{pct}%</span>
             <button type="button" onClick={() => zoomByButton(ZOOM_STEP)}
               disabled={view.scale >= MAX_SCALE - 1e-9}
               title="Zoom in" aria-label="Zoom in"
@@ -2161,39 +2468,6 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
             title="Fit the whole board in view"
             className="flex h-10 items-center rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content lg:h-9">
             Fit
-          </button>
-          {/* The way out of an arrangement that got away from you. Twenty runs
-              later a hand-tidied board can be a knot, and "move them all back by
-              hand" is not an answer — this drops every remembered position, hands
-              the board to the automatic tree again, and brings every picture back
-              beside the run that made it, however far it was dragged. */}
-          <button type="button" onClick={handleTidyUp} disabled={!arranged}
-            title={arranged
-              ? 'Forget every moved card, rebuild the automatic tree, and bring '
-                + 'every pinned image back beside its run'
-              : 'Nothing has been moved yet'}
-            className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
-            <span aria-hidden>✦</span> <span className="hidden sm:inline">Tidy up</span>
-          </button>
-          <HelpBadge topic="canvas-arrange" />
-          {/* 💾 Keep this arrangement, and put a kept one back. Next to ✦ Tidy
-              up on purpose: they are the two ends of the same question — Tidy
-              up throws an arrangement away, and until now that was the ONLY
-              way out of one. */}
-          <CanvasLayoutPresets positions={positions} imageNodes={allImageNodes}
-            datasetIds={shown.map((e) => e.datasetId)}
-            onRestored={onReloadLayout} toast={toast} />
-          {/* 📷 The board as a file. What it exports is stated before the
-              click, not after: the pictures and the trees, not the buttons. */}
-          <button type="button" onClick={exportPng} disabled={exporting || empty}
-            data-testid="canvas-export-png"
-            title={empty
-              ? 'There is nothing on the board to export yet'
-              : 'Save the whole board as a PNG — every pinned picture and every run '
-                + 'card, at full size. Buttons and badges are not drawn.'}
-            className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
-            <span aria-hidden>📷</span>{' '}
-            <span className={exporting ? '' : 'hidden sm:inline'}>{exporting ? 'Exporting…' : 'PNG'}</span>
           </button>
           {/* 🎨 The board's own launch button. It carries the pick count so the
               settings panel can be closed without losing sight of what is queued
@@ -2207,87 +2481,31 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
               + (picks.length
                 ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100 '
                 : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
-            <span aria-hidden>🎨</span> Generate
+            <Palette aria-hidden="true" className="h-3.5 w-3.5" /> Generate
             {picks.length > 0 && (
               <span className="rounded-full bg-indigo-500/40 px-1.5 tabular-nums">{picks.length}</span>
             )}
           </button>
-          {/* 🔌 A LoRA that never trained on this board — pinned as a node instead
-              of a pill, and stacked on top of the next run when checked. See
-              ExternalLoraNodes.jsx for the popover and the node cards. */}
-          <button type="button" onClick={() => setExtPickerOpen((v) => !v)}
-            aria-pressed={extPickerOpen}
-            /* The popover closes on a press anywhere else; this button is the
-               one exception, or the press would shut it and this click would
-               toggle it straight back open — leaving no way to close it here. */
-            data-canvas-ext-lora-toggle
-            title="Add an external LoRA to the board"
-            className={'flex h-10 items-center gap-1 rounded-md border px-2 sm:px-3 text-[0.6875rem] font-semibold lg:h-9 '
-              + (extPickerOpen
-                ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100 '
-                : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
-            <span aria-hidden>🔌</span> +<span className="hidden sm:inline"> LoRA</span>
-            {extNodes.length > 0 && (
-              <span className="rounded-full bg-cyan-500/40 px-1.5 tabular-nums">{extNodes.length}</span>
-            )}
-          </button>
-          <HelpBadge topic="canvas-external-loras" />
-          {/* The colour key. A colour with no legend is a guess, and this one
-              answers the question asked most often on this board: "which of these
-              can I generate from RIGHT NOW?". Each state carries a shape as well
-              as a colour (filled disc vs hollow ring), because roughly one man in
-              twelve reads red and green alike and the theme is dark graphite.
-              It renders from utils/checkpointDeployState, the same source the
-              pills read, so the key cannot drift from what it explains. */}
-          <span data-testid="canvas-deploy-legend"
-            className="flex items-center gap-2 text-content-subtle text-[0.625rem]">
-            {DEPLOY_LEGEND.map((l) => (
-              <span key={l.tone} className="flex items-center gap-1 whitespace-nowrap">
-                {/* The swatch is the pill's OWN bar class, so the key is drawn by
-                    the thing it explains and cannot drift from it. */}
-                <span aria-hidden className={`inline-block h-3 w-0 ${DEPLOY_BAR_CLASS[l.tone]}`} />
-                {/* 📱 Short below `sm`, in full from there up. The colour keeps
-                    its key at 400 px — it is the sentence explaining it that
-                    moves into the ☝ Gestures sheet, not the key itself. */}
-                <span className="sm:hidden">{l.short}</span>
-                <span className="hidden sm:inline">{l.label}</span>
-              </span>
-            ))}
-          </span>
-          {/* The ONLY place the board's gestures are discoverable. A gesture that
-              is not listed here does not exist as far as anyone is concerned, so
-              every new one earns its clause — including 🖼🖼 drop-to-fuse, which
-              nobody would ever guess.
-  
-              📱 …and below `lg` it used to be `hidden`, full stop. So on the one
-              device where the gestures are LEAST guessable — no wheel, no hover
-              title, no shift key — the board's instructions did not exist at all.
-              The line is too long to sit in a phone toolbar, so it folds into a
-              one-tap disclosure there instead of disappearing. Same words, written
-              once (BOARD_GESTURES), so the two can never drift. */}
-          <CanvasSystemStats />
-          <span className="ml-auto hidden text-content-subtle text-[0.625rem] lg:inline">
-            {BOARD_GESTURES}
-          </span>
-          {/* Closed it costs one more chip in a row that already wraps, not a row
-              of its own: every pixel spent above the frame is a pixel of board
-              pushed under the fold, which is the other half of this same pass.
-
-              ⚠️ It was a `<details>`, and an open `<details>` grows the box it
-              is IN. So the one control whose job is to explain the board took
-              the bar from 213 px to 380 px of an 800-px phone and buried the
-              board under its own manual, with no × to undo it. The chip is a
-              plain toggle now and the text is a SHEET floating over the board
-              (rendered beside the pill, further down) — same words, same single
-              source, but reading them costs the bar no height at all. */}
-          <button type="button" onClick={() => setGesturesOpen((v) => !v)}
-            aria-expanded={gesturesOpen}
-            data-testid="canvas-gestures-toggle"
-            className={'flex h-10 items-center rounded-md border px-2 sm:px-3 text-[0.6875rem] font-semibold lg:hidden '
-              + (gesturesOpen
+          {/* Each shelf is rendered by exactly ONE of these two places — here
+              when the width holds it, in the ⋯ sheet when it does not. */}
+          {inlineActions && boardActions}
+          {inlineReadouts && boardReadouts}
+          {/* ⋯ carries the external-LoRA count while that shelf is folded: a
+              shelf that hides state without saying so is a shelf that makes the
+              board look broken. */}
+          <button type="button" onClick={() => setMoreOpen((v) => !v)}
+            aria-expanded={moreOpen}
+            data-testid="canvas-more-toggle"
+            title="Tidy up, Layouts, PNG, external LoRAs, the colour key and what every gesture on this board does"
+            aria-label="More board tools"
+            className={'ml-auto flex h-10 items-center gap-1 rounded-md border px-2 sm:px-3 text-[0.6875rem] font-semibold lg:h-9 '
+              + (moreOpen
                 ? 'border-primary/60 bg-primary/15 text-content '
                 : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
-            <span aria-hidden className="mr-1">☝</span> Gestures
+            <span aria-hidden>⋯</span>
+            {!inlineActions && extNodes.length > 0 && (
+              <span className="rounded-full bg-cyan-500/40 px-1.5 tabular-nums">{extNodes.length}</span>
+            )}
           </button>
           {selectedForDiff.length > 0 && (
             <button type="button" onClick={() => setSelectedForDiff([])}
@@ -2422,6 +2640,9 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
         /* ✨ only where it means something: a picture with a library row that is
            not itself an improvement (canvasImprove.js states both reasons). */
         onImprove={canImproveCanvasImage(pinnedZoom) ? handleImproveCanvasImage : undefined}
+        /* ↩ A pinned ✨ result can hand its recorded settings back to the
+           global improve knobs — same ONE handler as the other hosts. */
+        onUseImproveSettings={restoreImproveSettings}
         /* ✦ Fix ONE part of a render instead of regenerating it (.samexit,
            Discord). Offered on the same pictures ✨ is: a board image with a
            library row behind it — that row's id is what the route addresses. */

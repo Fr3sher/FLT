@@ -1,4 +1,6 @@
 import { INPUT_CLASS, Card } from './primitives'
+import { SettingsGroup, SettingsGroupsToc, useSettingsGroupProps } from './SettingsGroupsView'
+import { CAPTIONING_GROUPS } from './settingsGroups'
 import ResetToDefault from './ResetToDefault'
 import { defaultValueAt } from './settingDefaults.js'
 import { importInputLimitLine, IMPORT_INPUT_UNLIMITED_NOTE } from '../dataset/importPolicy.js'
@@ -34,7 +36,7 @@ const CAPTIONING_OPTIONS = [
 
 // Same shape, same word ("backend"), same 'auto'-first order as the captioning
 // engine above — deliberately, because it is the same idea: two interchangeable
-// engines and a default that picks whichever is installed. Read by BOTH 🧽 Find
+// engines and a default that picks whichever is installed. Read by BOTH Find
 // watermarks surfaces (bank and dataset), which used to disagree: the bank had
 // always taken the detector when present, the dataset had never looked.
 const WATERMARK_BACKEND_OPTIONS = [
@@ -61,8 +63,15 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
   const inputLimit = importInputLimitLine(
     { input_max_side: inputMaxSide, input_max_pixels: inputMaxPixels })
   const inputUnlimited = !inputMaxSide || !inputMaxPixels
+  // Summary + collapsible groups — same shells as Image engines; a collapsed
+  // group opens itself under any ?focus= deep-link or search hit.
+  const [importGroup, captionGroup, watermarkGroup, qualityGroup] = CAPTIONING_GROUPS
+  const groupProps = useSettingsGroupProps('captioning')
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      <SettingsGroupsToc sectionId="captioning" groups={CAPTIONING_GROUPS} />
+
+      <SettingsGroup {...groupProps(importGroup)}>
       <Card
         title="Dataset import"
         help={`What happens to a photo the moment it enters a dataset. Preserve originals keeps the master file; training makes a temporary working copy only when a run starts. Every import must fit within ${inputLimit}; convert or resize a larger source before importing.`}
@@ -189,6 +198,9 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
         </p>
       </Card>
 
+      </SettingsGroup>
+
+      <SettingsGroup {...groupProps(captionGroup)}>
       <Card
         title="Captioning"
         help="Who writes the captions. Auto prefers JoyCaption (via ai-toolkit) and falls back to the Ollama vision model."
@@ -208,6 +220,9 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
         </div>
       </Card>
 
+      </SettingsGroup>
+
+      <SettingsGroup {...groupProps(watermarkGroup)}>
       <Card
         title="Watermark inpainting"
         help="Choose where LaMa removes small off-center watermarks. Auto uses CUDA when the configured ML Python supports it and otherwise falls back to CPU."
@@ -239,6 +254,9 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
         </label>
       </Card>
 
+      </SettingsGroup>
+
+      <SettingsGroup {...groupProps(qualityGroup)}>
       <Card
         title="Face similarity"
         help="Every image is scored against the reference face (InsightFace). These thresholds set where the badges flip."
@@ -287,7 +305,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
 
       <Card
         title="Image bank triage"
-        help="Thresholds for the 🗃️ Bank quality flags. Raw scores are stored per image, so changing a threshold re-sorts an already-scanned bank instantly — no rescan."
+        help="Thresholds for the Bank quality flags. Raw scores are stored per image, so changing a threshold re-sorts an already-scanned bank instantly — no rescan."
       >
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <div>
@@ -298,7 +316,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               value={config.bank?.sharpness_min ?? bankDefault('sharpness_min')}
               onChange={(e) => setField('bank', 'sharpness_min', parseFloat(e.target.value) || 0)}
               className={INPUT_CLASS} />
-            <p className="mt-0.5 text-xs text-content-muted">Sharpest region under this = 🌫 blurry.</p>
+            <p className="mt-0.5 text-xs text-content-muted">Sharpest region under this = blurry.</p>
             <ResetToDefault label="Sharpness minimum" section="bank" field="sharpness_min"
               config={config} configDefaults={configDefaults} setField={setField} />
           </div>
@@ -310,7 +328,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               value={config.bank?.noise_max ?? bankDefault('noise_max')}
               onChange={(e) => setField('bank', 'noise_max', parseFloat(e.target.value) || 0)}
               className={INPUT_CLASS} />
-            <p className="mt-0.5 text-xs text-content-muted">Residual grain over this = 📺 noisy.</p>
+            <p className="mt-0.5 text-xs text-content-muted">Residual grain over this = noisy.</p>
             <ResetToDefault label="Noise maximum" section="bank" field="noise_max"
               config={config} configDefaults={configDefaults} setField={setField} />
           </div>
@@ -334,7 +352,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               value={config.bank?.min_side ?? bankDefault('min_side')}
               onChange={(e) => setField('bank', 'min_side', parseInt(e.target.value, 10) || 0)}
               className={INPUT_CLASS} />
-            <p className="mt-0.5 text-xs text-content-muted">Smaller side under this = 📐 small (trainers only downscale).</p>
+            <p className="mt-0.5 text-xs text-content-muted">Smaller side under this = small (trainers only downscale).</p>
             <ResetToDefault label="Minimum side" section="bank" field="min_side"
               config={config} configDefaults={configDefaults} setField={setField} />
           </div>
@@ -384,7 +402,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               value={config.bank?.face_threshold ?? bankDefault('face_threshold')}
               onChange={(e) => setField('bank', 'face_threshold', parseFloat(e.target.value) || 0)}
               className={INPUT_CLASS} />
-            <p className="mt-0.5 text-xs text-content-muted">Cosine similarity for the 👥 person clustering. Applies at the next face pass.</p>
+            <p className="mt-0.5 text-xs text-content-muted">Cosine similarity for the person clustering. Applies at the next face pass.</p>
             <ResetToDefault label="Same-person similarity" section="bank" field="face_threshold"
               config={config} configDefaults={configDefaults} setField={setField} />
           </div>
@@ -396,7 +414,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               value={config.bank?.aesthetic_min ?? bankDefault('aesthetic_min')}
               onChange={(e) => setField('bank', 'aesthetic_min', parseFloat(e.target.value) || 0)}
               className={INPUT_CLASS} />
-            <p className="mt-0.5 text-xs text-content-muted">LAION score (~1–10) under which an image is flagged 💔 low aesthetic. Set by the ✨ Score pass.</p>
+            <p className="mt-0.5 text-xs text-content-muted">LAION score (~1–10) under which an image is flagged low aesthetic. Set by the Score pass.</p>
             <ResetToDefault label="Aesthetic minimum" section="bank" field="aesthetic_min"
               config={config} configDefaults={configDefaults} setField={setField} />
           </div>
@@ -408,7 +426,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               value={config.bank?.nsfw_max ?? bankDefault('nsfw_max')}
               onChange={(e) => setField('bank', 'nsfw_max', parseFloat(e.target.value) || 0)}
               className={INPUT_CLASS} />
-            <p className="mt-0.5 text-xs text-content-muted">NSFW probability (0–1) over which an image is flagged 🔞 NSFW. Set by the ✨ Score pass.</p>
+            <p className="mt-0.5 text-xs text-content-muted">NSFW probability (0–1) over which an image is flagged NSFW. Set by the Score pass.</p>
             <ResetToDefault label="NSFW maximum" section="bank" field="nsfw_max"
               config={config} configDefaults={configDefaults} setField={setField} />
           </div>
@@ -430,7 +448,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
                 setting that silently does nothing is how someone changes a
                 detector, sees no difference, and concludes the app is broken. */}
             <p className="mt-0.5 text-xs text-content-muted">
-              Which engine 🧽 Find watermarks uses, on datasets and banks alike.
+              Which engine Find watermarks uses, on datasets and banks alike.
               <strong> Auto</strong> takes the detector extra when it is installed
               (~0.14 s per image, and it returns a score) and the vision model
               otherwise — that is the behaviour that shipped, so leaving this alone
@@ -438,8 +456,8 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               extra installed does not fail the scan: the vision model runs it and the
               app says so, with the link to install the extra (Setup ▸ Quality tools).
               The two engines disagree at the margins, and only the detector can flag an
-              image <em>without</em> a position — those are counted apart and 🧽 Clean
-              leaves them for 🔍 Review. Changing this applies at the next scan; images
+              image <em>without</em> a position — those are counted apart and Clean
+              leaves them for Review. Changing this applies at the next scan; images
               you already dismissed as false positives are only re-judged by
               <em> ⟲ Rescan incl. dismissed</em>.
             </p>
@@ -462,7 +480,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
                 knee MEASURED on a real bank, not a probability you can reason
                 about from first principles. */}
             <p className="mt-0.5 text-xs text-content-muted">
-              Score (0–1) at or above which 🚩 Find flags an image, when the watermark
+              Score (0–1) at or above which Find flags an image, when the watermark
               detector extra is installed. 0.94 is measured on a 110-image hand-labelled
               sample of a real 29 759-image bank: it flagged none of the 55 clean images
               and 54 of the 55 marked ones. Lower it to ~0.92 to catch the faintest marks
@@ -481,7 +499,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               value={config.bank?.style_threshold ?? bankDefault('style_threshold')}
               onChange={(e) => setField('bank', 'style_threshold', parseFloat(e.target.value) || 0)}
               className={INPUT_CLASS} />
-            <p className="mt-0.5 text-xs text-content-muted">Cosine similarity for the 🎨 style clustering. Applies at the next scoring pass.</p>
+            <p className="mt-0.5 text-xs text-content-muted">Cosine similarity for the style clustering. Applies at the next scoring pass.</p>
             <ResetToDefault label="Same-style similarity" section="bank" field="style_threshold"
               config={config} configDefaults={configDefaults} setField={setField} />
           </div>
@@ -499,6 +517,7 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
           </div>
         </div>
       </Card>
+      </SettingsGroup>
     </div>
   )
 }

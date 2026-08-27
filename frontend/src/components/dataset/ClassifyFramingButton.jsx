@@ -1,10 +1,12 @@
 import { Link } from 'react-router';
+import { Ruler } from 'lucide-react';
 import { HelpBadge } from '../../help/HelpMode';
 import { classifyFramingState } from './classifyFramingGate';
 
 /** 📐 Classify framing — sits right under the Composition bar, where the lack is
- * seen: images imported without head-crop have no shot type, so they count for
- * nothing above. Renders nothing when there is nothing to classify. */
+ * seen: imported without a shot type, or cropped since the last classify (crop
+ * clears framing, same as the Bank). Renders nothing when there is nothing to
+ * classify. */
 export default function ClassifyFramingButton({
   images, ollama, capsLoading = false, busy = false, activity = null, onClassify,
 }) {
@@ -13,18 +15,18 @@ export default function ClassifyFramingButton({
 
   return (
     <div id="ds-classify-framing" tabIndex={-1}
-      className="scroll-mt-20 flex flex-col gap-1 rounded-lg border border-amber-400/40 bg-amber-500/5 px-3 py-2">
+      className="scroll-mt-20 flex flex-col gap-1 rounded-lg border border-border bg-surface-raised px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" data-workspace-focus
           onClick={() => onClassify?.(s.count)}
           disabled={s.disabled} title={s.title}
           className="px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-400/40 text-amber-200 text-sm font-semibold disabled:opacity-40">
-          {s.label}
+          <Ruler aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />{s.label}
         </button>
         <HelpBadge topic="action-classify-framing" className="self-center" />
         {!s.running && (
           <span className="text-content-subtle text-[0.6875rem] min-w-0">
-            imported without a shot type — they count for nothing in Composition until sorted
+            no shot type yet — imported without one, or cropped since they were last classified
           </span>
         )}
       </div>

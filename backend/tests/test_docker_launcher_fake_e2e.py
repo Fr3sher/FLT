@@ -555,7 +555,12 @@ def test_foreign_container_collision_fails_without_compose_mutation(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "belongs to another project or folder" in result.stderr
+    # Same wrap trap as the unhealthy assertion above: PowerShell folds the
+    # error record at the console width, and the fold lands wherever the path
+    # in the record pushes it — a long --basetemp (xdist adds /gwN) was enough
+    # to split this phrase across two lines and fail a launcher that had said
+    # exactly the right thing. Assert the words, not the spelling of the wrap.
+    assert "belongstoanotherprojectorfolder" in re.sub(r"\s+", "", result.stderr)
     assert not _compose_calls(calls, "up", "studio")
     assert not _compose_calls(calls, "stop", "ollama")
     assert [call for call in calls if "logs" in call["args"]]
@@ -695,9 +700,13 @@ def test_test_mode_bounds_the_wait_for_a_choice_no_browser_can_deliver(
     elapsed = time.monotonic() - started
 
     assert result.returncode == 0, result.stderr + result.stdout
-    output = result.stdout + result.stderr
-    assert "Test mode waits 10 seconds for that choice" in output
-    assert "wait up to 15 minutes" not in output
-    assert "not completed within 10 seconds" in output
+    # PowerShell wraps to the console width, and a narrow console breaks these
+    # sentences across lines — the same false red
+    # test_update_rebuild_returns_nonzero_when_health_is_unhealthy documents.
+    # Assert the message, not the spelling of the wrap.
+    output = re.sub(r"\s+", "", result.stdout + result.stderr)
+    assert "Testmodewaits10secondsforthatchoice" in output
+    assert "waitupto15minutes" not in output
+    assert "notcompletedwithin10seconds" in output
     # The interactive timeout is 900 s; anything near it means the bound is gone.
     assert elapsed < 60, f"the bounded wait took {elapsed:.1f}s"

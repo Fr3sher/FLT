@@ -1,5 +1,6 @@
 /** Variation catalog: presets + per-entry toggles + multiplier + Klein picker. */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Clapperboard, Dna, Download, Monitor } from 'lucide-react';
 import KleinModelSetting from '../shared/KleinModelSetting';
 import GlobalModelPicker from '../shared/GlobalModelPicker';
 import { useToast } from '../common/Toast';
@@ -24,7 +25,7 @@ import {
   applyShotImport, buildShotExport, parseShotImport, promoteCustomShot, MAX_IMPORT_BYTES,
 } from '../../utils/shotImport';
 import {
-  createCustomShot, editCustomShot, customShotDraft,
+  createCustomShot, editCustomShot, customShotDraft, hasDerivedLabel,
 } from '../../utils/customShots';
 import {
   ENGINE_ACCENTS, ENGINE_LABELS, billingEngines, canonicalEngines, engineBatches,
@@ -293,13 +294,19 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
     catch { /* private browsing / full storage: keep the in-memory preset usable */ }
   }, [customPresets]);
 
-  // ✏️ Which card the composer below is re-wording (null = writing a new one).
-  // Asked for by .samexit (Discord): a custom card could be added and deleted,
-  // never corrected. The composer is REUSED rather than duplicated inline on the
-  // card — it already owns the prompt box, the framing picker and the 🔞
-  // register line, and a second editor would drift from it the first time one of
-  // those changes. See utils/customShots.js for what an edit keeps.
+  // ✏️ Which card the composer below is re-wording (null = writing a new one),
+  // and which list it lives in — ✨ localStorage or 📥 the server-side catalog.
+  // Asked for by .samexit (Discord): a card could be added and deleted, never
+  // corrected. Then, once ✏️ shipped on the ✨ cards only, reported again by the
+  // same person: ⇪ Keep moves a card into the 📥 group, so saving a card for
+  // good was taking its pencil away. The two groups now offer the same verb.
+  // The composer is REUSED rather than duplicated inline on the card — it
+  // already owns the prompt box, the framing picker and the 🔞 register line,
+  // and a second editor would drift from it the first time one of those
+  // changes. See utils/customShots.js for what an edit keeps.
   const [editingShotId, setEditingShotId] = useState(null);
+  const [editingImported, setEditingImported] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
   const customDetailsRef = useRef(null);
 
   const addCustomShot = () => {
@@ -311,31 +318,56 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
     setCustomPrompt('');
   };
 
-  /** Load a card back into the composer. Opens the <details> if it is folded —
-   *  otherwise ✏️ would look like it did nothing at all, the editor being out of
-   *  sight below the grid of cards. */
-  const startEditCustomShot = (shot) => {
-    const draft = customShotDraft(customShots, shot.id);
+  /** Load a card back into the composer, from either group. Opens the <details>
+   *  if it is folded — otherwise ✏️ would look like it did nothing at all, the
+   *  editor being out of sight below the grid of cards. */
+  const startEditShot = (shot, { imported = false } = {}) => {
+    const draft = customShotDraft(imported ? importedShots : customShots, shot.id);
     if (!draft) return;
     setEditingShotId(shot.id);
+    setEditingImported(imported);
     setCustomPrompt(draft.prompt);
     setCustomFraming(draft.framing);
     if (customDetailsRef.current) customDetailsRef.current.open = true;
   };
 
-  const editingShot = editingShotId
-    ? customShots.find((c) => c.id === editingShotId) || null : null;
-
   const cancelEditCustomShot = () => {
     setEditingShotId(null);
+    setEditingImported(false);
+    setEditBusy(false);
     setCustomPrompt('');
   };
 
-  const saveEditCustomShot = () => {
-    if (!editingShotId) return;
-    setCustomShots((s) => editCustomShot(s, editingShotId, {
-      prompt: customPrompt, framing: customFraming }));
-    cancelEditCustomShot();
+  const saveEditCustomShot = async () => {
+    if (!editingShotId || editBusy) return;
+    if (!editingImported) {
+      setCustomShots((s) => editCustomShot(s, editingShotId, {
+        prompt: customPrompt, framing: customFraming }));
+      cancelEditCustomShot();
+      return;
+    }
+    // 📥 cards live on the server, so an edit is a round trip that the app can
+    // REFUSE (a re-derived name colliding with another catalog entry). Confirm
+    // the change actually landed before closing the editor: a silent revert
+    // would leave the user believing they saved something they did not.
+    const next = editCustomShot(importedShots, editingShotId, {
+      prompt: customPrompt, framing: customFraming });
+    if (next === importedShots) { cancelEditCustomShot(); return; }   // no-op
+    const want = next.find((s) => s.id === editingShotId);
+    setEditBusy(true);
+    try {
+      const d = await persistImported(next);
+      const landed = (d.shots || []).find((s) => s.id === editingShotId);
+      if (!landed || landed.prompt !== want.prompt) {
+        toast.error(`“${want.label}” was refused by the app — the card is unchanged.`);
+        setEditBusy(false);
+        return;
+      }
+      cancelEditCustomShot();
+    } catch {
+      toast.error('Could not save that shot.');
+      setEditBusy(false);
+    }
   };
 
   const removeCustomShot = (id) => {
@@ -343,7 +375,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
     setSelected((s) => { const n = new Set(s); n.delete(id); return n; });
     // Deleting the card being edited must not leave the composer pointing at a
     // shot that no longer exists — Save would then silently do nothing.
-    if (id === editingShotId) cancelEditCustomShot();
+    if (id === editingShotId && !editingImported) cancelEditCustomShot();
   };
 
   // 📥 Imported shots (idea by ashish.sinha — Discord): a JSON catalog the user
@@ -352,6 +384,21 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   // show up on a phone as well as the desktop and ride along in the full backup —
   // the ✨ cards above stay in localStorage, unchanged.
   const [importedShots, setImportedShots] = useState([]);
+
+  /** The card the composer is holding, from whichever list it belongs to.
+   *
+   *  ⚠️ This line must stay BELOW `importedShots`, not up with the other ✏️ state
+   *  where a reader would naturally group it. It is evaluated DURING RENDER, so
+   *  reading `importedShots` before its `const` declaration is a temporal dead
+   *  zone: `Cannot access … before initialization`, thrown on the first click of
+   *  ✏️ on an imported card, caught by the error boundary, panel gone. Nothing in
+   *  the test suite sees it — `node --test` cannot mount this JSX — so it was
+   *  green on 3939 tests and broken in the browser. Moving it back up is the one
+   *  tidy that re-breaks it. */
+  const editingShot = editingShotId
+    ? (editingImported ? importedShots : customShots)
+      .find((c) => c.id === editingShotId) || null
+    : null;
   // Every label the by-label resolvers already answer for (all catalogs + legacy
   // aliases). An imported label that shadows one of these resolves to the WRONG
   // entry on regenerate, so the importer refuses them — see shotImport.js.
@@ -418,6 +465,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
 
   const removeImportedShot = async (shot) => {
     setSelected((s) => { const n = new Set(s); n.delete(shot.id); return n; });
+    if (shot.id === editingShotId && editingImported) cancelEditCustomShot();
     try { await persistImported(importedShots.filter((s) => s.id !== shot.id)); }
     catch { toast.error('Could not remove that shot.'); }
   };
@@ -429,6 +477,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
    *  Saved first, removed from localStorage only once the server confirms it
    *  landed: a failure must never make the card disappear. */
   const keepCustomShot = async (shot) => {
+    // ⇪ Keep moves the card from one list to the other. If it is the one being
+    // edited, the composer would keep pointing at the list it just left.
+    if (shot.id === editingShotId) cancelEditCustomShot();
     const res = promoteCustomShot({ shot, customShots, importedShots, reservedLabels });
     if (!res.ok) { toast.error(res.message); return; }
     try {
@@ -492,7 +543,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       <div key={c.id} className={`relative flex items-center gap-1.5 px-1.5 py-1 rounded-lg text-[0.625rem] border transition-colors ${cls} ${blocked ? 'opacity-40' : ''} ${editing ? 'ring-2 ring-amber-400/70' : ''}`}>
         <button type="button" onClick={() => !blocked && toggle(c.id)} aria-pressed={on}
           disabled={blocked}
-          title={blocked ? '🔞 shot — check Klein alone to generate it' : c.prompt}
+          title={blocked ? 'NSFW shot — check Klein alone to generate it' : c.prompt}
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left disabled:cursor-not-allowed">
           <ShotIllustration framing={c.framing} label={c.label} className="w-7 h-7 shrink-0" />
           {/* Wraps like a catalog card instead of truncating: an imported label is
@@ -504,7 +555,8 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
               still fits two cards per row at 400 px. */}
           <span className="min-w-[4.5rem] leading-tight break-words">{c.label}</span>
           <span className="ml-auto shrink-0 flex items-center gap-1">
-            {done > 0 && <span className="text-emerald-300 font-semibold">✓×{done}</span>}
+            {done > 0 && <span className="text-emerald-300 font-semibold"
+              aria-label={`${done} already in the dataset`}>✓×{done}</span>}
             {on && <span className="text-indigo-300" aria-hidden="true">✓</span>}
           </span>
         </button>
@@ -920,7 +972,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       preset.selectedIds.forEach((id) => { const fr = framingById.get(id); if (fr) counts[fr] += 1; });
       return [preset.id, { counts, total: preset.selectedIds.length }];
     }));
-  }, [catalog, nsfwCatalog, customShots, customPresets]);
+    // userShots, pas customShots : la map lit AUSSI les shots importes, et
+    // une dep sur la moitie de la source laissait leurs framings figes.
+  }, [catalog, nsfwCatalog, userShots, customPresets]);
 
   const toggle = (id) => setSelected((s) => {
     const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
@@ -1071,7 +1125,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-3">
       <div className="flex items-center gap-2">
-        <span aria-hidden="true">🎬</span>
+        <Clapperboard aria-hidden="true" className="h-4 w-4" />
         <h2 className="text-content font-semibold text-sm">Generate variations</h2>
         <span className="text-content-subtle text-[0.6875rem]">
           pick the shots to synthesize from the reference photo
@@ -1321,7 +1375,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         <details className="rounded-lg border border-border bg-app/30 open:pb-2"
           onToggle={(e) => { if (e.currentTarget.open) requestHelpTip('klein-tuning-open'); }}>
           <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[0.75rem] text-content font-semibold">
-            🖥️ Klein tuning
+            <Monitor aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Klein tuning
             <span className="ml-2 font-normal text-content-subtle text-[0.625rem]">
               model file · consistency LoRA {loraStrength <= 0 ? 'off' : loraStrength.toFixed(2)}
               {' · '}{kleinStepsValue} steps
@@ -1454,7 +1508,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       {isKrea && krAvailable && (
         <details className="rounded-lg border border-border bg-app/30 open:pb-2">
           <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[0.75rem] text-content font-semibold">
-            🧬 Krea 2 Edit tuning
+            <Dna aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Krea 2 Edit tuning
             <span className="ml-2 font-normal text-content-subtle text-[0.625rem]">
               reference grounding {groundingDescription(groundingValue)}
               {` · ${stepsValue} steps · reference pull ${refBoostValue} · identity ${identityStrengthValue}`}
@@ -1761,7 +1815,15 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
                   return (
                     <button key={e.id} type="button" onClick={() => toggle(e.id)}
                       aria-pressed={on}
-                      title={done > 0 ? `${done} image(s) of this shot already in the dataset` : undefined}
+                      /* The tooltip of a shot card always says the SAME thing: the
+                         prompt it will send. It is the only fact about a card that
+                         is not already on it, and the one a user hovers to find.
+                         The "N already in the dataset" message this replaced was
+                         both a duplicate of the ✓×N badge and, being a title, it
+                         DISPLACED the prompt exactly on the cards you had used
+                         most. Reported by .samexit on Discord, who found the three
+                         card kinds each behaving differently. */
+                      title={e.prompt}
                       className={`flex items-center gap-1.5 px-1.5 py-1 rounded-lg text-[0.625rem] border text-left transition-colors ${cls}`}>
                       <ShotIllustration framing={e.framing} label={e.label} className="w-7 h-7 shrink-0" />
                       <span className="min-w-0 leading-tight">
@@ -1799,7 +1861,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
                 onRemove: () => removeCustomShot(c.id),
                 removeTitle: 'Remove this custom shot',
                 onKeep: () => keepCustomShot(c),
-                onEdit: () => startEditCustomShot(c),
+                onEdit: () => startEditShot(c),
               }))}
             </div>
           </div>
@@ -1811,10 +1873,10 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         {importedShots.length > 0 && (
           <div>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
-              <span aria-hidden="true">📥</span>
+              <Download aria-hidden="true" className="h-4 w-4" />
               <span className="text-[0.6875rem] uppercase font-semibold text-content-muted">Imported</span>
               <span className="text-content-subtle text-[0.625rem]">
-                {importedShots.length} shot{importedShots.length === 1 ? '' : 's'} from your JSON catalog — saved on this machine, not in the browser
+                {importedShots.length} shot{importedShots.length === 1 ? '' : 's'} from your JSON catalog — ✏️ edits one, saved on this machine, not in the browser
               </span>
               <button type="button" onClick={removeAllImported}
                 className="ml-auto px-1.5 py-px rounded border border-border text-content-subtle hover:text-white text-[0.625rem]">
@@ -1825,6 +1887,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
               {importedShots.map((c) => renderUserShot(c, {
                 onRemove: () => removeImportedShot(c),
                 removeTitle: 'Remove this imported shot',
+                onEdit: () => startEditShot(c, { imported: true }),
               }))}
             </div>
           </div>
@@ -1842,7 +1905,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           ? 'border-rose-500/40 bg-rose-500/5' : 'border-border bg-app/30'}`}>
           <button type="button" onClick={() => setNsfwMode((v) => !v)} aria-pressed={nsfwMode}
             className="flex items-center gap-2 text-left">
-            <span aria-hidden="true">🔞</span>
+            <span aria-hidden="true" className="text-[10px] font-bold tracking-tight">18+</span>
             <span className={`text-[0.75rem] font-semibold ${nsfwMode ? 'text-rose-300' : 'text-content-muted'}`}>
               NSFW mode {nsfwMode ? 'ON' : 'OFF'}
             </span>
@@ -1867,12 +1930,13 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
                       : 'border-border bg-app/40 text-content-muted hover:bg-surface-raised';
                   return (
                     <button key={e.id} type="button" onClick={() => toggle(e.id)} aria-pressed={on}
-                      title={done > 0 ? `${done} image(s) of this shot already in the dataset` : e.prompt}
+                      title={e.prompt}
                       className={`flex items-center gap-1.5 px-1.5 py-1 rounded-lg text-[0.625rem] border text-left transition-colors ${cls}`}>
                       <ShotIllustration framing={e.framing} label={e.label} className="w-7 h-7 shrink-0" />
                       <span className="min-w-0 leading-tight">{displayLabel(e.label)}</span>
                       <span className="ml-auto shrink-0 flex items-center gap-1">
-                        {done > 0 && <span className="text-emerald-300 font-semibold">✓×{done}</span>}
+                        {done > 0 && <span className="text-emerald-300 font-semibold"
+              aria-label={`${done} already in the dataset`}>✓×{done}</span>}
                         {on && <span className="text-rose-300" aria-hidden="true">✓</span>}
                       </span>
                     </button>
@@ -1899,13 +1963,13 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           <span className="ml-2 font-normal text-content-subtle text-[0.625rem]">
             {editingShot
               ? 'change the words or the framing, then Save — the card keeps its place'
-              : `write your own prompt — it becomes a reusable card in the Custom group above${nsfwMode && localOnlyRun ? ' — 🔞 register active' : ''}`}
+              : `write your own prompt — it becomes a reusable card in the Custom group above${nsfwMode && localOnlyRun ? ' — 18+ register active' : ''}`}
           </span>
         </summary>
         <div className="px-2.5 pt-1 flex flex-col gap-1">
           <label className="text-content-muted text-[0.6875rem]" htmlFor="custom-shot-prompt">
             {editingShot
-              ? 'Saving replaces the card in place — it keeps its position and stays selected. Its ✓×N tally starts over, because those images were generated from the words you are replacing.'
+              ? `Saving replaces the card in place — it keeps its position and stays selected. Its ✓×N tally starts over, because those images were generated from the words you are replacing.${editingImported ? ' This one is saved on this machine, so the change is written there too.' : ''}${hasDerivedLabel(editingShot) ? '' : ' Its name was written by hand and is kept as it is.'}`
               : 'Describe outfit, pose and setting, pick a framing, then Add.'}
           </label>
           <div className="flex gap-1.5 items-start">
@@ -1922,12 +1986,13 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             </select>
             {editingShot ? (
               <span className="flex flex-col gap-1">
-                <button type="button" onClick={saveEditCustomShot} disabled={!customPrompt.trim()}
+                <button type="button" onClick={saveEditCustomShot}
+                  disabled={!customPrompt.trim() || editBusy}
                   title="Replace this card with the words above"
-                  className="px-2.5 py-1 rounded-lg bg-gradient-primary text-white text-[0.6875rem] font-semibold disabled:opacity-40">
-                  ✔ Save
+                  className="px-2.5 py-1 rounded-lg bg-gradient-primary text-gray-950 text-[0.6875rem] font-semibold disabled:opacity-40">
+                  {editBusy ? 'Saving…' : '✔ Save'}
                 </button>
-                <button type="button" onClick={cancelEditCustomShot}
+                <button type="button" onClick={cancelEditCustomShot} disabled={editBusy}
                   title="Leave the card as it was"
                   className="px-2.5 py-1 rounded-lg border border-border text-content text-[0.6875rem] font-semibold hover:bg-surface-raised">
                   Cancel
@@ -1935,7 +2000,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
               </span>
             ) : (
               <button type="button" onClick={addCustomShot} disabled={!customPrompt.trim()}
-                className="px-2.5 py-1 rounded-lg bg-gradient-primary text-white text-[0.6875rem] font-semibold disabled:opacity-40">
+                className="px-2.5 py-1 rounded-lg bg-gradient-primary text-gray-950 text-[0.6875rem] font-semibold disabled:opacity-40">
                 ＋ Add
               </button>
             )}
@@ -1949,7 +2014,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           without an example of it. Collapsed by default. */}
       <details className="rounded-lg border border-border bg-app/30 open:pb-2">
         <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[0.75rem] text-content font-semibold">
-          📥 Shot catalog (JSON)
+          <Download aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Shot catalog (JSON)
           <span className="ml-2 font-normal text-content-subtle text-[0.625rem]">
             import your own shots — export first to get the format
           </span>
@@ -2011,7 +2076,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
               <div className="flex flex-wrap gap-1.5">
                 <button type="button" onClick={confirmImport}
                   disabled={importBusy || !importReview.result.accepted.length}
-                  className="px-2.5 py-1 rounded-lg bg-gradient-primary text-white text-[0.6875rem] font-semibold disabled:opacity-40">
+                  className="px-2.5 py-1 rounded-lg bg-gradient-primary text-gray-950 text-[0.6875rem] font-semibold disabled:opacity-40">
                   {importBusy ? 'Importing…' : `Import ${importReview.result.accepted.length} shot${importReview.result.accepted.length === 1 ? '' : 's'}`}
                 </button>
                 <button type="button" onClick={() => setImportReview(null)}
@@ -2106,7 +2171,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             Klein alike — keeps this locked with a visible reason. */}
         <button type="button" onClick={go} disabled={busy || !hasRef || !!blockedReason}
           title={generating ? 'A generation batch is already running' : (blockedReason || undefined)}
-          className="ml-auto px-4 py-1.5 rounded-lg bg-gradient-primary text-white text-sm font-semibold disabled:opacity-40">
+          className="ml-auto px-4 py-1.5 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">
           {busy
             ? (generating
                 ? `Generating…${generating.total ? ` ${generating.done}/${generating.total}` : ''}`

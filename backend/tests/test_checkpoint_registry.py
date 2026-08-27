@@ -1,6 +1,7 @@
 """Provenance registry: dataset fingerprint -> human version (v1/v2/...),
 manifest diffs, and the version suffix on deployed checkpoint names."""
 import json
+from app.extensions import db
 import os
 
 import pytest
@@ -41,9 +42,8 @@ def test_register_allocates_versions_by_fingerprint(app, ds_with_images):
         assert r2.version == 1
         # edit a caption -> new fingerprint -> v2
         from app.models import FaceDatasetImage
-        img = FaceDatasetImage.query.get(ids[0])
+        img = db.session.get(FaceDatasetImage, ids[0])
         img.caption = 'edited caption'
-        from app.extensions import db
         db.session.commit()
         r3 = reg.register_launch(LOCAL_USER, ds_id, 'zimage', 'local', steps=1000)
         assert r3.version == 2
@@ -100,7 +100,7 @@ def test_dataset_state_flags_drift(app, ds_with_images):
         assert st['registered'] is True and st['version'] == 1
         assert st['changed'] is False and st['diff'] is None
         # remove an image -> drift with a readable diff
-        FaceDatasetImage.query.get(ids[1]).status = 'reject'
+        db.session.get(FaceDatasetImage, ids[1]).status = 'reject'
         db.session.commit()
         st = reg.dataset_state(LOCAL_USER, ds_id, 'zimage')
         assert st['changed'] is True
@@ -111,7 +111,6 @@ def test_import_suffixes_deployed_name_with_version(app, ds_with_images, tmp_pat
     """A local import resolves the file's run via the registry and suffixes the
     run id (_rl<N>) + dataset version (_v<N>); without any registry row the name
     stays EXACTLY as before (no run tag either — the legacy-compatible path)."""
-    import re
     from app import config as cfg
     from app.services import lora_training as lt
     from app.services import checkpoint_registry as reg
@@ -541,8 +540,6 @@ def test_import_never_overwrites_a_different_lora_silently(app, ds_with_images, 
     under an incremental suffix and the caller is told — never a silent replace.
     An IDENTICAL re-import overwrites in place (idempotent, no `_2` copies)."""
     from app.services import lora_training as lt
-    ds = None
-    from app.services import face_dataset_service as svc
     with app.app_context():
         ds_id, _ = ds_with_images
         loras = tmp_path / 'loras'
@@ -567,7 +564,6 @@ def test_import_never_overwrites_a_different_lora_silently(app, ds_with_images, 
         assert os.path.isfile(loras / clash['name'])
         assert (loras / first_name).read_bytes() == b'OLD-DIFFERENT'   # untouched
         # idempotent: re-importing the SAME bytes to a matching name does not add copies
-        before = set(os.listdir(loras))
         again = lt.import_checkpoint(LOCAL_USER, ds_id, ck.name, src_dir=str(src),
                                      return_meta=True)
         assert again['collision'] is True   # first_name still squatted by OLD-DIFFERENT

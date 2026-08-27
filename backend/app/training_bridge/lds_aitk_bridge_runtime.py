@@ -17,13 +17,11 @@ import os
 import platform
 import random
 import re
-import shutil
 import stat
 import subprocess
 import sys
 import tarfile
 import time
-import types
 import uuid
 from contextlib import contextmanager
 from collections import Counter, defaultdict, deque
@@ -52,7 +50,6 @@ try:
         ENV_RESTORE_DIR,
         ENV_STATUS_FILE,
         ENV_STRICT,
-        IDENTITY_SCHEMA,
         SHAPE_REVISION,
         STATE_SCHEMA,
         atomic_json_nofollow,
@@ -76,7 +73,6 @@ except ImportError:  # Package import used by unit tests.
         ENV_RESTORE_DIR,
         ENV_STATUS_FILE,
         ENV_STRICT,
-        IDENTITY_SCHEMA,
         SHAPE_REVISION,
         STATE_SCHEMA,
         atomic_json_nofollow,
@@ -659,25 +655,6 @@ def _restore_optimizer_params(optimizer: Any, value: Mapping[str, Any]) -> None:
 def _trainer_requires_cuda(trainer: Any) -> bool:
     device = getattr(getattr(trainer, "accelerator", None), "device", None)
     return getattr(device, "type", str(device).split(":", 1)[0]) == "cuda"
-
-
-def _leaf_datasets(value: Any) -> Iterable[Any]:
-    """Yield concrete datasets through ai-toolkit/PyTorch container shapes."""
-    pending = [value]
-    seen: set[int] = set()
-    while pending:
-        current = pending.pop()
-        if current is None or id(current) in seen:
-            continue
-        seen.add(id(current))
-        if isinstance(current, (list, tuple)):
-            pending.extend(reversed(current))
-            continue
-        children = getattr(current, "datasets", None)
-        if isinstance(children, (list, tuple)):
-            pending.extend(reversed(children))
-            continue
-        yield current
 
 
 def _qualified_type(value: Any) -> str:
@@ -2110,6 +2087,9 @@ def _remove_runtime_tree_no_follow(path: Path, *, root: Path) -> None:
     if not stat.S_ISDIR(info.st_mode) or _is_link_or_reparse_info(info):
         raise OSError("runtime work directory is linked")
 
+    # Identical twin in services/training_state_bundle.py (the Flask side).
+    # This runtime deploys standalone into ai-toolkit and cannot import app.*,
+    # so it carries its own copy. test_cross_interpreter_twins.py pins both.
     def remove_directory(directory: Path) -> None:
         with os.scandir(directory) as entries:
             children = list(entries)
@@ -3201,8 +3181,6 @@ def install_from_environment() -> dict[str, Any]:
     global _ORIGINAL_AITK_SETUP_EPOCH
     global _ORIGINAL_AITK_CACHE_LATENTS
     global _ORIGINAL_AITK_CACHE_TEXT
-    global _EARLY_CACHE_ARCHIVE
-    global _EARLY_CACHE_DESCRIPTORS
 
     if _INSTALLED:
         return _SOURCE_PROBE
@@ -3291,27 +3269,3 @@ def install_from_environment() -> dict[str, Any]:
     )
     return _SOURCE_PROBE
 
-
-def uninstall_for_tests() -> None:
-    """Rollback monkeypatches (production rollback is removing the env overlay)."""
-    global _INSTALLED
-    if not _INSTALLED:
-        _EARLY_DATASET_RESTORE_QUEUE.clear()
-        _clear_early_staging()
-        return
-    from jobs.process import BaseSDTrainProcess
-    from extensions_built_in.sd_trainer.SDTrainer import SDTrainer
-    from toolkit.data_loader import AiToolkitDataset
-
-    BaseSDTrainProcess.save = _ORIGINAL_BASE_SAVE
-    BaseSDTrainProcess.end_step_hook = _ORIGINAL_BASE_END_STEP
-    SDTrainer.hook_before_train_loop = _ORIGINAL_SD_BEFORE_LOOP
-    SDTrainer.hook_train_loop = _ORIGINAL_SD_TRAIN_LOOP
-    AiToolkitDataset.setup_buckets = _ORIGINAL_AITK_SETUP_BUCKETS
-    AiToolkitDataset.setup_epoch = _ORIGINAL_AITK_SETUP_EPOCH
-    AiToolkitDataset.cache_latents_all_latents = _ORIGINAL_AITK_CACHE_LATENTS
-    AiToolkitDataset.cache_text_embeddings = _ORIGINAL_AITK_CACHE_TEXT
-    DataLoader.__iter__ = _ORIGINAL_DATALOADER_ITER
-    _EARLY_DATASET_RESTORE_QUEUE.clear()
-    _clear_early_staging()
-    _INSTALLED = False

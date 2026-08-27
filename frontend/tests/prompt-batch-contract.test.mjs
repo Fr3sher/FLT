@@ -18,13 +18,18 @@
  *     queue that receives nine.
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readSource } from './support/readSource.mjs'
 import test from 'node:test'
 
 import { getHelpTopic } from '../src/help/helpRegistry.js'
 import { WHATS_NEW } from '../src/whatsNew.js'
+import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
 
-const read = (rel) => readFileSync(new URL(`../src/${rel}`, import.meta.url), 'utf8')
+// The entry under test may have moved to the archive since it shipped
+// (see whatsNew.js, rule "Keep the list tidy") — search the union.
+const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
+
+const read = (rel) => readSource(`src/${rel}`)
 const RECENT = read('components/dataset/studio/RecentPrompts.jsx')
 const FIELD = read('components/dataset/studio/PromptField.jsx')
 const SETUP = read('components/dataset/studio/RunSetupPanel.jsx')
@@ -71,7 +76,9 @@ test('the batch reaches BOTH launch routes, through the channel both hooks sprea
   // The key rides in the same object as the global generation settings. That is
   // only safe because BOTH hooks spread that object into their body — checking
   // one half would have proved the feature on one screen only.
-  assert.match(SETUP, /const settings = launchSettings\(genSettings, pickedPrompts\)/)
+  // `allPickedPrompts` = the history batch plus the 🎬 scene batch, one channel:
+  // the scenes ride the SAME `prompts` key, so both screens get both features.
+  assert.match(SETUP, /const settings = launchSettings\(genSettings, allPickedPrompts\)/)
   assert.match(SETUP, /form\.genCount, settings,/)
   assert.match(STUDIO_HOOK, /count, family, \.\.\.genSettings \}/)
   assert.match(CANVAS_HOOK, /count, \.\.\.genSettings,/)
@@ -82,7 +89,7 @@ test('ticking nothing is not a new code path', () => {
   // (asserted for real in promptBatch.test.js); the panel must not add anything
   // of its own around it.
   assert.doesNotMatch(SETUP, /prompts:\s*\[/)
-  assert.match(SETUP, /const promptMult = Math\.max\(1, pickedPrompts\.length\)/)
+  assert.match(SETUP, /const promptMult = Math\.max\(1, allPickedPrompts\.length\)/)
 })
 
 test('what the batch costs is announced before the click, not by the queue', () => {
@@ -134,8 +141,8 @@ test('the batch has a help topic and a What\'s-new entry', () => {
   // The words someone types after being turned away by the cap that used to exist.
   assert.ok(topic.keywords.includes('at most 24 prompts'))
 
-  const entry = WHATS_NEW.find((e) => e.id === '2026-08-03-studio-prompt-batch')
+  const entry = ALL_WHATS_NEW.find((e) => e.id === '2026-08-03-studio-prompt-batch')
   assert.ok(entry, 'the prompt batch needs a What\'s-new entry')
-  const lifted = WHATS_NEW.find((e) => e.id === '2026-08-03-prompt-batch-no-cap')
+  const lifted = ALL_WHATS_NEW.find((e) => e.id === '2026-08-03-prompt-batch-no-cap')
   assert.ok(lifted, 'lifting the cap needs its own What\'s-new entry')
 })

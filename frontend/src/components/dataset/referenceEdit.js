@@ -80,6 +80,10 @@ export const MAX_EDIT_REFS = 3;
  *                      angles of the same face — is the wrong source for it.
  *                      Per-edit composition, not persistent identity.
  */
+// Exported for the BACKEND contract, not for a JS import:
+// backend/tests/test_engine_lists_contract.py reads this file's text and
+// regexes `export const EDIT_REF_SUPPORT` to pin the two languages'
+// engine tables together. A dead-export sweep must spare it.
 export const EDIT_REF_SUPPORT = {
   klein: 'dataset_only',
   krea: 'modal_one',
@@ -92,7 +96,7 @@ export function editRefSupport(engine) {
  *  an input whose files are thrown away is worse than none. Mirrors
  *  face_dataset_service.MODAL_EDIT_REF_LIMITS. */
 const MODAL_REF_LIMITS = { all: MAX_EDIT_REFS, modal_one: 1 };
-export function modalRefLimit(engine) {
+function modalRefLimit(engine) {
   return MODAL_REF_LIMITS[editRefSupport(engine)] || 0;
 }
 
@@ -209,7 +213,7 @@ export function editKeepNote(engine) {
  *  engine-specific diagnostics (utils/kreaEngine.js, the Klein hints in
  *  VariationCatalog): the modal passes the SAME functions the generation panel
  *  uses, so one gap is never explained two different ways. */
-export function editEngineBlockedBy(engine, { available = {}, reasonFor = null } = {}) {
+function editEngineBlockedBy(engine, { available = {}, reasonFor = null } = {}) {
   if (!LOCAL_ENGINES.includes(engine)) return null;
   if (available[engine]) return null;
   const reason = typeof reasonFor === 'function' ? reasonFor(engine) : null;

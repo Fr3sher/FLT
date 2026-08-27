@@ -101,8 +101,8 @@ def test_pytest_is_pinned_exactly_and_only_in_the_dev_file():
     CI's run."""
     dev = _lines(_DEV)
     assert [line for line in dev if line.lower().startswith('pytest')] == [
-        'pytest==9.0.3',
-        'pytest-xdist==3.6.1',
+        'pytest==9.1.1',
+        'pytest-xdist==3.8.0',
     ], 'pin the audited collector exactly — another pytest is not evidence about CI'
     assert not any(l.lower().startswith('pytest') for l in _lines(_RUNTIME)), \
         'test dependencies belong in requirements-dev.txt, not in the end-user install'
@@ -114,7 +114,7 @@ def test_torch_test_overlay_is_cpu_only_official_and_exactly_pinned():
         '--index-url https://download.pytorch.org/whl/cpu',
         'torch==2.13.0+cpu',
     ], 'the test overlay must be only the exact CPU Torch wheel from the official index'
-    assert 'setuptools==83.0.0' in _lines(_DEV), \
+    assert 'setuptools==84.0.0' in _lines(_DEV), \
         'preinstall the audited build backend before switching to the Torch index'
     assert not any(line.lower().startswith('torch') for line in _lines(_DEV))
     assert not any(line.lower().startswith('torch') for line in _lines(_RUNTIME))

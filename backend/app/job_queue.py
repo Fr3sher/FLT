@@ -10,12 +10,12 @@ lazy-imports the owning service (routing on job metadata) so this module never
 imports the services that create jobs (avoids import cycles).
 """
 from __future__ import annotations
+from .utils.timestamps import naive_utcnow
 import json
 import logging
 import threading
 import time
 import uuid
-from datetime import datetime
 from typing import NamedTuple
 
 from .extensions import db
@@ -49,6 +49,21 @@ COMFYUI_RECOVERY_REQUIRED_MESSAGE = (
 )
 
 
+# Why the worker will claim nothing at all. Stable KEYS — the wording lives at
+# each surface (see `QueueManager.gpu_hold`). Deliberately NOT the fifth
+# condition `process_one` checks ("a job is already running"): that one is the
+# serialization working as designed, not a hold.
+HOLD_TRAINING = 'training'
+HOLD_VISION = 'vision'
+HOLD_COMFYUI_RECOVERY = 'comfyui_recovery'
+# Noun phrases, for a caller writing "waiting for {x}".
+HOLD_LABELS = {
+    HOLD_TRAINING: 'LoRA training',
+    HOLD_VISION: 'a vision pass',
+    HOLD_COMFYUI_RECOVERY: 'a paused ComfyUI job',
+}
+
+
 class ComfyUIRecoveryRequired(RuntimeError):
     """Raised when new ComfyUI work must wait for explicit recovery."""
 
@@ -65,11 +80,6 @@ class _ComfySubmitUnknown(RuntimeError):
 # race between a vision window claim and a ComfyUI /prompt submission; the
 # persisted flags and queue rows remain the recovery record after a restart.
 GPU_ARBITER_LOCK = threading.RLock()
-
-
-def gpu_arbiter_lock():
-    """Shared in-process lock for the two local GPU consumers."""
-    return GPU_ARBITER_LOCK
 
 
 def require_comfyui_enqueue_ready() -> None:
@@ -299,8 +309,8 @@ def _claim(job_id) -> bool:
         claimed = (ImageGenerationQueue.query
                    .filter_by(job_id=job_id, status='pending')
                    .update({'status': 'processing',
-                            'started_at': datetime.utcnow(),
-                            'last_heartbeat': datetime.utcnow()}))
+                            'started_at': naive_utcnow(),
+                            'last_heartbeat': naive_utcnow()}))
         db.session.commit()
         return bool(claimed)
 
@@ -319,9 +329,15 @@ def _submit(workflow, client_id):
     result, error = queue_prompt_to_comfyui(workflow, client_id)
     if error:
         message = str(error)
-        if message.startswith('WORKFLOW_INVALIDE'):
+        # COMFYUI_UNREACHABLE means the request provably never left this
+        # machine (pre-POST refusal, connect timeout, connection never
+        # established) — ComfyUI cannot own the prompt, so this is the
+        # "unavailable local submit seam" _ComfySubmitRejected always
+        # documented: a clean terminal fail the user simply retries once
+        # ComfyUI is up, never the human-confirm recovery barrier (GitHub #51).
+        if message.startswith(('WORKFLOW_INVALIDE', 'COMFYUI_UNREACHABLE')):
             raise _ComfySubmitRejected(message)
-        # A timeout, a reset, malformed JSON, or any non-validation HTTP
+        # A READ timeout, a reset, malformed JSON, or any non-validation HTTP
         # response can happen after ComfyUI accepted the POST. Do not let a
         # caller collapse that unknown remote ownership into an ordinary fail.
         raise _ComfySubmitUnknown(message)
@@ -434,7 +450,7 @@ def _poll_outputs(prompt_id, timeout=POLL_TIMEOUT_SECONDS):
                     return None, True
                 if job.status in ('stalled', 'cancel_requested'):
                     return None, POLL_STALLED
-                job.last_heartbeat = datetime.utcnow()
+                job.last_heartbeat = naive_utcnow()
                 db.session.commit()
 
             if time.monotonic() >= deadline:
@@ -474,6 +490,7 @@ DATASET_IMAGE_JOB_NAMES = frozenset({
     'klein_edit_dataset',           # Klein (FLUX.2)
     'krea_identity_edit_dataset',   # Krea 2 Identity Edit
     'seedvr2_upscale',              # SeedVR2 (fidelity upscale)
+    'qwen_camera_dataset',          # 📷 Camera angles, dataset lane
 })
 # It happened a SECOND time, with SeedVR2, for the same reason and with the same
 # clean logs: rendered, `execution_success`, 2.2 MB PNG on disk, candidate row
@@ -715,7 +732,7 @@ class JobQueueManager:
                 'comfyui_prompt_id': str(prompt_id),
                 'completed_at': None,
                 'error_message': COMFYUI_STALLED_MESSAGE,
-                'last_heartbeat': datetime.utcnow(),
+                'last_heartbeat': naive_utcnow(),
             }, synchronize_session=False)
             if changed != 1:
                 return False
@@ -757,7 +774,7 @@ class JobQueueManager:
                        .filter(ImageGenerationQueue.comfyui_prompt_id.is_(None))
                        .update({'status': 'stalled', 'completed_at': None,
                                 'error_message': COMFYUI_UNKNOWN_SUBMIT_MESSAGE,
-                                'last_heartbeat': datetime.utcnow()},
+                                'last_heartbeat': naive_utcnow()},
                                synchronize_session=False))
             if changed != 1:
                 return False
@@ -823,7 +840,7 @@ class JobQueueManager:
             if (not current_valid or current_raw != raw
                     or not self._same_barrier_owner(current_owner, owner)):
                 return False
-            now = datetime.utcnow()
+            now = naive_utcnow()
             changed = (ImageGenerationQueue.query
                        .filter_by(job_id=str(job_id), status='stalled',
                                   comfyui_prompt_id=owner['prompt_id'])
@@ -887,7 +904,7 @@ class JobQueueManager:
                     or not self._same_barrier_owner(current_owner, owner)):
                 return False
 
-            now = datetime.utcnow()
+            now = naive_utcnow()
             changed = (ImageGenerationQueue.query
                        .filter_by(job_id=str(job_id), status='stalled')
                        .filter(ImageGenerationQueue.comfyui_prompt_id.is_(None)))
@@ -1113,6 +1130,45 @@ class JobQueueManager:
             logger.exception('job_queue: staged input prune failed')
 
     # -- worker -----------------------------------------------------------
+    def gpu_hold(self):
+        """WHICH hold is keeping the worker off the GPU, as a stable key, or None.
+
+        A key rather than a sentence because the two surfaces that ask word it
+        differently and both are right: the improve drain says "waiting for X"
+        inside a progress line, the queue dock writes a full sentence with a
+        remedy. Sharing one string would have forced one of them to read badly —
+        and picking a sentence written for a THIRD screen is how the dock ended
+        up telling someone in the dataset workspace that "the studio is
+        unavailable".
+
+        The four conditions `process_one` checks before it looks at a single row,
+        minus the fifth — 'a job is already running' — which is not a hold but the
+        serialization working as designed. The one that matters most, the
+        in-process vision window, is not visible in the DB flags at all: a caller
+        that re-derived this from `_get_system_state` alone would miss exactly the
+        case where the heartbeat lost ownership and the barrier outlived the flag.
+
+        It exists because a caller outside this module cannot tell a paused queue
+        from a slow one, and one that guessed got it wrong: the bulk improve drain
+        counted every poll of a queue frozen by a training run against its own
+        15-minute stall timeout, then declared itself stalled and silently dropped
+        the rest of the batch. Waiting on a queue that is provably held is not a
+        stall, it is waiting.
+        """
+        if _vision_window_blocks_gpu():
+            return HOLD_VISION
+        if self._get_system_state('training_in_progress', False):
+            return HOLD_TRAINING
+        if self._get_system_state('vision_in_progress', False):
+            return HOLD_VISION
+        if self.has_comfyui_stalled_barrier():
+            return HOLD_COMFYUI_RECOVERY
+        return None
+
+    def held_off_gpu_reason(self):
+        """The same answer as a NOUN PHRASE, for a caller writing "waiting for {x}"."""
+        return HOLD_LABELS.get(self.gpu_hold())
+
     def process_one(self) -> bool:
         """Run one queued image while closing the local ComfyUI/vision race."""
         job = None
@@ -1398,7 +1454,7 @@ class JobQueueManager:
                 # this while the shared lock is held. Persist intent without
                 # claiming a remote cancellation; process_one pins its returned id.
                 job.status = 'cancel_requested'
-                job.last_heartbeat = datetime.utcnow()
+                job.last_heartbeat = naive_utcnow()
                 db.session.commit()
                 return 'retry'
             prompt_id = job.comfyui_prompt_id
@@ -1435,18 +1491,6 @@ class JobQueueManager:
         """Compatibility boolean: only a proven cancellation is ``True``."""
         return self.cancel_job_outcome(
             job_id, user_id, job_type, commit=commit) == 'cancelled'
-
-    def interrupt_comfyui_job(self, prompt_id, job_id) -> bool:
-        """Compatibility helper: exact pending delete only; never /interrupt."""
-        if not prompt_id or not job_id:
-            return False
-        try:
-            from .utils.comfyui import ComfyPromptState, cancel_comfyui_prompt_state
-            return (cancel_comfyui_prompt_state(prompt_id, job_id)
-                    is ComfyPromptState.DELETED)
-        except Exception:
-            logger.exception('job_queue: could not target-cancel ComfyUI prompt %s', prompt_id)
-            return False
 
     # -- system-state KV (underscore names required verbatim) -------------
     def _set_system_state(self, key, value, ttl_seconds=None):

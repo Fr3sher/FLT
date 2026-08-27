@@ -21,8 +21,41 @@ const payload = (identityPrompts = {}) => ({
 test('a payload that has not arrived yields loaded:false, never a guess', () => {
   for (const bad of [null, undefined, 'nope', 42]) {
     assert.deepEqual(improveEditorState(bad),
-      { loaded: false, stored: '', shipped: '', enabled: true });
+      { loaded: false, stored: '', shipped: '', enabled: true,
+        loraPreset: '', loraPresets: [], megapixels: 2 });
   }
+});
+
+test('the output budget reads from the same payload, junk degrading to the shipped 2', () => {
+  const p = payload({});
+  p.config.klein = { improve_megapixels: 4.5 };
+  assert.equal(improveEditorState(p).megapixels, 4.5);
+  p.config.klein = { improve_megapixels: 'huge' };
+  assert.equal(improveEditorState(p).megapixels, 2);
+  assert.equal(improveEditorState(payload({})).megapixels, 2);
+});
+
+test('the LoRA-preset half reads from the same payload as the instruction', () => {
+  const p = payload({});
+  p.config.klein = {
+    improve_lora_preset: 'Detail',
+    generation_lora_presets: [
+      { name: 'Detail', loras: [{ file: 'klein/d.safetensors', strength: 0.7 }] },
+      { name: 'Skin', loras: [{ file: 'klein/s.safetensors', strength: 0.4 }] },
+      { name: '', loras: [] },              // junk a hand-edited config can hold
+    ],
+  };
+  const s = improveEditorState(p);
+  assert.equal(s.loraPreset, 'Detail');
+  assert.deepEqual(s.loraPresets, ['Detail', 'Skin']);
+});
+
+test('a stale preset pick is KEPT, so the user can see it and clear it', () => {
+  // The backend resolves it fail-closed to "none"; hiding it here would leave
+  // an invisible setting nobody can unset.
+  const p = payload({});
+  p.config.klein = { improve_lora_preset: 'Renamed-away', generation_lora_presets: [] };
+  assert.equal(improveEditorState(p).loraPreset, 'Renamed-away');
 });
 
 test('stored and shipped stay SEPARATE — the box shows one and saves the other', () => {
@@ -89,6 +122,37 @@ test('"back to the shipped text" is written as an EMPTY value, not a copy', () =
   // today's wording forever.
   assert.deepEqual(improveSettingsPatch({ prompt: '' }),
     { config: { identity_prompts: { klein_improve: '' } } });
+});
+
+test('a preset-only save touches klein and NOTHING else', () => {
+  assert.deepEqual(improveSettingsPatch({ loraPreset: 'Detail' }),
+    { config: { klein: { improve_lora_preset: 'Detail' } } });
+  // Clearing it back to "none" is an empty string, same as every other
+  // follow-the-default contract here.
+  assert.deepEqual(improveSettingsPatch({ loraPreset: '' }),
+    { config: { klein: { improve_lora_preset: '' } } });
+});
+
+test('instruction and preset ride in ONE patch when both are pending', () => {
+  assert.deepEqual(improveSettingsPatch({ prompt: 'x', loraPreset: 'Skin' }),
+    { config: { identity_prompts: { klein_improve: 'x' },
+      klein: { improve_lora_preset: 'Skin' } } });
+});
+
+test('the output budget saves clamped to the Settings bounds, half-typed never writes', () => {
+  assert.deepEqual(improveSettingsPatch({ megapixels: '4' }),
+    { config: { klein: { improve_megapixels: 4 } } });
+  // The same clamp the Settings card applies — two editors, one range.
+  assert.deepEqual(improveSettingsPatch({ megapixels: 99 }),
+    { config: { klein: { improve_megapixels: 8 } } });
+  assert.deepEqual(improveSettingsPatch({ megapixels: 0 }),
+    { config: { klein: { improve_megapixels: 0.5 } } });
+  // An emptied box mid-typing is not a settings write.
+  assert.deepEqual(improveSettingsPatch({ megapixels: '' }),
+    { config: {} });
+  // …and it shares the klein object with a pending preset pick.
+  assert.deepEqual(improveSettingsPatch({ megapixels: 2.5, loraPreset: 'Skin' }),
+    { config: { klein: { improve_lora_preset: 'Skin', improve_megapixels: 2.5 } } });
 });
 
 test('the scope note actually says the change is app-wide', () => {

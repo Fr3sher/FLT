@@ -17,6 +17,7 @@
  * image destinations keep seeing exactly what they saw before.
  */
 import { useState, useCallback, useEffect } from 'react';
+import { Globe, Search } from 'lucide-react';
 import { useToast } from '../common/Toast';
 import useBatchThumbs from '../../hooks/useBatchThumbs';
 import { postJson } from '../../hooks/useDataset';
@@ -181,8 +182,6 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   const [faceFilterBusy, setFaceFilterBusy] = useState(false);
   const [suggestBestBusy, setSuggestBestBusy] = useState(false);
   const [faceThreshold, setFaceThreshold] = useState(0.45);
-  // Suggested quality reference candidates (from "Suggest best references").
-  const [suggested, setSuggested] = useState(() => new Set());
   // Video posters that 404ed. Kept APART from `broken`: an image tile whose
   // thumbnail is dead usually IS the dead media (the thumb falls back to the
   // item's own url), but a video's poster is a separate CDN asset from the
@@ -359,7 +358,6 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
       const good = new Set(
         d.suggestions.filter((s) => s.state === 'scorable').slice(0, 12).map((s) => s.url)
       );
-      setSuggested(good);
       setFaceRefs(good);
       setPickingRef(true);
       if (good.size === 0) {
@@ -411,8 +409,8 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
     <section className="bg-surface rounded-xl border border-border p-3 flex flex-col gap-2">
       <div className="flex items-center gap-2 flex-wrap">
         <h2 className="text-content font-semibold text-sm">
-          {toVideoBank ? '🕷️ Scrape videos into the bank'
-            : toBank ? '🕷️ Scrape into the bank' : '🕷️ Build from scraped images'}
+          <><Globe aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />{toVideoBank ? 'Scrape videos into the bank'
+            : toBank ? 'Scrape into the bank' : 'Build from scraped images'}</>
         </h2>
         <span className="text-content-subtle text-[0.6875rem]"
           title={toVideoBank
@@ -477,14 +475,14 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
               onClick={() => setSourceMode(mode)}
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${
                 modeInUse === mode
-                  ? 'bg-indigo-500 text-white shadow-sm'
+                  ? 'bg-indigo-500 text-gray-950 shadow-sm'
                   : 'text-content-muted hover:bg-white/5 hover:text-content'}`}>
               {label}
             </button>
           ))}
         </div>
         <button type="button" onClick={handleImport} disabled={busy || importing || selected.size === 0}
-          className="ml-auto px-3 py-1.5 rounded-lg bg-gradient-primary text-white text-sm font-semibold disabled:opacity-40">
+          className="ml-auto px-3 py-1.5 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">
           {importing ? 'Importing…' : `⬇ Import ${selected.size || ''}`}
         </button>
       </div>
@@ -492,7 +490,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
       {modeInUse === 'reddit' && (
         <div className="rounded-lg border border-border bg-white/5 px-2 py-2 flex flex-col gap-1.5">
           <span className="text-content-subtle text-[0.6875rem] flex items-center gap-1">
-            <span aria-hidden>🔎</span> Search Reddit
+            <Search aria-hidden="true" className="h-3.5 w-3.5" /> Search Reddit
           </span>
           <div className="flex flex-wrap items-center gap-2">
             <input
@@ -757,7 +755,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                   className="px-2 py-0.5 rounded border border-indigo-400 bg-surface-raised hover:bg-white/10">
                   {faceFilterBusy ? 'Filtering…' : `Keep matches`}
                 </button>
-                <button type="button" onClick={() => { setFaceRefs(new Set()); setSuggested(new Set()); setPickingRef(false); }}
+                <button type="button" onClick={() => { setFaceRefs(new Set()); setPickingRef(false); }}
                   title="Clear references" className="px-1.5 rounded border border-border hover:text-content">✕</button>
               </>
             )}
@@ -854,7 +852,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                     )}
                     <span aria-hidden
                       className={`absolute top-1 right-1 w-4 h-4 rounded-full text-[0.625rem] leading-4 text-center font-bold
-                        ${on ? 'bg-indigo-500 text-white' : 'bg-black/50 text-white/70'}`}>
+                        ${on ? 'bg-indigo-500 text-gray-950' : 'bg-black/50 text-gray-950/70'}`}>
                       {on ? '✓' : ''}
                     </span>
                     {faceRefs.has(it.thumbnail || it.url) && (

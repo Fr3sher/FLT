@@ -428,8 +428,13 @@ test('installCatalog lists every app-installable component, present + available'
     ['face_scoring', 'masks', 'watermark_inpaint', 'video', 'shot_detect',
       'video_text', 'ollama_model',
       'klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora',
+      'klein_enhancement_lora',
       'krea_nodes', 'krea_model', 'krea_text_encoder', 'krea_vae',
-      'krea_identity_lora'],
+      'krea_identity_lora',
+      // 📷 Camera angles — four rows, not five: its VAE is the krea_vae row
+      // above (one file, one button).
+      'camera_model', 'camera_lora', 'camera_speed_lora', 'camera_text_encoder',
+      'lanpaint_nodes'],
   );
   // Everything installed in fullCaps -> every tile present, and available to REINSTALL.
   for (const c of Object.values(cat)) {
@@ -441,7 +446,7 @@ test('installCatalog lists every app-installable component, present + available'
 test('installCatalog stays fully available for reinstall when all is green', () => {
   // The menu must never collapse once installed — each item can always be repaired.
   const cat = installCatalog(fullCaps());
-  assert.ok(cat.length === 16 && cat.every((c) => c.available));
+  assert.ok(cat.length === 22 && cat.every((c) => c.available));
 });
 
 test('installCatalog marks missing ML extras not-present but still available', () => {

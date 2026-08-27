@@ -47,12 +47,12 @@ export function faceAnalysisState({ blockedReason, hasRef, busy,
  *  than inventing a count. */
 export function faceAnalysisLabel(scope) {
   const total = Number(scope?.total);
-  if (!Number.isFinite(total) || total <= 0) return '🎭 Analyze faces';
+  if (!Number.isFinite(total) || total <= 0) return 'Analyze faces';
   const unscored = Number(scope?.unscored);
   if (Number.isFinite(unscored) && unscored > 0 && unscored < total) {
-    return `🎭 Analyze faces (${total} · ${unscored} new)`;
+    return `Analyze faces (${total} · ${unscored} new)`;
   }
-  return `🎭 Analyze faces (${total})`;
+  return `Analyze faces (${total})`;
 }
 
 /** Can 🎯 Auto-triage act on the stored face scores?
@@ -102,7 +102,7 @@ export function autoTriageEmptyReason(visible, all = null) {
   const rows = pool.filter((i) => i && i.filename);
   if (!rows.length || !rows.some((i) => i.face_state != null)) {
     return { kind: 'never_scored', count: 0,
-             message: 'No image carries a face score yet — run 🎭 Analyze faces to unlock auto-triage.' };
+             message: 'No image carries a face score yet — run Analyze faces to unlock auto-triage.' };
   }
   if (!rows.some(triageScorable)) {
     // The case the Discord report was really about: a set of wide shots came

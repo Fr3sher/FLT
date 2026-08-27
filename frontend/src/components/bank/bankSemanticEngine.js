@@ -10,7 +10,7 @@ export const SEMANTIC_ENGINE_OPTIONS = [
   { id: 'siglip2', label: 'SigLIP 2', hint: 'Optional · its own semantic index' },
 ]
 
-export const PIPELINE_BASE_STEPS = [
+const PIPELINE_BASE_STEPS = [
   'scan', 'auto_reject', 'score', 'semantic_dedup',
   'watermark', 'faces', 'framing', 'caption',
 ]
@@ -164,7 +164,7 @@ export function semanticPurposeSentence(engine) {
 }
 
 export const SCORE_STAYS_CLIP_SENTENCE = '✨ Score stays on CLIP for aesthetic, NSFW, '
-  + 'visual style and 🎨 Medium.'
+  + 'visual style and Medium.'
 
 export const SEMANTIC_CACHE_SENTENCE = 'Switching engines keeps both caches and both '
   + 'same-shot groupings; it starts nothing automatically and deletes nothing.'
@@ -180,4 +180,12 @@ export function pipelineStepKeys(engine) {
 /** Default checked steps retain the historic caption-off behaviour. */
 export function defaultPipelineStepKeys(engine, ready = {}) {
   return pipelineStepKeys(engine).filter((key) => key !== 'caption' && !!ready[key])
+}
+
+/** One request, one vector space: a payload only counts for the engine
+ *  (and model) that asked for it. Shared by the workspace's coverage
+ *  loader and the curation lanes (useCurationLanes.js). */
+export function semanticPayloadMatches(payload, engine, modelKey = null) {
+  return payload?.engine === engine
+    && (!modelKey || payload?.model_key === modelKey)
 }

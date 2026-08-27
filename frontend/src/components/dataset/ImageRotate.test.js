@@ -16,7 +16,10 @@ const hook = read('../../hooks/useDataset.js');
 const workspace = read('./DatasetWorkspace.jsx');
 const lightbox = read('./DatasetLightbox.jsx');
 const gridItem = read('./DatasetGridItem.jsx');
-const bankWorkspace = read('../bank/BankWorkspace.jsx');
+// The review handlers moved to useReviewLightbox (hook wave 5); the
+// contract spans both sources, so it reads them as one text.
+const bankWorkspace = read('../bank/BankWorkspace.jsx')
+  + read('../bank/useReviewLightbox.js');
 // The thumbnail cache-buster lives on the TILE now (the Encre redesign
 // split the workspace); the rotate handlers stay in the workspace.
 const bankTile = read('../bank/BankTile.jsx');
@@ -41,14 +44,15 @@ test('the dataset lightbox offers both directions, labelled and keyboard reachab
   assert.match(lightbox, /onRotate,/);
   assert.match(lightbox, /const rotate = \(degrees\) => async \(event\)/);
   // Guarded by the same "an edit is running" flag as the mirror.
-  assert.match(lightbox, /if \(!onRotate \|\| busy \|\| mirrorBusy\) return/);
+  assert.match(lightbox, /if \(!onRotate \|\| pixelEditRefused \|\| mirrorBusy\) return/);
   // Real <button>s (focusable, Enter/Space) with an explicit label — the emoji
   // is decoration, never the accessible name.
-  // `refused ||` in front: while a dataset pass holds the image the accessible
-  // name becomes the sentence naming that pass, instead of a silently grey
-  // button (tests/dataset-tile-reads-stay-live.test.mjs).
-  assert.match(lightbox, /aria-label=\{refused \|\| `Rotate \$\{alt\} 90 degrees left`\}/);
-  assert.match(lightbox, /aria-label=\{refused \|\| `Rotate \$\{alt\} 90 degrees right`\}/);
+  // `pixelEditReason ||` in front: while a dataset pass holds the image — or an
+  // upscale of it is still rendering — the accessible name becomes the sentence
+  // naming WHY, instead of a silently grey button. It is the same reason the
+  // `disabled` flag reads (tests/dataset-tile-reads-stay-live.test.mjs).
+  assert.match(lightbox, /aria-label=\{pixelEditReason \|\| `Rotate \$\{alt\} 90 degrees left`\}/);
+  assert.match(lightbox, /aria-label=\{pixelEditReason \|\| `Rotate \$\{alt\} 90 degrees right`\}/);
   assert.match(lightbox, /onClick=\{rotate\(270\)\}/);
   assert.match(lightbox, /onClick=\{rotate\(90\)\}/);
   assert.ok(lightbox.includes('<span aria-hidden="true">↺</span> Rotate left'));

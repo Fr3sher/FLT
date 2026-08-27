@@ -108,6 +108,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from _harness import _emit, _log
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import import_report  # noqa: E402
@@ -131,14 +132,6 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 # parent sends (16), which is why it is expressed that way rather than as a
 # round number somebody would later "tidy" to 50.
 CLIPS_PER_FORWARD = 4
-
-
-def _log(m):
-    print(m, file=sys.stderr, flush=True)
-
-
-def _emit(obj):
-    print(json.dumps(obj), flush=True)
 
 
 def _preprocess(paths):
@@ -193,13 +186,17 @@ def _encode(model, batch, per_clip):
     `per_clip` is the frame count each clip contributed. Every one of them must
     be a multiple of the model's `num_frames`, or the cross-frame message block
     would mix two shots inside one group — see the module docstring."""
-    import torch
-
     num_frames = int(getattr(model.config, 'num_frames', 8) or 8)
     bad = [n for n in per_clip if n % num_frames]
     if bad:
         raise ValueError(f'frames per clip must be a multiple of {num_frames}, '
                          f'got {sorted(set(bad))}')
+    # Imported AFTER the guard on purpose: a mis-batched call is a programming
+    # error the parent must hear about identically on every machine, and torch is
+    # absent from CI. Importing first turned that ValueError into a
+    # ModuleNotFoundError and made the contract untestable without the GPU stack.
+    import torch
+
     with torch.no_grad():
         out = model(pixel_values=torch.from_numpy(batch))
     # `.pooler_output` is post_layernorm(CLS) — 768-d, NOT projected into the
@@ -228,7 +225,7 @@ def main() -> int:
 
     try:
         import numpy as np  # noqa: F401 — used by _preprocess/step_distances
-        import torch
+        import torch  # noqa: F401 — a probe: a missing torch must answer as import_failure here, not as a transformers traceback later
         from transformers import XCLIPModel
     except Exception as e:  # noqa: BLE001 — clean JSON, never a mute traceback
         _emit({'ok': False, 'error': import_report.import_failure(e)})

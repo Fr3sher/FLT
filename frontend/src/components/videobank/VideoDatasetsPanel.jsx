@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Clapperboard } from 'lucide-react';
 import { apiFetch, del, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import { HelpBadge } from '../../help/HelpMode'
@@ -32,7 +33,6 @@ export default function VideoDatasetsPanel() {
   useEffect(() => { refresh() }, [refresh])
 
   const remove = async (ds) => {
-    // eslint-disable-next-line no-alert
     if (!window.confirm(`Delete the video dataset “${ds.name}”?\n\nThe encoded clips are deleted. The bank they came from keeps every shot and every decision — you can re-cut at another length without triaging again.`)) return
     try {
       await del(`/api/video-dataset/${ds.id}`)
@@ -50,7 +50,7 @@ export default function VideoDatasetsPanel() {
     <section className="flex flex-col gap-2">
       <h2 className="flex items-center gap-2">
         <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-content-subtle">
-          <span aria-hidden>🎬</span> Video training sets
+          <Clapperboard aria-hidden="true" className="h-4 w-4" /> Video training sets
           <span className="font-normal normal-case tracking-normal"> ({datasets.length})</span>
         </span>
         <HelpBadge topic="video-datasets" />
@@ -157,7 +157,6 @@ function VideoTrainingSection({ ds }) {
         const room = typeof body.free_gigabytes === 'number'
           ? ` You have ${body.free_gigabytes.toFixed(1)} GB free there.`
           : ''
-        // eslint-disable-next-line no-alert
         if (window.confirm(`${body.error}\n\nDownload about ${body.gigabytes} GB from ${body.repo}?${room}`)) {
           setBusy(false)
           return start(true)

@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { buildLineageGraph, CARD_W, CARD_H } from '../../utils/lineageGraph';
+import { buildLineageGraph, CARD_W } from '../../utils/lineageGraph';
 import { GraphCard, CheckpointPill } from './lineageNodes';
 import { LineageEdgeDefs, LineageEdges } from './lineageEdges';
 import LineageDetailPanel from './LineageDetailPanel';
@@ -343,7 +343,7 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
           <button type="button" onClick={handleGenerate} disabled={!sel.enabled || gen.busy}
             className={'rounded-md px-3 py-1 text-[0.6875rem] font-semibold '
               + (sel.enabled && !gen.busy
-                ? 'bg-indigo-500 text-white hover:bg-indigo-400 '
+                ? 'bg-indigo-500 text-gray-950 hover:bg-indigo-400 '
                 : 'cursor-not-allowed bg-app/60 text-content-subtle ')}>
             {gen.busy ? 'Generating…' : 'Generate'}
           </button>

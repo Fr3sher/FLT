@@ -65,6 +65,7 @@ import hashlib
 import json
 import os
 import sys
+from _harness import _cancel_requested, _log, _write_count
 
 CACHE_EVERY = 50
 # Detection confidence and head-turn gates — the same values face_score_infer
@@ -85,36 +86,28 @@ DET_MIN, YAW_MAX = 0.50, 40.0
 # merge different people. Below the floor the answer would be noise; above it,
 # a small face is merely a small face.
 FACE_PX_MIN = 64.0
+# --- Zoom rescue -------------------------------------------------------------
+# The floor is only half the fix — the DETECTOR is the other half: FaceAnalysis
+# fits the whole frame into det_size (640x640) before it looks, so a head in a
+# full-body shot arrives a few pixels wide however many pixels the file holds.
+# A second detection on a CROP around the head (or on a 2x upscale when nothing
+# was found on a big frame) hands the model the resolution that was in the file
+# all along. Mirrors face_score_infer, where the rationale is written out in
+# full; same constants on both surfaces, pinned together by
+# test_face_score_zoom_rescue.py.
+ZOOM_PAD = 0.6
+ZOOM_RETRY_MIN_SIDE = 1280
+# Detector input size. The whole frame is fitted into this square BEFORE
+# detection looks at it (the reason the zoom rescue exists at all), so the
+# two surfaces must share it: a bigger square on one side would find faces
+# the other calls absent. Pinned across both files by
+# test_face_score_zoom_rescue.
+DET_SIZE = (640, 640)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bank_image_guard import read_validated_bank_image  # noqa: E402
 from face_score_infer import _repair_nested_antelopev2  # noqa: E402
 import npz_atomic  # noqa: E402
-
-
-def _log(m):
-    print(m, file=sys.stderr, flush=True)
-
-
-def _cancel_requested(cancel_file):
-    """The parent drops this sentinel file to ask for a clean stop, so the pass
-    flushes its cache and exits between images instead of being SIGKILLed
-    mid-compute (which would lose up to CACHE_EVERY images)."""
-    return bool(cancel_file) and os.path.exists(cancel_file)
-
-
-def _write_count(cache_path, n):
-    """Plain-text sidecar (``<cache>.count``) with how many images are cached so
-    far. The Flask parent has no numpy to read the .npz, so this is how a stopped
-    pass can still report an honest "N cached (M remaining)" — even in the rare
-    case it had to be hard-killed before it could print its own cancel line."""
-    if not cache_path:
-        return
-    try:
-        with open(cache_path + '.count', 'w', encoding='utf-8') as f:
-            f.write(str(int(n)))
-    except OSError:
-        pass
 
 
 def _file_sig(path):
@@ -384,7 +377,7 @@ def main() -> int:
             if models_root:
                 kwargs['root'] = models_root
             app = FaceAnalysis(**kwargs)
-            app.prepare(ctx_id=0 if used_gpu else -1, det_size=(640, 640))
+            app.prepare(ctx_id=0 if used_gpu else -1, det_size=DET_SIZE)
         except Exception as e:  # noqa: BLE001 — must exit as clean JSON, not a mute traceback
             print(json.dumps({'ok': False, 'results': {}, 'clusters': {},
                               'error': f'model load failed: {type(e).__name__}: {e}'}))
@@ -393,6 +386,22 @@ def main() -> int:
         def biggest(faces):
             return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])) \
                 if faces else None
+
+        def zoom_detect(img, f, lin_scale=1.0):
+            """Re-detect on a crop centred on `f`, at the source resolution.
+
+            `lin_scale` maps `f`'s coordinates back to source pixels (see the
+            2x retry below). The crop itself never rescales, so the returned
+            face is already measured in source pixels — mirrors
+            face_score_infer.zoom_detect."""
+            h, w = img.shape[:2]
+            x1, y1, x2, y2 = (v / lin_scale for v in f.bbox)
+            half = max(x2 - x1, y2 - y1) * (0.5 + ZOOM_PAD)
+            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            cx1, cy1 = max(0, int(cx - half)), max(0, int(cy - half))
+            cx2, cy2 = min(w, int(cx + half)), min(h, int(cy + half))
+            crop = img[cy1:cy2, cx1:cx2]
+            return biggest(app.get(crop)) if crop.size else None
 
         import numpy as _np
         zero = _np.zeros(512, dtype='float32')
@@ -427,24 +436,40 @@ def main() -> int:
                 else:
                     h, w = img.shape[:2]
                     f = biggest(app.get(img))
+                    padded = False
+                    pad_scale = 1.0    # padded/original AREA ratio (bbox_frac only)
+                    lin_scale = 1.0    # linear upscale of the 2x retry below
                     if f is None:   # padding rescue: SCRFD misses full-frame closeups
                         pad = int(0.25 * max(h, w))
                         f = biggest(app.get(cv2.copyMakeBorder(
                             img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(0, 0, 0))))
-                        scale = (w + 2 * pad) * (h + 2 * pad) / (w * h) if f is not None else 1.0
-                    else:
-                        scale = 1.0
+                        if f is not None:
+                            padded = True
+                            pad_scale = (w + 2 * pad) * (h + 2 * pad) / (w * h)
+                    if f is None and max(h, w) > ZOOM_RETRY_MIN_SIDE:
+                        # Nothing at det_size(640). On a frame this big that is
+                        # usually the downscale rather than the absence of a
+                        # face — a head in a full-body shot is a few pixels once
+                        # the whole frame is squeezed into 640 (mirrors
+                        # face_score_infer.analyze).
+                        f = biggest(app.get(cv2.resize(
+                            img, None, fx=2.0, fy=2.0,
+                            interpolation=cv2.INTER_CUBIC)))
+                        lin_scale = 2.0
                     if f is None:
                         result = ('no_face', 0.0, 0.0, zero, float('nan'),
                                   signature, payload_hash, float('nan'))
                     else:
-                        side_w = float(f.bbox[2] - f.bbox[0])
-                        side_h = float(f.bbox[3] - f.bbox[1])
+                        # Sides in SOURCE pixels: /lin_scale undoes the 2x retry.
+                        # The padding rescue needs no correction here — it ADDS
+                        # pixels without rescaling them (see _verdict).
+                        side_w = float(f.bbox[2] - f.bbox[0]) / lin_scale
+                        side_h = float(f.bbox[3] - f.bbox[1]) / lin_scale
                         # bbox_frac stays a fraction of the ORIGINAL image (the
-                        # /scale undoes the padding rescue) — it is still stored
-                        # and still read downstream. It is only no longer the
-                        # thing the size VERDICT is taken on.
-                        bbox_frac = float(side_w * side_h / (w * h) / scale)
+                        # /pad_scale undoes the padding rescue) — it is still
+                        # stored and still read downstream. It is only no longer
+                        # the thing the size VERDICT is taken on.
+                        bbox_frac = float(side_w * side_h / (w * h) / pad_scale)
                         face_px = min(side_w, side_h)
                         det = float(f.det_score)
                         # The pose estimate: kept BOTH as the 'extreme_pose'
@@ -455,6 +480,28 @@ def main() -> int:
                         pose = getattr(f, 'pose', None)
                         yaw = float(pose[1]) if pose is not None else float('nan')
                         state = _verdict(det, face_px, yaw)
+                        # One look at the head's own resolution before a size or
+                        # detection verdict stands — the stored embedding then
+                        # comes from the aligned crop those pixels deserve. NOT
+                        # for 'extreme_pose': a profile stays a profile however
+                        # close you crop, and embedding one MERGES people. And
+                        # not after a padding rescue — that face already fills
+                        # the frame. Mirrors face_score_infer.analyze.
+                        if state in ('too_small', 'low_det') and not padded:
+                            z = zoom_detect(img, f, lin_scale)
+                            if z is not None:
+                                zpose = getattr(z, 'pose', None)
+                                zyaw = (float(zpose[1]) if zpose is not None
+                                        else float('nan'))
+                                zdet = float(z.det_score)
+                                zpx = float(min(z.bbox[2] - z.bbox[0],
+                                                z.bbox[3] - z.bbox[1]))
+                                if _verdict(zdet, zpx, zyaw) == 'scorable':
+                                    f, det, yaw = z, zdet, zyaw
+                                    state, face_px = 'scorable', zpx
+                                    bbox_frac = float(
+                                        (z.bbox[2] - z.bbox[0])
+                                        * (z.bbox[3] - z.bbox[1]) / (w * h))
                         result = (state, round(det, 3), round(bbox_frac, 4),
                                   f.normed_embedding.astype('float32'),
                                   yaw if yaw != yaw else round(yaw, 2), signature,

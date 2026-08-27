@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Clapperboard } from 'lucide-react';
 import { apiFetch, del, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { HelpBadge } from '../help/HelpMode'
@@ -11,7 +12,7 @@ import { countsSummary } from '../components/videobank/videoBankStatus'
 
 const CURRENT_KEY = 'videoBankCurrentId'
 
-/** 🎬 Video bank — triage a folder of RUSHES before it becomes a training set.
+/** Video bank — triage a folder of RUSHES before it becomes a training set.
  *
  * WHY THIS IS A SEPARATE KIND OF BANK. Drop a .mp4 into an image bank today and
  * it is skipped in silence: no row, no warning, nothing to click. That is the
@@ -91,7 +92,6 @@ export default function VideoBankPage() {
   }
 
   const remove = async (bank) => {
-    // eslint-disable-next-line no-alert
     if (!window.confirm(`Remove the video bank “${bank.name}”?\n\nOnly the triage data (detected shots, decisions, thumbnails) is deleted — your video files and any dataset already built from them are NOT touched.`)) return
     try {
       await del(`/api/video-bank/${bank.id}`)
@@ -110,7 +110,7 @@ export default function VideoBankPage() {
     <div className="space-y-6">
       <header className="flex flex-wrap items-center gap-2">
         <h1 className="flex items-center gap-2 text-xl font-bold text-content">
-          🎬 Video bank
+          <Clapperboard aria-hidden="true" className="mr-2 inline h-5 w-5 align-[-3px]" />Video bank
           <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
             Beta
           </span>
@@ -143,7 +143,7 @@ export default function VideoBankPage() {
             hint="Reads .mp4, .mov, .mkv, .webm and .avi. No pass ever modifies your files: scanning, cutting and building all write elsewhere. The one thing that adds to this folder is a scrape you send to this bank yourself." />
         </div>
         <button type="submit" disabled={creating}
-          className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+          className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-semibold text-gray-950 disabled:opacity-50">
           {creating ? 'Inventorying…' : '➕ Create video bank'}
         </button>
       </form>

@@ -7,6 +7,7 @@ No login - single local user (`cfg.LOCAL_USER`). Every route except
 ai-toolkit isn't configured, so it degrades to `{'available': False}` instead.
 """
 import os
+from ..extensions import db
 import re
 import time
 from datetime import datetime
@@ -1867,7 +1868,7 @@ def dataset_train_import(dataset_id):
     if body.get('cloud_run_id'):
         from ..models import CloudTrainingRun
         from ..services import cloud_run_dataset as crd
-        crun = CloudTrainingRun.query.get(int(body['cloud_run_id']))
+        crun = db.session.get(CloudTrainingRun, int(body['cloud_run_id']))
         # (id, table), not id alone: this route is reached from a FACE dataset,
         # and a video run of the same id would otherwise pass the check and get
         # deployed into this dataset's ComfyUI folder.
@@ -2850,7 +2851,7 @@ def dataset_train_cloud_checkpoint(dataset_id):
     if rid is not None:
         from ..models import CloudTrainingRun
         from ..services import cloud_run_dataset as crd
-        run = CloudTrainingRun.query.get(rid)
+        run = db.session.get(CloudTrainingRun, rid)
         # Same (id, table) ownership test: this endpoint SERVES the run's
         # checkpoint file, so an id-only match would hand a face dataset's caller
         # the weights of a video run that shares its id.
@@ -2945,28 +2946,15 @@ def train_canvas_generate():
         return gate
     d = request.get_json(silent=True) or {}
     try:
+        from ..services.lora_test_studio import StudioGenSettings
         res = ct.canvas_generate(
             LOCAL_USER, d.get('selections') or [],
-            strengths=d.get('strengths') or [1.0],
-            seed=d.get('seed'), prompt=d.get('prompt'),
-            # 📝 Lot : une passe par prompt coché dans l'historique du panneau.
-            prompts=d.get('prompts'), z_model=d.get('z_model'),
-            # ◉ La base est un AXE : le panneau du board dit « BASE MODEL (MULTI) ».
-            z_models=d.get('z_models'),
-            aspects=d.get('aspects'), cfgs=d.get('cfgs'), steps_list=d.get('steps'),
-            steps2_list=d.get('steps2'), count=d.get('count'),
-            permanent_loras=d.get('permanent_loras'), batch_loras=d.get('batch_loras'),
-            external_loras=d.get('external_loras'),
-            rebalance=d.get('rebalance'),
-            rebalance_strength=d.get('rebalance_strength'),
-            negative=d.get('negative'), sampler=d.get('sampler'),
-            scheduler=d.get('scheduler'), weight_dtype=d.get('weight_dtype'),
-            enhancer=d.get('enhancer'), enhancer_strength=d.get('enhancer_strength'),
-            detail_amount=d.get('detail_amount'),
-            resolution_tier=d.get('resolution_tier'),
-            resolution_multiplier=d.get('resolution_multiplier'),
-            init_image=d.get('init_image'), denoise=d.get('denoise'),
-            combine=d.get('combine'))
+            d.get('strengths') or [1.0],
+            # Réglages partagés (mêmes clés wire que le Studio) ; 📝 Lot : une
+            # passe par prompt coché. ◉ La base est un AXE (z_models).
+            StudioGenSettings.from_payload(d),
+            prompts=d.get('prompts'),
+            external_loras=d.get('external_loras'), combine=d.get('combine'))
     except Exception as e:
         from ..services.lora_test_studio import StudioArchMismatch, StudioAssetsMissing
         if isinstance(e, StudioArchMismatch):
@@ -3012,6 +3000,75 @@ def train_checkpoint_images_delete(record_id, step):
         return jsonify({'error': 'Could not delete these images — a file is '
                                  'locked or unreachable. Try again.'}), 500
     return jsonify({'ok': True, **out})
+
+
+@bp.get('/gallery/images')
+def app_gallery_images():
+    """🖼 Every generated image in the app, newest first — the Gallery page.
+
+    Cursor-paginated (`before_id` = "older than this id"), optionally narrowed
+    by `dataset_id`, `kind` ('renders' | 'improved') and `liked=1`. Open like
+    the other gallery reads; an install that never generated anything answers
+    an empty page, never an error."""
+    kind = (request.args.get('kind') or '').strip() or None
+    if kind not in (None, 'renders', 'improved'):
+        return jsonify({'error': "kind must be 'renders' or 'improved'"}), 400
+    return jsonify(ct.app_gallery(
+        limit=request.args.get('limit', default=ct.APP_GALLERY_PAGE, type=int),
+        before_id=request.args.get('before_id', type=int),
+        dataset_id=request.args.get('dataset_id', type=int),
+        kind=kind,
+        liked=request.args.get('liked', default=0, type=int) == 1))
+
+
+@bp.post('/gallery/images/delete')
+def app_gallery_images_delete():
+    """🗑 Delete generated images from the Gallery page. Body: {image_ids: […]}.
+
+    The checkpoint delete with its scope removed (services.cloud_training.
+    delete_gallery_images): same recoverable disposal, same refusals — a cell
+    still generating is skipped, never cancelled."""
+    ids = (request.get_json(silent=True) or {}).get('image_ids') or []
+    if not isinstance(ids, list):
+        return jsonify({'error': 'image_ids must be a list'}), 400
+    try:
+        out = ct.delete_gallery_images(ids)
+    except OSError as e:
+        current_app.logger.warning('gallery delete failed: %s', e)
+        return jsonify({'error': 'Could not delete these images — a file is '
+                                 'locked or unreachable. Try again.'}), 500
+    return jsonify({'ok': True, **out})
+
+
+@bp.get('/gallery/images/zip')
+def app_gallery_images_zip():
+    """⬇ A Gallery SELECTION as one ZIP — `?ids=` is required: the feed spans
+    every run, so "the whole scope" would be an accidental everything."""
+    from ..services import gallery_download as gdl
+    from .datasets import _zip_download
+    ids = _zip_ids_arg()
+    if ids is None:
+        return jsonify({'error': 'ids is required — pick the images first'}), 400
+    plan = gdl.app_gallery_download_plan(ids)
+    if not plan['ok']:
+        return jsonify({'error': plan['note']}), 404
+    response = _zip_download(lambda out: gdl.write_gallery_zip(plan['entries'], out),
+                             plan['filename'])
+    response.headers['X-Lds-Zip-Images'] = str(plan['included'])
+    response.headers['X-Lds-Zip-Total'] = str(plan['total'])
+    return response
+
+
+@bp.get('/gallery/images/zip/plan')
+def app_gallery_images_zip_plan():
+    """The Gallery selection preflight — counts and cuts BEFORE any byte moves,
+    so a short archive is never a discovery."""
+    from ..services import gallery_download as gdl
+    ids = _zip_ids_arg()
+    if ids is None:
+        return jsonify({'error': 'ids is required — pick the images first'}), 400
+    plan = gdl.app_gallery_download_plan(ids)
+    return jsonify({k: v for k, v in plan.items() if k != 'entries'})
 
 
 @bp.get('/train/run/<int:record_id>/timeline')

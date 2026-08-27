@@ -51,7 +51,9 @@ captioning rules and a few guards change with the dataset kind.
    they poison training.
 7. **Caption** — one click captions the kept set (prose or booru tags,
    matched to the target model). The **identity-leak check** flags any caption
-   that describes hair/face/skin — fix every flagged one. A find/replace +
+   that describes a trait currently set to Omit (face/eyes/skin, and by default
+   hair). ⚙️ Options lets you Describe hair, makeup, facial hair or glasses so
+   they stay prompt-controllable. Fix every flagged caption. A find/replace +
    tag-frequency panel sweeps the whole set at once; its **💾 Write .txt
    files** button drops a kohya-style `<image>.txt` next to each kept image
    in the dataset folder (same format as the export ZIP) for external tools.
@@ -222,6 +224,83 @@ fp8 tool — which is the order the refusal points you at.
 **What the merge needs:** the same Python that quantization uses — one with
 `torch` available. If it is missing, the plan says so with the command to fix it,
 before you click anything.
+
+## The generation queue
+
+Everything that renders locally goes through one queue: your ComfyUI runs a
+single job at a time, whether it was asked for from a dataset, the Test Studio,
+the Canvas or the Bank. So you do not have to wait for one thing to finish
+before starting the next — launch an **✨ Upscale & improve** batch, then a
+**⚡ Generate**, then a retry on a tile, and they line up and run in turn.
+
+The dock in the bottom-left corner is that queue. It appears only when there is
+something in it, and shows, top to bottom: what the GPU is working on right now,
+then what is waiting behind it, in the order it will be taken. Each line names
+where the job came from and which dataset it belongs to, so two datasets feeding
+the same queue are never confused for one another.
+
+Two buttons per line:
+
+- **↑** sends a waiting job to the front. Only the wait can be re-ordered — a
+  job already on the GPU has nothing left to re-order, and says so.
+- **✕** cancels that one job. This is not **⏹ Stop generation**, which ends a
+  whole batch: cancelling here drops a single job and leaves its tile marked
+  failed, and **Retry** on that tile queues it again.
+
+Some jobs cannot be cancelled from the dock, and say who owns them instead: a
+watermark inpaint belongs to the 🧽 Clean watermarks pass, and a reference edit
+to the ✦ Edit reference panel. Both are being waited on by the pass that started
+them, and each has its own Stop where it lives. A **paused** line means ComfyUI
+stopped answering — that one is resolved from the recovery banner at the top of
+the screen, not from here.
+
+Two things still take the GPU exclusively and are not queued behind anything:
+a training run, and a vision pass (captioning, framing, face analysis). While
+one of those is running, new generations wait for it and the app says so.
+
+## The Gallery (every image you generated)
+
+**🖼 Gallery** in the top bar is one feed of everything the app ever rendered —
+Test Studio cells, Canvas previews, comparison runs and ✨ Upscale & improve
+results — across every dataset at once, newest first. The per-checkpoint
+galleries answer "what did this training produce"; this page answers "what did
+I make".
+
+Narrow it from the row above the grid: one dataset, **Renders** or
+**✨ Improved** only, or **👍 Liked** — the images you rated up in the Test
+Studio. The count always names what the grid is actually showing. The feed
+loads itself as you scroll towards its end; the **Load more** button at the
+bottom states how many are left and still works as a plain button.
+
+Tap any image to open the viewer — the same one the Canvas uses, with
+everything the picture was made from: seed (copyable), checkpoint, base model,
+sampler, CFG, the always-on LoRAs it was generated with, and the full prompt.
+The **‹ ›** buttons (or the ← → keys) walk the feed without closing it; tap
+the picture to put the details away, double-tap to magnify.
+
+From the viewer you can also:
+
+- **⬇ Download** — the file lands under a name that still says which dataset,
+  run, step and seed made it.
+- **✨ Upscale & improve** — Klein (re-renders detail; sharper, but skin can
+  shift) or SeedVR2 (upscales and keeps the look). The result arrives at the
+  top of this gallery as its own ✨ image; the original is untouched. The
+  amber note under the buttons is where the Klein instruction is edited in
+  place, the Klein model is chosen, a **LoRA preset** can be chained into
+  every improve and the **output size (MP)** picked — all app-wide, the same
+  values Settings shows.
+- **↩ Use these improve settings** — on a ✨ result you like: the
+  instruction, LoRA preset, strength, steps, output size and model that made
+  THIS image become the app-wide improve settings again, so the next
+  improves run the same way. Every new improvement records what it ran
+  with; older images restore what they carry, and the toast names exactly
+  which parts were applied.
+
+**Select** at the bottom turns on selection mode: tap the misses, then
+**🗑 Delete** (files go to the recycle bin or the app Trash — and the rows
+leave the Test Studio too, which the confirmation says before anything is
+armed), or **⬇ ZIP** to download the picked images as one archive under their
+lineage names.
 
 ## Recover a paused Test Studio batch
 
@@ -1967,15 +2046,26 @@ area:
   that crop, so it is quick and its memory use does not depend on how large the
   photo is. Right for a mark in a corner.
 - **🖌 Brush** — paint over the thing itself, with a size slider, an eraser and
-  Clear. The *whole* picture goes to the model together with what you painted,
-  so it reconstructs while seeing the face around the necklace instead of only a
-  square of skin. Right for jewelry, glasses, straps — anything a rectangle
-  would only enclose by taking a lot of its surroundings with it. Very large
-  photos are scaled down for this pass; the result is composited back at full
-  size, and pixels you did not paint are copied from your file either way.
+  Clear. The model sees your paint plus a generous ring of context around it —
+  a localized touch-up travels as a native-resolution crop, and only a paint
+  job that spans most of the frame sends the whole (size-capped) picture.
+  Right for jewelry, glasses, straps — anything a rectangle would only enclose
+  by taking a lot of its surroundings with it. Pixels you did not paint are
+  copied from your file either way.
 
 Both work under a finger, so this is usable from a phone. The brush was
 contributed by OneCodingDude on GitHub.
+
+**The brush needs one small install.** The masked pass runs on **LanPaint**, a
+training-free inpainting sampler (a ~1 MB ComfyUI node pack, no Python
+dependencies): Klein is an edit model, not an inpaint-trained one, and
+conditioning it like one is what used to hand back a smeary patch — reported by
+charlesangus on GitHub, and exactly what LanPaint exists to fix. Setup ▸ the
+**LanPaint sampler** row installs it; restart ComfyUI afterwards so it loads.
+Your paint is also grown by a few pixels before the model sees it, so the
+edges of the removed thing get rebuilt instead of leaving a halo — and the
+best prompts describe **what should be behind** (*"bare skin"*, *"plain
+wall"*) rather than naming what to remove.
 
 The 🚩 button next to it opens the same editor from the other intention — you
 spotted a watermark the scan missed. Same screen, same zones; what differs is
@@ -3374,7 +3464,8 @@ actions — Download, Deploy, Details, Delete — and **▶ Continue from here**
 opens the *same* launch dialog the Checkpoints panel and the Runs page open, on
 *that exact save*: pick where it runs (**💻 Local** or **☁ Cloud**), how many
 extra steps, and — folded under *Adjust settings* — the checkpoint cadence, the
-preview prompts, the timestep weighting and the learning rate. Rank, base and
+preview prompts, the preview steps and CFG, the timestep weighting and the
+learning rate. Rank, base and
 optimizer are locked to the checkpoint being continued; they are not things a
 resume can change.
 
@@ -3387,9 +3478,11 @@ The dialog also names **what “resume” means**; it never silently guesses:
   bytes, and the exact next step. Exported image, caption and mask contents,
   dataset topology, base, network shape, training recipe, ai-toolkit revision,
   GPU identity and the complete installed Python-package map must still match.
-  In this mode only the preview prompts can change. Save/preview cadence,
-  learning rate and timestep weighting stay locked because changing any of them
-  would change the trajectory the state belongs to.
+  In this mode only the preview settings can change — the prompts, and the
+  preview **steps and CFG**: those decide how a test image is rendered once the
+  sampler is already running, and touch neither the loop nor the weights.
+  Save/preview cadence, learning rate and timestep weighting stay locked because
+  changing any of them would change the trajectory the state belongs to.
 - **LoRA weights only** is the explicit fallback and is available for legacy
   checkpoints. The chosen `.safetensors` is copied into a clean run folder;
   optimizer, scheduler, scaler, RNG and dataloader progress restart. The source
@@ -3684,7 +3777,8 @@ otherwise be read as a vote for the checkpoint that did not produce it.
 - Trust the composition meter over your instinct — a set that "looks varied"
   is usually still face-heavy.
 - Fix every leak the badge reports before training; one "a woman with long
-  blonde hair" caption quietly competes with your trigger.
+  blonde hair" caption quietly competes with your trigger unless Hair is set
+  to Describe in Captions ⚙️ Options.
 - Don't chase steps. Train the auto count, then let the Test Studio find the
   *earliest* checkpoint that nails the identity — it keeps the most prompt
   flexibility.

@@ -3,17 +3,14 @@ import { apiFetch, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import { INSTALL_ALL_ACTION_LABELS, installCatalog } from '../../hooks/useSetupSteps'
 import InstallRunner from './InstallRunner'
+import CameraInstallCard from './CameraInstallCard'
 import KreaInstallCard from './KreaInstallCard'
 import SeedVr2InstallCard from './SeedVr2InstallCard'
 import { HelpBadge } from '../../help/HelpMode'
+import { fmtSize } from './fmtSize'
 
 const POLL_MS = 1200
 
-function fmtSize(b) {
-  if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`
-  if (b >= 1e6) return `${(b / 1e6).toFixed(0)} MB`
-  return `${Math.max(0, Math.round(b / 1e3))} KB`
-}
 
 const label = (action) => INSTALL_ALL_ACTION_LABELS[action] || action
 
@@ -235,7 +232,7 @@ export default function InstallEverything({ plan, caps, onDone }) {
               </p>
             ) : (
               <button type="button" onClick={start} disabled={phase === 'running'}
-                className="mt-4 rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                className="mt-4 rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950 disabled:opacity-50">
                 {phase === 'running' ? 'Installing…' : `Install everything (${(plan || []).length})`}
               </button>
             )}
@@ -253,6 +250,7 @@ export default function InstallEverything({ plan, caps, onDone }) {
           when it is asked for rather than by the unattended shortcut above. */}
       <KreaInstallCard caps={caps} onDone={onDone} />
       <SeedVr2InstallCard caps={caps} onDone={onDone} />
+      <CameraInstallCard caps={caps} onDone={onDone} />
 
       {/* Path 3 — the one-by-one menu, always visible (install/repair a single component). */}
       <section className="rounded-xl border border-border bg-surface p-5">

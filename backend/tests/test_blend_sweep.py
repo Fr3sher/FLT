@@ -17,7 +17,6 @@ Ce qui est épinglé ici, dans l'ordre où ça peut casser :
   · la VUE PILE — les combinaisons d'un même run ne doivent pas s'écraser en une
     variante unique étiquetée avec les poids de sa première cellule.
 """
-import pytest
 
 _ST = (b'\x08\x00\x00\x00\x00\x00\x00\x00{"__metadata__":{}}'.ljust(32, b'\x00'))
 
@@ -70,8 +69,10 @@ def _two_lora_stack(app_ctx_tmp, monkeypatch, capture_workflows=False):
             LOCAL_USER,
             [{'dataset_id': ds_a.id, 'checkpoint': cp_a, **sel_a},
              {'dataset_id': ds_b.id, 'checkpoint': cp_b, **sel_b}],
-            kw.pop('strengths', [1.0]), prompt='on a rooftop',
-            count=kw.pop('count', 1), combine=True, **kw)
+            kw.pop('strengths', [1.0]),
+            lts.StudioGenSettings(prompt='on a rooftop',
+                                  count=kw.pop('count', 1), **kw),
+            combine=True)
 
     return launch, cp_a, cp_b, submitted, ds_a, ds_b
 

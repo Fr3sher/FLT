@@ -5,7 +5,6 @@ win is compression + caching, not losing detail you're deciding on) while
 producing a WebP that is smaller than the raw source, and reuse the file on the
 second call instead of re-encoding."""
 import os
-import pytest
 from PIL import Image
 
 

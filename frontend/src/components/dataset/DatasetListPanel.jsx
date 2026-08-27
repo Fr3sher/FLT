@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { familyBadge } from '../../utils/familyBadges';
+import { AlertTriangle, Camera, Dna, Download, Image as ImageIcon, LayoutGrid, Lightbulb, Palette, PersonStanding, Plus, Save, Smile, Sparkles, Trash2, User, X } from 'lucide-react';
 import { datasetThumbUrl } from '../../utils/datasetThumbUrl';
 import ShotIllustration from './ShotIllustration';
 import TileSizeControl from '../shared/TileSizeControl';
@@ -12,13 +14,15 @@ import {
 
 // Fixed gradient palette for the dataset avatars — deterministic per name so a
 // dataset keeps its color across sessions (Tailwind needs literal class names).
+// Safelight: muted tonal pairs, not saturated two-hue gradients — distinct
+// enough to tell datasets apart, quiet enough to never compete with a photo.
 const AVATAR_GRADIENTS = [
-  'from-indigo-500 to-purple-500',
-  'from-rose-500 to-orange-400',
-  'from-emerald-500 to-teal-400',
-  'from-sky-500 to-blue-600',
-  'from-amber-500 to-pink-500',
-  'from-fuchsia-500 to-violet-600',
+  'from-[#4A4340] to-[#5C5450]',
+  'from-[#3E4650] to-[#4E5763]',
+  'from-[#464049] to-[#57505B]',
+  'from-[#414A44] to-[#525C55]',
+  'from-[#4E453F] to-[#605650]',
+  'from-[#4B4244] to-[#5D5254]',
 ];
 
 function gradientFor(name = '') {
@@ -31,16 +35,16 @@ function gradientFor(name = '') {
  *  on an EMPTY library: returning users know the pipeline by heart. */
 function PipelineSteps() {
   const steps = [
-    { n: 1, icon: '📸', title: 'Reference photo', text: 'Upload one clear photo of the face.' },
-    { n: 2, icon: '✨', title: 'Generate & curate', text: 'Synthesize varied shots, keep the best ones.' },
-    { n: 3, icon: '🧬', title: 'Train the LoRA', text: 'Export or train — reuse the character anywhere.' },
+    { n: 1, icon: Camera, title: 'Reference photo', text: 'Upload one clear photo of the face.' },
+    { n: 2, icon: Sparkles, title: 'Generate & curate', text: 'Synthesize varied shots, keep the best ones.' },
+    { n: 3, icon: Dna, title: 'Train the LoRA', text: 'Export or train — reuse the character anywhere.' },
   ];
   return (
     <ol className="grid grid-cols-1 sm:grid-cols-3 gap-2">
       {steps.map((s, i) => (
         <li key={s.n} className="relative flex items-start gap-2.5 rounded-lg border border-border bg-app/40 p-2.5">
           <span className="grid place-items-center w-8 h-8 shrink-0 rounded-full bg-primary/15 border border-primary/40 text-base"
-            aria-hidden="true">{s.icon}</span>
+            aria-hidden="true"><s.icon className="h-4 w-4" /></span>
           <span className="min-w-0">
             <span className="block text-content text-[0.75rem] font-semibold">
               <span className="text-indigo-300 mr-1">{s.n}.</span>{s.title}
@@ -94,17 +98,6 @@ function EmptyState() {
   );
 }
 
-// Badges de famille des LoRA entraînés — mêmes couleurs que le LoraPicker du Studio.
-const FAMILY_BADGE = {
-  zimage: ['Z-Image', 'border-sky-400/40 bg-sky-500/10 text-sky-300'],
-  sdxl: ['SDXL', 'border-violet-400/40 bg-violet-500/10 text-violet-300'],
-  krea: ['Krea', 'border-amber-400/40 bg-amber-500/10 text-amber-300'],
-  flux: ['FLUX.1', 'border-emerald-400/40 bg-emerald-500/10 text-emerald-300'],
-  // rose: libre (fuchsia/cyan sont pris par les badges kind Concept/Style au-dessus
-  // de la vignette — une couleur distincte évite de les confondre avec une famille).
-  flux2klein: ['FLUX.2 Klein', 'border-rose-400/40 bg-rose-500/10 text-rose-300'],
-  anima: ['Anima', 'border-teal-400/40 bg-teal-500/10 text-teal-300'],
-};
 
 // Display preferences — persisted globally (display settings, not dataset
 // data; same pattern as datasetGridTileSize / the CloudRuns group folds).
@@ -126,10 +119,11 @@ const GRID_COLS = {
 // Kind filter chips — only rendered when at least two kinds coexist in the
 // library. Transient on purpose: a persisted filter reads as lost datasets.
 const KIND_CHIPS = {
-  character: '🧑 Character',
-  concept: '💡 Concept',
-  style: '🎨 Style',
+  character: 'Character',
+  concept: 'Concept',
+  style: 'Style',
 };
+const KIND_ICONS = { character: User, concept: Lightbulb, style: Palette };
 
 /** One-line status of a tile: how big, how far along. Text, not color-only. */
 function tileStats(d) {
@@ -165,13 +159,13 @@ function DatasetTile({ d, onOpen, onDelete, onExportZip, onExportBackup, showPre
             </span>
           )}
           {d.kind === 'concept' && (
-            <span className="absolute left-1.5 top-1.5 rounded border border-fuchsia-400/40 bg-black/50 px-1.5 py-px text-[0.5625rem] font-semibold uppercase text-fuchsia-300 backdrop-blur-sm">
-              💡 Concept
+            <span className="absolute left-1.5 top-1.5 rounded border border-fuchsia-400/40 bg-black/50 px-1.5 py-px text-[0.5625rem] font-semibold uppercase text-fuchsia-300 backdrop-blur-sm inline-flex items-center gap-1">
+              <Lightbulb aria-hidden="true" className="h-2.5 w-2.5" /> Concept
             </span>
           )}
           {d.kind === 'style' && (
-            <span className="absolute left-1.5 top-1.5 rounded border border-cyan-400/40 bg-black/50 px-1.5 py-px text-[0.5625rem] font-semibold uppercase text-cyan-300 backdrop-blur-sm">
-              🎨 Style
+            <span className="absolute left-1.5 top-1.5 rounded border border-cyan-400/40 bg-black/50 px-1.5 py-px text-[0.5625rem] font-semibold uppercase text-cyan-300 backdrop-blur-sm inline-flex items-center gap-1">
+              <Palette aria-hidden="true" className="h-2.5 w-2.5" /> Style
             </span>
           )}
         </div>
@@ -179,7 +173,7 @@ function DatasetTile({ d, onOpen, onDelete, onExportZip, onExportBackup, showPre
           <span className="flex items-center gap-1.5 min-w-0">
             <span className="truncate text-sm font-semibold text-content">{d.name}</span>
             {(d.trained_families || []).map((f) => {
-              const [lbl, cls] = FAMILY_BADGE[f] || [f, 'border-border bg-white/5 text-content-muted'];
+              const [lbl, cls] = familyBadge(f);
               return (
                 <span key={f} className={`shrink-0 rounded border px-1.5 py-px text-[0.5625rem] font-semibold uppercase ${cls}`}
                   title={`A ${lbl} LoRA has been trained from this dataset`}>
@@ -202,15 +196,15 @@ function DatasetTile({ d, onOpen, onDelete, onExportZip, onExportBackup, showPre
             ? 'Download the kept images and captions as a training-ready ZIP'
             : 'Keep at least one image before exporting a training ZIP'}
           aria-label={`Export training ZIP for ${d.name}`}
-          className="rounded-md border border-border bg-app/50 px-2 py-1 text-[0.6875rem] font-semibold text-content-muted transition-colors hover:border-primary/40 hover:bg-surface-raised hover:text-content disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border disabled:hover:bg-app/50 disabled:hover:text-content-muted">
-          ⬇ ZIP
+          className="rounded-md border border-border bg-app/50 px-2 py-1 text-[0.6875rem] font-semibold text-content-muted transition-colors hover:border-primary/40 hover:bg-surface-raised hover:text-content disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border disabled:hover:bg-app/50 disabled:hover:text-content-muted inline-flex items-center justify-center gap-1">
+          <Download aria-hidden="true" className="h-3 w-3" /> ZIP
         </button>
         <button type="button"
           onClick={() => onExportBackup?.(d.id)}
           title="Download a portable backup with all images, captions and settings"
           aria-label={`Export portable backup for ${d.name}`}
-          className="rounded-md border border-border bg-app/50 px-2 py-1 text-[0.6875rem] font-semibold text-content-muted transition-colors hover:border-primary/40 hover:bg-surface-raised hover:text-content">
-          💾 Backup
+          className="rounded-md border border-border bg-app/50 px-2 py-1 text-[0.6875rem] font-semibold text-content-muted transition-colors hover:border-primary/40 hover:bg-surface-raised hover:text-content inline-flex items-center justify-center gap-1">
+          <Save aria-hidden="true" className="h-3 w-3" /> Backup
         </button>
       </div>
       {onDelete && (
@@ -220,7 +214,7 @@ function DatasetTile({ d, onOpen, onDelete, onExportZip, onExportBackup, showPre
           }}
           title="Delete this dataset" aria-label={`Delete the dataset ${d.name}`}
           className="library-card__actions absolute right-1.5 top-1.5 rounded-lg border border-red-500/40 bg-black/50 px-2 py-1 text-xs text-red-300 opacity-70 backdrop-blur-sm transition-opacity hover:bg-red-500/25 hover:opacity-100">
-          🗑
+          <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
         </button>
       )}
     </div>
@@ -255,11 +249,13 @@ function DatasetRow({ d, onOpen, onDelete, onExportZip, onExportBackup, showPrev
           <span className="flex min-w-0 items-center gap-1.5">
             {kind !== 'character' && (
               <span title={kind === 'concept' ? 'Concept dataset' : 'Style dataset'} aria-hidden="true"
-                className="shrink-0 text-[0.6875rem]">{kind === 'concept' ? '💡' : '🎨'}</span>
+                className="shrink-0 text-[0.6875rem]">{kind === 'concept'
+                  ? <Lightbulb aria-hidden="true" className="h-3 w-3" />
+                  : <Palette aria-hidden="true" className="h-3 w-3" />}</span>
             )}
             <span className="truncate text-xs font-semibold text-content">{d.name}</span>
             {(d.trained_families || []).map((f) => {
-              const [lbl, cls] = FAMILY_BADGE[f] || [f, 'border-border bg-white/5 text-content-muted'];
+              const [lbl, cls] = familyBadge(f);
               return (
                 <span key={f} className={`shrink-0 rounded border px-1 py-px text-[0.5rem] font-semibold uppercase ${cls}`}
                   title={`A ${lbl} LoRA has been trained from this dataset`}>
@@ -283,13 +279,13 @@ function DatasetRow({ d, onOpen, onDelete, onExportZip, onExportBackup, showPrev
             : 'Keep at least one image before exporting a training ZIP'}
           aria-label={`Export training ZIP for ${d.name}`}
           className={`${iconBtn} disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border disabled:hover:bg-app/50 disabled:hover:text-content-muted`}>
-          ⬇
+          <Download aria-hidden="true" className="h-3.5 w-3.5" />
         </button>
         <button type="button" onClick={() => onExportBackup?.(d.id)}
           title="Download a portable backup with all images, captions and settings"
           aria-label={`Export portable backup for ${d.name}`}
           className={iconBtn}>
-          💾
+          <Save aria-hidden="true" className="h-3.5 w-3.5" />
         </button>
         {onDelete && (
           <button type="button"
@@ -298,7 +294,7 @@ function DatasetRow({ d, onOpen, onDelete, onExportZip, onExportBackup, showPrev
             }}
             title="Delete this dataset" aria-label={`Delete the dataset ${d.name}`}
             className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-red-500/40 bg-app/50 text-xs text-red-300 transition-colors hover:bg-red-500/25">
-            🗑
+            <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
@@ -339,27 +335,27 @@ function NewDatasetForm({ onCreate, onClose }) {
     <div id="new-dataset-form" className="mx-auto w-full max-w-4xl rounded-xl border border-border bg-surface p-3 flex flex-col gap-2.5">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-content font-semibold text-sm flex items-center gap-2">
-          <span aria-hidden="true">🆕</span> New dataset
+          <Plus aria-hidden="true" className="h-4 w-4" /> New dataset
         </h2>
         {onClose && (
           <button type="button" onClick={onClose} aria-label="Close the new-dataset form"
-            className="rounded px-1.5 text-content-subtle hover:text-content">✕</button>
+            className="rounded px-1.5 text-content-subtle hover:text-content"><X aria-hidden="true" className="h-4 w-4" /></button>
         )}
       </div>
       {/* Nature : personnage (défaut) vs concept. Choisir « Concept » adapte tout le
           reste — import brut aspect conservé, captions qui gardent l'identité, pas de
           photo de référence ni de générateur de variations. */}
       <div className="flex gap-1.5">
-        {[['character', '🧑 Character', 'A person/face — identity binds to the trigger'],
-          ['concept', '💡 Concept', 'A recurring act/effect — the concept binds to the trigger'],
-          ['style', '🎨 Style', 'An always-on aesthetic: load the LoRA and control its influence with the LoRA weight']].map(
-          ([val, label, hint]) => (
+        {[['character', User, 'Character', 'A person/face — identity binds to the trigger'],
+          ['concept', Lightbulb, 'Concept', 'A recurring act/effect — the concept binds to the trigger'],
+          ['style', Palette, 'Style', 'An always-on aesthetic: load the LoRA and control its influence with the LoRA weight']].map(
+          ([val, KindIcon, label, hint]) => (
             <button key={val} type="button" onClick={() => setKind(val)} title={hint}
-              className={`flex-1 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${
+              className={`flex-1 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${
                 kind === val
                   ? 'border-primary/60 bg-primary/15 text-content'
                   : 'border-border bg-app/40 text-content-muted hover:bg-surface-raised'}`}>
-              {label}
+              <KindIcon aria-hidden="true" className="h-3.5 w-3.5" /> {label}
             </button>
           ))}
       </div>
@@ -381,7 +377,7 @@ function NewDatasetForm({ onCreate, onClose }) {
                 everywhere. A unique token (prefix/underscore/digits) binds cleanly. */}
             {trigger.trim() && /^[a-z]{1,7}$/i.test(trigger.trim()) && (
               <span className="text-amber-300 text-[0.625rem]">
-                ⚠ “{trigger.trim()}” looks like a common word — the base model already has a meaning
+                <AlertTriangle aria-hidden="true" className="mr-0.5 inline h-3 w-3 align-[-1px]" />“{trigger.trim()}” looks like a common word — the base model already has a meaning
                 for it. Prefer a unique token like <span className="font-mono">zchar_{trigger.trim().toLowerCase()}</span>.
               </span>
             )}
@@ -410,15 +406,15 @@ function NewDatasetForm({ onCreate, onClose }) {
         <div className="flex flex-col gap-1 text-[0.6875rem] text-content-muted">
           <span>Fidelity <span className="text-content-subtle normal-case">— what the LoRA must reproduce (changeable later)</span></span>
           <div className="flex gap-1.5">
-            {[['face', '🙂 Face', 'Identity = the face. Body shape may vary with the prompt.'],
-              ['body', '🧍 Face + body', 'Total fidelity: body shape, tattoos and marks bind to the trigger too. Prefers full-frame imports and more bust/body shots.']].map(
-              ([val, label, hint]) => (
+            {[['face', Smile, 'Face', 'Identity = the face. Body shape may vary with the prompt.'],
+              ['body', PersonStanding, 'Face + body', 'Total fidelity: body shape, tattoos and marks bind to the trigger too. Prefers full-frame imports and more bust/body shots.']].map(
+              ([val, FidIcon, label, hint]) => (
                 <button key={val} type="button" onClick={() => setFidelity(val)} title={hint}
-                  className={`flex-1 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${
+                  className={`flex-1 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${
                     fidelity === val
                       ? 'border-primary/60 bg-primary/15 text-content'
                       : 'border-border bg-app/40 text-content-muted hover:bg-surface-raised'}`}>
-                  {label}
+                  <FidIcon aria-hidden="true" className="h-3.5 w-3.5" /> {label}
                 </button>
               ))}
           </div>
@@ -446,7 +442,7 @@ function NewDatasetForm({ onCreate, onClose }) {
           onClick={() => canCreate && onCreate(name.trim(), trigger.trim(), kind, conceptDesc.trim(), trainType,
             (concept || style) ? undefined : fidelity)}
           disabled={!canCreate}
-          className="ml-auto px-4 py-1.5 rounded-lg bg-gradient-primary text-white text-sm font-semibold disabled:opacity-40">
+          className="ml-auto px-4 py-1.5 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">
           Create
         </button>
       </div>
@@ -522,8 +518,10 @@ export default function DatasetListPanel({
               }}
               aria-expanded={empty ? undefined : formOpen}
               aria-controls={empty ? undefined : 'new-dataset-form'}
-              className="rounded-lg bg-gradient-primary px-3.5 py-1.5 text-sm font-semibold text-white transition-transform hover:-translate-y-px">
-              {!empty && creating ? '✕ Close' : '+ New dataset'}
+              className="rounded-lg bg-gradient-primary px-3.5 py-1.5 text-sm font-semibold text-gray-950 transition-transform hover:-translate-y-px">
+              {!empty && creating
+                ? <span className="inline-flex items-center gap-1"><X aria-hidden="true" className="h-4 w-4" /> Close</span>
+                : <span className="inline-flex items-center gap-1"><Plus aria-hidden="true" className="h-4 w-4" /> New dataset</span>}
             </button>
             {/* Back up everything, its "include LoRAs" option and Import backup
                 all live in ONE 💾 Backup menu — only "+ New dataset" stays out,
@@ -551,7 +549,9 @@ export default function DatasetListPanel({
                       kindFilter === k
                         ? 'border-primary/60 bg-primary/15 text-content'
                         : 'border-border bg-surface text-content-muted hover:bg-surface-raised'}`}>
-                    {k === 'all' ? 'All' : KIND_CHIPS[k]}
+                    {k === 'all' ? 'All' : (() => { const KindIcon = KIND_ICONS[k]; return (
+                      <span className="inline-flex items-center gap-1"><KindIcon aria-hidden="true" className="h-3 w-3" />{KIND_CHIPS[k]}</span>
+                    ); })()}
                   </button>
                 ))}
               </div>
@@ -565,7 +565,9 @@ export default function DatasetListPanel({
                   showPreviews
                     ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
                     : 'border-border bg-surface text-content-muted hover:bg-surface-raised'}`}>
-                <span aria-hidden="true">{showPreviews ? '🖼️' : '▧'}</span>
+                {showPreviews
+                  ? <ImageIcon aria-hidden="true" className="h-3.5 w-3.5" />
+                  : <LayoutGrid aria-hidden="true" className="h-3.5 w-3.5" />}
                 <span className="hidden sm:inline">{showPreviews ? 'Hide previews' : 'Show previews'}</span>
                 <span className="sr-only">Image previews {showPreviews ? 'shown' : 'hidden'}</span>
               </button>
@@ -591,7 +593,7 @@ export default function DatasetListPanel({
         </p>
       ) : (
         <>
-          {groups.map(({ family, label, emoji, items }) => {
+          {groups.map(({ family, label, emoji: GroupIcon, items }) => {
             const open = filterActive || !collapsed[family];
             return (
               <section key={family} className="flex flex-col gap-2">
@@ -608,7 +610,7 @@ export default function DatasetListPanel({
                       className={`text-[0.625rem] transition-transform ${open ? 'rotate-90' : ''} ${filterActive ? 'opacity-40' : ''}`}>
                       ▶
                     </span>
-                    <span aria-hidden="true">{emoji}</span> {label}
+                    <GroupIcon aria-hidden="true" className="h-3.5 w-3.5" /> {label}
                     <span className="font-normal normal-case tracking-normal">({items.length})</span>
                   </button>
                 </h2>

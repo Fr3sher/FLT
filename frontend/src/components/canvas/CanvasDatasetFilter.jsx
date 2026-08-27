@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Images, Search } from 'lucide-react';
 import { selectionSummary } from '../../utils/canvasSelection';
 import { familyLabel } from '../../utils/canvasFamilyFilter';
 import { statusLabel, matchesDatasetQuery } from '../../utils/canvasFilterBar';
 import CanvasFilterMenu from './CanvasFilterMenu';
+import useMediaQuery from '../../hooks/useMediaQuery';
 
 /* Which datasets — and which runs of them — sit on the board.
  *
@@ -52,6 +54,12 @@ export default function CanvasDatasetFilter({
      checkbox list to find a dataset while the board silently filtered itself. */
   const [pick, setPick] = useState('');
 
+  /* 📏 Is there HEIGHT to spend? Every rule in this bar was written about its
+     width; a phone held sideways has plenty of that and almost none of this.
+     500 px is under every phone held upright and over every one held sideways
+     (see the same line in LineageCanvas). */
+  const tallFold = useMediaQuery('(min-height: 500px)');
+
   /* 📱 Is the board search unfolded? Below `lg` only — from `lg` up the field is
      in the bar unconditionally and this state is not consulted at all, which is
      what keeps a desktop from noticing this pass.
@@ -98,7 +106,7 @@ export default function CanvasDatasetFilter({
     // sits above the board's. The frame is isolated too, so the two cannot argue.
     <section data-testid="canvas-dataset-filter"
       aria-label="Canvas filters"
-      className="lds-canvas-filter relative isolate z-20 flex flex-wrap items-center gap-1.5">
+      className="lds-canvas-filter relative isolate z-20 flex flex-wrap items-center gap-1 md:gap-1.5">
 
       {/* ── Datasets ─────────────────────────────────────────────────────── */}
       <CanvasFilterMenu label="Datasets" glyph="◧" testId="canvas-filter-datasets"
@@ -112,11 +120,11 @@ export default function CanvasDatasetFilter({
           className="mb-1.5 h-9 w-full rounded-md border border-border bg-app/60 px-2.5 text-content text-[0.75rem] placeholder:text-content-subtle focus:border-primary focus:outline-none" />
         <div className="mb-1.5 flex items-center gap-1.5">
           <button type="button" onClick={onAll}
-            className="flex h-8 items-center rounded-md border border-border bg-app/60 px-2.5 text-content-muted text-[0.6875rem] hover:text-content">
+            className="flex h-10 items-center rounded-md border border-border bg-app/60 px-2.5 text-content-muted text-[0.6875rem] hover:text-content lg:h-8">
             Select all
           </button>
           <button type="button" onClick={onNone}
-            className="flex h-8 items-center rounded-md border border-border bg-app/60 px-2.5 text-content-muted text-[0.6875rem] hover:text-content">
+            className="flex h-10 items-center rounded-md border border-border bg-app/60 px-2.5 text-content-muted text-[0.6875rem] hover:text-content lg:h-8">
             Clear
           </button>
           <span className="ml-auto text-content-subtle text-[0.625rem] tabular-nums">
@@ -220,18 +228,18 @@ export default function CanvasDatasetFilter({
         title={showPinned
           ? 'Pinned images are on the board — click to hide them'
           : 'Pinned images are HIDDEN — click to put them back on the board'}
-        className={'flex h-10 items-center gap-1.5 rounded-md border px-2.5 text-[0.75rem] font-semibold lg:h-9 '
+        className={'flex h-10 items-center gap-1 md:gap-1.5 rounded-md border px-2 md:px-2.5 text-[0.75rem] font-semibold lg:h-9 '
           + (showPinned
             ? 'border-border bg-app/60 text-content hover:border-indigo-400/50'
             // Hidden is the state worth shouting about: pinned pictures missing
             // from the board with no visible cause is a bug report.
             : 'border-amber-400/60 bg-amber-500/15 text-amber-100')}>
-        <span aria-hidden>🖼</span>
+        <Images aria-hidden="true" className="h-3.5 w-3.5" />
         {/* The word drops below `sm` like every other label in this row — but
             "off" NEVER does: pinned pictures missing from the board with no
             visible cause is a bug report, and that is precisely the state a
             phone must not have to guess at. */}
-        <span className="hidden sm:inline">Pinned</span>
+        <span className="hidden md:inline">Pinned</span>
         {!showPinned && <span className="font-normal">off</span>}
       </button>
 
@@ -262,11 +270,11 @@ export default function CanvasDatasetFilter({
           ? `Search is narrowing the board: “${query}” — tap to edit or clear it`
           : 'Search runs — dataset, ID, model, variant'}
         aria-label="Search runs"
-        className={'flex h-10 items-center gap-1.5 rounded-md border px-2.5 text-[0.75rem] font-semibold lg:hidden '
+        className={'flex h-10 items-center gap-1 md:gap-1.5 rounded-md border px-2 md:px-2.5 text-[0.75rem] font-semibold lg:hidden '
           + (queryActive
             ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100'
             : 'border-border bg-app/60 text-content hover:border-indigo-400/50')}>
-        <span aria-hidden>🔍</span>
+        <Search aria-hidden="true" className="h-3.5 w-3.5" />
         {queryActive && <span className="max-w-[6rem] truncate font-normal">{query}</span>}
       </button>
 
@@ -274,17 +282,42 @@ export default function CanvasDatasetFilter({
       <input id="canvas-filter-search" ref={searchRef} type="search" value={query}
         onChange={(e) => onQueryChange(e.target.value)}
         placeholder="Search runs — dataset, ID, model, variant…"
+        /* 📏 `basis-full` puts the field on a ROW OF ITS OWN, which is right
+           when there is height to spend and wrong when there is not: on a phone
+           held sideways the bar went from 54 px to 146, and with the toolbar
+           that was 200 of the 390 the screen has — 51 %, over budget, for a
+           field that fits beside the chips at that width (500 px of chips and a
+           144-px field in an 844-px bar). On a short fold it shares the row
+           instead. Nothing changes on any fold a phone is held upright at,
+           where the full-width field is the better read. */
         className={'h-10 min-w-[9rem] flex-1 rounded-md border bg-app/60 px-3 text-content text-[0.75rem] placeholder:text-content-subtle lg:h-9 lg:block lg:basis-48 '
-          + (searchOpen ? 'basis-full ' : 'hidden ')
+          + (searchOpen ? `${tallFold ? 'basis-full' : 'basis-auto'} ` : 'hidden ')
           + (queryActive ? 'border-indigo-400/60' : 'border-border')} />
 
+      {/* 📏 …and below `md` it is not DRAWN at all until there is something to
+          reset. Measured at 412 px the bar has 366 px and its four chips, 🔍
+          and the runs readout come to 351 of them — a seventh control fits only
+          by taking a second 46-px row off the board, permanently, for a button
+          that is disabled on most visits. Greyed out is not free: it costs the
+          same width as an enabled one. From `md` up it keeps the familiar
+          always-there-but-disabled behaviour, because there the width is not
+          the scarce thing. `md` and not `sm`: at 640 the labelled row is 635 px
+          of the 580 it has, at 768 it is 635 of 708. */}
       <button type="button" onClick={() => { setPick(''); onResetFilters(); }}
         disabled={!anyNarrowing}
         data-testid="canvas-filter-reset"
         title={anyNarrowing ? 'Put every dataset, model and status back on the board'
           : 'Nothing is filtered out'}
-        className="flex h-10 items-center rounded-md border border-border px-2.5 text-content-muted text-[0.75rem] hover:text-content disabled:opacity-40 lg:h-9">
-        Reset
+        aria-label="Reset the filters"
+        className={'h-10 items-center rounded-md border border-border px-2 md:px-2.5 text-content-muted text-[0.75rem] hover:text-content disabled:opacity-40 lg:h-9 md:flex '
+          + (anyNarrowing ? 'flex' : 'hidden')}>
+        {/* ↺ below `sm`, the word from there up. Measured at 412 px: this row
+            held five chips on its first line and wrapped for "Reset" and the
+            runs readout alone — 46 px of board spent on a control that is
+            disabled on most visits. The glyph is the same button, 35 px
+            narrower, and the sentence stays on its title and its aria-label. */}
+        <span aria-hidden className="md:hidden">↺</span>
+        <span className="hidden md:inline">Reset</span>
       </button>
 
       {/* The readout that makes the whole bar honest: whatever is set, this says

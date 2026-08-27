@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Save } from 'lucide-react';
 import { apiFetch, del, postJson } from '../../api/fetchClient';
 import {
   canvasLayoutIsEmpty, canvasLayoutSnapshot, canvasPresetApplied,
@@ -107,10 +108,12 @@ export default function CanvasLayoutPresets({ positions, imageNodes, datasetIds,
       className="relative">
       <summary title="Layouts — save this arrangement, or put a saved one back"
         className="flex h-10 cursor-pointer list-none items-center gap-1 rounded-md border border-border bg-app/60 px-2 text-content-muted text-[0.6875rem] font-semibold hover:text-content sm:px-3 lg:h-9">
-        {/* 📱 Icon only below `sm`: at 400 px the board's toolbar wrapped into
-            five rows and ate a quarter of the screen. The word is back from
-            `sm` up, and the title carries it at every width. */}
-        <span aria-hidden>💾</span> <span className="hidden sm:inline">Layouts</span>
+        {/* 📱 This was icon-only below `sm`, because at 400 px the board's
+            toolbar wrapped into five rows and ate a quarter of the screen. It is
+            not in that toolbar below `lg` any more — it is in the board's ⋯
+            shelf, which is as wide as the screen — so the word is back at every
+            width, and the title still carries the sentence. */}
+        <Save aria-hidden="true" className="h-3.5 w-3.5" /> Layouts
       </summary>
       {/* `top-full` and not just `mt-1`: an absolutely-positioned box with no
           `top` falls back to its STATIC position, which is wherever the
@@ -135,14 +138,18 @@ export default function CanvasLayoutPresets({ positions, imageNodes, datasetIds,
           <HelpBadge topic="canvas-layouts" />
         </div>
         <div className="flex items-center gap-1">
+          {/* 📱 Field and button both 40 px below `lg`. They were sized by their
+              padding — 27 px — which is under the ~40 a fingertip lands on, and
+              this pair is the only way to name a layout. Found by
+              scripts/responsiveProbe.mjs. */}
           <input value={name} onChange={(e) => setName(e.target.value)}
             maxLength={PRESET_NAME_MAX}
             placeholder="e.g. likeness review"
             aria-label="Name for this board layout"
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } }}
-            className="min-w-0 flex-1 rounded border border-border bg-app/60 px-2 py-1 text-content text-[0.75rem] focus:border-primary focus:outline-none" />
+            className="h-10 min-w-0 flex-1 rounded border border-border bg-app/60 px-2 text-content text-[0.75rem] focus:border-primary focus:outline-none lg:h-8" />
           <button type="button" onClick={save} disabled={busy === 'save'}
-            className="shrink-0 rounded border border-indigo-400/50 bg-indigo-500/15 px-2 py-1 text-indigo-100 text-[0.6875rem] font-semibold disabled:opacity-50">
+            className="h-10 shrink-0 rounded border border-indigo-400/50 bg-indigo-500/15 px-2 text-indigo-100 text-[0.6875rem] font-semibold disabled:opacity-50 lg:h-8">
             {busy === 'save' ? '…' : 'Save'}
           </button>
         </div>
@@ -175,7 +182,12 @@ export default function CanvasLayoutPresets({ positions, imageNodes, datasetIds,
                 <button type="button" onClick={() => apply(p)}
                   disabled={busy === `apply:${p.id}`}
                   title={`Put this arrangement back on the board — moves every card and picture it names`}
-                  className="shrink-0 rounded border border-border bg-surface px-1.5 py-0.5 text-content-muted text-[0.625rem] font-semibold hover:text-content disabled:opacity-50">
+                  /* 📱 40 px below `lg`. These were sized by their padding —
+                     21 px — inside a popover that is opened with a thumb, and
+                     Apply sits one row from Delete: a miss here does the wrong
+                     thing rather than nothing. Found by responsiveProbe.mjs,
+                     which measures popovers now that it opens them. */
+                  className="flex h-10 shrink-0 items-center rounded border border-border bg-surface px-2 text-content-muted text-[0.625rem] font-semibold hover:text-content disabled:opacity-50 lg:h-6 lg:px-1.5">
                   {busy === `apply:${p.id}` ? '…' : 'Apply'}
                 </button>
                 <button type="button"
@@ -188,7 +200,7 @@ export default function CanvasLayoutPresets({ positions, imageNodes, datasetIds,
                     : `Forget the layout “${p.name}” — the board itself is not touched`}
                   aria-label={confirmDelete === p.id
                     ? `Confirm forgetting ${p.name}` : `Forget the layout ${p.name}`}
-                  className={'shrink-0 rounded border px-1.5 py-0.5 text-[0.625rem] font-semibold '
+                  className={'flex h-10 shrink-0 items-center rounded border px-2 text-[0.625rem] font-semibold lg:h-6 lg:px-1.5 '
                     + (confirmDelete === p.id
                       ? 'border-red-300 bg-red-600/90 text-white'
                       : 'border-border bg-surface text-content-muted hover:border-red-400/60 hover:text-content')}>

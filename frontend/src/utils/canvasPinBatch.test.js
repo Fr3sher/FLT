@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PIN_BATCH_MAX, batchTileSize, boardObstacles, pinBatchAnnouncement,
-  groupPinnedBatchBySource, groupPinnedBatchTogether, pinBatchLabel, pinBatchPending,
+  groupPinnedBatchBySource, pinBatchLabel, pinBatchPending,
   pinBatchPendingAcrossLanes, placeImageBatch, tidyGroupRows, tidyLaneReach,
   tidyLaneRows, laneStackEntries,
 } from './canvasPinBatch.js';
@@ -76,23 +76,30 @@ test('different checkpoints and unknown sources never auto-group', () => {
   assert.ok(result.rows.every((r) => r.groupId == null));
 });
 
-test('legacy Pin all with no run id keeps one whole-gesture grid across checkpoints', () => {
-  const result = groupPinnedBatchTogether({ placed: [
+test('a Pin all spanning several checkpoints makes NO whole-gesture grid', () => {
+  // Two epochs of one LoRA and one of another, a single picture each: three
+  // loose tiles in three band columns. A grid of one is not a grid, and fusing
+  // them is exactly the whole-gesture strip the per-checkpoint boundary
+  // replaces — it said nothing about where any picture came from.
+  const result = groupPinnedBatchBySource({ placed: [
     placed(1, 82, 500), placed(2, 82, 1000), placed(3, 86, 6000),
   ] });
-  assert.ok(result.rows[0].groupId);
-  assert.ok(result.rows.every((r) => r.groupId === result.rows[0].groupId));
-  assert.deepEqual(result.rows.map((r) => r.groupPos), [0, 1, 2]);
+  assert.ok(result.rows.every((r) => r.groupId == null));
   assert.ok(result.undoRows.every((r) => r.visible === false && r.groupId == null));
 });
 
-test('separate Pin all gestures get separate groups', () => {
-  const first = groupPinnedBatchTogether({ placed: [placed(1, 82, 500), placed(2, 82, 1000)] });
-  const second = groupPinnedBatchTogether({
+test('a second Pin all at the same checkpoint JOINS the first grid', () => {
+  // The reported symptom, at its root: batch after batch fired at one
+  // checkpoint used to park rival grids side by side (and, at one picture per
+  // batch, loose tiles that never coalesced at all). They accumulate now.
+  const first = groupPinnedBatchBySource({ placed: [placed(1, 82, 500), placed(2, 82, 500)] });
+  assert.ok(first.rows[0].groupId, 'the first batch formed the grid');
+  const second = groupPinnedBatchBySource({
     nodes: first.rows,
-    placed: [placed(3, 82, 1500), placed(4, 82, 2000)],
+    placed: [placed(3, 82, 500), placed(4, 82, 500)],
   });
-  assert.notEqual(first.rows[0].groupId, second.rows[0].groupId);
+  assert.ok(second.rows.every((r) => r.groupId === first.rows[0].groupId));
+  assert.deepEqual(second.rows.map((r) => r.groupPos), [0, 1, 2, 3]);
 });
 
 test('a manual mixed-checkpoint group is never used as an automatic target', () => {
@@ -363,8 +370,15 @@ test('a run card and its pill block are ONE obstacle, pinned images are the rest
      • a batch launched at SEVERAL LoRAs was pinned as one fused grid in which
        the per-LoRA batches were indistinguishable. The LoRA (`record_id`)
        joined the key: one grid per LoRA, per prompt, per launch — while the
-       EPOCHS of one LoRA still share their comparison strip (one grid per
-       epoch was tried and rejected: it dismantled that strip). */
+       EPOCHS of one LoRA still share their comparison strip.
+
+   ⚠️ Keying on the CHECKPOINT instead was tried, twice, and reverted both times
+   (18/08 and again 21/08 → 22/08). It fixes the thin case — a launch that makes
+   one picture per checkpoint leaves loose tiles here — and breaks the thick one,
+   which is the one people actually hit: every picture a checkpoint ever made
+   piles into a single grid forever, so REGENERATING has no way to start a new
+   lot. See imageBatchKey for why membership follows the launch and provenance
+   follows the placement, rather than both fighting over the same channel. */
 
 const runImg = (id, recordId, step, runId, prompt = '') => ({
   id, dataset_id: 3, record_id: recordId, step, run_id: runId,
@@ -388,26 +402,53 @@ const pinOneByOne = (laneMap, image,
   return laneMap;
 };
 
-test('two generations of the SAME checkpoint stay two strips', () => {
+test('THE assertion: two generations of the SAME checkpoint are TWO grids', () => {
   const lane = {};
   // Run A, pinned one by one from the checkpoint gallery.
   pinOneByOne(lane, runImg(11, 7, 500, 'runA'));
   pinOneByOne(lane, runImg(12, 7, 500, 'runA'));
-  // Run B — a LATER generation, same checkpoint, same dataset.
+  // Run B — a LATER generation, same checkpoint, same dataset. This is the
+  // 2026-08-22 report verbatim: regenerating appended to the grid already
+  // there, so two clicks read as one lot and there was no gesture that could
+  // say otherwise.
   pinOneByOne(lane, runImg(21, 7, 500, 'runB'));
   pinOneByOne(lane, runImg(22, 7, 500, 'runB'));
 
   const groupOf = (id) => lane[id].groupId;
-  assert.ok(groupOf(11), 'run A formed a strip');
+  assert.ok(groupOf(11), 'the first launch has its grid');
   assert.equal(groupOf(11), groupOf(12));
-  assert.ok(groupOf(21), 'run B formed its own strip');
+  assert.ok(groupOf(21), 'the second launch has its own');
   assert.equal(groupOf(21), groupOf(22));
   assert.notEqual(groupOf(11), groupOf(21),
-    'run B must NOT be concatenated onto run A');
+    'a later launch NEVER joins an earlier one — same checkpoint or not');
 });
 
-test('Pin all makes one separate grid per prompt inside the SAME run', () => {
-  const result = groupPinnedBatchTogether({ placed: [
+test('one picture per LoRA per launch stays LOOSE — the price of the launch boundary', () => {
+  // ⚠️ The cost of keying on the launch, written down rather than discovered.
+  // A Compare launch fires ONE picture at each of three LoRAs: no lot is big
+  // enough to be a grid, and the NEXT launch does not rescue the first, because
+  // it is a different lot.
+  //
+  // Keyed on the checkpoint (21/08 → 22/08) these coalesced — at the price of
+  // regenerating never being able to start a new grid, which is the thing that
+  // was actually reported. Fusing two lots on purpose is one drag: drop a
+  // pinned picture onto another. A rule cannot know you wanted them together.
+  const lane = {};
+  const launch = (runId, base) => [94, 91, 112].forEach((recordId, i) => {
+    pinOneByOne(lane, runImg(base + i, recordId, 1500, runId));
+  });
+
+  launch('first', 10);
+  assert.ok(Object.values(lane).every((row) => row.groupId == null),
+    'one picture per LoRA is not a grid — a grid of one is not a grid');
+
+  launch('second', 20);
+  assert.ok(Object.values(lane).every((row) => row.groupId == null),
+    'and the second launch is its own lot, so it does not rescue the first');
+});
+
+test('Pin all makes one grid per PROMPT, with that prompt\'s prompts inside it', () => {
+  const result = groupPinnedBatchBySource({ placed: [
     runPlaced(101, 82, 500, 'prompt-run', 'on a rooftop'),
     runPlaced(102, 82, 1000, 'prompt-run', 'on a rooftop'),
     runPlaced(103, 82, 1500, 'prompt-run', 'on a rooftop'),
@@ -417,66 +458,75 @@ test('Pin all makes one separate grid per prompt inside the SAME run', () => {
   ] });
   const groupOf = (id) => result.rows.find((r) => r.imageId === id).groupId;
 
-  assert.ok(groupOf(101), 'the first prompt formed a real grid');
-  assert.equal(groupOf(101), groupOf(102));
+  assert.equal(groupOf(101), groupOf(102), 'the three epochs of one prompt share its grid');
   assert.equal(groupOf(102), groupOf(103));
-  assert.ok(groupOf(201), 'the second prompt formed a real grid');
-  assert.equal(groupOf(201), groupOf(202));
+  assert.equal(groupOf(201), groupOf(202), 'and the other prompt keeps its own');
   assert.equal(groupOf(202), groupOf(203));
   assert.notEqual(groupOf(101), groupOf(201),
-    'two prompts of one run must never be fused into the same Canvas grid');
+    'two prompts fired by one click are two lots, not one and not six');
 });
 
-test('prompt whitespace is normalised without merging different prompt text', () => {
-  const result = groupPinnedBatchTogether({ placed: [
+test('the prompt is part of the boundary, and its whitespace is normalised', () => {
+  // Two spellings of ONE prompt must not make two lots: the key reads the text,
+  // so it has to read it the way the UI shows it. Meaningful text and case are
+  // preserved — only runs of whitespace collapse.
+  const result = groupPinnedBatchBySource({ placed: [
     runPlaced(301, 82, 500, 'normalised-run', '  on   a\nrooftop  '),
     runPlaced(302, 82, 1000, 'normalised-run', 'on a rooftop'),
-    runPlaced(401, 82, 500, 'normalised-run', 'on a rooftop at night'),
-    runPlaced(402, 82, 1000, 'normalised-run', 'on a rooftop at night'),
+    runPlaced(303, 82, 500, 'normalised-run', 'on a rooftop at night'),
   ] });
   const byId = Object.fromEntries(result.rows.map((row) => [row.imageId, row.groupId]));
 
   assert.ok(byId[301]);
-  assert.equal(byId[301], byId[302], 'equivalent whitespace is one prompt grid');
-  assert.equal(byId[401], byId[402]);
-  assert.notEqual(byId[301], byId[401], 'meaningfully different prompts stay apart');
+  assert.equal(byId[301], byId[302],
+    'the same prompt spelt with other whitespace is the same prompt');
+  assert.equal(byId[303], null,
+    'a genuinely different prompt is a different lot, and alone it is no grid');
 });
 
 test('a batch fired at several LoRAs lands as one grid PER LoRA', () => {
-  // The report this boundary comes from: a Canvas Compare batch over several
-  // LoRAs, pinned, arrived as ONE grid where the batches were
-  // indistinguishable. Same run, same prompt — the LoRA is the split, and the
-  // epochs INSIDE each LoRA still share that LoRA's grid.
-  const result = groupPinnedBatchTogether({ placed: [
+  // The report this half of the boundary comes from: a Canvas Compare batch
+  // over several LoRAs, pinned, arrived as ONE grid where the batches were
+  // indistinguishable. Same run, same prompt, same epoch — the LoRA (and so
+  // the dataset it was trained on) splits them.
+  const result = groupPinnedBatchBySource({ placed: [
     runPlaced(501, 82, 500, 'one-prompt', 'portrait in soft light'),
-    runPlaced(502, 82, 1000, 'one-prompt', 'portrait in soft light'),
-    runPlaced(503, 86, 1000, 'one-prompt', 'portrait in soft light'),
-    runPlaced(504, 86, 2000, 'one-prompt', 'portrait in soft light'),
+    runPlaced(502, 82, 500, 'one-prompt', 'portrait in soft light'),
+    runPlaced(503, 86, 500, 'one-prompt', 'portrait in soft light'),
+    runPlaced(504, 86, 500, 'one-prompt', 'portrait in soft light'),
   ] });
   const byId = Object.fromEntries(result.rows.map((row) => [row.imageId, row.groupId]));
   assert.ok(byId[501], 'the first LoRA formed its own grid');
-  assert.equal(byId[501], byId[502], 'two epochs of one LoRA share its grid');
+  assert.equal(byId[501], byId[502]);
   assert.ok(byId[503], 'the second LoRA formed its own grid');
   assert.equal(byId[503], byId[504]);
   assert.notEqual(byId[501], byId[503],
-    'two LoRAs of one launch must never be fused into the same grid');
+    'two LoRAs at the same epoch must never be fused into the same grid');
 });
 
-test('the epochs of ONE LoRA in a mono-prompt run are still one grid', () => {
-  const result = groupPinnedBatchTogether({ placed: [
+test('the epochs of ONE LoRA share their launch grid', () => {
+  // The choice made on 2026-08-22, with its price on the table: tick four
+  // epochs, click Generate once, and what comes back is ONE lot — so it is one
+  // grid, straddling the four band columns instead of filling one. The epoch
+  // axis is not lost, it just is not the GRID: the band still lays one column
+  // per checkpoint in training order, and byTrainingOrder keeps the members in
+  // that same order inside the strip.
+  const result = groupPinnedBatchBySource({ placed: [
     runPlaced(521, 82, 500, 'one-lora', 'portrait in soft light'),
-    runPlaced(522, 82, 1000, 'one-lora', 'portrait in soft light'),
-    runPlaced(523, 82, 1500, 'one-lora', 'portrait in soft light'),
+    runPlaced(522, 82, 500, 'one-lora', 'portrait in soft light'),
+    runPlaced(523, 82, 1000, 'one-lora', 'portrait in soft light'),
+    runPlaced(524, 82, 1000, 'one-lora', 'portrait in soft light'),
   ] });
-  assert.ok(result.rows[0].groupId);
-  assert.equal(new Set(result.rows.map((row) => row.groupId)).size, 1,
-    'the epoch-comparison strip survives the per-LoRA boundary');
+  const byId = Object.fromEntries(result.rows.map((row) => [row.imageId, row.groupId]));
+  assert.ok(byId[521]);
+  assert.equal(new Set([byId[521], byId[522], byId[523], byId[524]]).size, 1,
+    'one click, one grid, whatever epochs it reached');
 });
 
 test('one image per LoRA forms no grid — the singles stay loose in their columns', () => {
   // A grid of one is not a grid: each picture stays a loose tile, already
   // parked in its own checkpoint's band column by placeImageBatch.
-  const result = groupPinnedBatchTogether({ placed: [
+  const result = groupPinnedBatchBySource({ placed: [
     runPlaced(511, 82, 500, 'one-each', 'portrait in soft light'),
     runPlaced(512, 86, 1000, 'one-each', 'portrait in soft light'),
     runPlaced(513, 91, 1500, 'one-each', 'portrait in soft light'),
@@ -484,7 +534,7 @@ test('one image per LoRA forms no grid — the singles stay loose in their colum
   assert.ok(result.rows.every((row) => row.groupId == null));
 });
 
-test('gallery pins use the same run-prompt-LoRA boundary as Pin all', () => {
+test('gallery pins use the same per-LAUNCH boundary as Pin all', () => {
   const lane = {};
   pinOneByOne(lane, runImg(601, 7, 500, 'gallery-run', 'on a rooftop'));
   pinOneByOne(lane, runImg(701, 7, 500, 'gallery-run', 'in a cafe'));
@@ -492,20 +542,20 @@ test('gallery pins use the same run-prompt-LoRA boundary as Pin all', () => {
   pinOneByOne(lane, runImg(702, 7, 1000, 'gallery-run', 'in a cafe'));
 
   assert.ok(lane[601].groupId);
-  assert.equal(lane[601].groupId, lane[602].groupId);
+  assert.equal(lane[601].groupId, lane[602].groupId, 'one prompt gathers its epochs');
   assert.ok(lane[701].groupId);
-  assert.equal(lane[701].groupId, lane[702].groupId);
+  assert.equal(lane[701].groupId, lane[702].groupId, 'the other gathers its own');
   assert.notEqual(lane[601].groupId, lane[701].groupId,
-    'pinning prompts one by one must not recombine them');
+    'the two prompts stay two grids however the pins are interleaved');
 });
 
-test('interleaved gallery pins reflow their automatic prompt grids without overlap', () => {
+test('interleaved gallery pins reflow their automatic grids without overlap', () => {
   const lane = {};
   const a = 'on a rooftop';
   const b = 'in a cafe';
-  // Each first picture is individually valid. Once A gets its second member,
-  // its derived 640-wide strip reaches across B's node; the gallery path must
-  // reflow that new automatic group just like Pin all does.
+  // Each first picture is individually valid. Once a prompt gets its second
+  // member, its derived 640-wide strip reaches across the other prompt's node;
+  // the gallery path must reflow that new automatic group just like Pin all.
   pinOneByOne(lane, runImg(711, 7, 500, 'interleaved-run', a),
     { x: 0, y: 500, w: 320, h: 320 });
   pinOneByOne(lane, runImg(721, 7, 500, 'interleaved-run', b),
@@ -519,7 +569,7 @@ test('interleaved gallery pins reflow their automatic prompt grids without overl
   const groups = layout.filter((row) => row.kind === 'group');
   assert.equal(groups.length, 2);
   assert.deepEqual(new Set(groups.map((group) => group.members[0].node.image.prompt)),
-    new Set([a, b]));
+    new Set([a, b]), 'the two grids are the two prompts, epochs folded in');
   assertNoOverlap(layout.map(occupiedBox));
 });
 
@@ -535,7 +585,9 @@ test('gallery reflow moves an automatic grid around a manual group, never the ma
   const nodes = [...manual, autoAnchor];
   const result = groupPinnedBatchBySource({
     nodes,
-    placed: [{ ...runPlaced(742, 7, 1000, 'automatic', 'new prompt'),
+    // Same checkpoint as the loose anchor, so the two become one automatic
+    // grid — the hand-made group spans two epochs and is never a candidate.
+    placed: [{ ...runPlaced(742, 7, 500, 'automatic', 'new prompt'),
       x: 344, y: 900 }],
   });
   const updates = new Map(result.rows.map((row) => [row.imageId, row]));
@@ -547,10 +599,11 @@ test('gallery reflow moves an automatic grid around a manual group, never the ma
   assertNoOverlap(layoutImageNodes(after).map(occupiedBox));
 });
 
-const promptGridLayout = (promptCount) => {
-  // Two LoRAs, two epochs each, per prompt — so every prompt yields TWO grids
-  // (one per LoRA, each spanning its epochs) and the wrap/overlap contracts
-  // below are exercised on the real boundary.
+const launchGridLayout = (promptCount) => {
+  // ONE launch over two LoRAs, two epochs each, times N prompts — so 2×N lots
+  // of two members each (the two epochs), while the PLACEMENT still works in
+  // checkpoints: each of the four checkpoints receives N pictures, which is
+  // what drives the column wrap the contracts below are about.
   const images = Array.from({ length: promptCount }, (_, i) => `prompt ${i + 1}`)
     .flatMap((prompt, i) => [
       runImg(800 + i * 4, 106, 2500, 'multi-prompt-layout', prompt),
@@ -559,25 +612,24 @@ const promptGridLayout = (promptCount) => {
       runImg(803 + i * 4, 114, 2000, 'multi-prompt-layout', prompt),
     ]);
   const placedBatch = placeImageBatch({ graph: GRAPH, existing: [], images });
-  const grouped = groupPinnedBatchTogether({ placed: placedBatch.placed, graph: GRAPH });
+  const grouped = groupPinnedBatchBySource({ placed: placedBatch.placed, graph: GRAPH });
   return layoutImageNodes(grouped.rows);
 };
 
-const assertSeparatePromptGrids = (layout, promptCount) => {
+const assertSeparateLaunchGrids = (layout, promptCount) => {
   const groups = layout.filter((row) => row.kind === 'group');
   assert.equal(groups.length, promptCount * 2,
-    'one Canvas renderable per prompt per LoRA');
+    'one Canvas renderable per prompt, per LoRA');
   for (const group of groups) {
-    assert.equal(new Set(group.members.map((m) => m.node.image.prompt)).size, 1,
-      'a rendered grid never mixes prompt text');
+    assert.equal(group.members.length, 2,
+      'the two epochs that prompt reached are inside its one grid');
     assert.equal(new Set(group.members.map((m) => m.node.image.record_id)).size, 1,
-      'a rendered grid never mixes LoRAs');
-    const steps = group.members.map((m) => m.node.image.step);
-    assert.deepEqual(steps, [...steps].sort((a, b) => a - b),
-      'each LoRA grid keeps epoch training order');
+      'a rendered grid never mixes LoRAs — it could not be drawn in two lanes');
+    assert.equal(new Set(group.members.map((m) => m.node.image.prompt)).size, 1,
+      'a rendered grid never mixes prompts');
   }
   const gridBoxes = layout.map(occupiedBox);
-  // Keep the two contracts separate so a failure says whether prompt grids hit
+  // Keep the two contracts separate so a failure says whether the grids hit
   // EACH OTHER (the COLUMN_ROWS wrap regression) or climb back into the tree
   // through their title bar (the BAND_GAP regression).
   assertNoOverlap(gridBoxes);
@@ -588,21 +640,24 @@ const assertSeparatePromptGrids = (layout, promptCount) => {
 };
 
 test('two prompts over two LoRAs become four non-overlapping rendered Canvas grids', () => {
-  assertSeparatePromptGrids(promptGridLayout(2), 2);
+  assertSeparateLaunchGrids(launchGridLayout(2), 2);
 });
 
-test('seven prompts of LoRA grids stay separate and non-overlapping after the placement column wraps', () => {
-  // COLUMN_ROWS is six: the seventh image of each source starts another
-  // placement column. This is the boundary where two independently derived
-  // strips can otherwise acquire the same visible footprint.
-  assertSeparatePromptGrids(promptGridLayout(7), 7);
+test('grids stay separate and non-overlapping after the placement column wraps', () => {
+  // COLUMN_ROWS is six: the seventh picture placed at one CHECKPOINT starts
+  // another placement column. Seven prompts put seven pictures on each of the
+  // four checkpoints, so the wrap fires — and it is the boundary where two
+  // independently derived strips can otherwise acquire the same footprint.
+  assertSeparateLaunchGrids(launchGridLayout(7), 7);
 });
 
 test('remembered free pictures reflow when their future wide grid reaches across a card', () => {
   const graph = { nodes: [card(999, 400, 0, [1000])], edges: [], width: 700, height: 120 };
   const images = [
+    // ⚠️ ONE launch and ONE prompt: this test is about the GEOMETRY of a wide
+    // grid, so the two pictures have to be one lot before it can have any.
     runImg(751, 999, 1000, 'remembered-run', 'remember this prompt'),
-    runImg(752, 999, 2000, 'remembered-run', 'remember this prompt'),
+    runImg(752, 999, 1000, 'remembered-run', 'remember this prompt'),
   ];
   const remembered = Object.fromEntries(images.map((image, i) => [image.id, {
     imageId: image.id,
@@ -629,7 +684,7 @@ test('remembered free pictures reflow when their future wide grid reaches across
     ...placedBatch.placed.map((row) => ({ x: row.x, y: row.y, w: row.w, h: row.h })),
   ]);
 
-  const grouped = groupPinnedBatchTogether({
+  const grouped = groupPinnedBatchBySource({
     nodes: Object.values(remembered), placed: placedBatch.placed, graph,
   });
   const layout = layoutImageNodes(grouped.rows);
@@ -642,7 +697,7 @@ test('remembered free pictures reflow when their future wide grid reaches across
     [[751, 100, 100, false], [752, 800, 100, false]],
     'undo restores every remembered position exactly');
 
-  const again = groupPinnedBatchTogether({
+  const again = groupPinnedBatchBySource({
     nodes: Object.values(remembered), placed: placedBatch.placed, graph,
   });
   assert.deepEqual(again.rows.map((row) => [row.imageId, row.x, row.y]),
@@ -650,9 +705,10 @@ test('remembered free pictures reflow when their future wide grid reaches across
     'the graph-aware reflow is deterministic');
 });
 
-test('images with no run id keep the old per-checkpoint behaviour', () => {
-  // A board that predates the published run id must draw what it always drew:
-  // successive pins of one checkpoint still gather into one strip.
+test('an image carrying no run id at all still lands in its checkpoint grid', () => {
+  // Rows that predate the run column have no launch to be keyed on, so they
+  // fall back to their checkpoint and a board older than all of this keeps
+  // drawing what it drew rather than silently regrouping itself.
   const lane = {};
   pinOneByOne(lane, { id: 31, dataset_id: 3, record_id: 7, step: 500 });
   pinOneByOne(lane, { id: 32, dataset_id: 3, record_id: 7, step: 500 });
@@ -660,35 +716,43 @@ test('images with no run id keep the old per-checkpoint behaviour', () => {
   assert.equal(lane[31].groupId, lane[32].groupId);
 });
 
-test('a strip reads in TRAINING order, not alphabetical order', () => {
-  // 1000 < 500 as text; as epochs it is the other way round.
-  const result = groupPinnedBatchTogether({ placed: [
-    runPlaced(1, 82, 1000, 'r1'), runPlaced(2, 82, 500, 'r1'),
-    runPlaced(3, 82, 2000, 'r1'), runPlaced(4, 82, 1500, 'r1'),
+test('a grid reads in the order its pictures were made', () => {
+  // One launch at one checkpoint, so every member ties on the epoch and the
+  // tie-break — the image id, which is the order they were rendered — is the
+  // whole answer.
+  const result = groupPinnedBatchBySource({ placed: [
+    runPlaced(3, 82, 1000, 'r1'), runPlaced(1, 82, 1000, 'r1'),
+    runPlaced(4, 82, 1000, 'r1'), runPlaced(2, 82, 1000, 'r1'),
   ] });
   const strip = [...result.rows].sort((a, b) => a.groupPos - b.groupPos);
-  assert.deepEqual(strip.map((r) => r.image.step), [500, 1000, 1500, 2000]);
+  assert.deepEqual(strip.map((r) => r.imageId), [1, 2, 3, 4]);
   assert.deepEqual(strip.map((r) => r.groupPos), [0, 1, 2, 3]);
 });
 
-test('a picture pinned later at an EARLIER epoch lands at the head of the strip', () => {
+test('a LATER LAUNCH at an earlier epoch starts its own grid', () => {
   const lane = {};
   pinOneByOne(lane, runImg(41, 7, 2000, 'runC'));
-  pinOneByOne(lane, runImg(42, 7, 3000, 'runC'));
-  pinOneByOne(lane, runImg(43, 7, 1000, 'runC'));
-  const strip = Object.values(lane).sort((a, b) => a.groupPos - b.groupPos);
-  assert.deepEqual(strip.map((r) => r.image.step), [1000, 2000, 3000]);
+  pinOneByOne(lane, runImg(42, 7, 2000, 'runC'));
+  // A different click, at an epoch that sorts BEFORE everything already on the
+  // board. It must neither be appended to runC's grid nor reorder it — which is
+  // the trap, because byTrainingOrder would happily have put it at the head.
+  pinOneByOne(lane, runImg(43, 7, 1000, 'runD'));
+  pinOneByOne(lane, runImg(44, 7, 1000, 'runD'));
+  assert.equal(lane[41].groupId, lane[42].groupId);
+  assert.equal(lane[43].groupId, lane[44].groupId);
+  assert.notEqual(lane[41].groupId, lane[43].groupId);
+  assert.deepEqual([lane[41].groupPos, lane[42].groupPos], [0, 1]);
 });
 
-test('a lot that carries two runs is SPLIT, never concatenated', () => {
-  const result = groupPinnedBatchTogether({ placed: [
+test('a lot that carries two runs is SPLIT by run, never regrouped by epoch', () => {
+  const result = groupPinnedBatchBySource({ placed: [
     runPlaced(1, 82, 500, 'r1'), runPlaced(2, 82, 1000, 'r1'),
     runPlaced(3, 82, 500, 'r2'), runPlaced(4, 82, 1000, 'r2'),
   ] });
   const by = Object.fromEntries(result.rows.map((r) => [r.imageId, r.groupId]));
-  assert.equal(by[1], by[2]);
-  assert.equal(by[3], by[4]);
-  assert.notEqual(by[1], by[3]);
+  assert.equal(by[1], by[2], 'both epochs of the first run are its grid');
+  assert.equal(by[3], by[4], 'and both of the second are its own');
+  assert.notEqual(by[1], by[3], 'the two launches stay two grids');
 });
 
 test('the band lays its columns out in epoch order', () => {

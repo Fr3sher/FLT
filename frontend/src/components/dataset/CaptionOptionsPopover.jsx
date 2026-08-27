@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiFetch, postJson } from '../../api/fetchClient';
 import { useToast } from '../common/Toast';
+import { appearancePolicyChanged } from '../../utils/captionAppearancePolicy.js';
 
 /* ⚙️ Caption method options (per-dataset). Lets the user override, for THIS dataset:
    - the caption engine (or leave it on the global default);
    - which pulled Ollama vision model runs — and pull a new one by name, with progress;
    - the vocabulary register and the caption LENGTH preset, two independent axes;
    - extra instructions APPENDED to the caption prompt (the kind omission rules and the
-     output cleaners stay in force server-side, so this can't reintroduce a banned term).
+     output cleaners stay in force server-side, so this can't reintroduce a banned term);
+   - for character datasets, which appearance families to Omit (bind to the trigger) vs
+     Describe (stay prompt-controllable). Extra instructions cannot move a family.
    Saved to caption_options and picked up by the next caption / re-caption run (targeted
    and dual-short included). Modal so it never fights the workspace layout. */
 
@@ -48,7 +51,23 @@ export const CAPTION_LENGTH_OPTIONS = [
   { id: 'detailed', label: 'Detailed — several sentences' },
 ];
 
-export default function CaptionOptionsPopover({ datasetId, trainType, onClose, onSaved }) {
+// Character-only omit vs describe. Must match backend APPEARANCE_FAMILIES /
+// APPEARANCE_DEFAULTS in face_variations.py — Extra instructions cannot move a
+// family between columns; these toggles can.
+export const APPEARANCE_FAMILIES = [
+  { id: 'hair', label: 'Hair', hint: 'length, colour, style, how it falls' },
+  { id: 'makeup', label: 'Makeup and nails', hint: 'mascara, lipstick, eyeshadow, blush, manicure' },
+  { id: 'facial_hair', label: 'Facial hair', hint: 'beard, stubble, moustache, or clean-shaven' },
+  { id: 'glasses', label: 'Glasses', hint: 'glasses and sunglasses' },
+];
+export const APPEARANCE_DEFAULTS = {
+  hair: 'omit', makeup: 'describe', facial_hair: 'omit', glasses: 'describe',
+};
+const APPEARANCE_LOCKED = [
+  'face shape', 'eye colour', 'skin', 'age', 'gender', 'ethnicity',
+];
+
+export default function CaptionOptionsPopover({ datasetId, trainType, kind, onClose, onSaved }) {
   const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -57,6 +76,10 @@ export default function CaptionOptionsPopover({ datasetId, trainType, onClose, o
   const [vocabulary, setVocabulary] = useState('');
   const [length, setLength] = useState('');
   const [instructions, setInstructions] = useState('');
+  const [appearance, setAppearance] = useState(null); // null = no policy (classic lock)
+  const [appearanceDirty, setAppearanceDirty] = useState(false);
+  // The policy as LOADED, to tell a real edit from a plain re-save on Save.
+  const initialAppearanceRef = useRef(null);
   const [models, setModels] = useState([]);
   const [modelsReachable, setModelsReachable] = useState(true);
   const [pullName, setPullName] = useState('');
@@ -82,6 +105,10 @@ export default function CaptionOptionsPopover({ datasetId, trainType, onClose, o
         setVocabulary(o.vocabulary || '');
         setLength(o.length || '');
         setInstructions(o.instructions || '');
+        const stored = o.appearance && Object.keys(o.appearance).length ? o.appearance : null;
+        setAppearance(stored);
+        initialAppearanceRef.current = stored;
+        setAppearanceDirty(false);
         setModels(mdl.models || []);
         setModelsReachable(mdl.reachable !== false);
       } catch {
@@ -173,9 +200,25 @@ export default function CaptionOptionsPopover({ datasetId, trainType, onClose, o
   const save = async () => {
     setSaving(true);
     try {
-      const r = await postJson(`/api/dataset/${datasetId}/caption/options`,
-        { backend, ollama_model: ollamaModel, vocabulary, length, instructions });
-      toast.success('Caption options saved');
+      const payload = { backend, ollama_model: ollamaModel, vocabulary, length, instructions };
+      // Saving vocabulary / length / Extra instructions must not invent a policy.
+      if (appearanceDirty) {
+        payload.appearance = { ...APPEARANCE_DEFAULTS, ...(appearance || {}) };
+      }
+      const r = await postJson(`/api/dataset/${datasetId}/caption/options`, payload);
+      // A moved policy only steers the NEXT run: images already captioned keep the
+      // rule they were written under, and the plain Caption button skips them (it
+      // only fills empty captions). Say so, or the dataset silently ends up half
+      // under each rule. Same 'future captions' nudge as a kind change.
+      const policyMoved = appearancePolicyChanged(
+        initialAppearanceRef.current, r.options?.appearance);
+      if (policyMoved) {
+        toast.success(
+          'Appearance policy saved — re-caption to apply it to existing captions',
+          10000);
+      } else {
+        toast.success('Caption options saved');
+      }
       onSaved?.(r.options);
       onClose();
     } catch (e) {
@@ -201,6 +244,13 @@ export default function CaptionOptionsPopover({ datasetId, trainType, onClose, o
     startPullByName(KREA_2_OLLAMA_MODEL, true);
   };
   const inputCls = 'w-full px-2 py-1.5 rounded-lg bg-app/60 border border-border text-content text-sm';
+  const showAppearance = kind !== 'concept' && kind !== 'style';
+  const shownAppearance = { ...APPEARANCE_DEFAULTS, ...(appearance || {}) };
+  const policyActive = Boolean(appearance && Object.keys(appearance).length);
+  const flipAppearance = (id, value) => {
+    setAppearance({ ...shownAppearance, [id]: value });
+    setAppearanceDirty(true);
+  };
 
   return (
     <div className="fixed inset-0 z-[9990] flex items-center justify-center bg-black/80 p-3"
@@ -338,6 +388,59 @@ export default function CaptionOptionsPopover({ datasetId, trainType, onClose, o
               </p>
             </div>
 
+            {/* Appearance policy (character only): omit binds to the trigger,
+                describe stays prompt-controllable. Extra instructions cannot
+                move a family between columns — these toggles can. */}
+            {showAppearance && (
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-content">Appearance in captions</span>
+              <p className="text-xs text-content-subtle leading-relaxed">
+                <strong className="font-medium text-content-muted">Omit</strong> binds that look
+                to the trigger (do not caption it).{' '}
+                <strong className="font-medium text-content-muted">Describe</strong> keeps it
+                prompt-controllable — including “no makeup” or “clean shaven” when that is
+                what the photo shows. Re-caption after changing this.
+              </p>
+              {!policyActive && !appearanceDirty && (
+                <p className="text-xs text-content-subtle leading-relaxed">
+                  Not applied until you change a row — the captioner currently uses the classic
+                  lock (hair omitted, makeup neither asked nor forbidden).
+                </p>
+              )}
+              <div className="flex flex-col gap-1.5">
+                {APPEARANCE_FAMILIES.map((fam) => {
+                  const value = shownAppearance[fam.id];
+                  return (
+                    <div key={fam.id}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-border bg-app/40 px-2 py-1.5">
+                      <div className="min-w-0">
+                        <div className="text-sm text-content">{fam.label}</div>
+                        <div className="text-[0.6875rem] text-content-subtle">{fam.hint}</div>
+                      </div>
+                      <div className="flex shrink-0 rounded-md border border-border overflow-hidden">
+                        {['omit', 'describe'].map((state) => (
+                          <button key={state} type="button"
+                            aria-pressed={value === state}
+                            onClick={() => flipAppearance(fam.id, state)}
+                            className={`px-2 py-1 text-[0.6875rem] font-semibold capitalize ${
+                              value === state
+                                ? 'bg-surface-raised text-content'
+                                : 'bg-transparent text-content-muted hover:text-content'
+                            }`}>
+                            {state}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-content-subtle leading-relaxed">
+                Always omitted (the trigger’s job): {APPEARANCE_LOCKED.join(', ')}.
+              </p>
+            </div>
+            )}
+
             {/* Extra instructions */}
             <div className="flex flex-col gap-1">
               <label htmlFor="cap-opt-instructions" className="text-sm font-medium text-content">Extra instructions</label>
@@ -348,8 +451,9 @@ export default function CaptionOptionsPopover({ datasetId, trainType, onClose, o
               <p className="text-xs text-content-subtle">
                 Added to the end of the caption prompt (both engines), <em>after</em> the vocabulary
                 and length presets — so when yours contradicts one of them, yours is what the model
-                reads last. The identity / concept / style omission rules and the leak cleaners still
-                apply, so this can’t reintroduce a banned term.
+                reads last.{showAppearance
+                  ? ' Extra instructions can only steer wording of a described appearance family — they still cannot reintroduce an omitted one (hair stays omitted until you flip it above). Identity leak cleaners still run.'
+                  : ' The identity / concept / style omission rules and the leak cleaners still apply, so this can’t reintroduce a banned term.'}
               </p>
             </div>
 
@@ -359,7 +463,7 @@ export default function CaptionOptionsPopover({ datasetId, trainType, onClose, o
                 Cancel
               </button>
               <button type="button" onClick={save} disabled={saving}
-                className="px-4 py-1.5 rounded-lg bg-gradient-primary text-white text-sm font-semibold disabled:opacity-40">
+                className="px-4 py-1.5 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">
                 {saving ? 'Saving…' : 'Save'}
               </button>
             </div>

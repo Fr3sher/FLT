@@ -417,6 +417,33 @@ def bank_relocate(bank_id):
     return jsonify({'ok': True, **out})
 
 
+@bp.post('/bank/<int:bank_id>/forget-missing')
+def bank_forget_missing(bank_id):
+    """Drop the rows whose source file is no longer in the bank's folder — the
+    folder-sync warning's OTHER remedy: not a folder that moved (that is 📦
+    Move folder…), but files really deleted from it (a downloader that cleans
+    up its own intermediates, a sync client, a by-hand tidy). Two-step ON
+    PURPOSE: {} only REPORTS a freshly-walked count, {confirm: true} deletes
+    those rows. Files on disk are never touched, and an unavailable or
+    unreadable folder is refused outright — an unplugged drive must never be
+    able to erase a triage. The preview stays readable while a pass runs; only
+    a confirmed write returns 409."""
+    data = request.get_json(silent=True) or {}
+    try:
+        if data.get('confirm'):
+            out = {**banks.forget_missing(LOCAL_USER, bank_id), 'applied': True}
+        else:
+            out = {**banks.forget_missing_preview(LOCAL_USER, bank_id),
+                   'applied': False}
+    except bank_jobs.BankJobBusy as e:
+        return _busy(e)
+    except banks.BankFolderUnavailable as e:
+        return jsonify({'error': str(e)}), 400
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    return jsonify({'ok': True, **out})
+
+
 @bp.get('/bank/<int:bank_id>/images')
 def bank_images(bank_id):
     args = request.args
@@ -930,6 +957,22 @@ def bank_caption(bank_id):
                   ollama_model=data.get('ollama_model') or None,
                   statuses=data.get('statuses') or None,
                   include_asserted=bool(data.get('include_asserted')))
+
+
+@bp.get('/bank/<int:bank_id>/scenes')
+def bank_scenes(bank_id):
+    """The bank's captions as ORDERED scene cards — served raw so a generation
+    panel can offer them as a prompt batch without going through a dataset.
+    Read-only: no GPU, no writes, answers while a pass is running.
+    ?statuses=keep,pending scopes like the caption pass. 404 on a missing bank."""
+    raw = (request.args.get('statuses') or '').strip()
+    statuses = [s for s in (p.strip() for p in raw.split(',')) if s] or None
+    try:
+        payload = banks.export_scene_captions(LOCAL_USER, bank_id, statuses=statuses)
+    except ValueError as e:
+        msg = str(e)
+        return jsonify({'error': msg}), 404 if msg == 'bank not found' else 400
+    return jsonify(payload)
 
 
 @bp.post('/bank/<int:bank_id>/pipeline')

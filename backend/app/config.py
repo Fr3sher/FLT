@@ -356,11 +356,6 @@ DEFAULTS = {
              #   reference bank (screenshots of videos, padded stills).
              'bars_max': 0.04},
     'masks': {'python': ''},
-    'canvas': {},
-    # Kept as an explicit empty section because Settings saves the complete
-    # client config. Older clients can still carry this UI-state namespace;
-    # accepting it keeps an unrelated secret save from failing closed.
-    'variations': {},
     # 🔳 The burned-in-text reader (RapidOCR on CPU onnxruntime), used by the
     # video lane's safe-zone pass. Blank = the app's own interpreter, which is
     # where Setup installs it: the extra is small (an ONNX runtime the app
@@ -696,7 +691,19 @@ DEFAULTS = {
               'improve_consistency_strength': 1.0,
               # Total pixel budget the source is rescaled to before sampling, so it
               # is the output resolution. 2 = the value hardcoded in the workflow.
-              'improve_megapixels': 2.0},
+              'improve_megapixels': 2.0,
+              # Which generation_lora_presets entry the ✨ Upscale & improve pass
+              # chains after the consistency LoRA — by NAME, resolved fail-closed
+              # at enqueue time like every other step of the preset chain (a
+              # renamed or deleted preset degrades to "no extra LoRAs", never to
+              # a blocked pass). '' = none, the behaviour every install had
+              # before this key existed. GLOBAL like the improve instruction
+              # (identity_prompts.klein_improve) and for the same reason: one
+              # answer to "what will improve run with", editable from the
+              # lightbox and from Settings, honoured by the single pass, the
+              # 🔄 re-run and the batch alike. Klein only — SeedVR2 is a
+              # restoration and chains nothing.
+              'improve_lora_preset': ''},
     # Dataset variations — what BOTH local engines share, rather than what each
     # one does on its own. Its own namespace on purpose: a key under `klein` or
     # `krea` would be a value one engine owns and the other happens to read, and
@@ -773,6 +780,25 @@ DEFAULTS = {
     # restores it without reinterpreting. 'klein' is the default because it is
     # what every improve did before this setting existed.
     'improve': {'engine': 'klein'},
+    # 📷 Camera angles — the lane that moves the CAMERA rather than the subject
+    # (services/camera_angles.py explains why that needs its own base model).
+    # Same discipline as every other engine block: blank means "find it
+    # yourself", never a machine path. A pin exists for the install whose files
+    # the resolver cannot recognise — three different Qwen text encoders share
+    # `models/text_encoders`, and a renamed one is on disk but invisible.
+    # A pin that cannot be resolved falls back to auto-detection; it never
+    # blocks a render.
+    'camera': {
+        'unet': '', 'text_encoder': '', 'vae': '',
+        # The Multiple-Angles LoRA. Pinning something else here does not make
+        # the lane "wrong" — it makes it a different lane, and that is the
+        # user's business, exactly like a pinned Klein base.
+        'angles_lora': '',
+        # The 4-step Lightning LoRA. Blank and absent = the graph raises its own
+        # step count instead (qwen_camera_helper.STEPS_WITHOUT_SPEED_LORA);
+        # speed is the only thing this file buys.
+        'speed_lora': '',
+    },
     # SeedVR2 — the FIDELITY upscaler (services/seedvr2_helper.py, issue #32 by
     # SurpassHR). Not a generation engine: it restores detail and leaves the
     # content alone, which is the opposite trade from Klein's ✨ improve. Same

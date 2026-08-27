@@ -80,7 +80,7 @@ test('any dataset image can be inspected next to the reference photo', () => {
   // id-STAMPED per-image slot, not in a useState of its own: that is what makes
   // ⟩ leave the comparison behind with the image it belonged to, instead of
   // carrying an "Original" pane onto a picture whose parent is someone else's.
-  assert.match(lightbox, /full, compareMode, improving, actionsOpen, repairOpen, deciding,\n  \} = lightboxImageState\(/);
+  assert.match(lightbox, /full, compareMode, improving, actionsOpen, repairOpen, cameraOpen, deciding,\n  \} = lightboxImageState\(/);
   assert.doesNotMatch(lightbox, /useState\((true|false|'none')\)/);
   assert.match(lightbox,
     /patchImageState\(\{\s*full: false,\s*compareMode: compareMode === mode \? 'none' : mode,/);
@@ -135,7 +135,7 @@ test('✦ Repair owns every shortcut while it is open, not just Escape', () => {
   assert.ok(guard < grammar,
     'a close-only guard still lets R reject the picture under the dialog');
   // A listener registered once with repairOpen=false would keep judging forever.
-  assert.match(lightbox, /panelOpen, closePanel, repairOpen\]\);/);
+  assert.match(lightbox, /panelOpen, closePanel,\s*\n\s*repairOpen, cameraOpen, patchImageState\]\);/);
 });
 
 test('a verdict advances only once the write has landed, and skip touches nothing', () => {
@@ -230,7 +230,7 @@ test('settings separates scraper rescue instructions from manual lightbox improv
   // step count became editable.
   assert.match(settings, /manual Upscale & improve is a different flow/);
   assert.match(settings, /Settings ▸ Image engines/);
-  // the rescue card points at the separate manual "Identity & Klein prompts" card
+  // the rescue card points at the separate manual "Identity, Klein & Krea 2 prompts" card
   assert.match(settings, /separate from the manual .Klein upscale &amp; improve. prompt/i);
 });
 

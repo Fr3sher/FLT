@@ -19,15 +19,18 @@
  * file reaches becomes a failed test rather than a white screen on a bank.
  */
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
+import { readSource } from './support/readSource.mjs'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import './support/mountJsx.mjs'
 import { WHATS_NEW } from '../src/whatsNew.js'
+import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
+
+// The entry under test may have moved to the archive since it shipped
+// (see whatsNew.js, rule "Keep the list tidy") — search the union.
+const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
 import { getHelpTopic } from '../src/help/helpRegistry.js'
 import { BANK_PASSES, BANK_PASS_ORDER } from '../src/components/bank/bankPasses.js'
 import { JOB_LABELS } from '../src/components/bank/bankPassRun.js'
@@ -38,12 +41,12 @@ const { CapabilitiesProvider } = await import('../src/context/CapabilitiesContex
 const { ToastProvider } = await import('../src/components/common/Toast.jsx')
 const { MemoryRouter } = await import('react-router')
 
-const here = path.dirname(fileURLToPath(import.meta.url))
-const frontend = path.resolve(here, '..')
-const read = (rel) => fs.readFileSync(path.join(frontend, rel), 'utf8')
+const read = readSource
 const tile = read('src/components/bank/BankTile.jsx')
 const lightbox = read('src/components/bank/BankReviewLightbox.jsx')
+// Review handlers live in useReviewLightbox since hook wave 5.
 const workspace = read('src/components/bank/BankWorkspace.jsx')
+  + read('src/components/bank/useReviewLightbox.js')
 const passes = read('src/components/bank/BankPassesPanel.jsx')
 
 /** The panel probes capabilities, toasts, and carries a ❓ HelpBadge that
@@ -180,7 +183,7 @@ test('a selection retargets ↩ Revert at the selection, not the whole bank', ()
 })
 
 test('the feature is announced and documented', () => {
-  const entry = WHATS_NEW.find((e) => e.id === '2026-08-16-bank-crop-and-upscale')
+  const entry = ALL_WHATS_NEW.find((e) => e.id === '2026-08-16-bank-crop-and-upscale')
   assert.ok(entry, "What's new entry for the bank crop/upscale is missing")
   assert.equal(entry.to, '/bank')
   assert.match(entry.blurb, /nofaceman/)            // credit where it is due

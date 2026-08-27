@@ -1,4 +1,3 @@
-import pathlib
 import pytest
 
 from app import FRONTEND_DIST

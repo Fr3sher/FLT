@@ -9,6 +9,7 @@
  * for keys the batch response omitted).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { fetchWithCsrfRetry, getCsrfToken } from '../api/fetchClient';
 import { decodeBatchThumbs } from '../utils/batchThumbs';
 
 const DEFAULTS = { batchSize: 16, concurrency: 2 };
@@ -18,7 +19,9 @@ export default function useBatchThumbs(keys, buildRequest, opts = {}) {
   const [blobMap, setBlobMap] = useState(() => new Map());
   const fetched = useRef(new Set());
   const buildRef = useRef(buildRequest);
+  const keysRef = useRef(keys);
   buildRef.current = buildRequest;
+  keysRef.current = keys;
 
   const cacheKey = keys.join('\u0000');
 
@@ -26,7 +29,7 @@ export default function useBatchThumbs(keys, buildRequest, opts = {}) {
     // A changed page (or a rotation that must re-materialise) starts a fresh
     // batch pass: drop the remember-what-we-asked set so changed bytes refetch.
     fetched.current.clear();
-    const toFetch = keys.filter((k) => !fetched.current.has(k));
+    const toFetch = keysRef.current.filter((k) => !fetched.current.has(k));
     if (!toFetch.length) return;
     const batches = [];
     for (let i = 0; i < toFetch.length; i += batchSize) {
@@ -43,7 +46,11 @@ export default function useBatchThumbs(keys, buildRequest, opts = {}) {
         batch.forEach((k) => fetched.current.add(k));
         active += 1;
         const { url, body } = buildRef.current(batch);
-        fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
+        fetchWithCsrfRetry(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+          body,
+        })
           .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('batch'))))
           .then((buf) => {
             const got = decodeBatchThumbs(buf);

@@ -76,6 +76,11 @@ download) and is **local-only** for now.
   (Settings ▸ Local tools); it uses the GPU and waits rather than competing with
   a training run. Nothing is deleted and images it cannot read stay unknown, so
   running it again only retries those.
+- **A crop forgets the old shot type.** Cropping a body shot into a face (or a
+  bust into a close-up) clears the stored framing, the same way a Bank crop
+  does. Composition drops that image from its bucket until you run **📐 Classify
+  framing** again — and the button only counts the ones that actually changed,
+  not the whole set. Same vision model, same GPU wait.
 - **Vary everything except the person:** location, lighting, outfit, pose,
   expression, camera angle. Whatever repeats across images gets baked into the
   LoRA — a repeated background wall becomes part of "the person".
@@ -107,10 +112,17 @@ the caption does NOT explain** to the trigger word.
 Concretely:
 
 1. **Start every caption with the trigger word.** The app injects it on export.
-2. **Never mention hair, face, eyes or skin.** The app's *identity-leak* check
-   flags captions that do — fix every flagged one before training.
-3. **Describe scene, outfit, pose, lighting, framing.** Those are the things you
-   want to stay promptable *independently* of the identity.
+2. **Never mention face, eyes or skin** — and, by default, hair. Those bind
+   to the trigger. ⚙️ *Options* on the Captions panel has **Appearance in
+   captions**: flip Hair, Makeup, Facial hair or Glasses to **Describe** when
+   you want that look prompt-controllable (different hairstyles, no mascara in
+   every gen). **Omit** keeps it bound to the trigger. Face, eye colour, skin,
+   age, gender and ethnicity stay omitted. Extra instructions cannot reintroduce
+   an omitted family — flip the row instead. The *identity-leak* check watches
+   whatever is currently omitted.
+3. **Describe scene, outfit, pose, lighting, framing** — and any appearance
+   family you set to Describe. Those stay promptable *independently* of the
+   identity.
 4. **Vary the captions.** Identical captions across images teach nothing;
    captions under ~8 words are too weak to isolate the identity.
 5. **Match the style to the family.** Prose for Z-Image and Krea; booru tags for
@@ -152,7 +164,9 @@ Two more things worth knowing:
   vocabulary register, then the length preset, then your free **Extra instructions**
   last — so a hand-written steer that contradicts a preset is what the model reads
   most recently and wins. The identity/concept leak cleaners run after all of it
-  regardless, so no wording here can reintroduce a banned term.
+  regardless, so Extra instructions cannot reintroduce an omitted identity term.
+  Flip **Appearance in captions** (Hair / Makeup / Facial hair / Glasses) when
+  you *want* that look in the caption so it stays prompt-controllable.
 - **Concise is not the "short" of long + short captions.** Dual captions derive a
   short variant *from* the stored long caption into its own field; the length preset
   changes the long caption itself. They are separate axes and compose freely.
@@ -248,7 +262,7 @@ The app runs these checks when you hit Train — here's the list to self-check e
 - [ ] At least the family minimum kept (12 Z-Image / 20 SDXL / 15 Krea / 15 FLUX.1 / 15 FLUX.2 Klein) — 20–30 is the comfort zone
 - [ ] Framing balanced — not 100% face shots (some bust/body/back)
 - [ ] Every kept image captioned *(strongly recommended — a blank caption won't block the launch, it just asks you to confirm "train anyway")*
-- [ ] **Zero identity leaks** (no hair/face/skin words — the leak badge shows 0)
+- [ ] **Zero identity leaks** (the leak badge shows 0 for whatever is currently omitted — face/eyes/skin, and by default hair)
 - [ ] Captions varied, ≥ 8 words, style matches the family (prose vs booru — Anima takes either)
 - [ ] Near-duplicate pairs resolved (keep one of each)
 - [ ] Body fidelity: if ON, actual full-body shots exist
@@ -401,8 +415,9 @@ dialog:
 - **Extra steps** — how many *more* steps to train; the dialog shows the target
   step you'll land on.
 - **Adjust settings (optional)** — a resume can only safely change a handful of
-  things: the **checkpoint/preview cadence**, the **preview prompts** (test images
-  only — never the weights), and the **timestep weighting**. Everything structural
+  things: the **checkpoint/preview cadence**, the **preview prompts** and the
+  **preview steps and CFG** (test images only — never the weights), and the
+  **timestep weighting**. Everything structural
   (rank, base model, optimizer) is locked to the checkpoint you're continuing.
   The timestep knob enables a known **two-phase recipe**: train balanced first,
   then continue with a low-noise-leaning emphasis to polish fine texture.
@@ -975,6 +990,36 @@ The check reads a few kilobytes of file header — the quantization markers and 
 tensor dtypes — so it costs nothing and fires the moment you pick the file, not
 an hour into a paid run. A file whose header cannot be read is let through: the
 app refuses what it can prove, never what it merely suspects.
+
+## 11. Preview quality — steps and CFG
+
+The preview images a run writes every few hundred steps are the only thing you
+can judge it by while it is still running, so they have to be *readable*. How
+they are rendered is two numbers — how many **steps** each preview gets, and at
+what **guidance (CFG)** — and both live in ⚙️ **Advanced options** under
+*Preview quality*, next to the cadence and the prompts.
+
+**Leave them empty and nothing changes.** The boxes show, as a placeholder, the
+default your base resolves to; that default follows the model you picked, because
+the right answer is a property of the base and not a preference:
+
+| Base | Preview default | Why |
+| --- | --- | --- |
+| A **distilled** one (Krea 2 Turbo, Z-Image Turbo) | 8 steps, CFG 1 | Distillation is what buys the few-step sampling. Asking for 25 steps at CFG 4 wastes minutes per preview and does not look better. |
+| An **undistilled** one (Krea 2 Raw, Z-Image, FLUX, SDXL) | 20-35 steps, CFG 4-6 | At a distilled model's 8 steps these come back as unfinished sketches — muddy, half-formed — and you cannot tell a bad run from a bad preview. |
+
+You need the boxes when you train on a base the studio does not ship — a merge of
+your own, a converted checkpoint — because then the default is a guess about a
+model nobody measured. Symptoms worth acting on: previews that look like
+sketches (raise the steps), or a preview that visibly costs more time than the
+training it interrupts (lower them).
+
+These are **preview settings only**: they change the picture, never the weights.
+That is also why a **▶ Continue** can change them even in *full training state*
+mode, where the cadence and the learning rate are locked — a resume is exactly
+when you have already seen the previews and know they are unreadable.
+
+*Suggested by charlesangus (GitHub #46).*
 
 ---
 

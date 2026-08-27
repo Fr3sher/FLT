@@ -46,6 +46,20 @@ def test_the_dataset_floor_matches_the_bank_floor():
     assert (fsi.DET_MIN, fsi.YAW_MAX) == (fei.DET_MIN, fei.YAW_MAX)
 
 
+def test_the_zoom_rescue_reaches_both_surfaces():
+    """The rescue shipped on the dataset scorer first and the Bank's embed pass
+    stayed behind for a wave — the exact drift the pixel floor had already
+    lived through once (a user reported the same symptom on the second surface
+    months later). Same crop padding, same 2x-retry threshold, both files."""
+    import face_embed_infer as fei
+    assert (fsi.ZOOM_PAD, fsi.ZOOM_RETRY_MIN_SIDE) \
+        == (fei.ZOOM_PAD, fei.ZOOM_RETRY_MIN_SIDE)
+    # The detector input square too: the frame is fitted into it BEFORE
+    # detection, so a bigger square on one surface would find faces the
+    # other calls absent — the drift class this whole file exists for.
+    assert fsi.DET_SIZE == fei.DET_SIZE == (640, 640)
+
+
 def test_a_face_under_the_pixel_floor_is_still_too_small():
     """The floor is where the measurement stops meaning anything — under ~64 px
     the 112x112 recognition crop is upscaled more than 2x — not a taste."""

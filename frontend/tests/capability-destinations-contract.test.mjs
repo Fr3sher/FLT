@@ -1,6 +1,6 @@
 import test from 'node:test'
+import { readSource } from './support/readSource.mjs'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 
 import { deriveCapabilitySummary, capabilityDestination } from '../src/hooks/useSetupSteps.js'
 import { getHelpTopic } from '../src/help/helpRegistry.js'
@@ -15,7 +15,7 @@ import { SETTINGS_SECTIONS } from '../src/components/settings/registry.js'
    sections, the what's-new target validator), exactly the way whatsNew.test.js
    validates its own "Try it →" targets. */
 
-const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
+const read = readSource
 
 // Three rigs that between them light up every row shape: nothing configured,
 // everything configured, and the "installed but ComfyUI isn't running" rig that
@@ -45,13 +45,14 @@ test('every capability row carries a destination, in every rig', () => {
     // did, 19 since clip encoding did (probe_video reports decode/detect/encode
     // apart because they fail apart — ffmpeg can be absent on a machine that
     // decodes fine, and that machine cannot export a single clip)
-    // — each for the same reason. Krea was ABSENT before, which let the
-    // final screen certify "11 of 11 ready" on a machine with no Krea at all;
-    // the video lane repeated the defect ("12 of 12 ready" on a machine that
-    // could not cut one file); these four repeated it again ("14 of 14 ready"
-    // on a machine missing four installable engines). An absent capability
-    // must be visible and counted, never dropped from the denominator.
-    assert.equal(rows.length, 19, `${name}: expected 19 capabilities`)
+    // — each for the same reason, and 20 since 📷 Camera angles did. Krea was
+    // ABSENT before, which let the final screen certify "11 of 11 ready" on a
+    // machine with no Krea at all; the video lane repeated the defect ("12 of
+    // 12 ready" on a machine that could not cut one file); these four repeated
+    // it again ("14 of 14 ready" on a machine missing four installable
+    // engines). An absent capability must be visible and counted, never
+    // dropped from the denominator.
+    assert.equal(rows.length, 20, `${name}: expected 20 capabilities`)
     for (const row of rows) {
       const dest = capabilityDestination(row)
       assert.ok(dest, `${name}: "${row.label}" has no destination`)
@@ -102,8 +103,12 @@ test('a settings destination names a real Settings section', () => {
 
 test('a pending row is not a missing one: own destination, own wording', () => {
   const pending = deriveCapabilitySummary(CAPS_COMFY_OFF).filter((r) => r.pending)
-  assert.deepEqual(pending.map((r) => r.label), ['Klein (local)', 'Test Studio'],
-    'ComfyUI down should leave exactly Klein + Test Studio pending')
+  // Camera angles joins the pending set for the same reason Klein does: the
+  // lane is asset-only, so with the weights on disk and only the process down
+  // the honest state is "waiting for ComfyUI", never "install something".
+  assert.deepEqual(pending.map((r) => r.label),
+    ['Klein (local)', '📷 Camera angles (local)', 'Test Studio'],
+    'ComfyUI down should leave exactly Klein + Camera angles + Test Studio pending')
   for (const row of pending) {
     assert.ok(row.note, `${row.label}: pending row must explain itself`)
     const waiting = capabilityDestination(row)
@@ -127,7 +132,7 @@ test('the accessible label says the state AND where the row leads', () => {
 })
 
 test('the Overview grid actually uses the destinations (no dead tiles)', () => {
-  const src = read('../src/components/settings/OverviewSection.jsx')
+  const src = read('src/components/settings/OverviewSection.jsx')
   assert.match(src, /capabilityDestination/,
     'OverviewSection must resolve each tile through capabilityDestination')
   assert.match(src, /<Link\b/, 'tiles must be real links, not clickable divs')

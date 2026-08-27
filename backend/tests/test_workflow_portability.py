@@ -116,6 +116,10 @@ DECLARED_THIRD_PARTY_NODES = {
     'ConditioningKrea2Rebalance': 'comfyui-krea2edit',
     'Krea2EditModelPatch': 'comfyui-krea2edit',
     'Krea2EditGroundedEncode': 'comfyui-krea2edit',
+    # Masked Repair's sampler. Gated by lanpaint_helper.lanpaint_missing_nodes(),
+    # checked by _run_klein_mask_job before it queues anything, and installable
+    # from Setup's "LanPaint sampler" row.
+    'LanPaint_KSampler': 'LanPaint',
 }
 
 # The Klein lane is the one that broke, and the one the app leans on hardest
@@ -223,6 +227,19 @@ VANILLA_NODE_ALLOWLIST = frozenset({
     'LoraLoader',
     'LoraLoaderModelOnly', 'ModelSamplingFlux', 'PatchModelAddDownscale',
     'PreviewImage', 'PrimitiveInt', 'RandomNoise', 'ReferenceLatent',
-    'SamplerCustomAdvanced', 'SaveImage', 'UNETLoader', 'VAEDecode', 'VAEEncode',
-    'VAELoader',
+    'SamplerCustomAdvanced', 'SaveImage', 'SetLatentNoiseMask', 'UNETLoader',
+    'VAEDecode', 'VAEEncode', 'VAELoader',
+    # 📷 The camera-angle graph's five. All core, and CHECKED rather than
+    # assumed — a live ComfyUI 0.30.1 was asked for each one's
+    # `python_module` and every answer was a `comfy_extras.*` module, i.e.
+    # shipped with ComfyUI itself and not a pack:
+    #   CFGNorm                               comfy_extras.nodes_cfg
+    #   FluxKontextImageScale                 comfy_extras.nodes_flux
+    #   FluxKontextMultiReferenceLatentMethod comfy_extras.nodes_flux
+    #   ModelSamplingAuraFlow                 comfy_extras.nodes_model_advanced
+    #   TextEncodeQwenImageEditPlus           comfy_extras.nodes_qwen
+    # They are recent, so a much older ComfyUI will not have them — that is a
+    # /object_info gap the preflight reports, not a missing pack to install.
+    'CFGNorm', 'FluxKontextImageScale', 'FluxKontextMultiReferenceLatentMethod',
+    'ModelSamplingAuraFlow', 'TextEncodeQwenImageEditPlus',
 })

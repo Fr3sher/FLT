@@ -392,7 +392,7 @@ def _fetch_image_to_temp(url):
     # Prefer the cached resized WebP (already on disk from the grid) to avoid
     # re-hitting Instagram; 512 px is plenty for a face embedding.
     try:
-        from PIL import Image as _PIL, ImageFile
+        from PIL import ImageFile
         ImageFile.LOAD_TRUNCATED_IMAGES = True
         cache = _thumb_cache_path(url)
         if cache.is_file() and time() - cache.stat().st_mtime < _THUMB_CACHE_TTL:

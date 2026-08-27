@@ -14,6 +14,37 @@ from . import config as cfg
 FRONTEND_DIST = cfg.REPO_ROOT / 'frontend' / 'dist'
 logger = logging.getLogger(__name__)
 
+# --- No dialog may ever block this process ----------------------------------
+# The app spawns interpreters it does not control: the capability probes and
+# the install verifications run whatever python the user configured (or a test
+# fabricated). On Windows, CreateProcess on a BROKEN executable — a stub, a
+# truncated download, a text file with an .exe name — does not always return an
+# error: the invalid-16-bit-image path raises a MODAL MessageBox inside the
+# PARENT's CreateProcess call and waits for a click that a server (or a hidden
+# console, or a CI runner) can never deliver. Caught live: the whole test suite
+# frozen inside `_import_ok`, native stack ending MessageBoxW ←
+# RaiseInvalid16BitExeError ← CreateProcessInternalW, over a 4-byte fake
+# python.exe a fixture had written. Whether the dialog appears depends on the
+# error mode INHERITED from whoever launched us, so it strikes some launch
+# contexts and spares others — the worst kind of intermittent.
+#
+# SetErrorMode at import time makes every process that hosts this package —
+# the server, its re-exec, every pytest worker — state the server truth: fail
+# with a code, never ask a human. SEM_FAILCRITICALERRORS is the documented
+# suppressor for exactly that hard-error box; the other two keep Windows from
+# raising WER/open-file dialogs on our behalf. Idempotent, a no-op elsewhere.
+if os.name == 'nt':
+    try:
+        import ctypes
+        _SEM_FAILCRITICALERRORS = 0x0001
+        _SEM_NOGPFAULTERRORBOX = 0x0002
+        _SEM_NOOPENFILEERRORBOX = 0x8000
+        ctypes.windll.kernel32.SetErrorMode(
+            _SEM_FAILCRITICALERRORS | _SEM_NOGPFAULTERRORBOX
+            | _SEM_NOOPENFILEERRORBOX)
+    except Exception:      # noqa: BLE001 — a hardening step must never block startup
+        logger.debug('SetErrorMode unavailable', exc_info=True)
+
 # --- Content types for our own static files ---------------------------------
 # Flask/Werkzeug label every file they send with `mimetypes.guess_type()`. On
 # Windows that module seeds itself from the registry
@@ -277,6 +308,13 @@ _SCHEMA_ADDITIONS = (
     # behaving exactly as it did.
     ('lora_test_image', 'parent_image_id', 'INTEGER'),
     ('lora_test_image', 'derivation_kind', 'VARCHAR(32)'),
+    # ✨ What the improve pass RAN WITH (JSON) — written at enqueue time so the
+    # ↩ "Use these improve settings" restore never has to guess. Nullable:
+    # rows that predate it restore what they do record (prompt, extra_loras).
+    ('lora_test_image', 'improve_profile', 'TEXT'),
+    # 📷 The camera position a view was rendered at ('right/low/medium').
+    ('lora_test_image', 'camera_pose', 'VARCHAR(64)'),
+    ('face_dataset_image', 'camera_pose', 'VARCHAR(64)'),
     # Bank V2 scoring pass — the image_bank/bank_image tables shipped in the Beta,
     # so these columns need the additive path (db.create_all never ALTERs an
     # existing table).
@@ -666,6 +704,13 @@ def create_app(config_object=None):
     # the whole LAN the API keys, the GPU and the datasets. Loopback = untouched.
     from .netguard import install_network_guard
     install_network_guard(app)
+
+    # AFTER the network guard, deliberately: before_request hooks run in
+    # registration order, so an extension's hook can never answer a request the
+    # token gate would have refused. Extensions are trusted local code either
+    # way — this only keeps a public bind's front door in front.
+    from .extension_loader import load_extensions
+    load_extensions(app, csrf)
 
     # Registered last of the write-path guards, so a caller still has to clear CSRF
     # and the access token before we tell them anything about their own body.

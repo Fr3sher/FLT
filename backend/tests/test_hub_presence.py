@@ -23,6 +23,7 @@ No request ever leaves this process: ``_http_get`` is the single seam and every
 test replaces it.
 """
 import pytest
+from app.extensions import db
 
 from app.services import hub_presence as hp
 
@@ -80,7 +81,7 @@ def test_a_repository_that_answers_is_present(monkeypatch, token):
 
 
 def test_a_404_from_a_live_token_is_the_only_way_to_say_gone(monkeypatch, token):
-    hub = install(monkeypatch, FakeHub(model=404, whoami=200))
+    install(monkeypatch, FakeHub(model=404, whoami=200))
     out = hp.check(REPO)
     assert out['state'] == hp.GONE
     # The sentence names both readings of a 404 rather than picking one: the Hub
@@ -93,7 +94,7 @@ def test_a_404_from_a_live_token_is_the_only_way_to_say_gone(monkeypatch, token)
 
 def test_a_404_from_a_token_the_hub_no_longer_knows_is_NOT_gone(monkeypatch, token):
     """The inverse error, and the expensive one: it would report a loss."""
-    hub = install(monkeypatch, FakeHub(model=404, whoami=401))
+    install(monkeypatch, FakeHub(model=404, whoami=401))
     out = hp.check(REPO)
     assert out['state'] == hp.UNKNOWN
     assert 'could not be validated' in out['detail']
@@ -286,7 +287,7 @@ def test_the_endpoint_never_rewrites_the_delivery_record(app, client, monkeypatc
                        json={'run_ids': [run_id]}).status_code == 200
     with app.app_context():
         from app.models import CloudTrainingRun
-        run = CloudTrainingRun.query.get(run_id)
+        run = db.session.get(CloudTrainingRun, run_id)
         assert ct._run_param(run, 'artifact_status') == 'available'
 
 

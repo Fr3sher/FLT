@@ -15,6 +15,7 @@ web UI, unused - this app drives the CLI) and the whole ownership subsystem
 dropped - single local user, cf. plan's Global Constraints.
 """
 from __future__ import annotations
+from ..extensions import db
 import filecmp
 import functools
 import hashlib
@@ -671,7 +672,7 @@ def _lora_family_dirs(fam: str) -> list[str]:
     try:
         roots.append(_loras_root())
     except RuntimeError:
-        pass
+        pass   # an unconfigured root is simply not a candidate
     roots += comfy_model_paths.search_roots('loras')
     out, seen = [], set()
     for root in roots:
@@ -773,7 +774,7 @@ def _aitoolkit_supports_krea() -> bool:
                     if pat.search(fh.read()):
                         return True
             except OSError:
-                continue
+                continue   # unreadable log: not the one this grep is looking for
     return False
 
 
@@ -803,7 +804,7 @@ def _aitoolkit_supports_flux2klein() -> bool:
                     if pat.search(fh.read()):
                         return True
             except OSError:
-                continue
+                continue   # unreadable log: not the one this grep is looking for
     return False
 
 
@@ -836,7 +837,7 @@ def _aitoolkit_supports_anima() -> bool:
                     if pat.search(fh.read()):
                         return True
             except OSError:
-                continue
+                continue   # unreadable log: not the one this grep is looking for
     return False
 
 
@@ -915,7 +916,7 @@ def _sdxl_base_choices() -> set:
         for rel, _ab in comfy_model_paths.list_models('checkpoints'):
             out.add(os.path.basename(rel))
     except Exception:
-        pass
+        pass   # ComfyUI absent or unreadable: the fallback name list stands
     return out
 
 
@@ -2466,7 +2467,7 @@ def _aitoolkit_supports_concept_slider() -> bool:
                     if pat.search(fh.read()):
                         return True
             except OSError:
-                continue
+                continue   # unreadable log: not the one this grep is looking for
     return False
 
 
@@ -2630,6 +2631,85 @@ def _sample_prompts(ds, trigger) -> list:
 def _sample_every(ds) -> int:
     v = _train_settings(ds).get('sample_every')
     return v if v in _SAMPLE_EVERY_CHOICES else 250
+
+
+# --- Preview steps & CFG (GitHub #46) ----------------------------------------
+# Every family derives these two from its base and its variant: 8 steps at CFG 1
+# on a distilled Krea 2 Turbo, 25 at CFG 4 on the undistilled Raw, 20/4 on FLUX,
+# 28/6 on SDXL. Those numbers are right for the shipped bases and they REMAIN the
+# default — but they were literals inside seven builders with no way to override
+# them, which is what #46 ran into: the previews are a property of the base, and
+# a base the studio does not ship (a custom merge, a converted checkpoint) can
+# want a different pair. At a distilled model's step count an undistilled one
+# returns a sketch; at an undistilled one's, a distilled model burns time.
+#
+# ONE table instead of seven literals, because the panel has to SHOW the default
+# it offers to override, and a second copy of that number is exactly how a label
+# starts lying about the code under it.
+#
+# Free numbers, not a choice list: the sensible value follows the base (4-8
+# distilled, 20-35 not), so no single list fits every family. Bounds only.
+_SAMPLE_STEPS_RANGE = (1, 60)
+_SAMPLE_GUIDANCE_RANGE = (1.0, 20.0)
+
+# Families whose (steps, guidance) pair is a constant. Krea and Z-Image are not
+# here: distillation changes the answer, so they resolve from the variant below.
+_SAMPLE_RECIPE_DEFAULTS = {
+    'flux': (20, 4),          # FLUX.1-dev : guidance ~4 (notebook officiel)
+    'flux2klein': (25, 4),
+    'anima': (25, 4),
+    'sdxl': (28, 6),
+}
+
+
+def _sample_recipe_defaults(ds, family=None) -> tuple:
+    """The (steps, guidance) this dataset would preview at with nothing stored —
+    what the builders emit by default AND what the panel labels as the default.
+    One function so those two can never drift apart."""
+    fam = _train_type(ds, family)
+    if fam == 'krea':
+        if _is_full_transformer(ds):
+            return (FULL_TRANSFORMER_SAMPLE_STEPS, FULL_TRANSFORMER_SAMPLE_GUIDANCE)
+        # Turbo (distillé) : cfg 1 / 8 steps ; Raw (non distillé) : cfg 4 / 25 steps.
+        return (25, 4) if _krea_is_raw(ds) else (8, 1)
+    if fam == 'zimage':
+        try:
+            r = zimage_training_recipe(getattr(ds, 'train_variant', None),
+                                       getattr(ds, 'train_base_model', None))
+        except ValueError:
+            # An impossible variant/base pair is the launch path's error to
+            # raise, with its own message. A settings PAYLOAD must still render.
+            return (35, 4)
+        return (r['sample_steps'], r['guidance_scale'])
+    return _SAMPLE_RECIPE_DEFAULTS.get(fam, (25, 4))
+
+
+def _valid_sample_steps(v) -> bool:
+    lo, hi = _SAMPLE_STEPS_RANGE
+    return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
+
+
+def _valid_sample_guidance(v) -> bool:
+    lo, hi = _SAMPLE_GUIDANCE_RANGE
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and lo <= float(v) <= hi)
+
+
+def _sample_steps(ds, family=None) -> int:
+    """Preview steps for this run: the stored override when it is set and valid,
+    else the family default. Nothing stored → byte-identical to the literal the
+    builder used to carry."""
+    v = _train_settings(ds).get('sample_steps')
+    return v if _valid_sample_steps(v) else _sample_recipe_defaults(ds, family)[0]
+
+
+def _sample_guidance(ds, family=None):
+    v = _train_settings(ds).get('sample_guidance')
+    if not _valid_sample_guidance(v):
+        return _sample_recipe_defaults(ds, family)[1]
+    # An integral override goes out as an int, so a config built with the default
+    # in the box stays byte-identical to one built with nothing stored.
+    return int(v) if float(v).is_integer() else float(v)
 
 
 def person_masking_enabled(ds) -> bool:
@@ -3018,6 +3098,22 @@ def effective_train_settings(ds, family=None) -> dict:
             'max_step_saves': _max_step_saves(ds),
             'max_step_saves_choices': list(_MAX_SAVES_CHOICES),
             'sample_every': _sample_every(ds),
+            # Preview steps / CFG (#46). Three values, same shape as the memory
+            # levers above: `*_stored` is the raw override (None = "follow the
+            # family", so the control re-checks Auto), `*_default` is what this
+            # family/variant ships — the panel SHOWS it rather than printing a
+            # second copy of the number — and the bare key is what will be sent.
+            'sample_steps': _sample_steps(ds, fam),
+            'sample_steps_stored': (s.get('sample_steps')
+                                    if _valid_sample_steps(s.get('sample_steps')) else None),
+            'sample_guidance': _sample_guidance(ds, fam),
+            'sample_guidance_stored': (s.get('sample_guidance')
+                                       if _valid_sample_guidance(s.get('sample_guidance'))
+                                       else None),
+            'sample_steps_default': _sample_recipe_defaults(ds, fam)[0],
+            'sample_guidance_default': _sample_recipe_defaults(ds, fam)[1],
+            'sample_steps_range': list(_SAMPLE_STEPS_RANGE),
+            'sample_guidance_range': list(_SAMPLE_GUIDANCE_RANGE),
             # liste STOCKÉE brute (telle que tapée) ou [] → textarea vide = « défauts ».
             'sample_prompts': stored_prompts if isinstance(stored_prompts, list) else [],
             # défaut résolu (kind + trigger courant) : placeholder/aperçu quand vide.
@@ -3195,38 +3291,10 @@ def _training_selection_candidate(ds, patch: dict, requested_mode) -> dict:
             'train_slider': candidate_slider}
 
 
-def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -> dict:
-    """Valide + fusionne un patch {rank?, resolution?, save_every?, sample_every?,
-    sample_prompts?} dans train_settings. Une clé à None/'auto'/vide est RETIRÉE
-    (retour au défaut). Retourne les réglages effectifs pour la famille courante."""
-    ds = fds.get_dataset(user_id, dataset_id)
-    if not ds:
-        raise ValueError('dataset not found')
-    # `training_mode` is a first-class dataset column, not an ai-toolkit expert
-    # knob and not part of presets. It shares this endpoint so the TrainingPanel
-    # can persist the selector atomically with any advanced-options patch.
-    requested_training_mode = None
-    selection = None
-    if _settings is None:
-        if 'training_mode' in patch:
-            requested_training_mode = normalize_training_mode(patch['training_mode'])
-        if any(key in patch for key in
-               ('training_mode', 'train_type', 'base_model', 'variant',
-                'disable_slider_for_full_transformer')):
-            selection = _training_selection_candidate(
-                ds, patch, requested_training_mode)
-            if (selection['family_changed']
-                    and any(key in patch for key in TRAIN_SETTING_KEYS)):
-                raise ValueError(
-                    'change train_type separately from advanced training settings')
-    # ``_settings`` is the preset path's private, unpersisted candidate.  Reusing
-    # this validator keeps every acceptance/rejection rule identical while a
-    # preset validates its complete replacement before making one DB write.
-    cur = _train_settings(ds) if _settings is None else _settings
-    _krea_lora_performance_keys = {'batch_size', 'gradient_checkpointing'}
-    if (_krea_lora_performance_keys.intersection(patch)
-            and not (_train_type(ds) == 'krea' and training_mode(ds) == 'lora')):
-        raise ValueError('batch_size and gradient_checkpointing are available for Krea LoRA only')
+def _ts_apply_sampling_and_saves(patch, cur):
+    """rank / resolution / save cadence / preview sampling knobs, moved
+    verbatim from update_train_settings (2026-08-24). Mutates cur in
+    place; every refusal raises exactly as inline."""
     if 'rank' in patch:
         r = patch['rank']
         if r in (None, 'auto'):
@@ -3261,6 +3329,27 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
             cur['sample_every'] = v
         else:
             raise ValueError(f'sample_every must be one of {_SAMPLE_EVERY_CHOICES}')
+    if 'sample_steps' in patch:
+        v = patch['sample_steps']
+        if v in (None, 'auto', ''):
+            cur.pop('sample_steps', None)                 # retour au défaut famille
+        elif _valid_sample_steps(v):
+            cur['sample_steps'] = v
+        else:
+            raise ValueError(
+                f'sample_steps must be an integer between {_SAMPLE_STEPS_RANGE[0]} '
+                f'and {_SAMPLE_STEPS_RANGE[1]} (or auto)')
+    if 'sample_guidance' in patch:
+        v = patch['sample_guidance']
+        if v in (None, 'auto', ''):
+            cur.pop('sample_guidance', None)
+        elif _valid_sample_guidance(v):
+            # Stocké tel quel : un entier reste un entier (cf. _sample_guidance).
+            cur['sample_guidance'] = v
+        else:
+            raise ValueError(
+                f'sample_guidance must be a number between {_SAMPLE_GUIDANCE_RANGE[0]} '
+                f'and {_SAMPLE_GUIDANCE_RANGE[1]} (or auto)')
     if 'sample_prompts' in patch:
         v = patch['sample_prompts']
         # Accepte aussi une string multi-lignes (une par prompt) pour le confort UI.
@@ -3276,6 +3365,11 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
                 cur.pop('sample_prompts', None)
         else:
             raise ValueError('sample_prompts must be a list of strings (or empty to reset)')
+
+
+def _ts_apply_dense_recipe(patch, cur):
+    """The unlocked half of the dense (full-transformer) recipe — bounded,
+    never free-form. Moved verbatim; mutates cur in place."""
     # --- the unlocked half of the dense recipe --------------------------------
     # Bounded, never free-form: the bounds are what keep "editable" from meaning
     # "able to burn 80 GB of rented GPU on a value that cannot converge".
@@ -3381,6 +3475,10 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
                 cur[_flag] = v
             else:
                 raise ValueError(f'{_flag} must be true or false')
+
+
+def _ts_apply_regularisation(patch, cur):
+    """Dropout / alpha / timestep levers. Moved verbatim; mutates cur in place."""
     if 'dropout' in patch:
         v = patch['dropout']
         if v in (None, 0, 0.0, 'off', ''):
@@ -3405,6 +3503,12 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
             cur['timestep_type'] = v
         else:
             raise ValueError(f'timestep_type must be one of {_TIMESTEP_TYPE_CHOICES} (or auto)')
+
+
+def _ts_apply_optim(patch, cur):
+    """Optimizer, schedule, warmup and grad_accum levers - the automagic3/
+    grad_accum cross-check lives here, so this pair must never be split.
+    Moved verbatim; mutates cur in place."""
     if 'optimizer' in patch:
         v = patch['optimizer']
         if v in (None, 'auto', '', 'adamw8bit'):
@@ -3465,6 +3569,11 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
             cur.pop('gradient_checkpointing', None)
         else:
             raise ValueError('gradient_checkpointing must be true, false or auto')
+
+
+def _ts_apply_network_arch(patch, cur):
+    """Network architecture (LoKr, conv ranks), EMA, content/style and
+    differential guidance levers. Moved verbatim; mutates cur in place."""
     if 'network_type' in patch:
         v = patch['network_type']
         if v in (None, 'auto', '', 'lora'):
@@ -3537,6 +3646,20 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
         else:
             raise ValueError(
                 f'differential_guidance_scale must be between {lo:g} and {hi:g} (or auto)')
+
+
+def _ts_apply_network_and_optim(patch, cur):
+    """LoRA architecture and optimisation levers (dropout, alpha, LoKr,
+    optimizer, schedules, guidance). Moved verbatim; mutates cur in
+    place, including the automagic3/grad_accum cross-check."""
+    _ts_apply_regularisation(patch, cur)
+    _ts_apply_optim(patch, cur)
+    _ts_apply_network_arch(patch, cur)
+
+
+def _ts_apply_data_and_memory(patch, cur):
+    """Caption/mask data levers plus the boolean memory-setting keys.
+    Moved verbatim; mutates cur in place."""
     if 'dual_captions' in patch:
         # Plain boolean lever: truthy stores True, anything falsy drops the key so OFF is
         # byte-identical to a dataset that never touched it.
@@ -3579,6 +3702,11 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
             cur.pop(_mk, None)
         else:
             raise ValueError(f'{_mk} must be true, false or auto')
+
+
+def _ts_apply_quality_and_precision(patch, cur):
+    """Learning-rate/decay/loss quality levers plus quantisation, offloading,
+    save dtype and preset-step keys. Moved verbatim; mutates cur in place."""
     if 'learning_rate' in patch:
         # Not a general Advanced-options control: the family-fixed 1e-4 (or the
         # Prodigy lr=1 convention) is the default, and only the ▶ Continue dialog's
@@ -3659,6 +3787,53 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
             cur[key] = v
         else:
             raise ValueError(f'{key} must be a positive integer (or auto)')
+
+
+def _ts_apply_levers_memory_quality(patch, cur):
+    """Boolean/tri-state levers, memory-saver keys, quality knobs and the
+    preset step bounds. Moved verbatim; mutates cur in place."""
+    _ts_apply_data_and_memory(patch, cur)
+    _ts_apply_quality_and_precision(patch, cur)
+
+
+
+def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -> dict:
+    """Valide + fusionne un patch {rank?, resolution?, save_every?, sample_every?,
+    sample_prompts?} dans train_settings. Une clé à None/'auto'/vide est RETIRÉE
+    (retour au défaut). Retourne les réglages effectifs pour la famille courante."""
+    ds = fds.get_dataset(user_id, dataset_id)
+    if not ds:
+        raise ValueError('dataset not found')
+    # `training_mode` is a first-class dataset column, not an ai-toolkit expert
+    # knob and not part of presets. It shares this endpoint so the TrainingPanel
+    # can persist the selector atomically with any advanced-options patch.
+    requested_training_mode = None
+    selection = None
+    if _settings is None:
+        if 'training_mode' in patch:
+            requested_training_mode = normalize_training_mode(patch['training_mode'])
+        if any(key in patch for key in
+               ('training_mode', 'train_type', 'base_model', 'variant',
+                'disable_slider_for_full_transformer')):
+            selection = _training_selection_candidate(
+                ds, patch, requested_training_mode)
+            if (selection['family_changed']
+                    and any(key in patch for key in TRAIN_SETTING_KEYS)):
+                raise ValueError(
+                    'change train_type separately from advanced training settings')
+    # ``_settings`` is the preset path's private, unpersisted candidate.  Reusing
+    # this validator keeps every acceptance/rejection rule identical while a
+    # preset validates its complete replacement before making one DB write.
+    cur = _train_settings(ds) if _settings is None else _settings
+    krea_lora_performance_keys = {'batch_size', 'gradient_checkpointing'}
+    if (krea_lora_performance_keys.intersection(patch)
+            and not (_train_type(ds) == 'krea' and training_mode(ds) == 'lora')):
+        raise ValueError(
+            'batch_size and gradient_checkpointing are available for Krea LoRA only')
+    _ts_apply_sampling_and_saves(patch, cur)
+    _ts_apply_dense_recipe(patch, cur)
+    _ts_apply_network_and_optim(patch, cur)
+    _ts_apply_levers_memory_quality(patch, cur)
     if _settings is not None:
         return cur
     if selection and selection['family_changed']:
@@ -3695,7 +3870,8 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
 # new expert lever is added above. This is what makes presets schema-tolerant:
 # a preset key outside this list is IGNORED (and reported), never fatal.
 TRAIN_SETTING_KEYS = ('rank', 'resolution', 'save_every', 'max_step_saves',
-                      'sample_every', 'sample_prompts', 'dropout', 'alpha',
+                      'sample_every', 'sample_steps', 'sample_guidance',
+                      'sample_prompts', 'dropout', 'alpha',
                       'timestep_type', 'optimizer', 'lr_scheduler', 'warmup',
                       'grad_accum', 'batch_size', 'gradient_checkpointing',
                       'network_type', 'lokr_factor',
@@ -3744,7 +3920,11 @@ TRAIN_SETTING_KEYS = ('rank', 'resolution', 'save_every', 'max_step_saves',
 # every resume (ai-toolkit rebuilds the job config from scratch), so a user who
 # turns quantisation off and hits ▶ Continue already gets it. Listing them would
 # add untested surface with no caller.
-RESUME_SAFE_SETTING_KEYS = ('save_every', 'sample_every', 'sample_prompts',
+# `sample_steps`/`sample_guidance` join the list for the same reason as
+# `sample_prompts`: they change what a PREVIEW looks like, never the weights, so
+# a resume can honour them without mismatching the checkpoint it continues.
+RESUME_SAFE_SETTING_KEYS = ('save_every', 'sample_every', 'sample_steps',
+                            'sample_guidance', 'sample_prompts',
                             'timestep_type', 'lr_factor')
 
 
@@ -3775,6 +3955,26 @@ def validate_resume_overrides(overrides) -> dict:
         if v not in _SAMPLE_EVERY_CHOICES:
             raise ValueError(f'sample_every must be one of {_SAMPLE_EVERY_CHOICES}')
         patch['sample_every'] = v
+    if 'sample_steps' in overrides:
+        v = overrides['sample_steps']
+        if v in (None, 'auto', ''):
+            patch['sample_steps'] = None                    # back to the family default
+        elif _valid_sample_steps(v):
+            patch['sample_steps'] = v
+        else:
+            raise ValueError(
+                f'sample_steps must be an integer between {_SAMPLE_STEPS_RANGE[0]} '
+                f'and {_SAMPLE_STEPS_RANGE[1]} (or auto)')
+    if 'sample_guidance' in overrides:
+        v = overrides['sample_guidance']
+        if v in (None, 'auto', ''):
+            patch['sample_guidance'] = None
+        elif _valid_sample_guidance(v):
+            patch['sample_guidance'] = v
+        else:
+            raise ValueError(
+                f'sample_guidance must be a number between {_SAMPLE_GUIDANCE_RANGE[0]} '
+                f'and {_SAMPLE_GUIDANCE_RANGE[1]} (or auto)')
     if 'sample_prompts' in overrides:
         v = overrides['sample_prompts']
         if isinstance(v, str):
@@ -4681,7 +4881,7 @@ def _mask_fields(dataset_folder: str) -> dict:
         if isinstance(meta, dict) and isinstance(meta.get('mask_min_value'), (int, float)):
             min_value = float(meta['mask_min_value'])
     except (OSError, ValueError, TypeError):
-        pass
+        pass   # optional sidecar: absent or corrupt meta keeps the default floor
     return {'mask_path': md, 'mask_min_value': min_value}
 
 
@@ -5364,8 +5564,8 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
                     'sampler': 'flowmatch',
                     'neg': '',   # cohérence avec SDXL : défaut ai-toolkit = False (booléen) → fragile
                     'sample_every': _sample_every(ds),
-                    'guidance_scale': recipe['guidance_scale'],
-                    'sample_steps': recipe['sample_steps'],
+                    'guidance_scale': _sample_guidance(ds, 'zimage'),
+                    'sample_steps': _sample_steps(ds, 'zimage'),
                     'prompts': _sample_prompts(ds, trigger),
                 },
             }],
@@ -5466,8 +5666,8 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                         # that does not line up with a save cannot be used to
                         # pick which save to keep.
                         'sample_every': _dense_save_every(ds),
-                        'guidance_scale': FULL_TRANSFORMER_SAMPLE_GUIDANCE,
-                        'sample_steps': FULL_TRANSFORMER_SAMPLE_STEPS,
+                        'guidance_scale': _sample_guidance(ds, 'krea'),
+                        'sample_steps': _sample_steps(ds, 'krea'),
                         'prompts': _sample_prompts(ds, trigger),
                     },
                 }],
@@ -5537,9 +5737,9 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     'sampler': 'flowmatch',
                     'neg': '',
                     'sample_every': _sample_every(ds),
-                    # Turbo (distillé) : cfg 1 / 8 steps ; Raw (non distillé) : cfg 4 / 25 steps.
-                    'guidance_scale': 4 if is_raw else 1,
-                    'sample_steps': 25 if is_raw else 8,
+                    # Défauts Turbo/Raw : voir _SAMPLE_RECIPE_DEFAULTS.
+                    'guidance_scale': _sample_guidance(ds, 'krea'),
+                    'sample_steps': _sample_steps(ds, 'krea'),
                     'prompts': _sample_prompts(ds, trigger),
                 },
             }],
@@ -5619,8 +5819,8 @@ def _build_job_config_flux(ds, dataset_folder: str, steps: int, training_folder=
                     'sampler': 'flowmatch',
                     'neg': '',
                     'sample_every': _sample_every(ds),
-                    'guidance_scale': 4,   # FLUX.1-dev : guidance ~4 (notebook officiel)
-                    'sample_steps': 20,
+                    'guidance_scale': _sample_guidance(ds, 'flux'),
+                    'sample_steps': _sample_steps(ds, 'flux'),
                     'prompts': _sample_prompts(ds, trigger),
                 },
             }],
@@ -5711,8 +5911,8 @@ def _build_job_config_flux2klein(ds, dataset_folder: str, steps: int, training_f
                     'neg': '',
                     'sample_every': _sample_every(ds),
                     # Base non distillée → vrai CFG (cf. docstring) : 4 / 25 steps.
-                    'guidance_scale': 4,
-                    'sample_steps': 25,
+                    'guidance_scale': _sample_guidance(ds, 'flux2klein'),
+                    'sample_steps': _sample_steps(ds, 'flux2klein'),
                     'prompts': _sample_prompts(ds, trigger),
                 },
             }],
@@ -5805,8 +6005,8 @@ def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder
                     'sampler': 'flowmatch',
                     'neg': ANIMA_SAMPLE_NEG,
                     'sample_every': _sample_every(ds),
-                    'guidance_scale': 4,
-                    'sample_steps': 25,
+                    'guidance_scale': _sample_guidance(ds, 'anima'),
+                    'sample_steps': _sample_steps(ds, 'anima'),
                     'prompts': _sample_prompts(ds, trigger),
                 },
             }],
@@ -5886,8 +6086,8 @@ def _build_job_config_sdxl(ds, dataset_folder: str, steps: int, training_folder=
                     # 1re step. '' est un str valide → sample sans négatif (voulu pour un LoRA sujet).
                     'neg': '',
                     'sample_every': _sample_every(ds),
-                    'guidance_scale': 6,
-                    'sample_steps': 28,
+                    'guidance_scale': _sample_guidance(ds, 'sdxl'),
+                    'sample_steps': _sample_steps(ds, 'sdxl'),
                     'prompts': _sample_prompts(ds, trigger),
                 },
             }],
@@ -6076,7 +6276,7 @@ def list_checkpoints(user_id, dataset_id, base_model=_PERSISTED, family=None,
                     'Full-state resume is unavailable for this run: '
                     + '; '.join(bridge_reasons))
     except (OSError, ValueError, TypeError):
-        pass
+        pass   # advisory detail only: resume stays offered without the sentence
     for c in out:
         state = state_by_step.get(int(c['step']))
         if state is not None:
@@ -6445,7 +6645,7 @@ def list_imported_checkpoints(user_id, dataset_id, family=None) -> list[dict]:
             # 2026-07-13: imports succeeded but "in ComfyUI" stayed at 0).
             cloud_prefixes.add(f'lds{r.id}_')
     except Exception:
-        pass
+        pass   # best-effort prefix harvest: one broken row must not hide the others
     subfolder = _FAMILY_SUBDIR.get(fam, 'z image')
     out, seen = [], set()
     for dest_dir, fn in sorted(((d, fn) for d in dirs for fn in os.listdir(d)),
@@ -6675,7 +6875,7 @@ def _dir_size(path) -> int:
             try:
                 total += os.path.getsize(os.path.join(dirpath, f))
             except OSError:
-                pass
+                pass   # vanished mid-walk: a size sum stays best-effort
     return total
 
 
@@ -6689,14 +6889,14 @@ def dataset_disk_usage(user_id, dataset_id, base_model=_PERSISTED, family=None,
         if os.path.isdir(rd):
             out['run_dir_bytes'] = _dir_size(rd)
     except Exception:
-        pass
+        pass   # a disk-usage figure is advisory: what cannot be sized just does not count
     try:
         from ..models import CloudTrainingRun
         for r in CloudTrainingRun.query.filter_by(dataset_id=dataset_id).all():
             if r.staging_dir and os.path.isdir(r.staging_dir):
                 out['cloud_staging_bytes'] += _dir_size(r.staging_dir)
     except Exception:
-        pass
+        pass   # a disk-usage figure is advisory: what cannot be sized just does not count
     try:
         ds = fds.get_dataset(user_id, dataset_id)
         fam = _train_type(ds, family)
@@ -6705,9 +6905,9 @@ def dataset_disk_usage(user_id, dataset_id, base_model=_PERSISTED, family=None,
             try:
                 out['deployed_bytes'] += os.path.getsize(p) if p else 0
             except OSError:
-                pass
+                pass   # vanished or unresolvable: the sum stays best-effort
     except Exception:
-        pass
+        pass   # outer belt over the whole loop: the figure stays advisory either way
     out['total_bytes'] = sum(v for k, v in out.items() if k.endswith('_bytes'))
     return out
 
@@ -6765,7 +6965,7 @@ def purge_training_artifacts(user_id, trigger_safe) -> list[str]:
         try:
             output_datasets_roots.append(str(accessor()))
         except RuntimeError:
-            pass
+            pass   # an unconfigured root is simply not a candidate
     for root in output_datasets_roots:
         if not os.path.isdir(root):
             continue
@@ -7039,7 +7239,7 @@ def recommended_steps(dataset_id, train_type=None, variant=None) -> int:
     lancement en cours plutôt qu'un ancien choix persisté.
     """
     ds = _train_context_view(
-        FaceDataset.query.get(dataset_id), train_type, variant)
+        db.session.get(FaceDataset, dataset_id), train_type, variant)
     n = FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep').count()
     if ds is not None and slider_mode_enabled(ds):
         # Slider (mode, Beta) : la direction est définie par les prompts, pas par
@@ -7077,7 +7277,7 @@ def recommended_steps_info(dataset_id, train_type=None, variant=None) -> dict:
     pourquoi, afin que l'app apprenne au débutant au lieu de décider en boîte
     noire. Ne mute rien."""
     ds = _train_context_view(
-        FaceDataset.query.get(dataset_id), train_type, variant)
+        db.session.get(FaceDataset, dataset_id), train_type, variant)
     n = FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep').count()
     kind = (ds.kind or 'character') if ds is not None else 'character'
     steps = recommended_steps(dataset_id, train_type=train_type, variant=variant)
@@ -7164,7 +7364,7 @@ def _style_caption_quality_from_rows(ds, rows) -> dict:
 
 def style_caption_quality(dataset_id) -> dict:
     """Public read-only Style quality report used by routes/tests and preflight."""
-    ds = FaceDataset.query.get(dataset_id)
+    ds = db.session.get(FaceDataset, dataset_id)
     if ds is None or not fds.is_style(ds):
         return {'caption_count': 0, 'distinct_caption_count': 0,
                 'trigger_only_count': 0, 'all_identical': False, 'issues': []}
@@ -7191,80 +7391,8 @@ _KREA_MIN_VRAM_GB = 24
 _VRAM24_FAMILIES = ('krea', 'flux')   # familles 12B qui recommandent ~24 GB à 1024
 
 
-def training_preflight(user_id, dataset_id, train_type=None, variant=None,
-                       lane=None, masked=None, training_mode=None,
-                       base_model=_PERSISTED) -> dict:
-    """Pre-launch sanity report: {'blockers': [...], 'warnings': [...]}. Blockers
-    stop the launch (too few images for the family); warnings ask for one explicit
-    confirm in the UI. Pure reads — never mutates, never raises on probe failures
-    (an unknown GPU must not block a run).
-
-    Émet AUSSI `checks` (liste structurée {id,label,status,detail,target}) +
-    `verdict` ('ready'|'warnings'|'blocked') pour la pastille de préparation du
-    workspace — construits DANS LA MÊME PASSE que blockers/warnings (une seule
-    source de vérité, aucune règle dupliquée). `target` = id de section du
-    workspace (gf-generate/gf-images) où corriger — None quand rien à cibler.
-    NB : le check 'captioned' (images gardées sans caption) est un fail dans
-    `checks` (assert_trainable refusera le launch) mais volontairement PAS un
-    blocker ici — le flux modal existant (launch → erreur explicite) est conservé.
-
-    ``lane`` ('local' default, or 'cloud') says WHERE the run will execute. Every
-    row carries a ``scope``: 'dataset' (a property of the images/captions, true
-    wherever the job runs) or 'machine' (a read of THIS box — its GPU, its
-    ai-toolkit venv). A cloud lane drops the 'machine' rows and their warning
-    lines: that hardware will not run the job, and on a machine with no local
-    training environment at all they would fire on every single cloud launch —
-    which is exactly how users learn to click through warnings without reading
-    them. Default 'local' keeps the historical payload byte-for-byte.
-
-    ``masked`` says whether the caller intends MASKED training (person masks). It
-    is a client-side preference the server cannot read, so it is passed in; None
-    (the default) means "not stated" and the person-mask row is omitted entirely —
-    warning about a mask nobody asked for is exactly the noise that teaches people
-    to click through preflights."""
-    from .face_variations import caption_has_identity_leak
-    stored_ds = fds.get_dataset(user_id, dataset_id)
-    if not stored_ds:
-        raise ValueError('dataset not found')
-    ttype = _train_type(stored_ds, train_type)
-    mode = normalize_training_mode(
-        training_mode if training_mode is not None
-        else getattr(stored_ds, 'training_mode', None))
-    ds = _train_context_view(
-        stored_ds, ttype, variant, base_model=base_model,
-        training_mode=mode)
-    label = _FAMILY_LABEL.get(ttype, ttype)
-    blockers, warnings = [], []
-    checks = []
-    hf_cloud_token_status = None
-    # `warnings` is a flat list of strings (the modal renders it verbatim), so the
-    # lane filter cannot recognise a machine-scope line by reading it. Record the
-    # indices as they are appended instead — the only reliable pairing.
-    machine_warning_ix = set()
-
-    def _machine_warn(msg):
-        machine_warning_ix.add(len(warnings))
-        warnings.append(msg)
-
-    def _check(cid, clabel, status, detail, target=None, bypassable=None, hint=None,
-               scope='dataset'):
-        # `bypassable` (fail rows only): True = a QUALITY guard-rail the explicit
-        # "Continue anyway" ack can waive; False = a physical impossibility the ack
-        # never covers. `hint` = the honest one-line risk shown next to the ack.
-        # `scope`: 'dataset' = a property of the images/captions (true on any lane);
-        # 'machine' = a read of THIS box, meaningless when the job runs elsewhere;
-        # 'cloud' = a remote-lane prerequisite such as the dedicated HF token.
-        entry = {'id': cid, 'label': clabel, 'status': status,
-                 'detail': detail, 'target': target, 'scope': scope}
-        if bypassable is not None:
-            entry['bypassable'] = bool(bypassable)
-        if hint:
-            entry['hint'] = hint
-        checks.append(entry)
-
-    rows = FaceDatasetImage.query.filter_by(dataset_id=dataset_id).all()
-    kept = [r for r in rows if r.status == 'keep' and r.filename]
-    n = len(kept)
+def _pf_automagic3(ds, lane, _machine_warn, _check):
+    """Automagic3 selected but this ai-toolkit checkout lacks it (machine scope)."""
     if (_optimizer_eff(ds) == 'automagic3'
             and (lane or 'local') != 'cloud'
             and not _aitoolkit_supports_automagic3()):
@@ -7273,18 +7401,12 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         _machine_warn(message)
         _check('automagic3', 'Automagic3 available', 'fail', message,
                'gf-training', bypassable=False, scope='machine')
-    # CONCEPT / STYLE : plusieurs dimensions ci-dessous (équilibre de composition,
-    # fuite d'identité) sont des heuristiques de LoRA PERSONNAGE sans objet quand
-    # l'invariant du set n'est pas une identité — on les saute pour ne pas générer
-    # de faux avertissements.
-    concept = fds.is_conceptual(ds)
-    style = fds.is_style(ds)
-    # SLIDER mode (Beta) : les images ne sont qu'un SUBSTRAT de débruitage et les
-    # captions sont ignorées par la loss slider → plancher d'images réduit, gardes
-    # caption/composition/identité sans objet ; la vraie exigence est la paire de
-    # prompts qui définit la direction du slider.
-    slider = slider_mode_enabled(ds)
 
+
+def _pf_dense_mode(ds, ttype, mode, lane, slider, blockers, _check):
+    """Dense/full-transformer compatibility + the dedicated HF cloud token.
+    Returns hf_cloud_token_status (None outside full_transformer mode)."""
+    hf_cloud_token_status = None
     # Dense Krea is intentionally a separate, cloud-only lane. Surface every
     # physical incompatibility in the normal structured preflight instead of
     # letting a paid pod discover it after provisioning.
@@ -7371,7 +7493,12 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
                       'fine-grained token is recommended; global write is '
                       'accepted with a warning.'),
                 scope='cloud')
+    return hf_cloud_token_status
 
+
+def _pf_image_floor(n, slider, ttype, label, blockers, warnings, _check):
+    """1) family image floor / recommendation. Returns (floor, reco) — the
+    payload echoes both."""
     # 1) minimum d'images par famille (slider : plancher substrat réduit)
     floor, reco = (TRAIN_MIN_IMAGES_SLIDER if slider
                    else TRAIN_MIN_IMAGES.get(ttype, (12, 20)))
@@ -7407,7 +7534,11 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         _check('images', 'Enough images', 'ok',
                f'{n} kept ({reco}+ recommended)' + (' — substrate only in slider mode'
                                                     if slider else ''))
+    return floor, reco
 
+
+def _pf_slider_prompts(ds, slider, blockers, _check):
+    """1bis) slider prompt pair — THE slider prerequisite."""
     # 1bis) SLIDER : la paire de prompts est LE prérequis (assert_trainable refuse
     # le launch sans elle) + rappel honnête que les captions ne s'entraînent pas.
     if slider:
@@ -7430,6 +7561,9 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         _check('captioned', 'Captions', 'ok',
                'captions are ignored by the slider loss (images are substrate only)')
 
+
+def _pf_composition(ds, kept, n, concept, slider, warnings, _check):
+    """2) framing balance — a CHARACTER heuristic, skipped for concept/slider."""
     # 2) équilibre de composition — heuristique PERSONNAGE (viser un mix face/bust/body/
     # back pour rendre un visage à toutes les distances). Sans objet pour un CONCEPT (il
     # s'apprend sur les cadrages tels quels), et un dataset non classé (framing=None) y
@@ -7457,6 +7591,9 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
             _check('composition', 'Framing balance', 'ok',
                    f"face {comp['face']} · bust {comp['bust']} · body {comp['body']} · back {comp['back']}")
 
+
+def _pf_captioned(kept, n, slider, style, warnings, _check):
+    """3bis) every kept image captioned — a warn, the launch modal owns refusal."""
     # 3bis) toutes les gardées ont une caption — WARN, plus un mur : le launch
     # demande un confirm (« train anyway ») au lieu de refuser (UNCAPTIONED:
     # dans assert_trainable). Les captions restent fortement recommandées.
@@ -7473,6 +7610,9 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         else:
             _check('captioned', 'Every kept image captioned', 'ok', f'{n}/{n} captioned')
 
+
+def _pf_dual_captions(ds, ttype, label, slider, warnings, _check):
+    """3ter) dual captions vs cached text embeddings (issue #22)."""
     # 3ter) DUAL CAPTIONS vs effective recipe. A family default or a selected preset
     # may pre-cache text embeddings and unload the encoder: the short caption then
     # has no encoder to read it, and emitting it used to crash at step 1 (issue #22).
@@ -7493,6 +7633,10 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
             _check('dual_captions', 'Dual captions', 'ok',
                    f'{label} trains each image on both its long and its short caption')
 
+
+def _pf_caption_quality(ds, kept, style, slider, warnings, _check):
+    """3) suspect captions (short / duplicated). Returns `caps` — the identity-
+    leak section's ok-row condition reads it."""
     # 3) captions suspectes (trop courtes / dupliquées) — sans objet en slider mode
     caps = [(r.caption or '').strip() for r in kept if (r.caption or '').strip()]
     if caps and not slider:
@@ -7522,7 +7666,13 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         if _cap_ok:
             _check('caption_quality', 'Caption quality', 'ok',
                    'varied, ≥8 words')
+    return caps
 
+
+def _pf_identity_leaks(ds, kept, caps, concept, slider, warnings, _check):
+    """4) identity leaks in captions — keeps the OFFENDING images for the UI.
+    Returns leak_images."""
+    from .face_variations import caption_has_identity_leak
     # 4) fuite d'identité — on RETIENT les images fautives (pas juste le compte) pour
     # que l'UI liste lesquelles au moment du preflight, éditables sur place.
     # CONCEPT : décrire l'identité (visage/cheveux/corps) est VOULU — c'est le concept,
@@ -7530,11 +7680,13 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     # On saute entièrement cette dimension (comme le badge caption_leak du payload), sinon
     # CHAQUE caption concept déclenche un faux avertissement au preflight.
     body = fds.is_body_fidelity(ds)
+    appearance = (fds.caption_options(ds).get('appearance') or None)
     leak_images = [] if (concept or slider) else [
         {'id': r.id, 'filename': r.filename, 'caption': (r.caption or '').strip()}
         for r in kept
         if (r.caption or '').strip()
-        and caption_has_identity_leak((r.caption or '').strip(), body=body)]
+        and caption_has_identity_leak((r.caption or '').strip(), body=body,
+                                     appearance=appearance)]
     if leak_images:
         warnings.append(f'{len(leak_images)} caption(s) still describe the identity (face/hair'
                         f'{"/body marks" if body else ""}) — it will bind to those words '
@@ -7544,7 +7696,11 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
                'to those words, not the trigger', 'gf-images')
     elif caps and not concept and not slider:
         _check('leaks', 'No identity leaks', 'ok', '0 leaking caption')
+    return leak_images
 
+
+def _pf_duplicates(kept, n, slider, warnings, _check):
+    """5) near-duplicate pairs among kept (pairwise dHash). Returns dup_pairs."""
     # 5) quasi-doublons parmi les kept (dHash pairwise, n<=~60 -> négligeable). On
     # retient les PAIRES (leurs deux images) pour que l'UI montre lesquelles rejeter.
     # Slider : sans objet (le substrat n'est pas mémorisé) → on saute le scan.
@@ -7572,7 +7728,11 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
                 _check('duplicates', 'No near-duplicates', 'ok', '0 pair')
         except Exception:
             pass   # best-effort: an unreadable file must not block the preflight
+    return dup_pairs
 
+
+def _pf_triage(rows, warnings, _check):
+    """11) untriaged images — they will NOT train."""
     # 11) images encore en attente de tri (elles ne s'entraînent PAS)
     untriaged = sum(1 for r in rows if r.status == 'pending' and r.filename)
     if untriaged:
@@ -7583,6 +7743,9 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     elif rows:
         _check('triage', 'Everything triaged', 'ok', 'no image awaiting ✓/✕')
 
+
+def _pf_memory_savers(ds, ttype, label, lane, warnings, _check):
+    """6bis) memory savers off under a family whose recipe needs them."""
     # 6bis) MEMORY SAVERS switched off under a family whose recipe needs them.
     #
     # This is the row that did not exist while quantize/quantize_te/low_vram were
@@ -7626,6 +7789,9 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
                    f'{_off} off — {label} needs ~{_need} GB without them, {_seen}',
                    'gf-training')
 
+
+def _pf_vram(ds, ttype, label, _machine_warn, _check):
+    """7) VRAM floor for the 24 GB families (machine scope, never blocking)."""
     # 7) VRAM (Krea 2 mesuré à 24 GB ; None = inconnu, jamais bloquant)
     try:
         from .. import capabilities
@@ -7646,8 +7812,11 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
                    f'{vram} GB' + ('' if _at_1024 else ' (already at 768)'),
                    scope='machine')
     except Exception:
-        pass
+        pass   # an advisory VRAM note must never block the preflight it decorates
 
+
+def _pf_torch_arch(_machine_warn, _check):
+    """8) torch wheels vs GPU architecture — the RTX 50 / sm_120 trap."""
     # 8) torch build vs GPU architecture — the RTX 50 (Blackwell) trap. Stable
     # PyTorch wheels stop at sm_90; `torch.cuda.is_available()` stays True, the
     # run builds its buckets, then dies at the first real computation. Catching
@@ -7670,6 +7839,10 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     except Exception:
         pass   # a probe failure must never block or fake a diagnosis
 
+
+def _pf_face_mask(ds, slider, warnings, _check):
+    """9) face masking asked for but InsightFace absent (dataset-scoped: the
+    masks are exported locally and uploaded, so a cloud run pays too)."""
     # 9) Face masking asked for, but the detector isn't installed.
     #
     # InsightFace is an OPTIONAL extra by decision (a few hundred MB nobody should
@@ -7704,6 +7877,10 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
             _check('face_mask', 'Face masking ready', 'ok',
                    'InsightFace found — the faces will be weighted down')
 
+
+def _pf_person_mask(ds, masked, slider, concept, style, warnings, _check):
+    """9bis) masked training set but rembg absent (issue #24: the probe's
+    timeout collapses to False on a slow machine — warn, never block)."""
     # 9bis) Person masking set to ON, but rembg isn't installed.
     # Retenu de la premiere ecriture de cette ligne (issue #24) : la sonde derriere
     # rembg est un import en sous-processus dont le TIMEOUT s'effondre en False
@@ -7755,6 +7932,126 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         elif person_mask_ok:
             _check('person_mask', 'Masked training ready', 'ok',
                    'rembg found — the background will be weighted down to 10%')
+
+
+def training_preflight(user_id, dataset_id, train_type=None, variant=None,
+                       lane=None, masked=None, training_mode=None,
+                       base_model=_PERSISTED) -> dict:
+    """Pre-launch sanity report: {'blockers': [...], 'warnings': [...]}. Blockers
+    stop the launch (too few images for the family); warnings ask for one explicit
+    confirm in the UI. Pure reads — never mutates, never raises on probe failures
+    (an unknown GPU must not block a run).
+
+    Émet AUSSI `checks` (liste structurée {id,label,status,detail,target}) +
+    `verdict` ('ready'|'warnings'|'blocked') pour la pastille de préparation du
+    workspace — construits DANS LA MÊME PASSE que blockers/warnings (une seule
+    source de vérité, aucune règle dupliquée). `target` = id de section du
+    workspace (gf-generate/gf-images) où corriger — None quand rien à cibler.
+    NB : le check 'captioned' (images gardées sans caption) est un fail dans
+    `checks` (assert_trainable refusera le launch) mais volontairement PAS un
+    blocker ici — le flux modal existant (launch → erreur explicite) est conservé.
+
+    ``lane`` ('local' default, or 'cloud') says WHERE the run will execute. Every
+    row carries a ``scope``: 'dataset' (a property of the images/captions, true
+    wherever the job runs) or 'machine' (a read of THIS box — its GPU, its
+    ai-toolkit venv). A cloud lane drops the 'machine' rows and their warning
+    lines: that hardware will not run the job, and on a machine with no local
+    training environment at all they would fire on every single cloud launch —
+    which is exactly how users learn to click through warnings without reading
+    them. Default 'local' keeps the historical payload byte-for-byte.
+
+    ``masked`` says whether the caller intends MASKED training (person masks). It
+    is a client-side preference the server cannot read, so it is passed in; None
+    (the default) means "not stated" and the person-mask row is omitted entirely —
+    warning about a mask nobody asked for is exactly the noise that teaches people
+    to click through preflights."""
+    stored_ds = fds.get_dataset(user_id, dataset_id)
+    if not stored_ds:
+        raise ValueError('dataset not found')
+    ttype = _train_type(stored_ds, train_type)
+    mode = normalize_training_mode(
+        training_mode if training_mode is not None
+        else getattr(stored_ds, 'training_mode', None))
+    ds = _train_context_view(
+        stored_ds, ttype, variant, base_model=base_model,
+        training_mode=mode)
+    label = _FAMILY_LABEL.get(ttype, ttype)
+    blockers, warnings = [], []
+    checks = []
+    hf_cloud_token_status = None
+    # `warnings` is a flat list of strings (the modal renders it verbatim), so the
+    # lane filter cannot recognise a machine-scope line by reading it. Record the
+    # indices as they are appended instead — the only reliable pairing.
+    machine_warning_ix = set()
+
+    def _machine_warn(msg):
+        machine_warning_ix.add(len(warnings))
+        warnings.append(msg)
+
+    def _check(cid, clabel, status, detail, target=None, bypassable=None, hint=None,
+               scope='dataset'):
+        # `bypassable` (fail rows only): True = a QUALITY guard-rail the explicit
+        # "Continue anyway" ack can waive; False = a physical impossibility the ack
+        # never covers. `hint` = the honest one-line risk shown next to the ack.
+        # `scope`: 'dataset' = a property of the images/captions (true on any lane);
+        # 'machine' = a read of THIS box, meaningless when the job runs elsewhere;
+        # 'cloud' = a remote-lane prerequisite such as the dedicated HF token.
+        entry = {'id': cid, 'label': clabel, 'status': status,
+                 'detail': detail, 'target': target, 'scope': scope}
+        if bypassable is not None:
+            entry['bypassable'] = bool(bypassable)
+        if hint:
+            entry['hint'] = hint
+        checks.append(entry)
+
+    rows = FaceDatasetImage.query.filter_by(dataset_id=dataset_id).all()
+    kept = [r for r in rows if r.status == 'keep' and r.filename]
+    n = len(kept)
+    _pf_automagic3(ds, lane, _machine_warn, _check)
+    # CONCEPT / STYLE : plusieurs dimensions ci-dessous (équilibre de composition,
+    # fuite d'identité) sont des heuristiques de LoRA PERSONNAGE sans objet quand
+    # l'invariant du set n'est pas une identité — on les saute pour ne pas générer
+    # de faux avertissements.
+    concept = fds.is_conceptual(ds)
+    style = fds.is_style(ds)
+    # SLIDER mode (Beta) : les images ne sont qu'un SUBSTRAT de débruitage et les
+    # captions sont ignorées par la loss slider → plancher d'images réduit, gardes
+    # caption/composition/identité sans objet ; la vraie exigence est la paire de
+    # prompts qui définit la direction du slider.
+    slider = slider_mode_enabled(ds)
+
+    hf_cloud_token_status = _pf_dense_mode(ds, ttype, mode, lane, slider,
+                                          blockers, _check)
+
+    floor, reco = _pf_image_floor(n, slider, ttype, label, blockers,
+                                  warnings, _check)
+
+    _pf_slider_prompts(ds, slider, blockers, _check)
+
+    _pf_composition(ds, kept, n, concept, slider, warnings, _check)
+
+    _pf_captioned(kept, n, slider, style, warnings, _check)
+
+    _pf_dual_captions(ds, ttype, label, slider, warnings, _check)
+
+    caps = _pf_caption_quality(ds, kept, style, slider, warnings, _check)
+
+    leak_images = _pf_identity_leaks(ds, kept, caps, concept, slider,
+                                     warnings, _check)
+
+    dup_pairs = _pf_duplicates(kept, n, slider, warnings, _check)
+
+    _pf_triage(rows, warnings, _check)
+
+    _pf_memory_savers(ds, ttype, label, lane, warnings, _check)
+
+    _pf_vram(ds, ttype, label, _machine_warn, _check)
+
+    _pf_torch_arch(_machine_warn, _check)
+
+    _pf_face_mask(ds, slider, warnings, _check)
+
+    _pf_person_mask(ds, masked, slider, concept, style, warnings, _check)
 
     # Lane filter — BEFORE the verdict, so a cloud launch whose only complaint was
     # this machine's GPU comes back a clean 🟢 instead of a warning nobody can act
@@ -7867,7 +8164,7 @@ def _crash_payload(log_path, dataset_id, rc) -> dict:
             payload['hf_gated'] = {k: gated[k] for k in ('status', 'repo', 'url',
                                                          'title', 'message')}
     except Exception:
-        pass
+        pass   # diagnosis enricher: a failed probe leaves its section out
     # A dead fast-download accelerator looks exactly like a network fault, and the
     # app never sets that variable — so saying so is the whole remedy (GitHub #18,
     # bobba84).
@@ -7876,7 +8173,7 @@ def _crash_payload(log_path, dataset_id, rc) -> dict:
         if transfer:
             payload['hf_transfer'] = transfer
     except Exception:
-        pass
+        pass   # diagnosis enricher: a failed probe leaves its section out
     # A `ModuleNotFoundError` in the log is a PROVEN interpreter problem, and the
     # one fact the log itself never carries is WHICH Python produced it. The
     # module is read off the log — no subprocess is spawned from the watcher
@@ -7895,7 +8192,7 @@ def _crash_payload(log_path, dataset_id, rc) -> dict:
                     'python', 'module', 'windows_store', 'alternative',
                     'title', 'message')}
     except Exception:
-        pass
+        pass   # diagnosis enricher: a failed probe leaves its section out
     try:
         from .. import capabilities
         arch = torch_arch_verdict(capabilities.aitoolkit_torch_info(),
@@ -7903,7 +8200,7 @@ def _crash_payload(log_path, dataset_id, rc) -> dict:
         if arch and not arch['supported']:
             payload['gpu_arch'] = {'message': arch['message'], 'command': arch['command']}
     except Exception:
-        pass
+        pass   # diagnosis enricher: a failed probe leaves its section out
     return payload
 
 
@@ -8089,35 +8386,18 @@ def _refuse_unresolved_exact_resume_transactions() -> None:
             'operator recovery before another local training can start')
 
 
-@_serial_local_launch
-def launch_training(user_id, dataset_id, steps: int | None = None, check_captions: bool = True,
-                    base_model=None, variant: str | None = None, train_type: str | None = None,
-                    allow_caption_mismatch: bool = False, masked: bool | None = None,
-                    fresh: bool = False, allow_uncaptioned: bool = False,
-                    allow_caption_quality: bool = False,
-                    vae_path=_PERSISTED, te_path=_PERSISTED,
-                    allow_unverified_weights: bool = False,
-                    allow_not_ready: bool = False,
-                    parent_record_id=None, resumed_from=None,
-                    training_mode=None,
-                    _state_restore_bundle=None,
-                    _state_bridge_required: bool = False,
-                    _state_resume_training_folder=None,
-                    _state_resume_archived=None,
-                    _state_model_pins=None,
-                    _state_resume_journal=None) -> dict:
-    """Export + config + pause ComfyUI (flag) + lance l'entraînement ai-toolkit
-    en CLI headless (`run.py <config>`).
-
-    ``steps`` = step cible (None → calculé par recommended_steps selon le nombre
-    d'images). ai-toolkit reprend AUTOMATIQUEMENT depuis le dernier checkpoint
-    présent dans le training_folder (get_latest_save_path), donc relancer avec un
-    steps > dernier_step continue l'entraînement. ``fresh=True`` écarte d'abord le
-    run existant (archive_previous_run) → repart de zéro sur le dataset actuel.
-
-    Retourne {pid, config_path, log_path}. Raises RuntimeError if ai-toolkit isn't
-    installed/configured (route maps this to 409, not 400 - it's a backend
-    availability problem, not a bad request)."""
+def _lt_refuse_or_resolve(user_id, dataset_id, train_type, variant,
+                          base_model, check_captions, allow_caption_mismatch,
+                          allow_uncaptioned, allow_caption_quality,
+                          allow_not_ready, allow_unverified_weights,
+                          training_mode, vae_path, te_path,
+                          _state_resume_journal):
+    """launch_training's refusal battery, moved verbatim (2026-08-24):
+    every early ValueError/RuntimeError a launch can earn, in the original
+    order, ending on the run-collision check. Resolves and returns the
+    launch context: (ds, base_model, variant, launch_fam, recipe,
+    launch_view, eff_vae, eff_te). Mutates ds.train_type when the caller
+    passed train_type, exactly as before -- the trunk commits it."""
     # The decorator owns the launch transaction before this first action.  Exact
     # continuation passes its newly-created journal only after the outer
     # transaction has reconciled every older one; all other launches must recover
@@ -8255,13 +8535,19 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
             f"training collision: dataset '{clash.name}' (#{clash.id}) already uses "
             f"the same trigger '{ds.trigger_word}' on the same base - they would write "
             f"to the same folder. Change the trigger_word of one of the two before training.")
-    ds.train_base_model = base_model
-    ds.train_variant = variant
-    # Persist the resolved SDXL VAE/TE overrides (None on every other family) so the
-    # run-dir tag, the config, and continue/queue replays all read the same triplet.
-    ds.train_vae_path = eff_vae
-    ds.train_te_path = eff_te
-    fds.db.session.commit()
+    return ds, base_model, variant, launch_fam, recipe, launch_view, eff_vae, eff_te
+
+
+def _lt_prepare_job(user_id, dataset_id, ds, launch_fam, variant, base_model,
+                    steps, masked, fresh, _state_bridge_required,
+                    _state_model_pins):
+    """Everything between the persisted launch context and the lane paths,
+    moved verbatim: bridge probe/gate, archive-if-fresh, adaptive steps,
+    masked resolution, model pinning, dataset export/freeze, job config
+    (re-built without the bridge when pinning fails soft), config write and
+    the subprocess environment. Returns (archived, steps, masked,
+    _bridge_probe, _bridge_candidate, _bridge_model_pins, dataset_folder,
+    _prepared, _job_config, config_path, env)."""
     # The bridge is an opt-in overlay around one inspected ai-toolkit source
     # shape.  Unknown revisions keep training normally but cannot claim exact
     # checkpoints.  A requested restore is fail-closed.
@@ -8343,20 +8629,24 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # Environnement du sous-process d'entraînement (HF_HOME + auth Hugging Face,
     # cf. training_subprocess_env). Jamais shell=True ; args en liste.
     env = training_subprocess_env()
-    # Context/status files live inside the mutable run lane.  Protect their
-    # publication with the same lock as lane archive/seed and final admission;
-    # otherwise a launch which passed the cheap preflight earlier could overwrite
-    # an exact resume's context before either request reaches the spawn lock.
-    with _queue_lock:
-        run_dir = _run_root(
-            ds, base_model=base_model, family=launch_fam, variant=variant)
-        run_dir.mkdir(parents=True, exist_ok=True)
-        log_path = _run_log_path(
-            ds, base_model=base_model, family=launch_fam, variant=variant)
-    run_token = secrets.token_hex(16)
-    # The Dataset manifest/snapshot was frozen atomically with the export above;
-    # only the short registry write remains for the spawn transaction below.
-    from . import checkpoint_registry
+    return (archived, steps, masked, _bridge_probe, _bridge_candidate,
+            _bridge_model_pins, dataset_folder, _prepared, _job_config,
+            config_path, env)
+
+
+def _lt_publish_bridge_context(run_dir, config_path, env, masked, _prepared,
+                               _bridge_probe, _bridge_candidate,
+                               _state_restore_bundle, _state_bridge_required):
+    """The bridge context/status publication, verbatim -- INCLUDING the
+    under-lock re-check of process ownership that precedes it (a competing
+    request may have frozen while this one waited). Returns
+    (_bridge_candidate, env, _bridge_identity_path, _bridge_status_path);
+    raises exactly as inline when the lane is already owned or a required
+    bridge cannot be established."""
+    from . import aitoolkit_state_bridge
+    # The Dataset manifest/snapshot was frozen atomically with the export
+    # above; only the short registry write remains for the spawn transaction
+    # (its checkpoint_registry import moved there with it).
     _bridge_identity_path = None
     _bridge_status_path = None
     with _queue_lock:
@@ -8406,6 +8696,22 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                     'exact-state bridge disabled for this launch: %s', exc,
                     exc_info=True)
                 _bridge_candidate = False
+    return _bridge_candidate, env, _bridge_identity_path, _bridge_status_path
+
+
+def _lt_spawn_transaction(ds, user_id, dataset_id, steps, masked, launch_fam,
+                          variant, base_model, recipe, allow_not_ready,
+                          parent_record_id, resumed_from, run_token,
+                          log_path, config_path, env,
+                          _prepared, _state_resume_journal):
+    """The spawn transaction, verbatim: queue + GPU arbiter locks, the
+    authoritative ownership/vision/ComfyUI/Ollama checks, provenance
+    registration, durable identity publication, Popen with its fail-closed
+    pre-spawn cleanup, and the exact-resume journal updates. Returns the
+    spawned process; every refusal raises exactly as inline. Popen success
+    remains the irreversible boundary -- nothing after it may raise into
+    continue_training()."""
+    from . import checkpoint_registry
     # The training queue lock serializes launch/Stop ownership; the shared GPU
     # arbiter also covers vision's check -> flag handoff. Keep this lock order
     # everywhere training launches: queue ownership first, GPU admission second.
@@ -8507,7 +8813,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                 try:
                     logf.close()
                 except OSError:
-                    pass
+                    pass   # closing the log is courtesy inside an error path already being reported
             try:
                 _clear_training_identity(ttl_seconds=None)
             except Exception:
@@ -8543,6 +8849,76 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                 # earlier launching intent + durable fence remain recoverable.
                 logger.exception(
                     'could not attach process identity to exact-resume journal')
+    return proc
+
+
+@_serial_local_launch
+def launch_training(user_id, dataset_id, steps: int | None = None, check_captions: bool = True,
+                    base_model=None, variant: str | None = None, train_type: str | None = None,
+                    allow_caption_mismatch: bool = False, masked: bool | None = None,
+                    fresh: bool = False, allow_uncaptioned: bool = False,
+                    allow_caption_quality: bool = False,
+                    vae_path=_PERSISTED, te_path=_PERSISTED,
+                    allow_unverified_weights: bool = False,
+                    allow_not_ready: bool = False,
+                    parent_record_id=None, resumed_from=None,
+                    training_mode=None,
+                    _state_restore_bundle=None,
+                    _state_bridge_required: bool = False,
+                    _state_resume_training_folder=None,
+                    _state_resume_archived=None,
+                    _state_model_pins=None,
+                    _state_resume_journal=None) -> dict:
+    """Export + config + pause ComfyUI (flag) + lance l'entraînement ai-toolkit
+    en CLI headless (`run.py <config>`).
+
+    ``steps`` = step cible (None → calculé par recommended_steps selon le nombre
+    d'images). ai-toolkit reprend AUTOMATIQUEMENT depuis le dernier checkpoint
+    présent dans le training_folder (get_latest_save_path), donc relancer avec un
+    steps > dernier_step continue l'entraînement. ``fresh=True`` écarte d'abord le
+    run existant (archive_previous_run) → repart de zéro sur le dataset actuel.
+
+    Retourne {pid, config_path, log_path}. Raises RuntimeError if ai-toolkit isn't
+    installed/configured (route maps this to 409, not 400 - it's a backend
+    availability problem, not a bad request)."""
+    (ds, base_model, variant, launch_fam, recipe, launch_view,
+     eff_vae, eff_te) = _lt_refuse_or_resolve(
+        user_id, dataset_id, train_type, variant, base_model, check_captions,
+        allow_caption_mismatch, allow_uncaptioned, allow_caption_quality,
+        allow_not_ready, allow_unverified_weights, training_mode,
+        vae_path, te_path, _state_resume_journal)
+    ds.train_base_model = base_model
+    ds.train_variant = variant
+    # Persist the resolved SDXL VAE/TE overrides (None on every other family) so the
+    # run-dir tag, the config, and continue/queue replays all read the same triplet.
+    ds.train_vae_path = eff_vae
+    ds.train_te_path = eff_te
+    fds.db.session.commit()
+    (archived, steps, masked, _bridge_probe, _bridge_candidate,
+     _bridge_model_pins, dataset_folder, _prepared, _job_config,
+     config_path, env) = _lt_prepare_job(
+        user_id, dataset_id, ds, launch_fam, variant, base_model, steps,
+        masked, fresh, _state_bridge_required, _state_model_pins)
+    # Context/status files live inside the mutable run lane.  Protect their
+    # publication with the same lock as lane archive/seed and final admission;
+    # otherwise a launch which passed the cheap preflight earlier could overwrite
+    # an exact resume's context before either request reaches the spawn lock.
+    with _queue_lock:
+        run_dir = _run_root(
+            ds, base_model=base_model, family=launch_fam, variant=variant)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        log_path = _run_log_path(
+            ds, base_model=base_model, family=launch_fam, variant=variant)
+    run_token = secrets.token_hex(16)
+    (_bridge_candidate, env, _bridge_identity_path,
+     _bridge_status_path) = _lt_publish_bridge_context(
+        run_dir, config_path, env, masked, _prepared, _bridge_probe,
+        _bridge_candidate, _state_restore_bundle, _state_bridge_required)
+    proc = _lt_spawn_transaction(
+        ds, user_id, dataset_id, steps, masked, launch_fam, variant,
+        base_model, recipe, allow_not_ready, parent_record_id, resumed_from,
+        run_token, log_path, config_path, env, _prepared,
+        _state_resume_journal)
     # Watcher event-driven : libère ComfyUI / enchaîne la file dès la fin du
     # process (le poll de /train/status reste le filet de secours).
     _exact_resume_transaction = None
@@ -8645,7 +9021,7 @@ def _fsync_directory(path) -> None:
     try:
         os.fsync(descriptor)
     except OSError:
-        pass
+        pass   # fsync is belt-and-braces: close() already flushed the bytes
     finally:
         os.close(descriptor)
 
@@ -8855,7 +9231,7 @@ def _copy_verified_exact_checkpoint(source: Path, destination: Path, record) -> 
         try:
             temporary.unlink()
         except FileNotFoundError:
-            pass
+            pass   # already gone: exactly the state the unlink wanted
 
 
 def _archive_and_seed_exact_bundle(
@@ -9155,6 +9531,10 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     # Exact continuation must preserve every trajectory-shaping setting. Save
     # and sample boundaries affect ai-toolkit's main-vs-regularisation loader
     # selection, so cadence changes are not merely presentation changes.
+    # `sample_steps`/`sample_guidance` are deliberately NOT in this list: they
+    # change how a preview image is rendered once the sampler is already running
+    # and touch neither the loop nor the loader. Refusing them would make a
+    # full-state resume the one place you cannot fix an unreadable preview.
     if resume_mode == 'full_state' and (
             'lr_factor' in override_patch
             or 'timestep_type' in override_patch
@@ -9376,7 +9756,7 @@ def stop_training(expected_dataset_id=None, expected_run_token=None,
 def _dataset_name(dataset_id):
     if dataset_id is None:
         return None
-    ds = FaceDataset.query.get(int(dataset_id))
+    ds = db.session.get(FaceDataset, int(dataset_id))
     return ds.name if ds else f'#{dataset_id}'
 
 
@@ -9412,7 +9792,7 @@ def assert_trainable(dataset_id, train_type=None, allow_caption_mismatch=False,
     levées par ce flag : 0 image gardée (rien à entraîner) et, en mode slider, la
     paire de prompts absente (aucune direction à apprendre) — ai-toolkit planterait."""
     kept = FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep').count()
-    ds_ = FaceDataset.query.get(dataset_id)
+    ds_ = db.session.get(FaceDataset, dataset_id)
     if ds_ is not None and slider_mode_enabled(ds_):
         # Slider mode (Beta): images are only a denoising substrate — a small
         # varied set is enough — and captions are encoded but IGNORED by the
@@ -9584,7 +9964,7 @@ def training_status(user_id=None) -> dict:
         # id does not name. Answering them from the colliding face row is how the
         # run ends up on the wrong page under the wrong name.
         from ..models import VideoDataset
-        vds = VideoDataset.query.get(int(cur_id))
+        vds = db.session.get(VideoDataset, int(cur_id))
         current = {
             'dataset_id': cur_id,
             'dataset_table': cur_table,
@@ -9602,7 +9982,7 @@ def training_status(user_id=None) -> dict:
             'recipe_warning': None,
         }
     elif in_progress and cur_id is not None:
-        ds = FaceDataset.query.get(int(cur_id))
+        ds = db.session.get(FaceDataset, int(cur_id))
         fam = (queue_manager._get_system_state('training_train_type', None)
                or (_train_type(ds) if ds else None))
         variant = (queue_manager._get_system_state('training_variant', None)
@@ -9817,7 +10197,7 @@ def _parse_training_log(text: str) -> dict:
             try:
                 loss = float(lm.group(1))
             except ValueError:
-                continue
+                continue   # a line that only LOOKS like a loss sample: skip it
             out['loss'] = loss
             if not curve or curve[-1][0] != step:
                 curve.append([step, loss])
@@ -10641,7 +11021,7 @@ def _snapshot_final_checkpoint(dataset_id, step, base_model=_PERSISTED,
         return None
     if step <= 0 or dataset_id is None:
         return None
-    ds = FaceDataset.query.get(int(dataset_id))
+    ds = db.session.get(FaceDataset, int(dataset_id))
     if not ds:
         return None
     trigger = _safe_trigger(ds)

@@ -4,6 +4,7 @@ ComfyUI is never contacted: `queue_manager.add_job`/`_build_cell_workflow` are
 monkeypatched for the enqueue-path tests, and the workflow-build test loads
 the real copied workflow JSON but stops short of a network call."""
 import struct
+from app.extensions import db
 import threading
 import pytest
 
@@ -238,7 +239,8 @@ def test_create_run_commits_rows_before_enqueue(app, monkeypatch, tmp_path):
             return job_id
         monkeypatch.setattr(lts, '_enqueue_cell', fake_enqueue)
         monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
-        out = lts.create_run(LOCAL_USER, ds.id, [ck], [1.0], prompt='p', count=1)
+        out = lts.create_run(LOCAL_USER, ds.id, [ck], [1.0],
+                             lts.StudioGenSettings(prompt='p', count=1))
         rows = LoraTestImage.query.filter_by(dataset_id=ds.id).all()
         assert out['created'] == len(rows) >= 1
         assert seen and all(j for j in seen)
@@ -380,8 +382,9 @@ def test_create_run_with_resolution_tier_resolves_dims_via_lifted_resolution_mod
         monkeypatch.setattr(lts, '_build_cell_workflow', fake_build)
         monkeypatch.setattr(lts, '_enqueue_cell', lambda *a, **k: 'job-tier')
         monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
-        out = lts.create_run(LOCAL_USER, ds.id, [ck], [1.0], prompt='p', count=1,
-                             resolution_tier='hq')
+        out = lts.create_run(LOCAL_USER, ds.id, [ck], [1.0],
+                             lts.StudioGenSettings(prompt='p', count=1,
+                                                   resolution_tier='hq'))
         rows = LoraTestImage.query.filter_by(dataset_id=ds.id).all()
         assert out['created'] == len(rows) == 1
         assert rows[0].resolution_tier == 'hq'
@@ -541,7 +544,7 @@ def test_create_run_krea_enqueues_all_zero_cells_before_stable_nonzero_cells(
 
         out = lts.create_run(
             LOCAL_USER, ds.id, checkpoints, [1.0, 0.0, -0.5, 0.75],
-            prompt='p', count=1, z_models=[None, alt_base])
+            lts.StudioGenSettings(prompt='p', count=1, z_models=[None, alt_base]))
 
         expected = []
         for base in (None, alt_base):
@@ -575,8 +578,7 @@ def test_create_comparison_run_krea_enqueues_all_zero_cells_before_stable_nonzer
             [{'dataset_id': ds.id, 'checkpoint': checkpoint}
              for checkpoint in checkpoints],
             [1.0, 0.0, -0.5, 0.75],
-            prompt='p',
-            count=1,
+            lts.StudioGenSettings(prompt='p', count=1),
         )
 
         expected = [(None, checkpoint, 0.0) for checkpoint in checkpoints]
@@ -617,7 +619,7 @@ def test_create_comparison_run_commits_rows_before_enqueue(app, monkeypatch, tmp
         monkeypatch.setattr(lts, '_enqueue_cell', fake_enqueue)
         monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
         out = lts.create_comparison_run(LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': cks[0]}],
-                                        [1.0], prompt='p', count=1)
+                                        [1.0], lts.StudioGenSettings(prompt='p', count=1))
         rows = LoraTestImage.query.filter_by(dataset_id=ds.id).all()
         assert out['created'] == len(rows) >= 1
         assert seen and all(j for j in seen)
@@ -653,7 +655,8 @@ def test_comparison_run_failure_keeps_previous_cells_and_marks_the_failed_one(ap
         monkeypatch.setattr(lts, '_preflight_run', lambda *a, **k: None)
         with pytest.raises(RuntimeError, match='comfy exploded'):
             lts.create_comparison_run(LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': cks[0]}],
-                                      [0.6, 0.8, 1.0, 1.2, 1.4], prompt='p', count=1)
+                                      [0.6, 0.8, 1.0, 1.2, 1.4],
+                                      lts.StudioGenSettings(prompt='p', count=1))
         rows = LoraTestImage.query.filter_by(dataset_id=ds.id).order_by(LoraTestImage.id).all()
         assert len(rows) == 3                       # the 2 survivors + the failed one
         queued = {j.job_id for j in ImageGenerationQueue.query.all()}
@@ -693,7 +696,7 @@ def test_comparison_run_writes_one_transaction_per_cell_and_scans_loras_once(app
         try:
             out = lts.create_comparison_run(
                 LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': c} for c in cks],
-                [0.8, 1.0], prompt='p', count=1)
+                [0.8, 1.0], lts.StudioGenSettings(prompt='p', count=1))
         finally:
             event.remove(Session, 'after_commit', _count)
         assert out['created'] == 6
@@ -1310,7 +1313,8 @@ def test_create_run_preflights_missing_zimage_vae_and_text_encoder(app, tmp_path
         monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
         ds = svc.create_dataset(LOCAL_USER, 'PF', 'pf')
         with pytest.raises(lts.StudioAssetsMissing) as ei:
-            lts.create_run(LOCAL_USER, ds.id, [ck], [1.0], prompt='p', count=1)
+            lts.create_run(LOCAL_USER, ds.id, [ck], [1.0],
+                             lts.StudioGenSettings(prompt='p', count=1))
         paths = ' '.join(f['path'] for f in ei.value.missing_files)
         assert 'z ae.safetensors' in paths and 'qwen_3_4b.safetensors' in paths
         assert LoraTestImage.query.filter_by(dataset_id=ds.id).count() == 0  # no rows created
@@ -1658,6 +1662,23 @@ def test_embedded_workflow_model_refs_are_all_layout_independent():
             ('Flux2 klein\\flux-2-klein-9b-kv-fp8.safetensors', 'RESOLVED'),
         ('improve skin.json', '139', 'lora_name'):
             ('klein\\realistic.safetensors', 'BYPASSED'),
+        # 📷 Camera angles (services/qwen_camera_helper). Every one of the five
+        # is rewritten before enqueue by a resolver that reads the disk, and
+        # `camera_missing_assets` blocks the run when a REQUIRED one is absent —
+        # so none of these spellings has to exist on anybody's machine.
+        ('qwen_camera_angles.json', '108', 'unet_name'):
+            ('qwen\\qwen_image_edit_2511_fp8mixed.safetensors', 'RESOLVED'),
+        ('qwen_camera_angles.json', '109', 'lora_name'):
+            ('qwen\\Qwen-Image-Edit-2511-Multiple-Angles.safetensors', 'RESOLVED'),
+        # The ONLY optional one: absent, node 102 leaves the graph entirely and
+        # the step count rises to compensate (4 → 20). Dropping it while keeping
+        # 4 steps would render noise, which is why one function decides both.
+        ('qwen_camera_angles.json', '102', 'lora_name'):
+            ('qwen\\Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors', 'BYPASSED'),
+        ('qwen_camera_angles.json', '93', 'clip_name'):
+            ('qwen_2.5_vl_7b_fp8_scaled.safetensors', 'RESOLVED'),
+        ('qwen_camera_angles.json', '95', 'vae_name'):
+            ('qwen_image_vae.safetensors', 'RESOLVED'),
         ('klein_inpaint.json', '114', 'unet_name'):
             ('klein\\flux-2-klein-9b-fp8.safetensors', 'RESOLVED'),
         ('klein_inpaint.json', '10', 'vae_name'):
@@ -1684,6 +1705,22 @@ def test_embedded_workflow_model_refs_are_all_layout_independent():
             ('qwen3vl_4b_fp8_scaled.safetensors', 'DORMANT'),
         ('krea2_turbo_img2img.json', '22', 'vae_name'):
             ('qwen_image_vae.safetensors', 'DORMANT'),
+        # The Test Studio's FLUX.2 Klein lane (GitHub #53). Its three engine
+        # assets go through the SAME resolvers as the Klein inpaint graphs above
+        # — apply_klein_lora_test_settings calls unet_for_job /
+        # resolve_klein_text_encoder / resolve_klein_vae before enqueue — so the
+        # spellings below are a readable default, never a dependency.
+        ('flux2_klein_t2i.json', '20', 'unet_name'):
+            ('klein\\flux-2-klein-9b-fp8.safetensors', 'RESOLVED'),
+        ('flux2_klein_t2i.json', '21', 'clip_name'):
+            ('qwen_3_8b_fp8mixed.safetensors', 'RESOLVED'),
+        ('flux2_klein_t2i.json', '22', 'vae_name'):
+            ('flux2-vae.safetensors', 'RESOLVED'),
+        # Never loaded: the cell's own LoRA always replaces it, and the name is
+        # deliberately one no install can hold, so a builder that forgot to set
+        # it fails loudly instead of quietly testing somebody else's LoRA.
+        ('flux2_klein_t2i.json', '29', 'lora_name'):
+            ('flux2klein\\placeholder.safetensors', 'OVERRIDDEN'),
     }
     assert all(cat in ALLOWED for _ref, cat in EXPECTED.values())
     actual = {}
@@ -1750,7 +1787,7 @@ def test_combine_run_stacks_every_lora_with_its_own_weight_and_all_triggers(
             [{'dataset_id': ds_a.id, 'checkpoint': cks_a[0], 'weight': 0.9},
              {'dataset_id': ds_b.id, 'checkpoint': cp_b, 'weight': 0.55}],
             [0.6, 0.8, 1.0],            # sweep axis: meaningless here, must be dropped
-            prompt='on a rooftop', count=1, combine=True)
+            lts.StudioGenSettings(prompt='on a rooftop', count=1), combine=True)
 
         # ONE cell: the strength sweep is replaced by the per-LoRA weights.
         assert out['created'] == 1 and len(built) == 1
@@ -1845,9 +1882,9 @@ def test_a_blend_weight_above_two_survives_the_whole_launch_path(app, monkeypatc
             LOCAL_USER,
             [{'dataset_id': ds_a.id, 'checkpoint': cks_a[0], 'weight': 4.5},
              {'dataset_id': ds_b.id, 'checkpoint': cks_b[0], 'weight': 5.0}],
-            [1.0], prompt='p', count=1, combine=True)
+            [1.0], lts.StudioGenSettings(prompt='p', count=1), combine=True)
         assert out['created'] == 1
-        cell = LoraTestImage.query.get(out['ids'][0])
+        cell = db.session.get(LoraTestImage, out['ids'][0])
         assert cell.strength == 4.5, 'the head weight reaches the cell unclamped'
 
 
@@ -1863,7 +1900,7 @@ def test_combine_of_a_single_selection_stays_a_normal_run(app, monkeypatch, tmp_
         monkeypatch.setattr(lts, '_enqueue_cell', lambda *a, job_id=None, **k: job_id)
         out = lts.create_comparison_run(
             LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': cks[0]}],
-            [0.6, 0.8], prompt='p', count=1, combine=True)
+            [0.6, 0.8], lts.StudioGenSettings(prompt='p', count=1), combine=True)
         assert out['created'] == 2
 
 
@@ -1921,7 +1958,8 @@ def _stack_run(lts, svc, LOCAL_USER, tmp_path, monkeypatch, weights):
             LOCAL_USER,
             [{'dataset_id': ds_a.id, 'checkpoint': cks_a[0], 'weight': w_a},
              {'dataset_id': ds_b.id, 'checkpoint': cp_b, 'weight': w_b}],
-            [1.0], prompt='on a rooftop', count=1, combine=True)['run_id']
+            [1.0], lts.StudioGenSettings(prompt='on a rooftop', count=1),
+            combine=True)['run_id']
 
     return launch, ds_a, ds_b, cks_a[0], cp_b
 
@@ -1983,7 +2021,7 @@ def test_stack_variants_line_up_the_relaunches_of_the_same_stack(
         # A run of the SAME head LoRA alone is not a variant of this stack.
         solo = lts.create_comparison_run(
             LOCAL_USER, [{'dataset_id': ds_a.id, 'checkpoint': cp_a}],
-            [1.0], prompt='p', count=1)['run_id']
+            [1.0], lts.StudioGenSettings(prompt='p', count=1))['run_id']
         assert solo not in {v['run_id'] for v in
                             lts.studio_payload_run(LOCAL_USER, second)['stack_variants']}
         # And a comparison run has no stack block at all.

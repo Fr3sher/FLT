@@ -1,6 +1,6 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
-import LoadingScreen from './components/common/LoadingScreen'
+import { Suspense, useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, Navigate, Outlet, NavLink, useLocation } from 'react-router'
+import { Archive, ArrowUp, Dumbbell, Images, Loader2, Menu, Settings, X } from 'lucide-react'
 import { apiFetch, postJson } from './api/fetchClient'
 import { JobsProvider } from './context/JobsContext'
 import { ToastProvider, useToast } from './components/common/Toast'
@@ -11,17 +11,24 @@ import { WhatsNewButton, WhatsNewModal } from './components/common/WhatsNew'
 import ConnectionBanner from './components/common/ConnectionBanner'
 import SetupHealthNotice from './components/setup/SetupHealthNotice'
 import ComfyRecoveryBanner from './components/common/ComfyRecoveryBanner'
+import GenerationQueueDock from './components/common/GenerationQueueDock'
 import DockerUpdateInstructions from './components/common/DockerUpdateInstructions'
 import PinokioUpdateInstructions from './components/common/PinokioUpdateInstructions'
-const DatasetPage = lazy(() => import('./pages/DatasetPage'))
-const BankPage = lazy(() => import('./pages/BankPage'))
-const VideoBankPage = lazy(() => import('./pages/VideoBankPage'))
-const StudioPage = lazy(() => import('./pages/StudioPage'))
-const SettingsPage = lazy(() => import('./pages/SettingsPage'))
-const SetupPage = lazy(() => import('./pages/SetupPage'))
-const GuidePage = lazy(() => import('./pages/GuidePage'))
-const CloudRunsPage = lazy(() => import('./pages/CloudRunsPage'))
-const CanvasPage = lazy(() => import('./pages/CanvasPage'))
+import { lazyPage } from './utils/lazyPage'
+
+// Each page is its own chunk, fetched on first navigation — the entry bundle
+// stops carrying all eighteen routes to paint one. `lazyPage` also owns the
+// stale-chunk reload after an Update & restart (see utils/lazyPage.js).
+const DatasetPage = lazyPage(() => import('./pages/DatasetPage'))
+const BankPage = lazyPage(() => import('./pages/BankPage'))
+const VideoBankPage = lazyPage(() => import('./pages/VideoBankPage'))
+const StudioPage = lazyPage(() => import('./pages/StudioPage'))
+const SettingsPage = lazyPage(() => import('./pages/SettingsPage'))
+const SetupPage = lazyPage(() => import('./pages/SetupPage'))
+const GuidePage = lazyPage(() => import('./pages/GuidePage'))
+const CloudRunsPage = lazyPage(() => import('./pages/CloudRunsPage'))
+const CanvasPage = lazyPage(() => import('./pages/CanvasPage'))
+const GalleryPage = lazyPage(() => import('./pages/GalleryPage'))
 import { recommendedMet } from './hooks/useSetupSteps'
 import { HelpModeProvider, useHelpMode, TipHost } from './help/HelpMode'
 import HeaderMenu from './components/common/HeaderMenu'
@@ -111,7 +118,9 @@ function CheckUpdatesButton() {
       className={`${NAV_ITEM_BASE} relative ${available
         ? 'text-emerald-300 hover:text-emerald-200'
         : 'text-content-muted hover:text-content'} hover:bg-surface-raised disabled:opacity-50`}>
-      <span aria-hidden>{busy ? '⏳' : '⬆'}</span>
+      {busy
+        ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
+        : <ArrowUp aria-hidden="true" className="h-4 w-4" />}
       {available && (
         <span aria-hidden className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400" />
       )}
@@ -174,13 +183,13 @@ function NavBar() {
       {/* Bank sits right after Datasets: it FEEDS them (triage a big unsorted
           folder, then promote the keepers into a dataset). */}
       <NavLink to="/bank" className={navItemClass} onClick={() => setOpen(false)}>
-        <span className="inline-flex items-center gap-1"><span aria-hidden>🗃️</span> Bank</span>
+        <span className="inline-flex items-center gap-1"><Archive aria-hidden="true" className="h-3.5 w-3.5" /> Bank</span>
       </NavLink>
       {/* Unified runs hub (cloud + local history) — useful as soon as ANY
           training path exists, not just the cloud one. */}
       {(caps.cloud_training || caps.training_visible) && (
         <NavLink to="/cloud" className={navItemClass} onClick={() => setOpen(false)}>
-          <span className="inline-flex items-center gap-1"><span aria-hidden>🏋️</span> Runs
+          <span className="inline-flex items-center gap-1"><Dumbbell aria-hidden="true" className="h-3.5 w-3.5" /> Runs
             {activity.running && (
               /* Presence IS the message, so it must not be colour-only: the
                  label is read out and shown on hover/long-press. */
@@ -214,6 +223,23 @@ function NavBar() {
       )}
       {caps.studio_visible && (
         <NavLink to="/studio" className={navItemClass} onClick={() => setOpen(false)}>Test Studio</NavLink>
+      )}
+      {/* 🖼 Gallery — every generated image, one feed. Last: it is where the
+          OUTPUT of the other workspaces accumulates, so it reads as the shelf
+          at the end of the row. Visible whenever any surface that generates
+          is: renders can outlive a broken ComfyUI, so the training gates keep
+          it reachable even while the studio gate is down. */}
+      {(caps.studio_visible || caps.cloud_training || caps.training_visible) && (
+        <NavLink to="/gallery" className={navItemClass} onClick={() => setOpen(false)}>
+          <span className="inline-flex items-center gap-1"><Images aria-hidden="true" className="h-3.5 w-3.5" /> Gallery
+            {/* Same rule and the same hiding as the ◉ Canvas chip above: gone on
+                the tight desktop bar (md→lg) where the row already overflows,
+                kept in the mobile panel, which is where this app is actually
+                browsed — a beta warning that vanishes on the reader's own screen
+                warns nobody. */}
+            <span className="px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none md:hidden lg:inline">Beta</span>
+          </span>
+        </NavLink>
       )}
     </>
   )
@@ -270,7 +296,7 @@ function NavBar() {
                 </>
               )}
             </HeaderMenu>
-            <HeaderMenu triggerLabel={<span aria-hidden>⚙</span>}
+            <HeaderMenu triggerLabel={<Settings aria-hidden="true" className="h-4 w-4" />}
               triggerTitle="Setup & settings" active={settingsMenuActive} dot={setupNeedsAttention}>
               {(close) => (
                 <>
@@ -294,7 +320,9 @@ function NavBar() {
           <button type="button" onClick={() => setOpen((v) => !v)}
             aria-expanded={open} aria-label={open ? 'Close navigation menu' : 'Open navigation menu'}
             className="rounded-md p-2 text-content-muted hover:text-content hover:bg-surface-raised">
-            <span aria-hidden className="block text-lg leading-none">{open ? '✕' : '☰'}</span>
+            {open
+            ? <X aria-hidden="true" className="h-5 w-5" />
+            : <Menu aria-hidden="true" className="h-5 w-5" />}
           </button>
         </div>
       </div>
@@ -402,7 +430,7 @@ function UpdateBanner() {
             ) : (
               <>
                 <button type="button" onClick={apply}
-                  className="rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white transition-transform hover:-translate-y-px">
+                  className="rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 transition-transform hover:-translate-y-px">
                   Update &amp; restart
                 </button>
                 {/* Download link only for packaged builds (a git checkout updates in
@@ -434,9 +462,22 @@ function UpdateBanner() {
  * once-per-session redirect to the wizard; a verified one is never interrupted
  * again and re-verifies quietly in the background. */
 
+/* What the content area shows for the instant a page's chunk is in flight —
+   first navigation to a route, or the one reload after an update. Quiet on
+   purpose: the shell around it is already painted, so a big spinner would
+   shout about a wait that is usually under a second. */
+function PageLoading() {
+  return (
+    <div className="flex items-center justify-center py-24" role="status" aria-label="Loading this page">
+      <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-border border-t-content-muted" aria-hidden />
+    </div>
+  )
+}
+
 function Shell() {
   const { pathname } = useLocation();
-  const wideWorkspaceRoute = pathname === '/canvas' || pathname === '/bank';
+  const wideWorkspaceRoute = pathname === '/canvas' || pathname === '/bank'
+    || pathname === '/gallery';
   /* 🖼 THE BOARD IS THE WHOLE SCREEN. The canvas is not a document with a
      picture in it — it is a surface you pan and zoom, and every pixel the page
      keeps for itself is a pixel of board you have to pan to reach. So `/canvas`
@@ -448,7 +489,14 @@ function Shell() {
      `h-svh`, not `h-screen`: on a phone `100vh` is the LARGEST viewport, the one
      you only get once the URL bar has scrolled away — so `h-screen` here would
      put the bottom of the board under the browser chrome on every load, which
-     is the exact fold bug the frame's old `vh` heights were fighting. */
+     is the exact fold bug the frame's old `vh` heights were fighting.
+
+     …and below `sm` the gutter goes to ZERO. 8 px a side reads as a considered
+     margin on a desktop; on a 360-px phone it is 16 px of the 328 the toolbar
+     has to fit in, and it was the difference between that toolbar being one row
+     and being two. The frame keeps its own border, so the board still ends
+     somewhere visible — it just ends at the edge of the screen, which is where
+     a surface you pan and zoom should end. */
   const boardRoute = pathname === '/canvas';
   return (
     <div className={boardRoute ? 'flex h-svh flex-col' : undefined}>
@@ -467,13 +515,23 @@ function Shell() {
       <UpdateBanner />
       <main id="main-content" tabIndex={-1}
         className={boardRoute
-          ? 'flex min-h-0 w-full flex-1 flex-col px-2 py-2 sm:px-3 sm:py-3'
+          ? 'flex min-h-0 w-full flex-1 flex-col p-0 sm:px-3 sm:py-3'
           : wideWorkspaceRoute
             ? 'mx-auto w-full max-w-[1800px] px-3 py-4 sm:px-4 sm:py-6'
             : 'mx-auto max-w-5xl px-4 py-6'}>
-        <Outlet />
+        {/* The Suspense sits INSIDE the shell on purpose: a page chunk loading
+            on first navigation swaps only the content area, while the nav, the
+            banners and the queue dock stay put — wrapping <Routes> instead
+            made the whole chrome blink away on every first visit. */}
+        <Suspense fallback={<PageLoading />}>
+          <Outlet />
+        </Suspense>
       </main>
       <TipHost />
+      {/* One ComfyUI, one queue, fed by every surface — so the dock that shows
+          it is mounted once here rather than on the screen that happens to have
+          queued the work. Silent while the queue is empty (GitHub #44). */}
+      <GenerationQueueDock />
     </div>
   )
 }
@@ -496,7 +554,6 @@ function AppInner() {
       </a>
       <HashRouter>
         <HelpModeProvider>
-        <Suspense fallback={<LoadingScreen />}>
         <Routes>
           <Route element={<Shell />}>
             <Route path="/" element={<Navigate to="/datasets" replace />} />
@@ -515,13 +572,13 @@ function AppInner() {
             <Route path="/dataset/studio/:id" element={<StudioPage />} />
             <Route path="/cloud" element={<CloudRunsPage />} />
             <Route path="/canvas" element={<CanvasPage />} />
+            <Route path="/gallery" element={<GalleryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/:section" element={<SettingsPage />} />
             <Route path="/setup" element={<SetupPage />} />
             <Route path="*" element={<Navigate to="/datasets" replace />} />
           </Route>
         </Routes>
-        </Suspense>
         </HelpModeProvider>
       </HashRouter>
     </>

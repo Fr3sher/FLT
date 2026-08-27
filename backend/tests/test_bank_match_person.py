@@ -50,7 +50,6 @@ def _paths(bank_id):
 
 
 def test_match_person_auto_decides_pending_rows(bank_ctx, monkeypatch):
-    from app.extensions import db
     from app.models import BankImage
     from app.services import image_bank_service as banks
 

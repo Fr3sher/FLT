@@ -12,6 +12,8 @@ import StudioGenerationSettings from './StudioGenerationSettings';
 import StudioActionBar from './StudioActionBar';
 import StudioPreflightBanner from './StudioPreflightBanner';
 import { launchSettings, launchText as batchLaunchText, visibleBatch } from './promptBatch';
+import ScenePromptsPanel from './ScenePromptsPanel';
+import { combinedPromptBatch } from './scenePrompts';
 import { heavyRunConfirm, heavyRunNotice, runCost } from './runCost';
 
 // Rail gauche « Setup du run » : pickers + seed/launch + bandeaux d'état.
@@ -70,17 +72,24 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
   const toggleBatchPrompt = (p) => setBatchPrompts((cur) => (
     cur.includes(p) ? cur.filter((v) => v !== p) : [...cur, p]));
 
+  // 🎬 Scenes : les captions d'une banque OU d'un dataset DANS L'ORDRE, chaque
+  // scène cochée devenant une passe du même axe 📝. Non persisté, même raison que
+  // le lot d'historique ci-dessus. La règle vit dans scenePrompts.js (pur, testé).
+  const [sceneBatch, setSceneBatch] = useState({ source: null, scenes: [], picked: [] });
+  const allPickedPrompts = combinedPromptBatch(
+    pickedPrompts, sceneBatch.scenes, sceneBatch.picked);
+
   // Le nombre de cellules RÉELLEMENT lancées. `cellTotal` n'est fourni que par un
   // mode qui change la formule (🧬 Blend : une pile = une configuration) — sinon
   // c'est le total du formulaire, inchangé.
   // 📝 Chaque prompt coché est une passe de plus sur la MÊME grille : le compteur
   // et le bouton doivent le dire avant le clic, pas la file d'attente après.
-  const promptMult = Math.max(1, pickedPrompts.length);
+  const promptMult = Math.max(1, allPickedPrompts.length);
   const cells = cellTotal != null ? cellTotal : form.total;
   const total = cells * promptMult;
   const canLaunch = total > 0 && !d.pending && !d.gpu_busy && !studio.launching
     && !launchBlocked;
-  const launchText = batchLaunchText(launchLabel, pickedPrompts);
+  const launchText = batchLaunchText(launchLabel, allPickedPrompts);
   // Axe ⚖ batch (Always-on LoRA cochés batch) : chaque config tourne SANS puis
   // AVEC chaque LoRA coché → le compteur d'images/temps doit en tenir compte
   // (le backend multiplie déjà les cellules par 1 + nb cochés).
@@ -100,7 +109,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
     // hooks étalent cet objet dans le corps du POST) — donc aucune signature à
     // changer, et le lot arrive identiquement sur les deux routes. Absent quand
     // rien n'est coché : le corps envoyé est alors octet pour octet celui d'avant.
-    const settings = launchSettings(genSettings, pickedPrompts);
+    const settings = launchSettings(genSettings, allPickedPrompts);
     const res = await studio.launch(
       form.chosenCps, form.selSts, form.nextSeed(), form.effectivePrompt,
       form.effectiveModels, form.effectiveAspects, form.effectiveCfgs, form.effectiveSteps,
@@ -145,7 +154,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
           <span className="text-content text-sm">ComfyUI could not confirm whether this image started. Restart ComfyUI, confirm it here, then click Resume test.</span>
           <button type="button" disabled={studio.confirmingComfyuiRestart || !studio.confirmComfyuiRestart}
             onClick={studio.confirmComfyuiRestart}
-            className="ml-auto px-2.5 py-1 rounded-lg bg-gradient-primary text-white text-xs font-semibold disabled:opacity-40">
+            className="ml-auto px-2.5 py-1 rounded-lg bg-gradient-primary text-gray-950 text-xs font-semibold disabled:opacity-40">
             {studio.confirmingComfyuiRestart ? 'Confirming…' : '✓ J’ai redémarré ComfyUI'}
           </button>
         </div>
@@ -153,7 +162,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
 
       {/* --- Run en cours ------------------------------------------------ */}
       {d.pending > 0 && (
-        <div className="flex items-center gap-2 rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-2" role="status">
+        <div className="flex items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 py-2" role="status">
           <span className="inline-block w-4 h-4 border-2 border-indigo-400/40 border-t-indigo-400 rounded-full animate-spin" aria-hidden />
           <span className="text-content text-sm">
             {d.generating ?? d.running ?? 0} generating · {d.queued ?? d.pending} queued
@@ -172,7 +181,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
           <span className="text-content text-sm">{d.resumable} stopped cell(s) — resumable with their settings</span>
           <button type="button" disabled={!!d.gpu_busy || studio.launching}
             onClick={() => studio.resume()}
-            className="ml-auto px-2.5 py-1 rounded-lg bg-gradient-primary text-white text-xs font-semibold disabled:opacity-40">
+            className="ml-auto px-2.5 py-1 rounded-lg bg-gradient-primary text-gray-950 text-xs font-semibold disabled:opacity-40">
             ▶ Resume test
           </button>
         </div>
@@ -180,12 +189,16 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
 
       {/* --- Setup du run ------------------------------------------------ */}
       {!d.pending && (
-        <div id="st-setup" className="flex flex-col gap-2 scroll-mt-16">
+        <div id="st-setup" data-probe-panel="setup" className="flex flex-col gap-2 scroll-mt-16">
           {/* The ONE thing the canvas does differently: its checkpoints are the
               pills ticked on the board, so it hands in its own recap here and
               the picker stays out of the way. */}
           {checkpointSlot ?? (
-            <CheckpointPicker checkpoints={d.checkpoints} chosen={form.chosenCps} onToggle={form.toggleCp} />
+            <CheckpointPicker checkpoints={d.checkpoints} chosen={form.chosenCps}
+              onToggle={form.toggleCp}
+              guests={form.guestCps} onToggleGuest={form.toggleGuest}
+              onAddGuest={form.addGuest} onRemoveGuest={form.removeGuest}
+              family={d.family || 'zimage'} />
           )}
 
           {showStrengths && (
@@ -205,6 +218,11 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
             onToggleBatchPrompt={toggleBatchPrompt}
             onClearBatchPrompts={() => setBatchPrompts([])}
           />
+
+          {/* 🎬 Les captions d'une banque ou d'un dataset, dans l'ordre, comme
+              passes de prompt supplémentaires — juste sous le prompt qu'elles
+              prolongent. */}
+          <ScenePromptsPanel value={sceneBatch} onChange={setSceneBatch} />
 
           <AxisPickers
             zModels={d.z_models}

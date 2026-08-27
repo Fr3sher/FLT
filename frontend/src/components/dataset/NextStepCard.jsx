@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Lightbulb } from 'lucide-react';
 
 const LS_KEY = 'guidedCardCollapsed';
 
@@ -22,9 +23,9 @@ export default function NextStepCard({ step, trainMode, busy, totalImages, onAct
   const key = step.id === 'finish' ? (trainMode ? 'finish_train' : 'finish_export') : step.id;
 
   return (
-    <div role="status" className="rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-2">
+    <div role="status" className="rounded-lg border border-border bg-surface-raised px-3 py-2">
       <div className="flex items-center gap-2">
-        <span aria-hidden>💡</span>
+        <Lightbulb aria-hidden="true" className="h-4 w-4 shrink-0 text-primary" />
         <span className="text-content text-sm font-semibold">Next step: {step.label}</span>
         {!forceOpen && (
           <button type="button" onClick={() => setCollapsed((v) => !v)} aria-expanded={open}
@@ -39,7 +40,7 @@ export default function NextStepCard({ step, trainMode, busy, totalImages, onAct
         <div className="mt-1 flex items-center gap-3 flex-wrap">
           <p className="text-content-muted text-sm m-0">{COPY[key]}</p>
           <button type="button" onClick={onAction} disabled={busy}
-            className="ml-auto px-3 py-1.5 rounded-lg bg-gradient-primary text-white text-sm font-semibold disabled:opacity-40">
+            className="ml-auto px-3 py-1.5 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">
             {actionLabel}
           </button>
         </div>

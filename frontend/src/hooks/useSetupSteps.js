@@ -299,7 +299,7 @@ export function comfyuiDirVerdict(check) {
 // time. Deliberately a NOTE, never a blocker: mounting the volumes afterwards is a
 // perfectly normal order of operations. Empty string = nothing to say (not probed,
 // or fine). The backend already redacted the path.
-export function inputFolderNote(inputCheck) {
+function inputFolderNote(inputCheck) {
   const c = inputCheck || {}
   if (c.ok !== false) return ''
   return c.problem || 'The app cannot write into ComfyUI’s input folder.'
@@ -316,7 +316,7 @@ export function inputFolderNote(inputCheck) {
 // ("no interpreter found here") and opens both doors with equal weight — make
 // one, or name the one you already have. Pure strings + a shape: node --test
 // locks the wording, which is the part that was wrong.
-export const AITOOLKIT_PYTHON_SETTING = 'Settings ▸ Local tools ▸ ai-toolkit Python interpreter'
+const AITOOLKIT_PYTHON_SETTING = 'Settings ▸ Local tools ▸ ai-toolkit Python interpreter'
 
 // The install path, before any folder is configured. Same rule: the venv is ONE
 // way to give ai-toolkit a Python, not the definition of a working install.
@@ -506,6 +506,16 @@ export function deriveCapabilitySummary(caps) {
       ...(!e.krea && !kreaDiskGap && kreaRestartPending
         ? { pending: true, note: 'restart ComfyUI to load its nodes' }
         : !e.krea && !kreaDiskGap && comfyOff ? { pending: true, note: NOTE } : {}) },
+    // 📷 Same counting rule as Krea, for the same reason: the Gallery ships
+    // this verb to every install, so a machine without the weights must read
+    // "not ready, here is the install" — never a shorter list that certifies
+    // completeness by omission. `camera_ready` is asset-only (no node pack, no
+    // per-run process), so unlike the two engines above there is no restart
+    // state — just installed or not, plus the shared "ComfyUI is off" note.
+    { label: '📷 Camera angles (local)', ok: !!cu.camera_ready,
+      topic: 'setup-camera-install', waitingTopic: WAITING,
+      ...(!cu.camera_ready && !(Array.isArray(cu.camera_missing) && cu.camera_missing.length)
+        && comfyOff ? { pending: true, note: NOTE } : {}) },
     { label: 'Captioning', ok: !!(cap.joycaption || cap.ollama), topic: 'setup-ollama' },
     { label: 'Auto-framing & head-crop', ok: !!(o.reachable && o.vision_model_ready),
       topic: 'setup-ollama' },
@@ -604,7 +614,7 @@ export function recommendedMet(caps) {
  *  loadable. Mirrors setup_installer._needs_install — the backend authority, which
  *  now also REPLACES a blocking-invalid file instead of returning "already
  *  present" and doing nothing (the trap that made "download it again" a no-op). */
-export function brokenOrMissing(missing, invalid) {
+function brokenOrMissing(missing, invalid) {
   const out = Array.isArray(missing) ? [...missing] : []
   blockingInvalid(invalid).forEach((i) => { if (!out.includes(i.asset)) out.push(i.asset) })
   return out
@@ -624,6 +634,7 @@ export const INSTALL_ALL_ACTION_LABELS = {
   klein_text_encoder: 'Klein text encoder',
   klein_vae: 'Klein VAE',
   klein_lora: 'Klein consistency LoRA',
+  klein_enhancement_lora: 'Klein enhancement LoRA (✨ improve detail)',
   krea_nodes: 'Krea 2 Edit node pack',
   krea_model: 'Krea 2 base model (Turbo)',
   krea_text_encoder: 'Krea 2 text encoder',
@@ -631,6 +642,13 @@ export const INSTALL_ALL_ACTION_LABELS = {
   krea_identity_lora: 'Krea 2 Identity Edit LoRA',
   seedvr2_model: 'SeedVR2 model (3B FP8)',
   seedvr2_vae: 'SeedVR2 VAE',
+  lanpaint_nodes: 'LanPaint sampler (masked Repair)',
+  // 📷 Camera angles. The lane's VAE has no row of its own on purpose: it is
+  // the Krea 2 VAE (same file, same destination), listed once above.
+  camera_model: 'Camera angles model (Qwen-Image-Edit 2511)',
+  camera_lora: 'Camera angles LoRA (96 positions)',
+  camera_speed_lora: 'Camera angles speed LoRA (4-step)',
+  camera_text_encoder: 'Camera angles text encoder (Qwen 2.5-VL)',
 }
 
 // The Krea 2 Edit engine, installable in ONE click but deliberately NOT part of
@@ -677,6 +695,14 @@ export function kreaNeedsComfyuiRestart(caps) {
     && Array.isArray(cu.krea_nodes_missing) && cu.krea_nodes_missing.length)
 }
 
+/** Same restart rule for the LanPaint pack (masked Repair's sampler): on disk
+ *  but absent from /object_info means "restart ComfyUI", never "install it". */
+export function lanpaintNeedsComfyuiRestart(caps) {
+  const cu = (caps || {}).comfyui || {}
+  return !!(cu.lanpaint_nodes_installed
+    && Array.isArray(cu.lanpaint_nodes_missing) && cu.lanpaint_nodes_missing.length)
+}
+
 /** What the "Install SeedVR2" button would queue — the missing weights only.
  *  Mirror of setup_installer.install_group_plan('seedvr2', caps), which stays the
  *  authority.
@@ -686,13 +712,31 @@ export function kreaNeedsComfyuiRestart(caps) {
  *  interpreter, which the app does not own and must never pip into. Cloning it
  *  alone would land a pack that fails to import — so the pack is explained, and
  *  only the weights are installed. */
-export const SEEDVR2_INSTALL_ORDER = ['seedvr2_model', 'seedvr2_vae']
+const SEEDVR2_INSTALL_ORDER = ['seedvr2_model', 'seedvr2_vae']
 
 export function seedvr2InstallPlan(caps) {
   const cu = (caps || {}).comfyui || {}
   if (!cu.dir_valid) return []
   const missing = brokenOrMissing(cu.seedvr2_missing, cu.seedvr2_invalid)
   return SEEDVR2_INSTALL_ORDER.filter((a) => missing.includes(a))
+}
+
+// 📷 Camera angles — weights only, like SeedVR2 (the graph is stock ComfyUI
+// nodes, so there is no pack to clone and no restart state). Mirrors the
+// backend's setup_installer._INSTALL_GROUPS['camera'], which stays the
+// authority. `krea_vae` is a member on purpose: the lane runs on the Krea 2
+// VAE, and camera_missing reports that file under the action that installs it —
+// one file, one button, whichever engine asked first.
+export const CAMERA_INSTALL_ORDER = [
+  'camera_model', 'camera_lora', 'camera_speed_lora', 'camera_text_encoder',
+  'krea_vae',
+]
+
+export function cameraInstallPlan(caps) {
+  const cu = (caps || {}).comfyui || {}
+  if (!cu.dir_valid) return []
+  const missing = brokenOrMissing(cu.camera_missing, cu.camera_invalid)
+  return CAMERA_INSTALL_ORDER.filter((a) => missing.includes(a))
 }
 
 /** The one thing an install cannot do: ComfyUI registers custom nodes at STARTUP
@@ -756,6 +800,7 @@ export function installCatalog(caps) {
   const kleinMissing = Array.isArray(cu.klein_missing) ? cu.klein_missing : []
   const kleinHint = 'Point the app at a valid ComfyUI folder first (the ComfyUI step).'
   const kreaMissing = Array.isArray(cu.krea_missing) ? cu.krea_missing : []
+  const cameraMissing = Array.isArray(cu.camera_missing) ? cu.camera_missing : []
   // action -> the blocking integrity verdict for a file that IS on disk. This row
   // used to read "✓ Installed" purely because the file existed — which is how a
   // truncated 9.5 GB UNET certified itself on the very screen the user opened to
@@ -779,6 +824,10 @@ export function installCatalog(caps) {
   const kreaNodesPresent = !!cu.krea_nodes_installed
     || !!(cu.reachable && !(Array.isArray(cu.krea_nodes_missing) && cu.krea_nodes_missing.length))
   const kreaRestart = kreaNeedsComfyuiRestart(c)
+  const lanpaintNodesPresent = !!cu.lanpaint_nodes_installed
+    || !!(cu.reachable
+      && !(Array.isArray(cu.lanpaint_nodes_missing) && cu.lanpaint_nodes_missing.length))
+  const lanpaintRestart = lanpaintNeedsComfyuiRestart(c)
   const item = (action, present, available, hint) => {
     const bad = brokenBy[action]
     // A THIRD state, like the Krea node pack's: neither ✓ (it cannot load) nor a
@@ -843,7 +892,12 @@ export function installCatalog(caps) {
     item('ollama_model', o.vision_model_ready, o.reachable && modelName,
       !o.reachable ? 'Start Ollama first (the Captioning step).'
         : !modelName ? 'Set a vision model name first (the Captioning step).' : ''),
-    ...['klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora'].map(
+    // klein_enhancement_lora included: it was installable through the improve
+    // 409 for weeks and offered by NO surface — the first thing the setup
+    // coverage contract caught on its first run. Optional (the improve pass
+    // degrades without it), which is exactly why a silent gap hid so long.
+    ...['klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora',
+      'klein_enhancement_lora'].map(
       (a) => item(a, dirValid && !kleinMissing.includes(a), dirValid, kleinHint)),
     // Krea 2 Edit. Same per-component repair path as everything else — the group
     // button above installs the whole engine, this row is for fixing ONE piece.
@@ -861,5 +915,21 @@ export function installCatalog(caps) {
     },
     ...['krea_model', 'krea_text_encoder', 'krea_vae', 'krea_identity_lora'].map(
       (a) => item(a, dirValid && !kreaMissing.includes(a), dirValid, kleinHint)),
+    // 📷 Camera angles — the Gallery's re-shoot lane. Four rows, not five: the
+    // Qwen VAE is the krea_vae row above (one file, one button). These rows
+    // exist for the same reason the Krea ones do — the weights were installable
+    // through the 409 and NOWHERE on this screen, which is the exact "engine
+    // invisible where the user decides they are done" gap the menu closes.
+    ...['camera_model', 'camera_lora', 'camera_speed_lora', 'camera_text_encoder'].map(
+      (a) => item(a, dirValid && !cameraMissing.includes(a), dirValid, kleinHint)),
+    // LanPaint — the sampler the masked ✦ Repair lane runs on (a ~1 MB clone,
+    // zero pip dependencies). Same present/restart logic as the Krea pack: a
+    // reachable ComfyUI that exposes the node counts as present whatever the
+    // folder is called, and on-disk-but-not-loaded is a restart, not an install.
+    {
+      ...item('lanpaint_nodes', dirValid && lanpaintNodesPresent && !lanpaintRestart,
+        dirValid, kleinHint),
+      ...(lanpaintRestart ? { state: 'restart', stateLabel: '⟳ Restart ComfyUI' } : {}),
+    },
   ]
 }

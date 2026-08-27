@@ -12,6 +12,7 @@
  * maintainers edit each wave). This file is presentation only.
  */
 import { useEffect, useRef, useState } from 'react';
+import { Gift } from 'lucide-react'
 import { useNavigate } from 'react-router';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import {
@@ -68,11 +69,11 @@ export function WhatsNewButton() {
         has ? 'text-content hover:text-content' : 'text-content-muted hover:text-content'
       } hover:bg-surface-raised`}
     >
-      <span aria-hidden>🎁</span>
+      <Gift aria-hidden="true" className="h-4 w-4" />
       {has && (
         <span
           aria-hidden
-          className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-white"
+          className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-gray-950"
         >
           {count > 9 ? '9+' : count}
         </span>
@@ -92,9 +93,23 @@ export function WhatsNewButton() {
 export function WhatsNewModal() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  // The 500+ older entries live in their own lazy chunk (whatsNewArchive.js)
+  // and load only when asked for — they were compiled into the ENTRY bundle
+  // to back a panel that opens on the newest handful. null = not asked,
+  // 'loading' = chunk in flight, array = loaded; a failed load shows a quiet
+  // line instead of a dead button (offline is the realistic cause).
+  const [older, setOlder] = useState(null);
   const dialogRef = useRef(null);
   const closeRef = useRef(null);
   const entries = sortedEntries(WHATS_NEW);
+  const olderEntries = Array.isArray(older) ? older : [];
+
+  const loadOlder = () => {
+    setOlder('loading');
+    import('../../whatsNewArchive.js')
+      .then((m) => setOlder(sortedEntries(m.WHATS_NEW_ARCHIVE)))
+      .catch(() => setOlder('error'));
+  };
 
   useFocusTrap(dialogRef, open);
 
@@ -140,7 +155,7 @@ export function WhatsNewModal() {
       >
         <header className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
           <h2 id="whats-new-title" className="flex items-center gap-2 text-base font-semibold text-content">
-            <span aria-hidden>🎁</span> What&apos;s new
+            <Gift aria-hidden="true" className="h-4 w-4" /> What&apos;s new
           </h2>
           <button
             type="button"
@@ -158,7 +173,7 @@ export function WhatsNewModal() {
             <p className="py-8 text-center text-sm text-content-muted">Nothing new yet — check back after the next update.</p>
           ) : (
             <ol className="divide-y divide-border">
-              {entries.map((e) => (
+              {[...entries, ...olderEntries].map((e) => (
                 <li key={e.id} className="py-4">
                   <div className="flex items-baseline justify-between gap-3">
                     <h3 className="text-sm font-semibold text-content">{e.title}</h3>
@@ -179,6 +194,27 @@ export function WhatsNewModal() {
                 </li>
               ))}
             </ol>
+          )}
+          {entries.length > 0 && older === null && (
+            <div className="border-t border-border py-3 text-center">
+              <button
+                type="button"
+                onClick={loadOlder}
+                className="text-xs font-semibold text-content-subtle hover:text-content hover:underline"
+              >
+                Show older updates
+              </button>
+            </div>
+          )}
+          {older === 'loading' && (
+            <p className="border-t border-border py-3 text-center text-xs text-content-subtle" role="status">
+              Loading older updates…
+            </p>
+          )}
+          {older === 'error' && (
+            <p className="border-t border-border py-3 text-center text-xs text-content-subtle">
+              Older updates could not be loaded — they are also on the project&apos;s Releases page.
+            </p>
           )}
         </div>
       </div>

@@ -27,6 +27,7 @@
  * prop — so the safest rewrite is the one that rewrites nothing.
  */
 import BankThresholdsPanel from './BankThresholdsPanel.jsx'
+import { Ban, Palette, Search, SlidersHorizontal, SlidersVertical, UserX } from 'lucide-react';
 import DescribeFilterBar from './DescribeFilterBar.jsx'
 import SelectionTagsPanel from './SelectionTagsPanel.jsx'
 import SubfolderPersonPanel from './SubfolderPersonPanel'
@@ -66,6 +67,8 @@ export default function BankFilterRail({
 
   return (
     <aside aria-label="Bank filters"
+      data-probe-chrome={isDrawer ? 'rail' : undefined} data-probe-layer={isDrawer ? '' : undefined}
+      data-probe-panel="rail"
       className={isDrawer
         /* ⚠️ `bg-surface-overlay`, NOT `bg-surface`: the tint is 4 %-alpha white
            for cards sitting ON the opaque page — painted with it, this drawer
@@ -76,7 +79,7 @@ export default function BankFilterRail({
         <GroupLabel>Filters</GroupLabel>
         {isDrawer && (
           <button type="button" onClick={onClose} aria-label="Close the filters"
-            className="ml-auto rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">
+            className="min-h-10 lg:min-h-0 ml-auto rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">
             ✕
           </button>
         )}
@@ -105,7 +108,7 @@ export default function BankFilterRail({
             <button key={s.label} type="button"
               onClick={s.set || (() => setF({ status: filter.status === s.id ? null : s.id }))}
               aria-pressed={active}
-              className={`rounded-md border px-2.5 py-1.5 text-sm font-semibold transition-colors ${active
+              className={`min-h-10 lg:min-h-0 rounded-md border px-2.5 py-1.5 text-sm font-semibold transition-colors ${active
                 ? s.on
                 : 'border-border bg-surface-raised text-content-muted hover:text-content hover:bg-surface'}`}>
               {s.label}
@@ -126,7 +129,7 @@ export default function BankFilterRail({
       <DescribeFilterBar bankId={bankId} onApply={setF} />
 
       <div className="relative">
-        <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-content-subtle">🔍</span>
+        <Search aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-content-subtle" />
         <input type="search" value={searchText} onChange={(e) => setSearchText(e.target.value)}
           placeholder="Search captions and file names… (e.g. red dress)"
           aria-label="Search the bank by caption or file name"
@@ -144,7 +147,7 @@ export default function BankFilterRail({
           Comma-separated: hiding 'logo, watermark' in one pass is the
           normal case. */}
       <div className="relative">
-        <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-content-subtle">🚫</span>
+        <Ban aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-content-subtle" />
         <input type="search" value={excludeText} onChange={(e) => setExcludeText(e.target.value)}
           placeholder="Exclude words… (e.g. logo, watermark)"
           aria-label="Hide images whose caption or file name contains these words"
@@ -236,7 +239,7 @@ export default function BankFilterRail({
                       loading="lazy" className="h-16 w-16 object-cover" />
                   )}
                   <span className="absolute bottom-0 inset-x-0 bg-black/60 text-center text-[10px] font-semibold text-white">
-                    🎨{c.id} · {c.size}
+                    <Palette aria-hidden="true" className="mr-0.5 inline h-3 w-3 align-[-1px]" />{c.id} · {c.size}
                   </span>
                 </button>
               </li>
@@ -271,7 +274,7 @@ export default function BankFilterRail({
             <Chip active={filter.flag === 'clean'}
               onClick={() => setF({ flag: filter.flag === 'clean' ? null : 'clean' })}
               title="Scanned and carrying none of the quality flags">
-              ✨ Clean {flags.clean ?? 0}
+              Clean {flags.clean ?? 0}
             </Chip>
           </FilterGroup>
           {/* Coverage, stated where the zeros are. Measured on a real bank:
@@ -285,7 +288,7 @@ export default function BankFilterRail({
               these flags only see that part.{' '}
               <button type="button" onClick={() => setPassOpen('scan')}
                 className="underline underline-offset-2 hover:text-amber-200">
-                🔎 Scan the rest
+                <Search aria-hidden="true" className="mr-1 inline h-3 w-3 align-[-1px]" />Scan the rest
               </button>
             </p>
           )}
@@ -305,7 +308,7 @@ export default function BankFilterRail({
           )}
           {payload?.faces_scanned > 0 && (
             <Chip active={filter.flag === 'no_face'} onClick={() => setF({ flag: filter.flag === 'no_face' ? null : 'no_face' })}>
-              🚫👤 No face
+              <UserX aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />No face
             </Chip>
           )}
         </FilterGroup>
@@ -318,8 +321,8 @@ export default function BankFilterRail({
         <div className="border-t border-border pt-2">
           <button type="button" onClick={() => setMoreOpen((v) => !v)}
             aria-expanded={moreOpen} aria-controls="bank-rail-more"
-            className="flex w-full items-center gap-1.5 text-left text-xs text-content-muted hover:text-content">
-            <span aria-hidden>🎛</span>
+            className="min-h-10 lg:min-h-0 flex w-full items-center gap-1.5 text-left text-xs text-content-muted hover:text-content">
+            <SlidersHorizontal aria-hidden="true" className="h-3.5 w-3.5" />
             <span className="font-medium">More filters</span>
             <span className="text-content-subtle">({hiddenAxes})</span>
             <span aria-hidden className="ml-auto text-content-subtle">{moreOpen ? '▲' : '▼'}</span>
@@ -347,7 +350,7 @@ export default function BankFilterRail({
               {/* Framing tiers — face/bust/body/back (+ unknown), from the 📐 Framing
                   pass. One active at a time; re-click clears. Composes with everything. */}
               {available.framing && (
-                <FilterGroup label="📐 Framing">
+                <FilterGroup label="Framing">
                   {shownFramings.map((b) => (
                     <Chip key={b.id} active={filter.framing === b.id}
                       onClick={() => setF({ framing: filter.framing === b.id ? null : b.id })}
@@ -366,7 +369,7 @@ export default function BankFilterRail({
                   single most important thing to know about this measurement. */}
               {available.medium && (
                 <div className="flex flex-col gap-1">
-                  <FilterGroup label="🎨 Medium">
+                  <FilterGroup label="Medium">
                     {shownMediums.map((b) => (
                       <Chip key={b.id} active={filter.medium === b.id}
                         onClick={() => setF({ medium: filter.medium === b.id ? null : b.id })}
@@ -404,7 +407,7 @@ export default function BankFilterRail({
                       <span>{angleState.offer.why}</span>
                       <button type="button" onClick={() => setPassOpen('angles')} disabled={!!live}
                         title={angleState.offer.why}
-                        className="rounded-md border border-border bg-surface-raised px-2 py-0.5 text-[11px] text-content transition-colors hover:bg-surface disabled:opacity-50">
+                        className="min-h-10 lg:min-h-0 rounded-md border border-border bg-surface-raised px-2 py-0.5 text-[11px] text-content transition-colors hover:bg-surface disabled:opacity-50">
                         ⤢ {angleState.offer.label}
                       </button>
                     </p>
@@ -415,7 +418,7 @@ export default function BankFilterRail({
               {/* Resolution tiers — one active at a time; re-click clears.
                   Composes with every filter and with the Sort menu below. */}
               {available.resolution && (
-                <FilterGroup label="📐 Resolution">
+                <FilterGroup label="Resolution">
                   {shownResBuckets.map((b) => (
                     <Chip key={b.id} active={filter.resBucket === b.id}
                       onClick={() => setF({ resBucket: filter.resBucket === b.id ? null : b.id })}
@@ -430,7 +433,7 @@ export default function BankFilterRail({
                   the quality scan. 'Unknown' is the usual answer and is deliberately
                   shown next to the other two: silence is not evidence of anything. */}
               {available.origin && (
-                <FilterGroup label="🔎 Origin">
+                <FilterGroup label="Origin">
                   {ORIGIN_BUCKETS.map((b) => (
                     <Chip key={b.id} active={filter.origin === b.id}
                       onClick={() => setF({ origin: filter.origin === b.id ? null : b.id })}
@@ -459,8 +462,8 @@ export default function BankFilterRail({
       <div className="border-t border-border pt-2">
         <button type="button" onClick={() => setThresholdsOpen((v) => !v)}
           aria-expanded={thresholdsOpen} aria-controls="bank-thresholds-panel"
-          className="flex w-full items-center gap-1.5 text-left text-xs text-content-muted hover:text-content">
-          <span aria-hidden>🎚</span>
+          className="min-h-10 lg:min-h-0 flex w-full items-center gap-1.5 text-left text-xs text-content-muted hover:text-content">
+          <SlidersVertical aria-hidden="true" className="h-3.5 w-3.5" />
           <span className="font-medium">Filter thresholds</span>
           {/* The gloss is the first thing to go on a phone: the label already
               says what it opens, and a wrapped subtitle costs two lines. */}
@@ -525,7 +528,7 @@ export default function BankFilterRail({
           </select>
         </label>
         <button type="button" onClick={() => setTileSize((s) => (s === 'M' ? 'S' : 'M'))}
-          className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">
+          className="min-h-10 lg:min-h-0 rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">
           {tileSize === 'M' ? 'Small tiles' : 'Medium tiles'}
         </button>
       </div>

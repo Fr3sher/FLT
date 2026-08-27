@@ -74,7 +74,7 @@ export async function fetchWithCsrfRetry(url, options = {}) {
 
 /* The two sentences the network layer is allowed to say out loud. Exported so
    the tests and the offline indicator quote the same strings. */
-export const CONNECTION_LOST_MESSAGE = 'Connection lost. Please check your network.';
+const CONNECTION_LOST_MESSAGE = 'Connection lost. Please check your network.';
 export const CONNECTION_BACK_MESSAGE = 'Back online.';
 
 /**
@@ -143,7 +143,7 @@ async function doApiFetch(url, init, background) {
       body = await res.json();
       parsed = true;
       msg = (body && (body.error || body.detail || body.message)) || msg;
-    } catch {}
+    } catch { /* not JSON: the status text above stands */ }
 
     if (res.status === 400 && !parsed) {
       // A 400 whose body still isn't our JSON envelope after the retry above is

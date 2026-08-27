@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { readSource } from './support/readSource.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -16,16 +17,16 @@ import { shouldShowTip, markTipSeen } from '../src/help/helpTips.js'
 
 // ---- helpers ---------------------------------------------------------------
 
-const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
+const read = readSource
 
 // Chapter id → its markdown source (same mapping GuidePage imports as ?raw).
 const CHAPTER_MD = {
-  'getting-started': '../../docs/guide/getting-started.md',
-  'using-the-app': '../../docs/guide/using-the-app.md',
-  'dataset-guide': '../../docs/DATASET_GUIDE.md',
-  'settings-reference': '../../docs/guide/settings-reference.md',
-  'troubleshooting': '../../docs/guide/troubleshooting.md',
-  'getting-help': '../../docs/guide/getting-help.md',
+  'getting-started': '../docs/guide/getting-started.md',
+  'using-the-app': '../docs/guide/using-the-app.md',
+  'dataset-guide': '../docs/DATASET_GUIDE.md',
+  'settings-reference': '../docs/guide/settings-reference.md',
+  'troubleshooting': '../docs/guide/troubleshooting.md',
+  'getting-help': '../docs/guide/getting-help.md',
 }
 
 // The H2 anchor set of a chapter, computed with the SAME markdownHeadingId the
@@ -42,7 +43,7 @@ const anchorsFor = (chapterId) => {
 
 const SETTINGS_IDS = new Set(SETTINGS_SECTIONS.map((s) => s.id))
 const WORKSPACE_IDS = new Set(WORKSPACE_SECTIONS.map((s) => s.id))
-const STATIC_ROUTES = new Set(['/datasets', '/bank', '/video-bank', '/setup', '/settings', '/studio', '/cloud', '/canvas', '/help'])
+const STATIC_ROUTES = new Set(['/datasets', '/bank', '/video-bank', '/setup', '/settings', '/studio', '/cloud', '/canvas', '/gallery', '/help'])
 
 // route ∈ {static} OR /settings/<settings-id> OR /setup?step=<setup-step-id>
 //         OR /datasets?section=<ws-id>[&panel=<panel>]
@@ -83,7 +84,7 @@ const SRC = walk(new URL('../src/', import.meta.url)).join('\n')
 const settingsDomIds = () => {
   const dir = new URL('../src/components/settings/', import.meta.url)
   let src = ''
-  for (const f of readdirSync(dir)) if (f.endsWith('.jsx')) src += read(`../src/components/settings/${f}`) + '\n'
+  for (const f of readdirSync(dir)) if (f.endsWith('.jsx')) src += read(`src/components/settings/${f}`) + '\n'
   const ids = new Set()
   for (const m of src.matchAll(/id="([^"]+)"/g)) ids.add(m[1])
   for (const m of src.matchAll(/\bkey:\s*'([^']+)'/g)) ids.add(m[1])
@@ -148,7 +149,7 @@ test('(5) each Settings section and Workspace section has its topic', () => {
 
 test('(6) tips have unique triggers and non-empty text', () => {
   const tips = helpTips()
-  assert.equal(tips.length, 18, 'expected exactly 18 one-time tips')
+  assert.equal(tips.length, 19, 'expected exactly 19 one-time tips')
   const triggers = new Set()
   for (const tip of tips) {
     assert.ok(tip.trigger, 'tip missing trigger')
@@ -188,7 +189,7 @@ test('(8) search matches settings by keyword/id', () => {
 // ---- (9) GuidePage registers the settings-reference chapter -----------------
 
 test('(9) GuidePage registers the settings-reference chapter before troubleshooting', () => {
-  const guide = read('../src/pages/GuidePage.jsx')
+  const guide = read('src/pages/GuidePage.jsx')
   assert.match(guide, /import settingsReference from '[^']*settings-reference\.md\?raw'/)
   assert.match(guide, /\{ id: 'settings-reference', num: '04',[^\n]*source: settingsReference \}/)
   // The pre-existing help-navigation contract still holds: HELP_CHAPTER shape and

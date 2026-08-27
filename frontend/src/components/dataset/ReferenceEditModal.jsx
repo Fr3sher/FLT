@@ -95,6 +95,9 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
       ? referenceEdit.engines
       : [referenceEdit?.engine].filter(Boolean);
     if (recorded.length) setEngines([...new Set(recorded)]);
+    // started_at = l'identite du LOT : re-seeder sur chaque mutation de champ
+    // ecraserait la selection en cours de l'utilisateur.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [referenceEdit?.started_at]);
 
   const blocked = editBatchBlockedReason(prompt, engines, options);
@@ -236,7 +239,7 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
                       {editKeepNote(candidate.engine)}
                     </p>
                     <button type="button" onClick={() => keep(candidate.engine)} disabled={busy}
-                      className="mt-auto px-4 py-2 rounded-lg bg-gradient-primary text-white text-sm font-semibold disabled:opacity-40">
+                      className="mt-auto px-4 py-2 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">
                       {busyAction === candidate.engine ? 'Keeping…' : `Keep ${label}`}
                     </button>
                   </figure>
@@ -312,7 +315,7 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
                   aria-pressed={engines.includes(o.engine)}
                   title={o.blocked || undefined}
                   className={`px-2.5 py-1 rounded-lg text-xs font-semibold disabled:opacity-40 ${engines.includes(o.engine)
-                    ? 'bg-indigo-500 text-white'
+                    ? 'bg-indigo-500 text-gray-950'
                     : o.usable
                       ? 'bg-surface-raised text-content-muted hover:bg-surface'
                       : 'bg-surface-raised text-content-subtle line-through decoration-1'}`}>
@@ -413,7 +416,7 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
               )}
               <button type="button" onClick={runEdit} disabled={busy || !!blocked}
                 title={blocked || undefined}
-                className="px-4 py-2 rounded-lg bg-gradient-primary text-white text-sm font-semibold disabled:opacity-40">
+                className="px-4 py-2 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">
                 {starting
                   ? 'Starting…'
                   : `Generate ${engines.length || 0} edit${engines.length === 1 ? '' : 's'}`}

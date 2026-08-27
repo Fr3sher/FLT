@@ -23,6 +23,7 @@ user:
     only configuration anyone has measured.
 """
 import json
+from app.extensions import db
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -258,7 +259,7 @@ def _stub_model(monkeypatch, steps_for):
 def _metrics(app, clip_id):
     from app.models import VideoClip
     with app.app_context():
-        raw = VideoClip.query.get(clip_id).metrics_json
+        raw = db.session.get(VideoClip, clip_id).metrics_json
     return json.loads(raw) if raw else {}
 
 
@@ -345,7 +346,7 @@ def test_the_pass_merges_into_the_blob_and_never_erases_another_passs_verdict(ap
     from app.models import VideoClip
     bank_id, ids = _bank_with_clips(app, _long(1))
     with app.app_context():
-        clip = VideoClip.query.get(ids[0])
+        clip = db.session.get(VideoClip, ids[0])
         clip.metrics_json = json.dumps({'sharpness_p90': 312.5,
                                         'watermark_score': 0.98,
                                         ac.SCORE_KEY: 99.0,
@@ -369,7 +370,7 @@ def test_a_recheck_that_now_finds_a_shot_too_short_leaves_no_stale_score(app, mo
     from app.models import VideoClip
     bank_id, ids = _bank_with_clips(app, [(0.0, 1.0)])
     with app.app_context():
-        clip = VideoClip.query.get(ids[0])
+        clip = db.session.get(VideoClip, ids[0])
         clip.metrics_json = json.dumps({ac.STATE_KEY: 'ok', ac.SCORE_KEY: 1.23,
                                         ac.FRAMES_KEY: 16})
         db.session.commit()
@@ -623,10 +624,25 @@ def test_batching_never_straddles_two_clips():
 
     with pytest.raises(ValueError, match='multiple of 8'):
         infer._encode(_Model(), np.zeros((12, 3, 4, 4), dtype='float32'), [12])
-    # And 16 is accepted, which is what the parent always sends.
-    class _Ok(_Model):
+
+
+def test_a_batch_that_divides_evenly_is_handed_to_the_model():
+    """The other side of the guard: 16 per clip is what the parent always sends,
+    and it must reach the forward pass. SEPARATE from the refusal above because
+    getting there costs a real torch — the refusal must stay checkable on a
+    machine without one (CI has no GPU stack), which is where a guard is worth
+    the most."""
+    pytest.importorskip('numpy')
+    pytest.importorskip('torch')
+    import numpy as np
+    infer = _infer_module()
+
+    class _Ok:
+        config = type('_Cfg', (), {'num_frames': 8})()
+
         def __call__(self, **kwargs):
             raise RuntimeError('reached the model')
+
     with pytest.raises(RuntimeError, match='reached the model'):
         infer._encode(_Ok(), np.zeros((32, 3, 4, 4), dtype='float32'), [16, 16])
 

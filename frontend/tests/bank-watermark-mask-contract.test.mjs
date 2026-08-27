@@ -6,16 +6,17 @@
  * mask being drawn in a coordinate space the cleaner does not use.
  */
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
+import { readSource } from './support/readSource.mjs'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
 import { WHATS_NEW } from '../src/whatsNew.js'
+import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
+
+// The entry under test moved to the archive when it shipped long ago
+// (see whatsNew.js, rule "Keep the list tidy") — search the union.
+const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
 import { getHelpTopic } from '../src/help/helpRegistry.js'
 
-const here = path.dirname(fileURLToPath(import.meta.url))
-const frontend = path.resolve(here, '..')
-const read = (rel) => fs.readFileSync(path.join(frontend, rel), 'utf8')
+const read = readSource
 const dialog = read('src/components/bank/BankWatermarkMaskDialog.jsx')
 const lightbox = read('src/components/bank/BankReviewLightbox.jsx')
 
@@ -49,8 +50,8 @@ test('the review lightbox offers the editor on any image it can still act on', (
   // never saw there is no box to "edit", and promising one is how the miss stayed
   // unanswerable. What each state reads is asserted on the helper's VALUES in
   // src/components/bank/bankWatermarkMask.test.js.
-  assert.match(lightbox, /🚩 \{maskButtonLabel\(img\)\}/)
-  assert.doesNotMatch(lightbox, /🚩 Edit mask/)
+  assert.match(lightbox, /<FlagIcon [^>]*\/>\{maskButtonLabel\(img\)\}/)
+  assert.doesNotMatch(lightbox, />Edit mask/)
   // M is the Bank's OWN key, read off the same event once the shared review
   // grammar (K/R/S, ← , Esc) has declined it — and still behind the same
   // "does this field own the keystroke?" guard.
@@ -69,9 +70,10 @@ test('the keyboard cannot decide on an image while an editor is open', () => {
 })
 
 test('the feature is announced and documented', () => {
-  const entry = WHATS_NEW.find((e) => e.id === '2026-07-28-bank-watermark-mask-editing')
+  const entry = ALL_WHATS_NEW.find((e) => e.id === '2026-07-28-bank-watermark-mask-editing')
   assert.ok(entry, "What's new entry for the bank mask editor is missing")
-  assert.equal(entry.to, '/bank')
+  // Archived → no in-app target, by doctrine (whatsNew.js, "Keep the list tidy").
+  assert.equal(entry.to, undefined)
   assert.match(entry.blurb, /Qeeyana/)             // credit where it is due
   const topic = getHelpTopic('bank-edit-watermark-mask')
   assert.ok(topic, 'help topic bank-edit-watermark-mask is missing')

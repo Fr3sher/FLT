@@ -1,4 +1,5 @@
 import { runCost } from './runCost';
+import { Dices } from 'lucide-react';
 
 // Contrôles de seed : affichage seed + 🎲 re-roll + 🔒/🔓 verrou + ×N gén/config + compteur.
 // Extrait behavior-preserving de LoraTestStudio.jsx (barre seed/lock/×N/compteur).
@@ -7,7 +8,7 @@ import { runCost } from './runCost';
 // `promptMult` : nombre de prompts cochés dans l'historique (axe 📝 lot). Déjà
 // compté dans `total` — il n'est ici que pour NOMMER d'où vient le multiplicateur,
 // sinon le compteur triple sans que rien à l'écran dise pourquoi.
-export default function SeedControls({ seed, seedLocked, onReroll, onToggleLock, genCount, onGenCount, total, batchMult = 1, promptMult = 1, secondsPerImage = null, fmt }) {
+export default function SeedControls({ seed, seedLocked, onReroll, onToggleLock, genCount, onGenCount, total, batchMult = 1, promptMult = 1, secondsPerImage = null }) {
   // ⏱ L'estimation était « ×12 s » en dur : vraie sur une 4090 en Z-Image Turbo,
   // fausse partout ailleurs. `secondsPerImage` est la médiane RÉELLE mesurée sur
   // cette machine (null tant que l'historique est trop court → le repli).
@@ -20,7 +21,7 @@ export default function SeedControls({ seed, seedLocked, onReroll, onToggleLock,
       <button type="button" onClick={onReroll}
         className="px-2 py-0.5 rounded bg-surface text-content-muted text-[0.6875rem]"
         title="Re-roll the seed manually">
-        🎲 re-roll
+        <Dices aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />re-roll
       </button>
       <button type="button" onClick={onToggleLock}
         aria-pressed={seedLocked}

@@ -3,7 +3,7 @@
  *
  * One full-size image at a time with ✓ Keep / ✕ Reject / ⏭ Skip; every button
  * (and its keyboard shortcut) decides AND moves on, so a 3 000-image dump is
- * worked through without ever going back to the grid. "🎲 Random order"
+ * worked through without ever going back to the grid. "Random order"
  * shuffles what's left instead of walking the folder sequentially — on a dump
  * that means a representative sample straight away rather than 200 near-
  * identical frames in a row.
@@ -17,7 +17,8 @@
  * cursor with the error visible, so a decision is never silently dropped.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiFetch, postJson } from '../../api/fetchClient'
+import { Flag as FlagIcon, PartyPopper, Shuffle } from 'lucide-react';
+import { apiFetch, fetchWithCsrfRetry, postJson } from '../../api/fetchClient'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 import {
   createSession, currentId, isFinished, progress, back, decide, skip, setShuffle,
@@ -39,9 +40,9 @@ import ShortcutKey from '../shared/ShortcutKey'
 const META_WINDOW = 40
 
 const FLAG_TEXT = {
-  blur: '🌫 Blurry', noise: '📺 Noisy', uniform: '⬜ Flat', small: '📐 Small',
-  unreadable: '❌ Unreadable', low_aesthetic: '💔 Low aesthetic', nsfw: '🔞 NSFW',
-  watermark: '🚩 Watermark', ...PROVENANCE_FLAG_LABEL,
+  blur: 'Blurry', noise: 'Noisy', uniform: 'Flat', small: 'Small',
+  unreadable: 'Unreadable', low_aesthetic: 'Low aesthetic', nsfw: 'NSFW',
+  watermark: 'Watermark', ...PROVENANCE_FLAG_LABEL,
 }
 
 // Origin chip colours, one per state. 'unknown' is deliberately the quiet grey
@@ -65,31 +66,31 @@ function Facts({ img }) {
     <div className="flex flex-wrap items-center justify-center gap-1.5">
       <span className="max-w-[22rem] truncate text-xs text-white/70" title={img.name}>{img.name}</span>
       {chip('res', `${img.width || '?'}×${img.height || '?'}`, 'bg-white/10 text-white/80')}
-      {detail && chip('detail', detail.soft ? `🫧 ~${detail.real} px real` : '🫧 full detail',
+      {detail && chip('detail', detail.soft ? `~${detail.real} px real` : 'full detail',
         detail.soft ? 'bg-amber-500/20 text-amber-100' : 'bg-white/10 text-white/60',
         detail.soft ? `${detail.text}. ${DETAIL_CAVEAT}` : DETAIL_CAVEAT)}
       {origin && chip('origin', `${origin.icon} ${origin.label}`, ORIGIN_CLASS[origin.state],
         `${origin.detail}${hint ? ` ${hint}` : ''}`)}
       {img.aesthetic_score != null
-        && chip('aes', `✨ ${img.aesthetic_score.toFixed(1)}`, 'bg-white/10 text-amber-200')}
+        && chip('aes', `${img.aesthetic_score.toFixed(1)}`, 'bg-white/10 text-amber-200')}
       {img.nsfw_score != null
-        && chip('nsfw', `🔞 ${Math.round(img.nsfw_score * 100)}%`, 'bg-white/10 text-rose-200')}
+        && chip('nsfw', `${Math.round(img.nsfw_score * 100)}%`, 'bg-white/10 text-rose-200')}
       {img.blur_score != null
         && chip('sharp', `sharpness ${Math.round(img.blur_score)}`, 'bg-white/10 text-white/70')}
-      {img.face_cluster != null && chip('face', `👤 #${img.face_cluster}`, 'bg-white/10 text-sky-200')}
-      {img.framing && chip('framing', `📐 ${img.framing}`, 'bg-white/10 text-teal-200')}
+      {img.face_cluster != null && chip('face', `#${img.face_cluster}`, 'bg-white/10 text-sky-200')}
+      {img.framing && chip('framing', `${img.framing}`, 'bg-white/10 text-teal-200')}
       {/* 🎨 the medium, with the margin BEHIND it in the tooltip: a verdict shown
           without its confidence is how a guess turns into a fact. 'unsure' is
           shown too — here, where the user is looking at the picture and can
           settle it, it is the most useful thing the classifier can say. */}
-      {img.medium && chip('medium', `🎨 ${img.medium}`,
+      {img.medium && chip('medium', `${img.medium}`,
         img.medium === 'unsure' ? 'bg-white/10 text-white/50' : 'bg-white/10 text-lime-200',
         img.medium_margin != null
-          ? `Zero-shot CLIP over the ✨ Score embedding — confidence gap ${img.medium_margin.toFixed(3)}.`
+          ? `Zero-shot CLIP over the Score embedding — confidence gap ${img.medium_margin.toFixed(3)}.`
           : null)}
       {img.face_yaw != null && chip('yaw',
         `⤢ ${Math.round(Math.abs(img.face_yaw))}°`, 'bg-white/10 text-cyan-200',
-        'How far the head is turned, measured by the 🎭 Faces pass.')}
+        'How far the head is turned, measured by the Faces pass.')}
       {img.dup_group != null && chip('dup', `≈ dup #${img.dup_group}`, 'bg-white/10 text-fuchsia-200')}
       {img.semantic_dup_group != null
         && chip('sdup', `✂ same shot #${img.semantic_dup_group}`, 'bg-white/10 text-orange-200')}
@@ -192,7 +193,7 @@ export default function BankReviewLightbox({
         const ids = batches[bi++]
         ids.forEach((x) => prefetched.current.add(x))
         active += 1
-        fetch(`/api/bank/${bankId}/review-batch?ids=${ids.join(',')}`)
+        fetchWithCsrfRetry(`/api/bank/${bankId}/review-batch?ids=${ids.join(',')}`)
           .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('batch'))))
           .then((buf) => {
             const got = {}
@@ -213,7 +214,7 @@ export default function BankReviewLightbox({
       }
     }
     pump()
-  }, [bankId, session.order])
+  }, [bankId, session.order, session.pos])
 
   const sendDecision = useCallback(async (status) => {
     const target = currentId(session)
@@ -380,6 +381,7 @@ export default function BankReviewLightbox({
 
   return (
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Review the bank image by image"
+      data-probe-chrome="review" data-probe-layer
       className="fixed inset-0 z-[9996] flex flex-col bg-black/95">
       <div className="flex shrink-0 flex-wrap items-center gap-3 px-4 py-2 text-sm">
         <span className="font-semibold text-white">▶ Review</span>
@@ -390,15 +392,15 @@ export default function BankReviewLightbox({
         <label className="flex items-center gap-1.5 text-xs text-white/80"
           title="Walk what's left in random order instead of folder order — on a big dump that shows you a representative sample straight away instead of 200 near-identical shots. Nothing you have already seen comes back.">
           <input type="checkbox" checked={session.shuffle} onChange={toggleShuffle} />
-          🎲 Random order
+          <Shuffle aria-hidden="true" className="h-3.5 w-3.5" /> Random order
         </label>
         <button type="button" onClick={onClose} title="Close (Esc)" aria-label="Close review"
-          className="ml-auto h-9 w-9 rounded-full bg-white/10 text-lg leading-none text-white hover:bg-white/20">✕</button>
+          className="ml-auto h-10 w-10 lg:h-9 lg:w-9 rounded-full bg-white/10 text-lg leading-none text-white hover:bg-white/20">✕</button>
       </div>
 
       {done ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
-          <p className="text-2xl font-bold text-white">🎉 All {p.total.toLocaleString()} image{p.total === 1 ? '' : 's'} reviewed</p>
+          <p className="text-2xl font-bold text-white"><PartyPopper aria-hidden="true" className="mr-2 inline h-6 w-6 align-[-3px]" />All {p.total.toLocaleString()} image{p.total === 1 ? '' : 's'} reviewed</p>
           <p className="text-sm text-white/70">
             {p.kept} kept · {p.rejected} rejected
             {p.skipped ? ` · ${p.skipped} skipped (still undecided)` : ''}
@@ -411,7 +413,7 @@ export default function BankReviewLightbox({
               </button>
             )}
             <button type="button" onClick={onClose}
-              className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-white">
+              className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950">
               Back to the grid
             </button>
           </div>
@@ -446,55 +448,55 @@ export default function BankReviewLightbox({
           <div className="flex flex-wrap items-center justify-center gap-2">
             <button type="button" onClick={goBack} disabled={session.pos === 0}
               title="Previous image (←) — navigation only, decides nothing"
-              className="rounded-lg border border-white/20 px-3 py-2 text-sm text-white disabled:opacity-35 hover:bg-white/10">
+              className="min-h-10 lg:min-h-0 rounded-lg border border-white/20 px-3 py-2 text-sm text-white disabled:opacity-35 hover:bg-white/10">
               ←
             </button>
             <button type="button" onClick={() => rotateCurrent(-90)} disabled={busy}
               aria-label="Rotate this image 90 degrees left"
               title="Rotate 90° left ([) — decides nothing. Your own file is never modified: the turn is stored and applied to what you see and to what gets promoted."
-              className="rounded-lg border border-white/20 px-3 py-2 text-sm text-white disabled:opacity-35 hover:bg-white/10">
+              className="min-h-10 lg:min-h-0 rounded-lg border border-white/20 px-3 py-2 text-sm text-white disabled:opacity-35 hover:bg-white/10">
               <span aria-hidden="true">↺</span><span className="sr-only">Rotate left</span>
             </button>
             <button type="button" onClick={() => rotateCurrent(90)} disabled={busy}
               aria-label="Rotate this image 90 degrees right"
               title="Rotate 90° right (]) — decides nothing. Your own file is never modified: the turn is stored and applied to what you see and to what gets promoted."
-              className="rounded-lg border border-white/20 px-3 py-2 text-sm text-white disabled:opacity-35 hover:bg-white/10">
+              className="min-h-10 lg:min-h-0 rounded-lg border border-white/20 px-3 py-2 text-sm text-white disabled:opacity-35 hover:bg-white/10">
               <span aria-hidden="true">↻</span><span className="sr-only">Rotate right</span>
             </button>
             {/* ✂ and ↩ sit with the rotate pair, not with ✓/✕/⏭: everything left
                 of the decisions CHANGES THE IMAGE and advances nothing. */}
             <button type="button" onClick={() => setCropId(id)} disabled={busy || id == null}
               title="Crop this image (C) — decides nothing. Nothing is resampled: a Bank sits upstream of the training resolution, so the cut keeps its pixels and a dataset decides the size when it imports. Your own file is never modified, and ↩ Revert brings the original framing back."
-              className="rounded-lg border border-sky-400/60 bg-sky-500/20 px-4 py-2 text-sm font-semibold text-sky-100 disabled:opacity-50 hover:bg-sky-500/30">
+              className="min-h-10 lg:min-h-0 rounded-lg border border-sky-400/60 bg-sky-500/20 px-4 py-2 text-sm font-semibold text-sky-100 disabled:opacity-50 hover:bg-sky-500/30">
               ✂ Crop{shortcut('C')}
             </button>
             {img?.edit_method && (
               <button type="button" onClick={revertCurrent} disabled={busy}
-                title="Throw away the ✂ crop / ✨ upscale made in this bank and go back to the image it started from. Only a copy made by the app is deleted — your own file was never modified."
-                className="rounded-lg border border-white/25 px-4 py-2 text-sm text-white disabled:opacity-50 hover:bg-white/10">
+                title="Throw away the ✂ crop / upscale made in this bank and go back to the image it started from. Only a copy made by the app is deleted — your own file was never modified."
+                className="min-h-10 lg:min-h-0 rounded-lg border border-white/25 px-4 py-2 text-sm text-white disabled:opacity-50 hover:bg-white/10">
                 ↩ Revert edit
               </button>
             )}
             {canEditMask(img) && (
               <button type="button" onClick={() => setMaskId(id)} disabled={busy}
-                title="Draw the watermark zones on this image (M) — decides nothing. Works even when the scan found nothing: what you draw becomes the flag, and 🧽 Inpaint then repaints exactly that."
-                className="rounded-lg border border-amber-400/60 bg-amber-500/20 px-4 py-2 text-sm font-semibold text-amber-100 disabled:opacity-50 hover:bg-amber-500/30">
-                🚩 {maskButtonLabel(img)}{shortcut('M')}
+                title="Draw the watermark zones on this image (M) — decides nothing. Works even when the scan found nothing: what you draw becomes the flag, and Inpaint then repaints exactly that."
+                className="min-h-10 lg:min-h-0 rounded-lg border border-amber-400/60 bg-amber-500/20 px-4 py-2 text-sm font-semibold text-amber-100 disabled:opacity-50 hover:bg-amber-500/30">
+                <FlagIcon aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />{maskButtonLabel(img)}{shortcut('M')}
               </button>
             )}
             <button type="button" onClick={() => sendDecision('keep')} disabled={busy}
               title="Keep this image and move on (K)"
-              className="rounded-lg border border-emerald-400/60 bg-emerald-500/20 px-5 py-2 text-sm font-semibold text-emerald-100 disabled:opacity-50 hover:bg-emerald-500/30">
+              className="min-h-10 lg:min-h-0 rounded-lg border border-emerald-400/60 bg-emerald-500/20 px-5 py-2 text-sm font-semibold text-emerald-100 disabled:opacity-50 hover:bg-emerald-500/30">
               ✓ Keep{shortcut('K')}
             </button>
             <button type="button" onClick={() => sendDecision('reject')} disabled={busy}
               title="Reject this image and move on (R) — reversible, nothing is deleted from disk"
-              className="rounded-lg border border-rose-400/60 bg-rose-500/20 px-5 py-2 text-sm font-semibold text-rose-100 disabled:opacity-50 hover:bg-rose-500/30">
+              className="min-h-10 lg:min-h-0 rounded-lg border border-rose-400/60 bg-rose-500/20 px-5 py-2 text-sm font-semibold text-rose-100 disabled:opacity-50 hover:bg-rose-500/30">
               ✕ Reject{shortcut('R')}
             </button>
             <button type="button" onClick={doSkip}
               title="Decide later (S) — stays undecided and is not shown again in this review"
-              className="rounded-lg border border-white/25 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 hover:bg-white/10">
+              className="min-h-10 lg:min-h-0 rounded-lg border border-white/25 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 hover:bg-white/10">
               ⏭ Skip{shortcut('S')}
             </button>
           </div>

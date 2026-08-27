@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Dna, Lock, PartyPopper } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router'
 import { apiFetch, getCsrfToken, putJson, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
@@ -14,7 +15,6 @@ import { ML_INSTALL_CARDS, cardInstalled } from '../components/setup/mlInstallCa
 import InstallRunner from '../components/setup/InstallRunner'
 import InstallEverything from '../components/setup/InstallEverything'
 import { HelpBadge } from '../help/HelpMode'
-import { comfyEnumUnavailableReason } from '../utils/comfyEnumSupport.js'
 import { kleinAssetBlocks } from '../utils/kleinAssets.js'
 
 const INPUT_CLASS =
@@ -85,6 +85,10 @@ const CAPABILITY_STEP_ID = {
   'OpenRouter': 'image',
   'Klein (local)': 'comfyui',
   'Krea 2 Edit (local)': 'install',
+  // Same screen as Krea, for the same reason: its one-click installer
+  // (CameraInstallCard) lives on the install screen, and the comfyui step
+  // carries Klein's weights only — mapping there would land on nothing to press.
+  '📷 Camera angles (local)': 'install',
   'Captioning': 'ollama',
   'Auto-framing & head-crop': 'ollama',
   'Face-similarity scoring': 'quality',
@@ -511,9 +515,6 @@ export default function SetupPage() {
       const kleinMissing = step.kleinMissing || []
       const missingLabels = kleinMissingLabels(kleinMissing)
       const missingSummary = missingLabels.length ? missingLabels.join(' + ') : ''
-      // Null on a capable install AND on an unreachable one (the probe fails open),
-      // so this line only ever appears when we actually proved the gap.
-      const kleinEnumReason = comfyEnumUnavailableReason(step.unsupportedEnums)
       // THE reason Klein is not usable, worded by the same helper the generation
       // panel uses — so this screen can no longer name a different cause (or a
       // missing file that is sitting on the disk) from the one that refuses the
@@ -787,7 +788,7 @@ export default function SetupPage() {
             </div>
             <div className="flex items-center gap-4 pt-1">
               <button type="button" onClick={skipComfyui} disabled={busy}
-                className="rounded-lg bg-gradient-primary px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+                className="rounded-lg bg-gradient-primary px-4 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50">
                 {busy ? 'Saving…' : 'Continue without ComfyUI'}
               </button>
               <button type="button" onClick={() => setSkipConfirm(false)}
@@ -841,7 +842,7 @@ export default function SetupPage() {
                   the host; this container intentionally never starts it for you.
                 </p>
               </div>
-              <a href="https://github.com/Fr3sher/FLT/blob/main/docs/guide/docker.md"
+              <a href="https://github.com/perfectgf/lora-dataset-studio/blob/main/docs/guide/docker.md"
                 target="_blank" rel="noreferrer"
                 className="mt-2 inline-block text-xs text-primary underline">
                 Docker setup guide →
@@ -1077,7 +1078,7 @@ export default function SetupPage() {
                 </p>
                 <p>After changing the host service, click this selected card again to test it.</p>
               </div>
-              <a href="https://github.com/Fr3sher/FLT/blob/main/docs/guide/docker.md"
+              <a href="https://github.com/perfectgf/lora-dataset-studio/blob/main/docs/guide/docker.md"
                 target="_blank" rel="noreferrer"
                 className="mt-2 inline-block text-xs text-primary underline">
                 Docker setup guide →
@@ -1102,7 +1103,7 @@ export default function SetupPage() {
                 Start it (it listens on port 11434) to unlock captioning and auto-framing — no restart needed.
               </p>
               <button type="button" onClick={startOllama} disabled={startingOllama}
-                className="rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+                className="rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50">
                 {startingOllama ? 'Starting…' : '▶ Start Ollama'}
               </button>
             </div>
@@ -1218,7 +1219,7 @@ export default function SetupPage() {
           <div className="rounded-md border border-primary/40 bg-primary/10 px-3 py-3 text-sm text-content">
             <p className="mb-2">Found an ai-toolkit install at <span className="font-mono">{detectedDir}</span>. Use it?</p>
             <button type="button" onClick={() => applyDetectedPath('aitoolkit', 'dir', detectedDir)}
-              className="rounded-lg bg-gradient-primary px-4 py-1.5 text-xs font-semibold text-white">
+              className="rounded-lg bg-gradient-primary px-4 py-1.5 text-xs font-semibold text-gray-950">
               Use this ai-toolkit →
             </button>
           </div>
@@ -1243,7 +1244,7 @@ export default function SetupPage() {
             {verdict.candidates.map((p) => (
               <button key={p} type="button"
                 onClick={() => applyDetectedPath('aitoolkit', 'python', p)}
-                className="block w-full rounded-lg bg-gradient-primary px-3 py-2 text-left text-xs font-semibold text-white sm:w-auto">
+                className="block w-full rounded-lg bg-gradient-primary px-3 py-2 text-left text-xs font-semibold text-gray-950 sm:w-auto">
                 Use this Python: <span className="font-mono break-all">{p}</span>
               </button>
             ))}
@@ -1408,7 +1409,7 @@ export default function SetupPage() {
   // Progress dots: one per tool step, filled when that tool is ready.
   const ProgressDots = () => (
     <div className="flex items-center gap-1.5" aria-hidden="true">
-      {SETUP_STEP_IDS.map((id, i) => {
+      {SETUP_STEP_IDS.map((id) => {
         const active = kind === id
         const ready = stepById[id].status === 'ready'
         return (
@@ -1486,7 +1487,7 @@ export default function SetupPage() {
     return (
       <div className="mx-auto max-w-2xl space-y-6">
         <div className="text-center">
-          <div className="text-3xl" aria-hidden="true">🧬</div>
+          <Dna aria-hidden="true" className="mx-auto h-8 w-8 text-primary" />
           <h1 className="mt-2 text-2xl font-bold text-content">Welcome to FLT - Fresh LoRa Trainer</h1>
           <p className="mt-2 text-sm text-content-muted">
             Let's set up your machine. I'll scan what's already installed and help you install the rest —
@@ -1563,7 +1564,7 @@ export default function SetupPage() {
               everything + the one-by-one menu) comes AFTER, since several installs depend
               on a configured ComfyUI/Ollama. */}
           <button type="button" onClick={goNext}
-            className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-white">
+            className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950">
             {allReady ? "Everything's ready — review →" : 'Start setup →'}
           </button>
         </div>
@@ -1576,7 +1577,7 @@ export default function SetupPage() {
     return (
       <div className="mx-auto max-w-2xl space-y-6">
         <div className="text-center">
-          <div className="text-3xl" aria-hidden="true">🎉</div>
+          <PartyPopper aria-hidden="true" className="mx-auto h-8 w-8 text-primary" />
           <h1 className="mt-2 text-2xl font-bold text-content">You're all set</h1>
           <p className="mt-1 text-sm text-content-muted">{readyCount} of {summary.length} capabilities ready.</p>
         </div>
@@ -1620,7 +1621,7 @@ export default function SetupPage() {
           <button type="button" onClick={goBack} className="text-xs text-content-subtle underline hover:text-content">
             ← Back
           </button>
-          <Link to="/datasets" className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-white">
+          <Link to="/datasets" className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950">
             Build your first dataset →
           </Link>
         </div>
@@ -1649,7 +1650,7 @@ export default function SetupPage() {
           <div className="flex items-center gap-4">
             {skipLink}
             <button type="button" onClick={goNext}
-              className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-white">
+              className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950">
               Finish →
             </button>
           </div>
@@ -1697,7 +1698,7 @@ export default function SetupPage() {
 
       {reason && (
         <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-          🔒 {reason}
+          <Lock aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />{reason}
         </p>
       )}
       <div className="flex items-center justify-between">
@@ -1708,7 +1709,7 @@ export default function SetupPage() {
           {skipLink}
           <button type="button" onClick={nextWithSave} disabled={advancing}
             title={reason || ''}
-            className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
+            className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950 disabled:cursor-not-allowed disabled:opacity-40">
             {nextLabel}
           </button>
         </div>

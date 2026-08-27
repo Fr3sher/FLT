@@ -10,6 +10,7 @@ Logs -> stderr.
 Gating 3-etats + padding rescue (valide empiriquement sur test3) + zoom rescue."""
 from __future__ import annotations
 import json, os, sys
+from _harness import _log
 
 DET_MIN, YAW_MAX = 0.50, 40.0
 
@@ -40,9 +41,10 @@ ZOOM_PAD = 0.6          # bbox sides added around the box (hair, chin, ears)
 # under 1280 px the detector already saw it at >=50% scale, so a miss is a real
 # miss and the retry would only cost CPU.
 ZOOM_RETRY_MIN_SIDE = 1280
-
-
-def _log(m): print(m, file=sys.stderr, flush=True)
+# Detector input size — shared with the Bank's embed pass for the same
+# reason as every constant above it: same question, same answer. Pinned by
+# test_face_score_zoom_rescue.
+DET_SIZE = (640, 640)
 
 
 def _verdict(det, face_px, yaw):
@@ -131,7 +133,7 @@ def main() -> int:
         if models_root:
             kwargs['root'] = models_root
         app = FaceAnalysis(**kwargs)
-        app.prepare(ctx_id=0 if use_cuda else -1, det_size=(640, 640))
+        app.prepare(ctx_id=0 if use_cuda else -1, det_size=DET_SIZE)
     except Exception as e:
         # Un crash de chargement (modeles absents/corrompus) doit sortir en JSON
         # propre — pas en traceback muet que le parent resume en « pas de JSON ».

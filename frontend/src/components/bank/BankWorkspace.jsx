@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiFetch, del, patchJson, postJson } from '../../api/fetchClient'
+import { AlertTriangle, Archive, BarChart3, FolderInput, FolderOpen, Lightbulb, Palette, Rocket, Search, Target, Trash2, Type, Undo2, UserRoundCheck, Wand2 } from 'lucide-react';
+import { apiFetch, patchJson, postJson } from '../../api/fetchClient'
+import { useFolderPersons } from './useFolderPersons'
+import { useReviewLightbox } from './useReviewLightbox'
+import { useCaptionOptions } from './useCaptionOptions'
+import { useCurationLanes } from './useCurationLanes'
 import { useToast } from '../common/Toast'
 import { useCapabilities } from '../../context/CapabilitiesContext'
 import { useConnectionStatus } from '../../hooks/useConnectionStatus'
@@ -33,6 +38,7 @@ import ScoringPythonDialog from './ScoringPythonDialog'
 import PipelineReport from './PipelineReport'
 import FolderSyncNote from './FolderSyncNote'
 import RelocateBankDialog from './RelocateBankDialog'
+import ForgetMissingDialog from './ForgetMissingDialog'
 import BankReviewLightbox from './BankReviewLightbox'
 import PersonPreflightDialog from './PersonPreflightDialog'
 import { preflightNeeded, preflightWillSample } from './personPreflight.js'
@@ -46,7 +52,7 @@ import { PICKER_PROFILES } from './scoringPython.js'
 // Reuse the dataset's register list so the Bank lane never drifts from it — and the
 // same ENGINE list, so "which engine" means the same thing on both surfaces.
 import {
-  CAPTION_LENGTH_OPTIONS, ENGINE_OPTIONS, OLLAMA_RELEVANT, VOCABULARY_OPTIONS,
+  CAPTION_LENGTH_OPTIONS, ENGINE_OPTIONS, VOCABULARY_OPTIONS,
 } from '../dataset/CaptionOptionsPopover'
 // Which pile the caption pass is aimed at, and the number the button quotes (pure).
 import {
@@ -64,10 +70,10 @@ import { passScopeOption } from './bankPassScope.js'
 import PassDialog from './PassDialog.jsx'
 import { BANK_PASSES } from './bankPasses.js'
 import {
-  semanticEngineLabel, semanticEnginePatchBody, semanticEngineState, semanticPrerequisite,
+  semanticEngineLabel, semanticEnginePatchBody, semanticEngineState,
+  semanticPayloadMatches, semanticPrerequisite,
 } from './bankSemanticEngine.js'
 // Ordered zone model + the "what's next" accent, both pure/testable.
-import { BANK_ZONES, nextBankStep } from './bankGuide.js'
 // Grid ordering menu (which sorts exist, and which ones have data) — pure/testable.
 import { bankSortGroups, loadBankSort, saveBankSort } from '../../utils/gridSort.js'
 // 🏷️ One image's caption → the chips you can filter by, and the same chips over a
@@ -76,14 +82,14 @@ import { tagsParam, selectionTagCounts } from './bankTags.js'
 // 🔤 Text search wording — "closest", never "matching" — plus the cold-start and
 // CLIP-limitation copy. Pure/testable (node --test cannot parse this JSX).
 import {
-  PUSH_DOWN_DEFAULT_STRENGTH, PUSH_DOWN_STRENGTHS, pushDownCaveat, pushDownNote,
+  PUSH_DOWN_STRENGTHS, pushDownCaveat, pushDownNote,
   limitsSentence, pendingLabel, readinessHint, suggestPushDown, summarize,
   withoutNegation,
 } from './bankTextSearch.js'
 // ⚖️ Balanced pick — the distribution obtained, in words and numbers. Pure logic
 // on purpose: the repartition is what has to be provable (node --test, no JSX).
 import {
-  BALANCE_AXES, BALANCE_DEFAULT_AXIS, balanceNotes, balanceReadiness,
+  BALANCE_AXES, balanceNotes, balanceReadiness,
   balanceRows, summarizeBalance,
 } from './bankBalance.js'
 // 🎨 Medium + ⤢ Angle — buckets, tooltips and, above all, the LIMITS each row
@@ -99,10 +105,6 @@ import {
 } from './autoRejectReadiness.js'
 import { chipCounts, facetDataKey, isFacetFiltered } from './bankFacetCounts.js'
 
-function semanticPayloadMatches(payload, engine, modelKey = null) {
-  return payload?.engine === engine
-    && (!modelKey || payload?.model_key === modelKey)
-}
 
 const PAGE_SIZE = 120
 /* The Curate row's five buttons, one style. They were the same gray text-xs as
@@ -193,25 +195,17 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // so without this the row would compute the answer and then delete the question.
   const [tagFreeze, setTagFreeze] = useState(null)
   const [subfolders, setSubfolders] = useState([])
-  // 👤 Folder-level person assertions ("this subfolder is one person").
-  const [folderPersons, setFolderPersons] = useState([])
-  // The whole folder-person payload: assertions PLUS the suggestions the app
-  // probed by itself, and what a scan would cost.
-  const [folderPersonInfo, setFolderPersonInfo] = useState(null)
-  const [folderPersonBusy, setFolderPersonBusy] = useState(false)
   // 👤 The preflight of the person pass: { plan, probing, run } — `run` is the
   // pass (or the whole 🚀 Launch all) the user actually asked for, held until
   // they have answered the folder question.
   const [preflight, setPreflight] = useState(null)
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState({ images: [], total: 0 })
-  // Batch-prefetch the current page's grid thumbnails so a high-RTT link pays
-  // one round trip per batch, not one per tile (see useBatchThumbs).
+  // Batch-prefetch the current page's grid thumbnails so a high-latency link
+  // pays one round trip per batch instead of one per tile.
   const { getBlobUrl: getThumb } = useBatchThumbs(
     page.images.map((img) => img.id),
     (ids) => ({ url: `/api/bank/${bankId}/thumbs`, body: JSON.stringify({ ids }) }),
-    // A rotation re-materialises the thumb bytes server-side, so let the grid
-    // know to refetch that page instead of showing the pre-turn orientation.
     { rev: page.images.map((img) => img.rotation || 0).join(',') },
   )
   const [selected, setSelected] = useState(() => new Set())
@@ -237,6 +231,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [pythonPickerFor, setPythonPickerFor] = useState('')
   const [dismissedReportAt, setDismissedReportAt] = useState(null)
   const [relocating, setRelocating] = useState(false)
+  const [forgettingMissing, setForgettingMissing] = useState(false)
   const [openingSourceFolder, setOpeningSourceFolder] = useState(false)
   const [rejectFlags, setRejectFlags] = useState(() => new Set(['blur', 'uniform']))
   const [showAutoReject, setShowAutoReject] = useState(false)
@@ -275,40 +270,6 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const openRail = useCallback(() => setRail(true), [setRail])
   const closeRail = useCallback(() => setRail(false), [setRail])
   const togglePasses = useCallback(() => setPassesOpen((v) => !v), [])
-  // Curation popovers ('diverse' | 'similar' | null) and their target counts.
-  const [curateOpen, setCurateOpen] = useState(null)
-  const [diverseN, setDiverseN] = useState(60)
-  // Typicality guard for 🎨 Pick diverse. Pure farthest-point sampling maximises
-  // the distance to what is already picked — mathematically the criterion that
-  // prefers ISOLATED images, so the first picks used to be the memes and the
-  // stray photos of someone else. 0 = the historical behaviour, on purpose still
-  // reachable; 0.5 = the default (see BANK_TYPICALITY_DEFAULT rationale in the
-  // service docstring).
-  const [diverseTypicality, setDiverseTypicality] = useState(0.5)
-  const [diverseBusy, setDiverseBusy] = useState(false)
-  // ⚖️ Balanced pick — the OTHER question ("does my set cover the framings?").
-  // Axis ids are persisted keys, never renamed (see bankBalance.js).
-  const [balanceN, setBalanceN] = useState(60)
-  const [balanceAxis, setBalanceAxis] = useState(BALANCE_DEFAULT_AXIS)
-  const [balanceBusy, setBalanceBusy] = useState(false)
-  const [balanceResult, setBalanceResult] = useState(null)
-  const [similarN, setSimilarN] = useState(60)
-  const [similarBusy, setSimilarBusy] = useState(false)
-  // 🎯 Keep this person — auto-decide the bank against one reference face.
-  const [matchPersonBusy, setMatchPersonBusy] = useState(false)
-  const [matchThreshold, setMatchThreshold] = useState(0.5)
-  // 🔤 Text search. `textStatus` is the BEFORE-the-click truth (available? model
-  // already warm? would it download?), `textResult` the AFTER-the-click one that
-  // keeps the ranking legible once the grid has switched to it.
-  const [textQuery, setTextQuery] = useState('')
-  const [textN, setTextN] = useState(60)
-  // 🔤 what to push DOWN the ranking. Not a filter — see bankTextSearch.js.
-  const [textExclude, setTextExclude] = useState('')
-  const [textExcludeW, setTextExcludeW] = useState(PUSH_DOWN_DEFAULT_STRENGTH)
-  const [textStatus, setTextStatus] = useState(null)
-  const [textPending, setTextPending] = useState(false)
-  const [textResult, setTextResult] = useState(null)
-  const semanticOperationBusy = diverseBusy || balanceBusy || similarBusy || textPending
   // "Show selected" VIEW: render ONLY the selected ids, in a chosen order.
   // showSelected flips the grid from the facet page to the selection; selectedOrder
   // holds the order to render them in — the similarity/diversity ranking after a
@@ -317,23 +278,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [showSelected, setShowSelected] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState(null)
   const [tileSize, setTileSize] = useState('M')
-  // Caption register for the 🏷️ Caption pass ('' = model's own wording). Explicit is
-  // the NSFW lane — same registers as the dataset caption, passed per-run.
-  const [captionVocab, setCaptionVocab] = useState('')
-  // Caption LENGTH preset, per RUN like the vocabulary register above (a bank has no
-  // caption_options row to persist to). '' = standard: nothing appended to the prompt.
-  const [captionLength, setCaptionLength] = useState('')
-  // WHICH ENGINE and WHICH VISION MODEL write this run's captions. Per RUN, like every
-  // other dial on this row: the global Settings stay the default and are never written
-  // from here, so a user can try a different captioner on one pass without changing what
-  // every dataset does afterwards. '' on either = follow the setting, and the key is then
-  // left OUT of the request — a run that picks nothing is byte-identical to before.
-  const [captionEngine, setCaptionEngine] = useState('')
-  const [captionModel, setCaptionModel] = useState('')
-  // The pulled Ollama models, for the picker. Not in `caps` (which carries only the
-  // configured vision model), so it is its own always-200 fetch — an unreachable Ollama
-  // is an empty list, never an error.
-  const [ollamaModels, setOllamaModels] = useState([])
+  const {
+    captionVocab, setCaptionVocab, captionLength, setCaptionLength,
+    captionEngine, setCaptionEngine, captionModel, setCaptionModel,
+    captionIncludeAsserted, setCaptionIncludeAsserted,
+    visionModel, visionModelLooksUncensored, ollamaPicksApply,
+    captionModelChoices, captionRunOptions,
+  } = useCaptionOptions({ caps })
   /* WHICH PILE each pass runs on, and whether it re-does rows that already have a
      result — kept HERE, not inside the windows, so closing one does not silently
      undo a choice. Keyed by pass id; '' is the historical scope (kept + undecided,
@@ -346,20 +297,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const setPassScope = (id, v) => setPassScopes((p) => ({ ...p, [id]: v }))
   const setPassRedoFor = (id, v) => setPassRedo((p) => ({ ...p, [id]: v }))
   const captionScope = passScopes.caption || ''
-  /* The ESCAPE HATCH, and the reason it is a piece of state and not a request key: it has
-     to be visible, deliberate and re-read in the confirmation. Never persisted, so it
-     resets with the panel — an opt-out of a protection is not a preference. */
-  const [captionIncludeAsserted, setCaptionIncludeAsserted] = useState(false)
   // Coverage advice (idea by @antonp) — a collapsible read-only panel, fetched
   // on demand (and refreshed whenever it's open and the bank changes).
   const [coverageOpen, setCoverageOpen] = useState(false)
   const [coverage, setCoverage] = useState(null)
-  // ▶ Review — the fast-triage lightbox. `review` holds the SNAPSHOT of ids it
-  // walks ({ids, startId}); null when closed. Snapshotting at open is the whole
-  // point: a decision drops the image out of the current filter, so a live list
-  // would reorder under the cursor and make the run skip or loop.
-  const [review, setReview] = useState(null)
-  const [reviewLoading, setReviewLoading] = useState(false)
   // started_at of the last FINISHED activity already announced (toast + grid
   // refresh). `undefined` = no payload seen yet — refreshPayload records the
   // first snapshot silently; the landing effect announces every one after it.
@@ -555,6 +496,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     }
     const t = setInterval(tick, 2000)
     return () => { dropped = true; clearInterval(t) }
+    // Les TRANCHES de activity, jamais l'objet : son identite change a
+    // chaque poll et relancerait l'intervalle toutes les 2 s.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, bankId, refreshPayload, refreshImages, toast,
       payload?.activity?.error, payload?.activity?.cancelled,
       payload?.activity?.detail, payload?.activity?.started_at])
@@ -571,26 +515,14 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       payload?.counts?.captioned, payload?.counts?.scored,
       payload?.counts?.semantic_indexed, payload?.semantic?.engine])
 
-  // 👤 "Single person here" — the folder-level person assertions. Reloaded when
-  // a job LANDS too: the sample check writes its verdict from the background.
-  const loadFolderPersons = useCallback(() => {
-    apiFetch(`/api/bank/${bankId}/folder-persons`)
-      .then((d) => { setFolderPersons(d.assertions || []); setFolderPersonInfo(d) })
-      .catch(() => { setFolderPersons([]); setFolderPersonInfo(null) })
-  }, [bankId])
+  const {
+    folderPersons, folderPersonInfo, folderPersonBusy, loadFolderPersons,
+    assertFolderPerson, revokeFolderPerson, checkFolderPerson,
+    scanFolderPersons,
+  } = useFolderPersons({
+    bankId, live, filter, toast, refreshImages, refreshPayload,
+  })
 
-  useEffect(() => { loadFolderPersons() }, [loadFolderPersons, live])
-
-  // 🏷️ The pulled Ollama models, for the per-run caption model picker. Fetched ONCE per
-  // mount and never blocking: the endpoint always answers 200, and an unreachable Ollama
-  // is an empty list — the picker then offers only "Use the configured model", which is
-  // exactly the truth on that machine.
-  useEffect(() => {
-    let alive = true
-    apiFetch('/api/ollama/models').catch(() => ({ models: [] }))
-      .then((d) => { if (alive) setOllamaModels(d?.models || []) })
-    return () => { alive = false }
-  }, [])
 
   const openSourceFolder = async () => {
     if (openingSourceFolder) return
@@ -604,42 +536,6 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     }
   }
 
-  const runFolderPerson = async (call, success) => {
-    setFolderPersonBusy(true)
-    try {
-      const d = await call()
-      if (success) toast.success(success(d))
-      // The payload too, not only the grid: an assertion creates (or dissolves)
-      // a person cluster, and the PEOPLE row above would otherwise keep showing
-      // a group that no longer exists until the next poll.
-      loadFolderPersons(); refreshImages(); refreshPayload({ force: true })
-    } catch (e) {
-      toast.error(e?.message || 'That did not work')
-    } finally { setFolderPersonBusy(false) }
-  }
-
-  const assertFolderPerson = () => runFolderPerson(
-    () => postJson(`/api/bank/${bankId}/folder-person`, { subfolder: filter.subfolder }),
-    (d) => `${d.images} image(s) grouped as person #${d.cluster_id} — the face pass `
-      + 'will skip them',
-  )
-
-  const revokeFolderPerson = () => runFolderPerson(
-    () => del(`/api/bank/${bankId}/folder-person`
-      + `?subfolder=${encodeURIComponent(filter.subfolder ?? '')}`),
-    (d) => `${d.cleared} image(s) back to normal clustering`,
-  )
-
-  const checkFolderPerson = () => runFolderPerson(
-    () => postJson(`/api/bank/${bankId}/folder-person/check`,
-      { subfolder: filter.subfolder }),
-    (d) => `Checking ${d.sample_size} images of this folder…`,
-  )
-
-  const scanFolderPersons = () => runFolderPerson(
-    () => postJson(`/api/bank/${bankId}/folder-scan`, {}),
-    () => 'Sampling the folders — nothing is grouped until you confirm',
-  )
 
   // Leaving the selection view: back to the facet grid.
   const exitSelectionView = () => { setShowSelected(false); setSelectedOrder(null) }
@@ -765,6 +661,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     }
     // captionsSeen is the dependency that matters — the cache is a ref, so React
     // cannot see it change on its own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, captionsSeen])
 
   /* WHICH row is on screen, in priority order. A frozen selection outranks a live
@@ -961,20 +858,6 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     if (gated === true) return { ok: true }
     return runPass('faces', {})
   }
-  /* Every option is spread-if-set, so a run that changes nothing posts the SAME body it
-     posted before any of these controls existed — the contract the vocabulary/length
-     pair set and the two new dials join.
-
-     `statuses` is deliberately omitted while a selection is live: the server INTERSECTS
-     the two, so "kept only" plus a selection of undecided images would caption fewer
-     than the button says. The selection wins, the scope select goes inert, and the label
-     switches to the selection count. */
-  const captionRunOptions = () => ({
-    ...(captionVocab ? { vocabulary: captionVocab } : {}),
-    ...(captionLength ? { length: captionLength } : {}),
-    ...(captionEngine ? { backend: captionEngine } : {}),
-    ...(captionModel ? { ollama_model: captionModel } : {}),
-  })
   const startCaption = (run) => runPass('caption', run, captionRunOptions())
   const cancelJob = () => act(() => postJson(`/api/bank/${bankId}/cancel`, {}), null)
 
@@ -1076,7 +959,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const runPipeline = async (config) => {
     let error = null
     const d = await act(() => postJson(`/api/bank/${bankId}/pipeline`, config),
-      '🚀 Launch all started — you can walk away; Stop any time.',
+      'Launch all started — you can walk away; Stop any time.',
       { onRefusal: (m) => { error = m } })
     if (!d) return { ok: false, error }
     setLaunchOpen(false)
@@ -1147,57 +1030,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     }
   }
 
-  // Open ▶ Review over what the user is actually looking at: the whole current
-  // filter (all pages, current sort), or the selection when the "Show selected"
-  // view is on. `startId` (the ▶ on a tile) opens on that image.
-  const openReview = async (startId = null) => {
-    setReviewLoading(true)
-    try {
-      const ids = showSelected
-        ? ((selectedOrder && selectedOrder.length) ? selectedOrder : [...selected])
-        : await fetchAllIds(bankId, filterParams(filter))
-      if (!ids.length) {
-        toast.info('Nothing to review — no image matches the current filter.')
-        return
-      }
-      setReview({ ids, startId })
-    } catch (e) {
-      toast.error(e?.message || 'Could not build the review list.')
-    } finally {
-      setReviewLoading(false)
-    }
-  }
-
-  // One decision landed in the lightbox — refresh the header counters so
-  // kept/rejected/undecided track the run live. The grid is refreshed once, on
-  // close, so its tiles don't shuffle around behind the lightbox.
-  const onReviewDecided = () => { refreshPayload() }
-  // A turn made in ▶ Review must already be right on the tile behind it: the
-  // grid is only refetched on close, and a tile still lying sideways would read
-  // as "it didn't take".
-  const onReviewRotated = (imageId, rotation) => setPage((prev) => ({
-    ...prev,
-    images: prev.images.map((im) => (im.id === imageId
-      ? { ...im, rotation, width: im.height, height: im.width }
-      : im)),
-  }))
-  /* Same rule for a ✂ crop / ↩ revert made in ▶ Review, and it matters MORE here:
-     the tile's thumbnail URL carries the edit generation, so a tile left with the
-     old generation would keep serving the pre-crop image from the browser cache
-     for an hour behind the lightbox. The state comes from the route's own reply
-     rather than being guessed. */
-  const onReviewEdited = (imageId, state) => setPage((prev) => ({
-    ...prev,
-    images: prev.images.map((im) => (im.id === imageId
-      ? { ...im,
-          edit_method: state?.edit_method ?? null,
-          edit_generation: state?.edit_generation ?? 0,
-          rotation: state?.rotation ?? 0,
-          width: state?.width ?? im.width,
-          height: state?.height ?? im.height }
-      : im)),
-  }))
-  const closeReview = () => { setReview(null); refreshPayload(); refreshImages() }
+  const {
+    review, reviewLoading, openReview, onReviewDecided, onReviewRotated,
+    onReviewEdited, closeReview,
+  } = useReviewLightbox({
+    bankId, filter, filterParams, fetchAllIds, showSelected, selected,
+    selectedOrder, setPage, toast, refreshPayload, refreshImages,
+  })
 
   const selectAllCurrent = async () => {
     try {
@@ -1226,193 +1065,6 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
 
   // The typicality guard reads the whole pool's neighbourhood before sampling, so
   // on a big bank this click is no longer instant — say so instead of looking dead.
-  const pickDiverse = async () => {
-    const requestEngine = semanticState.engine
-    const requestModelKey = semanticState.modelKey
-    setCurateOpen(null)
-    setDiverseBusy(true)
-    try {
-      const d = await postJson(`/api/bank/${bankId}/select-diverse`,
-        { n: diverseN, typicality: diverseTypicality, ...filterParams(filter) })
-      if (semanticEngineRef.current !== requestEngine
-          || !semanticPayloadMatches(d, requestEngine, requestModelKey)) return
-      if (!d.image_ids?.length) {
-        toast.info(`Nothing to sample — no ${semanticState.label}-indexed images match the current filter.`)
-        return
-      }
-      showCuratedSelection(d.image_ids)
-      toast.info(`Showing the ${d.image_ids.length} most diverse of ${d.pool}. Review, then ✓ Keep or ⬆ Promote — or “Show all” to leave this view.`)
-    } catch (e) {
-      toast.error(e?.message || 'Diversity sampling failed.')
-    } finally {
-      setDiverseBusy(false)
-    }
-  }
-
-  // ⚖️ Balanced pick — spread over the framings instead of taking the top of one
-  // ranking. Same embeddings and same typicality guard as 🎨 Pick diverse, applied
-  // INSIDE each bucket. The result is only useful if the user can see its shape,
-  // so the distribution is kept on screen (numbers, aria-live) after the click.
-  const pickBalanced = async () => {
-    const requestEngine = semanticState.engine
-    const requestModelKey = semanticState.modelKey
-    setCurateOpen(null)
-    setBalanceBusy(true)
-    try {
-      const d = await postJson(`/api/bank/${bankId}/select-balanced`,
-        { n: balanceN, axis: balanceAxis, typicality: diverseTypicality,
-          ...filterParams(filter) })
-      if (semanticEngineRef.current !== requestEngine
-          || !semanticPayloadMatches(d, requestEngine, requestModelKey)) return
-      if (!d.image_ids?.length) {
-        toast.info('Nothing to balance — no labelled images match the current filter.')
-        return
-      }
-      setBalanceResult(d)
-      showCuratedSelection(d.image_ids)
-      toast.info(summarizeBalance(d))
-    } catch (e) {
-      // A missing pass is the DEFAULT state of a fresh bank, not a failure: the
-      // backend names the pass, so show that sentence rather than "failed".
-      toast.error(e?.message || 'Balanced selection failed.')
-    } finally {
-      setBalanceBusy(false)
-    }
-  }
-
-  const findSimilar = async () => {
-    const requestEngine = semanticState.engine
-    const requestModelKey = semanticState.modelKey
-    setCurateOpen(null)
-    const ref = [...selected][0]
-    if (ref == null) return
-    setSimilarBusy(true)
-    try {
-      const d = await postJson(`/api/bank/${bankId}/select-similar`,
-        { ref_id: ref, n: similarN, ...filterParams(filter) })
-      if (semanticEngineRef.current !== requestEngine
-          || !semanticPayloadMatches(d, requestEngine, requestModelKey)) return
-      if (!d.image_ids?.length) {
-        toast.info(`No matches — no ${semanticState.label}-indexed images match the current filter.`)
-        return
-      }
-      // Backend returns the ids ranked by similarity (reference first); keep that
-      // order so the view reads closest→farthest instead of by id.
-      showCuratedSelection(d.image_ids)
-      toast.info(`Showing the ${d.image_ids.length} most similar to the reference (of ${d.pool}), closest first. Review, then ✓ Keep or ⬆ Promote — or “Show all” to leave this view.`)
-    } catch (e) {
-      toast.error(e?.message || 'Similarity search failed.')
-    } finally {
-      setSimilarBusy(false)
-    }
-  }
-
-  // 🎯 Keep this person — score the whole bank against ONE selected reference face
-  // (insightface identity, not the semantic index) and auto-decide: matches are
-  // kept, no-face and different-person shots are auto-rejected. Only 'pending'
-  // rows are decided. The bank's poll refreshes the grid when the pass finishes.
-  const keepThisPerson = async () => {
-    const ref = [...selected][0]
-    if (ref == null || matchPersonBusy) return
-    setMatchPersonBusy(true)
-    try {
-      const d = await postJson(`/api/bank/${bankId}/match-person`,
-        { ref_id: ref, threshold: matchThreshold })
-      if (d?.ok) {
-        toast.success('Matching the bank to that person — non-matches auto-rejected, grid refreshes when done.')
-      } else {
-        toast.error(d?.error || 'Match pass failed to start.')
-      }
-    } catch (e) {
-      toast.error(e?.message || 'Match pass failed.')
-    } finally {
-      setMatchPersonBusy(false)
-    }
-  }
-
-  // 🔤 Text search — same engine as 🎯 Similar, with the reference vector coming
-  // from words instead of a picture. Opening the panel asks the backend what it
-  // is about to cost (model warm? weights present?) so a slow FIRST search is
-  // announced before the click rather than felt as a freeze after it.
-  const openTextSearch = async () => {
-    const next = curateOpen === 'text' ? null : 'text'
-    setCurateOpen(next)
-    if (next !== 'text') {
-      textStatusRequestRef.current += 1
-      releaseTextEncoder()
-      return
-    }
-    const requestId = ++textStatusRequestRef.current
-    const expectedEngine = semanticState.engine
-    if (semanticState.text) setTextStatus(semanticState.text)
-    try {
-      const status = await apiFetch('/api/bank/text-search/status'
-        + `?engine=${encodeURIComponent(expectedEngine)}`)
-      if (requestId === textStatusRequestRef.current
-          && expectedEngine === semanticEngineRef.current
-          && semanticPayloadMatches(status, expectedEngine)) setTextStatus(status)
-    } catch {
-      // The Bank payload already carries an engine-aware status. Keep it when
-      // the optional warm/cold probe cannot be read.
-      if (!semanticState.text) setTextStatus(null)
-    }
-  }
-
-  // Hand the selected text encoder's memory back as soon as the panel closes.
-  // Best effort by design — the backend idle timer remains the guarantee for a
-  // tab that simply vanished.
-  const releaseTextEncoder = (engine = semanticState.engine) => {
-    postJson('/api/bank/text-search/release', semanticEnginePatchBody(engine)).catch(() => {})
-  }
-
-  // Leaving the Bank entirely is the same signal as closing the panel: give the
-  // memory back. The backend idle timer still covers a browser that just died.
-  useEffect(() => () => {
-    postJson('/api/bank/text-search/release',
-      semanticEnginePatchBody(semanticEngineRef.current)).catch(() => {})
-  }, [])
-
-  const runTextSearch = async () => {
-    const q = textQuery.trim()
-    if (!q) return
-    const requestEngine = semanticState.engine
-    const requestModelKey = semanticState.modelKey
-    setTextPending(true)
-    try {
-      const d = await postJson(`/api/bank/${bankId}/search-text`,
-        { query: q, n: textN, push_down: textExclude.trim() || null,
-          push_down_weight: textExcludeW, ...filterParams(filter) })
-      if (semanticEngineRef.current !== requestEngine
-          || !semanticPayloadMatches(d, requestEngine, requestModelKey)) return
-      setTextResult(d)
-      setCurateOpen(null)
-      if (!d.image_ids?.length) {
-        // NOT a silent empty grid: say why nothing could be ranked.
-        toast.info(summarize(d, semanticState.engine))
-        return
-      }
-      showCuratedSelection(d.image_ids)
-      // Refresh the warm flag so the panel now promises "instant" truthfully.
-      apiFetch('/api/bank/text-search/status'
-        + `?engine=${encodeURIComponent(semanticState.engine)}`)
-        .then(setTextStatus).catch(() => {})
-    } catch (e) {
-      // 503 = this install cannot do it at all; 400 = do something first. Both
-      // arrive as a message written for a human — show it as-is.
-      toast.error(e?.message || 'Text search failed.')
-    } finally {
-      setTextPending(false)
-    }
-  }
-
-  const counts = payload?.counts
-  /* A freshly imported dump has nothing measured: the grid is a wall of
-     unscanned images and every useful action is inside the passes panel, so it
-     opens ITSELF once. Guarded on the computed boolean rather than on `counts`,
-     so the first scan flipping it to false never re-runs this — and so a user
-     who closes the panel on such a bank is not fought by the effect. */
-  const passesShouldOpen = passesPanelStartsOpen(counts)
-  useEffect(() => { if (passesShouldOpen) setPassesOpen(true) }, [passesShouldOpen])
   const semanticState = semanticEngineState(payload, capsLoading ? null : caps)
   semanticEngineRef.current = semanticState.engine
   semanticModelKeyRef.current = semanticState.modelKey
@@ -1422,6 +1074,52 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const semanticBlocked = semanticState.engine === 'siglip2' && capsLoading
     ? 'Checking whether the SigLIP 2 Quality tool is installed…'
     : semanticPrerequisite(semanticState)
+  const {
+    curateOpen, setCurateOpen, diverseN, setDiverseN, diverseTypicality,
+    setDiverseTypicality, diverseBusy, balanceN, setBalanceN, balanceAxis,
+    setBalanceAxis, balanceBusy, balanceResult, setBalanceResult, similarN,
+    setSimilarN, similarBusy, textQuery, setTextQuery, textN, setTextN,
+    textExclude, setTextExclude, textExcludeW, setTextExcludeW, textStatus,
+    setTextStatus, textPending, textResult, setTextResult, pickDiverse,
+    pickBalanced, findSimilar, openTextSearch, releaseTextEncoder,
+    runTextSearch,
+  } = useCurationLanes({
+    bankId, filter, filterParams, selected, toast, showCuratedSelection,
+    semanticState, semanticEngineRef, textStatusRequestRef,
+  })
+  const [matchPersonBusy, setMatchPersonBusy] = useState(false)
+  const [matchThreshold, setMatchThreshold] = useState(0.5)
+
+  // Score the bank against one selected reference face. Only pending rows are
+  // decided by the backend; manual keep/reject decisions remain untouched.
+  const keepThisPerson = async () => {
+    const ref = [...selected][0]
+    if (ref == null || matchPersonBusy) return
+    setMatchPersonBusy(true)
+    try {
+      const result = await postJson(`/api/bank/${bankId}/match-person`,
+        { ref_id: ref, threshold: matchThreshold })
+      if (result?.ok) {
+        toast.success('Matching the bank to that person — non-matches auto-rejected, grid refreshes when done.')
+      } else {
+        toast.error(result?.error || 'Match pass failed to start.')
+      }
+    } catch (error) {
+      toast.error(error?.message || 'Match pass failed.')
+    } finally {
+      setMatchPersonBusy(false)
+    }
+  }
+  const semanticOperationBusy = diverseBusy || balanceBusy || similarBusy || textPending
+
+  const counts = payload?.counts
+  /* A freshly imported dump has nothing measured: the grid is a wall of
+     unscanned images and every useful action is inside the passes panel, so it
+     opens ITSELF once. Guarded on the computed boolean rather than on `counts`,
+     so the first scan flipping it to false never re-runs this — and so a user
+     who closes the panel on such a bank is not fought by the effect. */
+  const passesShouldOpen = passesPanelStartsOpen(counts, viewportWidth())
+  useEffect(() => { if (passesShouldOpen) setPassesOpen(true) }, [passesShouldOpen])
   // The Sort menu greys an entry out when its pass has measured NOTHING. Face
   // confidence is the one whose progress the payload reports outside `counts`
   // (faces_scanned, a sibling key), so it is folded in here rather than by
@@ -1452,7 +1150,6 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const clusters = payload?.clusters || []
   const styleClusters = payload?.style_clusters || []
   const framingCounts = chipPrint.framing
-  const framingClassified = counts?.framing_classified || 0
   // Only surface framing chips once the pass has classified something (plus the
   // active one, so a chip you're filtering on never vanishes mid-review).
   const shownFramings = FRAMING_BUCKETS.filter(
@@ -1479,18 +1176,6 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // model. We can't prove abliteration, but the common builds name themselves — a soft
   // heuristic drives an honest "may soften" hint (never a hard block: a differently
   // named abliterated model still works).
-  // It reads the EFFECTIVE model — this run's override if one was picked, else the
-  // configured one. Warning about the global model while the run uses another is worse
-  // than not warning at all.
-  const visionModel = captionModel || caps.ollama?.vision_model || ''
-  const visionModelLooksUncensored = /abliterat|uncensor|huihui|nsfw/i.test(visionModel)
-  // The Ollama model choice only bites when the resolved engine can reach Ollama.
-  const ollamaPicksApply = OLLAMA_RELEVANT.has(captionEngine)
-  // A model pulled elsewhere (or configured in Settings) stays selectable even when the
-  // live list doesn't carry it — silently dropping the user's choice is worse than
-  // offering a name we can't confirm.
-  const captionModelChoices = captionModel && !ollamaModels.includes(captionModel)
-    ? [captionModel, ...ollamaModels] : ollamaModels
   // 🔄 Re-caption: inert (and why), plus the sentence that names what it destroys.
   const includeAssertedLabel = captionIncludeAssertedLabel(counts, captionScope)
   const recaptionInert = captionRecaptionDisabledReason(
@@ -1565,7 +1250,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           Register
           <select value={captionVocab} onChange={(e) => setCaptionVocab(e.target.value)}
             disabled={live} aria-label="Caption vocabulary register"
-            title="How captions name nude or sexual content. Explicit needs an uncensored (abliterated) Ollama vision model. Richer, more explicit captions also make the 🔍 search find more."
+            title="How captions name nude or sexual content. Explicit needs an uncensored (abliterated) Ollama vision model. Richer, more explicit captions also make the search find more."
             className={`${captionSelectClass} sm:max-w-[16rem]`}>
             {VOCABULARY_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
           </select>
@@ -1674,18 +1359,6 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // everything.
   const isFiltered = isFacetFiltered(filter)
 
-  // The ONE recommended next step, from the counters the header strip already
-  // reads. Advisory only — draws an amber "Next step" accent on that zone.
-  const activeStep = nextBankStep({
-    scanned: counts?.scanned || 0,
-    scored: scored || 0,
-    keep: counts?.keep || 0,
-    scoringAvailable: !!caps?.bank_scoring,
-  })
-  const analyzeZone = BANK_ZONES.find((z) => z.id === 'analyze')
-  const triageZone = BANK_ZONES.find((z) => z.id === 'triage')
-  const curateZone = BANK_ZONES.find((z) => z.id === 'curate')
-  const promoteZone = BANK_ZONES.find((z) => z.id === 'promote')
 
   return (
     /* ── Structure B ──────────────────────────────────────────────────────
@@ -1703,15 +1376,21 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       {/* ── The top bar ──────────────────────────────────────────────────
           Bank identity, the counters, and the DECISIVE actions. Everything
           here is bank-wide; anything that narrows the grid lives in the rail. */}
-      <header className="space-y-2 rounded-xl border border-border bg-surface px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2">
+      {/* A phone held sideways has ~390 px of fold: the card drops its path and
+          counter rows and most of its padding, and becomes a one-line toolbar. */}
+      <header data-probe-chrome="header"
+        className="space-y-2 rounded-xl border border-border bg-surface px-4 py-3 [@media(max-height:500px)]:flex [@media(max-height:500px)]:flex-nowrap [@media(max-height:500px)]:items-center [@media(max-height:500px)]:gap-3 [@media(max-height:500px)]:space-y-0 [@media(max-height:500px)]:py-1">
+        <div className="flex flex-wrap items-center gap-2 [@media(max-height:500px)]:min-w-0 [@media(max-height:500px)]:shrink">
           <button type="button" onClick={onBack}
-            className="rounded-md border border-border px-2 py-1 text-xs text-content-muted hover:text-content hover:bg-surface-raised">
+            className="min-h-10 lg:min-h-0 rounded-md border border-border px-2 py-1 text-xs text-content-muted hover:text-content hover:bg-surface-raised">
             ← Banks
           </button>
-          <h1 className="text-lg text-content">🗃️ {payload?.name || `Bank #${bankId}`}</h1>
+          <h1 className="flex items-center gap-2 text-lg text-content"><Archive aria-hidden="true" className="h-4 w-4" /> {payload?.name || `Bank #${bankId}`}</h1>
           {payload?.source_path && (
-            <div className="flex min-w-0 grow items-center gap-2">
+            /* hidden below sm: opening or moving the folder is a gesture on the
+               machine that serves the app, and on a 360-px screen this row alone
+               cost 60 px of a fold the header was already taking 38 % of. */
+            <div className="hidden min-w-0 grow items-center gap-2 sm:flex [@media(max-height:500px)]:!hidden">
               <p className="min-w-0 grow truncate font-mono text-xs text-content-subtle"
                 title={payload.source_path}>
                 {payload.source_path}
@@ -1719,8 +1398,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               <button type="button" onClick={openSourceFolder}
                 disabled={openingSourceFolder} aria-busy={openingSourceFolder}
                 title="Open this Bank's source folder in the system file explorer."
-                className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content disabled:cursor-wait disabled:opacity-60">
-                {openingSourceFolder ? 'Opening…' : '📂 Open folder'}
+                className="min-h-10 lg:min-h-0 shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content disabled:cursor-wait disabled:opacity-60">
+                <FolderOpen aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />{openingSourceFolder ? 'Opening…' : 'Open folder'}
               </button>
               {/* Cold path. The folder-sync note below offers this too, but only once
                   the folder is already gone — and the real move is PLANNED: you look
@@ -1728,14 +1407,16 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   after breaking the bank to discover it could have been repaired. */}
               <button type="button" onClick={() => setRelocating(true)}
                 title="Moving this folder to another disk? Point the bank at its new location."
-                className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
-                📦 Move folder…
+                className="min-h-10 lg:min-h-0 shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
+                <FolderInput aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Move folder…
               </button>
             </div>
           )}
         </div>
         {counts && (
-          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-border pt-2 text-sm">
+          /* One scrolling line below sm: eight counters wrapping to four rows were
+             a quarter of a phone's fold, before a single image. */
+          <div className="flex flex-nowrap items-baseline gap-x-4 gap-y-1 overflow-x-auto border-t border-border pt-2 text-sm sm:flex-wrap sm:overflow-visible [@media(max-height:500px)]:hidden">
             <Stat label="images" value={counts.total} />
             <Stat label="scanned" value={counts.scanned} />
             {scored > 0 && <Stat label="scored" value={scored} />}
@@ -1755,34 +1436,34 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
         )}
         {/* The decisive actions. ⚙ Passes opens the analysis panel; the other
             three are the ones that change what leaves this bank. */}
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
+        <div className="flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto border-t border-border pt-2 sm:flex-wrap sm:overflow-visible [@media(max-height:500px)]:ml-auto [@media(max-height:500px)]:flex-nowrap [@media(max-height:500px)]:overflow-x-auto [@media(max-height:500px)]:border-t-0 [@media(max-height:500px)]:pt-0">
           {/* ☰ exists only where the rail cannot sit beside the grid — at 400 px
               it is the ONLY way back to the filters, so it is a real button and
               never a CSS-hidden one. */}
           {!railIsColumnNow && (
             <button type="button" onClick={openRail}
               aria-expanded={railOpen} aria-controls="bank-filter-rail"
-              className="rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content hover:bg-surface">
+              className="min-h-10 lg:min-h-0 rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content hover:bg-surface">
               ☰ Filters
             </button>
           )}
           <button type="button" onClick={togglePasses}
             aria-expanded={passesOpen} aria-controls="bank-passes-panel"
             title="Open the analysis passes — scan, score, group by person, framing, medium, crops, watermarks and captions."
-            className="rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content hover:bg-surface">
+            className="min-h-10 lg:min-h-0 rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content hover:bg-surface">
             {passesButtonLabel(live)}
           </button>
           <button type="button" onClick={() => setLaunchOpen(true)} disabled={live || !(counts?.total > 0)}
             title={`Run the whole triage in one go — scan, auto-reject, Score${semanticState.engine === 'siglip2' ? ', SigLIP 2 semantic index' : ''}, crops/variants, watermarks, group by person and (optionally) caption. Start it and walk away. If the person pass is in, it checks your folders first and asks once, before the run.`}
-            className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-bold text-white shadow disabled:opacity-50">
-            🚀 Launch all…
+            className="min-h-10 lg:min-h-0 rounded-md bg-gradient-primary px-4 py-2 text-sm font-bold text-gray-950 shadow disabled:opacity-50">
+            <Rocket aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Launch all…
           </button>
           <span className="ml-auto" />
           <button type="button" onClick={() => setPromoteOpen(true)} disabled={live || !canPromote}
             title={canPromote
               ? 'Copy the kept selection into a dataset — or into a brand-new bank, to keep working on a shortlist apart'
               : 'Keep some images first'}
-            className="rounded-md bg-gradient-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
+            className="min-h-10 lg:min-h-0 rounded-md bg-gradient-primary px-3 py-1.5 text-sm font-semibold text-gray-950 disabled:opacity-50">
             ⬆ Promote…
           </button>
           {/* Disabled outright when this bank's folder belongs to a dataset: the
@@ -1795,8 +1476,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               : (counts?.reject > 0)
                 ? 'Delete the rejected images from your disk (OS trash when available). Irreversible — asks you to type DELETE first. Kept images are untouched.'
                 : 'No rejected images to delete'}
-            className="rounded-md border border-rose-500/50 px-3 py-1.5 text-sm text-rose-300 disabled:opacity-40 hover:bg-rose-500/10">
-            🗑 Delete rejected from disk{(counts?.reject > 0) ? ` (${counts.reject})` : ''}
+            className="min-h-10 lg:min-h-0 rounded-md border border-rose-500/50 px-3 py-1.5 text-sm text-rose-300 disabled:opacity-40 hover:bg-rose-500/10">
+            <Trash2 aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Delete rejected from disk{(counts?.reject > 0) ? ` (${counts.reject})` : ''}
           </button>
         </div>
       </header>
@@ -1812,14 +1493,15 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           <p className="font-semibold">⛔ This bank sits on a dataset’s image folder</p>
           <p className="text-rose-100/90">{payload.dataset_conflict.message}</p>
           <p className="text-rose-100/90">
-            🗑 Delete rejected is disabled here. Use 📦 Move folder… to point this
+            Delete rejected is disabled here. Use Move folder… to point this
             bank at a folder of its own, or remove the bank — removing a bank never
             touches files.
           </p>
         </div>
       )}
       <FolderSyncNote sync={payload?.folder_sync}
-        onRelocate={() => setRelocating(true)} />
+        onRelocate={() => setRelocating(true)}
+        onForget={() => setForgettingMissing(true)} />
 
       <ProgressBar activity={payload?.activity} onCancel={cancelJob} offline={!connection.online} />
 
@@ -1835,9 +1517,15 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       {/* ⚙ The analysis passes, opened on demand. All eight are here with their
           own dialogs untouched — only the door changed. */}
       {passesOpen && (
-        <div id="bank-passes-panel">
+        /* data-probe-reading: the panel is what you asked for when you pressed ⚙,
+           one tap puts it away, and nothing in it is used against the grid behind
+           it (every pass opens its own window) — so it is measured for targets,
+           truncation and fill, and charged to no fold budget. Plain comment: this
+           is an EXPRESSION position (inside `{passesOpen && ( … )}`). */
+        <div id="bank-passes-panel" data-probe-chrome="passes" data-probe-panel="passes" data-probe-reading>
           <BankPassesPanel
             bankId={bankId} payload={payload} counts={counts} live={live}
+            compact={!railIsColumnNow}
             caps={caps} capsLoading={capsLoading}
             semanticState={semanticState} semanticReady={semanticReady}
             semanticBlocked={semanticBlocked} semanticSwitching={semanticSwitching}
@@ -1948,8 +1636,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             <button type="button" onClick={() => setShowAutoReject((v) => !v)} disabled={live}
               aria-expanded={showAutoReject}
               title="Bulk-reject the still-undecided images carrying the chosen quality flags"
-              className="rounded-md border border-border bg-surface-raised px-2 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
-              🧹 Auto-reject…
+              className="min-h-10 lg:min-h-0 rounded-md border border-border bg-surface-raised px-2 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
+              <Wand2 aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Auto-reject…
             </button>
             {showAutoReject && (
               <>
@@ -1961,7 +1649,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                     counts this panel exists to show. Capped height + internal
                     scroll so "Reject them" is reachable however long the caveats
                     get. */}
-                <div className="fixed inset-x-3 bottom-3 z-50 max-h-[70vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:w-72">
+                <div data-probe-chrome="auto-reject" data-probe-panel="auto-reject" data-probe-layer
+                  className="fixed inset-x-3 bottom-3 z-50 max-h-[70vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:w-72">
                   <p className="text-xs text-content-muted">
                     Rejects the UNDECIDED images with these flags. Your manual ✓/✕ are never changed;
                     everything stays reversible (nothing is deleted from disk).
@@ -2020,7 +1709,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                     </p>
                   )}
                   <button type="button" onClick={applyAutoReject} disabled={!rejectFlags.size}
-                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
+                    className="min-h-10 lg:min-h-0 w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-50">
                     Reject them
                   </button>
                 </div>
@@ -2036,7 +1725,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               className={`rounded-md border px-2 py-0.5 text-xs font-medium ${showSelected
                 ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-200'
                 : 'border-border text-content-muted hover:text-content hover:bg-surface-raised'}`}>
-              {showSelected ? '↩ Show all' : `🔎 Show selected (${selected.size})`}
+              {showSelected ? <><Undo2 aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Show all</> : <><Search aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Show selected ({selected.size})</>}
             </button>
           )}
           {selected.size > 0 && (
@@ -2081,12 +1770,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 ? `Pick the N images that best COVER the visual variety of the current filter (varied angles/outfits/scenes) using the ${semanticState.label} semantic index.`
                 : semanticBlocked}
               className={CURATE_BTN}>
-              🎨 Pick diverse…{!semanticReady && ` (needs ${semanticState.label})`}{diverseBusy && ' (sampling…)'}
+              <Palette aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Pick diverse…{!semanticReady && ` (needs ${semanticState.label})`}{diverseBusy && ' (sampling…)'}
             </button>
             {curateOpen === 'diverse' && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
-                <div className="absolute z-50 mt-1 w-72 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2">
+                <div data-probe-chrome="curate-diverse" data-probe-panel="curate-diverse" data-probe-layer
+                  className="absolute z-50 mt-1 w-72 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2">
                   <p className="text-xs text-content-muted">
                     Selects the most <strong>varied</strong> images of the current filter — the best
                     coverage of the visual space, not N look-alikes. Reviews as a normal selection
@@ -2119,7 +1809,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                       : 'Images that look like nothing else in the bank (memes, screenshots, someone else) stop winning on isolation alone. Variety inside your subject is untouched.'}
                   </p>
                   <button type="button" onClick={pickDiverse} disabled={diverseBusy}
-                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-60">
                     {diverseBusy ? 'Sampling…' : `Select ${diverseN} most diverse`}
                   </button>
                 </div>
@@ -2145,7 +1835,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
                 {/* Bottom sheet below sm (measured at 400 px, an anchored w-80 panel
                     pushes the page sideways), normal popover from sm up. */}
-                <div className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:max-h-none sm:w-80 sm:overflow-visible">
+                <div data-probe-chrome="curate-balanced" data-probe-panel="curate-balanced" data-probe-layer
+                  className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:max-h-none sm:w-80 sm:overflow-visible">
                   <p className="text-xs text-content-muted">
                     Splits your pick <strong>evenly across the framings</strong> — “20 face, 20 bust,
                     20 body” — and fills each bucket with the same most-varied sampling.
@@ -2172,11 +1863,47 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   <p className="text-[11px] leading-snug text-content-muted">
                     Framing is the reliable axis on a one-subject bank: person groups there tend to be
                     few, sparse and arbitrary. It uses the same “Skip the odd ones out” setting as
-                    🎨 Pick diverse ({diverseTypicality === 0 ? 'off' : `${Math.round(diverseTypicality * 100)}%`}).
+                    Pick diverse ({diverseTypicality === 0 ? 'off' : `${Math.round(diverseTypicality * 100)}%`}).
                   </p>
                   <button type="button" onClick={pickBalanced} disabled={balanceBusy}
-                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-60">
                     {balanceBusy ? 'Sampling…' : `Select ${balanceN}, balanced`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="relative">
+            <button type="button"
+              disabled={live || selected.size !== 1 || matchPersonBusy}
+              onClick={() => setCurateOpen((value) => (value === 'match' ? null : 'match'))}
+              aria-expanded={curateOpen === 'match'}
+              title={selected.size === 1
+                ? 'Auto-decide the whole bank against this one selected face: matches are kept; no-face and different-person shots are auto-rejected.'
+                : 'Select exactly one person’s face to use as the reference'}
+              className={CURATE_BTN}>
+              <UserRoundCheck aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />
+              Keep this person{matchPersonBusy && ' (matching…)'}
+            </button>
+            {curateOpen === 'match' && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
+                <div className="absolute z-50 mt-1 w-72 space-y-2 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl">
+                  <p className="text-xs text-content-muted">
+                    Scores every non-rejected image against your one selected face and auto-decides:
+                    matches are kept; no-face and different-person shots are auto-rejected. Only pending
+                    images are touched, so manual decisions are never overridden.
+                  </p>
+                  <label className="flex items-center gap-2 text-sm text-content">
+                    Similarity ≥
+                    <input type="number" min={0.2} max={0.9} step={0.05} value={matchThreshold}
+                      onChange={(event) => setMatchThreshold(
+                        Math.max(0.2, Math.min(0.9, Number(event.target.value) || 0.5)))}
+                      className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
+                  </label>
+                  <button type="button" onClick={keepThisPerson} disabled={matchPersonBusy}
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-60">
+                    {matchPersonBusy ? 'Matching…' : 'Auto-decide the bank'}
                   </button>
                 </div>
               </>
@@ -2193,7 +1920,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   ? `Rank the current filter against the ONE selected image with the ${semanticState.label} semantic index and select the closest N.`
                   : 'Select exactly one image to use as the reference'}
               className={CURATE_BTN}>
-              🎯 Similar to selected…{similarBusy && ' (ranking…)'}
+              <Target aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Similar to selected…{similarBusy && ' (ranking…)'}
             </button>
             {curateOpen === 'similar' && (
               <>
@@ -2211,42 +1938,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                       className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
                   </label>
                   <button type="button" onClick={findSimilar} disabled={similarBusy}
-                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-60">
                     {similarBusy ? 'Ranking…' : `Select ${similarN} most similar`}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-          <div className="relative">
-            <button type="button"
-              disabled={live || selected.size !== 1 || matchPersonBusy}
-              onClick={() => setCurateOpen((v) => (v === 'match' ? null : 'match'))}
-              aria-expanded={curateOpen === 'match'}
-              title={selected.size === 1
-                ? 'Auto-decide the whole bank against this one selected face: matches are kept; no-face and different-person shots are auto-rejected.'
-                : 'Select exactly one Liza face to use as the reference'}
-              className={CURATE_BTN}>
-              🎯 Keep this person{matchPersonBusy && ' (matching…)'}
-            </button>
-            {curateOpen === 'match' && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setCurateOpen(null)} aria-hidden />
-                <div className="absolute z-50 mt-1 w-72 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2">
-                  <p className="text-xs text-content-muted">
-                    Scores every non-rejected image against your one selected face (InsightFace identity — not the
-                    semantic index) and auto-decides: matches are kept; no-face and different-person shots are
-                    auto-rejected. Only 'pending' images are touched; your manual keep/reject is never overridden.
-                  </p>
-                  <label className="flex items-center gap-2 text-sm text-content">
-                    Similarity ≥
-                    <input type="number" min={0.2} max={0.9} step={0.05} value={matchThreshold}
-                      onChange={(e) => setMatchThreshold(Math.max(0.2, Math.min(0.9, Number(e.target.value) || 0.5)))}
-                      className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
-                  </label>
-                  <button type="button" onClick={keepThisPerson} disabled={matchPersonBusy}
-                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
-                    {matchPersonBusy ? 'Matching…' : 'Auto-decide the bank'}
                   </button>
                 </div>
               </>
@@ -2260,7 +1953,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 ? `Describe what you are looking for in words ("brunette outdoors, wide shot") and rank the current filter with ${semanticState.label}.`
                 : semanticBlocked}
               className={CURATE_BTN}>
-              🔤 Find by text…{!semanticReady && ` (needs ${semanticState.label})`}
+              <Type aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Find by text…{!semanticReady && ` (needs ${semanticState.label})`}
             </button>
             {curateOpen === 'text' && (
               <>
@@ -2275,7 +1968,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                     page is scrolled. So the vertical anchor is explicit, and the
                     sheet scrolls internally when the copy is long. From sm up it
                     behaves exactly like its two sibling popovers. */}
-                <div className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:max-h-none sm:w-80 sm:overflow-visible">
+                <div data-probe-chrome="curate-text" data-probe-panel="curate-text" data-probe-layer
+                  className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:max-h-none sm:w-80 sm:overflow-visible">
                   <p className="text-xs text-content-muted">
                     Ranks the <strong>current filter</strong> by how close each image is to your
                     words. It refines what the grid is showing — it does not search the whole bank.
@@ -2346,7 +2040,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   </p>
                   <button type="button" onClick={runTextSearch}
                     disabled={textPending || !textQuery.trim()}
-                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
+                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-50">
                     {textPending ? pendingLabel(textStatus) : `Rank the closest ${textN}`}
                   </button>
                 </div>
@@ -2360,7 +2054,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             aria-expanded={coverageOpen}
             title="See what your kept set leans on and what's thin for a good LoRA — advice only, nothing is kept or rejected."
             className={CURATE_BTN}>
-            📊 Coverage advice{coverageOpen ? ' ▲' : ' ▼'}
+            <BarChart3 aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Coverage advice{coverageOpen ? ' ▲' : ' ▼'}
           </button>
         </div>
 
@@ -2371,9 +2065,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             a screen reader hears the outcome — the grid change is silent. */}
         <div aria-live="polite">
           {textResult && (
-            <div className="mt-2 space-y-1 rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-2 text-xs text-content">
+            <div className="mt-2 space-y-1 rounded-lg border border-border bg-surface-raised px-3 py-2 text-xs text-content">
               <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
-                <span aria-hidden>🔤</span>
+                <Type aria-hidden="true" className="h-3.5 w-3.5" />
                 <span className="min-w-0 flex-1">
                   {summarize(textResult, semanticState.engine)}
                 </span>
@@ -2424,7 +2118,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               </ul>
               {balanceNotes(balanceResult).map((note, i) => (
                 <p key={i} className={note.tone === 'warn' ? 'text-amber-300/90' : 'text-content-subtle'}>
-                  {note.tone === 'warn' ? '⚠️ ' : '💡 '}{note.text}
+                  {note.tone === 'warn' ? <AlertTriangle aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" /> : <Lightbulb aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />}{note.text}
                 </p>
               ))}
             </div>
@@ -2564,6 +2258,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       {relocating && (
         <RelocateBankDialog bankId={bankId} bankName={payload?.name || `Bank #${bankId}`}
           sourcePath={payload?.source_path} onClose={() => setRelocating(false)}
+          onDone={() => { refreshPayload({ force: true }); refreshImages() }} />
+      )}
+
+      {forgettingMissing && (
+        <ForgetMissingDialog bankId={bankId} bankName={payload?.name || `Bank #${bankId}`}
+          onClose={() => setForgettingMissing(false)}
           onDone={() => { refreshPayload({ force: true }); refreshImages() }} />
       )}
     </div>

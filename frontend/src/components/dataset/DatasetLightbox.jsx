@@ -11,7 +11,9 @@
  * stability guarantees.
  */
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Flag as FlagIcon } from 'lucide-react';
 import RepairDialog from '../shared/RepairDialog';
+import CameraAnglePicker from '../shared/CameraAnglePicker';
 import KleinImproveNote from './KleinImproveNote';
 import { lightboxImproveButtons } from '../../utils/improveEngines';
 import { useCapabilities } from '../../context/CapabilitiesContext';
@@ -114,7 +116,7 @@ function ActionsHost({ sheet, open, panelId, label, closeRef, onDone, children }
         <h2 className="min-w-0 truncate text-sm font-semibold text-white">Image actions</h2>
         <button type="button" ref={closeRef} onClick={onDone}
           title="Close the actions panel (Esc)" aria-label="Close the actions panel"
-          className="min-h-9 shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20">
+          className="min-h-10 lg:min-h-9 shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20">
           Done
         </button>
       </div>
@@ -166,6 +168,11 @@ export default function DatasetLightbox({
   onMirror,
   onRotate,
   onImprove,
+  /* 📷 Re-shoot this image from other camera positions. Optional like the rest,
+     and the CALLER decides eligibility (datasetCameraRefusal) — same pattern as
+     onImprove, so a picture that cannot take it simply shows no button. Results
+     land as pending candidates of this dataset, not as edits of this file. */
+  onCameraAngles,
   // Opens the watermark mask editor on THIS image, flagged or not. Optional like
   // the rest: a caller that does not pass it simply shows no button.
   onMarkWatermark,
@@ -180,6 +187,17 @@ export default function DatasetLightbox({
   onRepair,
   onUndoRepair,
   busy = false,
+  // ✨ Improve is queue work, not a write on this image: `improve_existing_image`
+  // only refuses a candidate already in flight on THIS source, plus MAX_FANOUT.
+  // So it reads the improve-lane gate the grid's ✨ buttons read, not the
+  // conservative `busy` that guards crop/rotate/mirror/keep/reject (GitHub #44).
+  // Same action, same answer on both surfaces of one screen. Defaults to `busy`
+  // so a caller that passes neither keeps the old blanket.
+  improveBusy = undefined,
+  // Curating this image — keep/reject, crop, mirror, rotate, watermark, repair.
+  // Same gate the grid behind the lightbox uses, because it is the same action:
+  // one screen must not answer twice differently. Defaults to `busy`.
+  curationBusy = undefined,
   // The sentence a refused write shows (which pass holds this dataset, where it
   // is, what to do). Opening, zooming and comparing never consult it: they read
   // the same bytes the grid is already showing.
@@ -224,7 +242,7 @@ export default function DatasetLightbox({
      slot the guarantee is structural: a foreign stamp yields a fresh state, so
      moving image closes the comparison with no reset effect to get right. */
   const {
-    full, compareMode, improving, actionsOpen, repairOpen, deciding,
+    full, compareMode, improving, actionsOpen, repairOpen, cameraOpen, deciding,
   } = lightboxImageState(storedState, imageId);
   /* Which image is on screen when a setter actually RUNS — a ref, because the
      `finally` of an improve resolves long after the render that created its
@@ -274,7 +292,21 @@ export default function DatasetLightbox({
     if (nextImage && onNavigate) onNavigate(nextImage);
   }, [nextImage, onNavigate]);
   // A rail decided mid-rotation would move under the pointer that started it.
-  const actionsLocked = busy || mirrorBusy || improving || improvePending;
+  const curationRefused = (curationBusy ?? busy);
+  const curationRefusedReason = curationRefused ? busyReason : null;
+  // Same one-tile rule as the grid: an upscale of THIS image copied its source
+  // at enqueue, so editing the pixels now would send back an upscale of the
+  // version from before the edit.
+  const upscaleRendering = improvePending && !improveReady;
+  const pixelEditRefused = curationRefused || upscaleRendering;
+  const pixelEditReason = curationRefusedReason
+    || (upscaleRendering
+      ? 'An upscale of this image is still rendering — it would come back as an '
+        + 'upscale of the version from before your edit. It will be available '
+        + 'again once that result arrives.'
+      : null);
+  const refused = curationRefusedReason;
+  const actionsLocked = curationRefused || mirrorBusy || improving || improvePending;
   const [ratio, setRatio] = useState(() => readImageRatio(imageId));
   // Decided for the FIRST painted frame, not corrected by an effect afterwards:
   // with the ratio already known (the grid measured it) there is no frame in
@@ -363,6 +395,13 @@ export default function DatasetLightbox({
          zone. Escape-only was not enough: watermark review already returns on
          every key for the same reason, and the Bank does it for crop/mask. */
       if (repairOpen) return;
+      // 📷 The picker is a layer like ✦ Repair: while it is open, every key
+      // belongs to it — a stray R must not reject the picture behind the dial.
+      // Escape peels IT first, before the panel and before the lightbox.
+      if (cameraOpen) {
+        if (reviewKeyAction(e) === 'close') patchImageState({ cameraOpen: false });
+        return;
+      }
       const action = reviewKeyAction(e);
       /* Escape peels ONE layer: an open actions panel first, the lightbox only
          once it is closed. Closing everything at once would throw the user out
@@ -388,7 +427,8 @@ export default function DatasetLightbox({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onNavigate, onStatus, decide, prev, nextImage, panelOpen, closePanel, repairOpen]);
+  }, [onClose, onNavigate, onStatus, decide, prev, nextImage, panelOpen, closePanel,
+    repairOpen, cameraOpen, patchImageState]);
   useEffect(() => { closeRef.current?.focus(); }, []);
   /* No "close the comparison when the image changes" effect on purpose: the id
      stamp above already guarantees it, for BOTH comparison modes, without a
@@ -442,10 +482,10 @@ export default function DatasetLightbox({
      a user with a screenshot of exactly that). The wording, the gating and the
      per-engine disabled reasons all come from the shared pure module, so this
      surface can never drift from the toolbar's. */
-  const refused = busy ? busyReason : null;
   const improveButtons = onImprove
     ? lightboxImproveButtons({
-      caps, engines: caps?.engines, improving, improvePending, improveReady, busy,
+      caps, engines: caps?.engines, improving, improvePending, improveReady,
+      busy: (improveBusy ?? busy),
       busyReason,
     })
     : [];
@@ -461,9 +501,10 @@ export default function DatasetLightbox({
     }
   };
 
+
   const mirror = async (event) => {
     event.stopPropagation();
-    if (!onMirror || busy || mirrorBusy) return;
+    if (!onMirror || pixelEditRefused || mirrorBusy) return;
     await onMirror(img.id);
   };
 
@@ -472,18 +513,19 @@ export default function DatasetLightbox({
   // file, so neither may start while the other is in flight.
   const rotate = (degrees) => async (event) => {
     event.stopPropagation();
-    if (!onRotate || busy || mirrorBusy) return;
+    if (!onRotate || pixelEditRefused || mirrorBusy) return;
     await onRotate(img.id, degrees);
   };
 
   return (
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={`Inspect — ${alt}`}
+      data-probe-chrome="lightbox" data-probe-layer
       className={`fixed inset-0 z-[9996] bg-black/95 flex ${rail ? 'flex-row' : 'flex-col'}`}
       onClick={onClose}>
       <button type="button" ref={closeRef}
         onClick={(e) => { e.stopPropagation(); onClose(); }}
         title="Close (Esc)" aria-label="Close inspection"
-        className="absolute top-3 right-3 z-10 w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white text-lg leading-none">✕</button>
+        className="absolute top-3 right-3 z-10 w-10 h-10 lg:w-9 lg:h-9 rounded-full bg-white/10 hover:bg-white/20 text-white text-lg leading-none">✕</button>
 
       {/* The image area is the positioning context for ⟨ / ⟩ — NOT the dialog:
           in rail mode the dialog's right edge is the action rail, and an arrow
@@ -624,16 +666,16 @@ export default function DatasetLightbox({
              The keys are printed on the buttons AND spelled out below: a
              shortcut nobody can discover is folklore. */
           <div className={`flex items-stretch gap-2 ${rail ? 'w-full flex-col' : 'w-full sm:w-auto'}`}>
-            <button type="button" onClick={() => decide('keep')} disabled={deciding || busy}
+            <button type="button" onClick={() => decide('keep')} disabled={deciding || curationRefused}
               aria-label={refused || `Keep ${alt} and move to the next image`}
               title={refused || 'Keep this image and move on (K) — kept images are the ones captioned, exported and trained on'}
-              className="min-h-9 flex-1 rounded-lg border border-emerald-400/60 bg-emerald-500/20 px-4 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-45">
+              className="min-h-10 lg:min-h-9 flex-1 rounded-lg border border-emerald-400/60 bg-emerald-500/20 px-4 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-45">
               ✓ Keep<ShortcutKey>K</ShortcutKey>
             </button>
-            <button type="button" onClick={() => decide('reject')} disabled={deciding || busy}
+            <button type="button" onClick={() => decide('reject')} disabled={deciding || curationRefused}
               aria-label={refused || `Reject ${alt} and move to the next image`}
               title={refused || 'Reject this image and move on (R) — reversible, and nothing is deleted from disk'}
-              className="min-h-9 flex-1 rounded-lg border border-rose-400/60 bg-rose-500/20 px-4 py-1.5 text-xs font-semibold text-rose-100 hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-45">
+              className="min-h-10 lg:min-h-9 flex-1 rounded-lg border border-rose-400/60 bg-rose-500/20 px-4 py-1.5 text-xs font-semibold text-rose-100 hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-45">
               ✕ Reject<ShortcutKey>R</ShortcutKey>
             </button>
             <button type="button" onClick={skipImage} disabled={!nextImage || !onNavigate}
@@ -643,7 +685,7 @@ export default function DatasetLightbox({
               title={nextImage
                 ? 'Decide later (S) — moves on and leaves this image exactly as it is'
                 : nav.nextReason || 'There is no next image to skip to'}
-              className="min-h-9 flex-1 rounded-lg border border-white/25 px-4 py-1.5 text-xs font-semibold text-white hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-45">
+              className="min-h-10 lg:min-h-9 flex-1 rounded-lg border border-white/25 px-4 py-1.5 text-xs font-semibold text-white hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-45">
               ⏭ Skip<ShortcutKey>S</ShortcutKey>
             </button>
           </div>
@@ -660,7 +702,7 @@ export default function DatasetLightbox({
               ? `Hide the original next to ${alt}`
               : `Show the original next to ${alt}`}
             title={COMPARE_HELP}
-            className="min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-indigo-400/50 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-100 text-xs font-semibold">
+            className="min-h-10 lg:min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-indigo-400/50 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-100 text-xs font-semibold">
             {compareMode === 'derived' ? '⊟ Exit comparison' : '⧉ Compare with original'}
           </button>
         )}
@@ -677,7 +719,7 @@ export default function DatasetLightbox({
               ? `Hide the reference photo next to ${alt}`
               : `Show the reference photo next to ${alt}`}
             title={REFERENCE_COMPARE_HELP}
-            className="min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-sky-400/50 bg-sky-500/20 hover:bg-sky-500/30 text-sky-100 text-xs font-semibold">
+            className="min-h-10 lg:min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-sky-400/50 bg-sky-500/20 hover:bg-sky-500/30 text-sky-100 text-xs font-semibold">
             {compareMode === 'reference' ? '⊟ Exit comparison' : '◐ Compare with reference'}
           </button>
         )}
@@ -697,10 +739,10 @@ export default function DatasetLightbox({
           </span>
         )}
         {onCrop && (
-          <button type="button" onClick={() => onCrop(img)} disabled={busy}
-            title={refused || 'Open the crop editor for this image (stretchable box, any ratio)'}
-            aria-label={refused || 'Open the crop editor for this image'}
-            className="min-h-9 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+          <button type="button" onClick={() => onCrop(img)} disabled={pixelEditRefused}
+            title={pixelEditReason || 'Open the crop editor for this image (stretchable box, any ratio)'}
+            aria-label={pixelEditReason || 'Open the crop editor for this image'}
+            className="min-h-10 lg:min-h-9 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
             ✂ Crop
           </button>
         )}
@@ -711,11 +753,11 @@ export default function DatasetLightbox({
             the image. Hidden on an already-cleaned row — those pixels are gone,
             and ↩ Undo is the way back. */}
         {onMarkWatermark && img?.watermark_state !== 'cleaned' && (
-          <button type="button" onClick={() => onMarkWatermark(img)} disabled={busy}
+          <button type="button" onClick={() => onMarkWatermark(img)} disabled={curationRefused}
             title={refused || 'Draw the watermark zones on this image — works even when the scan found nothing. What you draw becomes the flag, and 🧽 Clean then repaints exactly that.'}
             aria-label={refused || watermarkMaskButtonLabel(img)}
-            className="min-h-9 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
-            🚩 {watermarkMaskButtonLabel(img)}
+            className="min-h-10 lg:min-h-9 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+            <FlagIcon aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />{watermarkMaskButtonLabel(img)}
           </button>
         )}
         {/* ✦ TWO INTENTIONS, TWO BUTTONS — AND NOW TWO DESTINATIONS. 🚩 above
@@ -725,21 +767,21 @@ export default function DatasetLightbox({
             only the area you pointed at changes. They shared one destination
             until now, which made the pair look like a duplicate. */}
         {onRepair && (
-          <button type="button" onClick={() => patchImageState({ repairOpen: true })} disabled={busy}
+          <button type="button" onClick={() => patchImageState({ repairOpen: true })} disabled={curationRefused}
             title={refused || 'Repaint part of this image from your own description — draw a box or paint over the thing with the brush, say what should be there ("remove the necklace"), and everything outside it stays byte-identical.'}
             aria-label={refused || 'Repair an area of this image'}
-            className="min-h-9 px-3 py-1.5 rounded-lg bg-sky-500/25 hover:bg-sky-500/35 text-sky-50 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+            className="min-h-10 lg:min-h-9 px-3 py-1.5 rounded-lg bg-sky-500/25 hover:bg-sky-500/35 text-sky-50 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
             ✦ Repair
           </button>
         )}
         {onMirror && (
-          <button type="button" onClick={mirror} disabled={busy || mirrorBusy}
+          <button type="button" onClick={mirror} disabled={pixelEditRefused || mirrorBusy}
             aria-busy={mirrorBusy}
-            aria-label={refused
+            aria-label={pixelEditReason
               || (mirrorBusy ? `Mirroring ${alt} horizontally` : `Mirror ${alt} horizontally`)}
             title={refused
               || (mirrorBusy ? 'Mirroring horizontally…' : 'Mirror horizontally (flip left and right)')}
-            className="min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+            className="min-h-10 lg:min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
             {mirrorBusy ? '⇆ Mirroring…' : '⇆ Mirror horizontally'}
           </button>
         )}
@@ -751,19 +793,19 @@ export default function DatasetLightbox({
              reading as a different kind of control than their neighbours.
              Emoji stay aria-hidden — the label is the text. */
           <div className={`flex items-stretch gap-2 ${rail ? 'w-full' : 'w-full sm:w-auto'}`}>
-            <button type="button" onClick={rotate(270)} disabled={busy || mirrorBusy}
-              aria-busy={mirrorBusy} aria-label={refused || `Rotate ${alt} 90 degrees left`}
-              title={refused
+            <button type="button" onClick={rotate(270)} disabled={pixelEditRefused || mirrorBusy}
+              aria-busy={mirrorBusy} aria-label={pixelEditReason || `Rotate ${alt} 90 degrees left`}
+              title={pixelEditReason
                 || "Rotate 90° left (counter-clockwise) — keeps the file's format; four turns come back round"}
-              className={`min-h-9 flex-1 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45 ${
+              className={`min-h-10 lg:min-h-9 flex-1 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45 ${
                 rail ? '' : 'sm:flex-none'}`}>
               <span aria-hidden="true">↺</span> Rotate left
             </button>
-            <button type="button" onClick={rotate(90)} disabled={busy || mirrorBusy}
-              aria-busy={mirrorBusy} aria-label={refused || `Rotate ${alt} 90 degrees right`}
-              title={refused
+            <button type="button" onClick={rotate(90)} disabled={pixelEditRefused || mirrorBusy}
+              aria-busy={mirrorBusy} aria-label={pixelEditReason || `Rotate ${alt} 90 degrees right`}
+              title={pixelEditReason
                 || "Rotate 90° right (clockwise) — keeps the file's format; four turns come back round"}
-              className={`min-h-9 flex-1 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45 ${
+              className={`min-h-10 lg:min-h-9 flex-1 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45 ${
                 rail ? '' : 'sm:flex-none'}`}>
               <span aria-hidden="true">↻</span> Rotate right
             </button>
@@ -774,7 +816,7 @@ export default function DatasetLightbox({
             <button type="button"
               onClick={improve(btn.id, btn.disabled)} disabled={btn.disabled}
               aria-busy={improvementActive} title={btn.title}
-              className="min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-indigo-400/50 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-100 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+              className="min-h-10 lg:min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-indigo-400/50 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-100 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
               {btn.label}
             </button>
             {/* Klein's note goes BETWEEN the two buttons in the rail, and only
@@ -795,6 +837,20 @@ export default function DatasetLightbox({
             )}
           </Fragment>
         ))}
+        {/* 📷 With the improve group because it answers the same question from
+            the other side: ✨ makes THIS picture better, 📷 makes MORE pictures
+            of this scene. The results are new pending candidates, so the button
+            must not read as an edit of the file on screen — the title says
+            where they land. */}
+        {onCameraAngles && (
+          <button type="button" data-testid="dataset-camera-angles"
+            onClick={(e) => { e.stopPropagation(); patchImageState({ cameraOpen: true }); }}
+            disabled={actionsLocked}
+            title="Re-shoot this scene from other camera positions — the views arrive as new pending candidates of this dataset, with the angle already in the caption"
+            className="min-h-10 lg:min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-indigo-400/50 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-100 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
+            <span aria-hidden>📷</span> Camera angles
+          </button>
+        )}
         {/* Bottom bar only: the note takes its OWN line under the buttons.
             `sm:w-auto` used to let it sit INLINE beside them, which was fine
             with a single improve button and is not with two — the paragraph
@@ -827,6 +883,17 @@ export default function DatasetLightbox({
         onClose={() => patchImageState({ repairOpen: false })}
         onSubmit={({ boxes, mask, prompt }) => onRepair(img.id, prompt, boxes, mask)}
         onUndo={onUndoRepair ? () => onUndoRepair(img.id) : null} />
+      {/* 📷 Above the lightbox (its z-index outranks this dialog's), so the
+          picture stays visible behind the dial while positions are chosen —
+          picking an angle of something you cannot see is guesswork. */}
+      {cameraOpen && onCameraAngles && (
+        <CameraAnglePicker
+          onClose={() => patchImageState({ cameraOpen: false })}
+          onShoot={async (poses) => {
+            const ok = await onCameraAngles(img.id, poses);
+            if (ok) patchImageState({ cameraOpen: false });
+          }} />
+      )}
     </div>
   );
 }

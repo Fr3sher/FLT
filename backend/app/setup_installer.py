@@ -211,14 +211,82 @@ _SEEDVR2_DOWNLOADS = {
     },
 }
 
+# 📷 Camera angles — the weights that move the CAMERA rather than the subject.
+#
+# WHY A SECOND BASE MODEL AT ALL, when a 9 GB one is already installed. Measured
+# on this repo's own Klein lane (2026-08-25, one reference, seed held constant):
+# asked for a profile or a back view, Klein turns the PERSON and leaves the room
+# exactly where it was — every phrasing tried, English, an explicit "only the
+# photographer moves", the Chinese cinematography terms, with and without the
+# one camera LoRA that exists for Klein 9B. The backdrop delta stayed at 11-14
+# (noise) against 64-80 for a real viewpoint change. The Qwen LoRA below was
+# trained on 3000+ gaussian-splatting renders — pairs where the subject cannot
+# move and the background must — and reaches 64-80 on all eight angles tried.
+# That inversion is the feature; it is not reachable by prompting harder.
+#
+# URL survey 2026-08-26 (anonymous HTTP HEAD, no token): all four answer 200 and
+# the signed CDN URL carries `user_id=public` — none is access-gated. The
+# 401/403 recovery path is kept anyway, like every other catalog here: a
+# measurement is a photograph of one moment.
+#
+# NOT LISTED, on purpose: the Qwen image VAE. `krea_vae` above already installs
+# the identical file to the identical destination — a second key for the same
+# bytes would put the same gigabyte on the Setup screen twice and let two copies
+# drift. services/qwen_camera_helper.CAMERA_VAE_ACTION names that button instead.
+#
+# `dest[0]` is 'diffusion_models' for the model and 'loras' for the adapters,
+# both under a `qwen/` subfolder — the same shape the Klein and Krea lanes use,
+# and what qwen_camera_helper._scan looks for first.
+_CAMERA_DOWNLOADS = {
+    'camera_model': {
+        'url': 'https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors',
+        'dest': ('diffusion_models', 'qwen', 'qwen_image_edit_2511_fp8mixed.safetensors'),
+        'min_free_gb': 25, 'gated': False, 'min_bytes': 4 * 1024 ** 3,
+        'license_url': 'https://huggingface.co/Qwen/Qwen-Image-Edit-2511',
+    },
+    # The lane's REASON. Without it the base model still edits, it just answers
+    # `<sks>` the way any edit model does — by turning the subject. A camera view
+    # that silently has no camera in it would look like a success, which is why
+    # qwen_camera_helper lists this one as REQUIRED, not recommended.
+    'camera_lora': {
+        'url': 'https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/resolve/main/qwen-image-edit-2511-multiple-angles-lora.safetensors',
+        'dest': ('loras', 'qwen', 'Qwen-Image-Edit-2511-Multiple-Angles.safetensors'),
+        'min_free_gb': 2, 'gated': False, 'min_bytes': 32 * 1024 ** 2,
+        'license_url': 'https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA',
+    },
+    # Speed only, and genuinely optional: absent, the lane raises its own step
+    # count (STEPS_WITHOUT_SPEED_LORA) and renders correctly, about five times
+    # slower. Keeping 4 steps without it would render noise — which is why the
+    # step count and this file are decided in the same place.
+    'camera_speed_lora': {
+        'url': 'https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors',
+        'dest': ('loras', 'qwen', 'Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors'),
+        'min_free_gb': 3, 'gated': False, 'min_bytes': 128 * 1024 ** 2,
+        'license_url': 'https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning',
+    },
+    # ⚠️ A THIRD Qwen text encoder, and the three are NOT interchangeable:
+    # qwen_3_8b_fp8mixed is Klein's, qwen3vl_4b_fp8_scaled is Z-Image/Krea's,
+    # and this 2.5-VL 7B build is Qwen-Image-Edit's. They share a folder and a
+    # prefix; a resolver matching a bare 'qwen' picks the wrong one and the
+    # sampler dies on a shape mismatch. Canonical name first, narrow token after
+    # — see qwen_camera_helper.resolve_camera_text_encoder.
+    'camera_text_encoder': {
+        'url': 'https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors',
+        'dest': ('text_encoders', 'qwen_2.5_vl_7b_fp8_scaled.safetensors'),
+        'min_free_gb': 12, 'gated': False, 'min_bytes': 1024 ** 3,
+        'license_url': 'https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI',
+    },
+}
+
 # Every streamed model download, whatever engine it belongs to. The worker,
 # destination resolution, disk precondition and extra_model_paths de-duplication
 # are engine-agnostic; only the catalog entries differ.
-_MODEL_DOWNLOADS = {**_KLEIN_DOWNLOADS, **_KREA_DOWNLOADS, **_SEEDVR2_DOWNLOADS}
+_MODEL_DOWNLOADS = {**_KLEIN_DOWNLOADS, **_KREA_DOWNLOADS, **_SEEDVR2_DOWNLOADS,
+                    **_CAMERA_DOWNLOADS}
 
-# Custom-node packs the app can install itself. THE ONLY ONE TODAY — and the
-# first git-cloned dependency this app installs at all, so the rules are written
-# down rather than implied:
+# Custom-node packs the app can install itself. The first git-cloned
+# dependencies this app installs at all, so the rules are written down rather
+# than implied:
 #   * the URL is a CONSTANT here, never derived from user input, and the clone
 #     runs as an argument list (no shell) with a timeout;
 #   * the destination is <validated ComfyUI>/custom_nodes/<folder> — resolved
@@ -239,6 +307,19 @@ _NODE_PACKS = {
         'repo': 'https://github.com/lbouaraba/comfyui-krea2edit',
         'zip': 'https://codeload.github.com/lbouaraba/comfyui-krea2edit/zip/refs/heads/main',
         'folder': 'comfyui-krea2edit',
+    },
+    # LanPaint: the training-free inpainting sampler the masked Repair lane
+    # runs on (services/lanpaint_helper explains why it replaced
+    # InpaintModelConditioning — GitHub #43). GPL-3.0, like ComfyUI itself and
+    # installed the same way every ComfyUI custom node is: into the USER'S
+    # ComfyUI, at their click. pyproject declares zero dependencies (checked
+    # 2026-08-25, v2.1.0), so a clone is enough — same contract as the pack
+    # above.
+    'lanpaint_nodes': {
+        'pack': 'LanPaint',
+        'repo': 'https://github.com/scraed/LanPaint',
+        'zip': 'https://codeload.github.com/scraed/LanPaint/zip/refs/heads/master',
+        'folder': 'LanPaint',
     },
 }
 
@@ -439,10 +520,29 @@ def _new_run():
 
 
 def _append(action, line):
-    log = _runs[action]['log']
+    # A worker thread can outlive its registry entry: the tests reset _runs
+    # between cases while a download thread is still draining, and clearing
+    # runs mid-flight is one registry write away in prod too. A cleared entry
+    # means nobody is watching this run any more — drop the line rather than
+    # killing the thread (the CI's recurring `KeyError: 'seedvr2_model'`
+    # warning was this, raised from the error handler's own _append).
+    run = _runs.get(action)
+    if run is None:
+        return
+    log = run['log']
     log.append(line.rstrip('\n'))
     if len(log) > _LOG_MAX:
         del log[:-_LOG_MAX]
+
+
+def _finish_run(action, returncode, state):
+    """Stamp a worker's final state, tolerating an entry cleared under it —
+    same contract as _append, for the same orphaned-thread reason."""
+    run = _runs.get(action)
+    if run is None:
+        return
+    run['returncode'] = returncode
+    run['state'] = state
 
 
 def _note(action, line):
@@ -559,16 +659,44 @@ def _app_pillow_spec() -> str:
     return spec if spec.lower() != 'pillow' else 'Pillow>=10'
 
 
-def _is_flask_venv(python: str) -> bool:
-    """True only when `python` is the app's own interpreter path.
+def _venv_root(python: str) -> str:
+    """The venv directory that OWNS `python` (its grandparent, when a pyvenv.cfg
+    marks it as one), resolved and case-normalised — or '' for a non-venv path.
 
-    Do not use :func:`os.path.samefile`: POSIX virtualenv launchers commonly
-    symlink to their base binary, which would misclassify every managed venv as
-    the Flask runtime and block its dedicated installer.  Normalize the logical
-    paths instead; this stays case-insensitive on Windows.
-    """
-    return (os.path.normcase(os.path.abspath(python))
-            == os.path.normcase(os.path.abspath(sys.executable)))
+    This is the identity that matters when two interpreter paths are compared:
+    on Linux a venv's bin/python is a SYMLINK to the base interpreter, so
+    resolving the BINARY (os.path.samefile) answers "same base Python?", never
+    "same environment?". Every venv on the machine then collapses into one —
+    which is how the Flask-venv guard mistook the app-managed bank-scoring env
+    for the app's own venv inside the GPU Docker image and refused installs that
+    were the whole point of the button. The DIRECTORY is still resolved (a data
+    dir reached through a mount symlink must match itself); only the binary is
+    taken at face value. Conda envs carry no pyvenv.cfg and return '', keeping
+    their comparisons on the old samefile path. Never raises."""
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(python or '')))
+        if root and os.path.isfile(os.path.join(root, 'pyvenv.cfg')):
+            return os.path.normcase(os.path.realpath(root))
+    except OSError:
+        pass
+    return ''
+
+
+def _is_flask_venv(python: str) -> bool:
+    """True when `python` resolves to the app's OWN interpreter (the Flask venv) —
+    the environment whose Pillow must never be downgraded. Compares ENVIRONMENTS,
+    not binaries (see _venv_root): two venvs are the same only when they are the
+    same directory, and a venv is never the same environment as a bare system
+    Python, even the one it was built from. Case/separator-insensitive on
+    Windows; never raises."""
+    own, other = _venv_root(sys.executable), _venv_root(python)
+    if own or other:
+        return bool(own) and bool(other) and own == other
+    try:
+        return os.path.samefile(python, sys.executable)
+    except OSError:
+        return (os.path.normcase(os.path.abspath(python))
+                == os.path.normcase(os.path.abspath(sys.executable)))
 
 
 def _flask_pillow_guard(python: str) -> list:
@@ -648,14 +776,14 @@ def manual_command(action) -> str:
         # test_requirements_ml_floors_transformers_for_qwen3vl).
         python = _bank_scoring_env_python()
         pkgs = ' '.join(f'"{s}"' for s in _bank_scoring_specs())
-        return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
+        return (f'{_quote(python)} -m pip install torch torchvision --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install {pkgs}')
     if action == 'shot_detect':
         # One line, and no weights step: transnetv2-pytorch carries its own inside
         # the wheel. Targets the scoring environment because of torch.
         python = (cfg.get('shot_detect.python') or cfg.get('bank_scoring.python')
                   or _bank_scoring_env_python())
-        return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
+        return (f'{_quote(python)} -m pip install torch torchvision --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install '
                 f'"{_requirement_spec("transnetv2-pytorch")}" "{_requirement_spec("av")}"')
     if action == 'bank_siglip2':
@@ -672,7 +800,7 @@ def manual_command(action) -> str:
             f"d(repo_id='{assets.MODEL_ID}', filename='{name}', "
             f"revision='{assets.REVISION}', cache_dir=r'{root}')"
             for name in assets.FILES)
-        return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
+        return (f'{_quote(python)} -m pip install torch torchvision --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install "transformers>=4.49" '
                 f'huggingface_hub safetensors sentencepiece Pillow  &&  '
                 f'{_quote(python)} -c "from huggingface_hub import hf_hub_download as d; '
@@ -690,7 +818,7 @@ def manual_command(action) -> str:
                         for name in meta['files'])
             + '"'
             for repo, meta in watermark_detector.MODEL_FILES.items())
-        return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
+        return (f'{_quote(python)} -m pip install torch torchvision --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install transformers huggingface_hub '
                 f'safetensors  &&  {pulls}')
     if action == 'ollama_model':
@@ -975,6 +1103,14 @@ _INSTALL_GROUPS = {
     'krea': ('krea_nodes', 'krea_model', 'krea_text_encoder', 'krea_vae',
              'krea_identity_lora'),
     'seedvr2': ('seedvr2_model', 'seedvr2_vae'),
+    # 📷 Camera angles — the Gallery's re-shoot lane. No node pack (the graph is
+    # stock ComfyUI nodes only, asserted by test_workflow_portability), so like
+    # SeedVR2 it is weights-only. `krea_vae` is a member ON PURPOSE: the lane
+    # runs on the same Qwen VAE the Krea 2 lane installs, and
+    # qwen_camera_helper.camera_missing_assets reports it under that key — one
+    # file, one action, whichever engine asks for it first.
+    'camera': ('camera_model', 'camera_lora', 'camera_speed_lora',
+               'camera_text_encoder', 'krea_vae'),
 }
 
 # Which capabilities keys hold each group's gaps, and which member (if any) is
@@ -987,6 +1123,12 @@ _GROUP_CAPS_KEYS = {
     'seedvr2': {'missing': 'seedvr2_missing', 'invalid': 'seedvr2_invalid',
                 'pack_action': None, 'nodes_missing': 'seedvr2_nodes_missing',
                 'nodes_installed': 'seedvr2_nodes_installed'},
+    # No integrity lane yet (`camera_invalid` is not a capability): the key is
+    # named anyway so _broken_or_missing reads None today and the verdicts the
+    # day the validator learns these files — same shape as the others, no branch.
+    'camera': {'missing': 'camera_missing', 'invalid': 'camera_invalid',
+               'pack_action': None, 'nodes_missing': None,
+               'nodes_installed': None},
 }
 
 
@@ -1056,8 +1198,7 @@ def status_many(actions) -> dict:
 def _execute(action):
     try:
         rc = _WORKERS[action](action)
-        _runs[action]['returncode'] = rc
-        _runs[action]['state'] = 'success' if rc == 0 else 'error'
+        _finish_run(action, rc, 'success' if rc == 0 else 'error')
         if action in _IMPORT_CACHE_ACTIONS and rc == 0:
             try:
                 capabilities.clear_import_cache()
@@ -1089,19 +1230,25 @@ def _execute(action):
             except Exception:
                 logger.debug('clear_model_caches failed after %s', action, exc_info=True)
         if action in _NODE_PACKS and rc == 0:
+            # Both node caches only ever hold a POSITIVE answer, so clearing
+            # them regardless of which pack just landed costs one probe each
+            # and can never turn a present pack into a missing one.
             try:
                 from .services import krea_edit_helper
                 krea_edit_helper.clear_nodes_cache()
             except Exception:
                 logger.debug('krea node-cache clear failed after %s', action, exc_info=True)
+            try:
+                from .services import lanpaint_helper
+                lanpaint_helper.clear_nodes_cache()
+            except Exception:
+                logger.debug('lanpaint node-cache clear failed after %s', action, exc_info=True)
     except Cancelled:
         _append(action, 'cancelled by user')
-        _runs[action]['returncode'] = None
-        _runs[action]['state'] = 'cancelled'
+        _finish_run(action, None, 'cancelled')
     except Exception as e:  # never let a worker thread die silently
         _append(action, f'error: {e}')
-        _runs[action]['returncode'] = -1
-        _runs[action]['state'] = 'error'
+        _finish_run(action, -1, 'error')
     finally:
         # Always hand the pip worker to the next queued install, even on failure — a
         # crashed install must not wedge the queue behind it.
@@ -1220,6 +1367,31 @@ _TORCH_CPU_INDEX = 'https://download.pytorch.org/whl/cpu'
 _WARM_IMPORT_TIMEOUT = 300
 
 
+def _install_cpu_torch_pair(action, python, *, constraint=False) -> int:
+    """Install torch AND torchvision together from _TORCH_CPU_INDEX into a managed
+    environment. Always the PAIR, never torch alone: the stacks that land in these
+    envs afterwards (open_clip_torch, timm, simple-lama-inpainting) depend on
+    torchvision, and left to pip that torchvision resolves from PyPI — where the
+    Linux wheel is built against a DIFFERENT torch than the CPU-index one already
+    present. The mismatch imports into `RuntimeError: operator torchvision::nms
+    does not exist` and the whole env is unusable (reported from the GPU Docker
+    image, whose rebuilt bank-scoring env failed exactly this way; Dockerfile.gpu
+    names the same trap for the image venv and pairs them for the same reason).
+    Windows never surfaced it because PyPI's Windows torchvision wheels are CPU
+    builds. One index, both names: pip resolves a matched pair, and the call is a
+    no-op when a matched pair is already there."""
+    _append(action, 'installing CPU torch + torchvision '
+                    '(download.pytorch.org/whl/cpu) if needed')
+    cmd = [python, '-m', 'pip', 'install', 'torch', 'torchvision',
+           '--index-url', _TORCH_CPU_INDEX]
+    if constraint:
+        cmd += ['-c', str(_ML_REQUIREMENTS)]
+    rc = _run_pip(action, cmd)
+    if rc != 0:
+        _append(action, f'torch install failed (rc={rc}) — see the log above')
+    return rc
+
+
 def _watermark_env_dir():
     """The app-managed watermark venv directory (deterministic, under the data dir), so
     a re-click resolves the SAME venv — idempotent build/repair, never a duplicate."""
@@ -1237,8 +1409,15 @@ def _watermark_env_python() -> str:
 
 
 def _same_path(a, b) -> bool:
-    """True when two paths point at the same interpreter. samefile when both exist,
-    else a case/separator-insensitive compare (so a not-yet-built venv path matches)."""
+    """True when two paths point at the same interpreter ENVIRONMENT. Venv pythons
+    compare by the venv directory that owns them (see _venv_root) — never by
+    resolving the binary, which on Linux collapses every venv into its symlinked
+    base and made a borrowed interpreter indistinguishable from the managed env.
+    Non-venv paths keep samefile when both exist, else a case/separator-insensitive
+    compare (so a not-yet-built venv path matches)."""
+    ra, rb = _venv_root(a or ''), _venv_root(b or '')
+    if ra or rb:
+        return bool(ra) and bool(rb) and ra == rb
     try:
         return os.path.samefile(a, b)
     except OSError:
@@ -1387,11 +1566,10 @@ def _pip_install_watermark(action, python, *, managed: bool) -> int:
     spec = _requirement_spec(_WATERMARK_PKG)
     _append(action, f'target interpreter: {python}')
     if managed:
-        _append(action, 'installing CPU torch (download.pytorch.org/whl/cpu)')
-        rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
-                               '--index-url', _TORCH_CPU_INDEX, '-c', str(_ML_REQUIREMENTS)])
+        # simple-lama-inpainting depends on torchvision, so the pair matters here
+        # exactly as it does for the bank-scoring stack (see _install_cpu_torch_pair).
+        rc = _install_cpu_torch_pair(action, python, constraint=True)
         if rc != 0:
-            _append(action, f'torch install failed (rc={rc}) — see the log above')
             return rc
     _append(action, f'installing {spec}  (constraints: requirements-ml.txt)')
     return _run_pip(action, [python, '-m', 'pip', 'install', spec, '-c', str(_ML_REQUIREMENTS)])
@@ -1573,11 +1751,8 @@ def _run_bank_scoring(action) -> int:
         _append(action, 'Install/repair targets only the LDS-managed environment below.')
     # Past this point the target is always the app-managed venv.
     _append(action, f'target interpreter: {python}')
-    _append(action, 'installing CPU torch (download.pytorch.org/whl/cpu)')
-    rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
-                           '--index-url', _TORCH_CPU_INDEX])
+    rc = _install_cpu_torch_pair(action, python)
     if rc != 0:
-        _append(action, f'torch install failed (rc={rc}) — see the log above')
         return rc
     specs = _bank_scoring_specs()
     _append(action, f"installing {', '.join(specs)}")
@@ -1671,9 +1846,7 @@ def _run_bank_siglip2(action) -> int:
         _append(action, 'Install/repair targets only the LDS-managed environment below.')
 
     _append(action, f'target interpreter: {python}')
-    _append(action, 'installing CPU torch if needed (the GPU-Python picker remains available)')
-    rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
-                           '--index-url', _TORCH_CPU_INDEX])
+    rc = _install_cpu_torch_pair(action, python)
     if rc != 0:
         return rc
     rc = _run_pip(action, [python, '-m', 'pip', 'install',
@@ -1777,11 +1950,8 @@ def _run_watermark_detect(action) -> int:
             _append(action, line)
         return 1
     _append(action, f'target interpreter: {python}')
-    _append(action, 'installing CPU torch (download.pytorch.org/whl/cpu) if needed')
-    rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
-                           '--index-url', _TORCH_CPU_INDEX])
+    rc = _install_cpu_torch_pair(action, python)
     if rc != 0:
-        _append(action, f'torch install failed (rc={rc}) — see the log above')
         return rc
     rc = _run_pip(action, [python, '-m', 'pip', 'install', 'transformers',
                            'huggingface_hub', 'safetensors'])
@@ -2749,11 +2919,8 @@ def _run_shot_detect(action) -> int:
             _append(action, line)
         return 1
     _append(action, f'target interpreter: {python}')
-    _append(action, 'installing CPU torch (download.pytorch.org/whl/cpu) if needed')
-    rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
-                           '--index-url', _TORCH_CPU_INDEX])
+    rc = _install_cpu_torch_pair(action, python)
     if rc != 0:
-        _append(action, f'torch install failed (rc={rc}) — see the log above')
         return rc
     # av rides along because the WORKER decodes with PyAV in this same
     # environment (infer/shot_detect_infer.py imports av before torch sees a

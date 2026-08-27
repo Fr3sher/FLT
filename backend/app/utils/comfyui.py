@@ -126,47 +126,6 @@ def api_address() -> str:
     return cfg.get('comfyui.api_url')
 
 
-# --- Circuit breaker for ComfyUI history polling ---
-# Exponential backoff: each time 3 consecutive failures trip the circuit,
-# the open window doubles (30s -> 60s -> 120s -> 240s cap). A successful call
-# (counter reset) also resets the backoff window to 30s.
-_COMFYUI_CIRCUIT_INITIAL_S = 30
-_COMFYUI_CIRCUIT_MAX_S = 240
-_COMFYUI_CIRCUIT_FAIL_THRESHOLD = 3
-
-_comfyui_consecutive_failures = 0
-_comfyui_circuit_open_until = 0
-_comfyui_circuit_next_window_s = _COMFYUI_CIRCUIT_INITIAL_S
-
-
-def _check_comfyui_circuit():
-    """Check if the ComfyUI circuit breaker allows a request."""
-    global _comfyui_circuit_open_until
-    if time.time() < _comfyui_circuit_open_until:
-        return False  # Circuit is open, skip call
-    return True
-
-
-def _record_comfyui_failure():
-    """Record a ComfyUI call failure; open the circuit with exponential backoff if threshold reached."""
-    global _comfyui_consecutive_failures, _comfyui_circuit_open_until, _comfyui_circuit_next_window_s
-    _comfyui_consecutive_failures += 1
-    if _comfyui_consecutive_failures >= _COMFYUI_CIRCUIT_FAIL_THRESHOLD:
-        window = _comfyui_circuit_next_window_s
-        _comfyui_circuit_open_until = time.time() + window
-        logger.warning(
-            f"ComfyUI circuit breaker opened for {window}s "
-            f"after {_comfyui_consecutive_failures} consecutive failures"
-        )
-        # Double the next window for the *next* open, capped.
-        _comfyui_circuit_next_window_s = min(window * 2, _COMFYUI_CIRCUIT_MAX_S)
-
-
-def _record_comfyui_success():
-    """Reset failure counter and backoff window after a successful call."""
-    global _comfyui_consecutive_failures, _comfyui_circuit_next_window_s
-    _comfyui_consecutive_failures = 0
-    _comfyui_circuit_next_window_s = _COMFYUI_CIRCUIT_INITIAL_S
 
 
 # --- Per-model optimal sampler/scheduler parameters (SDXL dropdown only) ---
@@ -276,19 +235,6 @@ def _load_sampler_params_overrides() -> dict:
     except (ValueError, OSError) as e:
         logger.warning(f"sampler_params.json invalid or unreadable: {e}; using code defaults")
         return {}
-
-
-def save_sampler_params_overrides(overrides: dict) -> None:
-    """Persist admin overrides to `sampler_params.json` (atomic write).
-
-    Raises OSError on disk failure. The admin endpoint should let those
-    propagate as a 500 so the operator sees the real cause.
-    """
-    import json
-    tmp_path = _SAMPLER_PARAMS_JSON_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(overrides, f, indent=2, ensure_ascii=False)
-    os.replace(tmp_path, _SAMPLER_PARAMS_JSON_PATH)
 
 
 def get_effective_sampler_params() -> dict:
@@ -457,6 +403,26 @@ def _ensure_comfyui_before_generation():
         return None
 
 
+def _request_never_sent(exc) -> bool:
+    """True when this requests exception PROVES no request reached the server.
+
+    Only two shapes qualify. A connect timeout: the TCP handshake never
+    finished. A ConnectionError whose urllib3 reason is NewConnectionError (or
+    a connect-phase timeout): the socket was refused or unroutable. Everything
+    else — read timeouts, resets, protocol errors — can postdate an accepted
+    POST and must keep flowing into the unknown-submit recovery barrier.
+    Checked by type name so no urllib3 import is pinned here; both names are
+    stable public urllib3 exceptions."""
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return True
+    if isinstance(exc, requests.exceptions.ConnectionError) \
+            and not isinstance(exc, requests.exceptions.ReadTimeout):
+        inner = exc.args[0] if getattr(exc, 'args', None) else None
+        reason = getattr(inner, 'reason', None)
+        return type(reason).__name__ in ('NewConnectionError', 'ConnectTimeoutError')
+    return False
+
+
 def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
     """Envoie un workflow à ComfyUI pour exécution.
 
@@ -480,7 +446,10 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
             success, message = result
             if not success:
                 logger.error(f"ComfyUI is not available: {message}")
-                return None, f"ComfyUI service unavailable: {message}"
+                # Pre-POST: nothing has been submitted, so this is provably
+                # barrier-free — same tag as the connect-phase failures below.
+                return None, ("COMFYUI_UNREACHABLE (nothing was submitted): "
+                              f"ComfyUI service unavailable: {message}")
             logger.info(f"ComfyUI service check: {message}")
 
     # Check for Ollama usage in the workflow (local only)
@@ -574,9 +543,18 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
     try:
         payload = {"prompt": prompt_workflow, "client_id": client_id}
         headers = {'Content-Type': 'application/json'}
+        # (connect, read). Connect stays short — nobody listening must fail
+        # fast, and it is PROOF the request never went out. The read budget is
+        # deliberately long: /prompt VALIDATES the whole graph synchronously on
+        # the same event loop the executor blocks, so a ComfyUI that is loading
+        # a 9 GB model on a VRAM-starved card can sit far past 10 s before it
+        # answers — and a flat timeout=10 turned every such wait into the
+        # human-confirm recovery barrier, on every attempt (GitHub #51,
+        # charlesangus: "restarting does not seem to help", because the next
+        # try timed out the same way).
         response = requests.post(
-            urljoin(api_addr, "/prompt"), json=payload, headers=headers, timeout=10,
-            allow_redirects=False)
+            urljoin(api_addr, "/prompt"), json=payload, headers=headers,
+            timeout=(10, 120), allow_redirects=False)
         response.raise_for_status()
         status = getattr(response, 'status_code', None)
         if type(status) is not int or not 200 <= status < 300:
@@ -609,6 +587,17 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
         # ComfyUI accepted the first request; retrying would create an untracked
         # second prompt. The queue stores this outcome as a client-id recovery
         # barrier; recovery requires an externally verified ComfyUI restart.
+        #
+        # EXCEPT when the request provably never left this machine: a connect
+        # timeout, or a connection that was never established (refused /
+        # unroutable — urllib3's NewConnectionError). No TCP session existed,
+        # so ComfyUI cannot own the prompt, and turning that into the
+        # human-confirm barrier made a simply-stopped ComfyUI read as a scary
+        # paused job requiring a restart nobody needed (GitHub #51). Those fail
+        # the job cleanly; the user starts ComfyUI and just retries.
+        if _request_never_sent(e):
+            return None, (f"COMFYUI_UNREACHABLE (nothing was submitted): could not "
+                          f"connect to ComfyUI at {api_addr}: {e}")
 
         detail = f": {e}" + (f" | ComfyUI: {err_body}" if err_body else '')
         return None, f"Failed to connect or communicate with ComfyUI API ({api_addr}){detail}"
@@ -667,12 +656,6 @@ def get_comfyui_history_probe(prompt_id, worker_url=None) -> ComfyHistoryProbe:
     except Exception as exc:
         return ComfyHistoryProbe(ComfyHistoryHealth.UNHEALTHY,
                                  detail=str(exc)[:200])
-
-
-def get_comfyui_history(prompt_id, worker_url=None):
-    """Backward-compatible untyped accessor for existing callers."""
-    probe = get_comfyui_history_probe(prompt_id, worker_url)
-    return probe.history if probe.health is ComfyHistoryHealth.READY else None
 
 
 def _queue_entry_identity(entry):
@@ -783,35 +766,6 @@ def cancel_comfyui_prompt(prompt_id, client_id=None, worker_url=None) -> bool:
     """Compatibility bool: only an exact pending-delete reports success."""
     return (cancel_comfyui_prompt_state(prompt_id, client_id, worker_url)
             is ComfyPromptState.DELETED)
-
-
-def download_image_from_worker(filename, worker_url, output_dir):
-    """Télécharge une image générée depuis un worker distant via l'API ComfyUI.
-
-    Args:
-        filename: Nom du fichier image (ex: "123_GeneratedImage_00001_.png").
-        worker_url: URL de l'API du worker (ex: "http://192.168.1.100:8188/").
-        output_dir: Répertoire local où sauvegarder l'image.
-
-    Returns:
-        True si succès, False sinon.
-    """
-    try:
-        url = urljoin(worker_url, f"/view?filename={filename}&type=output")
-        response = requests.get(url, timeout=60, stream=True)
-        response.raise_for_status()
-
-        os.makedirs(output_dir, exist_ok=True)
-        filepath = os.path.join(output_dir, filename)
-        with open(filepath, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-
-        logger.info(f"Image téléchargée depuis worker : {filename} -> {output_dir}")
-        return True
-    except Exception as e:
-        logger.error(f"Erreur téléchargement image {filename} depuis {worker_url} : {e}")
-        return False
 
 
 def fetch_output_image_bytes(filename, subfolder='', timeout=30):
@@ -2020,8 +1974,14 @@ def get_zimage_models():
             # `diffusion_models` root also holds Krea, FLUX and Klein weights, and
             # nothing in a Z-Image filename separates them reliably — the folder
             # IS the claim here. (Krea does have such a rule; see get_krea_models.)
+            # 'z-image' too: the retired capabilities scanner accepted the
+            # hyphen spelling (z[ -]?image), so a user's Z-Image/ folder showed
+            # ✓ in Setup while this lister — the one the Studio picker actually
+            # reads — could not see it. Folding the fifth scanner onto this one
+            # (probe == picker == resolver) surfaced the gap; the token list is
+            # where the tolerance belongs.
             out = comfy_model_paths.scan_family_tree(
-                _model_scan_roots(out_dir), ("z image", "zimage"))
+                _model_scan_roots(out_dir), ("z image", "zimage", "z-image"))
         except Exception as e:
             logger.error(f"get_zimage_models error: {e}")
     _zimage_models_cache["data"] = out
@@ -2230,6 +2190,66 @@ def get_krea_loras():
                     })
     except Exception as e:
         logger.error(f"get_krea_loras error: {e}")
+    return out
+
+
+def get_family_loras(family: str) -> list[dict]:
+    """Deployed LoRAs of `family`, for the families that have no hand-written
+    getter above: FLUX.1, FLUX.2 Klein and Anima.
+
+    Same row shape as the three getters above, and the same reason to exist —
+    but it reads the family's folders from `lora_training._lora_family_dirs`,
+    the SAME table the deploy accessors write through, instead of hardcoding a
+    folder name. That is the whole point: a family whose LoRAs are written to
+    `loras/flux2klein` was being looked for in `loras/z image`, because the pool
+    dispatcher had no branch for it and fell through to Z-Image. Deploy said
+    "done" (it was), every later "is it deployed?" said no, and Generate refused
+    a checkpoint sitting right there on disk (GitHub #52, lunchingfriar — Klein;
+    FLUX.1 and Anima were silently in the same hole).
+
+    Reading through `_lora_family_dirs` also picks up the other roots ComfyUI
+    searches (extra_model_paths.yaml), which the folder-walking getters above do
+    not. Empty list when nothing is configured or readable — never raises: this
+    feeds a picker, and a broken read must read as "no LoRA", not as a 500."""
+    fam = (family or '').lower()
+    out = []
+    try:
+        from ..services.lora_training import _lora_family_dirs
+        dirs = _lora_family_dirs(fam)
+    except Exception as e:      # noqa: BLE001 — an unreadable root is not a crash
+        logger.error(f"get_family_loras({fam}) could not resolve its folders: {e}")
+        return out
+    seen = set()
+    for d in dirs:
+        try:
+            if not os.path.isdir(d):
+                continue
+            sub = os.path.basename(os.path.normpath(d))
+            for f in sorted(os.listdir(d)):
+                if not f.lower().endswith('.safetensors'):
+                    continue
+                if not os.path.isfile(os.path.join(d, f)):
+                    continue
+                # LoraLoader form, and de-duplicated by it: the same file name
+                # under two roots is ONE entry for ComfyUI, which resolves it by
+                # this relative name against whichever root holds it.
+                rel = os.path.join(sub, f)
+                key = os.path.normcase(rel)
+                if key in seen:
+                    continue
+                seen.add(key)
+                triggers = _extract_klein_triggers(f)
+                grp, stp = trained_lora_group(f, fam)
+                out.append({
+                    'filename': rel,
+                    'displayName': format_trained_lora_label(f, fam) or _clean_klein_lora_label(f),
+                    'triggerWord': triggers[0]['prompt'] if triggers else None,
+                    'triggerWords': triggers,
+                    'group': grp,
+                    'step': stp,
+                })
+        except OSError as e:
+            logger.error(f"get_family_loras({fam}) could not read {d}: {e}")
     return out
 
 

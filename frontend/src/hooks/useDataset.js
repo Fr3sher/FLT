@@ -15,6 +15,7 @@ import {
   normalizeTrainingMode,
   trainingModeSettingsPayload,
 } from '../utils/trainingMode.js';
+import { activityBlocks, exclusivePassRunning } from '../utils/activityLanes.js';
 import { refreshDatasetIfActive } from '../utils/datasetRefresh';
 import { ENGINE_LABELS } from '../components/dataset/engineSelection.js';
 import { retryRequestForReferenceEdit } from '../components/dataset/referenceEdit.js';
@@ -115,7 +116,7 @@ export function faceScoringErrorMessage(scoringError) {
  * `error` is a separate concern (why an attempted inpaint failed) and is
  * surfaced by its own toast.error at the call site.
  */
-export function summarizeClean(d) {
+function summarizeClean(d) {
   const cropped = d.cropped || 0;
   // LaMa and Klein inpaints tally together — both "repainted the mark" from the
   // user's point of view (the batch method toggle picks which engine ran).
@@ -262,7 +263,7 @@ export function useDataset() {
     const goHome = () => setCurrentId(null);
     window.addEventListener('lds:home', goHome);
     return () => window.removeEventListener('lds:home', goHome);
-  }, []);
+  }, [setCurrentId]);   // useCallback stable : toujours mount-only en pratique
 
   // Mirror in-flight dataset generations into the global JobsContext so the
   // floating jobs dock shows (and can cancel) them like other generations.
@@ -337,7 +338,7 @@ export function useDataset() {
     return () => clearInterval(id);
   }, [hasActivity, currentId, refresh]);
 
-  const open = useCallback(async (id) => { setCurrentId(id); await refresh(id); }, [refresh]);
+  const open = useCallback(async (id) => { setCurrentId(id); await refresh(id); }, [refresh, setCurrentId]);
 
   const create = useCallback(async (name, trigger, kind, conceptDesc, trainType, fidelity) => {
     const d = await postJson('/api/dataset/create',
@@ -638,7 +639,9 @@ export function useDataset() {
         toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
         return;
       }
-      const msg = classifyResultMessage(d.classified, want);
+      const msg = classifyResultMessage(d.classified, want, {
+        attempted: d.attempted, unanswered: d.unanswered,
+      });
       (toast[msg.tone] || toast.success)(msg.text);
       await refresh();
     } finally {
@@ -1676,13 +1679,35 @@ export function useDataset() {
   const watermarkingLive = localActivityRuns.has(`watermark:${currentId}`)
     || actKind === 'watermark_detect' || actKind === 'watermark_clean';
   const busyLive = busy || !!activity;
+  // GitHub #44 — `busyLive` is the CONSERVATIVE union and stays the gate for
+  // everything that owns the dataset's rows. Starting a job that merely becomes
+  // a row in the serialized image queue asks a narrower question, because the
+  // queue is already a queue: `activityLanes` answers it per action kind, so an
+  // ✨ improve batch (or a one-tile Retry, which publishes 'generate' too) no
+  // longer greys out ⚡ Generate for as long as it runs.
+  const generationBusy = busy || activityBlocks(activity, 'generate');
+  // Curating an image — keep/reject, caption, crop, mirror, rotate, delete,
+  // score, watermark — is not queue work, so `activityBlocks` would refuse it
+  // for the wrong reason. It asks its own question: is a pass running that owns
+  // the ROWS? Queued generations do not; every one of these writes is already
+  // defended server-side where it matters (see utils/activityLanes.js).
+  const curationBusy = busy || exclusivePassRunning(activity);
+  const improveBusy = busy || activityBlocks(activity, 'improve');
+  // No `referenceEditBusy` on purpose. A live reference edit stops blocking the
+  // other lanes (it is queue work like any other, and it changes nothing until
+  // the user keeps the result), but what gates STARTING one is the reference
+  // panel's own `busy` — the same flag that guards replacing and cropping the
+  // reference itself, which every queued variation derives from. Splitting that
+  // one out is a separate question from #44 and does not get answered here by
+  // accident.
   const canRetryReferenceEdit = Boolean(retryRequestForReferenceEdit(
     referenceEditRetryRef.current.get(String(currentId)),
     data?.reference_edit,
   ));
 
 
-  return { datasets, currentId, data, busy: busyLive, localBusy: busy, captioning: captioningLive,
+  return { datasets, currentId, data, busy: busyLive, localBusy: busy,
+           generationBusy, improveBusy, curationBusy, captioning: captioningLive,
            lastCaptionRun,
            analyzing: analyzingLive, watermarking: watermarkingLive, activity,
            nonces, mirroringIds, refNonce, scoringFaceIds, recaptioningIds, create, open,

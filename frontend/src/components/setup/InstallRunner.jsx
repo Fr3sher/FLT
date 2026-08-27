@@ -1,15 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
+import { fmtSize } from './fmtSize'
 
 const POLL_MS = 1200
 const MAX_POLL_FAILURES = 5
 
-function fmtSize(b) {
-  if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`
-  if (b >= 1e6) return `${(b / 1e6).toFixed(0)} MB`
-  return `${Math.max(0, Math.round(b / 1e3))} KB`
-}
 
 // One-click installer. Every failure ends in either auto-recovery (the backend
 // retries transient file locks and repairs on re-click) or ONE button to click
@@ -110,7 +106,7 @@ export default function InstallRunner({ action, buttonLabel, onDone }) {
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={start} disabled={busy}
-          className="rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+          className="rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50">
           {state === 'queued' ? 'Queued…' : running ? 'Installing…' : buttonLabel}
         </button>
         {action === 'ollama_model' && running && (

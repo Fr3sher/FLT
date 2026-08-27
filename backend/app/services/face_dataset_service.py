@@ -38,32 +38,37 @@ from ..models import (CanvasImageNode, CanvasNodePosition, FaceDataset,
                       FaceDatasetImage, LoraTestImage)
 from .. import config as cfg
 from . import (bank_transfer_metadata, caption_origin, dataset_activity,
-               image_encoding, input_budget, reference_edit_jobs, trash)
+               image_encoding, reference_edit_jobs,
+               scene_captions, trash)
 from .dataset_storage import dataset_path, ensure_dataset_dir
 from .image_provenance import provenance_metrics
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
+from .pass_scopes import normalize_pass_statuses
 from .ollama_control import normalize_ollama_model_ref
 
 # Garde le modèle vision chaud entre les images d'un même batch caption/classify
 # (sinon Ollama le recharge - cold start ~10s - à CHAQUE image). Déchargé en fin
 # de batch pour rendre la VRAM à ComfyUI. ComfyUI est déjà en pause pendant la passe.
 _VISION_BATCH_KEEPALIVE = '5m'
-from .face_variations import (CAPTION_PROMPT, CAPTION_PROMPT_BOORU,
-                              DESCRIPTIVE_CAPTION_PROMPT,
+# Re-exported on purpose (not used here): face_variations.py says so, and
+# `svc.KLEIN_IMAGE_IMPROVE_PROMPT` is what the tests and the improve lane read.
+from .face_variations import KLEIN_IMAGE_IMPROVE_PROMPT  # noqa: F401
+from .face_variations import (DESCRIPTIVE_CAPTION_PROMPT,
                               CAPTION_REFINE_CONCEPT_PROMPT, CAPTION_LEAK_FIX_PROMPT,
                               EXPAND_CONCEPT_TERMS_PROMPT,
                               CLASSIFY_PROMPT, HEAD_BBOX_PROMPT, WATERMARK_BBOX_PROMPT,
-                              JOYCAPTION_PROMPT, aspect_for_label, caption_prompt_for,
+                              aspect_for_label, caption_prompt_for,
                               caption_prompt_for_style, caption_prompt_for_concept,
                               caption_has_identity_leak, caption_has_concept_leak,
+                              appearance_describe_phrases, appearance_omit_shorten_clause,
                               compose_prompt_suffix, concept_lexical_field,
                               drop_identity_sentences, drop_identity_tags,
-                              drop_style_lead_in,
+                              drop_style_lead_in, identity_leak_chips,
                               is_nsfw_label, prompt_by_label, wrap_variation,
                               wrap_variation_klein, wrap_variation_krea,
                               get_identity_prompt,
-                              normalize_subject_type,
-                              KLEIN_IMAGE_IMPROVE_PROMPT)
+                              normalize_appearance,
+                              normalize_subject_type)
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +296,11 @@ _ACTIVE_RUN_MESSAGE = _ACTIVE_RUN_TEMPLATE.format(action='deleting')
 SMALL_IMAGE_SOURCE = 'small_image_source'
 KLEIN_SMALL_IMAGE = 'klein_small_image'
 KLEIN_IMAGE_IMPROVE = 'klein_image_improve'
+# 📷 A camera view — the same scene re-photographed from another position
+# (services/camera_angles.py owns the why). Same value as the gallery table's
+# lora_test_studio.CAMERA_ANGLE on purpose: one word for one thing, two tables.
+# ⚠️ Written into user databases — never renamed without an alias path.
+CAMERA_ANGLE = 'camera_angle'
 
 # The three "Upscale & improve" knobs live in config (klein.improve_*). Read
 # through clamps: a hand-edited config with a string, a negative or a wild value
@@ -1045,11 +1055,12 @@ _LENGTH_INSTRUCTION = {
 
 
 def caption_options(ds) -> dict:
-    """Normalized per-dataset caption overrides: {backend, ollama_model, instructions}.
-    Empty strings = "use the global default". Never raises ({} defaults on a missing or
-    corrupt blob) so every caption path can read it unconditionally."""
+    """Normalized per-dataset caption overrides: {backend, ollama_model, instructions,
+    vocabulary, length, appearance}. Empty strings / empty appearance = "use the
+    global default" / historical identity lock. Never raises ({} defaults on a
+    missing or corrupt blob) so every caption path can read it unconditionally."""
     out = {'backend': '', 'ollama_model': '', 'instructions': '', 'vocabulary': '',
-           'length': ''}
+           'length': '', 'appearance': {}}
     raw = getattr(ds, 'caption_options', None) if ds else None
     if not raw:
         return out
@@ -1076,6 +1087,7 @@ def caption_options(ds) -> dict:
     length = str(data.get('length') or '').strip().lower()
     if length in _CAPTION_LENGTHS:
         out['length'] = length
+    out['appearance'] = normalize_appearance(data.get('appearance'))
     return out
 
 
@@ -1108,6 +1120,20 @@ def set_caption_options(user_id, dataset_id, patch) -> dict:
         if ln and ln not in _CAPTION_LENGTHS:
             raise ValueError(f'invalid caption length: {ln}')
         cur['length'] = ln
+    if 'appearance' in patch:
+        raw_app = patch.get('appearance')
+        if raw_app in (None, '', {}):
+            cur['appearance'] = {}
+        elif not isinstance(raw_app, dict):
+            raise ValueError('invalid caption appearance: expected an object')
+        else:
+            # A dict with no valid family (all-bogus keys) is not a policy — refuse
+            # so a typo cannot silently wipe the lock. A partial dict (one toggle)
+            # fills the rest from APPEARANCE_DEFAULTS via normalize_appearance.
+            normalized = normalize_appearance(raw_app)
+            if not normalized and raw_app:
+                raise ValueError('invalid caption appearance: no known family')
+            cur['appearance'] = normalized
     stored = {k: v for k, v in cur.items() if v}
     ds.caption_options = json.dumps(stored) if stored else None
     db.session.commit()
@@ -1232,13 +1258,6 @@ def _record_caption_skips(outcome, pending, errors) -> None:
         outcome['skipped_reason'] = reason
 
 
-def _resolve_caption_backend(ds) -> str:
-    """The engine a caption run uses: the dataset override when set, else the global
-    captioning.backend (default 'auto')."""
-    return (caption_options(ds).get('backend')
-            or cfg.get('captioning.backend') or 'auto').lower()
-
-
 def _with_caption_instructions(prompt: str, instructions: str) -> str:
     """Append the user's extra instructions to a built caption prompt. The base prompt
     (with its kind omission rules) stays first so the model still reads them; the extras
@@ -1250,15 +1269,39 @@ def _with_caption_instructions(prompt: str, instructions: str) -> str:
     return f'{prompt}\n\nAdditional instructions from the user:\n{extra}'
 
 
-def _caption_preset_parts(vocabulary=None, length=None) -> list:
+def _length_instruction_text(length, appearance=None) -> str | None:
+    """The length-preset paragraph, with Describe-family extras folded in so a
+    Concise instruction cannot fight a hair/makeup policy (it currently names
+    only subject, pose, clothing and setting). No appearance → the historical
+    sentence, byte-identical."""
+    key = (length or '').strip().lower()
+    text = _LENGTH_INSTRUCTION.get(key)
+    if not text:
+        return None
+    extras = appearance_describe_phrases(appearance)
+    if not extras:
+        return text
+    joined = ', '.join(extras)
+    if key == 'concise':
+        return text.replace(
+            'the clothing and the setting',
+            f'the clothing, {joined}, and the setting')
+    if key == 'detailed':
+        return text.rstrip('.') + f', plus {joined}.'
+    return text
+
+
+def _caption_preset_parts(vocabulary=None, length=None, appearance=None) -> list:
     """The preset instructions for a run, in their fixed order: vocabulary register first
     (how to name things), then length (how much to write). One list so the dataset pass,
-    the Caption Lab preview and the image bank never drift on that order."""
+    the Caption Lab preview and the image bank never drift on that order. `appearance`
+    only affects the length paragraph (Describe families named so Concise cannot omit
+    them); Caption Lab / the bank pass None and stay descriptive."""
     parts = []
     register = _VOCABULARY_INSTRUCTION.get((vocabulary or '').strip().lower())
     if register:
         parts.append(register)
-    size = _LENGTH_INSTRUCTION.get((length or '').strip().lower())
+    size = _length_instruction_text(length, appearance)
     if size:
         parts.append(size)
     return parts
@@ -1271,7 +1314,8 @@ def _combined_caption_instructions(opts) -> str:
     dataset that never touched the popover produces byte-identical prompts. All of it rides
     at the END of the prompt, after the kind omission rules, and the output cleaners still
     post-filter."""
-    parts = _caption_preset_parts(opts.get('vocabulary'), opts.get('length'))
+    appearance = opts.get('appearance') or None
+    parts = _caption_preset_parts(opts.get('vocabulary'), opts.get('length'), appearance)
     extra = (opts.get('instructions') or '').strip()
     if extra:
         parts.append(extra)
@@ -2426,6 +2470,11 @@ def crop_image(user_id, image_id, x, y, w, h):
         _clear_watermark_metadata(img)
         img.upscale_ratio = scale
         _invalidate_image_content_analysis(img)
+        # Same shape as a Bank crop: the stored shot type describes the pixels
+        # that just went away. Clearing it makes 📐 Classify pick this row up
+        # (and drops it from Composition until that pass runs) instead of
+        # leaving a body-count on a face crop.
+        img.framing = None
         db.session.commit()
     return ok
 
@@ -2831,7 +2880,7 @@ def delete_dataset(user_id, dataset_id):
         from . import lora_training as lt
         purge_trigger = lt._safe_trigger(ds)
     except ImportError:
-        pass
+        pass   # circular-import escape: the purge works without the trigger name
     imgs = FaceDatasetImage.query.filter_by(dataset_id=dataset_id).all()
     studio_rows = LoraTestImage.query.filter_by(dataset_id=dataset_id).all()
     # ◉ LoRA Canvas card positions. The model declares a relationship() to
@@ -3793,13 +3842,10 @@ def import_backup_zip(user_id: int, archive: bytes | BinaryIO):
             owned.close()
 
 
-def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
-    # Validate the central directory BEFORE inflating JSON.  Previously a tiny
-    # compressed manifest/images.json could bypass the image-only size total and
-    # consume unbounded RAM during z.read/json.loads.
-    all_infos = z.infolist()
-    _validate_backup_limits(
-        (info.filename, info.file_size) for info in all_infos)
+def _bkp_v_manifest(z, all_infos):
+    """Locate and parse manifest.json/images.json, enforce format/version and
+    normalise both. Moved verbatim from _bkp_validate_archive. Returns
+    (manifest, images_meta, restored_training_mode, version)."""
     metadata = {}
     for info in all_infos:
         if info.filename not in ('manifest.json', 'images.json'):
@@ -3837,6 +3883,13 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
         _normalized_backup_image_meta(meta, version=version)
         for meta in images_meta
     ]
+    return manifest, images_meta, restored_training_mode, version
+
+
+def _bkp_v_rows(images_meta, version):
+    """Per-row identity/provenance validation (filenames, backup ids, Klein
+    rescue lineage). Moved verbatim from _bkp_validate_archive. Returns the
+    casefolded filename -> exact name map the v2 cross-check needs."""
     seen_backup_ids = set()
     metadata_image_names = {}
     rescue_sources = set()
@@ -3883,6 +3936,13 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
                 raise ValueError('multiple Klein rescue candidates for one source')
     if any(parent_id not in rescue_sources for parent_id in rescue_parent_counts):
         raise ValueError('Klein rescue candidate has no valid source')
+    return metadata_image_names
+
+
+def _bkp_v_payload_names(all_infos, version):
+    """Select the restorable payload members and map their casefolded names,
+    refusing ref/images collisions. Moved verbatim from _bkp_validate_archive.
+    Returns (infos, archive_names)."""
     infos = []
     for info in all_infos:
         if info.is_dir() or info.filename in ('manifest.json', 'images.json'):
@@ -3916,6 +3976,13 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
     if collisions:
         collision = archive_names['images'][next(iter(collisions))]
         raise ValueError(f'backup has colliding ref/image filename: {collision}')
+    return infos, archive_names
+
+
+def _bkp_v_crosscheck_v2(version, manifest, archive_names, metadata_image_names):
+    """v2-only cross-checks: archive image set == metadata set (exact case), and
+    every required/allowed reference file present with no orphans. Moved
+    verbatim from _bkp_validate_archive."""
     if version >= 2:
         archive_image_keys = set(archive_names['images'])
         metadata_image_keys = set(metadata_image_names)
@@ -3959,6 +4026,13 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
             raise ValueError(
                 f'unreferenced reference image in backup: '
                 f'{archive_names["ref"][next(iter(orphan_refs))]}')
+
+
+def _bkp_v_caches(z, all_infos, images_meta, version):
+    """Derive analysis-cache ownership from the validated rows, then read and
+    verify every requested sidecar (size, digest, shape) before anything is
+    staged. Moved verbatim from _bkp_validate_archive. Returns the
+    cache_ref -> raw payload map."""
 
     # Derive cache ownership only after the exact set of restorable rows/files
     # has been validated. A crafted skipped row cannot smuggle an otherwise
@@ -4029,6 +4103,43 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
             raise ValueError(
                 'analysis cache sidecar is malformed or has a digest mismatch')
         validated_cache_payloads[cache_ref] = raw
+    return validated_cache_payloads
+
+
+def _bkp_validate_archive(z: zipfile.ZipFile):
+    """The whole security battery of a backup import, moved verbatim
+    (2026-08-24): central-directory limits, manifest/version checks, image
+    metadata normalisation and provenance rules, archive-entry filtering
+    with the traversal/collision refusals, the v2 archive<->metadata
+    pairing, and the analysis-cache binding (CRC/SHA validated BEFORE any
+    staging folder or transaction exists). Pure reads: nothing on disk or
+    in the database changes here. Returns (manifest, images_meta,
+    restored_training_mode, infos, validated_cache_payloads)."""
+    # Validate the central directory BEFORE inflating JSON.  Previously a tiny
+    # compressed manifest/images.json could bypass the image-only size total and
+    # consume unbounded RAM during z.read/json.loads.
+    all_infos = z.infolist()
+    _validate_backup_limits(
+        (info.filename, info.file_size) for info in all_infos)
+    manifest, images_meta, restored_training_mode, version = _bkp_v_manifest(
+        z, all_infos)
+    metadata_image_names = _bkp_v_rows(images_meta, version)
+    infos, archive_names = _bkp_v_payload_names(all_infos, version)
+    _bkp_v_crosscheck_v2(version, manifest, archive_names, metadata_image_names)
+    validated_cache_payloads = _bkp_v_caches(z, all_infos, images_meta, version)
+    return (manifest, images_meta, restored_training_mode, infos,
+            validated_cache_payloads)
+
+
+def _bkp_restore_validated(user_id: int, z: zipfile.ZipFile, manifest,
+                           images_meta, restored_training_mode, infos,
+                           validated_cache_payloads):
+    """The atomic restore of an already-validated backup, moved verbatim:
+    staging-directory extraction (bytes re-validated on the way), dataset
+    row + image rows in one transaction, the within-backup provenance
+    graph, reference rebinding from actual archive files, and the single
+    rename promotion — with the except/finally that can never leave a
+    partial restore behind. Returns the new dataset."""
     name = (manifest.get('name') or 'Restored dataset')[:100]
     trigger = (manifest.get('trigger_word') or 'restored')[:60]
     # Extract first into a sibling directory: it is on the same volume as the final
@@ -4195,6 +4306,14 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
         shutil.rmtree(staging_dir, ignore_errors=True)
     logger.info(f"dataset backup restored: '{name}' -> #{ds.id} ({n_rows} image rows)")
     return ds
+
+
+def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
+    (manifest, images_meta, restored_training_mode, infos,
+     validated_cache_payloads) = _bkp_validate_archive(z)
+    return _bkp_restore_validated(
+        user_id, z, manifest, images_meta, restored_training_mode,
+        infos, validated_cache_payloads)
 
 
 @_serialize_dataset_ingest
@@ -4872,11 +4991,6 @@ def _resolve_comfy_output(filename):
     return name, candidate, True
 
 
-def _comfy_output_path(filename):
-    _name, candidate, allowed = _resolve_comfy_output(filename)
-    return candidate if allowed else None
-
-
 def _is_reparse_stat(st):
     attrs = getattr(st, 'st_file_attributes', 0)
     reparse_flag = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
@@ -4951,7 +5065,7 @@ def _drop_comfy_output(filename):
     try:
         os.remove(p)
     except OSError:
-        pass
+        pass   # already gone or locked: the trash sweep moves on
 
 
 def _run_reference_edit(app, user_id, dataset_id, token, act_token, engine, refs,
@@ -5127,7 +5241,7 @@ def _commit_edited_reference_locked(user_id, dataset_id, image_bytes):
             try:
                 os.remove(p)
             except OSError:
-                pass
+                pass   # rollback is best-effort: the pair may never have landed
         raise
     # 2) VERIFY both landed before touching anything the dataset still points at.
     if not (os.path.exists(ref_path) and os.path.exists(orig_path)):
@@ -5135,7 +5249,7 @@ def _commit_edited_reference_locked(user_id, dataset_id, image_bytes):
             try:
                 os.remove(p)
             except OSError:
-                pass
+                pass   # rollback is best-effort: the pair may never have landed
         raise RuntimeError('failed to write edited reference')
     # 3) REPOINT the dataset, then commit.
     ds.ref_filename = new_ref
@@ -5147,7 +5261,7 @@ def _commit_edited_reference_locked(user_id, dataset_id, image_bytes):
             try:
                 os.remove(os.path.join(dsdir, fn))
             except OSError:
-                pass
+                pass   # the replaced file may be gone or locked: the new pair is already in place
     return new_ref
 
 
@@ -5246,6 +5360,7 @@ def dataset_payload(user_id, dataset_id):
     kind_concept = is_concept(ds)
     kind_style = is_style(ds)
     body = is_body_fidelity(ds)
+    appearance = (caption_options(ds).get('appearance') or None)
     # Cached concept ban-list (JSON on the row) → the concept-leak detector unions it with
     # concept_desc + the derived body/pose field, so the badge and the caption-time
     # enforcement agree on what "leaking" means. Ignored for non-concept kinds.
@@ -5258,7 +5373,7 @@ def dataset_payload(user_id, dataset_id):
             return caption_has_concept_leak(i.caption, ds.concept_desc, _concept_terms)
         if kind_style:
             return False
-        return caption_has_identity_leak(i.caption, body=body)
+        return caption_has_identity_leak(i.caption, body=body, appearance=appearance)
 
     return {
         'id': ds.id, 'name': ds.name, 'trigger_word': ds.trigger_word,
@@ -5345,6 +5460,11 @@ def dataset_payload(user_id, dataset_id):
                     'fail_kind': i.fail_kind,
                     'parent_image_id': i.parent_image_id,
                     'derivation_kind': i.derivation_kind,
+                    # 📷 Same two reasons as the gallery payload: the tile says
+                    # WHICH angle it shows (eight views side by side are
+                    # unreadable otherwise), and the surface refuses to re-shoot
+                    # a view before the click instead of through a 400 after it.
+                    'camera_pose': i.camera_pose,
                     'source_metadata': normalize_source_metadata(i.source_metadata),
                     'upscale_ratio': i.upscale_ratio,
                     # Core creative prompt (generated tiles) → seeds the ✏️ edit
@@ -5378,6 +5498,12 @@ def dataset_payload(user_id, dataset_id):
         'caption_leak': {
             'leaking': sum(1 for i in imgs if _img_leaks(i)),
             'captioned': sum(1 for i in imgs if i.status == 'keep' and i.caption),
+            # Character-only watched list (legacy hair/eyes/skin/face, or the
+            # active appearance policy). The Identity-leak panel renders these
+            # chips instead of a hardcoded set so a Describe family never stays
+            # flagged. Concept/style ignore it.
+            'watched': ([] if (kind_concept or kind_style)
+                        else identity_leak_chips(appearance, body=body)),
         },
         # Live server-side batch on this dataset (watermark detect/clean, caption/
         # re-caption, face analysis, framing classify) as {kind, done, total,
@@ -5662,17 +5788,6 @@ def import_store_image(image_bytes: bytes) -> tuple[bytes, str]:
             '.webp')
 
 
-def import_encode(image_bytes: bytes) -> bytes:
-    """Backward-compatible bytes-only view of :func:`import_store_image`.
-
-    New ingest lanes need the true extension as well and use
-    :func:`import_store_image` directly. Generated images and API transport
-    copies deliberately keep their own fixed sizes: this policy is about what the
-    user hands in, not about what the app produces.
-    """
-    return import_store_image(image_bytes)[0]
-
-
 def detect_head_bbox(image_bytes):
     """Return normalized (x1, y1, x2, y2) of the main head via Qwen3-VL, or None.
 
@@ -5824,76 +5939,17 @@ def face_crop_to_square_webp(image_bytes: bytes, size: int = 1024, pad: float = 
 
 
 # --- Import + classify (Qwen3-VL) ------------------------------------------
-@_serialize_dataset_ingest
-def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, stats=None,
-                  source_metadata=None, captions=None, caption_origins=None,
-                  bank_image_ids=None,
-                  framings=None, bank_analysis_snapshots=None,
-                  watermark_states=None, watermark_bboxes=None,
-                  watermark_regions=None, watermark_sources=None,
-                  watermark_scores=None, statuses=None,
-                  transfer_metadatas=None, dedupe_seen=None,
-                  preserve_exact_bytes=False, created_ids_sink=None,
-                  provenance_changes_sink=None):
-    """Store original static bytes (or head-crop) + create import rows (status=keep).
-    When crop=True, each image is auto head-cropped via Qwen3-VL - the CALLER
-    must then hold the GPU-exclusive window - and is by construction a face,
-    so framing='face' is set directly (no classify pass needed).
-
-    dedupe=True (the /import route) drops perceptual duplicates by dHash — both
-    within the batch and vs the dataset's existing files. The hash is computed on
-    the final stored image, so a re-import of the same photo matches its earlier
-    crop instead of comparing a full frame to a head crop. Skips are counted in
-    stats['duplicates'] when a stats dict is passed.
-    Default stays False: service-level callers (scrape flow dedupes upstream on
-    the ORIGINALS, before paying the crop) keep the historical behavior.
-
-    ``source_metadata`` is an optional list parallel to ``files_bytes``. Only
-    validated Pexels or web-search provenance is stored; existing callers can omit it.
-
-    ``captions`` is an optional list parallel to ``files_bytes`` — a pre-existing
-    caption to carry onto the new row (the image-bank promotion path passes the bank
-    captions here, so a promoted selection starts already captioned). Empty/None entries
-    leave the row uncaptioned. A skipped duplicate simply drops its caption with it.
-
-    ``framings`` is an optional list parallel to ``files_bytes`` — a framing
-    ALREADY known for the blob (the image-bank promotion path passes the framing
-    its own classify pass wrote, so a promoted selection lands counted in the
-    composition instead of sitting at 0 until something re-classifies it). Only
-    the catalog buckets are accepted; anything else lands as None so the dataset
-    classifier can still fill it. Ignored when crop=True (a head crop IS a face).
-
-    ``bank_image_ids`` is an optional list parallel to ``files_bytes`` — the
-    bank_image each blob came from, recorded on the new row. A blob dropped as a
-    perceptual DUPLICATE hands its bank id to the row it matched (when that row
-    carries none yet): the dataset does hold that bank image, just under another
-    row, and the bank's "already promoted here" answer must say so. That link is
-    what lets the bank re-offer an image once the user deletes it here. Bank ids
-    that could NOT be linked (the matched row already belongs to another bank —
-    a scalar column can only credit one) are listed in ``stats['bank_unlinked']``.
-
-    ``bank_analysis_snapshots`` is an internal Bank-promotion marker parallel to
-    ``files_bytes``.  When present, this importer recalculates deterministic
-    quality/provenance from the final Dataset bytes and seals a v3 snapshot with
-    their SHA-256.  A byte-identical Bank capture also retains its complete row
-    analysis plus path-free Score/Face embeddings in a bounded sidecar; a
-    transformed image gets deterministic analysis only.  The regular current
-    Dataset fields stay separate and remain user-owned.
-
-    ``dedupe_seen`` is an optional internal mutable cache of ``(dhash, row_id)``
-    pairs for chunked imports. When omitted, the importer loads the dataset's
-    existing hashes itself, preserving the standalone-call behavior.
-
-    Returns (ids, failed_count)."""
-    ds = get_dataset(user_id, dataset_id)
-    if not ds:
-        return [], 0
-    # Sans head-crop, on préserve le ratio ET les octets source autorisés : l'ancien
-    # chemin « carré padé » ajoutait des bandes noires que le LoRA apprendrait, et
-    # forçait tous les imports personnage en carré — un plan buste/corps importé
-    # doit rester tel quel (ai-toolkit gère le bucketing multi-ratios).
-    seen = (dedupe_seen if dedupe_seen is not None
-            else _existing_dhash_rows(dataset_id)) if dedupe else None
+def _imp_input_accessors(crop, source_metadata, captions, caption_origins,
+                         bank_image_ids, framings, bank_analysis_snapshots,
+                         watermark_states, watermark_bboxes,
+                         watermark_regions, watermark_sources,
+                         watermark_scores, statuses, transfer_metadatas):
+    """The importer's input normalisation, moved verbatim (2026-08-23):
+    every optional list parallel to ``files_bytes`` is copied once, and the
+    per-index accessors validate on the way out (an unknown caption-origin
+    stamp, framing bucket, watermark state/source or status never reaches a
+    row). Returns the two lists the row builder indexes directly plus the
+    eleven accessors, in the order the trunk unpacks them."""
     metadata_by_index = list(source_metadata) if source_metadata is not None else []
     captions_by_index = list(captions) if captions is not None else []
     # Parallel to ``captions`` and travelling WITH it. Without this list a bank
@@ -5984,6 +6040,331 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
         if normalized is None:
             raise RuntimeError('invalid Bank/Dataset transfer metadata')
         return normalized
+    return (metadata_by_index, captions_by_index, bank_id_at,
+            caption_origin_at, framing_at, snapshot_at, watermark_state_at,
+            watermark_bbox_at, watermark_regions_at, watermark_source_at,
+            watermark_score_at, status_at, transfer_metadata_at)
+
+
+def _imp_prepare_seal(snapshot_at, index, stored, dataset_id):
+    """Bank-promotion analysis prep for ONE image, moved verbatim: when a
+    snapshot marker rides with this index, recompute deterministic analysis
+    from the final stored bytes and keep the captured cache bundle only on
+    a byte-identical fingerprint. Returns the ``seal_analysis_snapshot``
+    closure the duplicate-absorb and commit steps call at the last moment
+    (it writes the cache sidecar, so it must run only when a row is about
+    to commit)."""
+    final_analysis = None
+    captured_analysis = None
+    captured_cache_bundle = None
+    if snapshot_at(index) is not None:
+        final_analysis = bank_deterministic_analysis(stored)
+        if final_analysis is None:
+            raise RuntimeError('could not seal Bank analysis for Dataset image')
+        captured_analysis = (
+            snapshot_at(index) if isinstance(snapshot_at(index), dict) else None)
+        captured_matches = (
+            captured_analysis is not None
+            and captured_analysis.get('fingerprint')
+            == bank_transfer_metadata.content_fingerprint_bytes(stored))
+        if captured_matches and captured_analysis.get('caches'):
+            captured_cache_bundle = captured_analysis['caches']
+
+    def seal_analysis_snapshot():
+        """Persist the sidecar only when this candidate is about to commit."""
+        if final_analysis is None:
+            return None, None
+        cache_ref = None
+        try:
+            if captured_cache_bundle:
+                cache_ref = bank_transfer_metadata.write_cache_sidecar(
+                    _bank_analysis_cache_dir(dataset_id), captured_cache_bundle)
+                if cache_ref is None:
+                    raise RuntimeError(
+                        'could not preserve Bank Score/Face cache in Dataset')
+            snapshot = bank_transfer_metadata.snapshot_storage(
+                final_analysis, stored, captured=captured_analysis,
+                cache_ref=cache_ref)
+            if snapshot is None:
+                raise RuntimeError(
+                    'could not seal Bank analysis for Dataset image')
+            return snapshot, cache_ref
+        except Exception:
+            _remove_unreferenced_bank_analysis_cache(dataset_id, cache_ref)
+            raise
+    return seal_analysis_snapshot
+
+
+def _imp_dedupe_match(dedupe, stored, seen, dataset_id,
+                      preserve_exact_bytes):
+    """The perceptual-duplicate scan, moved verbatim: dHash the stored
+    bytes, walk the ``seen`` cache refreshing entries whose row changed on
+    disk and evicting stale ones in place, and refuse a merely-similar
+    match when exact bytes must be preserved. Returns (fp, match) — fp for
+    the trunk to cache on commit, match as the row id this image
+    duplicates (None when it is new or dedupe is off)."""
+    match = None
+    fp = None
+    if dedupe:
+        try:
+            with Image.open(io.BytesIO(stored)) as im:
+                fp = _dhash(im)
+        except (OSError, ValueError):
+            fp = None   # unreadable output would have failed above; belt & braces
+        if fp is not None:
+            match = None
+            stale_ids = set()
+            for cached_hash, mid in tuple(seen):
+                if _hamming(fp, cached_hash) > SCRAPE_DHASH_MAX_DISTANCE:
+                    continue
+                live = (FaceDatasetImage.query
+                        .filter(
+                            FaceDatasetImage.id == mid,
+                            FaceDatasetImage.dataset_id == dataset_id,
+                            FaceDatasetImage.status.in_(('keep', 'pending')))
+                        .first())
+                if live is None or not live.filename:
+                    stale_ids.add(mid)
+                    continue
+                try:
+                    live_path = os.path.join(
+                        _dataset_dir(dataset_id), live.filename)
+                    if (preserve_exact_bytes
+                            and Path(live_path).read_bytes() != stored):
+                        # Perceptually similar is not byte-identical and
+                        # cannot carry this image's exact analysis vault.
+                        continue
+                    with Image.open(live_path) as im:
+                        live_hash = _dhash(im)
+                except (OSError, ValueError):
+                    stale_ids.add(mid)
+                    continue
+                if live_hash != cached_hash:
+                    for cache_index, (_old_hash, cached_id) in enumerate(seen):
+                        if cached_id == mid:
+                            seen[cache_index] = (live_hash, mid)
+                            break
+                if _hamming(fp, live_hash) <= SCRAPE_DHASH_MAX_DISTANCE:
+                    match = mid
+                    break
+            if stale_ids:
+                seen[:] = [
+                    (h, mid) for h, mid in seen if mid not in stale_ids
+                ]
+    return fp, match
+
+
+def _imp_absorb_duplicate(match, index, stats, dataset_id, bank_id_at,
+                          seal_analysis_snapshot, provenance_changes_sink):
+    """What happens to a blob the dataset already holds, moved verbatim:
+    count it, hand its bank provenance to the row that owns the bytes
+    (sealing the analysis sidecar first), report an unlinkable bank id
+    back through stats, and record the provenance flip for the caller's
+    rollback bookkeeping — with the rollback/finally pairing that never
+    leaves the session dirty or the cache sidecar orphaned."""
+    if stats is not None:
+        stats['duplicates'] = stats.get('duplicates', 0) + 1
+    # The dataset already holds this image — hand the provenance to
+    # the row that holds it, so the source can tell it landed. When
+    # that row is already claimed (another bank supplied the same
+    # photo first), report the id back: the caller has no verifiable
+    # trace here and needs to fall back on its own bookkeeping.
+    bid = bank_id_at(index)
+    analysis_snapshot = None
+    analysis_cache_ref = None
+    try:
+        if bid:
+            analysis_snapshot, analysis_cache_ref = (
+                seal_analysis_snapshot())
+        linked_before = db.session.get(FaceDatasetImage, match)
+        previous = ((linked_before.bank_image_id,
+                     linked_before.bank_analysis_snapshot)
+                    if linked_before is not None else None)
+        linked = (bool(bid) and _attach_bank_provenance(
+            match, bid, bank_analysis_snapshot=analysis_snapshot,
+            bank_analysis_cache_dir=_bank_analysis_cache_dir(
+                dataset_id)))
+        linked_after = db.session.get(FaceDatasetImage, match)
+        if (provenance_changes_sink is not None
+                and previous is not None
+                and linked_after is not None
+                and previous != (linked_after.bank_image_id,
+                                linked_after.bank_analysis_snapshot)):
+            provenance_changes_sink.append({
+                'image_id': match,
+                'old_bank_image_id': previous[0],
+                'old_snapshot': previous[1],
+                'new_bank_image_id': linked_after.bank_image_id,
+                'new_snapshot': linked_after.bank_analysis_snapshot,
+            })
+        if bid and not linked and stats is not None:
+            stats.setdefault('bank_unlinked', []).append(bid)
+    except Exception:
+        # `_attach_bank_provenance` commits on success.  A fault
+        # before that commit leaves the session unusable until
+        # rollback; a fault after it is resolved by the durable
+        # ownership proof in `finally` below.
+        db.session.rollback()
+        raise
+    finally:
+        _remove_unreferenced_bank_analysis_cache(
+            dataset_id, analysis_cache_ref)
+    logger.info(f"dataset import: perceptual duplicate skipped (dataset {dataset_id})")
+
+
+def _imp_commit_row(user_id, dataset_id, index, stored, extension, scale,
+                    seal_analysis_snapshot, transfer_metadata_at,
+                    captions_by_index, metadata_by_index, status_at,
+                    framing_at, caption_origin_at, bank_id_at,
+                    watermark_state_at, watermark_bbox_at,
+                    watermark_regions_at, watermark_source_at,
+                    watermark_score_at):
+    """One image's atomic landing, moved verbatim: seal the analysis
+    sidecar, restore transfer-metadata values, write the file atomically,
+    insert the row and commit — and on ANY failure roll back, unlink the
+    uncommitted file and drop the now-unreferenced cache sidecar before
+    re-raising. Returns the committed row."""
+    analysis_snapshot, analysis_cache_ref = seal_analysis_snapshot()
+    transfer_metadata = transfer_metadata_at(index)
+    restored = bank_transfer_metadata.dataset_restore_values(
+        transfer_metadata,
+        bank_transfer_metadata.content_fingerprint_bytes(stored))
+    fn = f"{user_id}_dataset_{uuid.uuid4().hex[:8]}{extension}"
+    stored_path = os.path.join(_dataset_dir(dataset_id), fn)
+    try:
+        write_image_atomic(stored_path, stored)
+        cap = (captions_by_index[index] if index < len(captions_by_index) else None)
+        cap = _cap_caption(cap) if (cap or '').strip() else None
+        restored_short = restored.get('caption_short')
+        restored_short = (_cap_caption(restored_short)
+                          if isinstance(restored_short, str)
+                          and restored_short.strip() else None)
+        restored_short_origin = (restored.get('caption_short_origin')
+                                 if restored_short else None)
+        img = FaceDatasetImage(
+                               dataset_id=dataset_id,
+                               source=restored.get('source') or 'import',
+                               status=status_at(index),
+                               filename=fn, framing=framing_at(index),
+                               variation_label=restored.get('variation_label'),
+                               variation_prompt=restored.get('variation_prompt'),
+                               klein_model=restored.get('klein_model'),
+                               face_score=restored.get('face_score'),
+                               face_state=restored.get('face_state'),
+                               fail_reason=restored.get('fail_reason'),
+                               fail_kind=restored.get('fail_kind'),
+                               upscale_ratio=(restored.get('upscale_ratio')
+                                              if restored.get('upscale_ratio')
+                                              is not None else scale),
+                               caption=cap, caption_short=restored_short,
+                               caption_origin=caption_origin_at(index, cap),
+                               caption_short_origin=restored_short_origin,
+                               bank_image_id=bank_id_at(index),
+                               bank_analysis_snapshot=analysis_snapshot,
+                               transfer_metadata=transfer_metadata,
+                               watermark_state=watermark_state_at(index),
+                               watermark_bbox=watermark_bbox_at(index),
+                               watermark_regions=watermark_regions_at(index),
+                               watermark_source=watermark_source_at(index),
+                               watermark_score=watermark_score_at(index),
+                               source_metadata=_source_metadata_storage(
+                                   metadata_by_index[index]
+                                   if index < len(metadata_by_index) else None))
+        db.session.add(img)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        try:
+            os.unlink(stored_path)
+        except FileNotFoundError:
+            pass   # already gone: exactly what the rollback wanted
+        except OSError:
+            logger.warning('dataset import: could not remove uncommitted image %s',
+                           stored_path, exc_info=True)
+        _remove_unreferenced_bank_analysis_cache(
+            dataset_id, analysis_cache_ref)
+        raise
+    return img
+
+
+@_serialize_dataset_ingest
+def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, stats=None,
+                  source_metadata=None, captions=None, caption_origins=None,
+                  bank_image_ids=None,
+                  framings=None, bank_analysis_snapshots=None,
+                  watermark_states=None, watermark_bboxes=None,
+                  watermark_regions=None, watermark_sources=None,
+                  watermark_scores=None, statuses=None,
+                  transfer_metadatas=None, dedupe_seen=None,
+                  preserve_exact_bytes=False, created_ids_sink=None,
+                  provenance_changes_sink=None):
+    """Store original static bytes (or head-crop) + create import rows (status=keep).
+    When crop=True, each image is auto head-cropped via Qwen3-VL - the CALLER
+    must then hold the GPU-exclusive window - and is by construction a face,
+    so framing='face' is set directly (no classify pass needed).
+
+    dedupe=True (the /import route) drops perceptual duplicates by dHash — both
+    within the batch and vs the dataset's existing files. The hash is computed on
+    the final stored image, so a re-import of the same photo matches its earlier
+    crop instead of comparing a full frame to a head crop. Skips are counted in
+    stats['duplicates'] when a stats dict is passed.
+    Default stays False: service-level callers (scrape flow dedupes upstream on
+    the ORIGINALS, before paying the crop) keep the historical behavior.
+
+    ``source_metadata`` is an optional list parallel to ``files_bytes``. Only
+    validated Pexels or web-search provenance is stored; existing callers can omit it.
+
+    ``captions`` is an optional list parallel to ``files_bytes`` — a pre-existing
+    caption to carry onto the new row (the image-bank promotion path passes the bank
+    captions here, so a promoted selection starts already captioned). Empty/None entries
+    leave the row uncaptioned. A skipped duplicate simply drops its caption with it.
+
+    ``framings`` is an optional list parallel to ``files_bytes`` — a framing
+    ALREADY known for the blob (the image-bank promotion path passes the framing
+    its own classify pass wrote, so a promoted selection lands counted in the
+    composition instead of sitting at 0 until something re-classifies it). Only
+    the catalog buckets are accepted; anything else lands as None so the dataset
+    classifier can still fill it. Ignored when crop=True (a head crop IS a face).
+
+    ``bank_image_ids`` is an optional list parallel to ``files_bytes`` — the
+    bank_image each blob came from, recorded on the new row. A blob dropped as a
+    perceptual DUPLICATE hands its bank id to the row it matched (when that row
+    carries none yet): the dataset does hold that bank image, just under another
+    row, and the bank's "already promoted here" answer must say so. That link is
+    what lets the bank re-offer an image once the user deletes it here. Bank ids
+    that could NOT be linked (the matched row already belongs to another bank —
+    a scalar column can only credit one) are listed in ``stats['bank_unlinked']``.
+
+    ``bank_analysis_snapshots`` is an internal Bank-promotion marker parallel to
+    ``files_bytes``.  When present, this importer recalculates deterministic
+    quality/provenance from the final Dataset bytes and seals a v3 snapshot with
+    their SHA-256.  A byte-identical Bank capture also retains its complete row
+    analysis plus path-free Score/Face embeddings in a bounded sidecar; a
+    transformed image gets deterministic analysis only.  The regular current
+    Dataset fields stay separate and remain user-owned.
+
+    ``dedupe_seen`` is an optional internal mutable cache of ``(dhash, row_id)``
+    pairs for chunked imports. When omitted, the importer loads the dataset's
+    existing hashes itself, preserving the standalone-call behavior.
+
+    Returns (ids, failed_count)."""
+    ds = get_dataset(user_id, dataset_id)
+    if not ds:
+        return [], 0
+    # Sans head-crop, on préserve le ratio ET les octets source autorisés : l'ancien
+    # chemin « carré padé » ajoutait des bandes noires que le LoRA apprendrait, et
+    # forçait tous les imports personnage en carré — un plan buste/corps importé
+    # doit rester tel quel (ai-toolkit gère le bucketing multi-ratios).
+    seen = (dedupe_seen if dedupe_seen is not None
+            else _existing_dhash_rows(dataset_id)) if dedupe else None
+    (metadata_by_index, captions_by_index, bank_id_at, caption_origin_at,
+     framing_at, snapshot_at, watermark_state_at, watermark_bbox_at,
+     watermark_regions_at, watermark_source_at, watermark_score_at,
+     status_at, transfer_metadata_at) = _imp_input_accessors(
+        crop, source_metadata, captions, caption_origins, bank_image_ids,
+        framings, bank_analysis_snapshots, watermark_states,
+        watermark_bboxes, watermark_regions, watermark_sources,
+        watermark_scores, statuses, transfer_metadatas)
 
     ids = []
     failed = 0
@@ -5996,7 +6377,7 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
                 if min(_import_header_dimensions(raw)) < SCRAPE_IMPORT_MIN_SIDE:
                     stats['small'] = stats.get('small', 0) + 1
             except Exception:
-                pass
+                pass   # the counter feeds a toast: an unreadable header must not fail the import
         try:
             if preserve_exact_bytes:
                 if crop:
@@ -6020,201 +6401,22 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
             failed += 1
             logger.warning(f"dataset import: image skipped (dataset {dataset_id}): {e}")
             continue
-        final_analysis = None
-        captured_analysis = None
-        captured_cache_bundle = None
-        if snapshot_at(index) is not None:
-            final_analysis = bank_deterministic_analysis(stored)
-            if final_analysis is None:
-                raise RuntimeError('could not seal Bank analysis for Dataset image')
-            captured_analysis = (
-                snapshot_at(index) if isinstance(snapshot_at(index), dict) else None)
-            captured_matches = (
-                captured_analysis is not None
-                and captured_analysis.get('fingerprint')
-                == bank_transfer_metadata.content_fingerprint_bytes(stored))
-            if captured_matches and captured_analysis.get('caches'):
-                captured_cache_bundle = captured_analysis['caches']
-
-        def seal_analysis_snapshot():
-            """Persist the sidecar only when this candidate is about to commit."""
-            if final_analysis is None:
-                return None, None
-            cache_ref = None
-            try:
-                if captured_cache_bundle:
-                    cache_ref = bank_transfer_metadata.write_cache_sidecar(
-                        _bank_analysis_cache_dir(dataset_id), captured_cache_bundle)
-                    if cache_ref is None:
-                        raise RuntimeError(
-                            'could not preserve Bank Score/Face cache in Dataset')
-                snapshot = bank_transfer_metadata.snapshot_storage(
-                    final_analysis, stored, captured=captured_analysis,
-                    cache_ref=cache_ref)
-                if snapshot is None:
-                    raise RuntimeError(
-                        'could not seal Bank analysis for Dataset image')
-                return snapshot, cache_ref
-            except Exception:
-                _remove_unreferenced_bank_analysis_cache(dataset_id, cache_ref)
-                raise
-        fp = None
-        if dedupe:
-            try:
-                with Image.open(io.BytesIO(stored)) as im:
-                    fp = _dhash(im)
-            except (OSError, ValueError):
-                fp = None   # unreadable output would have failed above; belt & braces
-            if fp is not None:
-                match = None
-                stale_ids = set()
-                for cached_hash, mid in tuple(seen):
-                    if _hamming(fp, cached_hash) > SCRAPE_DHASH_MAX_DISTANCE:
-                        continue
-                    live = (FaceDatasetImage.query
-                            .filter(
-                                FaceDatasetImage.id == mid,
-                                FaceDatasetImage.dataset_id == dataset_id,
-                                FaceDatasetImage.status.in_(('keep', 'pending')))
-                            .first())
-                    if live is None or not live.filename:
-                        stale_ids.add(mid)
-                        continue
-                    try:
-                        live_path = os.path.join(
-                            _dataset_dir(dataset_id), live.filename)
-                        if (preserve_exact_bytes
-                                and Path(live_path).read_bytes() != stored):
-                            # Perceptually similar is not byte-identical and
-                            # cannot carry this image's exact analysis vault.
-                            continue
-                        with Image.open(live_path) as im:
-                            live_hash = _dhash(im)
-                    except (OSError, ValueError):
-                        stale_ids.add(mid)
-                        continue
-                    if live_hash != cached_hash:
-                        for cache_index, (_old_hash, cached_id) in enumerate(seen):
-                            if cached_id == mid:
-                                seen[cache_index] = (live_hash, mid)
-                                break
-                    if _hamming(fp, live_hash) <= SCRAPE_DHASH_MAX_DISTANCE:
-                        match = mid
-                        break
-                if stale_ids:
-                    seen[:] = [
-                        (h, mid) for h, mid in seen if mid not in stale_ids
-                    ]
-                if match is not None:
-                    if stats is not None:
-                        stats['duplicates'] = stats.get('duplicates', 0) + 1
-                    # The dataset already holds this image — hand the provenance to
-                    # the row that holds it, so the source can tell it landed. When
-                    # that row is already claimed (another bank supplied the same
-                    # photo first), report the id back: the caller has no verifiable
-                    # trace here and needs to fall back on its own bookkeeping.
-                    bid = bank_id_at(index)
-                    analysis_snapshot = None
-                    analysis_cache_ref = None
-                    try:
-                        if bid:
-                            analysis_snapshot, analysis_cache_ref = (
-                                seal_analysis_snapshot())
-                        linked_before = db.session.get(FaceDatasetImage, match)
-                        previous = ((linked_before.bank_image_id,
-                                     linked_before.bank_analysis_snapshot)
-                                    if linked_before is not None else None)
-                        linked = (bool(bid) and _attach_bank_provenance(
-                            match, bid, bank_analysis_snapshot=analysis_snapshot,
-                            bank_analysis_cache_dir=_bank_analysis_cache_dir(
-                                dataset_id)))
-                        linked_after = db.session.get(FaceDatasetImage, match)
-                        if (provenance_changes_sink is not None
-                                and previous is not None
-                                and linked_after is not None
-                                and previous != (linked_after.bank_image_id,
-                                                linked_after.bank_analysis_snapshot)):
-                            provenance_changes_sink.append({
-                                'image_id': match,
-                                'old_bank_image_id': previous[0],
-                                'old_snapshot': previous[1],
-                                'new_bank_image_id': linked_after.bank_image_id,
-                                'new_snapshot': linked_after.bank_analysis_snapshot,
-                            })
-                        if bid and not linked and stats is not None:
-                            stats.setdefault('bank_unlinked', []).append(bid)
-                    except Exception:
-                        # `_attach_bank_provenance` commits on success.  A fault
-                        # before that commit leaves the session unusable until
-                        # rollback; a fault after it is resolved by the durable
-                        # ownership proof in `finally` below.
-                        db.session.rollback()
-                        raise
-                    finally:
-                        _remove_unreferenced_bank_analysis_cache(
-                            dataset_id, analysis_cache_ref)
-                    logger.info(f"dataset import: perceptual duplicate skipped (dataset {dataset_id})")
-                    continue
-        analysis_snapshot, analysis_cache_ref = seal_analysis_snapshot()
-        transfer_metadata = transfer_metadata_at(index)
-        restored = bank_transfer_metadata.dataset_restore_values(
-            transfer_metadata,
-            bank_transfer_metadata.content_fingerprint_bytes(stored))
-        fn = f"{user_id}_dataset_{uuid.uuid4().hex[:8]}{extension}"
-        stored_path = os.path.join(_dataset_dir(dataset_id), fn)
-        try:
-            write_image_atomic(stored_path, stored)
-            cap = (captions_by_index[index] if index < len(captions_by_index) else None)
-            cap = _cap_caption(cap) if (cap or '').strip() else None
-            restored_short = restored.get('caption_short')
-            restored_short = (_cap_caption(restored_short)
-                              if isinstance(restored_short, str)
-                              and restored_short.strip() else None)
-            restored_short_origin = (restored.get('caption_short_origin')
-                                     if restored_short else None)
-            img = FaceDatasetImage(
-                                   dataset_id=dataset_id,
-                                   source=restored.get('source') or 'import',
-                                   status=status_at(index),
-                                   filename=fn, framing=framing_at(index),
-                                   variation_label=restored.get('variation_label'),
-                                   variation_prompt=restored.get('variation_prompt'),
-                                   klein_model=restored.get('klein_model'),
-                                   face_score=restored.get('face_score'),
-                                   face_state=restored.get('face_state'),
-                                   fail_reason=restored.get('fail_reason'),
-                                   fail_kind=restored.get('fail_kind'),
-                                   upscale_ratio=(restored.get('upscale_ratio')
-                                                  if restored.get('upscale_ratio')
-                                                  is not None else scale),
-                                   caption=cap, caption_short=restored_short,
-                                   caption_origin=caption_origin_at(index, cap),
-                                   caption_short_origin=restored_short_origin,
-                                   bank_image_id=bank_id_at(index),
-                                   bank_analysis_snapshot=analysis_snapshot,
-                                   transfer_metadata=transfer_metadata,
-                                   watermark_state=watermark_state_at(index),
-                                   watermark_bbox=watermark_bbox_at(index),
-                                   watermark_regions=watermark_regions_at(index),
-                                   watermark_source=watermark_source_at(index),
-                                   watermark_score=watermark_score_at(index),
-                                   source_metadata=_source_metadata_storage(
-                                       metadata_by_index[index]
-                                       if index < len(metadata_by_index) else None))
-            db.session.add(img)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-            try:
-                os.unlink(stored_path)
-            except FileNotFoundError:
-                pass
-            except OSError:
-                logger.warning('dataset import: could not remove uncommitted image %s',
-                               stored_path, exc_info=True)
-            _remove_unreferenced_bank_analysis_cache(
-                dataset_id, analysis_cache_ref)
-            raise
+        seal_analysis_snapshot = _imp_prepare_seal(
+            snapshot_at, index, stored, dataset_id)
+        fp, match = _imp_dedupe_match(
+            dedupe, stored, seen, dataset_id, preserve_exact_bytes)
+        if match is not None:
+            _imp_absorb_duplicate(
+                match, index, stats, dataset_id, bank_id_at,
+                seal_analysis_snapshot, provenance_changes_sink)
+            continue
+        img = _imp_commit_row(
+            user_id, dataset_id, index, stored, extension, scale,
+            seal_analysis_snapshot, transfer_metadata_at,
+            captions_by_index, metadata_by_index, status_at, framing_at,
+            caption_origin_at, bank_id_at, watermark_state_at,
+            watermark_bbox_at, watermark_regions_at, watermark_source_at,
+            watermark_score_at)
         if dedupe and fp is not None:
             seen.append((fp, img.id))
         ids.append(img.id)
@@ -6335,7 +6537,7 @@ def _merge_training_images(user_id, dataset_id, entries, captions, stats=None):
                 if min(_import_header_dimensions(raw)) < SCRAPE_IMPORT_MIN_SIDE:
                     stats['small'] = stats.get('small', 0) + 1
             except Exception:
-                pass
+                pass   # the counter feeds a toast: an unreadable header must not fail the import
         try:
             stored, extension = import_store_image(raw)
         except Exception as e:
@@ -6362,7 +6564,7 @@ def _merge_training_images(user_id, dataset_id, entries, captions, stats=None):
                 # overwritten — an import cannot silently rewrite curated work.
                 if stats is not None:
                     stats['duplicates'] = stats.get('duplicates', 0) + 1
-                row = FaceDatasetImage.query.get(match) if incoming else None
+                row = db.session.get(FaceDatasetImage, match) if incoming else None
                 if row is not None:
                     if (row.caption or '').strip():
                         if stats is not None:
@@ -6441,7 +6643,7 @@ def import_dataset_zip(user_id: int, dataset_id: int,
                     except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile,
                             zlib.error, lzma.LZMAError, NotImplementedError,
                             RuntimeError):
-                        pass
+                        pass   # unreadable member: the image imports uncaptioned
             entries = [
                 (os.path.splitext(i.filename)[0], i.filename,
                  lambda i=i: z.read(i))
@@ -6512,7 +6714,7 @@ def import_dataset_folder(user_id, dataset_id, folder, stats=None):
                     captions[os.path.splitext(p)[0]] = \
                         fh.read().decode('utf-8', 'replace').strip()
             except OSError:
-                pass
+                pass   # unreadable caption file: the image imports uncaptioned
 
     def _read(p):
         source_stat = os.lstat(p)
@@ -6562,7 +6764,10 @@ def _dhash(im: Image.Image) -> int:
     au resize/re-encodage, donc stable entre un scrape original et sa version
     normalisée webp déjà importée."""
     g = im.convert('L').resize((9, 8), Image.LANCZOS)
-    px = list(g.getdata())
+    # tobytes(), not getdata(): identical values for mode 'L' (row-major,
+    # no padding) and getdata() is deprecated for removal in Pillow 14 -
+    # same swap video_safe_zone already carries.
+    px = g.tobytes()
     bits = 0
     for row in range(8):
         for col in range(8):
@@ -6673,7 +6878,7 @@ def _existing_dhash_rows(dataset_id) -> list:
             with Image.open(os.path.join(_dataset_dir(dataset_id), r.filename)) as im:
                 out.append((_dhash(im), r.id))
         except (OSError, ValueError):
-            continue
+            continue   # unreadable image: it cannot match a dHash anyway
     return out
 
 
@@ -6960,8 +7165,39 @@ def _parse_classify(raw):
     return fr, (label or None)
 
 
-def classify_images(user_id, dataset_id):
-    """Classify imported images lacking a framing via Qwen3-VL. Returns count."""
+def _classify_pool(dataset_id, force=False):
+    """The rows the framing pass will classify.
+
+    ONE definition for the job, matching the Bank's ``_framing_pool``: the
+    dataset UI counts this same set (``classifyFramingGate.js``), so a button
+    that announces N must act on N.
+
+    Default: every image that has a file and whose framing is still NULL —
+    imported without a shot type, or cropped since the last classify (crop
+    clears framing, same as the Bank). ``force`` re-reads tagged files too
+    (the Bank's framing rescan; no dataset button exposes it).
+    """
+    q = FaceDatasetImage.query.filter_by(dataset_id=dataset_id).filter(
+        FaceDatasetImage.filename.isnot(None),
+        FaceDatasetImage.filename != '')
+    if not force:
+        q = q.filter(FaceDatasetImage.framing.is_(None))
+    return q
+
+
+def classify_images(user_id, dataset_id, force=False, report=None):
+    """Classify images via Qwen3-VL. Returns how many rows were written.
+
+    Default fills images that still have no shot type (any source — a crop
+    clears framing so this pass is what re-reads it). ``force`` re-classifies
+    every image that has a file (the Bank's framing ``rescan``).
+    An empty vision answer leaves the row untouched, so a retry can finish it
+    without wiping a value that was already there.
+
+    ``report``, when a dict, is filled with ``attempted`` / ``unanswered`` /
+    ``missing`` / ``vanished`` so the UI can tell "looked at them, model said
+    nothing" from "the pool was empty" — both used to arrive as classified=0.
+    """
     _guard_not_bank_export(dataset_id)
     try:
         from .vision_ollama import describe_image_ollama, unload_vision_model
@@ -6970,14 +7206,13 @@ def classify_images(user_id, dataset_id):
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         return 0
-    rows = FaceDatasetImage.query.filter_by(
-        dataset_id=dataset_id, source='import', framing=None).all()
+    rows = _classify_pool(dataset_id, force).all()
     # Ids, not ORM objects: see _live_image_row. The commit at the bottom of this
     # loop expires every row it has not reached, and a tile deleted from the grid
     # meanwhile used to kill the whole classification.
     row_ids = [img.id for img in rows]
     n = 0
-    vanished = 0
+    vanished = unanswered = missing = 0
     # Persistent progress indicator (survives a page reload): try/finally guarantees
     # end() runs even if the batch raises → no phantom "Classifying…" spinner.
     token = dataset_activity.begin(dataset_id, 'classify', total=len(row_ids))
@@ -6990,14 +7225,23 @@ def classify_images(user_id, dataset_id):
                 continue
             path = _img_path(img) if img.filename else ''
             if not os.path.exists(path):
+                missing += 1
                 continue
             with open(path, 'rb') as fh:
-                raw = describe_image_ollama(fh.read(), CLASSIFY_PROMPT, num_predict=1200,
-                                            prefer_json=True, keep_alive=_VISION_BATCH_KEEPALIVE)
+                # fmt='json' is the Bank framing call, and the head-crop call:
+                # without the grammar a reasoning/abliterated checkpoint rambles
+                # a <think> trace past num_predict and `response` comes back
+                # empty — the toast then blames Ollama for a silent no-answer.
+                raw = describe_image_ollama(
+                    fh.read(), CLASSIFY_PROMPT, num_predict=400,
+                    prefer_json=True, fmt='json',
+                    keep_alive=_VISION_BATCH_KEEPALIVE,
+                    auto_start_local=(i == 0))
             if not (raw or '').strip():
                 # Échec vision (Ollama indisponible) ≠ « framing indéterminé » :
                 # on laisse framing=None (retry possible) au lieu d'écrire 'unknown'
                 # définitivement, qui bloquerait toute reclassification.
+                unanswered += 1
                 continue
             framing, label = _parse_classify(raw)
             img.framing = framing
@@ -7010,6 +7254,11 @@ def classify_images(user_id, dataset_id):
     if vanished:
         logger.info('classify: %s image(s) were deleted while the pass ran, skipped',
                     vanished)
+    if report is not None:
+        report['attempted'] = len(row_ids)
+        report['unanswered'] = unanswered
+        report['missing'] = missing
+        report['vanished'] = vanished
     return n
 
 
@@ -7244,6 +7493,199 @@ def _enforce_concept_omission(caption, leak_re, image_bytes, concept_desc, descr
     return caption
 
 
+def _caption_write_blocked(img, *, force, spare_asserted, field='caption'):
+    """A caption that appeared on the row while its image sat in inference wins
+    over the machine's answer: the pass planned its work minutes ago, and a
+    human has typed since. Mirror of the bank pass's mid-pass guard — the two
+    surfaces must spare hand-written words the same way."""
+    if not force and (getattr(img, field, None) or '').strip():
+        return True
+    return spare_asserted and caption_origin.is_protected(img, field=field)
+
+
+def _cc_store_joy_drafts(ds, refine_targets, remaining, jc_errors, concept_desc,
+                         force, spare_asserted, token, report, outcome):
+    """Forced-JoyCaption store: mechanical scrub of the Joy drafts, refused
+    images counted as handled. Moved verbatim from _caption_concept; returns
+    the (written, vanished, spared) deltas."""
+    n = 0
+    vanished = 0
+    spared = 0
+    if remaining:
+        dataset_activity.bump(token, len(remaining))
+        _record_caption_skips(outcome, remaining, jc_errors)
+        logger.info('caption concept: %d image(s) refused by JoyCaption, first '
+                    'reason: %s', len(remaining),
+                    _first_caption_skip_reason(remaining, jc_errors))
+    leak_re = _concept_terms_re(_fallback_concept_terms(concept_desc))
+    for image_id, p, joycap in refine_targets:
+        if dataset_activity.cancel_requested(ds.id):
+            break   # graceful stop at an image boundary (see caption_images)
+        dataset_activity.bump(token)
+        img = _live_image_row(image_id)
+        if img is None:      # deleted while the pass ran
+            vanished += 1
+            continue
+        if _caption_write_blocked(img, force=force, spare_asserted=spare_asserted):
+            spared += 1
+            continue
+        try:
+            with open(p, 'rb') as fh:
+                data = fh.read()
+        except OSError:
+            data = b''
+        final = _enforce_concept_omission(joycap, leak_re, data, concept_desc) or joycap
+        caption_origin.stamp(img, _cap_caption(_with_camera_pose_phrase(img, final)),
+                             caption_origin.JOYCAPTION)
+        db.session.commit()
+        n += 1
+        _writer(report, CAPTION_WRITER_JOYCAPTION)
+    return n, vanished, spared
+
+
+def _cc_refine_joy_drafts(ds, refine_targets, describe, leak_re, cap_prompt,
+                          concept_desc, extra_instructions, force,
+                          spare_asserted, token, report):
+    """Qwen refine of each Joy draft with the direct-Qwen and Joy-draft
+    fallbacks and the ban-list enforcement. Moved verbatim from
+    _caption_concept; stops at an image boundary on cancel and returns the
+    (written, vanished, spared) deltas."""
+    n = 0
+    vanished = 0
+    spared = 0
+    for image_id, p, joycap in refine_targets:
+        if dataset_activity.cancel_requested(ds.id):
+            break   # graceful stop at an image boundary (see caption_images)
+        dataset_activity.bump(token)
+        with open(p, 'rb') as fh:
+            data = fh.read()
+        refined = ''
+        # The refine prompt is where the concept-omitting caption is actually
+        # PRODUCED when JoyCaption is available (the dominant path), so the
+        # per-dataset extra instructions — including the NSFW vocabulary preset —
+        # must ride here too. Applied ONLY to cap_prompt before, they never reached
+        # the refine, so an 'explicit' preset silently produced a neutral caption:
+        # the (abliterated) refiner rewrote the crude Joy draft "as a clean caption"
+        # with no register directive. Empty extras keep the prompt byte-identical.
+        refine_prompt = _with_caption_instructions(
+            CAPTION_REFINE_CONCEPT_PROMPT.format(existing=joycap,
+                                                 concept=concept_desc),
+            extra_instructions)
+        try:
+            refined = describe(
+                data, refine_prompt,
+                num_predict=5000,
+                keep_alive=_VISION_BATCH_KEEPALIVE,
+                timeout=(10, 300))
+        except Exception as e:  # noqa: BLE001 - refine best-effort
+            logger.warning('caption concept: Qwen refine failed (%s)', e)
+        refined = (refined or '').strip().strip('"').strip()
+        # Which engine gets the credit follows the text through the three
+        # outcomes below, rather than being decided by the branch we are in:
+        # a Joy draft kept because the refine was unusable is JoyCaption's
+        # sentence, not Qwen's.
+        writer = CAPTION_WRITER_REFINED
+        if _refine_output_ok(refined, joycap):
+            final = refined
+            origin = caption_origin.OLLAMA
+        else:
+            # Unusable refine (reasoning trace / loop) -> direct Qwen caption
+            # (natively omits the concept), else keep the Joy draft.
+            logger.info('caption concept: refine rejected -> direct Qwen (image %s)',
+                        image_id)
+            alt = ''
+            try:
+                alt = describe(data, cap_prompt, num_predict=2000,
+                               keep_alive=_VISION_BATCH_KEEPALIVE,
+                               timeout=(10, 300))
+            except Exception:  # noqa: BLE001
+                alt = ''
+            alt = (alt or '').strip().strip('"').strip()
+            final = alt or joycap
+            writer = CAPTION_WRITER_OLLAMA if alt else CAPTION_WRITER_JOYCAPTION
+            origin = caption_origin.OLLAMA if alt else caption_origin.JOYCAPTION
+        final = _enforce_concept_omission(final, leak_re, data, concept_desc,
+                                          describe=describe) or final
+        # Re-read only now: everything above is model work measured in
+        # seconds per image, and the tile can be deleted during it.
+        img = _live_image_row(image_id)
+        if img is None:
+            vanished += 1
+            continue
+        if _caption_write_blocked(img, force=force, spare_asserted=spare_asserted):
+            spared += 1
+            continue
+        if not _usable_caption(final):
+            # Refine AND direct both unusable → fall back to the Joy draft (clean
+            # prose), scrubbed of any leak; leave blank if even that fails.
+            final = _enforce_concept_omission(joycap, leak_re, data, concept_desc,
+                                              describe=describe) or joycap
+            writer = CAPTION_WRITER_JOYCAPTION
+            origin = caption_origin.JOYCAPTION
+            if not _usable_caption(final):
+                # force=re-do-all: overwrite any stale pre-fix caption with blank
+                # (trigger-only is valid for a concept LoRA) rather than retain it.
+                # The stamp is cleared WITH the text: a blanked row must not keep
+                # an origin describing a sentence that no longer exists.
+                if force and (img.caption or ''):
+                    caption_origin.stamp(img, '', None)
+                    db.session.commit()
+                logger.info('caption concept: no usable caption for image %s '
+                            '-> left blank', image_id)
+                continue
+        caption_origin.stamp(img, _cap_caption(_with_camera_pose_phrase(img, final)),
+                             origin)
+        db.session.commit()
+        n += 1
+        _writer(report, writer)
+    return n, vanished, spared
+
+
+def _cc_direct_captions(ds, remaining, describe, leak_re, cap_prompt,
+                        concept_desc, force, spare_asserted, token, report):
+    """Direct-Qwen caption of the images JoyCaption never drafted. Moved
+    verbatim from _caption_concept; same cancel/deltas contract as the
+    refine loop."""
+    n = 0
+    vanished = 0
+    spared = 0
+    for image_id, p in remaining:
+        if dataset_activity.cancel_requested(ds.id):
+            break   # graceful stop at an image boundary (see caption_images)
+        dataset_activity.bump(token)
+        with open(p, 'rb') as fh:
+            data = fh.read()
+        cap = describe(
+            data, cap_prompt, num_predict=2000,
+            keep_alive=_VISION_BATCH_KEEPALIVE,
+            auto_start_local=True, timeout=(10, 300))
+        cap = (cap or '').strip().strip('"').strip()
+        if cap:
+            cap = _enforce_concept_omission(cap, leak_re, data, concept_desc,
+                                            describe=describe) or cap
+        # Re-read after the call, for the same reason as the refine loop.
+        img = _live_image_row(image_id)
+        if img is None:
+            vanished += 1
+            continue
+        if _caption_write_blocked(img, force=force, spare_asserted=spare_asserted):
+            spared += 1
+            continue
+        if _usable_caption(cap):
+            caption_origin.stamp(img, _cap_caption(_with_camera_pose_phrase(img, cap)),
+                                 caption_origin.OLLAMA)
+            db.session.commit()
+            n += 1
+            _writer(report, CAPTION_WRITER_OLLAMA)
+        else:
+            if force and (img.caption or ''):
+                caption_origin.stamp(img, '', None)
+                db.session.commit()
+            logger.info('caption concept: no usable direct caption for image '
+                        '%s -> left blank', image_id)
+    return n, vanished, spared
+
+
 def _caption_concept(ds, force, backend, token=None, image_ids=None,
                      ollama_model=None, extra_instructions='', report=None,
                      outcome=None):
@@ -7268,8 +7710,15 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
     q = FaceDatasetImage.query.filter_by(dataset_id=ds.id, status='keep')
     if image_ids is not None:
         q = q.filter(FaceDatasetImage.id.in_(image_ids))
+    # A forced BATCH spares the captions a human wrote or corrected ('asserted')
+    # — the promise the caption editor's tooltip makes. Naming images is the
+    # explicit opt-out: the leak panel re-captions a leaking caption no matter
+    # who wrote it. Same shape as the bank pass (start_caption).
+    spare_asserted = bool(force) and image_ids is None
     if not force:
         q = q.filter((FaceDatasetImage.caption.is_(None)) | (FaceDatasetImage.caption == ''))
+    elif spare_asserted:
+        q = q.filter(caption_origin.unprotected_clause(FaceDatasetImage))
     # (image_id, path), not (row, path): the loops below commit per image and
     # this pass runs for a long time over a live grid. See _live_image_row.
     todo = [(img.id, _img_path(img)) for img in q.all() if img.filename]
@@ -7281,6 +7730,7 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                               detail=f'Preparing {len(todo)} concept caption(s)…')
     n = 0
     vanished = 0
+    spared = 0           # hand-written ('asserted') captions left untouched
     remaining = list(todo)
     refine_targets = []  # (image_id, p, joycap) -> Joy draft refined by Qwen
     # 1) JoyCaption batch (draft) when the backend allows it.
@@ -7318,31 +7768,12 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
         # Ollama pass follows. Counting them here is what keeps the indicator from
         # freezing short of the total on a pass that is actually finished; the same
         # freeze was reported on the main lane and fixed there (see caption_images).
-        if remaining:
-            dataset_activity.bump(token, len(remaining))
-            _record_caption_skips(outcome, remaining, jc_errors)
-            logger.info('caption concept: %d image(s) refused by JoyCaption, first '
-                        'reason: %s', len(remaining),
-                        _first_caption_skip_reason(remaining, jc_errors))
-        leak_re = _concept_terms_re(_fallback_concept_terms(concept_desc))
-        for image_id, p, joycap in refine_targets:
-            if dataset_activity.cancel_requested(ds.id):
-                break   # graceful stop at an image boundary (see caption_images)
-            dataset_activity.bump(token)
-            img = _live_image_row(image_id)
-            if img is None:      # deleted while the pass ran
-                vanished += 1
-                continue
-            try:
-                with open(p, 'rb') as fh:
-                    data = fh.read()
-            except OSError:
-                data = b''
-            final = _enforce_concept_omission(joycap, leak_re, data, concept_desc) or joycap
-            caption_origin.stamp(img, _cap_caption(final), caption_origin.JOYCAPTION)
-            db.session.commit()
-            n += 1
-            _writer(report, CAPTION_WRITER_JOYCAPTION)
+        jn, jv, js = _cc_store_joy_drafts(
+            ds, refine_targets, remaining, jc_errors, concept_desc, force,
+            spare_asserted, token, report, outcome)
+        n += jn
+        vanished += jv
+        spared += js
         return n
     # 2b) Qwen passes ('auto'/'ollama'): refine Joy drafts, direct-caption the rest, all
     #     enforced. One model load -> unload once at the end.
@@ -7364,117 +7795,18 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
         leak_re = _concept_terms_re(_get_concept_terms(ds, image_path=sample,
                                                        describe=describe))
         try:
-            for image_id, p, joycap in refine_targets:
-                if dataset_activity.cancel_requested(ds.id):
-                    break   # graceful stop at an image boundary (see caption_images)
-                dataset_activity.bump(token)
-                with open(p, 'rb') as fh:
-                    data = fh.read()
-                refined = ''
-                # The refine prompt is where the concept-omitting caption is actually
-                # PRODUCED when JoyCaption is available (the dominant path), so the
-                # per-dataset extra instructions — including the NSFW vocabulary preset —
-                # must ride here too. Applied ONLY to cap_prompt before, they never reached
-                # the refine, so an 'explicit' preset silently produced a neutral caption:
-                # the (abliterated) refiner rewrote the crude Joy draft "as a clean caption"
-                # with no register directive. Empty extras keep the prompt byte-identical.
-                refine_prompt = _with_caption_instructions(
-                    CAPTION_REFINE_CONCEPT_PROMPT.format(existing=joycap,
-                                                         concept=concept_desc),
-                    extra_instructions)
-                try:
-                    refined = describe(
-                        data, refine_prompt,
-                        num_predict=5000,
-                        keep_alive=_VISION_BATCH_KEEPALIVE,
-                        timeout=(10, 300))
-                except Exception as e:  # noqa: BLE001 - refine best-effort
-                    logger.warning('caption concept: Qwen refine failed (%s)', e)
-                refined = (refined or '').strip().strip('"').strip()
-                # Which engine gets the credit follows the text through the three
-                # outcomes below, rather than being decided by the branch we are in:
-                # a Joy draft kept because the refine was unusable is JoyCaption's
-                # sentence, not Qwen's.
-                writer = CAPTION_WRITER_REFINED
-                if _refine_output_ok(refined, joycap):
-                    final = refined
-                    origin = caption_origin.OLLAMA
-                else:
-                    # Unusable refine (reasoning trace / loop) -> direct Qwen caption
-                    # (natively omits the concept), else keep the Joy draft.
-                    logger.info('caption concept: refine rejected -> direct Qwen (image %s)',
-                                image_id)
-                    alt = ''
-                    try:
-                        alt = describe(data, cap_prompt, num_predict=2000,
-                                       keep_alive=_VISION_BATCH_KEEPALIVE,
-                                       timeout=(10, 300))
-                    except Exception:  # noqa: BLE001
-                        alt = ''
-                    alt = (alt or '').strip().strip('"').strip()
-                    final = alt or joycap
-                    writer = CAPTION_WRITER_OLLAMA if alt else CAPTION_WRITER_JOYCAPTION
-                    origin = caption_origin.OLLAMA if alt else caption_origin.JOYCAPTION
-                final = _enforce_concept_omission(final, leak_re, data, concept_desc,
-                                                  describe=describe) or final
-                # Re-read only now: everything above is model work measured in
-                # seconds per image, and the tile can be deleted during it.
-                img = _live_image_row(image_id)
-                if img is None:
-                    vanished += 1
-                    continue
-                if not _usable_caption(final):
-                    # Refine AND direct both unusable → fall back to the Joy draft (clean
-                    # prose), scrubbed of any leak; leave blank if even that fails.
-                    final = _enforce_concept_omission(joycap, leak_re, data, concept_desc,
-                                                      describe=describe) or joycap
-                    writer = CAPTION_WRITER_JOYCAPTION
-                    origin = caption_origin.JOYCAPTION
-                    if not _usable_caption(final):
-                        # force=re-do-all: overwrite any stale pre-fix caption with blank
-                        # (trigger-only is valid for a concept LoRA) rather than retain it.
-                        # The stamp is cleared WITH the text: a blanked row must not keep
-                        # an origin describing a sentence that no longer exists.
-                        if force and (img.caption or ''):
-                            caption_origin.stamp(img, '', None)
-                            db.session.commit()
-                        logger.info('caption concept: no usable caption for image %s '
-                                    '-> left blank', image_id)
-                        continue
-                caption_origin.stamp(img, _cap_caption(final), origin)
-                db.session.commit()
-                n += 1
-                _writer(report, writer)
-            for image_id, p in remaining:
-                if dataset_activity.cancel_requested(ds.id):
-                    break   # graceful stop at an image boundary (see caption_images)
-                dataset_activity.bump(token)
-                with open(p, 'rb') as fh:
-                    data = fh.read()
-                cap = describe(
-                    data, cap_prompt, num_predict=2000,
-                    keep_alive=_VISION_BATCH_KEEPALIVE,
-                    auto_start_local=True, timeout=(10, 300))
-                cap = (cap or '').strip().strip('"').strip()
-                if cap:
-                    cap = _enforce_concept_omission(cap, leak_re, data, concept_desc,
-                                                    describe=describe) or cap
-                # Re-read after the call, for the same reason as the refine loop.
-                img = _live_image_row(image_id)
-                if img is None:
-                    vanished += 1
-                    continue
-                if _usable_caption(cap):
-                    caption_origin.stamp(img, _cap_caption(cap), caption_origin.OLLAMA)
-                    db.session.commit()
-                    n += 1
-                    _writer(report, CAPTION_WRITER_OLLAMA)
-                else:
-                    if force and (img.caption or ''):
-                        caption_origin.stamp(img, '', None)
-                        db.session.commit()
-                    logger.info('caption concept: no usable direct caption for image '
-                                '%s -> left blank', image_id)
+            rn, rv, rs = _cc_refine_joy_drafts(
+                ds, refine_targets, describe, leak_re, cap_prompt, concept_desc,
+                extra_instructions, force, spare_asserted, token, report)
+            n += rn
+            vanished += rv
+            spared += rs
+            dn, dv, ds_ = _cc_direct_captions(
+                ds, remaining, describe, leak_re, cap_prompt, concept_desc,
+                force, spare_asserted, token, report)
+            n += dn
+            vanished += dv
+            spared += ds_
         finally:
             if ollama_model:
                 unload_vision_model(model=ollama_model)
@@ -7483,6 +7815,8 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
     if vanished:
         logger.info('caption concept: %s image(s) were deleted while the pass ran, '
                     'skipped', vanished)
+    if spared:
+        logger.info('caption concept: %s hand-written caption(s) spared', spared)
     return n
 
 
@@ -7589,18 +7923,26 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
         # (tatouages/cicatrices/piercings…) et le post-filtre les retire — elles doivent
         # se lier au trigger, pas aux mots (même principe que le visage).
         body = is_body_fidelity(ds)
-        cap_prompt = caption_prompt_for(mode, body=body)
+        appearance = (opts.get('appearance') or None) or None
+        cap_prompt = caption_prompt_for(mode, body=body, appearance=appearance)
         base_cleaner = drop_identity_tags if mode == 'booru' else drop_identity_sentences
         def cleaner(text):
-            return base_cleaner(text, body=body)
+            return base_cleaner(text, body=body, appearance=appearance)
     # Extra user instructions ride at the END of the prompt (both engines) — the kind
     # omission rules stay first, and the cleaner above still post-filters the output.
     cap_prompt = _with_caption_instructions(cap_prompt, extra_instructions)
     q = FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep')
     if ids is not None:
         q = q.filter(FaceDatasetImage.id.in_(ids))
+    # A forced BATCH spares the captions a human wrote or corrected ('asserted')
+    # — the promise the caption editor's tooltip makes. Naming images is the
+    # explicit opt-out: the leak panel re-captions a leaking caption no matter
+    # who wrote it. Same shape as the bank pass (start_caption).
+    spare_asserted = bool(force) and ids is None
     if not force:
         q = q.filter((FaceDatasetImage.caption.is_(None)) | (FaceDatasetImage.caption == ''))
+    elif spare_asserted:
+        q = q.filter(caption_origin.unprotected_clause(FaceDatasetImage))
     rows = q.all()
     # (image_id, path), not (row, path): both loops below commit per image, which
     # expires every row still to come, and this pass runs for minutes-to-hours
@@ -7621,6 +7963,7 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
     try:
         n = 0
         vanished = 0
+        spared = 0           # hand-written ('asserted') captions left untouched
         remaining = todo
         # In 'auto', why JoyCaption didn't contribute (deps missing / crash). Kept so a
         # LATER Ollama failure reports BOTH reasons instead of only the Ollama one —
@@ -7670,9 +8013,15 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                         vanished += 1
                         dataset_activity.bump(token)
                         continue
+                    if _caption_write_blocked(img, force=force,
+                                              spare_asserted=spare_asserted):
+                        spared += 1
+                        dataset_activity.bump(token)
+                        continue
                     cleaned = cleaner(cap) or cap
-                    caption_origin.stamp(img, _cap_caption(cleaned),
-                                         caption_origin.JOYCAPTION)
+                    caption_origin.stamp(
+                        img, _cap_caption(_with_camera_pose_phrase(img, cleaned)),
+                        caption_origin.JOYCAPTION)
                     db.session.commit()
                     n += 1
                     _writer(report, CAPTION_WRITER_JOYCAPTION)
@@ -7731,11 +8080,17 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                             vanished += 1
                             dataset_activity.bump(token)
                             continue
+                        if _caption_write_blocked(img, force=force,
+                                                  spare_asserted=spare_asserted):
+                            spared += 1
+                            dataset_activity.bump(token)
+                            continue
                         cleaned = cleaner(cap) or cap
                         # Which engine wrote THIS row, not which backend was asked
                         # for: in 'auto' the two branches both write inside one run.
-                        caption_origin.stamp(img, _cap_caption(cleaned),
-                                             caption_origin.OLLAMA)
+                        caption_origin.stamp(
+                            img, _cap_caption(_with_camera_pose_phrase(img, cleaned)),
+                            caption_origin.OLLAMA)
                         db.session.commit()
                         n += 1
                         _writer(report, CAPTION_WRITER_OLLAMA)
@@ -7751,8 +8106,9 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
             finally:
                 unload_vision_model()  # libère la VRAM pour ComfyUI en fin de batch
         logger.info('captioning finished: dataset=%s backend=%s captioned=%s '
-                    'deleted_mid_pass=%s elapsed=%.1fs',
-                    dataset_id, backend, n, vanished, time.monotonic() - started)
+                    'deleted_mid_pass=%s spared_asserted=%s elapsed=%.1fs',
+                    dataset_id, backend, n, vanished, spared,
+                    time.monotonic() - started)
         return n
     except Exception:
         logger.exception('captioning failed: dataset=%s backend=%s elapsed=%.1fs',
@@ -8050,8 +8406,13 @@ def _shorten_prompt(ds, long_caption) -> str:
         rule = (f'Never mention or describe this recurring element: '
                 f'{(ds.concept_desc or "").strip()}. Keep it fully omitted.\n')
     else:
-        rule = ("Never mention or describe the person's identity, face, or facial "
-                'features.\n')
+        appearance = caption_options(ds).get('appearance') or None
+        if appearance:
+            rule = ('Never mention or describe: '
+                    f'{appearance_omit_shorten_clause(appearance)}.\n')
+        else:
+            rule = ("Never mention or describe the person's identity, face, or facial "
+                    'features.\n')
     return f'{_SHORTEN_BASE}{rule}\nCAPTION:\n{(long_caption or "").strip()}\n'
 
 
@@ -8071,7 +8432,8 @@ def _scrub_short_like_long(ds, text, mode) -> str:
         return _enforce_concept_omission(t, leak_re, b'', (ds.concept_desc or '').strip(),
                                          describe=None) or ''
     cleaner = drop_identity_tags if mode == 'booru' else drop_identity_sentences
-    return cleaner(t, body=is_body_fidelity(ds)) or ''
+    return cleaner(t, body=is_body_fidelity(ds),
+                   appearance=(caption_options(ds).get('appearance') or None)) or ''
 
 
 def derive_short_captions(user_id, dataset_id, image_ids=None, force=False, mode=None,
@@ -8100,8 +8462,14 @@ def derive_short_captions(user_id, dataset_id, image_ids=None, force=False, mode
             return 0
         q = q.filter(FaceDatasetImage.id.in_(ids))
     rows = [i for i in q.all() if (i.caption or '').strip()]
+    # Same promise as the long pass: a forced batch never rewrites a short a
+    # human typed in the expanded editor; naming images is the explicit opt-out.
+    spare_asserted = bool(force) and image_ids is None
     if not force:
         rows = [i for i in rows if not (i.caption_short or '').strip()]
+    elif spare_asserted:
+        rows = [i for i in rows
+                if not caption_origin.is_protected(i, field='caption_short')]
     if not rows:
         return 0
     if generate is None:
@@ -8150,6 +8518,9 @@ def derive_short_captions(user_id, dataset_id, image_ids=None, force=False, mode
             img = _live_image_row(image_id)
             if img is None:      # deleted DURING its own generation
                 vanished += 1
+                continue
+            if _caption_write_blocked(img, force=force, spare_asserted=spare_asserted,
+                                      field='caption_short'):
                 continue
             # The SHORT gets its own stamp, on its own column: this pass derives it
             # with a text model while the long caption above it may well have been
@@ -8686,7 +9057,7 @@ def _preserve_original(path) -> bool:
             try:
                 os.unlink(staged_backup)
             except OSError:
-                pass
+                pass   # already gone: the backup owed nothing
 
 
 def _stage_oriented_watermark_edit(path) -> str | None:
@@ -8724,7 +9095,7 @@ def _stage_oriented_watermark_edit(path) -> str | None:
             try:
                 os.unlink(staged)
             except OSError:
-                pass
+                pass   # already gone: the staged copy owed nothing
         return None
 
 
@@ -8747,7 +9118,7 @@ def _discard_staged_watermark_edit(staged_path) -> None:
     try:
         os.unlink(staged_path)
     except OSError:
-        pass
+        pass   # already gone: the staged copy owed nothing
 
 
 def _apply_watermark_crop(path, box) -> bool:
@@ -8964,7 +9335,10 @@ def _detect_watermarks_detector(dataset_id, row_ids, *, include_dismissed,
 
     token = dataset_activity.begin(dataset_id, 'watermark_detect', total=len(planned))
     try:
-        for path, state, score, regions, _error in watermark_detector.scan(
+        # Six fields, same as the bank's read of this generator. The fingerprint
+        # only feeds the bank's stale-write attestation — a dataset row has no
+        # such column, so it is deliberately dropped here, not missing.
+        for path, state, score, regions, _fingerprint, _error in watermark_detector.scan(
                 [p for _i, p in planned], should_cancel=_cancelled,
                 cancel_file=cancel_file):
             dataset_activity.bump(token)
@@ -9067,74 +9441,21 @@ def _clean_inpaint_engine(route, method):
     return 'lama' if route == 'lama' else 'review'
 
 
-@_serialize_dataset_ingest
-def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='auto',
-                     allow_crop=None):
-    """Apply the crop/inpaint/review routing to every image marked 'detected'. Returns
-    ({'cropped', 'inpainted', 'inpainted_klein', 'needs_review', 'failed', 'skipped'},
-    error|None) -- same tuple contract as score_dataset_faces: `error` is None unless an
-    inpaint that was ATTEMPTED failed (never a silent swallow). Crop stays in PIL.
-
-    `allow_crop` gates the border-crop route (see _route_watermark). None (the default)
-    resolves the persisted `watermark.allow_crop` preference, so a plain call and the
-    batch Clean button both honour Settings; the review lightbox passes an explicit
-    True/False to force crop or inpaint for ONE image. When False, a border mark is
-    repainted (LaMa/Klein per `method`) instead of cropped -- nothing else changes.
-
-    `method` selects the inpaint engine (the batch UI's LaMa|Klein toggle):
-      - 'auto'/'lama' → LaMa (fast, non-generative) for small off-center marks; on-subject
-        marks stay 'review'. Uses the resolved CPU/GPU `device`; GPU mode is protected by
-        the route's exclusive window.
-      - 'klein' → masked Flux.2 Klein inpaint + pixel-space composite for the off-center
-        AND the on-subject marks (making 'review' actionable). Each image is one serialized
-        ComfyUI round-trip; `device` is irrelevant (ComfyUI owns the GPU).
-
-    LaMa absent (probe False) is NOT an error: LaMa-routed images are counted as
-    `skipped` (crop still runs) so the UI can nudge "install the ML extras". Klein absent
-    is likewise `skipped`.
-
-    image_ids (optional): restrict the pass to this subset -- the review lightbox cleans
-    ONE image at a time. The filter still requires watermark_state='detected' AND
-    dataset ownership, so a stale/foreign id is a no-op (never touches another dataset,
-    never re-edits an already-cleaned image). None = every detected image (bulk button)."""
-    from . import watermark_lama, watermark_klein
-    ds = get_dataset(user_id, dataset_id)
-    if not ds:
-        raise ValueError('dataset not found')
-    # None = "no explicit choice" -> fall back to the persisted preference (default
-    # True), so the batch button follows Settings; the lightbox passes a real bool.
-    if allow_crop is None:
-        allow_crop = bool(cfg.get('watermark.allow_crop'))
-    q = (FaceDatasetImage.query
-         .filter_by(dataset_id=dataset_id, watermark_state='detected')
-         .filter(FaceDatasetImage.filename.isnot(None)))
-    if image_ids is not None:
-        ids = [int(i) for i in (image_ids or [])
-               if isinstance(i, (int, float, str)) and str(i).lstrip('-').isdigit()]
-        q = q.filter(FaceDatasetImage.id.in_(ids or [-1]))   # empty subset -> match nothing
-    rows = q.all()
-    row_ids = [img.id for img in rows]
-    out = {'cropped': 0, 'inpainted': 0, 'inpainted_klein': 0, 'needs_review': 0,
-           'failed': 0, 'skipped': 0}
+def _wm_route_images(user_id, row_ids, token, method, allow_crop, lama_ok,
+                     klein_ok, klein_model, out):
+    """The per-image watermark routing pass, moved verbatim (2026-08-23)
+    together with its two closures — they rebind ``error`` via nonlocal,
+    so every writer of that cell lives in this one scope. Manual regions
+    route to Klein or LaMa staging; a detected bbox routes through
+    _route_watermark to crop, inpaint or review. Returns
+    (lama_pending, error, vanished) — the staged LaMa work, the last
+    attempted-and-failed error, and the rows deleted mid-pass."""
+    from . import watermark_klein
     # NOT a key in `out`: that dict is the route's response shape and existing
     # tests pin it. 'skipped' already means "engine unavailable" and must not be
     # overloaded with "the image no longer exists". Logged at the end instead.
     vanished = 0
     error = None
-    lama_ok = watermark_lama.is_available()
-    klein_ok = method == 'klein' and watermark_klein.is_available()
-    # The Klein model this DATASET runs on — the same pick ✨ improve and Klein
-    # generation use. A watermark clean overwrites the image in place, so running
-    # it on a model the dataset did not choose is the one lane where the swap
-    # cannot be spotted afterwards by comparing to a source.
-    klein_model = dataset_klein_model(ds)
-    if klein_ok and klein_model:
-        # Refuse the WHOLE pass by name, before a single file is touched: every
-        # image would fail identically, and a half-cleaned dataset is worse than
-        # an untouched one. None (never chose) skips this — nothing was promised.
-        from . import klein_edit_helper as keh
-        if not keh.klein_model_on_disk(klein_model):
-            raise keh.KleinModelGone(klein_model)
     # (image_id, live_path, staged_path, bboxes, manual_regions). An ID, not an
     # ORM row: this list is carried across the whole per-image loop AND across
     # the LaMa batch, which runs for minutes -- by the time the tail loop writes,
@@ -9205,6 +9526,269 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
                     error = err
         finally:
             _discard_staged_watermark_edit(staged)
+
+    for i, image_id in enumerate(row_ids):
+        dataset_activity.progress(token, done=i + 1)
+        img = _live_image_row(image_id)
+        if img is None:      # deleted while the pass ran
+            vanished += 1
+            continue
+        path = _img_path(img)
+        if img.watermark_regions is not None:
+            try:
+                regions = normalize_watermark_regions(
+                    _safe_json(img.watermark_regions), allow_null=False,
+                )
+            except ValueError as e:
+                out['failed'] += 1
+                error = {'kind': 'failed',
+                         'detail': f'invalid watermark regions: {e}'}
+                db.session.commit()
+                continue
+            if not regions:
+                out['needs_review'] += 1
+                db.session.commit()
+                continue
+            if not os.path.exists(path):
+                out['failed'] += 1
+                db.session.commit()
+                continue
+            if method == 'klein':
+                _run_klein(img, path, regions, True)
+                db.session.commit()
+                continue
+            if not lama_ok:
+                out['skipped'] += 1
+                db.session.commit()
+                continue
+            staged = _stage_oriented_watermark_edit(path)
+            if not staged:
+                out['failed'] += 1
+                error = {'kind': 'failed',
+                         'detail': 'could not stage image EXIF orientation'}
+                db.session.commit()
+                continue
+            if not _preserve_original(path):
+                _backup_failed(img, staged)
+                db.session.commit()
+                continue
+            lama_pending.append((img.id, path, staged, regions, True))
+            continue
+        bbox = _safe_json(img.watermark_bbox)
+        if not (isinstance(bbox, list) and len(bbox) == 4):
+            # Flagged, position unknown. The detector cascade produces this
+            # legitimately (its locator found nothing) and promotion carries
+            # it in from a bank; stamping 'failed' would DESTROY a correct
+            # flag over a missing coordinate. It goes to manual review, where
+            # a zone can be drawn — the same answer the bank gives.
+            out['needs_review'] += 1
+            db.session.commit()
+            continue
+        if not os.path.exists(path):
+            img.watermark_state = 'failed'
+            out['failed'] += 1
+            db.session.commit()
+            continue
+        try:
+            with Image.open(path) as im:
+                # Stored detection boxes are in the browser/VLM's upright
+                # coordinate space, never the raw camera raster. This branch
+                # may route to review/no-op, so keep it header-only until an
+                # actual crop/staging edit needs the pixels.
+                W, H = image_encoding.visual_size_from_header(im)
+        except (OSError, ValueError):
+            img.watermark_state = 'failed'
+            out['failed'] += 1
+            db.session.commit()
+            continue
+        route, box = _route_watermark(tuple(bbox), W, H, allow_crop=allow_crop)
+        if route == 'crop':
+            if not _preserve_original(path):
+                _backup_failed(img)
+            elif _apply_watermark_crop(path, box):
+                # NOTE dHash: the perceptual hash used for import-dedupe is recomputed
+                # ON THE FLY from the file (_existing_dhashes / _dhash), NOT stored in a
+                # column -- there is no stored dHash to leave untouched. So after a crop
+                # the dedupe compares against the CLEANED pixels; re-importing the same
+                # watermarked visual is NOT guaranteed to dedupe against it (a border
+                # crop shifts the whole hash). Preserving the original-dHash behaviour the
+                # spec asks for would need a new stored column -> deferred (out of V1 scope).
+                img.watermark_state = 'cleaned'
+                out['cropped'] += 1
+            else:
+                img.watermark_state = 'failed'
+                out['failed'] += 1
+        else:
+            engine = _clean_inpaint_engine(route, method)
+            if engine == 'klein':
+                _run_klein(img, path, [bbox], False)
+            elif engine == 'lama':
+                if not lama_ok:
+                    out['skipped'] += 1      # leave state='detected' (crop-only mode)
+                else:
+                    staged = _stage_oriented_watermark_edit(path)
+                    if staged:
+                        if _preserve_original(path):
+                            lama_pending.append((img.id, path, staged, [bbox], False))
+                        else:
+                            _backup_failed(img, staged)
+                    else:
+                        img.watermark_state = 'failed'
+                        out['failed'] += 1
+                        error = {'kind': 'failed',
+                                 'detail': 'could not stage image EXIF orientation'}
+            else:  # 'review' -> stays 'detected' so the badge/count keep flagging it
+                out['needs_review'] += 1
+        db.session.commit()
+    return lama_pending, error, vanished
+
+
+def _wm_lama_tail(dataset_id, lama_pending, device, out, error, vanished):
+    """The LaMa batch tail, moved verbatim: one call for a single staged
+    image (manual regions vs single bbox), one batch otherwise; every
+    result is promoted onto a re-fetched LIVE row (the pass runs for
+    minutes and rows get deleted under it), an engine fault marks the
+    non-manual rows failed, and the finally sweep discards every staged
+    disposable copy. Returns the updated (error, vanished)."""
+    from . import watermark_lama
+    if lama_pending:
+        try:
+            if len(lama_pending) == 1:
+                _pid, live_path, staged_path, boxes, manual = lama_pending[0]
+                if manual:
+                    ok, err = watermark_lama.inpaint_watermarks(
+                        staged_path, boxes,
+                        **({'device': device} if device != 'cpu' else {}))
+                else:
+                    ok, err = watermark_lama.inpaint_watermark(
+                        staged_path, boxes[0],
+                        **({'device': device} if device != 'cpu' else {}))
+                results = {staged_path: (ok, err)}
+            else:
+                results = watermark_lama.inpaint_batch(
+                    [{'image_path': staged_path, 'bboxes': boxes}
+                     for _pid, _live_path, staged_path, boxes, _manual in lama_pending],
+                    device=device,
+                )
+            for pending_id, live_path, staged_path, _boxes, manual in lama_pending:
+                img = _live_image_row(pending_id)
+                if img is None:
+                    # Deleted while the batch ran: there is no row left to
+                    # point at the repainted file, so drop the staged edit
+                    # rather than promote it over a master nobody owns.
+                    _discard_staged_watermark_edit(staged_path)
+                    vanished += 1
+                    continue
+                ok, err = results.get(
+                    staged_path,
+                    (False, {'kind': 'failed', 'detail': 'missing inpaint result'}),
+                )
+                if ok and _promote_staged_watermark_edit(staged_path, live_path):
+                    # Kept, for the reason spelled out in the Klein lane above.
+                    img.watermark_state = 'cleaned'
+                    out['inpainted'] += 1
+                elif ok:
+                    if not manual:
+                        img.watermark_state = 'failed'
+                    out['failed'] += 1
+                    error = {'kind': 'failed',
+                             'detail': 'could not promote staged watermark edit'}
+                elif err and err.get('kind') == 'unavailable':
+                    out['skipped'] += 1
+                else:
+                    # Manual correction regions are user-authored retry metadata. Keep
+                    # the image detected when LaMa fails so Clean can be retried.
+                    if not manual:
+                        img.watermark_state = 'failed'
+                    out['failed'] += 1
+                    if err:
+                        error = err
+                db.session.commit()
+        except Exception as exc:  # engine/process faults must not leak a staged edit
+            logger.exception('watermark: LaMa execution failed for dataset %s', dataset_id)
+            error = {'kind': 'failed', 'detail': f'watermark inpaint failed: {exc}'}
+            for pending_id, _live_path, _staged_path, _boxes, manual in lama_pending:
+                img = _live_image_row(pending_id)
+                if img is None:
+                    vanished += 1
+                    continue
+                if not manual:
+                    img.watermark_state = 'failed'
+                out['failed'] += 1
+                db.session.commit()
+        finally:
+            # The engine can crash before returning a result; in that case its
+            # disposable EXIF-oriented copy still has to disappear, while the
+            # master remains exactly where it was.
+            for _pid, _live_path, staged_path, _boxes, _manual in lama_pending:
+                _discard_staged_watermark_edit(staged_path)
+    return error, vanished
+
+
+@_serialize_dataset_ingest
+def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='auto',
+                     allow_crop=None):
+    """Apply the crop/inpaint/review routing to every image marked 'detected'. Returns
+    ({'cropped', 'inpainted', 'inpainted_klein', 'needs_review', 'failed', 'skipped'},
+    error|None) -- same tuple contract as score_dataset_faces: `error` is None unless an
+    inpaint that was ATTEMPTED failed (never a silent swallow). Crop stays in PIL.
+
+    `allow_crop` gates the border-crop route (see _route_watermark). None (the default)
+    resolves the persisted `watermark.allow_crop` preference, so a plain call and the
+    batch Clean button both honour Settings; the review lightbox passes an explicit
+    True/False to force crop or inpaint for ONE image. When False, a border mark is
+    repainted (LaMa/Klein per `method`) instead of cropped -- nothing else changes.
+
+    `method` selects the inpaint engine (the batch UI's LaMa|Klein toggle):
+      - 'auto'/'lama' → LaMa (fast, non-generative) for small off-center marks; on-subject
+        marks stay 'review'. Uses the resolved CPU/GPU `device`; GPU mode is protected by
+        the route's exclusive window.
+      - 'klein' → masked Flux.2 Klein inpaint + pixel-space composite for the off-center
+        AND the on-subject marks (making 'review' actionable). Each image is one serialized
+        ComfyUI round-trip; `device` is irrelevant (ComfyUI owns the GPU).
+
+    LaMa absent (probe False) is NOT an error: LaMa-routed images are counted as
+    `skipped` (crop still runs) so the UI can nudge "install the ML extras". Klein absent
+    is likewise `skipped`.
+
+    image_ids (optional): restrict the pass to this subset -- the review lightbox cleans
+    ONE image at a time. The filter still requires watermark_state='detected' AND
+    dataset ownership, so a stale/foreign id is a no-op (never touches another dataset,
+    never re-edits an already-cleaned image). None = every detected image (bulk button)."""
+    from . import watermark_lama, watermark_klein
+    ds = get_dataset(user_id, dataset_id)
+    if not ds:
+        raise ValueError('dataset not found')
+    # None = "no explicit choice" -> fall back to the persisted preference (default
+    # True), so the batch button follows Settings; the lightbox passes a real bool.
+    if allow_crop is None:
+        allow_crop = bool(cfg.get('watermark.allow_crop'))
+    q = (FaceDatasetImage.query
+         .filter_by(dataset_id=dataset_id, watermark_state='detected')
+         .filter(FaceDatasetImage.filename.isnot(None)))
+    if image_ids is not None:
+        ids = [int(i) for i in (image_ids or [])
+               if isinstance(i, (int, float, str)) and str(i).lstrip('-').isdigit()]
+        q = q.filter(FaceDatasetImage.id.in_(ids or [-1]))   # empty subset -> match nothing
+    rows = q.all()
+    row_ids = [img.id for img in rows]
+    out = {'cropped': 0, 'inpainted': 0, 'inpainted_klein': 0, 'needs_review': 0,
+           'failed': 0, 'skipped': 0}
+    lama_ok = watermark_lama.is_available()
+    klein_ok = method == 'klein' and watermark_klein.is_available()
+    # The Klein model this DATASET runs on — the same pick ✨ improve and Klein
+    # generation use. A watermark clean overwrites the image in place, so running
+    # it on a model the dataset did not choose is the one lane where the swap
+    # cannot be spotted afterwards by comparing to a source.
+    klein_model = dataset_klein_model(ds)
+    if klein_ok and klein_model:
+        # Refuse the WHOLE pass by name, before a single file is touched: every
+        # image would fail identically, and a half-cleaned dataset is worse than
+        # an untouched one. None (never chose) skips this — nothing was promised.
+        from . import klein_edit_helper as keh
+        if not keh.klein_model_on_disk(klein_model):
+            raise keh.KleinModelGone(klein_model)
+
     # Persistent progress indicator (survives a page reload). The device is included
     # so the UI can honestly state whether ComfyUI is paused for the GPU pass.
     device_label = 'GPU' if device == 'cuda' else 'CPU'
@@ -9212,190 +9796,11 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
         dataset_id, 'watermark_clean', total=len(rows),
         detail=f'Cleaning watermarks on {device_label}…')
     try:
-        for i, image_id in enumerate(row_ids):
-            dataset_activity.progress(token, done=i + 1)
-            img = _live_image_row(image_id)
-            if img is None:      # deleted while the pass ran
-                vanished += 1
-                continue
-            path = _img_path(img)
-            if img.watermark_regions is not None:
-                try:
-                    regions = normalize_watermark_regions(
-                        _safe_json(img.watermark_regions), allow_null=False,
-                    )
-                except ValueError as e:
-                    out['failed'] += 1
-                    error = {'kind': 'failed',
-                             'detail': f'invalid watermark regions: {e}'}
-                    db.session.commit()
-                    continue
-                if not regions:
-                    out['needs_review'] += 1
-                    db.session.commit()
-                    continue
-                if not os.path.exists(path):
-                    out['failed'] += 1
-                    db.session.commit()
-                    continue
-                if method == 'klein':
-                    _run_klein(img, path, regions, True)
-                    db.session.commit()
-                    continue
-                if not lama_ok:
-                    out['skipped'] += 1
-                    db.session.commit()
-                    continue
-                staged = _stage_oriented_watermark_edit(path)
-                if not staged:
-                    out['failed'] += 1
-                    error = {'kind': 'failed',
-                             'detail': 'could not stage image EXIF orientation'}
-                    db.session.commit()
-                    continue
-                if not _preserve_original(path):
-                    _backup_failed(img, staged)
-                    db.session.commit()
-                    continue
-                lama_pending.append((img.id, path, staged, regions, True))
-                continue
-            bbox = _safe_json(img.watermark_bbox)
-            if not (isinstance(bbox, list) and len(bbox) == 4):
-                # Flagged, position unknown. The detector cascade produces this
-                # legitimately (its locator found nothing) and promotion carries
-                # it in from a bank; stamping 'failed' would DESTROY a correct
-                # flag over a missing coordinate. It goes to manual review, where
-                # a zone can be drawn — the same answer the bank gives.
-                out['needs_review'] += 1
-                db.session.commit()
-                continue
-            if not os.path.exists(path):
-                img.watermark_state = 'failed'
-                out['failed'] += 1
-                db.session.commit()
-                continue
-            try:
-                with Image.open(path) as im:
-                    # Stored detection boxes are in the browser/VLM's upright
-                    # coordinate space, never the raw camera raster. This branch
-                    # may route to review/no-op, so keep it header-only until an
-                    # actual crop/staging edit needs the pixels.
-                    W, H = image_encoding.visual_size_from_header(im)
-            except (OSError, ValueError):
-                img.watermark_state = 'failed'
-                out['failed'] += 1
-                db.session.commit()
-                continue
-            route, box = _route_watermark(tuple(bbox), W, H, allow_crop=allow_crop)
-            if route == 'crop':
-                if not _preserve_original(path):
-                    _backup_failed(img)
-                elif _apply_watermark_crop(path, box):
-                    # NOTE dHash: the perceptual hash used for import-dedupe is recomputed
-                    # ON THE FLY from the file (_existing_dhashes / _dhash), NOT stored in a
-                    # column -- there is no stored dHash to leave untouched. So after a crop
-                    # the dedupe compares against the CLEANED pixels; re-importing the same
-                    # watermarked visual is NOT guaranteed to dedupe against it (a border
-                    # crop shifts the whole hash). Preserving the original-dHash behaviour the
-                    # spec asks for would need a new stored column -> deferred (out of V1 scope).
-                    img.watermark_state = 'cleaned'
-                    out['cropped'] += 1
-                else:
-                    img.watermark_state = 'failed'
-                    out['failed'] += 1
-            else:
-                engine = _clean_inpaint_engine(route, method)
-                if engine == 'klein':
-                    _run_klein(img, path, [bbox], False)
-                elif engine == 'lama':
-                    if not lama_ok:
-                        out['skipped'] += 1      # leave state='detected' (crop-only mode)
-                    else:
-                        staged = _stage_oriented_watermark_edit(path)
-                        if staged:
-                            if _preserve_original(path):
-                                lama_pending.append((img.id, path, staged, [bbox], False))
-                            else:
-                                _backup_failed(img, staged)
-                        else:
-                            img.watermark_state = 'failed'
-                            out['failed'] += 1
-                            error = {'kind': 'failed',
-                                     'detail': 'could not stage image EXIF orientation'}
-                else:  # 'review' -> stays 'detected' so the badge/count keep flagging it
-                    out['needs_review'] += 1
-            db.session.commit()
-        if lama_pending:
-            try:
-                if len(lama_pending) == 1:
-                    _pid, live_path, staged_path, boxes, manual = lama_pending[0]
-                    if manual:
-                        ok, err = watermark_lama.inpaint_watermarks(
-                            staged_path, boxes,
-                            **({'device': device} if device != 'cpu' else {}))
-                    else:
-                        ok, err = watermark_lama.inpaint_watermark(
-                            staged_path, boxes[0],
-                            **({'device': device} if device != 'cpu' else {}))
-                    results = {staged_path: (ok, err)}
-                else:
-                    results = watermark_lama.inpaint_batch(
-                        [{'image_path': staged_path, 'bboxes': boxes}
-                         for _pid, _live_path, staged_path, boxes, _manual in lama_pending],
-                        device=device,
-                    )
-                for pending_id, live_path, staged_path, _boxes, manual in lama_pending:
-                    img = _live_image_row(pending_id)
-                    if img is None:
-                        # Deleted while the batch ran: there is no row left to
-                        # point at the repainted file, so drop the staged edit
-                        # rather than promote it over a master nobody owns.
-                        _discard_staged_watermark_edit(staged_path)
-                        vanished += 1
-                        continue
-                    ok, err = results.get(
-                        staged_path,
-                        (False, {'kind': 'failed', 'detail': 'missing inpaint result'}),
-                    )
-                    if ok and _promote_staged_watermark_edit(staged_path, live_path):
-                        # Kept, for the reason spelled out in the Klein lane above.
-                        img.watermark_state = 'cleaned'
-                        out['inpainted'] += 1
-                    elif ok:
-                        if not manual:
-                            img.watermark_state = 'failed'
-                        out['failed'] += 1
-                        error = {'kind': 'failed',
-                                 'detail': 'could not promote staged watermark edit'}
-                    elif err and err.get('kind') == 'unavailable':
-                        out['skipped'] += 1
-                    else:
-                        # Manual correction regions are user-authored retry metadata. Keep
-                        # the image detected when LaMa fails so Clean can be retried.
-                        if not manual:
-                            img.watermark_state = 'failed'
-                        out['failed'] += 1
-                        if err:
-                            error = err
-                    db.session.commit()
-            except Exception as exc:  # engine/process faults must not leak a staged edit
-                logger.exception('watermark: LaMa execution failed for dataset %s', dataset_id)
-                error = {'kind': 'failed', 'detail': f'watermark inpaint failed: {exc}'}
-                for pending_id, _live_path, _staged_path, _boxes, manual in lama_pending:
-                    img = _live_image_row(pending_id)
-                    if img is None:
-                        vanished += 1
-                        continue
-                    if not manual:
-                        img.watermark_state = 'failed'
-                    out['failed'] += 1
-                    db.session.commit()
-            finally:
-                # The engine can crash before returning a result; in that case its
-                # disposable EXIF-oriented copy still has to disappear, while the
-                # master remains exactly where it was.
-                for _pid, _live_path, staged_path, _boxes, _manual in lama_pending:
-                    _discard_staged_watermark_edit(staged_path)
+        lama_pending, error, vanished = _wm_route_images(
+            user_id, row_ids, token, method, allow_crop, lama_ok,
+            klein_ok, klein_model, out)
+        error, vanished = _wm_lama_tail(
+            dataset_id, lama_pending, device, out, error, vanished)
         if vanished:
             logger.info('watermark clean: %s image(s) were deleted while the pass '
                         'ran, skipped', vanished)
@@ -9850,6 +10255,128 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
     return ids
 
 
+def camera_views_for_dataset_image(user_id, image_id, poses):
+    """📷 Queue one render per requested camera position, from ONE dataset image.
+
+    The dataset twin of lora_test_studio.camera_views_for_canvas_image — same
+    shape on purpose (one job per view, rows before enqueue, weights preflight
+    BEFORE any row) with the two differences this table imposes:
+
+      * results are dataset CANDIDATES: status 'pending', reviewed through the
+        exact keep/reject cycle every generated tile already gets;
+      * the caption starts as the pose's angle phrase (origin NULL, so the
+        captioner completes it rather than being locked out) — and the captioner
+        re-injects that phrase on every later pass (_with_camera_pose_phrase),
+        because a back view left undescribed binds "back-facing" to the trigger.
+
+    An ✨ improve result and an import are valid sources; a camera view is not
+    (a view of a view compounds two invented backdrops). Returns
+    ``{'views': [{'candidate_id','job_id','pose','label'}], 'queued'}``, or
+    None when the image is not the caller's.
+    """
+    from . import camera_angles as ca
+    from . import qwen_camera_helper as qch
+
+    img = _owned_image(user_id, image_id)
+    if img is None:
+        return None
+    _guard_not_bank_export(img.dataset_id)
+    if img.derivation_kind == CAMERA_ANGLE:
+        raise ValueError(ca.ALREADY_DERIVED)
+    if not img.filename:
+        raise ValueError(ca.SOURCE_NOT_DONE)
+    source_path = _img_path(img)
+    if not os.path.isfile(source_path):
+        raise ValueError(ca.SOURCE_FILE_GONE)
+
+    wanted = ca.normalize_requested(poses)   # raises on empty / unknown
+
+    # Weights BEFORE rows — the Klein lane's lesson, already paid for once: a
+    # preflight that ran too late left a dataset full of failed tiles.
+    missing = qch.camera_missing_assets()
+    if any(a in missing for a in qch.CAMERA_REQUIRED):
+        raise qch.CameraModelsMissing(missing)
+
+    # Same anti-DoS shape as generate_variations: the fan-out shares one GPU.
+    in_flight = (FaceDatasetImage.query
+                 .filter_by(dataset_id=img.dataset_id, status='pending')
+                 .filter(FaceDatasetImage.filename.is_(None)).count())
+    if in_flight + len(wanted) > MAX_FANOUT:
+        raise ValueError(f'too many generations in flight ({in_flight}), wait or cancel')
+
+    views = []
+    try:
+        for azimuth, elevation, distance in wanted:
+            pose = ca.pose_id(azimuth, elevation, distance)
+            row = FaceDatasetImage(
+                dataset_id=img.dataset_id, source='generated', status='pending',
+                parent_image_id=img.id,
+                derivation_kind=CAMERA_ANGLE,
+                camera_pose=pose,
+                # The LoRA's own sentence — what regenerate would re-send, and
+                # what the tile's ✏️ bubble shows as the real prompt.
+                variation_prompt=ca.pose_prompt(azimuth, elevation, distance),
+                # The angle phrase seeds the caption from birth (origin NULL →
+                # the captioner may complete or rewrite it; its own passes then
+                # re-inject the phrase). front/eye poses phrase to None and
+                # that is correct: nothing worth binding, nothing written.
+                caption=ca.pose_caption_phrase(pose),
+            )
+            db.session.add(row)
+            db.session.commit()             # row BEFORE enqueue: no orphan job
+            candidate_id = row.id
+            try:
+                job_id = qch.enqueue_camera_view(
+                    user_id=str(user_id), source_filename=img.filename,
+                    source_path=source_path,
+                    pose_prompt=ca.pose_prompt(azimuth, elevation, distance),
+                    model_name='qwen_camera_dataset',
+                    extra_metadata={'is_dataset': True,
+                                    'dataset_id': img.dataset_id,
+                                    'camera_pose': pose})
+            except Exception:
+                stale = _live_image_row(candidate_id)
+                if stale is not None:
+                    stale.status = 'failed'
+                    stale.fail_reason = 'The camera view could not be queued.'
+                    db.session.commit()
+                if views:
+                    logger.warning('camera dataset: %d queued before %s failed',
+                                   len(views), pose)
+                    break
+                raise
+            live = _live_image_row(candidate_id)
+            if live is None:
+                continue                    # ⏹ Stop removed it mid-enqueue
+            live.job_id = job_id
+            db.session.commit()
+            views.append({'candidate_id': candidate_id, 'job_id': job_id,
+                          'pose': pose,
+                          'label': ca.pose_label(azimuth, elevation, distance)})
+    finally:
+        _sync_generate_activity(img.dataset_id)
+    return {'views': views, 'queued': len(views)}
+
+
+def _with_camera_pose_phrase(img, text):
+    """The caption a camera view gets to keep: the model's words PLUS the angle.
+
+    Applied at the VLM stamp sites, so the phrase survives every re-caption —
+    seeding it only at row creation would last exactly until the first batch
+    pass overwrote it. Idempotent (never doubled), inert for every row without
+    a pose, and it prefixes rather than appends: the angle is the one fact the
+    captioner cannot see, so it must not end up trailing a sentence that reads
+    as complete without it."""
+    from . import camera_angles as ca
+    phrase = ca.pose_caption_phrase(getattr(img, 'camera_pose', None))
+    if not phrase:
+        return text
+    body = (text or '').strip()
+    if phrase.lower() in body.lower():
+        return body or phrase
+    return f'{phrase}, {body}' if body else phrase
+
+
 def generate_variations_krea(user_id, dataset_id, variations, multiplier,
                             generation_lora_preset=None):
     """Krea 2 Identity Edit fan-out — the second LOCAL engine, same contract as
@@ -10023,7 +10550,22 @@ def _improve_enqueue_profile(ds=None) -> dict:
         'sampler_steps': _improve_int('improve_steps', 4),
         'base_lora_strength': _improve_float('improve_base_lora_strength', 0.0),
         'output_megapixels': _improve_float('improve_megapixels', 2.0, 8.0),
+        # The generation-LoRA preset the user picked FOR THIS PASS
+        # (klein.improve_lora_preset), resolved to its ordered rows here so the
+        # choice reaches the same three lanes as every other improve knob.
+        # Fail-closed: '' or a stale name resolve to [], which
+        # enqueue_klein_edit reads as "no preset".
+        'generation_loras': improve_lora_preset_rows(),
     }
+
+
+def improve_lora_preset_rows():
+    """Ordered [{file, strength}] rows of the preset ✨ improve is set to chain,
+    or [] — the resolver's own fail-closed rule. One reader, shared with the
+    surfaces that record provenance (improve_canvas_image stores these rows on
+    the candidate), so what is stored is what actually ran."""
+    from .klein_edit_helper import resolve_generation_lora_preset
+    return resolve_generation_lora_preset(cfg.get('klein.improve_lora_preset'))
 
 
 def _improve_extra_metadata(source, label, engine='klein') -> dict:
@@ -10094,7 +10636,7 @@ def _improve_preflight(engine):
 
 
 def _enqueue_improve(engine, *, user_id, source, source_path, prompt, label,
-                     dataset, extra_metadata=None):
+                     dataset, extra_metadata=None, profile=None):
     """Hand ONE improve off to the chosen engine and return its job id.
 
     The two engines take deliberately different arguments — Klein needs a prompt,
@@ -10126,10 +10668,14 @@ def _enqueue_improve(engine, *, user_id, source, source_path, prompt, label,
             user_id=str(user_id), source_filename=source_filename,
             source_path=source_path, extra_metadata=meta)
     from . import klein_edit_helper as keh
+    # `profile` lets a caller that RECORDS what ran (improve_canvas_image
+    # stores it on the candidate) hand over the very dict it stored — computed
+    # twice, the two could disagree the moment a setting is saved in between.
     return keh.enqueue_klein_edit(
         user_id=str(user_id), source_filename=source_filename,
         source_path=source_path, edit_prompt=prompt,
-        **_improve_enqueue_profile(dataset), extra_metadata=meta)
+        **(profile if profile is not None else _improve_enqueue_profile(dataset)),
+        extra_metadata=meta)
 
 
 def improve_existing_image(user_id, image_id, engine=None):
@@ -10430,6 +10976,19 @@ def _reimprove_image_locked(user_id, image_id):
 # draining the selection in WAVES — it waits for a slot to free instead of hitting
 # the wall — with a cooperative stop checked at every image boundary.
 IMPROVE_SLOT_POLL_SECONDS = 2.0
+# How many of its OWN improvements the bulk drain keeps in flight at once.
+#
+# ComfyUI runs one job at a time and `job_queue`'s worker refuses to claim a
+# second while any row is 'processing' or 'sent_to_comfy', so queueing sixty
+# improvements ahead finishes no sooner than queueing a handful — they wait
+# either way. What the deep queue DID buy was the whole per-dataset fan-out
+# budget, spent on background work: the next thing the user clicked came back
+# "too many generations in flight (60), wait or cancel", which is the second
+# half of GitHub #44, reported by charlesangus (the first half being the UI
+# blanket — see frontend/src/utils/activityLanes.js). A shallow depth keeps the
+# GPU fed across the gap between two jobs and leaves the rest of MAX_FANOUT to
+# the person sitting in front of the app.
+IMPROVE_QUEUE_DEPTH = 4
 # Give up (and say so) if no slot frees for this long. A ComfyUI that died mid-batch
 # would otherwise leave the thread polling a count that never drops, and the dataset
 # stuck behind an "in progress" indicator until the registry TTL expires.
@@ -10450,6 +11009,56 @@ def _improve_in_flight(dataset_id):
             .filter(FaceDatasetImage.filename.is_(None)).count())
 
 
+def _improve_batch_in_flight(dataset_id):
+    """The improvements THIS lane still has rendering, and only those.
+
+    ``_improve_in_flight`` counts every unfinished generation on the dataset,
+    the user's own ⚡ Generate batch included — so the drain used to wait on
+    work that was never its own, and a big enough interactive batch could park
+    it for the whole slot timeout. The improve lane is identified by its
+    derivation kind (a legacy name: it predates the second engine, so a SeedVR2
+    candidate carries it too — which is right here, both lanes are background
+    work)."""
+    db.session.rollback()
+    return (FaceDatasetImage.query
+            .filter_by(dataset_id=dataset_id, derivation_kind=KLEIN_IMAGE_IMPROVE,
+                       status='pending')
+            .filter(FaceDatasetImage.filename.is_(None)).count())
+
+
+def _queue_held_off_gpu_reason():
+    """Why the image queue is claiming nothing at all, or None if it is free.
+
+    Delegates to the worker rather than re-deriving the conditions here: a copy
+    would drift, and the one that matters most (the in-process vision window) is
+    not even visible in the DB flags. Never raises — a drain must not die because
+    it could not ask.
+    """
+    try:
+        from ..job_queue import queue_manager
+        return queue_manager.held_off_gpu_reason()
+    except Exception:   # noqa: BLE001 — unreadable state is not a reason to stall
+        logger.exception('bulk improve: could not read why the queue is held')
+        return None
+
+
+def _improve_slot_blocked(dataset_id):
+    """Must the bulk drain wait before queueing one more improvement?
+
+    Two independent reasons, and neither may be dropped:
+      * its own depth (``IMPROVE_QUEUE_DEPTH``) — background work does not get
+        to spend the whole shared budget for no throughput in return;
+      * the shared cap itself, which nothing may blow through.
+
+    The depth is clamped to ``MAX_FANOUT`` so lowering the cap (a test, a
+    future setting) below the depth still behaves.
+    """
+    depth = min(IMPROVE_QUEUE_DEPTH, MAX_FANOUT)
+    if _improve_batch_in_flight(dataset_id) >= depth:
+        return True
+    return _improve_in_flight(dataset_id) + 1 > MAX_FANOUT
+
+
 def bulk_improve_eligible_ids(user_id, dataset_id, image_ids):
     """The subset of ``image_ids`` this dataset can actually improve, in selection
     order and de-duplicated. Mirrors the client-side partition
@@ -10461,7 +11070,7 @@ def bulk_improve_eligible_ids(user_id, dataset_id, image_ids):
         try:
             image_id = int(raw)
         except (TypeError, ValueError):
-            continue
+            continue   # malformed client id: dropped, the rest of the batch lands
         if image_id not in seen:
             seen.add(image_id)
             wanted.append(image_id)
@@ -10545,11 +11154,17 @@ def start_bulk_improve(app, user_id, dataset_id, image_ids, engine=None):
 
 def _drain_improve_queue(user_id, dataset_id, image_ids, token, sleep=time.sleep,
                          engine=None):
-    """Queue one improvement per id, in WAVES that respect the MAX_FANOUT
-    concurrency cap: when the dataset already has that many generations in flight
-    the worker WAITS for a slot (the count drops as ComfyUI writes the files) rather
-    than firing a request doomed to be refused. Stops at the next image boundary
-    when ⏹ Stop arms the flag. Returns a summary dict (also used by the tests)."""
+    """Queue one improvement per id, in WAVES: the worker WAITS for a slot (the
+    count drops as ComfyUI writes the files) rather than firing a request doomed
+    to be refused. Stops at the next image boundary when ⏹ Stop arms the flag.
+    Returns a summary dict (also used by the tests).
+
+    A wave is bounded by ``IMPROVE_QUEUE_DEPTH`` — the batch's OWN in-flight
+    count — and, on top of that, by the shared ``MAX_FANOUT`` budget. It used to
+    be bounded by MAX_FANOUT alone, measured over every generation on the
+    dataset, which had it both hogging that budget (nothing the user launched
+    next could get in) and waiting on generations that were not its own.
+    """
     total = len(image_ids)
     queued = failed = 0
     waited = 0.0
@@ -10560,18 +11175,30 @@ def _drain_improve_queue(user_id, dataset_id, image_ids, token, sleep=time.sleep
                                                  dataset_activity.IMPROVE_KINDS)
 
     for index, image_id in enumerate(image_ids):
-        while not stopped and not stalled and _improve_in_flight(dataset_id) + 1 > MAX_FANOUT:
+        while not stopped and not stalled and _improve_slot_blocked(dataset_id):
             if _stop_requested():
                 stopped = True
             elif waited >= IMPROVE_SLOT_TIMEOUT_SECONDS:
                 stalled = True
             else:
+                # WHY the wait, before HOW LONG it has lasted. A queue frozen by a
+                # training run or a vision pass is not this batch's fault and no
+                # amount of waiting will free a slot — so that time must not count
+                # against the stall timeout. It used to: lowering the wave depth
+                # from MAX_FANOUT to IMPROVE_QUEUE_DEPTH made the wait loop the
+                # NORMAL path (a 30-image batch never entered it before), so a
+                # training run longer than 15 minutes ended with the batch
+                # declaring itself stalled and dropping every image it had not
+                # queued yet — silently, since 'stalled' breaks out of the loop.
+                held = _queue_held_off_gpu_reason()
+                waiting_for = held or 'a free generation slot'
                 dataset_activity.progress(
                     token,
-                    detail=f'Queuing improvements… {queued}/{total} — waiting for a '
-                           f'free generation slot ({total - index} left)')
+                    detail=f'Queuing improvements… {queued}/{total} — waiting for '
+                           f'{waiting_for} ({total - index} left)')
                 sleep(IMPROVE_SLOT_POLL_SECONDS)
-                waited += IMPROVE_SLOT_POLL_SECONDS
+                if held is None:
+                    waited += IMPROVE_SLOT_POLL_SECONDS
         if stalled:
             break
         if stopped or _stop_requested():
@@ -10593,47 +11220,13 @@ def _drain_improve_queue(user_id, dataset_id, image_ids, token, sleep=time.sleep
             'remaining': total - queued - failed}
 
 
-def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=None,
-                     engine=None, klein_model=None, generation_lora_preset=None):
-    """Re-enqueue a single generated variation IN PLACE (same row id): cancel any
-    in-flight job, drop the old file, reset the row to pending with the new
-    job_id. Returns the new job_id, or None if the image is not owned / not a
-    generated variation. Raises ValueError if the dataset has no reference or
-    the variation prompt can't be recovered.
-
-    `prompt` (optional) is the user-EDITED core creative prompt from the tile's
-    ✏️ bubble. When given it REPLACES and is PERSISTED into `variation_prompt`
-    (so a later plain regenerate / reject-regenerate reuses the edit), then feeds
-    the identity-guard wrapper like any catalog prompt — the face lock is still
-    applied on top, the user only steers the creative half. Empty/None = the
-    current behaviour (recover the prompt from the row or the label).
-
-    `engine` (optional, one of ``KNOWN_ENGINES``) is an EXPLICIT caller
-    override. The ordinary workspace Retry omits it, so it reuses the engine
-    recorded on the row; callers that deliberately pass one can still move a
-    tile to another lane. Exception:
-    an NSFW-labelled tile always stays on the local Klein path (fail-closed —
-    NSFW never goes to third-party APIs, mirroring the batch generate rule).
-    `klein_model` (optional) is the workspace's Klein model pick, used when a
-    row born on an API engine switches to Klein (its klein_model column holds
-    an engine TAG, not a real model file).
-    `generation_lora_preset` (optional): NAME of the generation-LoRA preset
-    picked in the workspace (Idea by @waltm). Both local engines resolve it —
-    Klein and Krea each from their OWN config list (`klein.generation_lora_presets`
-    / `krea.generation_lora_presets`), so the same name can mean two different
-    chains depending on which engine `target` resolves to below — resolved from
-    the CONFIG only (fail-closed; unknown name degrades to no extra LoRAs)."""
-    img = _owned_image(user_id, image_id)
-    if not img or img.source != 'generated':
-        return None
-    _guard_not_bank_export(img.dataset_id)
-    if img.derivation_kind == KLEIN_SMALL_IMAGE:
-        raise ValueError('small-image rescue candidates cannot be regenerated; re-import the source')
-    if img.derivation_kind == KLEIN_IMAGE_IMPROVE:
-        raise ValueError('upscale & improve candidates cannot be regenerated from the dataset reference')
-    ds = db.session.get(FaceDataset, img.dataset_id)
-    if not ds.ref_filename:
-        raise ValueError('reference image required')
+def _rgn_resolve_target(img, prompt, engine):
+    """The prompt recovery and engine election, moved verbatim
+    (2026-08-23): the user's edited prompt (persisted), else the row's,
+    else the label's; then the requested engine over the row's origin,
+    with the fail-closed NSFW clamp applied BOTH before and after the
+    disabled-engines fallback. Returns (edited, stored_prompt, prompt,
+    target)."""
     edited = (prompt or '').strip()
     stored_prompt = edited[:500] if edited else img.variation_prompt
     prompt = stored_prompt or prompt_by_label(img.variation_label or '')
@@ -10665,10 +11258,17 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
         # ...and the NSFW clamp must survive that fallback.
         if is_nsfw_label(img.variation_label) and target in API_ENGINES:
             target = origin if origin in LOCAL_ENGINES else 'klein'
-    # Complete every fallible target-specific preflight before changing either
-    # the row or its current file. Klein enqueue is itself part of preparation:
-    # if the later DB transition fails, that exact new job is cancelled below.
-    from ..job_queue import queue_manager
+    return edited, stored_prompt, prompt, target
+
+
+def _rgn_prepare_target(user_id, img, ds, target, engine, klein_model,
+                        generation_lora_preset, prompt, lora_strength):
+    """Every fallible target-specific preflight, moved verbatim, BEFORE the
+    row or its file changes: the exact previous row state (for the Trash
+    failure path), then per engine — API reference checks, or the Krea /
+    Klein enqueue (either raises here and the tile keeps its image).
+    Returns (old_state, old_path, new_job_id, api_generate, aspect,
+    ref_bytes, model, engine)."""
     old_state = {
         field: getattr(img, field) for field in (
             'filename', 'caption', 'status', 'fail_reason', 'fail_kind', 'job_id',
@@ -10754,7 +11354,18 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
             base_lora_strength=_generation_base_lora_strength(),
             extra_metadata={'is_dataset': True, 'dataset_id': img.dataset_id,
                             'variation_label': img.variation_label})
+    return (old_state, old_path, new_job_id, api_generate, aspect,
+            ref_bytes, model, engine)
 
+
+def _rgn_swap_row(user_id, img, edited, stored_prompt, target, engine,
+                  model, new_job_id, old_state):
+    """The in-place row transition, moved verbatim: cancel the old
+    unstarted job inside the same transaction, clear every per-image
+    verdict with the file, stamp the new engine identity and job — and on
+    ANY failure roll back and cancel the prepared replacement job so
+    nothing runs unlinked."""
+    from ..job_queue import queue_manager
     # Persist the replacement state first. The old file remains in place until
     # this commit succeeds, eliminating rows that reference an already-moved file.
     try:
@@ -10794,6 +11405,14 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
                                  new_job_id)
         raise
 
+
+def _rgn_trash_old(user_id, img, image_id, old_path, old_state,
+                   new_job_id):
+    """The old file's disposal, moved verbatim: Trash it now that no row
+    references it; if Trash itself fails, cancel the replacement job and
+    put the exact previous row state back in one restoration
+    transaction."""
+    from ..job_queue import queue_manager
     # The DB no longer references the old filename. If Trash itself fails, put
     # the exact previous row state back and cancel the prepared Klein job.
     try:
@@ -10817,6 +11436,153 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
                              image_id)
         raise
 
+
+def _rgn_run_api(app, img, ds, user_id, image_id, prompt, aspect,
+                 ref_bytes, engine, api_generate):
+    """The API lane's execution, moved verbatim: with an app handle the
+    call runs in a background thread under the batch's own 'generate'
+    indicator; without one it runs synchronously, holding that indicator
+    itself, naming refusals and quota errors instead of disguising them,
+    and never leaking the activity entry. Returns the engine tag."""
+    if app is not None:
+        # Threaded path: _run_nanobanana_batch owns the 'generate' indicator
+        # (begin/bump/end) so a single API regenerate takes the same lock as a
+        # batch — every concurrent action stays disabled until it finishes.
+        try:
+            threading.Thread(target=_run_nanobanana_batch,
+                             args=(app, [(img.id, prompt, aspect,
+                                          dataset_prompt_suffix(ds, img.framing))],
+                                   ref_bytes, engine, img.dataset_id),
+                             daemon=True).start()
+        except Exception as e:
+            img.status = 'failed'
+            img.fail_reason = f'{engine}: failed to start generation: {e}'[:500]
+            db.session.commit()
+            raise
+        return engine
+    # Synchronous path (legacy / no-app callers): guard the same 'generate'
+    # indicator directly so the payload advertises the regenerate too, and a
+    # raise never leaks the entry (finally end()).
+    token = None
+    try:
+        token = dataset_activity.begin(
+            img.dataset_id, 'generate', total=1, engine=engine)
+        gen_kwargs = {'aspect_ratio': aspect}
+        if engine == 'chatgpt':
+            from .chatgpt_image import _use_subscription
+            gen_kwargs['force_lane'] = 'subscription' if _use_subscription() else 'api'
+        try:
+            out = api_generate(
+                ref_bytes,
+                wrap_variation(prompt, ref_count=len(ref_bytes),
+                               suffix=dataset_prompt_suffix(ds, img.framing),
+                               subject_type=subject_type_of(ds)),
+                **gen_kwargs)
+        except EngineRefused as e:
+            # Même règle que dans le lot : un refus se nomme, il ne se
+            # déguise pas en panne (et il n'invente pas de contournement).
+            out = None
+            img.status = 'failed'
+            img.fail_reason = f'{engine}: {str(e)[:400]}'
+            img.fail_kind = 'refused'
+            db.session.commit()
+            return engine
+        except SubscriptionQuotaExceeded:
+            out = None
+            img.status = 'failed'
+            img.fail_reason = _QUOTA_MSG
+            img.fail_kind = 'error'
+            db.session.commit()
+            return engine
+        except SubscriptionUnavailable as e:
+            out = None
+            img.status = 'failed'
+            img.fail_reason = f'chatgpt: {e}'
+            img.fail_kind = 'error'
+            db.session.commit()
+            return engine
+        if out:
+            fn = f"{user_id}_{_ENGINE_FILE_TAG[engine]}_{uuid.uuid4().hex[:8]}.webp"
+            write_image_atomic(os.path.join(_dataset_dir(img.dataset_id), fn),
+                               normalize_to_webp(out))
+            img.filename = fn
+        else:
+            img.status = 'failed'
+            img.fail_reason = f'{engine}: {_EMPTY_MSG}'
+            img.fail_kind = 'empty'
+        db.session.commit()
+        return engine
+    except Exception as e:
+        db.session.rollback()
+        current = db.session.get(FaceDatasetImage, image_id)
+        if current and current.filename is None:
+            current.status = 'failed'
+            current.fail_reason = f'{engine}: {e}'[:500]
+            current.fail_kind = 'error'
+            db.session.commit()
+        raise
+    finally:
+        if token is not None:
+            dataset_activity.end(token)
+
+
+def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=None,
+                     engine=None, klein_model=None, generation_lora_preset=None):
+    """Re-enqueue a single generated variation IN PLACE (same row id): cancel any
+    in-flight job, drop the old file, reset the row to pending with the new
+    job_id. Returns the new job_id, or None if the image is not owned / not a
+    generated variation. Raises ValueError if the dataset has no reference or
+    the variation prompt can't be recovered.
+
+    `prompt` (optional) is the user-EDITED core creative prompt from the tile's
+    ✏️ bubble. When given it REPLACES and is PERSISTED into `variation_prompt`
+    (so a later plain regenerate / reject-regenerate reuses the edit), then feeds
+    the identity-guard wrapper like any catalog prompt — the face lock is still
+    applied on top, the user only steers the creative half. Empty/None = the
+    current behaviour (recover the prompt from the row or the label).
+
+    `engine` (optional, one of ``KNOWN_ENGINES``) is an EXPLICIT caller
+    override. The ordinary workspace Retry omits it, so it reuses the engine
+    recorded on the row; callers that deliberately pass one can still move a
+    tile to another lane. Exception:
+    an NSFW-labelled tile always stays on the local Klein path (fail-closed —
+    NSFW never goes to third-party APIs, mirroring the batch generate rule).
+    `klein_model` (optional) is the workspace's Klein model pick, used when a
+    row born on an API engine switches to Klein (its klein_model column holds
+    an engine TAG, not a real model file).
+    `generation_lora_preset` (optional): NAME of the generation-LoRA preset
+    picked in the workspace (Idea by @waltm). Both local engines resolve it —
+    Klein and Krea each from their OWN config list (`klein.generation_lora_presets`
+    / `krea.generation_lora_presets`), so the same name can mean two different
+    chains depending on which engine `target` resolves to below — resolved from
+    the CONFIG only (fail-closed; unknown name degrades to no extra LoRAs)."""
+    img = _owned_image(user_id, image_id)
+    if not img or img.source != 'generated':
+        return None
+    _guard_not_bank_export(img.dataset_id)
+    if img.derivation_kind == KLEIN_SMALL_IMAGE:
+        raise ValueError('small-image rescue candidates cannot be regenerated; re-import the source')
+    if img.derivation_kind == KLEIN_IMAGE_IMPROVE:
+        raise ValueError('upscale & improve candidates cannot be regenerated from the dataset reference')
+    ds = db.session.get(FaceDataset, img.dataset_id)
+    if not ds.ref_filename:
+        raise ValueError('reference image required')
+    edited, stored_prompt, prompt, target = _rgn_resolve_target(
+        img, prompt, engine)
+    # Complete every fallible target-specific preflight before changing either
+    # the row or its current file. Klein enqueue is itself part of preparation:
+    # if the later DB transition fails, that exact new job is cancelled below.
+    (old_state, old_path, new_job_id, api_generate, aspect, ref_bytes,
+     model, engine) = _rgn_prepare_target(
+        user_id, img, ds, target, engine, klein_model,
+        generation_lora_preset, prompt, lora_strength)
+
+    _rgn_swap_row(user_id, img, edited, stored_prompt, target, engine,
+                  model, new_job_id, old_state)
+
+    _rgn_trash_old(user_id, img, image_id, old_path, old_state,
+                   new_job_id)
+
     # API target ('nanobanana'/'chatgpt' — requested, or the row's origin when
     # no engine was given): the row's klein_model column carries the engine tag.
     # With an `app` handle the call runs in a background thread (the row flips
@@ -10824,86 +11590,8 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
     # reacts at once); without it the call is synchronous (test path / legacy
     # callers).
     if target in API_ENGINES:
-        if app is not None:
-            # Threaded path: _run_nanobanana_batch owns the 'generate' indicator
-            # (begin/bump/end) so a single API regenerate takes the same lock as a
-            # batch — every concurrent action stays disabled until it finishes.
-            try:
-                threading.Thread(target=_run_nanobanana_batch,
-                                 args=(app, [(img.id, prompt, aspect,
-                                              dataset_prompt_suffix(ds, img.framing))],
-                                       ref_bytes, engine, img.dataset_id),
-                                 daemon=True).start()
-            except Exception as e:
-                img.status = 'failed'
-                img.fail_reason = f'{engine}: failed to start generation: {e}'[:500]
-                db.session.commit()
-                raise
-            return engine
-        # Synchronous path (legacy / no-app callers): guard the same 'generate'
-        # indicator directly so the payload advertises the regenerate too, and a
-        # raise never leaks the entry (finally end()).
-        token = None
-        try:
-            token = dataset_activity.begin(
-                img.dataset_id, 'generate', total=1, engine=engine)
-            gen_kwargs = {'aspect_ratio': aspect}
-            if engine == 'chatgpt':
-                from .chatgpt_image import _use_subscription
-                gen_kwargs['force_lane'] = 'subscription' if _use_subscription() else 'api'
-            try:
-                out = api_generate(
-                    ref_bytes,
-                    wrap_variation(prompt, ref_count=len(ref_bytes),
-                                   suffix=dataset_prompt_suffix(ds, img.framing),
-                                   subject_type=subject_type_of(ds)),
-                    **gen_kwargs)
-            except EngineRefused as e:
-                # Même règle que dans le lot : un refus se nomme, il ne se
-                # déguise pas en panne (et il n'invente pas de contournement).
-                out = None
-                img.status = 'failed'
-                img.fail_reason = f'{engine}: {str(e)[:400]}'
-                img.fail_kind = 'refused'
-                db.session.commit()
-                return engine
-            except SubscriptionQuotaExceeded:
-                out = None
-                img.status = 'failed'
-                img.fail_reason = _QUOTA_MSG
-                img.fail_kind = 'error'
-                db.session.commit()
-                return engine
-            except SubscriptionUnavailable as e:
-                out = None
-                img.status = 'failed'
-                img.fail_reason = f'chatgpt: {e}'
-                img.fail_kind = 'error'
-                db.session.commit()
-                return engine
-            if out:
-                fn = f"{user_id}_{_ENGINE_FILE_TAG[engine]}_{uuid.uuid4().hex[:8]}.webp"
-                write_image_atomic(os.path.join(_dataset_dir(img.dataset_id), fn),
-                                   normalize_to_webp(out))
-                img.filename = fn
-            else:
-                img.status = 'failed'
-                img.fail_reason = f'{engine}: {_EMPTY_MSG}'
-                img.fail_kind = 'empty'
-            db.session.commit()
-            return engine
-        except Exception as e:
-            db.session.rollback()
-            current = db.session.get(FaceDatasetImage, image_id)
-            if current and current.filename is None:
-                current.status = 'failed'
-                current.fail_reason = f'{engine}: {e}'[:500]
-                current.fail_kind = 'error'
-                db.session.commit()
-            raise
-        finally:
-            if token is not None:
-                dataset_activity.end(token)
+        return _rgn_run_api(app, img, ds, user_id, image_id, prompt,
+                            aspect, ref_bytes, engine, api_generate)
 
     # Advertise the in-flight Klein job so a single regenerate takes the same lock
     # as a batch; link_completed_dataset_image clears it on completion.
@@ -11255,7 +11943,7 @@ def link_completed_dataset_image(job_id, filename, failed=False, reason=None):
             try:
                 os.remove(late_output)
             except OSError:
-                pass
+                pass   # already gone or locked: the late output was a leftover either way
         try:
             _sync_generate_activity(img.dataset_id)
         except Exception:
@@ -11319,39 +12007,6 @@ def link_completed_dataset_image(job_id, filename, failed=False, reason=None):
 
 
 # --- Migration helper (run once manually after deploy) ---------------------
-def migrate_existing_images_to_per_dataset():
-    """Migration helper - run once manually after deploy. Not called automatically."""
-    counts = {'moved': 0, 'skipped': 0, 'missing': 0}
-    output_dir = _comfy_output_dir()
-    if output_dir is None:
-        return counts
-    datasets = FaceDataset.query.all()
-    for ds in datasets:
-        if ds.ref_filename:
-            src = os.path.join(output_dir, ds.ref_filename)
-            dst = os.path.join(_dataset_dir(ds.id), ds.ref_filename)
-            if os.path.exists(src) and not os.path.exists(dst):
-                shutil.move(src, dst)
-                counts['moved'] += 1
-            elif os.path.exists(dst):
-                counts['skipped'] += 1
-            else:
-                counts['missing'] += 1
-        for img in FaceDatasetImage.query.filter_by(dataset_id=ds.id).all():
-            if not img.filename:  # pending/failed rows without a file
-                continue
-            src = os.path.join(output_dir, img.filename)
-            dst = os.path.join(_dataset_dir(img.dataset_id), img.filename)
-            if os.path.exists(src) and not os.path.exists(dst):
-                shutil.move(src, dst)
-                counts['moved'] += 1
-            elif os.path.exists(dst):
-                counts['skipped'] += 1
-            else:
-                counts['missing'] += 1
-    return counts
-
-
 # --- Export ----------------------------------------------------------------
 _TRAIN_FAMILY_LABELS = {
     'zimage': 'Z-Image',
@@ -11458,7 +12113,7 @@ def write_export_zip(user_id: int, dataset_id: int, output: BinaryIO) -> None:
                 zf.writestr(f"{folder}/{safe}_000_ref.png", rpng.getvalue())
                 zf.writestr(f"{folder}/{safe}_000_ref.txt", ds.trigger_word)
             except OSError:
-                pass
+                pass   # the reference is a bonus in this export: a bad file must not sink the zip
         for n, img in enumerate(kept, 1):
             path = _img_path(img) if img.filename else ''
             if not img.filename or not os.path.exists(path):
@@ -11521,3 +12176,62 @@ def write_caption_files(user_id, dataset_id) -> dict:
     return {'ok': True, 'written': written,
             'skipped_uncaptioned': skipped_uncaptioned,
             'removed_stale': removed_stale}
+
+
+# --- Scene captions -------------------------------------------------------
+# The dataset side of 🎬 Scenes. A dataset already holds one caption per image,
+# and read in row order those captions are a SEQUENCE exactly like a bank's —
+# the same read, on the images the user curated rather than on a reference pile.
+# Shape, ceiling and labels come from services/scene_captions.py, which
+# image_bank_service reads too: two surfaces, ONE contract.
+# A READ, never a pass — no GPU, no writes, alive while a job runs.
+
+
+def export_scene_captions(user_id, dataset_id, statuses=None):
+    """The dataset's captions as ORDERED scene cards.
+
+    One card per captioned image, in dataset order (row id ascending = the order
+    the images were generated or imported). Order is the point: each card is one
+    beat of a sequence, so a missing framing is NOT a gate — the card rides the
+    row's classified framing when there is one and 'body' otherwise, because
+    refusing an image would silently drop a beat from the middle. Only a missing
+    caption skips a row, and it is COUNTED, never guessed.
+
+    ``statuses`` scopes the read the way a Bank pass does (any of 'keep',
+    'pending', 'reject'); None keeps the default a curated dataset deserves —
+    kept and pending, never the images the user threw away.
+
+    The prompts come out WITHOUT the trigger word, which is how they are stored:
+    the launch prepends the trigger of the LoRA actually being tested
+    (`lora_test_studio._prompt_with_trigger`), so a scene read from dataset A can
+    be replayed against a checkpoint trained on dataset B and still say the right
+    name. ``filename`` lets a UI show the image a scene came from (dataset thumb
+    route); it is display-only and never rides a generation payload.
+    """
+    ds = get_dataset(user_id, dataset_id)
+    if not ds:
+        raise ValueError('dataset not found')
+    want = normalize_pass_statuses(statuses) or ['keep', 'pending']
+    rows = (FaceDatasetImage.query
+            .filter_by(dataset_id=dataset_id)
+            .filter(FaceDatasetImage.status.in_(want))
+            .order_by(FaceDatasetImage.id.asc()).all())
+    scenes = []
+    skipped = {'no_caption': 0}
+    for row in rows:
+        caption = (row.caption or '').strip()
+        if not caption:
+            skipped['no_caption'] += 1
+            continue
+        name = os.path.basename(row.filename or '')
+        scenes.append({'label': scene_captions.scene_label(
+            len(scenes), name or f'image {row.id}'),
+            'framing': scene_captions.scene_framing(row.framing),
+            'prompt': scene_captions.scene_prompt(caption),
+            'image_id': row.id,
+            # None when the file is not written yet (a generation still in
+            # flight): the card is its caption, and the panel simply draws no
+            # thumbnail rather than pointing an <img> at a URL that 404s.
+            'filename': name or None})
+    return {'dataset_id': dataset_id, 'dataset_name': ds.name,
+            'scenes': scenes, 'skipped': skipped}

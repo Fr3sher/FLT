@@ -5,8 +5,6 @@ dataset's trigger in the krea pool (mtime wins, so a re-imported/re-trained LoRA
 supersedes an older one), and None when nothing is deployed."""
 import os
 
-import pytest
-
 
 def _ds():
     from types import SimpleNamespace

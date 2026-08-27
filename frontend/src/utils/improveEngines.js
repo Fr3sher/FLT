@@ -32,7 +32,7 @@ export const IMPROVE_ENGINES = [
   },
 ]
 
-export const DEFAULT_IMPROVE_ENGINE = 'klein'
+const DEFAULT_IMPROVE_ENGINE = 'klein'
 
 export function improveEngine(id) {
   return IMPROVE_ENGINES.find((e) => e.id === id)
@@ -52,7 +52,6 @@ export function availableImproveEngines(caps) {
 
 /** Why an engine's bulk button is disabled, or null when it can run. */
 export function improveEngineBlockedReason(engineId, { caps, engines, eligibleCount } = {}) {
-  const engine = improveEngine(engineId)
   if (engineId === 'klein' && engines && engines.klein === false) {
     return 'Klein is not available in this setup'
   }

@@ -115,7 +115,7 @@ export function originLabel(img) {
 
 /* Generator bucket sizes (SDXL / FLUX / SD1.5). A camera essentially never
  * produces one of these exact shapes. */
-export const GENERATOR_SIZES = [
+const GENERATOR_SIZES = [
   [512, 512], [768, 768], [1024, 1024], [1536, 1536],
   [1152, 896], [896, 1152], [1216, 832], [832, 1216],
   [1344, 768], [768, 1344], [1536, 640], [640, 1536],
@@ -156,12 +156,12 @@ export function jpegQualitySummary(img) {
 /* Labels for the two flags this pass adds, so the chip row and the lightbox
  * cannot drift apart. Ids are user-facing filter keys — never rename them. */
 export const PROVENANCE_FLAG_LABEL = {
-  soft_detail: '🫧 Soft detail',
-  bars: '🎞 Black bars',
+  soft_detail: 'Soft detail',
+  bars: 'Black bars',
 }
 
 export const ORIGIN_CHIPS = [
-  { id: 'ai', label: '🤖 AI' },
-  { id: 'camera', label: '📷 Camera' },
+  { id: 'ai', label: 'AI' },
+  { id: 'camera', label: 'Camera' },
   { id: 'unknown', label: '❔ Unknown' },
 ]

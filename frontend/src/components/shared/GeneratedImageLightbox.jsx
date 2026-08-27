@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
+import { useImageZoomPan } from '../../hooks/useImageZoomPan';
 import RepairDialog from './RepairDialog';
 import { useImageDownload } from '../../hooks/useImageDownload';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import { lightboxImproveButtons } from '../../utils/improveEngines';
+import { canRestoreImproveSettings } from '../../utils/improveSettingsRestore';
 import KleinImproveNote from '../dataset/KleinImproveNote';
 import {
   imageHeadlineFacts, imagePromptBlocks, imageSettingFacts, promptFold,
 } from '../../utils/generatedImageFacts';
 import {
-  FACTS_PANEL_CLASS, IMAGE_CLASS, IMAGE_PANE_CLASS, SHELL_CLASS,
+  FACTS_PANEL_CLASS, IMAGE_CLASS, IMAGE_CLASS_BARE, IMAGE_PANE_CLASS,
+  IMAGE_PANE_CLASS_BARE, SHELL_CLASS,
 } from './generatedImageLightboxLayout';
 
 /* 🔍 ONE generated image, large, with what it was made from.
@@ -187,31 +190,109 @@ export default function GeneratedImageLightbox({ img, alt, actions = null,
   /* ✦ Repair one detail instead of regenerating the whole picture
      (.samexit, Discord). Absent = the button is not drawn, so a surface that
      has no route for it shows nothing rather than a dead control. */
-  onRepair = null, onRepairUndo = null }) {
+  onRepair = null, onRepairUndo = null,
+  /* ‹ › Walk the host's list without closing the viewer — the 🖼 Gallery's
+     whole browsing loop. Same contract as every optional action here: absent =
+     not drawn, so the three hosts that show ONE picture render exactly what
+     they always did. The host passes null AT the ends rather than a disabled
+     flag, for the same reason — a chevron that cannot go anywhere is not
+     drawn, never greyed. */
+  onPrev = null, onNext = null,
+  /* ↩ Make future improves run like THIS ✨ result did (hooks/
+     useRestoreImproveSettings). Only meaningful on a Klein improve row —
+     utils/improveSettingsRestore gates it — and only where the host has a
+     toast to answer with, hence the usual explicit opt-in. */
+  onUseImproveSettings = null }) {
   const dialogRef = useRef(null);
   const closeRef = useRef(null);
+  /* ONE reading of "are the facts on screen", used by the panel, the pane and
+     the picture. Two of them disagreeing draws a bare pane around a framed
+     picture, or a frame around nothing. Declared with the hooks, above the
+     early return: an effect depends on it, and a hook may not sit behind a
+     conditional return. */
   const [repairOpen, setRepairOpen] = useState(false);
+  /* 🔍 Are the facts on screen? They are what this viewer is FOR, so they open
+     with it — but they are not what you want while you are looking. Measured at
+     412x780, the panel open, the picture is 35 % of the screen; put away, it is
+     the screen. The state lives here rather than in localStorage on purpose:
+     hiding the details is a decision about the render in front of you, not a
+     preference, and it survives flipping to the next image (this component
+     stays mounted across `img` changes) which is the span that matters. */
+  const [factsOpen, setFactsOpen] = useState(true);
+  const showFacts = facts && factsOpen;
+  const paneRef = useRef(null);
+  const imgRef = useRef(null);
+  /* 🔍 Pinch, wheel and double-tap, over utils/imageZoomPan's geometry.
+
+     Folding the details away answered "let me see the render" on every shape
+     but one: measured, a phone held UPRIGHT went from 35 % of the screen to
+     39 % and stopped, because a 4:3 render at 412 px wide already has the whole
+     of the scarce axis. Folding cannot give it more; only magnifying can. This
+     is that half, and the phone is the device that needs it.
+
+     `onTap` is the fold — the two gestures share a beginning, so the single tap
+     waits DOUBLE_TAP_MS to find out which it was. See the hook. */
+  const zoom = useImageZoomPan({
+    imgRef,
+    frameRef: paneRef,
+    active: !!img,
+    resetKey: img?.url || null,
+    onTap: useCallback(() => { if (facts) setFactsOpen((v) => !v); }, [facts]),
+  });
   const dl = useImageDownload();
   useFocusTrap(dialogRef, !!img);
   useEffect(() => {
     if (!img) return undefined;
     // Escape peels ONE layer — see RepairDialog: while it is open the key is
     // its own, and this listener would close the lightbox underneath it.
-    const onKey = (e) => { if (e.key === 'Escape' && !repairOpen) onClose?.(); };
+    // …and a magnified picture is a layer of its own: Escape puts the zoom back
+    // before it closes the viewer, so the key never throws away the render you
+    // were in the middle of inspecting.
+    const onKey = (e) => {
+      if (repairOpen) return;
+      // ← → walk the list even while magnified: the zoom resets with the new
+      // picture anyway (resetKey follows img), so making the user un-zoom
+      // first would add a step that buys nothing.
+      if (e.key === 'ArrowLeft' && onPrev) { onPrev(); return; }
+      if (e.key === 'ArrowRight' && onNext) { onNext(); return; }
+      if (e.key !== 'Escape') return;
+      if (zoom.zoomed) { zoom.reset(); return; }
+      onClose?.();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [img, onClose, repairOpen]);
+  }, [img, onClose, repairOpen, zoom, onPrev, onNext]);
   useEffect(() => { if (img) closeRef.current?.focus(); }, [img]);
+  /* Folding the details resizes the frame under a held zoom, and a view that
+     was legally at its edge before is a strip of backdrop afterwards. Settle
+     re-applies the travel limit without touching the magnification — the zoom
+     is the user's, the gap is not. */
+  const settle = zoom.settle;
+  useEffect(() => { settle(); }, [showFacts, settle]);
 
+  // Every hook above this line, every read of `img` below it: nothing renders
+  // for a viewer with no picture, and a hook may not sit behind a return.
   if (!img) return null;
   const head = imageHeadlineFacts(img);
   const settings = imageSettingFacts(img);
   const blocks = imagePromptBlocks(img);
   const label = alt || 'Generated image';
 
+  // The ‹ › chevrons pin to the OVERLAY, like ✕ — inside the zoom pane they
+  // would feed the pan/tap gesture machinery a press that meant "next". The
+  // right one steps clear of the facts column in the split shape, so it always
+  // sits over the PICTURE's edge; the widths mirror FACTS_PANEL_CLASS plus a
+  // 1rem gutter.
+  const NAV_BTN_CLASS = 'absolute top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 '
+    + 'items-center justify-center rounded-full bg-white/10 text-2xl leading-none '
+    + 'text-white hover:bg-white/20';
+  const NAV_NEXT_POS = showFacts
+    ? 'right-2 md:landscape:right-[21rem] lg:landscape:right-[25rem] xl:landscape:right-[28rem]'
+    : 'right-2';
+
   return (
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={label}
-      data-testid="generated-image-lightbox"
+      data-testid="generated-image-lightbox" data-probe-layer
       onClick={onClose}
       // ⚠️ /95, not an arbitrary /92: Tailwind only emits the opacities in its
       // scale, so bg-black/92 compiled to NOTHING and the board behind stayed at
@@ -226,16 +307,85 @@ export default function GeneratedImageLightbox({ img, alt, actions = null,
         title="Close (Esc)" aria-label="Close image"
         className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-lg leading-none text-white hover:bg-white/20">✕</button>
 
-      <div className={IMAGE_PANE_CLASS}>
-        <img src={img.url} alt={label} onClick={(e) => e.stopPropagation()}
-          className={IMAGE_CLASS} />
+      {/* 📱 Put the details away and give the picture the screen.
+
+          Beside ✕ and pinned to the OVERLAY for the same reason ✕ is: it must
+          be the same target at every width, and it must not be inside the
+          column it folds. Only drawn when there ARE facts — a 🪪 reference face
+          passes `facts={false}` and has nothing to fold. */}
+      {facts && (
+        <button type="button" data-testid="lightbox-facts-toggle"
+          onClick={(e) => { e.stopPropagation(); setFactsOpen((v) => !v); }}
+          aria-expanded={factsOpen}
+          title={factsOpen
+            ? 'Hide the details and give the picture the whole screen — or just tap the picture'
+            : 'Show the seed, the settings and the prompt again'}
+          aria-label={factsOpen ? 'Hide the image details' : 'Show the image details'}
+          className="absolute right-14 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-base leading-none text-white hover:bg-white/20">
+          <span aria-hidden>{factsOpen ? '⤢' : 'ⓘ'}</span>
+        </button>
+      )}
+
+      {/* The gestures live on the PANE, not on the picture: zoomed in past the
+          frame on one axis there are still bars of backdrop on the other, and a
+          pan that dies the moment your thumb crosses onto one is a pan that
+          fights you. `touch-none` because the browser would otherwise take the
+          pinch for itself and zoom the whole page over a viewer that was
+          already zooming the picture. */}
+      {/* ⤾ The way back out, for the wheel and the pinch — a double tap already
+          goes home, but nothing says so, and a magnified picture with no
+          visible way back is the state people close the viewer to escape.
+          Only while it can do something. */}
+      {zoom.zoomed && (
+        <button type="button" data-testid="lightbox-zoom-reset"
+          onClick={(e) => { e.stopPropagation(); zoom.reset(); }}
+          title="Back to the whole picture (double-tap it, or press Esc)"
+          aria-label="Reset the zoom"
+          className="absolute right-24 top-3 z-10 flex h-9 items-center rounded-full bg-white/10 px-3 text-[0.75rem] font-semibold leading-none text-white hover:bg-white/20">
+          <span aria-hidden className="mr-1">⤾</span>{Math.round(zoom.view.scale * 100)}%
+        </button>
+      )}
+
+      {/* ‹ › — drawn only where there IS somewhere to go (see the prop note). */}
+      {onPrev && (
+        <button type="button" data-testid="lightbox-prev"
+          onClick={(e) => { e.stopPropagation(); onPrev(); }}
+          title="Previous image (←)" aria-label="Previous image"
+          className={`${NAV_BTN_CLASS} left-2`}>
+          <span aria-hidden>‹</span>
+        </button>
+      )}
+      {onNext && (
+        <button type="button" data-testid="lightbox-next"
+          onClick={(e) => { e.stopPropagation(); onNext(); }}
+          title="Next image (→)" aria-label="Next image"
+          className={`${NAV_BTN_CLASS} ${NAV_NEXT_POS}`}>
+          <span aria-hidden>›</span>
+        </button>
+      )}
+
+      <div ref={paneRef} {...zoom.handlers}
+        className={(showFacts ? IMAGE_PANE_CLASS : IMAGE_PANE_CLASS_BARE) + ' touch-none'}
+        /* A press on the backdrop still closes the viewer, which is the way out
+           people reach for first — but not while the picture is magnified, or
+           letting go after a pan would shut the thing you were inspecting. */
+        onClick={(e) => { if (zoom.zoomed) e.stopPropagation(); }}>
+        {/* Tapping the picture folds the details away and brings them back —
+            the gesture every photo viewer on a phone already has, and the one a
+            thumb reaches without aiming. Double-tap magnifies instead, and the
+            press never reaches the backdrop, so neither can close the viewer by
+            accident. */}
+        <img ref={imgRef} src={img.url} alt={label} draggable={false}
+          onClick={(e) => e.stopPropagation()}
+          style={zoom.style}
+          className={showFacts ? IMAGE_CLASS : IMAGE_CLASS_BARE} />
       </div>
 
       {/* THE fix for the wall of text: a column, not a line. Bounded width above
           `md` and the panel's own width below it — either way the prose has a
           reading width, never the width of the screen. Its own scroll, so the
           image never shrinks to make room for a long prompt. */}
-      {facts && (
+      {showFacts && (
       <aside onClick={(e) => e.stopPropagation()}
         data-testid="generated-image-facts"
         /* OPAQUE, not a tint. At 60 % the page behind it stayed legible through
@@ -303,6 +453,20 @@ export default function GeneratedImageLightbox({ img, alt, actions = null,
               <ImproveActions img={img} onImprove={onImprove}
                 improvePending={improvePending} improveReady={improveReady}
                 busy={busy} subjectType={subjectType} datasetId={datasetId} />
+            )}
+            {/* ↩ On a ✨ result you LIKE: make every next improve run the way
+                this one did — the recorded instruction back into the global
+                setting, the chained LoRAs mapped back to their preset. The
+                gate lives in improveSettingsRestore: a pure-restoration
+                result recorded no instruction and offers nothing. */}
+            {onUseImproveSettings && canRestoreImproveSettings(img) && (
+              <button type="button" data-testid="lightbox-use-improve-settings"
+                onClick={(e) => { e.stopPropagation(); onUseImproveSettings(img); }}
+                disabled={busy}
+                title="Make the next ✨ improves use what THIS image was made with — its instruction and LoRA preset become the app-wide improve settings"
+                className="rounded-md border border-emerald-400/50 bg-emerald-500/15 px-3 py-1.5 text-[0.75rem] font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-40">
+                <span aria-hidden>↩</span> Use these improve settings
+              </button>
             )}
             {/* ✦ Repair sits with them because it answers the third thing you do
                 with a render: keep it, improve it — or fix the ONE part that is

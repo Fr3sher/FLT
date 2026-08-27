@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from .utils.timestamps import naive_utcnow
 from .extensions import db
 from sqlalchemy import Integer, String, Text, DateTime, Float
 
@@ -198,6 +198,14 @@ class FaceDatasetImage(db.Model):
     # que ce qu'elle sait, elle ne devine pas. Colonne additive (migration
     # create_app). Valeurs = clés stockées en base : ne jamais les renommer.
     fail_kind = db.Column(String(16), nullable=True)
+    # 📷 The camera position this row was rendered AT ('azimuth/elevation/
+    # distance', services/camera_angles.pose_id) — same contract as
+    # LoraTestImage.camera_pose: stored rather than re-parsed from the prompt,
+    # NULL everywhere else, component ids frozen (user databases). On THIS
+    # table it also feeds the caption: the captioner injects the angle phrase
+    # for any row carrying a pose, because a back view left undescribed binds
+    # "back-facing" to the trigger word. Additive column (_SCHEMA_ADDITIONS).
+    camera_pose = db.Column(String(64), nullable=True)
     # De combien la box recadrée (head-crop auto à l'import OU recadrage manuel) est
     # en-dessous de la résolution d'entraînement : size / côté_de_la_box. NULL =
     # jamais croppé (import plein cadre) ou pas encore recalculé (anciennes lignes).
@@ -756,6 +764,27 @@ class LoraTestImage(db.Model):
     # their rows and read NULL everywhere (see _SCHEMA_ADDITIONS).
     parent_image_id = db.Column(Integer, nullable=True, index=True)
     derivation_kind = db.Column(String(32), nullable=True)
+    # ✨ The knobs the improve pass ACTUALLY ran with, as JSON — written by
+    # improve_canvas_image from the very dict handed to the engine, so what is
+    # stored can never drift from what executed. Klein only (a restoration
+    # pass has no knobs to record); NULL on every row that is not an improve
+    # result and on rows that predate the column. Read by ↩ "Use these
+    # improve settings"; keys are published as-is by _gallery_image, so they
+    # are part of the frontend contract (improveSettingsRestore.js) — never
+    # rename one without an alias. Additive column (see _SCHEMA_ADDITIONS).
+    improve_profile = db.Column(Text, nullable=True)
+    # 📷 The camera position this row was rendered AT, as the stable pose id
+    # `azimuth/elevation/distance` (services/camera_angles.pose_id). NULL on
+    # every row that is not a camera view and on rows predating the column.
+    #
+    # Stored rather than derived: the pose IS recoverable from `prompt` (which
+    # holds the LoRA's own `<sks> ...` sentence), but only by parsing English
+    # back into ids — and that parse would silently produce the WRONG label the
+    # day a token changes. A tile that mislabels which angle it is showing is
+    # worse than one with no label, because a dataset gets built on it.
+    # ⚠️ The three components are catalog ids written into user databases: they
+    # never change without an alias path. Additive column (see _SCHEMA_ADDITIONS).
+    camera_pose = db.Column(String(64), nullable=True)
 
     def __repr__(self):
         return f'<LoraTestImage {self.id} ds={self.dataset_id} {self.checkpoint}@{self.strength} {self.status}>'
@@ -785,20 +814,11 @@ class JobQueueMixin:
             self.comfyui_prompt_id = comfyui_prompt_id
 
         if new_status == 'processing':
-            self.started_at = datetime.utcnow()
+            self.started_at = naive_utcnow()
         elif new_status in ('completed', 'failed', 'cancelled'):
-            self.completed_at = datetime.utcnow()
+            self.completed_at = naive_utcnow()
 
-        self.last_heartbeat = datetime.utcnow()
-
-    def is_stuck(self, timeout_minutes=10):
-        """True if the job is in-progress but heartbeat is missing/stale."""
-        if self.status not in ('processing', 'sent_to_comfy'):
-            return False
-        if not self.last_heartbeat:
-            return True
-        return datetime.utcnow() - self.last_heartbeat > timedelta(minutes=timeout_minutes)
-
+        self.last_heartbeat = naive_utcnow()
 
 class ImageGenerationQueue(JobQueueMixin, db.Model):
     """Modèle pour la file d'attente de génération d'images"""
@@ -888,7 +908,7 @@ class SystemState(db.Model):
     __tablename__ = 'system_state'
     key = db.Column(db.String(64), primary_key=True)
     value = db.Column(db.Text)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=naive_utcnow, onupdate=naive_utcnow)
 
 
 class CloudTrainingRun(db.Model):
@@ -920,8 +940,8 @@ class CloudTrainingRun(db.Model):
     checkpoint_local_path = db.Column(db.Text)
     train_params = db.Column(db.Text)             # JSON: steps/variant/train_type/masked
     error = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=naive_utcnow)
+    updated_at = db.Column(db.DateTime, default=naive_utcnow, onupdate=naive_utcnow)
     # When the user asked this run to stop. Durable on purpose: an in-memory
     # threading.Event does not survive a restart and cannot be enforced by
     # anything but the monitor thread — which is exactly what may be dead.
@@ -980,7 +1000,7 @@ class TrainingRunRecord(db.Model):
     # Kept distinct so a reconstructed edge stays auditable and reversible.
     lineage_origin = db.Column(db.String(16))
     note = db.Column(db.Text)                                # free-form run note (Lab)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=naive_utcnow)
 
 
 class CheckpointNote(db.Model):
@@ -1026,7 +1046,7 @@ class CheckpointPreview(db.Model):
     lora_test_image_id = db.Column(db.Integer, nullable=True)
     prompt = db.Column(db.Text, nullable=False, default='')
     seed = db.Column(db.BigInteger, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=naive_utcnow)
     # No UniqueConstraint on (record_id, step) — see the class docstring. The
     # composite index replaces it: the reads are all "every preview of this
     # checkpoint", which is exactly what the old unique index used to serve.
@@ -1053,7 +1073,7 @@ class TrainingPreset(db.Model):
     dataset_kind = db.Column(db.String(16), nullable=True)
     variants = db.Column(db.Text, nullable=True)
     settings = db.Column(db.Text, nullable=False, default='{}')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=naive_utcnow)
 
 
 class CanvasNodePosition(db.Model):
@@ -1091,8 +1111,8 @@ class CanvasNodePosition(db.Model):
     record_id = db.Column(db.Integer, nullable=False, index=True)
     x = db.Column(Float, nullable=False, default=0.0)
     y = db.Column(Float, nullable=False, default=0.0)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
-                           onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=naive_utcnow,
+                           onupdate=naive_utcnow)
     dataset = db.relationship('FaceDataset')
     __table_args__ = (db.UniqueConstraint('dataset_id', 'record_id',
                                           name='uq_canvas_node_position'),)
@@ -1170,8 +1190,8 @@ class CanvasImageNode(db.Model):
     # predates them reads NULL everywhere and draws the board it always drew.
     group_id = db.Column(db.String(40), nullable=True)
     group_pos = db.Column(db.Integer, nullable=True)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
-                           onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=naive_utcnow,
+                           onupdate=naive_utcnow)
     dataset = db.relationship('FaceDataset')
     __table_args__ = (db.UniqueConstraint('dataset_id', 'image_id',
                                           name='uq_canvas_image_node'),)
@@ -1211,9 +1231,9 @@ class CanvasLayoutPreset(db.Model):
     user_id = db.Column(String(36), nullable=False, index=True, default='local')
     name = db.Column(db.String(80), nullable=False)
     payload = db.Column(db.Text, nullable=False, default='{}')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
-                           onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=naive_utcnow)
+    updated_at = db.Column(db.DateTime, default=naive_utcnow,
+                           onupdate=naive_utcnow)
     __table_args__ = (db.UniqueConstraint('user_id', 'name',
                                           name='uq_canvas_layout_preset'),)
 

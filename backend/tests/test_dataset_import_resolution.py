@@ -163,8 +163,10 @@ def test_explicit_encoding_tiers_and_ceiling_remain_available(app):
         policy = svc.import_encode_policy()
 
     source = Image.open(io.BytesIO(raw)).convert('RGB')
-    assert list(Image.open(io.BytesIO(lossless)).convert('RGB').getdata()) == list(source.getdata())
-    assert list(Image.open(io.BytesIO(standard)).convert('RGB').getdata()) != list(source.getdata())
+    # tobytes() both sides: byte equality is pixel equality for one mode,
+    # and getdata() is deprecated for removal in Pillow 14.
+    assert Image.open(io.BytesIO(lossless)).convert('RGB').tobytes() == source.tobytes()
+    assert Image.open(io.BytesIO(standard)).convert('RGB').tobytes() != source.tobytes()
     assert policy['max_side'] == svc.IMPORT_MAX_SIDE_CEILING and policy['capped'] is True
 
 
@@ -248,7 +250,6 @@ def test_zip_and_folder_merge_preserve_raw_sources(app, tmp_path):
     """ZIP and folder routes share `_merge_training_images`; cover both public
     entries so a future shortcut cannot reintroduce a WebP rewrite in one lane."""
     from app.config import LOCAL_USER
-    from app.models import FaceDatasetImage
     from app.services import face_dataset_service as svc
 
     zip_raw = _image_bytes('PNG', seed=12)

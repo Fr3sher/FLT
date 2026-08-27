@@ -32,7 +32,6 @@ only the in-process progress bookkeeping the routes poll — the same shape as
 ``setup_installer``.
 """
 import copy
-import io
 import json
 import logging
 import os
@@ -1008,12 +1007,6 @@ def status(kind: str) -> dict:
         if st is None:
             return {'state': 'idle'}
         return copy.deepcopy(st)
-
-
-def is_running(kind: str) -> bool:
-    with _lock:
-        st = _runs.get(kind)
-        return bool(st and st['state'] == 'running')
 
 
 def start_backup(app, user_id, *, include_loras: bool = False) -> None:

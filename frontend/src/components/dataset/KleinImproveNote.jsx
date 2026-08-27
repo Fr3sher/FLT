@@ -40,8 +40,9 @@ import { apiFetch, putJson } from '../../api/fetchClient';
 import SettingsLink from '../common/SettingsLink';
 import PromptOverrideField from '../common/PromptOverrideField';
 import KleinModelSetting from '../shared/KleinModelSetting';
-import { improveInstructionLine, improveAnimeCaution, readImproveInstruction } from './kleinImproveHint';
+import { improveInstructionLine, improveAnimeCaution } from './kleinImproveHint';
 import {
+  IMPROVE_MEGAPIXELS_MAX, IMPROVE_MEGAPIXELS_MIN, IMPROVE_MEGAPIXELS_STEP,
   IMPROVE_OFF_NOTE, IMPROVE_SCOPE_NOTE, createImproveSaver, effectiveImprovePrompt,
   improveEditorState, improveSettingsPatch,
 } from './kleinImproveEditor';
@@ -74,8 +75,13 @@ function loadSettings() {
 
 /** Hand a freshly saved settings payload to the cache AND to every mounted note.
  *  Invalidating alone would only fix the NEXT mount; the copies already on
- *  screen are the ones showing the replaced text. */
-function publishSettings(payload) {
+ *  screen are the ones showing the replaced text.
+ *
+ *  Exported (as publishKleinImproveSettings) for the OTHER writer of these
+ *  values: ↩ "Use these improve settings" saves through its own PUT, and a
+ *  note left quoting the replaced instruction for 15 s is the exact staleness
+ *  this publish exists to prevent. */
+export function publishSettings(payload) {
   if (!payload || typeof payload !== 'object') return;
   cache = { at: Date.now(), promise: Promise.resolve(payload), value: payload };
   // A listener that throws must not stop the ones after it — the whole point is
@@ -155,6 +161,8 @@ export default function KleinImproveNote({
   const server = improveEditorState(payload);
   const stored = draft?.stored ?? server.stored;
   const enabled = draft?.enabled ?? server.enabled;
+  const loraPreset = draft?.loraPreset ?? server.loraPreset;
+  const megapixels = draft?.megapixels ?? server.megapixels;
   const state = {
     loaded: server.loaded,
     enabled,
@@ -164,16 +172,29 @@ export default function KleinImproveNote({
   const caution = improveAnimeCaution({ ...state, subjectType });
 
   const setStored = (v) => {
-    setDraft((d) => ({ stored: v, enabled: d?.enabled ?? server.enabled }));
+    setDraft((d) => ({ ...(d || {}), stored: v, enabled: d?.enabled ?? server.enabled }));
     saver.current.schedule('prompt', v);
   };
   const setEnabled = (v) => {
-    setDraft((d) => ({ stored: d?.stored ?? server.stored, enabled: v }));
+    setDraft((d) => ({ ...(d || {}), stored: d?.stored ?? server.stored, enabled: v }));
     // A checkbox is a discrete act, not a stream of keystrokes: send it now.
     // schedule-then-flush rather than a direct call so a half-typed sentence
     // rides along in the SAME request instead of being overtaken by it.
     saver.current.schedule('enabled', v);
     saver.current.flush();
+  };
+  const setLoraPreset = (v) => {
+    setDraft((d) => ({ ...(d || {}), loraPreset: v }));
+    // A pick is discrete, like the checkbox — and rides with any half-typed
+    // sentence for the same reason.
+    saver.current.schedule('loraPreset', v);
+    saver.current.flush();
+  };
+  const setMegapixels = (v) => {
+    setDraft((d) => ({ ...(d || {}), megapixels: v }));
+    // Typed, like the prompt: coalesced, so "2.5" is one write, not a write at
+    // "2" — improveSettingsPatch drops a half-typed value on its own.
+    saver.current.schedule('megapixels', v);
   };
 
   return (
@@ -198,6 +219,59 @@ export default function KleinImproveNote({
           even on a one-model install; the picker itself only appears when
           there is more than one thing to pick. */}
       <KleinModelSetting datasetId={datasetId} />
+      {/* WHICH LoRA preset the pass chains (klein.improve_lora_preset) — the
+          third half of "what will improve run with", and app-wide exactly like
+          the instruction, which the label says out loud because this control
+          sits inside dataset screens. Only drawn when there IS something to
+          pick — presets are defined in Settings ▸ Engines — or when a stale
+          pick is stored, which must stay visible so it can be cleared (the
+          backend already resolves it fail-closed to "none"). Klein only:
+          SeedVR2 is a restoration and chains nothing. */}
+      {(server.loraPresets.length > 0 || loraPreset) && (
+        <label className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+          <span className="text-content-muted">LoRA preset (app-wide, Klein only)</span>
+          <select
+            data-testid="klein-improve-lora-preset"
+            aria-label="Generation-LoRA preset chained by every Klein improve"
+            disabled={saving || !server.loaded}
+            value={loraPreset}
+            onChange={(e) => setLoraPreset(e.target.value)}
+            className="min-w-0 max-w-full flex-1 bg-white/[0.03] border border-white/10 rounded-md
+                       px-2 py-1 text-[0.6875rem] text-content focus:outline-none
+                       focus:border-primary/60 disabled:opacity-50"
+          >
+            <option value="" className="bg-surface-overlay">None</option>
+            {server.loraPresets.map((name) => (
+              <option key={name} value={name} className="bg-surface-overlay">{name}</option>
+            ))}
+            {loraPreset && !server.loraPresets.includes(loraPreset) && (
+              <option value={loraPreset} className="bg-surface-overlay">
+                {loraPreset} (missing — runs as None)
+              </option>
+            )}
+          </select>
+        </label>
+      )}
+      {/* The output budget (klein.improve_megapixels) — the size the result
+          comes back at, and the knob people left this panel for (reported the
+          day the rest of the improve controls arrived here). Same single truth
+          as the Settings card: same key, same 0.5–8 bounds, said app-wide. */}
+      <label className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+        <span className="text-content-muted">Output size, MP (app-wide)</span>
+        <input
+          type="number"
+          data-testid="klein-improve-megapixels"
+          aria-label="Output size of every Klein improve, in megapixels"
+          min={IMPROVE_MEGAPIXELS_MIN} max={IMPROVE_MEGAPIXELS_MAX}
+          step={IMPROVE_MEGAPIXELS_STEP}
+          disabled={saving || !server.loaded}
+          value={megapixels}
+          onChange={(e) => setMegapixels(e.target.value)}
+          className="w-20 bg-white/[0.03] border border-white/10 rounded-md
+                     px-2 py-1 text-[0.6875rem] text-content focus:outline-none
+                     focus:border-primary/60 disabled:opacity-50"
+        />
+      </label>
       {/* Two targets because they are two different problems: the WORDS
           (why it turned realistic) and the AMOUNT (how far it moved).
           flex-wrap so they stack rather than overflow on a phone. */}
@@ -208,15 +282,15 @@ export default function KleinImproveNote({
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
           disabled={!server.loaded}
-          className="underline text-indigo-300 hover:text-indigo-200 disabled:opacity-40"
+          className="min-h-10 lg:min-h-0 inline-flex items-center underline text-indigo-300 hover:text-indigo-200 disabled:opacity-40"
         >
           <span aria-hidden="true">✎ </span>
           {open ? 'Close the instruction editor' : 'Edit this instruction here'}
         </button>
-        <SettingsLink section="engines" focus="identity-prompt-klein-improve">
+        <SettingsLink section="engines" focus="identity-prompt-klein-improve" className="min-h-10 lg:min-h-0 inline-flex items-center">
           All Klein prompts in Settings
         </SettingsLink>
-        <SettingsLink section="engines" focus="klein-improve-strength">
+        <SettingsLink section="engines" focus="klein-improve-strength" className="min-h-10 lg:min-h-0 inline-flex items-center">
           Adjust improve strength
         </SettingsLink>
       </p>
