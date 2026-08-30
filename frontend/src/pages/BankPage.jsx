@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Archive, Ban, FolderInput, Plus, X } from 'lucide-react'
-import { apiFetch, del, postForm, postJson } from '../api/fetchClient'
+import { apiFetch, del, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { HelpBadge } from '../help/HelpMode'
 import BankWorkspace from '../components/bank/BankWorkspace'
@@ -12,7 +11,6 @@ import { datasetFolderNotice } from '../utils/pathRelation'
 import FolderSyncNote from '../components/bank/FolderSyncNote'
 import FolderCheckLine from '../components/bank/FolderCheckLine'
 import RelocateBankDialog from '../components/bank/RelocateBankDialog'
-import ForgetMissingDialog from '../components/bank/ForgetMissingDialog'
 import BankScrapePanel from '../components/bank/BankScrapePanel'
 import BankLaneTabs from '../components/videobank/BankLaneTabs'
 import { bankListOverview } from '../components/bank/bankOverview.js'
@@ -101,7 +99,6 @@ export default function BankPage() {
   const [creating, setCreating] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [relocating, setRelocating] = useState(null)   // the bank being repointed
-  const [forgetting, setForgetting] = useState(null)   // the bank forgetting its missing rows
   // Dataset storage folders, so a folder that belongs to a dataset can be named
   // as such WHILE it is typed. The server refuses it either way — this only
   // spares the round-trip and the "why not?" (see utils/pathRelation.js).
@@ -201,18 +198,34 @@ export default function BankPage() {
         fd.append('upload_id', uploadId)
         fd.append('path', f.webkitRelativePath || f.name)
         fd.append('file', f, f.name)
-        await postForm('/api/bank/upload-file', fd)
+        const res = await fetch('/api/bank/upload-file', {
+          method: 'POST',
+          body: fd,
+          credentials: 'include',
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || `Upload failed (HTTP ${res.status})`)
+        }
       }
       for (const f of files) {
         try {
           await uploadOne(f)
-        } catch {
-          console.warn('File upload failed; retrying once.')
+        } catch (err) {
+          console.error('File upload failed, retrying once:', f.name, err)
           await uploadOne(f)
         }
       }
-      const data = await postJson('/api/bank/upload-folder/complete',
-        { name: finalName, upload_id: uploadId })
+      const complete = new FormData()
+      complete.append('name', finalName)
+      complete.append('upload_id', uploadId)
+      const res = await fetch('/api/bank/upload-folder/complete', {
+        method: 'POST',
+        body: complete,
+        credentials: 'include',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`)
       toast.success(`Bank created — ${data.added} image(s) uploaded.`)
       setName(''); setFolder('')
       open(data.id)
@@ -225,6 +238,7 @@ export default function BankPage() {
   }
 
   const remove = async (bank) => {
+    // eslint-disable-next-line no-alert
     if (!window.confirm(`Remove the bank “${bank.name}”?\n\nOnly the triage data (decisions, scores, thumbnails) is deleted — the source folder and its images are NOT touched.`)) return
     try {
       await del(`/api/bank/${bank.id}`)
@@ -242,7 +256,7 @@ export default function BankPage() {
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-center gap-2">
-        <h1 className="flex items-center gap-2 text-xl font-bold text-content"><Archive aria-hidden="true" className="h-5 w-5" /> Image bank</h1>
+        <h1 className="text-xl font-bold text-content">🗃️ Image bank</h1>
         <HelpBadge topic="page-bank" />
         {/* The kind of bank you are making, said WHERE you make one. Until now a
             .mp4 dropped in this folder was skipped in silence — this is the only
@@ -253,8 +267,7 @@ export default function BankPage() {
         Point the app at a big unsorted folder (a Telegram export, a scrape dump…) and triage it
         into dataset-ready selections: a quality pass flags blur/noise/flat/small shots and groups
         near-duplicates, the face pass sorts the dump by person — then you promote the keepers
-        into a dataset. No pass ever modifies your files; the one thing that adds to the folder
-        is a scrape you send to this bank yourself.
+        into a dataset. The folder itself is never modified.
       </p>
 
       <form onSubmit={create}
@@ -280,15 +293,15 @@ export default function BankPage() {
         </label>
         <button type="submit" disabled={creating || !!folderNotice}
           title={folderNotice ? 'That folder belongs to a dataset' : undefined}
-          className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-semibold text-gray-950 disabled:opacity-50">
-          {creating ? 'Inventorying…' : <span className="inline-flex items-center gap-1.5"><Plus aria-hidden="true" className="h-4 w-4" /> Create bank</span>}
+          className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+          {creating ? 'Inventorying…' : '➕ Create bank'}
         </button>
         {/* basis-full: its own row inside the wrapping flex form, so the sentence
             never squeezes the fields — including at 400 px. */}
         {folderNotice && (
           <p role="alert"
             className="basis-full rounded-md border border-rose-500/70 bg-rose-500/15 p-3 text-sm text-rose-100">
-            <Ban aria-hidden="true" className="mr-1 inline h-4 w-4 align-[-2px]" />{folderNotice.text}
+            ⛔ {folderNotice.text}
           </p>
         )}
       </form>
@@ -315,7 +328,7 @@ export default function BankPage() {
             <li key={b.id}
               className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-surface p-4">
               <div className="flex min-w-0 items-center gap-2">
-                <button type="button" onClick={() => open(b.id)} aria-label={`Open the bank ${b.name}`}
+                <button type="button" onClick={() => open(b.id)}
                   className="min-w-0 truncate text-left text-base font-semibold text-content hover:underline">
                   {b.name}
                 </button>
@@ -325,9 +338,9 @@ export default function BankPage() {
                 <button type="button" onClick={() => setRelocating(b)}
                   aria-label={`Move the folder of bank ${b.name}`}
                   title="Moved this folder to another disk? Point the bank at its new location."
-                  className="ml-auto px-1.5 text-content-subtle hover:text-content"><FolderInput aria-hidden="true" className="h-4 w-4" /></button>
+                  className="ml-auto px-1.5 text-content-subtle hover:text-content">📦</button>
                 <button type="button" onClick={() => remove(b)} aria-label={`Remove bank ${b.name}`}
-                  className="px-1.5 text-content-subtle hover:text-rose-300"><X aria-hidden="true" className="h-4 w-4" /></button>
+                  className="px-1.5 text-content-subtle hover:text-rose-300">✕</button>
               </div>
               <p className="truncate font-mono text-xs text-content-subtle" title={b.source_path}>
                 {b.source_path}
@@ -335,8 +348,7 @@ export default function BankPage() {
               <BankPreviewStrip bank={b} onOpen={() => open(b.id)} />
               <BankListSummary bank={b} />
               <FolderSyncNote sync={b.folder_sync}
-                onRelocate={() => setRelocating(b)}
-                onForget={() => setForgetting(b)} />
+                onRelocate={() => setRelocating(b)} />
               <button type="button" onClick={() => open(b.id)}
                 className="self-start rounded-md border border-border bg-surface-raised px-3 py-1 text-xs font-semibold text-content hover:bg-surface">
                 Open →
@@ -350,11 +362,6 @@ export default function BankPage() {
         <RelocateBankDialog bankId={relocating.id} bankName={relocating.name}
           sourcePath={relocating.source_path}
           onClose={() => setRelocating(null)} onDone={() => refresh()} />
-      )}
-
-      {forgetting && (
-        <ForgetMissingDialog bankId={forgetting.id} bankName={forgetting.name}
-          onClose={() => setForgetting(null)} onDone={() => refresh()} />
       )}
     </div>
   )

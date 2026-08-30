@@ -60,7 +60,7 @@ export default function QuicIndicator() {
         ? 'Connected over QUIC (HTTP/3) — the fast lane'
         : 'Not connected over QUIC'}
       aria-label={active ? 'Connected over QUIC' : 'Not connected over QUIC'}
-      className={`hidden min-[400px]:inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none transition-colors ${
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none transition-colors ${
         active
           ? 'border border-emerald-400/40 bg-emerald-500/10 text-emerald-300'
           : 'text-content-subtle hover:text-content-muted'
