@@ -26,6 +26,7 @@ _TEST_TARGETS = {
     # probe_ollama_model so the Test button, the Setup step and the diagnostic are one
     # source of truth.
     'ollama': capabilities.probe_ollama_connection,
+    'lmstudio': capabilities.probe_lmstudio_connection,
     # Folder checks PLUS an `import torch` on the chosen interpreter: a Test that
     # goes green on a Python without torch is the trap of GitHub #19 (strouder).
     'aitoolkit': capabilities.probe_aitoolkit_test,
@@ -971,6 +972,7 @@ def diagnostic():
     are reduced to *_set booleans — the output is meant to be pasted into a
     public issue or Discord thread as-is. (Log lines may still cite file names;
     the UI tells the user to skim before posting.)"""
+    from ..services import vision_llm as _vision_llm
     import platform
     import sys
     import time
@@ -1045,6 +1047,10 @@ def diagnostic():
             # allow_crop is the watermark auto-routing default (the trap: crop vs
             # inpaint). A non-sensitive knob whose value silently changes behaviour.
             'watermark_allow_crop': bool((conf.get('watermark') or {}).get('allow_crop')),
+            # 🔤 Find text sensitivity — the launch window's slider reads it
+            # here and writes it through PUT /api/settings. One stored value,
+            # both surfaces (bank and dataset passes read the same key).
+            'text_scan_score_min': (conf.get('text_scan') or {}).get('score_min'),
             'lan_enabled': (conf.get('server') or {}).get('host') not in (None, '', '127.0.0.1', 'localhost', '::1'),
         },
         # The configured vision-model string + the tags the probe actually sees at
@@ -1053,6 +1059,12 @@ def diagnostic():
         # slightly different identifier (namespace/registry/field variance, issue #7).
         # Model names are not secrets; paths are still absent from this block.
         'ollama': capabilities.ollama_diagnostic(),
+        # Both, always, plus which one is in charge. A report that names only
+        # Ollama on an LM Studio install says `ollama_reachable: false` about a
+        # daemon nobody is using and nothing at all about the one that is —
+        # which is the report we would be asked to diagnose from.
+        'local_llm': {'provider': _vision_llm.provider()},
+        'lmstudio': capabilities.lmstudio_diagnostic(),
         # Last failed-generation reason per engine + the last Studio failure — the
         # real cause behind "it fails every time". Redacted + capped (see helper).
         'generation_errors': _recent_generation_errors(),

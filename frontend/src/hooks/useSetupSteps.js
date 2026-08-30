@@ -259,6 +259,97 @@ export const COMFYUI_SKIP_KEPT = [
   'Publishing datasets and LoRAs to Hugging Face',
 ]
 
+// What "continue without Ollama" costs vs keeps. Same rule as the ComfyUI lists
+// above: every line is sourced from a real gate, nothing is invented.
+//   LOST  — classifyFramingGate.js ("Ollama is the only backend for this pass"),
+//           detect_head_bbox, lora_test_studio.describe/enhance_test_prompt,
+//           bank_filter_translator.translate, watermark_detect.backend='vision',
+//           and the caption_short derivation (text-only, Ollama-only).
+//   KEPT  — captioning itself, because JoyCaption writes the SAME prompt: the
+//           caption style is chosen by train_type (prose for Z-Image, booru for
+//           SDXL) and handed to BOTH engines, so JoyCaption is not an SDXL-only
+//           fallback. The wizard used to claim otherwise and gated on it.
+export const OLLAMA_SKIP_LOST = [
+  'Auto-classify framing (📐) on datasets and the bank',
+  'Auto head-crop when a dataset is built from a reference photo',
+  'Test Studio 🔎 Describe and ✨ Enhance',
+  'The bank’s “Describe filter” natural-language search',
+  'Watermark detection through the vision route (the detector engine still works)',
+  'Short captions derived from long ones',
+]
+export const OLLAMA_SKIP_KEPT = [
+  'Captioning with JoyCaption — prose or booru tags, matched to what you train',
+  'Scraping, dataset curation and the bank',
+  'Local generation, Test Studio comparisons and the Canvas (ComfyUI)',
+  'LoRA training — local ai-toolkit and cloud (vast.ai)',
+  'Nano Banana, ChatGPT and OpenRouter image engines',
+]
+
+// The KEPT list as THIS machine may claim it. Every other line is true of any
+// install; the captioning one is not — ticking it where JoyCaption is absent would
+// promise a captioner that isn't there. The panel's amber note names the fix, so
+// the line is withheld rather than reworded into a half-promise.
+export function ollamaSkipKept(joycaptionReady) {
+  return joycaptionReady
+    ? OLLAMA_SKIP_KEPT
+    : OLLAMA_SKIP_KEPT.filter((t) => !/^Captioning with JoyCaption/.test(t))
+}
+
+// Why the wizard would keep you on the Ollama step, or `null` when it would not.
+//
+// This step used to HARD BLOCK, on the premise that "JoyCaption only covers SDXL
+// booru tags" — which the code it guarded contradicts: the caption STYLE follows
+// the TRAIN TYPE (face_dataset_service picks prose unless sdxl) and the resulting
+// prompt is handed to BOTH engines, so JoyCaption writes the very prose Z-Image
+// wants. A ready JoyCaption therefore lifts the gate outright, and a conscious
+// skip lifts it too; with neither, SetupPage offers the skip panel rather than a
+// wall. What Ollama alone still unlocks — framing, head-crop, Describe/Enhance,
+// the bank's NL filter, short captions — stays listed, counted and honestly
+// absent (OLLAMA_SKIP_LOST, and the capability summary below).
+//
+// Pure, and living here rather than inside the page, so it can be re-evaluated
+// against FRESH capabilities after a save — and so `node --test` can hold every
+// branch of it, which is what the page's own closures can never offer.
+export function ollamaGateReason(s) {
+  if (!s || s.status === 'ready' || s.disabled) return null
+  // Asked BEFORE the lifts below: an unconfigured Docker install is not a capability
+  // question but an unanswered one — nothing starts until a card is picked, and the
+  // 'No Ollama' card is itself one of the answers. Having a captioner elsewhere must
+  // not wave that choice through, or the companion container is never brought up.
+  if (s.unconfigured) {
+    return 'Choose No Ollama, Existing host Ollama or Docker Ollama on this page before continuing.'
+  }
+  if (s.skipped || s.joycaptionReady) return null
+  // LM Studio answers a different pair of questions: it cannot be started from
+  // here, and "ready" means a model is LOADED rather than pulled. Sending someone
+  // to download an Ollama binary they deliberately did not choose is the kind of
+  // wrong-product instruction that costs a support round-trip.
+  if (s.isLmStudio) {
+    if (!s.reachable) {
+      return 'LM Studio is not answering. Open it, go to Developer and press Start Server '
+        + '(then Save & re-check), or switch provider in Settings ▸ Local tools.'
+    }
+    if (!s.visionModelReady) {
+      return 'LM Studio is running but has no usable model loaded — load a vision model '
+        + 'in its Developer tab, then Save & re-check.'
+    }
+    return 'Finish this step to continue.'
+  }
+  if (s.managedInitializing) {
+    return 'The companion Ollama container is still starting. This page will continue automatically when it is ready.'
+  }
+  if (!s.reachable) {
+    if (s.deploymentMode === 'host') {
+      return 'Host Ollama is selected but unreachable from Docker. Start it on the host and make port 11434 reachable from Docker, or choose Docker Ollama on this page.'
+    }
+    // Installed-but-stopped gets a Start nudge; genuinely absent gets install.
+    if (!s.installed) return "Ollama isn't installed — download it and start it (port 11434) to continue."
+    return 'Ollama is installed but not running — click ▶ Start Ollama below to continue.'
+  }
+  if (!s.visionModelReady) return 'Pull the vision model below to continue — with no JoyCaption installed, it is the only captioner this install has.'
+  return 'Finish this step to continue.'
+}
+
 // Map a /api/setup/comfyui-dir verdict to the wizard's inline feedback: a tone
 // (drives the colour) and an actionable message. `suggestion` is carried through so
 // the caller can render an "adopt this folder" button for the launcher-folder case.
@@ -365,6 +456,11 @@ export function aitoolkitVerdict(step, dir) {
 }
 
 function ollamaStep(caps, runtimeReadiness) {
+  // Which local LLM this step is actually about. An install predating the setting
+  // has no local_llm block and means Ollama.
+  const llmProvider = ((caps.local_llm || {}).provider) || 'ollama'
+  const isLmStudio = llmProvider === 'lmstudio'
+  const lms = caps.lmstudio || {}
   const o = caps.ollama || {}
   const managed = (runtimeReadiness && runtimeReadiness.ollama) || {}
   const deploymentMode = managed.mode || 'local'
@@ -380,30 +476,57 @@ function ollamaStep(caps, runtimeReadiness) {
   // never transfer a model-ready verdict across that endpoint switch.
   const capabilityMatchesDeployment = !dockerManaged || !deploymentUrl
     || normalizedCapabilityUrl === deploymentUrl
-  const reachable = dockerManaged ? !!managed.ready : !!o.reachable
-  const visionModelReady = reachable && capabilityMatchesDeployment
-    && !!o.vision_model_ready
+  // Under LM Studio the whole Docker/host/companion machinery is beside the point:
+  // it is one server the user runs themselves, and its readiness question is
+  // "is a model loaded", not "is a model pulled".
+  const reachable = isLmStudio ? !!lms.reachable
+    : dockerManaged ? !!managed.ready : !!o.reachable
+  const visionModelReady = isLmStudio ? !!lms.model_ready
+    : (reachable && capabilityMatchesDeployment && !!o.vision_model_ready)
   const disabled = deploymentMode === 'none'
   const unconfigured = deploymentMode === 'unconfigured'
   const managedInitializing = deploymentMode === 'docker'
     && managed.state === 'starting' && !managed.ready
+  // Conscious "continue without Ollama". The backend derives it (stored flag AND
+  // not reachable), so a reachable Ollama can never read as skipped — its real
+  // state, model gap included, always wins. A Docker deployment set to 'none'
+  // reaches the same neutral status by its own route.
+  // NOT excluded for LM Studio any more. The backend derives the flag on the ACTIVE
+  // provider now, so it means "the user chose to continue without a local LLM" —
+  // and excluding LM Studio here made the step impossible to settle: the panel
+  // wrote a flag that read back as false, so the wizard asked again at every Next.
+  const skipped = !dockerManaged && !!o.skipped
+  // JoyCaption covers captioning on its own — the caption style follows the
+  // TRAIN TYPE (prose for Z-Image, booru for SDXL) and the same prompt goes to
+  // both engines, so its presence is what turns this step from a gate into a
+  // recommendation. Everything else Ollama unlocks stays genuinely unavailable.
+  const joycaptionReady = !!((caps.captioners || {}).joycaption)
   const status = unconfigured
     ? 'available'
-    : disabled
+    : (disabled || skipped)
     ? 'skipped'
     : (managedInitializing
         ? 'initializing'
         : gateStatus(reachable, visionModelReady))
   return {
-    id: 'ollama', title: 'Ollama — captioning & auto-framing', recommended: false,
+    id: 'ollama',
+    title: isLmStudio ? 'LM Studio — captioning & auto-framing'
+      : 'Ollama — captioning & auto-framing',
+    recommended: false,
     unlocks: ['Captioning', 'Auto-classify framing', 'Auto head-crop'],
-    status, reachable, visionModelReady,
+    status, reachable, visionModelReady, skipped, joycaptionReady,
+    llmProvider, isLmStudio, lmDetail: lms.detail || '', lmUrl: lms.url || '',
     deploymentMode, deploymentState, deploymentConfigured, deploymentUrl,
     dockerManaged, disabled, unconfigured, managedInitializing,
     url: deploymentUrl || o.url || '', visionModel: o.vision_model || '',
     // Execution-independent install signal (binary on disk) vs `reachable` (server
     // answering): installed && !reachable -> "installed but stopped", offer a Start.
-    installed: !!o.installed, binaryPath: o.binary_path || '',
+    // LM Studio has its own signal -- its CLI on disk -- so this is that provider's
+    // flag, never Ollama's. Reading Ollama's here put "installed -- not running"
+    // and a "▶ Start Ollama" button on the welcome scan of someone whose LM STUDIO
+    // was not started: the wrong product, and a button that would not have helped.
+    installed: isLmStudio ? !!lms.installed : !!o.installed,
+    binaryPath: isLmStudio ? '' : (o.binary_path || ''),
   }
 }
 
@@ -516,8 +639,17 @@ export function deriveCapabilitySummary(caps) {
       topic: 'setup-camera-install', waitingTopic: WAITING,
       ...(!cu.camera_ready && !(Array.isArray(cu.camera_missing) && cu.camera_missing.length)
         && comfyOff ? { pending: true, note: NOTE } : {}) },
-    { label: 'Captioning', ok: !!(cap.joycaption || cap.ollama), topic: 'setup-ollama' },
-    { label: 'Auto-framing & head-crop', ok: !!(o.reachable && o.vision_model_ready),
+    // The ACTIVE provider, with the old expression as the fallback for a caps
+    // payload that predates it. Keyed on Ollama alone, a working LM Studio install
+    // was counted as two MISSING capabilities here — on the screen whose entire
+    // job is to tell the user whether they are ready.
+    { label: 'Captioning',
+      ok: !!(cap.joycaption || (cap.local_llm !== undefined ? cap.local_llm : cap.ollama)),
+      topic: 'setup-ollama' },
+    { label: 'Auto-framing & head-crop',
+      ok: !!(cap.local_llm_vision !== undefined
+        ? cap.local_llm_vision
+        : (o.reachable && o.vision_model_ready)),
       topic: 'setup-ollama' },
     { label: 'Face-similarity scoring', ok: !!c.face_scoring, topic: 'setup-quality' },
     { label: 'Person masks', ok: !!c.masks, topic: 'setup-quality' },
@@ -697,7 +829,7 @@ export function kreaNeedsComfyuiRestart(caps) {
 
 /** Same restart rule for the LanPaint pack (masked Repair's sampler): on disk
  *  but absent from /object_info means "restart ComfyUI", never "install it". */
-export function lanpaintNeedsComfyuiRestart(caps) {
+function lanpaintNeedsComfyuiRestart(caps) {
   const cu = (caps || {}).comfyui || {}
   return !!(cu.lanpaint_nodes_installed
     && Array.isArray(cu.lanpaint_nodes_missing) && cu.lanpaint_nodes_missing.length)
@@ -790,6 +922,8 @@ export function installAllPlan(caps) {
 //               button, pointing back at the config step that unblocks them.
 export function installCatalog(caps) {
   const c = caps || {}
+  // Total: a config written before this setting existed has no local_llm block.
+  const llmProvider = ((c.local_llm || {}).provider) || 'ollama'
   const mlOk = !(c.python && c.python.ml_supported === false)
   const mlRange = (c.python && c.python.ml_range) || '3.10–3.12'
   const mlHint = `Needs Python ${mlRange} — install it into a separate 3.10–3.12 env and set its path in Settings.`
@@ -889,8 +1023,19 @@ export function installCatalog(caps) {
     // a row to click, and an extra with no row is the dead end this menu exists
     // to close.
     item('video_text', c.video_text, true, ''),
-    item('ollama_model', o.vision_model_ready, o.reachable && modelName,
-      !o.reachable ? 'Start Ollama first (the Captioning step).'
+    // Pulling an Ollama model is offered only when Ollama is the SELECTED provider.
+    // A machine running LM Studio often still has Ollama answering, so without this
+    // the menu would offer several GB of a model that install will never call — and
+    // offer it exactly where a user is clicking everything to finish Setup.
+    // There is no LM Studio row beside it on purpose: its download endpoint exists
+    // but 0.4.23 has no progress endpoint to go with it, so an install action would
+    // be a multi-gigabyte download with no progress and no cancel. LM Studio's own
+    // app does that well; the hint sends people there.
+    item('ollama_model', o.vision_model_ready,
+      llmProvider === 'ollama' && o.reachable && modelName,
+      llmProvider !== 'ollama'
+        ? 'LM Studio is the selected provider — download models in the LM Studio app.'
+        : !o.reachable ? 'Start Ollama first (the Captioning step).'
         : !modelName ? 'Set a vision model name first (the Captioning step).' : ''),
     // klein_enhancement_lora included: it was installable through the improve
     // 409 for weeks and offered by NO surface — the first thing the setup

@@ -3,7 +3,7 @@ import { apiFetch, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import {
   frameOptions, defaultFrames, needsManualFrames, sizeOptions,
-  promoteProblem, promotePayload, promoteScopeLabel,
+  promoteProblem, promotePayload, promoteScopeLabel, datasetScaleNote,
   insetProblem, insetHint, insetOutcome,
   capProblem, capHint, capBalanceNote,
 } from './videoTargetChoice'
@@ -36,6 +36,7 @@ export default function PromoteVideoDialog({
   const [targets, setTargets] = useState(null)
   const [targetKey, setTargetKey] = useState('')
   const [name, setName] = useState('')
+  const [triggerWord, setTriggerWord] = useState('')
   const [frames, setFrames] = useState(null)
   const [sizeKey, setSizeKey] = useState('source')
   // ✂ Per-end trim, in seconds. Zero by default and kept as TEXT while typing:
@@ -92,12 +93,17 @@ export default function PromoteVideoDialog({
     try {
       const d = await postJson(`/api/video-bank/${bankId}/promote`,
         promotePayload({ name, targetKey, frames, size, ids: selectedIds,
-          edgeInsetS: edgeInset, maxPerSource }))
+          edgeInsetS: edgeInset, maxPerSource, triggerWord }))
       toast.success(`Building “${d.name}” — ${d.clips} clip(s) being encoded.`)
       // Said out loud rather than left in the job line: these clips were removed
       // by the user's OWN setting, and it is the only limit here they can undo.
       const cost = insetOutcome(d.composition)
       if (cost) toast.warning(cost)
+      if (d.composition?.high_fps_clips > 0) {
+        toast.warning(`${d.composition.high_fps_clips} clip(s) come from 48+ fps `
+          + 'sources — often slow-motion footage, which teaches floaty movement. '
+          + 'Worth a second look if that is not the style you want.')
+      }
       // What the set turned out to be MADE OF. 60% from one source is invisible
       // on disk — the folder looks exactly like a diverse one — so the only
       // place it can be seen is here, right after it happened.
@@ -129,12 +135,33 @@ export default function PromoteVideoDialog({
           folder of clips with caption sidecars. This is the only step that writes
           video files — your source folder is never touched.
         </p>
+        {(() => {
+          const note = datasetScaleNote((selectedIds || []).length || keepCount)
+          if (!note) return null
+          const tone = note.tone === 'warning' ? 'text-amber-300'
+            : note.tone === 'good' ? 'text-emerald-300' : 'text-content-subtle'
+          return <p className={`text-xs ${tone}`}>{note.text}</p>
+        })()}
 
         <div>
           <label htmlFor="video-ds-name" className="block text-sm font-medium text-content">Name</label>
           <input id="video-ds-name" value={name} onChange={(e) => setName(e.target.value)}
             placeholder="wan 14b — city rushes" required
             className="mt-1 w-full rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content" />
+        </div>
+
+        <div>
+          <label htmlFor="video-ds-trigger" className="block text-sm font-medium text-content">
+            Trigger word <span className="font-normal text-content-subtle">(optional)</span>
+          </label>
+          <input id="video-ds-trigger" value={triggerWord}
+            onChange={(e) => setTriggerWord(e.target.value)}
+            placeholder="mychar"
+            className="mt-1 w-full rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content" />
+          <p className="mt-1 text-xs text-content-subtle">
+            Prepended once to every clip&rsquo;s caption at export. Use it in ONE place —
+            here or in the captions, never both.
+          </p>
         </div>
 
         <fieldset>

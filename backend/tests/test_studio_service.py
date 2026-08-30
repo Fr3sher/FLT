@@ -741,6 +741,46 @@ def test_studio_payload_on_fresh_dataset_is_well_formed_and_empty(app):
         assert 'saved_to_gallery' not in json_dump_keys(payload)
 
 
+def test_every_studio_cells_payload_is_a_superset_of_the_shared_gallery_shape(app):
+    """The Studio viewer reads the SAME facts the Gallery viewer does — prompt,
+    seed, checkpoint, extra LoRAs, base model, sampler, derivation, camera
+    pose. Three cell payloads had drifted into three thinner shapes, and that
+    was user-visible: opening a comparison of two runs showed less about an
+    image than opening the very same row from the Gallery. Every cells block
+    must now publish cloud_training.gallery_image as its floor."""
+    from app.services import cloud_training as ct
+    from app.services import lora_test_studio as lts, face_dataset_service as svc
+    from app.models import LoraTestImage
+    from app.config import LOCAL_USER
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'Shape', 'shapetrig')
+        row = LoraTestImage(dataset_id=ds.id, checkpoint='z image\\shape.safetensors',
+                            strength=1.0, status='done', filename='cell.png',
+                            prompt='a probe scene', seed=7, run_id='run-shape')
+        svc.db.session.add(row)
+        svc.db.session.commit()
+        floor = set(ct.gallery_image(row))
+        payload = lts.studio_payload(LOCAL_USER, ds.id)
+        assert payload['cells'], 'the seeded cell must be served'
+        for cell in payload['cells']:
+            missing = floor - set(cell)
+            assert not missing, f'studio_payload cell lacks shared keys: {sorted(missing)}'
+        run_payload = lts.studio_payload_run(LOCAL_USER, 'run-shape')
+        assert run_payload and run_payload['cells']
+        for cell in run_payload['cells']:
+            missing = floor - set(cell)
+            assert not missing, f'studio_payload_run cell lacks shared keys: {sorted(missing)}'
+        # A pending row keeps the shape but must not publish a lying URL.
+        pending = LoraTestImage(dataset_id=ds.id, checkpoint='z image\\shape.safetensors',
+                                strength=1.0, status='pending')
+        svc.db.session.add(pending)
+        svc.db.session.commit()
+        cells = lts.studio_payload(LOCAL_USER, ds.id)['cells']
+        by_status = {c['status']: c for c in cells}
+        assert by_status['pending']['url'] is None
+        assert by_status['done']['url'] and by_status['done']['url'].endswith('/cell.png')
+
+
 def test_studio_payload_splits_queued_and_generating_from_real_queue(app):
     from app.services import lora_test_studio as lts, face_dataset_service as svc
     from app.job_queue import queue_manager
@@ -2144,3 +2184,39 @@ def test_enhance_test_prompt_raises_when_the_model_answers_nothing(app, monkeypa
     with app.app_context():
         with pytest.raises(RuntimeError, match='empty prompt'):
             lts.enhance_test_prompt('a girl')
+
+
+def test_enhance_test_prompt_threads_the_picked_model_through_both_seams(app, monkeypatch):
+    """The ⚙️ override must be VERIFIED (ensure_captioning_ready gets it — probing the
+    Settings default instead would green-light a model that isn't pulled) and USED
+    (generate_text_ollama gets it — or the check and the call would disagree)."""
+    from app.services import lora_test_studio as lts, vision_ollama, ollama_control
+    seen = {}
+
+    def ready(model=None):
+        seen['checked'] = model
+        return {'ok': True}
+    monkeypatch.setattr(ollama_control, 'ensure_captioning_ready', ready)
+
+    def fake_generate(prompt, **kwargs):
+        seen['generated_with'] = kwargs.get('model')
+        return 'richer'
+    monkeypatch.setattr(vision_ollama, 'generate_text_ollama', fake_generate)
+    with app.app_context():
+        assert lts.enhance_test_prompt('a girl', model='llama3.1:8b') == 'richer'
+    assert seen['checked'] == 'llama3.1:8b'
+    assert seen['generated_with'] == 'llama3.1:8b'
+
+
+def test_enhance_test_prompt_not_ready_error_names_the_override_path(app, monkeypatch):
+    """With a ⚙️ override the remedy lives in the gear, not in Settings: the Settings
+    sentence would send the user to fix a value the call never used."""
+    from app.services import lora_test_studio as lts, ollama_control
+    monkeypatch.setattr(ollama_control, 'ensure_captioning_ready',
+                        lambda *a, **k: {'ok': False, 'error': 'custom-model not pulled'})
+    with app.app_context():
+        with pytest.raises(RuntimeError) as exc:
+            lts.enhance_test_prompt('a girl', model='custom-model')
+    assert 'custom-model not pulled' in str(exc.value)
+    assert 'Enhance ⚙️ options' in str(exc.value)
+    assert 'Settings › Local tools' not in str(exc.value)

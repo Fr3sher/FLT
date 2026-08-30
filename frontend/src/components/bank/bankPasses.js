@@ -234,6 +234,47 @@ export const BANK_PASSES = {
     binCost: 'each rejected image is put through the detector',
   },
 
+  /* 🔤 The OTHER detection feeding the same funnel. Not in BANK_PASS_ORDER for
+   * the same reason as the cleaning levels: its button lives on the Watermarks
+   * panel, inside the funnel it feeds — a second copy in the pass row would
+   * read as an unrelated action. */
+  text_scan: {
+    id: 'text_scan',
+    label: 'Find text',
+    verb: 'Scan',
+    endpoint: 'text',
+    what: 'Reads burned-in text — speech bubbles, subtitles, captions, sound '
+      + 'effects — and marks each zone so 🧽 Repaint can erase it. Runs on the '
+      + 'CPU (never the GPU), with the same engine as the Video bank\'s Safe '
+      + 'zone pass.',
+    scopes: true,
+    selection: true,
+    redo: {
+      key: 'rescan',
+      label: 'Also re-read images that were already scanned',
+      note: 'Images you dismissed as “not watermarked” keep their ruling — this '
+        + 'pass never re-examines them, whichever line you pick. With “Try on '
+        + 'a sample” ticked, this re-reads the SAME first images — the way to '
+        + 'judge a new sensitivity on known pages.',
+    },
+    settings: [
+      { name: 'Sensitivity (this window — stored as a setting)',
+        note: 'The OCR confidence a line needs to become a repaint zone. One '
+          + 'stored value; the dataset’s 🔤 Find text reads it too.' },
+    ],
+    notHere: [
+      'The repaint itself — 🧽 Inpaint on the Watermarks panel erases the '
+        + 'zones this pass records.',
+    ],
+    caveats: [
+      '“Try on a sample first” reads only the first N images of the scope — '
+        + 'deterministic, so a re-read hits the same pages. What the sample '
+        + 'does not reach simply stays unscanned; the 🔤 card then offers '
+        + '“Read the remaining …”.',
+    ],
+    binCost: 'each rejected image is read by the OCR engine',
+  },
+
   /* THE TWO LEVELS THAT PRODUCE A NEW IMAGE.
    *
    * Every other entry here computes a verdict: a wrong scope costs time. These
@@ -403,7 +444,7 @@ export const BANK_PASSES = {
       label: 'Also re-classify images that already have a framing',
     },
     settings: [
-      { name: 'Vision model + Ollama URL (Settings ▸ Local tools)' },
+      { name: 'Vision model + local LLM URL (Settings ▸ Local tools)' },
       { name: 'Vision concurrency (Settings ▸ Local tools)' },
       { name: 'The prompt — NOT configurable',
         note: 'It is the same fixed classifier prompt the datasets use.' },
@@ -500,7 +541,7 @@ export const BANK_PASSES = {
     settings: [
       { name: 'Captioning engine (Settings ▸ Captioning & quality)',
         note: 'Overridden for this run by the Engine picker below.' },
-      { name: 'Vision model + Ollama URL (Settings ▸ Local tools)',
+      { name: 'Vision model + local LLM URL (Settings ▸ Local tools)',
         note: 'Overridden for this run by the Model picker below.' },
       { name: 'Vision concurrency (Settings ▸ Local tools)' },
     ],
@@ -614,10 +655,10 @@ export function watermarkSettings(detectorReady) {
     };
   }
   return {
-    route: 'The vision model (Ollama) — the detector extra is not installed, so '
+    route: 'The vision model (your local LLM) — the detector extra is not installed, so '
       + 'this run falls back to the route that has always worked. ~1.7 s per image.',
     settings: [
-      { name: 'Vision model + Ollama URL (Settings ▸ Local tools)' },
+      { name: 'Vision model + local LLM URL (Settings ▸ Local tools)' },
       { name: 'Vision concurrency (Settings ▸ Local tools)' },
       { name: 'The prompt — NOT configurable' },
     ],

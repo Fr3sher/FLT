@@ -32,7 +32,8 @@ from ..services.face_variations import (NSFW_VARIATION_CATALOG, VARIATION_CATALO
                                         preset_meta_for, all_catalog_labels,
                                         sanitize_custom_shots,
                                         MAX_CUSTOM_SHOTS_PER_SUBJECT)
-from ..utils.comfyui import KREA_ALLOWED_SAMPLERS, KREA_ALLOWED_SCHEDULERS, get_krea_loras
+from ..utils.comfyui import (KREA_ALLOWED_SAMPLERS, KREA_ALLOWED_SCHEDULERS,
+                            KREA_SAMPLER_PRESETS, get_krea_loras)
 from ._common import (_map_error, _require_comfyui, _require_no_stalled_comfyui,
                       _studio_arch_mismatch_response, _studio_missing_response)
 
@@ -337,11 +338,12 @@ def dataset_set_ref(dataset_id):
         # Tell the user WHY it didn't run — the usual cause on a fresh install is the
         # Ollama vision model not being pulled — and how to recover (Setup + Crop).
         # (Manual mode: the centered crop is the intended behavior, no warning.)
-        from .. import capabilities
-        model_ready = capabilities.probe_ollama_model()['ok']
+        from ..services import vision_llm
+        model_ready = vision_llm.probe_model()['ok']
+        _llm = 'LM Studio' if vision_llm.provider() == 'lmstudio' else 'Ollama'
         resp['warning'] = (
-            "Auto head-crop needs the Ollama vision model, which isn't ready yet — "
-            'used a centered crop. Finish the Ollama step in Setup, then click Crop to re-center on the face.'
+            f"Auto head-crop needs the {_llm} vision model, which isn't ready yet — "
+            f'used a centered crop. Finish the {_llm} step in Setup, then click Crop to re-center on the face.'
             if not model_ready else
             "Couldn't detect a face — used a centered crop. Use the Crop button to adjust it manually."
         )
@@ -412,11 +414,12 @@ def dataset_ref_recrop_auto(dataset_id):
         return jsonify({'error': 'no reference to re-crop'}), 400
     resp = {'ok': True, 'head_crop': head_detected}
     if not head_detected:
-        from .. import capabilities
-        model_ready = capabilities.probe_ollama_model()['ok']
+        from ..services import vision_llm
+        model_ready = vision_llm.probe_model()['ok']
+        _llm = 'LM Studio' if vision_llm.provider() == 'lmstudio' else 'Ollama'
         resp['warning'] = (
-            "Auto head-crop needs the Ollama vision model, which isn't ready yet — "
-            'used a centered crop. Finish the Ollama step in Setup, then adjust with Crop.'
+            f"Auto head-crop needs the {_llm} vision model, which isn't ready yet — "
+            f'used a centered crop. Finish the {_llm} step in Setup, then adjust with Crop.'
             if not model_ready else
             "Couldn't detect a face — used a centered crop. Use Crop to adjust it manually."
         )
@@ -1207,6 +1210,21 @@ def dataset_image_analyze_face(image_id):
     return jsonify({'ok': True, **result})
 
 
+@bp.get('/dataset/<int:dataset_id>/watermark/preview')
+def dataset_watermark_preview(dataset_id):
+    """The 🚩 launch window's result gallery: watermark-family flagged pages
+    (not 🔤 text-flagged) with their zones, oldest-id first — the twin of
+    /text/preview, polled by the window while a scan runs."""
+    try:
+        limit = int(request.args.get('limit') or 24)
+    except (TypeError, ValueError):
+        limit = 24
+    payload = svc.watermark_preview(LOCAL_USER, dataset_id, limit)
+    if payload is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(payload)
+
+
 @bp.post('/dataset/<int:dataset_id>/watermarks/detect')
 def dataset_watermarks_detect(dataset_id):
     """Scan kept images for overlaid watermarks. WHICH detector runs follows
@@ -1239,6 +1257,7 @@ def dataset_watermarks_detect(dataset_id):
             counts = svc.detect_watermarks(
                 LOCAL_USER, dataset_id, include_dismissed=include_dismissed,
                 backend=resolution, report=report,
+                limit=data.get('limit'),
                 should_cancel=lambda: dataset_activity.cancel_requested(
                     dataset_id, dataset_activity.WATERMARK_KINDS))
     except Exception as e:
@@ -1272,6 +1291,83 @@ def dataset_watermarks_detect_cancel(dataset_id):
     if not dataset_activity.request_cancel(dataset_id,
                                            dataset_activity.WATERMARK_KINDS):
         return jsonify({'error': 'no watermark scan in progress'}), 409
+    return jsonify({'ok': True, 'stopping': True})
+
+
+@bp.get('/dataset/<int:dataset_id>/text/preview')
+def dataset_text_preview(dataset_id):
+    """The 🔤 launch window's result gallery: text-flagged pages with their
+    zones, oldest-id first (the sample's own deterministic order) — the twin
+    of the bank's /text/preview, polled by the window while a scan runs."""
+    try:
+        limit = int(request.args.get('limit') or 24)
+    except (TypeError, ValueError):
+        limit = 24
+    payload = svc.text_preview(LOCAL_USER, dataset_id, limit)
+    if payload is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(payload)
+
+
+@bp.post('/dataset/<int:dataset_id>/text/detect')
+def dataset_text_detect(dataset_id):
+    """🔤 Read burned-in text (speech bubbles, subtitles, captions, sound
+    effects) on the kept images — RapidOCR on the CPU, the same engine as the
+    Video bank's safe-zone pass — and fold the zones into the watermark mask
+    channel so 🧽 Clean repaints them. {rescan:true} re-reads scanned rows;
+    'dismissed' rows are never re-examined. Persists watermark_regions/
+    watermark_state/text_state; deletes nothing; never takes the GPU window.
+
+    {limit:N} is the launch window's "try on a sample first" — the first N
+    images that actually need reading, deterministic (full parity with the
+    bank's dial).
+
+    Stoppable: ⏹ Stop posts to .../text/detect/cancel and this returns
+    `stopped: true` with everything judged so far already committed."""
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    data = request.get_json(silent=True) or {}
+    from ..capabilities import probe_video_text
+    probe = probe_video_text()
+    if not probe.get('ok'):
+        detail = probe.get('detail')
+        return jsonify({'error': 'the text reader is not installed'
+                                 + (f' — {detail}' if detail else '')
+                                 + '. Install "Burned-in text" from Setup, '
+                                   'then run it again.'}), 503
+    report = {}
+    try:
+        counts = svc.detect_text(
+            LOCAL_USER, dataset_id, rescan=bool(data.get('rescan')),
+            limit=data.get('limit'), report=report,
+            should_cancel=lambda: dataset_activity.cancel_requested(
+                dataset_id, dataset_activity.TEXT_KINDS))
+    except Exception as e:
+        return _map_error(e)
+    finally:
+        dataset_activity.clear_cancel(dataset_id, dataset_activity.TEXT_KINDS)
+    return jsonify({'ok': True, **counts,
+                    'stopped': bool(report.get('stopped')),
+                    'uncovered': report.get('uncovered', 0),
+                    # Files the OCR child could not open — counted per image
+                    # (text_state='error', retried on the next plain run), so
+                    # the toast can say it instead of a silent shortfall.
+                    'unreadable': report.get('unreadable', 0),
+                    # Files no longer on disk when the pass looked — skipped
+                    # before the child ran, state untouched.
+                    'missing': report.get('missing', 0)})
+
+
+@bp.post('/dataset/<int:dataset_id>/text/detect/cancel')
+def dataset_text_detect_cancel(dataset_id):
+    """Ask an in-progress 🔤 text scan to stop at the next image boundary.
+    Judged rows are kept (the pass commits per image); a later run finishes the
+    rest. Idempotent. 404 unknown dataset, 409 when no text scan is running."""
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    if not dataset_activity.request_cancel(dataset_id,
+                                           dataset_activity.TEXT_KINDS):
+        return jsonify({'error': 'no text scan in progress'}), 409
     return jsonify({'ok': True, 'stopping': True})
 
 
@@ -1315,6 +1411,9 @@ def dataset_watermarks_clean(dataset_id):
     method = (data.get('method') or 'auto')
     if method not in ('auto', 'lama', 'klein'):
         return jsonify({'error': "'method' must be 'auto', 'lama' or 'klein'"}), 400
+    target = (data.get('target') or 'all')
+    if target not in ('all', 'text', 'watermark'):
+        return jsonify({'error': "'target' must be 'all', 'text' or 'watermark'"}), 400
     # allow_crop is optional: omitted -> clean_watermarks resolves the persisted
     # watermark.allow_crop preference (so the batch button follows Settings); a bool
     # forces crop (True) or inpaint (False) — the review lightbox's per-image choice.
@@ -1329,7 +1428,8 @@ def dataset_watermarks_clean(dataset_id):
             if resp is not None:
                 return resp
             counts, error = svc.clean_watermarks(
-                LOCAL_USER, dataset_id, image_ids=image_ids, method='klein', **crop_kw)
+                LOCAL_USER, dataset_id, image_ids=image_ids, method='klein',
+                target=target, **crop_kw)
         else:
             from contextlib import nullcontext
             from ..services import watermark_lama
@@ -1338,7 +1438,7 @@ def dataset_watermarks_clean(dataset_id):
             with window:
                 counts, error = svc.clean_watermarks(
                     LOCAL_USER, dataset_id, image_ids=image_ids, device=device,
-                    method=method, **crop_kw)
+                    method=method, target=target, **crop_kw)
     except Exception as e:
         from ..services.klein_edit_helper import KleinModelsMissing
         if isinstance(e, KleinModelsMissing):
@@ -1718,7 +1818,8 @@ def canvas_image_camera_angles(image_id):
             return _camera_missing_response(e)
         return _map_error(e)
     if result is None:
-        return jsonify({'error': 'not found'}), 404
+        from ..services import camera_angles as ca
+        return jsonify({'error': ca.SOURCE_GONE}), 404
     return jsonify({'ok': True, **result})
 
 
@@ -1745,8 +1846,32 @@ def dataset_image_camera_angles(image_id):
             return _camera_missing_response(e)
         return _map_error(e)
     if result is None:
-        return jsonify({'error': 'not found'}), 404
+        from ..services import camera_angles as ca
+        return jsonify({'error': ca.SOURCE_GONE}), 404
     return jsonify({'ok': True, **result})
+
+
+@bp.get('/canvas/image/<int:image_id>/status')
+def canvas_image_render_status(image_id):
+    """Render state of ONE library image — the ✨ modal's 4-second heartbeat.
+
+    {ok, id, status, url, error}: everything "is my improve done yet" needs
+    and nothing more. Its own route per table for the same reason improve has
+    two: the two id spaces are independent, and a wrong-table poll would
+    happily report a REAL but unrelated row forever."""
+    out = lts.image_render_status(LOCAL_USER, image_id)
+    if out is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **out})
+
+
+@bp.get('/dataset/image/<int:image_id>/status')
+def dataset_image_render_status(image_id):
+    """The dataset twin of the canvas status poll — face_dataset_image ids."""
+    out = svc.image_render_status(LOCAL_USER, image_id)
+    if out is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **out})
 
 
 @bp.get('/camera/catalog')
@@ -1754,13 +1879,27 @@ def camera_catalog():
     """The camera vocabulary the picker draws, plus whether the lane can run.
 
     Served rather than duplicated so the dial's degrees and the model's tokens
-    come from ONE table; `camera_catalog_contract.test.js` reads both sides."""
+    come from ONE table; `camera_catalog_contract.test.js` reads both sides.
+
+    `unet` is the picker's Model row in one read: `setting` is the saved
+    `camera.unet` pin ('' = auto), `effective` the file the next run would
+    actually load (None while nothing is installed), `default` the name of the
+    Setup-installed build — so the row can SAY what "empty" means instead of
+    calling it auto-detect — and `distilled` whether that effective build's
+    name reads as an already-few-step merge, in which case runs skip the
+    chained speed LoRA (the note under the row is where the user learns that
+    BEFORE wondering why their run behaved differently)."""
     from ..services import camera_angles as ca
     from ..services import qwen_camera_helper as qch
     missing = qch.camera_missing_assets()
+    effective = qch.resolve_camera_unet()
     return jsonify({**ca.catalog(),
-                    'ready': not any(a in missing for a in qch.CAMERA_REQUIRED),
-                    'missing': missing})
+                    'ready': qch.camera_ready(missing),
+                    'missing': missing,
+                    'unet': {'setting': (cfg.get('camera.unet') or '').strip(),
+                             'effective': effective,
+                             'default': qch.camera_default_unet(),
+                             'distilled': qch.unet_is_distilled(effective)}})
 
 
 @bp.post('/dataset/<int:dataset_id>/improve/batch')
@@ -2357,4 +2496,10 @@ def index_config():
         'krea_loras': get_krea_loras(),
         'krea_samplers': KREA_ALLOWED_SAMPLERS,
         'krea_schedulers': KREA_ALLOWED_SCHEDULERS,
+        # Presets of the sampler this app ships (utils/kreaSamplerChoice.js splits
+        # them back out of the one dropdown). Published unconditionally, NOT gated
+        # on the node being installed: the preflight is what turns "you picked one
+        # and it isn't there" into an actionable 409, and hiding the option instead
+        # would leave someone who wants it with nothing to click and no explanation.
+        'krea_sampler_presets': list(KREA_SAMPLER_PRESETS),
     })

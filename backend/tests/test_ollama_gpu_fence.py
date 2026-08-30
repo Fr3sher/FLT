@@ -284,7 +284,7 @@ def test_a_stopped_ollama_never_stands_in_comfyuis_way(fence_data_dir):
     # And the status says the daemon is not there rather than pretending it
     # answered with an empty runner.
     assert status == {'applies': True, 'blocked': False, 'scope': 'local',
-                      'reachable': False, 'models': []}
+                      'reachable': False, 'models': [], 'provider': 'ollama'}
 
 
 def test_a_stopped_ollama_clears_a_claim_left_by_a_previous_run(fence_data_dir):
@@ -307,7 +307,8 @@ def test_fence_status_names_what_is_in_the_way_and_clears_when_it_goes(fence_dat
         with patch.object(fence.requests, 'get', return_value=_ps('other-app-model')):
             state = fence.fence_status()
         assert state == {'applies': True, 'blocked': True, 'scope': 'local',
-                         'reachable': True, 'models': ['other-app-model']}
+                         'reachable': True, 'models': ['other-app-model'],
+                         'provider': 'ollama'}
         # Ollama's own idle unload, or the other app closing: the block ends
         # with nobody clicking anything.
         with patch.object(fence.requests, 'get', return_value=_ps()):
@@ -323,8 +324,8 @@ def test_fence_status_never_reports_blocked_for_an_unreachable_or_remote_daemon(
 
     with patch.object(fence, '_configured_local_endpoint', return_value=('remote', None)), \
             patch.object(fence.requests, 'get') as get:
-        assert fence.fence_status() == {'applies': False, 'blocked': False,
-                                        'scope': 'remote', 'models': []}
+        assert fence.fence_status() == {'applies': False, 'blocked': False, 'scope': 'remote',
+                                        'models': [], 'provider': 'ollama'}
     get.assert_not_called()
 
 
@@ -379,3 +380,154 @@ def test_nothing_short_of_the_consent_route_ever_unloads_a_foreign_model(fence_d
         assert fence.ensure_released_for_comfy() is False
         assert fence.release_owned_models(ollama_url=endpoint) is False
     post.assert_not_called()
+
+
+# --- a fence refusal is PUBLISHED (named hold), cleared, and rate-limited ---
+
+
+def _kcpp_ps(name='kcpp-model'):
+    """KoboldCPP's /api/ps: always one resident model, family self-identified,
+    expires_at hardcoded decades away — the exact shape that froze a user's
+    queue with no explanation anywhere in the app."""
+    return _Response({'models': [
+        {'name': name, 'model': f'{name}:latest',
+         'expires_at': '2055-06-04T19:06:25.5433636+08:00',
+         'details': {'family': 'koboldcpp'}},
+    ]})
+
+
+def test_a_refused_handoff_publishes_why_and_success_clears_it():
+    endpoint = 'http://127.0.0.1:5001'
+    with patch.object(fence, '_configured_local_endpoint', return_value=('local', endpoint)):
+        with patch.object(fence.requests, 'get', return_value=_kcpp_ps()):
+            assert fence.ensure_released_for_comfy() is False
+        blk = fence.last_block()
+        assert blk is not None
+        assert blk['reason'] == 'foreign'
+        assert blk['models'] == ['kcpp-model']
+        assert 'koboldcpp' in blk['families']
+        # The runner empties (kcpp closed) -> the next hand-off passes and clears.
+        with patch.object(fence.requests, 'get', return_value=_ps()):
+            assert fence.ensure_released_for_comfy() is True
+        assert fence.last_block() is None
+
+
+def test_a_stale_refusal_stops_explaining_the_queue():
+    """A held queue re-refuses every worker cycle, so a LIVE block is always
+    fresh; one from a queue that has since emptied must go silent on its own."""
+    endpoint = 'http://127.0.0.1:5001'
+    with patch.object(fence, '_configured_local_endpoint', return_value=('local', endpoint)), \
+            patch.object(fence.requests, 'get', return_value=_kcpp_ps()):
+        assert fence.ensure_released_for_comfy() is False
+    assert fence.last_block() is not None
+    assert fence.last_block(max_age_s=-1) is None
+
+
+def test_an_unollama_endpoint_is_a_named_refusal_not_a_silent_one():
+    """A daemon that answers /api/ps with something else entirely (404, alien
+    JSON) used to refuse with NO log and NO published reason — the completely
+    invisible frozen queue."""
+    endpoint = 'http://127.0.0.1:5001'
+    with patch.object(fence, '_configured_local_endpoint', return_value=('local', endpoint)), \
+            patch.object(fence.requests, 'get',
+                         return_value=_Response({'nope': 1}, status_code=404)):
+        assert fence.ensure_released_for_comfy() is False
+    blk = fence.last_block()
+    assert blk is not None and blk['reason'] == 'unreachable'
+
+
+def test_an_unusable_ollama_url_never_stops_generation():
+    """The blast radius rule: a CAPTIONING setting must not stop IMAGE GENERATION.
+
+    A URL with a proxy base-path (or a typo) is one LDS cannot address at all —
+    `mark_before_generate` refuses every vision call on it, so LDS has nothing
+    loaded there and nothing to release. Refusing the ComfyUI hand-off as well
+    froze the queue over a setting the user may never have meant to use, and the
+    dock could only point back at that same URL.
+    """
+    with patch.object(fence, '_configured_local_endpoint', return_value=('unknown', None)), \
+            patch.object(fence.requests, 'get') as get, \
+            patch.object(fence.requests, 'post') as post:
+        assert fence.ensure_released_for_comfy() is True
+    assert fence.last_block() is None
+    get.assert_not_called()
+    post.assert_not_called()
+
+
+def test_an_endpoint_lds_did_use_is_still_released_after_the_url_becomes_unusable():
+    """The other half: 'not applicable' must not become 'forget what LDS loaded'."""
+    endpoint = 'http://127.0.0.1:11434'
+    with patch.object(fence.requests, 'get', return_value=_ps()):
+        assert fence.mark_before_generate(endpoint, 'lds-model') == 'local'
+    # The user edits the Ollama URL into something LDS cannot address; the model
+    # LDS loaded a moment ago is still resident and still LDS's to unload.
+    with patch.object(fence, '_configured_local_endpoint', return_value=('unknown', None)), \
+            patch.object(fence.requests, 'get', side_effect=[_ps('lds-model'), _ps()]), \
+            patch.object(fence.requests, 'post', return_value=_Response({})) as post:
+        assert fence.ensure_released_for_comfy() is True
+    post.assert_called_once_with(f'{endpoint}/api/generate',
+                                 json={'model': 'lds-model', 'keep_alive': 0},
+                                 timeout=(10, 30), allow_redirects=False)
+
+
+# --- a hold is BOUNDED: it says how long, and it can be answered --------------
+
+
+def test_a_republished_block_keeps_the_moment_it_actually_started():
+    """The worker re-refuses every second; `since` must not move with it, or the
+    dock could never tell a two-second blip from a twenty-minute wall."""
+    endpoint = 'http://127.0.0.1:5001'
+    with patch.object(fence, '_configured_local_endpoint', return_value=('local', endpoint)), \
+            patch.object(fence.requests, 'get', return_value=_ps('other-app-model')):
+        assert fence.ensure_released_for_comfy() is False
+        with fence._lock:      # a block that started two minutes ago
+            fence._last_block['since'] = fence._last_block['at'] - 120
+        assert fence.ensure_released_for_comfy() is False
+    assert fence.last_block()['held_seconds'] >= 120
+
+
+def test_sharing_the_gpu_needs_a_live_block_and_then_lets_the_queue_through():
+    endpoint = 'http://127.0.0.1:11434'
+    with patch.object(fence, '_configured_local_endpoint', return_value=('local', endpoint)):
+        # Nothing is held: there is nothing to consent to.
+        assert fence.share_gpu_with_foreign_model()['reason'] == 'not-blocked'
+        with patch.object(fence.requests, 'get', return_value=_ps('other-app-model')), \
+                patch.object(fence.requests, 'post') as post:
+            assert fence.ensure_released_for_comfy() is False
+            granted = fence.share_gpu_with_foreign_model()
+            assert granted['ok'] is True and granted['models'] == ['other-app-model']
+            # The hand-off now passes with the other model still resident — and
+            # without a single request going anywhere near it.
+            assert fence.ensure_released_for_comfy() is True
+        post.assert_not_called()
+    assert fence.last_block() is None
+    assert fence.share_state()['sharing'] is True
+
+
+def test_a_shared_gpu_goes_back_behind_the_fence_when_the_consent_runs_out():
+    """Bounded on purpose: a forgotten click must not disable the fence for the day."""
+    endpoint = 'http://127.0.0.1:11434'
+    with patch.object(fence, '_configured_local_endpoint', return_value=('local', endpoint)), \
+            patch.object(fence.requests, 'get', return_value=_ps('other-app-model')), \
+            patch.object(fence.requests, 'post') as post:
+        assert fence.ensure_released_for_comfy() is False
+        assert fence.share_gpu_with_foreign_model()['ok'] is True
+        assert fence.ensure_released_for_comfy() is True
+        with fence._lock:                      # the consent expires
+            fence._share_until = 0.0
+        assert fence.share_state()['sharing'] is False
+        assert fence.ensure_released_for_comfy() is False
+    post.assert_not_called()
+
+
+def test_repeated_refusals_warn_once_per_interval(caplog):
+    """The worker retries a held queue every second; the per-attempt warning was
+    sixty identical lines a minute. One a minute carries the same information."""
+    endpoint = 'http://127.0.0.1:5001'
+    with patch.object(fence, '_configured_local_endpoint', return_value=('local', endpoint)), \
+            patch.object(fence.requests, 'get', return_value=_kcpp_ps()):
+        with caplog.at_level('WARNING', logger='app.services.ollama_gpu_fence'):
+            for _ in range(5):
+                assert fence.ensure_released_for_comfy() is False
+    warnings = [r for r in caplog.records if 'stays blocked' in r.getMessage()]
+    assert len(warnings) == 1

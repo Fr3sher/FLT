@@ -48,6 +48,7 @@ one venv fail 6/6 with WinError 2 / Errno 13). Each pip run also retries once on
 transient file-lock error (an antivirus holding a fresh file). Model downloads and the
 ollama pull don't touch a venv, so they stay parallel.
 """
+import contextlib
 import importlib
 import json
 import logging
@@ -56,6 +57,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -65,6 +67,7 @@ from . import capabilities
 from . import config as cfg
 from .utils.redact import redact_user_paths
 from .services import infer_env
+from .version import APP_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -323,11 +326,39 @@ _NODE_PACKS = {
     },
 }
 
+# Node packs the app SHIPS (backend/comfy_nodes/<folder>), installed by COPY into
+# the user's ComfyUI instead of fetched from a remote. See
+# backend/comfy_nodes/README.md for the contract these folders sign.
+#
+# Why a second registry rather than a `local: True` flag on _NODE_PACKS: the two
+# differ on the rule that matters most, which is what to do when the folder is
+# already there. A third-party pack is LEFT ALONE (the user may have pinned a
+# version of somebody else's code). Ours is OVERWRITTEN when the stamp inside it
+# is not this app version — nobody pins ours, and a stale copy is how a user ends
+# up running last month's sampler against this month's graph. One flag would have
+# hidden an inverted rule inside a shared code path.
+_BUNDLED_NODE_PACKS = {
+    'krea_sampler_nodes': {
+        'pack': 'Krea 2 preset sampler',
+        'folder': 'lds_krea_sampler',
+    },
+}
+
+# The stamp file written into a deployed folder. Its presence is ALSO the
+# permission to delete that folder: the installer only ever removes a directory
+# it can prove it wrote itself.
+_BUNDLED_STAMP = '.lds-version'
+
+# Every action that lands something in <ComfyUI>/custom_nodes, whatever its
+# source. The post-install cache clears and the ComfyUI-folder precondition apply
+# to all of them; only the FETCH differs between the two registries.
+_ALL_NODE_PACKS = tuple(_NODE_PACKS) + tuple(_BUNDLED_NODE_PACKS)
+
 INSTALL_ACTIONS = ('ml_extras', 'scrape_extras', 'ollama_model',
                    'face_scoring', 'masks', 'watermark_inpaint',
                    'bank_scoring', 'bank_siglip2',
                    'watermark_detect',
-                   'video', 'shot_detect', 'video_text') + tuple(_MODEL_DOWNLOADS) + tuple(_NODE_PACKS)
+                   'video', 'shot_detect', 'video_text') + tuple(_MODEL_DOWNLOADS) + _ALL_NODE_PACKS
 
 _ML_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-ml.txt'
 _SCRAPE_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-scrape.txt'
@@ -438,8 +469,12 @@ _CAPABILITY_PACKAGES = {
     #               server: naming the headless variant makes pip prefer it, the
     #               same trick face_scoring and masks already use for the same
     #               transitive dependency.
+    # pillow: the worker's unicode-path reader falls back to PIL (cv2.imread
+    # cannot open non-ASCII paths on Windows). Always present in the app's own
+    # Python — the app itself requires it — listed so a custom video_text
+    # interpreter gets it installed rather than probing ✗ unrepairably.
     'video_text': ('rapidocr-onnxruntime', 'onnxruntime', 'numpy',
-                   'opencv-python-headless'),
+                   'opencv-python-headless', 'pillow'),
     #   bank_scoring  has its own worker and its own package tuple
     #                 (_BANK_SCORING_PKGS); only the ONE package whose version
     #                 floor matters is declared in requirements-ml.txt, so it is
@@ -838,6 +873,14 @@ def manual_command(action) -> str:
         except Precondition:
             dest = os.path.join('<ComfyUI>', 'custom_nodes', spec['folder'])
         return f'git clone --depth 1 {spec["repo"]} "{dest}"'
+    if action in _BUNDLED_NODE_PACKS:
+        # No remote to fetch: the "manual command" is the copy this action performs.
+        try:
+            dest = _bundled_pack_dest(action)
+        except Precondition:
+            dest = os.path.join('<ComfyUI>', 'custom_nodes',
+                                _BUNDLED_NODE_PACKS[action]['folder'])
+        return f'copy "{_bundled_pack_source(action)}" -> "{dest}"'
     return ''
 
 
@@ -874,6 +917,8 @@ def start(action) -> dict:
             _check_download_precondition(action)
         if action in _NODE_PACKS:
             _node_pack_dest(action)      # raises Precondition without a valid ComfyUI
+        if action in _BUNDLED_NODE_PACKS:
+            _bundled_pack_dest(action)   # same precondition, shipped source
         _runs[action] = _new_run()
         if action in _PIP_ACTIONS and _pip_current is not None:
             # A pip install already owns the worker -> queue this one (FIFO, click
@@ -974,6 +1019,52 @@ def _node_pack_dest(action) -> str:
     return os.path.join(_comfyui_root(), 'custom_nodes', _NODE_PACKS[action]['folder'])
 
 
+def _bundled_pack_source(action) -> str:
+    """Where the shipped folder lives inside THIS install: backend/comfy_nodes/<folder>.
+
+    `packaging/build_release_zip.ps1` robocopies all of `backend/` into the
+    release, so this path is as valid in a downloaded ZIP as in a git checkout —
+    which is the reason the folder lives under backend/ and not at the repo root."""
+    return str(cfg.BACKEND_DIR / 'comfy_nodes' / _BUNDLED_NODE_PACKS[action]['folder'])
+
+
+def _bundled_pack_dest(action) -> str:
+    """Absolute destination for a shipped pack: <validated ComfyUI>/custom_nodes/<folder>.
+    Raises Precondition (via _comfyui_root) when ComfyUI's folder isn't set yet."""
+    return os.path.join(_comfyui_root(), 'custom_nodes',
+                        _BUNDLED_NODE_PACKS[action]['folder'])
+
+
+def _bundled_pack_stamp(dest) -> str | None:
+    """The app version recorded inside a deployed folder, or None when there is no
+    stamp — which also means "we did not put this here", and the installer must
+    not delete it."""
+    try:
+        with open(os.path.join(dest, _BUNDLED_STAMP), encoding='utf-8') as fh:
+            return fh.read().strip() or None
+    except OSError:
+        return None
+
+
+def _bundled_pack_state(action) -> str:
+    """'absent' | 'current' | 'stale' | 'foreign' for the deployed copy.
+
+    'foreign' is a real folder under our name that carries no stamp: either a
+    hand-installed copy or a leftover. It is reported, never overwritten — the
+    app does not get to silently delete something in the user's ComfyUI that it
+    cannot prove it wrote."""
+    try:
+        dest = _bundled_pack_dest(action)
+    except Precondition:
+        return 'absent'
+    if not os.path.isdir(dest):
+        return 'absent'
+    stamp = _bundled_pack_stamp(dest)
+    if stamp is None:
+        return 'foreign'
+    return 'current' if stamp == APP_VERSION else 'stale'
+
+
 def _check_download_precondition(action):
     dest = _download_dest_path(action)
     spec = _MODEL_DOWNLOADS[action]
@@ -1036,6 +1127,20 @@ def _action_needed(action, caps) -> bool:
     if action == 'ollama_model':
         # Only when Ollama is already reachable AND a model name is configured (the pull
         # needs a target) — Ollama itself can't be auto-installed here.
+        #
+        # And only when Ollama is the SELECTED provider. Offering to pull an Ollama
+        # model to someone running LM Studio installs several GB they will never use,
+        # and it would happen exactly when they are most likely to click: a machine
+        # that still has Ollama running answers `reachable` perfectly well.
+        #
+        # There is deliberately no LM Studio counterpart here. Its own
+        # POST /api/v1/models/download exists, but the matching progress endpoint does
+        # not on 0.4.23 (`GET /api/v1/models/download/status` -> "Unexpected endpoint"),
+        # so an install action for it would be a multi-gigabyte download with no
+        # progress and no cancel — worse than what LM Studio's own app already does
+        # well. Models are downloaded there; the Setup card says so.
+        if (caps.get('local_llm') or {}).get('provider', 'ollama') != 'ollama':
+            return False
         o = caps.get('ollama') or {}
         return bool(o.get('reachable') and not o.get('vision_model_ready')
                     and (o.get('vision_model') or '').strip())
@@ -1216,7 +1321,7 @@ def _execute(action):
                 capabilities.clear_import_cache()
             except Exception:
                 logger.debug('probe-cache clear failed after ollama_model', exc_info=True)
-        if (action in _MODEL_DOWNLOADS or action in _NODE_PACKS) and rc == 0:
+        if (action in _MODEL_DOWNLOADS or action in _ALL_NODE_PACKS) and rc == 0:
             # The training-base/model listers cache their scans 5 min and
             # /object_info is cached per API address — a freshly downloaded model
             # (or an installed node pack, once ComfyUI has been restarted) must
@@ -1229,7 +1334,7 @@ def _execute(action):
                 comfyui.clear_model_caches()
             except Exception:
                 logger.debug('clear_model_caches failed after %s', action, exc_info=True)
-        if action in _NODE_PACKS and rc == 0:
+        if action in _ALL_NODE_PACKS and rc == 0:
             # Both node caches only ever hold a POSITIVE answer, so clearing
             # them regardless of which pack just landed costs one probe each
             # and can never turn a present pack into a missing one.
@@ -1243,6 +1348,12 @@ def _execute(action):
                 lanpaint_helper.clear_nodes_cache()
             except Exception:
                 logger.debug('lanpaint node-cache clear failed after %s', action, exc_info=True)
+            try:
+                from .services import krea_sampler_helper
+                krea_sampler_helper.clear_nodes_cache()
+            except Exception:
+                logger.debug('krea sampler node-cache clear failed after %s', action,
+                             exc_info=True)
     except Cancelled:
         _append(action, 'cancelled by user')
         _finish_run(action, None, 'cancelled')
@@ -1367,7 +1478,7 @@ _TORCH_CPU_INDEX = 'https://download.pytorch.org/whl/cpu'
 _WARM_IMPORT_TIMEOUT = 300
 
 
-def _install_cpu_torch_pair(action, python, *, constraint=False) -> int:
+def _install_cpu_torch_pair(action, python, *, constraints=None) -> int:
     """Install torch AND torchvision together from _TORCH_CPU_INDEX into a managed
     environment. Always the PAIR, never torch alone: the stacks that land in these
     envs afterwards (open_clip_torch, timm, simple-lama-inpainting) depend on
@@ -1384,12 +1495,66 @@ def _install_cpu_torch_pair(action, python, *, constraint=False) -> int:
                     '(download.pytorch.org/whl/cpu) if needed')
     cmd = [python, '-m', 'pip', 'install', 'torch', 'torchvision',
            '--index-url', _TORCH_CPU_INDEX]
-    if constraint:
-        cmd += ['-c', str(_ML_REQUIREMENTS)]
+    if constraints:
+        # A PATH, never the raw requirements file: the one caller that constrains
+        # this install (the watermark env) must not inherit the app's Pillow pin.
+        cmd += ['-c', str(constraints)]
     rc = _run_pip(action, cmd)
     if rc != 0:
         _append(action, f'torch install failed (rc={rc}) — see the log above')
     return rc
+
+
+# `python -m venv` seeds a new env with the pip BUNDLED IN THE BASE PYTHON, not a
+# current one. A 3.10 base ships pip 21.x, which rejects several of today's wheels
+# ("inconsistent Name: expected 'typing-extensions', but metadata has
+# 'typing_extensions'"), falls back to their sdists, and then cannot even build
+# those against the CPU torch index (it has no flit_core) — all four optional
+# installs died exactly this way on one user's machine. pip normalises that name
+# check from 23.x, so anything older gets ONE upgrade. Checked on creation AND on
+# reuse: existing installs out there already carry the old pip.
+_MIN_PIP = (23, 1)
+
+
+def _pip_version(python):
+    """(major, minor) of `python`'s pip — read by RUNNING it — or None when it
+    cannot be read (missing/fake interpreter, no pip module)."""
+    try:
+        proc = subprocess.run([python, '-m', 'pip', '--version'],
+                              capture_output=True, text=True, timeout=30,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    parts = (proc.stdout or '').split()
+    if len(parts) < 2 or parts[0] != 'pip':
+        return None
+    nums = parts[1].split('.')
+    try:
+        major = int(nums[0])
+        minor = int(nums[1]) if len(nums) > 1 else 0
+    except ValueError:
+        return None
+    return major, minor
+
+
+def _ensure_modern_pip(action, python) -> None:
+    """Upgrade a MANAGED venv's pip once when it is too old for current wheels.
+
+    Only ever called on the app's own venvs — never on a user-configured
+    interpreter, whose environment is theirs. Non-fatal by design: an unreadable
+    version or a failed upgrade logs and moves on, leaving the install to behave
+    exactly as it did before this guard existed."""
+    ver = _pip_version(python)
+    if ver is None or ver >= _MIN_PIP:
+        return
+    _append(action, f'pip {ver[0]}.{ver[1]} in this environment is too old for '
+                    "today's packages — upgrading it once")
+    rc = _run_pip(action, [python, '-m', 'pip', 'install', '--upgrade', 'pip'])
+    if rc != 0:
+        _append(action, 'pip upgrade failed — continuing with the bundled pip '
+                        '(the install may still hit the old-pip wheel refusal)')
 
 
 def _watermark_env_dir():
@@ -1553,26 +1718,69 @@ def _ensure_watermark_env(action) -> str:
     except Exception as e:
         _append(action, f'warning: could not save watermark.python ({e}); '
                         'the environment still works for this run')
+    _ensure_modern_pip(action, env_python)
     return env_python
+
+
+# The pins requirements-ml.txt carries FOR THE APP that this environment must
+# never inherit. Pillow is the whole reason the watermark venv exists: the app
+# needs 12 (the burned-in-text reader's unicode-path fallback), and
+# simple-lama-inpainting refuses anything above 9. Handing pip both at once is
+# an unsatisfiable request, and pip answers with ResolutionImpossible naming
+# "The user requested (constraint) pillow<13,>=12" — GitHub #59, on an install
+# that had worked until the app pinned its own Pillow in requirements-ml.txt.
+# The constraint file is still worth passing: it is what keeps a torch pull from
+# bumping numpy past insightface's <2 ceiling in a user's OWN environment.
+_WATERMARK_CONSTRAINT_EXCLUDES = frozenset({_canon('pillow')})
+
+
+@contextlib.contextmanager
+def _watermark_constraint_file():
+    """requirements-ml.txt MINUS the pins the watermark env cannot honour.
+
+    Yields a path to a temporary constraints file, or None when the source file
+    cannot be read (then the caller passes no -c at all — an unconstrained
+    install still works, a crashed one does not).
+
+    A filtered COPY rather than a second checked-in file on purpose: the floors
+    stay in one place, so a version bump in requirements-ml.txt reaches this
+    environment too, and nobody has to remember a parallel list exists.
+    """
+    lines = _ml_requirement_specs(exclude=_WATERMARK_CONSTRAINT_EXCLUDES)
+    if not lines:
+        yield None
+        return
+    with tempfile.TemporaryDirectory(prefix='lds-watermark-') as tmp:
+        path = os.path.join(tmp, 'constraints.txt')
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write('\n'.join(lines) + '\n')
+        yield path
 
 
 def _pip_install_watermark(action, python, *, managed: bool) -> int:
     """Install simple-lama-inpainting into `python` (a dedicated 3.10-3.12 env). The
     version floor is read from requirements-ml.txt (single source of truth), which also
     rides along as a -c constraint so pulling torch can't bump numpy past insightface's
-    <2 ceiling. For the app-managed venv (managed=True) CPU torch is installed FIRST and
-    explicitly (small/reliable/cross-OS); a user's OWN env keeps whatever torch it has —
-    we never downgrade a CUDA build there."""
+    <2 ceiling — MINUS the app's own Pillow pin, which this environment exists to
+    contradict (see _WATERMARK_CONSTRAINT_EXCLUDES). For the app-managed venv
+    (managed=True) CPU torch is installed FIRST and explicitly (small/reliable/
+    cross-OS); a user's OWN env keeps whatever torch it has — we never downgrade a
+    CUDA build there."""
     spec = _requirement_spec(_WATERMARK_PKG)
     _append(action, f'target interpreter: {python}')
-    if managed:
-        # simple-lama-inpainting depends on torchvision, so the pair matters here
-        # exactly as it does for the bank-scoring stack (see _install_cpu_torch_pair).
-        rc = _install_cpu_torch_pair(action, python, constraint=True)
-        if rc != 0:
-            return rc
-    _append(action, f'installing {spec}  (constraints: requirements-ml.txt)')
-    return _run_pip(action, [python, '-m', 'pip', 'install', spec, '-c', str(_ML_REQUIREMENTS)])
+    with _watermark_constraint_file() as constraints:
+        if managed:
+            # simple-lama-inpainting depends on torchvision, so the pair matters here
+            # exactly as it does for the bank-scoring stack (see _install_cpu_torch_pair).
+            rc = _install_cpu_torch_pair(action, python, constraints=constraints)
+            if rc != 0:
+                return rc
+        _append(action, f'installing {spec}  (constraints: requirements-ml.txt '
+                        'without the app Pillow pin)')
+        cmd = [python, '-m', 'pip', 'install', spec]
+        if constraints:
+            cmd += ['-c', constraints]
+        return _run_pip(action, cmd)
 
 
 def _verify_watermark_import(action, python) -> bool:
@@ -1723,6 +1931,7 @@ def _ensure_bank_scoring_env(action, *, save_score_python=True) -> str:
         except Exception as e:
             _append(action, f'warning: could not save bank_scoring.python ({e}); '
                             'the environment still works for this run')
+    _ensure_modern_pip(action, env_python)
     return env_python
 
 
@@ -2708,6 +2917,106 @@ def _zip_node_pack(action, spec, dest) -> bool:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _deploy_bundled_pack(action, log=None) -> tuple[bool, str]:
+    """Copy backend/comfy_nodes/<folder> into the user's ComfyUI. (ok, message).
+
+    Shared by the Setup button and the boot-time refresh, so the two can never
+    disagree about what "installed" means. `log` is an optional one-arg callable
+    for progress lines (the Setup run log); the boot path passes None.
+
+    Replaces rather than merges: a `copytree(..., dirs_exist_ok=True)` over an old
+    version leaves behind any file the new version dropped, and a stray module in
+    a ComfyUI package folder is imported all the same. The delete is gated on the
+    stamp, so the only directory this can ever remove is one a previous run of
+    this same function wrote."""
+    def say(line):
+        if log:
+            log(line)
+
+    src = _bundled_pack_source(action)
+    if not os.path.isdir(src):
+        # Only reachable from a truncated install (the folder is copied verbatim
+        # into every release). Say which folder, so a support answer is one line.
+        return False, (f'the shipped node folder is missing from this install '
+                       f'({os.path.basename(src)}) — reinstall the app files')
+    dest = _bundled_pack_dest(action)
+    state = _bundled_pack_state(action)
+
+    if state == 'current':
+        return True, f'already up to date ({APP_VERSION})'
+    if state == 'foreign':
+        return False, ('a folder of that name already exists in your ComfyUI and was '
+                       'not put there by this app — it was left untouched. Remove or '
+                       'rename it if you want the shipped version.')
+    if state == 'stale':
+        say(f'replacing the previous copy ({_bundled_pack_stamp(dest)} -> {APP_VERSION})')
+        try:
+            shutil.rmtree(dest)
+        except OSError as e:
+            return False, f'could not remove the previous copy: {e}'
+
+    try:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        # __pycache__ is the user's ComfyUI's business, not ours to seed: a .pyc
+        # compiled by a different interpreter version is at best ignored and at
+        # worst imported in preference to the source next to it.
+        shutil.copytree(src, dest,
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        with open(os.path.join(dest, _BUNDLED_STAMP), 'w', encoding='utf-8') as fh:
+            fh.write(APP_VERSION)
+    except OSError as e:
+        # Never leave a half-copied package behind: ComfyUI would import it and
+        # report a broken node rather than a missing one, which is a much harder
+        # thing for a user to describe.
+        shutil.rmtree(dest, ignore_errors=True)
+        return False, f'could not copy the node into ComfyUI: {e}'
+    return True, f'installed {_BUNDLED_NODE_PACKS[action]["pack"]} ({APP_VERSION})'
+
+
+def _run_bundled_node_pack(action) -> int:
+    """Setup action for a node pack this app ships. No network, no git: the source
+    is already on disk beside the code that installs it.
+
+    Like every node install, success does not mean the node is usable yet —
+    ComfyUI registers nodes at startup only."""
+    try:
+        _bundled_pack_dest(action)
+    except Precondition as e:
+        _append(action, f'{e}')
+        _append(action, "the node has to go inside YOUR ComfyUI's custom_nodes folder, "
+                        "and the app doesn't know where that is yet — nothing was installed.")
+        return 1
+    ok, message = _deploy_bundled_pack(action, log=lambda line: _append(action, line))
+    _append(action, message)
+    if not ok:
+        return 1
+    _append(action, 'restart ComfyUI for it to load.')
+    return 0
+
+
+def refresh_bundled_node_packs() -> dict:
+    """Re-deploy every shipped pack whose installed copy is out of date. {action: message}
+    for the ones that were actually touched (empty when there is nothing to do).
+
+    Called at boot. This is the piece that makes an app update reach the node:
+    "Update & restart" replaces the app's files and nothing else — it has no
+    business writing to the user's ComfyUI on its own — so without this, someone
+    who installed the node once would keep the version they first clicked, forever,
+    while the app's graph moved on. Absent copies are LEFT absent: installing is
+    the user's decision, refreshing what they already chose is not a new one."""
+    out = {}
+    for action in _BUNDLED_NODE_PACKS:
+        try:
+            if _bundled_pack_state(action) != 'stale':
+                continue
+            ok, message = _deploy_bundled_pack(action)
+            out[action] = message
+            logger.info('bundled node pack %s: %s', action, message)
+        except Exception:       # noqa: BLE001 — boot must not die over a node folder
+            logger.warning('bundled node pack %s: refresh failed', action, exc_info=True)
+    return out
+
+
 def _run_node_pack(action) -> int:
     """Install a custom-node pack into THIS user's ComfyUI. git clone first, ZIP
     fallback, and an explicit "here is what to do by hand" when both fail — never
@@ -2979,7 +3288,8 @@ _WORKERS = {**{a: _run_ml_extras for a in _PIP_REQUIREMENTS},   # ml_extras + sc
             'watermark_detect': _run_watermark_detect,
             'shot_detect': _run_shot_detect,
             **{a: _run_model_download for a in _MODEL_DOWNLOADS},
-            **{a: _run_node_pack for a in _NODE_PACKS}}
+            **{a: _run_node_pack for a in _NODE_PACKS},
+            **{a: _run_bundled_node_pack for a in _BUNDLED_NODE_PACKS}}
 # Structural invariant: every whitelisted action MUST have a worker — a missing
 # entry surfaces as a cryptic "error: '<action>'" KeyError at runtime (live
 # repro: scrape_extras was added to INSTALL_ACTIONS but not here).

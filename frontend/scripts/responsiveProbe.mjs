@@ -153,9 +153,15 @@ const PAGES = {
      after that (each state still gets a fresh load). A prime whose control is
      absent is not a failure: the workspace is already open, or the instance
      holds nothing to open, and the coverage line says which. */
+  /* ⚠️ Both primes carry `:visible`. The libraries render their rows TWICE (a
+     compact list and a card grid, one hidden per breakpoint), and the hidden
+     twin comes first in the DOM: the bare selector then waits on an element
+     that will never appear, the prime reports "absent", and EVERY state of the
+     page is skipped — silently clean, measuring nothing. Seen at 360×800 on an
+     instance whose dataset was right there on screen. */
   '#/bank': {
     label: 'Bank',
-    prime: ['[aria-label^="Open the bank"]'],
+    prime: ['[aria-label^="Open the bank"]:visible'],
     states: [
       { name: 'resting', open: [] },
       // The ☰ button exists only where the rail cannot sit beside the grid, so
@@ -164,11 +170,23 @@ const PAGES = {
       { name: 'passes', open: ['[aria-controls="bank-passes-panel"]'] },
       { name: 'auto-reject', open: ['button:has-text("Auto-reject")'] },
       { name: 'review', open: ['[aria-label^="Review from"]'] },
+      // 🧪 The Caption Lab, on the surface it was ported to. Same three steps a
+      // user takes: the passes panel, the 🏷️ Caption window, then the bench. The
+      // Caption pass button's label is computed (it carries the run's count), so it
+      // is matched on the one word that never leaves it. Skipped, and said so, on a
+      // viewport where the panel is already open — the toggle would then CLOSE it.
+      { name: 'caption-lab-picker', open: ['[aria-controls="bank-passes-panel"]',
+        '#bank-passes-panel >> button:has-text("Caption")',
+        '[aria-label="Open the Caption Lab"]:visible'] },
+      { name: 'caption-lab', open: ['[aria-controls="bank-passes-panel"]',
+        '#bank-passes-panel >> button:has-text("Caption")',
+        '[aria-label="Open the Caption Lab"]:visible',
+        '[aria-label^="Bench captions on image"]:visible'] },
     ],
   },
   '#/datasets': {
     label: 'Datasets',
-    prime: ['[aria-label^="Open the dataset"]'],
+    prime: ['[aria-label^="Open the dataset"]:visible'],
     states: [
       { name: 'resting', open: [] },
       { name: 'more', open: ['summary:has-text("More")'] },
@@ -180,6 +198,32 @@ const PAGES = {
       { name: 'training', open: ['nav[aria-label="Dataset sections"]:visible >> button:has-text("Training")'] },
       { name: 'lightbox', open: ['nav[aria-label="Dataset sections"]:visible >> button:has-text("Images"):not(:has-text("Add"))',
         '[aria-label^="Inspect"]'] },
+      // ✍️ The Captions section, and the bench inside it. Neither existed as a
+      // state: the section was never opened by any of the states above, so its
+      // rows — the engine select, four buttons, the leak badge — were measured
+      // on no screen at all, and the 🧪 Caption Lab's dialogs (a thumbnail grid
+      // and a four-card bench, the densest thing this section can put on a
+      // phone) were not even in the DOM. The Lab is reached the way a user
+      // reaches it: the section, then the button, then the first image — which
+      // is also what proves the entry point is really there.
+      { name: 'captions', open: ['nav[aria-label="Dataset sections"]:visible >> button:has-text("Captions")'] },
+      { name: 'caption-lab-picker', open: ['nav[aria-label="Dataset sections"]:visible >> button:has-text("Captions")',
+        '[aria-label="Open the Caption Lab"]:visible'] },
+      { name: 'caption-lab', open: ['nav[aria-label="Dataset sections"]:visible >> button:has-text("Captions")',
+        '[aria-label="Open the Caption Lab"]:visible',
+        '[aria-label^="Bench captions on image"]:visible'] },
+      // ☁ The checkpoints manager's run groups — a dense header (run chip,
+      // family, version, status, GPU, cost, then ⚙ Details / ⇄ Compare / a
+      // Runs link) that NO state opened until now. That gap was not theory:
+      // four "View in Runs ↗" links sat at 21 px on a phone, under the 40 px
+      // floor, for as long as the panel existed, because nothing here could
+      // reach them. Reached as a user does — the sidebar section, then ☰ List,
+      // since the groups render in the list view and NOT in the default graph.
+      // `:visible` is required: the phone rail's hidden twin comes first in the
+      // DOM. Skipped, and said so, on an instance with no cloud run whose
+      // provenance record exists (the actions only render for one).
+      { name: 'checkpoints', open: ['button:visible:has-text("Checkpoints & LoRAs")',
+        'button:visible:has-text("☰ List")'] },
     ],
   },
   '#/gallery': {
@@ -212,6 +256,16 @@ const PAGES = {
       // cannot take it (a camera view or an improve result refuses the button).
       { name: 'camera', open: ['[data-testid="gallery-zoom"]',
         '[data-testid="lightbox-camera-angles"]'] },
+      // ✨ The improve settings window, reached the same way: open the viewer,
+      // press the Klein verb. One state on ONE page for a dialog every surface
+      // shares (dataset, Gallery, Canvas, checkpoint galleries mount the same
+      // ImproveModal) — measured here because this page's path to it is the
+      // shortest. It stacks the full Klein note (instruction editor, model,
+      // preset, output size) over a phone screen, which is exactly the density
+      // the source tests cannot see. Skipped, and said so, when the first
+      // tile refuses the verb (an improve result, or a candidate waiting).
+      { name: 'improve', open: ['[data-testid="gallery-zoom"]',
+        '[data-testid="lightbox-improve-klein"]'] },
     ],
   },
   '#/dataset/studio': {
@@ -560,6 +614,10 @@ async function main() {
   const seenSurfaces = new Set();
   const skipped = [];
   let measured = 0;
+  /* Set when the page's anchor EXISTS but cannot be reached (see the prime
+     block): the run is void from that point, so it is carried past the
+     teardown and reported as "did not run" rather than as a clean sheet. */
+  let unreachable = null;
 
   try {
     for (const [width, height] of args.viewports) {
@@ -583,10 +641,35 @@ async function main() {
           await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
           await page.waitForTimeout(900);
           for (const selector of pageSpec.prime) {
+            /* TWO counts, because "absent" hid two opposite answers and only
+               one of them is benign. `exists` drops the :visible filter and
+               asks whether the anchor is in the DOM at all; `el` asks whether
+               it can be clicked.
+                 nothing in the DOM  → an instance with nothing to open. A fact
+                   about the fixture: reported in the coverage line, never failed.
+                 in the DOM, unreachable → the probe is about to measure the LIST
+                   while claiming to measure the workspace, and every state of
+                   this page becomes a green that means nothing. That is the
+                   exact failure this script exists to make impossible, so it is
+                   loud and exits 2.
+               Measured 2026-08-29: both libraries render their rows twice (one
+               hidden per breakpoint) and the HIDDEN twin comes first, so the
+               bare selector reported "absent" with the row plainly on screen —
+               and the pages read as clean for weeks without being measured. */
+            const exists = await page.locator(selector.replace(/:visible\b/g, '')).count();
             const el = page.locator(selector).first();
             if ((await el.count()) && (await el.isVisible())) {
               await el.click({ timeout: 4000 });
               await page.waitForTimeout(600);
+            } else if (exists) {
+              unreachable = {
+                why: `${width}×${height}: ${exists} element(s) match `
+                  + `${selector.replace(/:visible\b/g, '')} but none can be clicked — the workspace `
+                  + 'never opened, so every state of this page would have been measured on the list behind it.',
+                how: 'A hidden twin (two renderings, one per breakpoint), a collapsed group, or an overlay. '
+                  + 'Add :visible to the prime selector, or open the item once by hand and re-run.',
+              };
+              break;
             } else {
               skipped.push(`${width}×${height} prime (${selector} absent)`);
             }
@@ -594,6 +677,7 @@ async function main() {
         } catch (e) {
           skipped.push(`${width}×${height} prime (${e.message.split('\n')[0]})`);
         }
+        if (unreachable) break;   // the run is void — stop before measuring air
       }
 
       for (const state of states) {
@@ -690,6 +774,10 @@ async function main() {
   } finally {
     await browser.close();
   }
+
+  // After the teardown, never inside the loop: exiting there would leave a
+  // headless browser running on every void run.
+  if (unreachable) cannotRun(unreachable.why, unreachable.how);
 
   /* A clean run STAMPS the tree, which is what closes the loop: layoutGuard's
      Stop hook compares that stamp against the layout-dirty mark and refuses to

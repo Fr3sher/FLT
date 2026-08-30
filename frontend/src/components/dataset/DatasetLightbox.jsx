@@ -14,7 +14,8 @@ import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react
 import { Flag as FlagIcon } from 'lucide-react';
 import RepairDialog from '../shared/RepairDialog';
 import CameraAnglePicker from '../shared/CameraAnglePicker';
-import KleinImproveNote from './KleinImproveNote';
+import ImproveModal from '../shared/ImproveModal';
+import { generationMetaRows } from '../../utils/generationMetaFacts';
 import { lightboxImproveButtons } from '../../utils/improveEngines';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import {
@@ -242,7 +243,7 @@ export default function DatasetLightbox({
      slot the guarantee is structural: a foreign stamp yields a fresh state, so
      moving image closes the comparison with no reset effect to get right. */
   const {
-    full, compareMode, improving, actionsOpen, repairOpen, cameraOpen, deciding,
+    full, compareMode, improving, actionsOpen, repairOpen, cameraOpen, improveOpen, deciding,
   } = lightboxImageState(storedState, imageId);
   /* Which image is on screen when a setter actually RUNS — a ref, because the
      `finally` of an improve resolves long after the render that created its
@@ -402,6 +403,13 @@ export default function DatasetLightbox({
         if (reviewKeyAction(e) === 'close') patchImageState({ cameraOpen: false });
         return;
       }
+      // ✨ Same rule for the improve modal: its own keys stay its own (the
+      // modal stops them at its root); a stray key must not verdict the
+      // image, and Escape peels the modal first.
+      if (improveOpen) {
+        if (reviewKeyAction(e) === 'close') patchImageState({ improveOpen: false });
+        return;
+      }
       const action = reviewKeyAction(e);
       /* Escape peels ONE layer: an open actions panel first, the lightbox only
          once it is closed. Closing everything at once would throw the user out
@@ -428,7 +436,7 @@ export default function DatasetLightbox({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, onNavigate, onStatus, decide, prev, nextImage, panelOpen, closePanel,
-    repairOpen, cameraOpen, patchImageState]);
+    repairOpen, cameraOpen, improveOpen, patchImageState]);
   useEffect(() => { closeRef.current?.focus(); }, []);
   /* No "close the comparison when the image changes" effect on purpose: the id
      stamp above already guarantees it, for BOTH comparison modes, without a
@@ -489,10 +497,19 @@ export default function DatasetLightbox({
       busyReason,
     })
     : [];
+  // ⚙ The Made-with rows of THIS image's generation stamp — [] on imports and
+  // on rows predating the stamp, which is what hides the block entirely.
+  const madeWithRows = generationMetaRows(img?.generation_meta);
 
   const improve = (engineId, disabled) => async (event) => {
     event.stopPropagation();
     if (!onImprove || disabled) return;
+    // ✨ Klein's settings and result live in the MODAL now (user-asked): the
+    // button opens it instead of firing blind. SeedVR2 has no dials — direct.
+    if (engineId === 'klein') {
+      patchImageState({ improveOpen: true });
+      return;
+    }
     patchImageState({ improving: true });
     try {
       await onImprove(img.id, engineId);
@@ -819,22 +836,6 @@ export default function DatasetLightbox({
               className="min-h-10 lg:min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-indigo-400/50 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-100 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
               {btn.label}
             </button>
-            {/* Klein's note goes BETWEEN the two buttons in the rail, and only
-                there. The rail is a column, so sitting under Klein is what makes
-                it read as Klein's — which matters, because it warns that Klein's
-                INSTRUCTION ("detailed texture, sharp details") pulls drawn skin
-                towards realism, while SeedVR2 sends no instruction at all.
-                In the BOTTOM bar the buttons are a horizontal ROW, and a
-                full-width paragraph dropped mid-row pushes everything after it
-                onto its own line: a user reported the second improve button
-                stranded alone, centred, at the very bottom of the screen. There
-                the note therefore follows the whole group (see below) — its own
-                first words, "Improve asks Klein to:", carry the attribution that
-                position gave it in the rail. */}
-            {rail && btn.showKleinNote && !improvementActive && (
-              <KleinImproveNote subjectType={subjectType} datasetId={datasetId}
-                className="w-full border-t border-white/10 pt-2" />
-            )}
           </Fragment>
         ))}
         {/* 📷 With the improve group because it answers the same question from
@@ -851,28 +852,35 @@ export default function DatasetLightbox({
             <span aria-hidden>📷</span> Camera angles
           </button>
         )}
-        {/* Bottom bar only: the note takes its OWN line under the buttons.
-            `sm:w-auto` used to let it sit INLINE beside them, which was fine
-            with a single improve button and is not with two — the paragraph
-            took the width the second button needed and pushed it off alone.
-            Full-width in a wrap container is a line break, so the buttons wrap
-            among themselves and the note reads under the whole group. */}
-        {!rail && improveButtons.some((b) => b.showKleinNote) && !improvementActive && (
-          <KleinImproveNote subjectType={subjectType} datasetId={datasetId}
-            className="w-full" />
+        {/* ⚙ What THIS generated image was made with — engine, base model,
+            chained LoRAs, steps, seed… the stamp its generating lane wrote at
+            enqueue (generation_meta). Folded by default: it is looked up, not
+            read every time, and this panel already carries the verbs. NULL on
+            imports and on rows that predate the stamp — no block, never an
+            empty shell. Same vocabulary as the Gallery viewer's Made-with,
+            because "the dataset knows less about its own generated images
+            than the Gallery does" was the reported gap. */}
+        {madeWithRows.length > 0 && (
+          <details data-testid="dataset-made-with"
+            className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+            <summary className="cursor-pointer text-xs font-semibold text-white/80">
+              <span aria-hidden>⚙</span> Made with
+            </summary>
+            <dl className="m-0 mt-1.5 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-0.5">
+              {madeWithRows.map((r) => (
+                <div key={r.key} className="contents">
+                  <dt className="m-0 text-[0.6875rem] text-white/45">{r.label}</dt>
+                  <dd className="m-0 break-words text-[0.6875rem] tabular-nums text-white/80">{r.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
         )}
-        {/* Its strength, step count and instruction are all editable, and nothing
-            here said so — the reported case for making settings discoverable from
-            where the action happens. A link alone was not enough: it pointed at
-            the strength knobs while the complaint ("anime comes back realistic",
-            Qeeyana on Reddit) is caused by the INSTRUCTION. The note quotes that
-            instruction live and links to both. */}
-        {/* It stays glued to ✨, in both placements. It is what the button is
-            about to ask the model for, so it is only worth reading in the
-            second before clicking — parked anywhere else it becomes a stray
-            paragraph. The rail is where it fits BEST: it is prose, and a 15rem
-            column is a better shape for prose than a strip squeezed to the
-            right of six buttons. A rule above it ties it to the ✨ it explains. */}
+        {/* ✨ Klein's settings prose (KleinImproveNote) no longer mounts
+            inline: it lives in the ImproveModal the Klein button opens —
+            user-asked, after a phone screenshot of this very panel being
+            mostly Klein settings. The instruction is still read in the second
+            before generating; that second now happens in the modal. */}
 
       </div>
       </ActionsHost>
@@ -893,6 +901,15 @@ export default function DatasetLightbox({
             const ok = await onCameraAngles(img.id, poses);
             if (ok) patchImageState({ cameraOpen: false });
           }} />
+      )}
+      {/* ✨ The improve modal — the SAME shared dialog the unified viewer
+          mounts, on this table's own routes. Settings on demand, result in
+          place, and the candidate lands in this dataset's grid (which
+          refreshes itself) if the dialog is closed early. */}
+      {improveOpen && onImprove && (
+        <ImproveModal img={img} host="dataset" datasetId={datasetId}
+          subjectType={subjectType}
+          onClose={() => patchImageState({ improveOpen: false })} />
       )}
     </div>
   );

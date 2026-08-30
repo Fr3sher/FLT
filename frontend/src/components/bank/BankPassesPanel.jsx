@@ -23,6 +23,7 @@ import SettingsLink from '../common/SettingsLink'
 import { captionButtonLabel, captionScopeNote } from './bankCaptionScope.js'
 import { holdsTheGpu } from './bankScoreDevice.js'
 import { openerLabel } from './scoringPython.js'
+import { activeLocalLlm, localLlmLabel } from '../../utils/localLlm'
 
 /* Below lg the panel folds everything that is not a pass button. Measured by
    the responsive probe at 360 px: the panel was ~1 500 px tall — engine card,
@@ -50,6 +51,11 @@ export default function BankPassesPanel({
   captionVocab, visionModel, visionModelLooksUncensored,
   onPassOpen, onPassRedo, onPickPython, onSemanticEngineChange, onChanged,
 }) {
+  // Which Settings field this warning opens depends on the configured provider:
+  // sending an LM Studio user to the Ollama model field is a dead end, in a
+  // warning whose whole job is to point at a real place.
+  const visionModelFocus = activeLocalLlm(caps).provider === 'lmstudio'
+    ? 'lmstudio-vision-model' : 'ollama-vision-model'
   return (
     <div className="grid gap-4 xl:grid-cols-12 xl:items-start">
       <div className="min-w-0 space-y-3 xl:col-span-7">
@@ -148,6 +154,7 @@ export default function BankPassesPanel({
           <Fold compact={compact} title="Watermarks">
           <BankWatermarkPanel bankId={bankId} live={live}
             onFind={() => onPassOpen('watermark')}
+            onFindText={() => onPassOpen('text_scan')}
             payload={payload} selectedIds={[...selected]}
             gpuPresent={scoreGpuPresent} onPickPython={onPickPython}
             onChanged={onChanged} />
@@ -199,10 +206,10 @@ export default function BankPassesPanel({
                on screen instead, and only mentions Settings for the case the picker
                cannot solve: no uncensored model pulled on this machine at all. */
             <p className="text-xs text-amber-400/90">
-              ⚠️ Explicit captions need an uncensored (abliterated) Ollama vision model
+              ⚠️ Explicit captions need an uncensored (abliterated) {localLlmLabel(caps)} vision model
               {visionModel ? ` — “${visionModel}” may refuse or soften explicit terms` : ''}.
               Pick another one in <b>Caption vision model</b> above, or pull one from{' '}
-              <SettingsLink section="local-tools" focus="ollama-vision-model" tone="warning">
+              <SettingsLink section="local-tools" focus={visionModelFocus} tone="warning">
                 Settings ▸ Local tools
               </SettingsLink>. Richer captions also feed the search.
             </p>

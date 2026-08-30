@@ -83,6 +83,499 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-30-lmstudio-loads-itself',
+    date: '2026-08-30',
+    title: 'LM Studio models now load themselves',
+    blurb:
+      'No more opening LM Studio just to load the model: LDS loads it for you — '
+      + 'automatically the first time captioning or framing needs it, or from the '
+      + 'new ⏬ Load button in Setup and Settings ▸ Local tools. A model LDS '
+      + 'loads is also one it can unload later to hand the GPU to ComfyUI; one '
+      + 'YOU loaded is never touched. Downloading new models stays in LM Studio.',
+    to: '/settings/local-tools',
+  },
+  {
+    id: '2026-08-30-promote-window-knows-the-numbers',
+    date: '2026-08-30',
+    title: 'The video promote window now tells you what the numbers mean',
+    blurb:
+      'Building a first video training set means guessing a target, a size and '
+      + 'a clip count — so the window stops making you guess. Each target '
+      + 'carries a one-line hint (which one is proven locally, which trains in '
+      + 'the cloud, which needs reference photos). The size menu says which '
+      + 'sizes train exactly as cut and which of the model’s stated sizes get '
+      + 'rescaled a little. And a line under the clip count tells you where '
+      + 'your dataset sits: a dozen clips proves the pipeline, strong LoRAs '
+      + 'are typically trained on 50–200. All of it measured, none of it '
+      + 'blocking — every field stays yours to set.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-30-start-lm-studio',
+    date: '2026-08-30',
+    title: 'Start LM Studio without leaving the app',
+    blurb:
+      'A stopped LM Studio server now has a ▶ Start button, in Settings ▸ Local '
+      + 'tools and on the Setup step — the one Ollama has always had. Whatever '
+      + 'model you had loaded stays loaded, and the server comes up on the port '
+      + 'your settings name, not whichever one it used last. The button only '
+      + 'appears once LM Studio has been opened at least once on this machine.',
+    to: '/settings/local-tools',
+  },
+  {
+    id: '2026-08-30-lm-studio-provider',
+    date: '2026-08-30',
+    title: 'Use LM Studio instead of Ollama, if that is what you run',
+    blurb:
+      'Captioning, framing, head-crop, Describe and Enhance can now run on '
+      + 'LM Studio. The Setup wizard asks which one you run, and Settings ▸ Local '
+      + 'tools switches it any time — the whole '
+      + 'app follows — both the Dataset and the Bank pickers, and the GPU '
+      + 'arbitration that keeps a vision model and ComfyUI from fighting over '
+      + 'the card. Ollama stays the default and nothing changes unless you '
+      + 'switch. LM Studio only serves a model you have loaded, so the app says '
+      + 'so plainly when none is.',
+    to: '/settings/local-tools',
+  },
+  {
+    id: '2026-08-30-setup-without-ollama',
+    date: '2026-08-30',
+    title: 'Setup no longer stops at Ollama',
+    blurb:
+      'Ollama is optional, and the wizard finally treats it that way. With '
+      + 'JoyCaption installed, captioning already works without it — JoyCaption '
+      + 'writes the same captions the vision model would, prose or booru tags '
+      + 'depending on what you train — so the step is a recommendation, not a '
+      + 'gate. With neither installed you get an explicit "Continue without '
+      + 'Ollama" that lists exactly what turns off first: auto-framing, '
+      + 'head-crop, Describe & Enhance, the bank’s natural-language filter. '
+      + 'Start Ollama later and everything switches back on by itself.',
+    to: '/setup',
+  },
+  {
+    id: '2026-08-30-h3-ref2va-training',
+    date: '2026-08-30',
+    title: 'Train MiniMax H3 Ref2V LoRAs — identity from reference images',
+    blurb:
+      'The Ref2V flavour of H3 generates from reference images of a subject, '
+      + 'and now you can train for it: pick the MiniMax H3 Ref2V target when '
+      + 'promoting clips, attach 1–4 reference images on the dataset card, and '
+      + 'train locally or in the cloud with the same recipe H3 uses. The app '
+      + 'refuses to launch without references on purpose — without them the '
+      + 'trainer silently learns nothing of the identity, which is a paid run '
+      + 'wasted. Local training needs an ai-toolkit from 2026-08-13 or newer; '
+      + 'the app checks yours and says so instead of failing mid-run.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-30-video-cloud-gpu-picker',
+    date: '2026-08-30',
+    title: 'Pick the GPU for a cloud video run — with prices in front of you',
+    blurb:
+      'Cloud video training used to rent the cheapest suitable card without '
+      + 'showing you a number. The panel now lists one offer per GPU class — '
+      + 'price per hour, VRAM, and a rough time and cost for your dataset — '
+      + 'and lets you pick, or leave it on “cheapest suitable” as before. '
+      + 'Estimates are honest about being rough: they come from one measured '
+      + 'run, and a clip length nothing was measured at shows no estimate '
+      + 'rather than an invented one.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-30-video-trigger-word',
+    date: '2026-08-30',
+    title: 'Video datasets get a trigger word',
+    blurb:
+      'Set it once when promoting clips, and it is prepended to every clip’s '
+      + 'caption file at export — exactly once, in one place. Your captions '
+      + 'stay clean on screen, editing one never loses the trigger, and a '
+      + 'caption that already starts with it is left alone: a doubled trigger '
+      + 'measurably hurts prompt adherence, so the app makes doubling '
+      + 'impossible. Optional — a style set legitimately has none.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-30-h3-i2v-training',
+    date: '2026-08-30',
+    title: 'Train MiniMax H3 LoRAs for image-to-video',
+    blurb:
+      'If you animate still images, train the way you generate: one checkbox '
+      + 'on the video training panels switches an H3 run to first-frame '
+      + 'conditioning, so the LoRA learns under the same setup your i2v '
+      + 'generations use. Works locally and in the cloud, on any ai-toolkit '
+      + 'that trains H3 at all.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-30-h3-stills-training',
+    date: '2026-08-30',
+    title: 'Train an H3 video LoRA from your image datasets — no clips needed',
+    blurb:
+      'MiniMax H3 trains on still images too, and your image datasets already '
+      + 'have everything that needs: curated pictures, edited captions, a '
+      + 'trigger. One button in the Video training sets section turns an image '
+      + 'dataset into a ready-to-train stills set — people have trained H3 '
+      + 'character LoRAs this way on 12 GB cards. The promotion window also '
+      + 'now counts clips coming from 48+ fps sources, which are often '
+      + 'slow-motion footage that teaches floaty movement.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-30-video-steps-sized-to-the-dataset',
+    date: '2026-08-30',
+    title: 'Video training steps now start from your dataset, not a constant',
+    blurb:
+      'A 12-clip set and a 176-clip set used to get the same step count. The '
+      + 'Steps field on a video dataset now starts from a suggestion sized to '
+      + 'the clips it actually holds — about 28 steps per clip, taken from '
+      + 'measured runs, never below the old default and never past what the '
+      + 'measurements support. The local ▶ Train button gains the same editable '
+      + 'Steps field the cloud panel already had, so no run starts on a number '
+      + 'you never saw. Type over it freely: what you enter is what trains.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-30-h3-trains-the-way-h3-is-trained',
+    date: '2026-08-30',
+    title: 'MiniMax H3 video LoRAs now train the way the model expects',
+    blurb:
+      'H3 ships guidance-distilled, and training a LoRA on it without accounting '
+      + 'for that quietly degrades the result. ai-toolkit answered with a '
+      + 'contrastive guidance loss and a small training adapter, and made the '
+      + 'pair its default for H3 — video training here now uses both, wherever '
+      + 'the ai-toolkit it is driving can actually run them: your installed copy '
+      + 'is read for the capability, and a rented pod is judged on the image it '
+      + 'boots, so an older setup quietly skips the recipe instead of failing. '
+      + 'Alongside it, a clip now defaults to 39 frames instead of 107 — the '
+      + 'length the trainer itself trains at, and about a third of the work per '
+      + 'step — with every other length still on the menu, 22 included.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-29-video-lora-in-the-cloud',
+    date: '2026-08-29',
+    title: 'Train a video LoRA on a rented GPU — MiniMax H3 included',
+    blurb:
+      'Promote clips out of a 🎬 video bank, pick a target model, and '
+      + '☁️ Train in cloud now rents a pod that can actually run it: the '
+      + 'right ai-toolkit, enough VRAM, and enough disk for a base that weighs '
+      + '42 GB — all settled before the rental instead of discovered after it. '
+      + 'MiniMax H3 has now been trained end to end that way, on clips cut to '
+      + 'its own geometry (107 frames at 24 fps, audio kept at 32 kHz stereo), '
+      + 'and the checkpoints come back to the dataset. Check your territory '
+      + 'first: H3’s licence grants no rights in the EU, the UK, South Korea '
+      + 'or the USA without MiniMax’s free authorisation, and it covers what '
+      + 'you generate as well as the model.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-29-krea-preset-sampler',
+    date: '2026-08-29',
+    title: 'A second way to sample Krea renders, built for its 8-step setting',
+    blurb:
+      'Krea 2 Turbo runs at eight steps, where the sampler has to make every '
+      + 'one of them count. The Studio’s Sampler menu now offers five presets '
+      + 'that change how those steps are taken — more texture and finer detail '
+      + 'as you go up the scale, at no extra generation time. Pick “neutral” '
+      + 'to render exactly as before, so you can judge the others against it at '
+      + 'the same seed. It is optional: install it from the Krea card on the '
+      + 'Setup screen, and everything works as it always did if you do not.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-29-caption-lab-on-a-bank',
+    date: '2026-08-29',
+    title: 'Try caption models on a bank before captioning thousands of images',
+    blurb:
+      'The 🧪 Caption Lab now runs on an image bank too: open the 🏷️ Caption '
+      + 'window, press Caption Lab, pick one image, and line up to four configs — '
+      + 'engine, vision model, vocabulary register and length — side by side. '
+      + 'Nothing is written until you choose, and the winning config loads straight '
+      + 'into the dials the next pass will use. A bank caption can also be edited by '
+      + 'hand for the first time, and what you write is protected from a later '
+      + 're-caption exactly as it is on a dataset.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-29-queue-hold-has-an-answer',
+    date: '2026-08-29',
+    title: 'A queue held by another app now has a way out',
+    blurb:
+      'When something outside LDS is holding a model on your graphics card, '
+      + 'generations wait rather than evict it — and that wait could last as '
+      + 'long as the other app did. The queue dock now tells you how long it '
+      + 'has been waiting and offers Run anyway, which starts generating next '
+      + 'to the other model instead (nothing of yours is unloaded, it can be '
+      + 'slower, and the guard returns after fifteen minutes). An Ollama URL '
+      + 'the app cannot use no longer stops image generation at all.',
+  },
+  {
+    id: '2026-08-29-one-run-number',
+    date: '2026-08-29',
+    title: 'One number per training run, on every screen',
+    blurb:
+      'A cloud run used to wear two ids — its run number on the lineage '
+      + 'cards and a different cloud number on the Checkpoints and Runs '
+      + 'chips — and ⚙ Details on a checkpoints card could answer "not in '
+      + 'the lineage tree" because of it. Every card, chip and tree row now '
+      + 'prints the same single run number; the cloud id moved into the '
+      + 'tooltip for when support asks. Deep links and stored data are '
+      + 'untouched.',
+  },
+  {
+    id: '2026-08-29-improve-settings-window',
+    date: '2026-08-29',
+    title: '✨ Improve now opens its settings in a window — and shows you the result',
+    blurb:
+      'Press ✨ Improve via Klein anywhere — dataset, Gallery, Canvas, a '
+      + 'checkpoint gallery — and a window opens with the instruction '
+      + '(editable in place), model, LoRA preset and output size, then a '
+      + 'Generate button. Stay and the finished picture appears right there; '
+      + 'leave early and it lands where it always did, with a toast saying '
+      + 'where. The image viewers keep their action bars short — the batch '
+      + 'toolbar keeps its inline note, since a batch should show its '
+      + 'instruction before launching a lot.',
+  },
+  {
+    id: '2026-08-29-run-details-from-checkpoints',
+    date: '2026-08-29',
+    title: 'Run details and run-vs-run compare, right on the checkpoint cards',
+    blurb:
+      'Every cloud-run card in a dataset’s checkpoints now has ⚙ Details '
+      + '— the full recipe that trained it (rank, learning rate, optimizer, '
+      + 'resolution, notes) — and ⇄ Compare: pick two runs to see exactly '
+      + 'what changed between them, including the frozen dataset (images '
+      + 'added, removed or re-captioned) and the machine. Same panels as the '
+      + 'Lineage graph, one click closer.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-29-dataset-made-with',
+    date: '2026-08-29',
+    title: 'Generated dataset images now remember what made them',
+    blurb:
+      'Every image a dataset generates — variations, ✨ improve, 📷 camera '
+      + 'views, small-image rescues — is stamped with what actually ran: '
+      + 'engine, base model, chained LoRAs, steps, seed. A folded ⚙ Made '
+      + 'with block in the image actions panel shows it, in the same words '
+      + 'as the Gallery viewer. Older images and imports simply show '
+      + 'nothing — the stamp never guesses.',
+    to: '/datasets?section=images',
+  },
+  {
+    id: '2026-08-29-studio-viewer-facts',
+    date: '2026-08-29',
+    title: 'The Test Studio viewer now tells you everything about a render',
+    blurb:
+      'Open an image in the Test Studio — or in a comparison of two training '
+      + 'runs — and you get the same full viewer as the Gallery: prompt, '
+      + 'seed, checkpoint, extra LoRAs, base model, sampler, and the same '
+      + 'verbs (download, improve, repair, camera angles), with the 👍/👎 '
+      + 'vote kept right there. Comparing two runs no longer shows less '
+      + 'about an image than the Gallery knows about the very same file.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-29-same-verbs-every-viewer',
+    date: '2026-08-29',
+    title: 'Every generated-image viewer now offers the same verbs',
+    blurb:
+      'Open a render anywhere — the Gallery, the ◉ Canvas, a checkpoint '
+      + 'gallery — and the same footer is there: ⬇ Download, ✨ Improve, '
+      + '✦ Repair and 📷 Camera angles. The Canvas used to lack the camera '
+      + 'button and only the Canvas had Repair; now the viewer itself owns '
+      + 'its verbs, so a picture has the same powers wherever you meet it.',
+    to: '/gallery',
+  },
+  {
+    id: '2026-08-28-krea-base-pick-saves',
+    date: '2026-08-28',
+    title: 'The Krea 2 base-model pick actually saves now',
+    blurb:
+      'Picking a Krea 2 base model from the variation catalog looked saved '
+      + 'but quietly forgot the choice on the next reload — the save request '
+      + 'was shaped wrong and the server ignored it politely. Fixed; your '
+      + 'pick now survives, and the camera panel’s new Model row uses '
+      + 'the same repaired path.',
+    to: '/datasets?section=images',
+  },
+  {
+    id: '2026-08-28-camera-model-choice',
+    date: '2026-08-28',
+    title: 'Camera angles can run on your own Qwen build',
+    blurb:
+      '📷 The camera-angles panel now has a Model row: pick any '
+      + 'Qwen-Image-Edit build on your disk — a finetune, an NSFW merge — '
+      + 'and every camera run uses it, on the Gallery and in datasets alike. '
+      + 'Empty keeps the installed 2511 default. The angle grammar comes from '
+      + 'the LoRA, so a different build changes the look, not the camera.',
+    to: '/gallery',
+  },
+  {
+    id: '2026-08-28-enhance-model-choice',
+    date: '2026-08-28',
+    title: 'Pick which Ollama model runs ✨ Enhance',
+    blurb:
+      'A ⚙️ next to ✨ Enhance — in the Test Studio and in the Canvas run '
+      + 'panel alike — lets you pick which pulled Ollama model enriches your '
+      + 'test prompt, instead of always the captioning model. The pick is '
+      + 'remembered and applies to both surfaces at once; leave it on the '
+      + 'default and nothing changes. A vanilla model can refuse NSFW '
+      + 'prompts — the abliterated captioning default stays the safe choice '
+      + 'there.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-28-studio-trigger-toggle',
+    date: '2026-08-28',
+    title: 'Test a prompt without the trigger word',
+    blurb:
+      'A new "Trigger word" checkbox next to the Studio test prompt (also in '
+      + 'Compare and the canvas panel) controls whether the dataset\'s trigger '
+      + 'is prefixed to what you type. Untick it to send the prompt exactly as '
+      + 'written — handy when a render keeps typing the trigger back into '
+      + 'speech bubbles or signs, or for pure style and scene tests. Ticked '
+      + 'stays the default, the choice is remembered in this browser, and '
+      + 'images generated without it say "no trigger" in their details.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-28-watermark-scan-window',
+    date: '2026-08-28',
+    title: 'Find watermarks gets the Find-text launch window',
+    blurb:
+      '🚩 Find watermarks now opens the same kind of window as 🔤 Find text, '
+      + 'on both surfaces (the dataset button used to fire straight from the '
+      + 'click): try a sample first — deterministic, so a re-run re-judges '
+      + 'the same images — tune the detector threshold where its effect is '
+      + 'judged (one stored value, both surfaces), and watch the flagged '
+      + 'pages appear below the dials with their boxes drawn on them while '
+      + 'the scan runs.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-28-header-machine-load',
+    date: '2026-08-28',
+    title: 'A resource monitor on every page — now with GPU temperature',
+    blurb:
+      'The 📊 machine-load readout is no longer Canvas-only: click 📊 in the '
+      + 'header and every page — the Test Studio above all — shows live '
+      + 'CPU · GPU · VRAM · RAM numbers, now joined by the GPU temperature, '
+      + 'so you can watch a generation or a training work without keeping '
+      + 'Task Manager or a ComfyUI monitor open. It polls only while the tab '
+      + 'is visible, folds away with ▾, and remembers your choice. '
+      + 'Suggested by Sam Exit (Discord).',
+  },
+  {
+    id: '2026-08-28-clean-text-or-watermarks',
+    date: '2026-08-28',
+    title: 'Clean text and watermarks separately',
+    blurb:
+      'Once 🔤 Find text has flagged something, the repaint level grows a '
+      + '“What to clean” switch — Both, 🔤 Text, 🚩 Marks — next to the '
+      + 'LaMa/Klein toggle, on the bank panel and the dataset Clean row '
+      + 'alike, and the button’s count follows the choice. The split is by '
+      + 'page: a page carrying both counts as text and is repainted whole, '
+      + 'so one page is never split between two runs.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-28-find-text-results-in-window',
+    date: '2026-08-28',
+    title: 'Find text shows its result in the launch window',
+    blurb:
+      'Launching 🔤 Find text no longer closes the window: the flagged '
+      + 'pages appear right below the dials with every zone drawn on them, '
+      + 'filling in live while the scan runs, and each tile opens the '
+      + 'full-size page. Try a sample, judge the zones where you launched '
+      + 'them, adjust, re-run: the whole loop happens in one window, on '
+      + 'both surfaces.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-28-similar-add-more',
+    date: '2026-08-28',
+    title: 'Similar to selected: ask for the next batch without starting over',
+    blurb:
+      'After “Select 60 most similar” your selection holds 60 '
+      + 'images — and the one-reference rule used to lock the panel '
+      + 'shut right when you wanted more. It now remembers the last '
+      + 'ranking: reopen Similar to selected and “Add N more” '
+      + 'extends the SAME ranking by the next closest images — no '
+      + 'unselecting, no hunting the reference down again.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-28-text-fill-outline-safe',
+    date: '2026-08-28',
+    title: 'Text cleaning stops breaking speech bubbles',
+    blurb:
+      'Repainting a 🔤 text zone used to hand the WHOLE rectangle to the '
+      + 'repaint model, which kept eating balloon outlines and cartouche '
+      + 'borders. Zones found by Find text now go through an outline-safe '
+      + 'filler first: the letters are emptied with the bubble’s own '
+      + 'background (instant, on the CPU), anything drawn across the zone '
+      + 'edge — the outline, the art — is untouched by '
+      + 'construction, and the repaint model only ever sees the leftover '
+      + 'lettering on busy art. Both surfaces; ↩ Undo then Clean again '
+      + 'upgrades pages you already cleaned.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-27-civitai-prompt-browser',
+    date: '2026-08-27',
+    title: 'Borrow a prompt from Civitai’s top images',
+    blurb:
+      'A new 🌐 Civitai button next to the test-prompt field (Test Studio, '
+      + 'multi-LoRA comparison and the canvas alike) browses the most-reacted '
+      + 'images of the day, week or month — each one shown right next to the '
+      + 'prompt it was generated with, when the poster published it. One click '
+      + 'copies it or drops it into your prompt field. Reading prompts uses '
+      + 'the free Civitai API key from Settings → Scraping & sources.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-27-find-text-sample',
+    date: '2026-08-27',
+    title: 'Find text: try a sample, tune the sensitivity, then commit',
+    blurb:
+      'The 🔤 Find text launch window now carries two dials — on BOTH '
+      + 'surfaces. “Try on a sample first” reads only the first N pages — '
+      + 'judge the zones in the flagged review, then launch the rest, or '
+      + 're-read the SAME sample after moving the new Sensitivity slider '
+      + '(lower catches fainter lettering, at the cost of false zones — one '
+      + 'stored value, moved from either side). No more committing a '
+      + '9 000-page bank to find out.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-27-find-text-clean',
+    date: '2026-08-27',
+    title: 'Erase burned-in text — speech bubbles, subtitles, captions',
+    blurb:
+      'A comic page carries its dialogue, a screencap its subtitle — and a '
+      + 'LoRA learns the lettering along with the subject. 🔤 Find text reads '
+      + 'the text (Latin or CJK alike) and turns each block into a mask zone, '
+      + 'so the same 🧽 Repaint that clears watermarks erases it — one funnel, '
+      + 'one ↩ Undo, and ✂ Auto-crop never touches a bubble. On banks and '
+      + 'datasets both, CPU-only, powered by the same small offline OCR the '
+      + 'Video bank already uses. Very stylised sound-effect lettering can '
+      + 'still escape the reader — the mask editor covers those.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-27-scene-custom-prompt',
+    date: '2026-08-27',
+    title: 'Scenes take a custom prompt of their own',
+    blurb:
+      'In the Test Studio\'s 🎬 Scenes panel, every picked scene now carries an '
+      + 'optional ✏️ text field. Whatever you type there is appended to that '
+      + 'scene\'s caption at launch — swap an outfit, set the time of day, add '
+      + 'your trigger word — without touching the caption itself or the other '
+      + 'scenes. Leave it empty and the caption runs exactly as before.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-26-klein-enhancement-repair-row',
     date: '2026-08-26',
     title: 'The Klein enhancement LoRA can finally be repaired from Setup',
@@ -114,6 +607,7 @@ export const WHATS_NEW = [
       + 'photos; promote to a dataset first, and the views are born as '
       + 'candidates, never filed as real.',
     to: '/datasets?section=images',
+    image: 'docs/screenshots/release/camera-angles-picker.png',
   },
   {
     id: '2026-08-26-camera-setup-card',

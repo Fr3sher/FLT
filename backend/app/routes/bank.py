@@ -694,10 +694,55 @@ def bank_semantic_dedup(bank_id):
 
 @bp.post('/bank/<int:bank_id>/watermark')
 def bank_watermark(bank_id):
-    """Overlaid-watermark scan (Qwen3-VL). {rescan:true} re-checks scanned rows."""
+    """Overlaid-watermark scan (detector or vision). {rescan:true} re-checks
+    scanned rows; {limit:N} is the launch window's "try on a sample first" —
+    the first N of the scope by id, deterministic (the 🔤 scan's dial)."""
     data = request.get_json(silent=True) or {}
     return _start(banks.start_watermark, _app(), LOCAL_USER, bank_id,
-                  rescan=bool(data.get('rescan')), **_scope(data))
+                  rescan=bool(data.get('rescan')), limit=data.get('limit'),
+                  **_scope(data))
+
+
+@bp.get('/bank/<int:bank_id>/watermark/preview')
+def bank_watermark_preview(bank_id):
+    """The 🚩 launch window's result gallery: watermark-family flagged pages
+    (not 🔤 text-flagged) with their zones, oldest-id first."""
+    try:
+        limit = int(request.args.get('limit') or 24)
+    except (TypeError, ValueError):
+        limit = 24
+    payload = banks.watermark_preview(LOCAL_USER, bank_id, limit)
+    if payload is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(payload)
+
+
+@bp.get('/bank/<int:bank_id>/text/preview')
+def bank_text_preview(bank_id):
+    """The 🔤 launch window's result gallery: text-flagged pages with their
+    zones, oldest-id first (the sample's own deterministic order)."""
+    try:
+        limit = int(request.args.get('limit') or 24)
+    except (TypeError, ValueError):
+        limit = 24
+    payload = banks.text_preview(LOCAL_USER, bank_id, limit)
+    if payload is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(payload)
+
+
+@bp.post('/bank/<int:bank_id>/text')
+def bank_text_scan(bank_id):
+    """🔤 Burned-in text scan (RapidOCR, CPU). Folds the text zones it finds
+    into the watermark mask channel so 🧽 Inpaint can repaint them.
+    {rescan:true} re-reads scanned rows; dismissed rows are never re-examined.
+    {limit:N} is the launch window's "try on a sample first" — only the first
+    N rows of the scope, deterministic, so redo re-reads the same sample.
+    Same {statuses}/{image_ids} scope dials as every other pass. 202/409/400/503."""
+    data = request.get_json(silent=True) or {}
+    return _start(banks.start_text_scan, _app(), LOCAL_USER, bank_id,
+                  rescan=bool(data.get('rescan')), limit=data.get('limit'),
+                  **_scope(data))
 
 
 @bp.get('/bank/<int:bank_id>/watermark/levels')
@@ -734,7 +779,8 @@ def bank_watermark_inpaint(bank_id):
     without them repaints exactly what it repainted before."""
     data = request.get_json(silent=True) or {}
     return _start(banks.start_watermark_inpaint, _app(), LOCAL_USER, bank_id,
-                  method=data.get('method') or 'auto', **_scope(data))
+                  method=data.get('method') or 'auto',
+                  target=data.get('target') or 'all', **_scope(data))
 
 
 @bp.post('/bank/<int:bank_id>/watermark/undo')
@@ -957,6 +1003,73 @@ def bank_caption(bank_id):
                   ollama_model=data.get('ollama_model') or None,
                   statuses=data.get('statuses') or None,
                   include_asserted=bool(data.get('include_asserted')))
+
+
+@bp.post('/bank/<int:bank_id>/image/<int:image_id>/caption/preview')
+def bank_image_caption_preview(bank_id, image_id):
+    """🧪 Caption Lab: run ONE candidate config on ONE bank image and return the
+    caption WITHOUT writing it. The Bank's half of the dataset route of the same name,
+    with the same body ({backend, ollama_model, vocabulary, length, instructions}) and
+    the same meaning — both call one shared bench (face_dataset_service.
+    preview_caption_path), so a candidate cannot mean two things.
+
+    Synchronous, and it holds the bank for its duration under the 'caption' kind: the
+    bench owns the GPU while it runs, and ▶ Stop / POST /bank/<id>/cancel aborts it at
+    the image boundary like any pass.
+    400 = bad config · 404 = unknown bank/image · 409 = a pass holds the bank · 503 = GPU
+    held by training or another vision task."""
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    elif not isinstance(data, dict):
+        return jsonify({'error': 'JSON body must be an object'}), 400
+    # 404 for an unknown BANK, like the dataset twin (datasets.py checks the container
+    # first). Without this the service's ValueError('bank not found') surfaced as a 400,
+    # so the same mistake answered 404 on one surface and 400 on the other.
+    if banks.get_bank(LOCAL_USER, bank_id) is None:
+        return jsonify({'error': 'not found'}), 404
+    try:
+        result = banks.preview_caption(
+            LOCAL_USER, bank_id, image_id,
+            backend=data.get('backend'), ollama_model=data.get('ollama_model', ''),
+            vocabulary=data.get('vocabulary'), length=data.get('length'),
+            instructions=data.get('instructions'))
+    except bank_jobs.BankJobBusy as e:
+        # BEFORE _map_error, and not for the reason one would guess: BankJobBusy derives
+        # from Exception, NOT RuntimeError, so _map_error does not recognise it at all and
+        # would RE-RAISE it. Caught here so the refusal is a 409 carrying `busy_kind` —
+        # the machine-readable half the UI refuses the click in the user's words with.
+        return _busy(e)
+    except Exception as e:  # noqa: BLE001 — _map_error re-raises what it cannot map
+        return _map_error(e)
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **result})
+
+
+@bp.put('/bank/<int:bank_id>/image/<int:image_id>/caption')
+def bank_image_caption(bank_id, image_id):
+    """Write ONE bank image's caption by hand. {caption: "..."} — an empty string
+    clears it. The text lands stamped 'asserted', so a forced 🔄 Re-caption spares it
+    unless the user ticks the include-asserted opt-out.
+
+    Synchronous: it writes one row of ours, like the crop and the watermark undo.
+    400 = bad body · 404 = unknown bank/image · 409 = a pass holds the bank."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON body must be an object'}), 400
+    if banks.get_bank(LOCAL_USER, bank_id) is None:
+        return jsonify({'error': 'not found'}), 404
+    try:
+        result = banks.set_image_caption(LOCAL_USER, bank_id, image_id,
+                                         data.get('caption'))
+    except bank_jobs.BankJobBusy as e:
+        return _busy(e)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **result})
 
 
 @bp.get('/bank/<int:bank_id>/scenes')

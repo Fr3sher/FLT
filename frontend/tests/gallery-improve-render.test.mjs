@@ -57,11 +57,24 @@ test('the gallery lightbox, given what the panel passes, shows ✨ beside ⬇', 
   assert.deepEqual(improveButtons(html), ['klein'],
     'Klein is always offered; SeedVR2 only once it is installed')
   assert.match(html, /data-testid="lightbox-download"/, 'and Download is still there')
-  // Klein's amber note follows Klein, and it is the note that pulls in the
-  // settings pointers AND the in-place instruction editor — the branch most
-  // likely to throw on a bare render. (The editor's own behaviour is covered by
+  // Klein's amber note no longer rides along inline — ✨ opens the shared
+  // ImproveModal and the note is that modal's settings screen. The bare viewer
+  // must therefore NOT carry the note's markers any more…
+  assert.doesNotMatch(html, /data-testid="klein-improve-edit-toggle"/)
+})
+
+test("the modal ✨ opens carries Klein's note — pointers and the instruction editor", async () => {
+  // …and the modal must. Its settings phase is the initial one, so a bare
+  // render shows the note with the settings pointers AND the in-place
+  // instruction editor — the branch most likely to throw on a bare render.
+  // (The editor's own behaviour is covered by
   // tests/klein-improve-inline-editor.test.mjs; what is asserted here is that
-  // this host still renders it at all.)
+  // the modal renders it at all, for the same host props the gallery passes.)
+  const { default: ImproveModal } = await import('../src/components/shared/ImproveModal.jsx')
+  const html = inApp(createElement(ImproveModal, {
+    img: row(), host: 'library', datasetId: 7, subjectType: 'person', onClose: () => {},
+  }))
+  assert.match(html, /data-testid="improve-modal-generate"/)
   assert.match(html, /data-testid="klein-improve-edit-toggle"/)
   assert.match(html, /focus=identity-prompt-klein-improve/)
 })
@@ -77,16 +90,23 @@ test('the same lightbox with NO handler renders no improve button at all', () =>
   assert.match(html, /data-testid="lightbox-download"/)
 })
 
-test('the pill preview gains NOTHING — and never asks for capabilities', () => {
-  /* Rendered with NO provider around it on purpose. If the improve group ever
-     leaked into this host, `useCapabilities()` would throw here instead of on a
-     user's screen — which is the failure this test exists to move forward in
-     time. */
-  const html = renderToStaticMarkup(createElement(PreviewLightbox, {
-    target: { url: '/api/dataset/7/img/p.png', step: 1500 }, onClose: () => {},
-  }))
+test('the pill preview gains NOTHING — no improve, no repair, no camera', () => {
+  /* The viewer owns ✦ and 📷 now (lightbox-owns-the-verbs contract), so the
+     proof moved from "a hook throws outside its provider" to the markup
+     itself: a picture the host holds only as a URL has no library row, and a
+     row-less picture gets NO verb — not improve (the host passes none), not
+     ✦, not 📷 (the viewer's own hasRow gate). Mounted under the app's
+     ToastProvider because the viewer's root legitimately uses the toast
+     infrastructure; `useCapabilities` is still only reached through the
+     improve group, which this host must never render. */
+  const html = renderToStaticMarkup(createElement(ToastProvider, null,
+    createElement(PreviewLightbox, {
+      target: { url: '/api/dataset/7/img/p.png', step: 1500 }, onClose: () => {},
+    })))
   assert.deepEqual(improveButtons(html), [])
   assert.doesNotMatch(html, /Improve via|Upscale via/)
+  assert.doesNotMatch(html, /data-testid="lightbox-repair"/)
+  assert.doesNotMatch(html, /data-testid="lightbox-camera-angles"/)
   assert.match(html, /data-testid="generated-image-lightbox"/, 'it still renders')
 })
 

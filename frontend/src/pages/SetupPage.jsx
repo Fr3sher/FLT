@@ -6,6 +6,7 @@ import { useToast } from '../components/common/Toast'
 import { useCapabilities } from '../context/CapabilitiesContext'
 import { deriveSetupSteps, deriveCapabilitySummary, SETUP_STEP_IDS, kleinMissingLabels,
   comfyuiDirVerdict, comfyuiLauncherState, COMFYUI_SKIP_LOST, COMFYUI_SKIP_KEPT, installAllPlan,
+  OLLAMA_SKIP_LOST, ollamaSkipKept, ollamaGateReason,
   aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS, chatgptLanes, chatgptLaneSummary }
   from '../hooks/useSetupSteps'
 import ChatgptSubscriptionConnect from '../components/common/ChatgptSubscriptionConnect'
@@ -144,6 +145,8 @@ export default function SetupPage() {
   const [readinessRevision, setReadinessRevision] = useState(0)
   const [dirCheck, setDirCheck] = useState(null)    // live classify of the typed ComfyUI dir
   const [skipConfirm, setSkipConfirm] = useState(false) // "continue without ComfyUI" panel open
+  const [ollamaSkipConfirm, setOllamaSkipConfirm] = useState(false) // same, for Ollama
+  const [savingProvider, setSavingProvider] = useState(false)   // local-LLM switch in flight
   const autodetectedRef = useRef(false)             // run the on-load autodetect only once
   // Last SERVER-acknowledged config (JSON) — dirty = user edits not yet saved.
   const savedConfigRef = useRef(null)
@@ -199,8 +202,9 @@ export default function SetupPage() {
   }, [config, runAutodetect])
 
   // Navigating between wizard screens dismisses a half-open "continue without ComfyUI"
-  // panel, so it never re-appears stale when the user comes back to this step.
-  useEffect(() => { setSkipConfirm(false) }, [screen])
+  // or "continue without Ollama" panel, so neither re-appears stale when the user
+  // comes back to that step — by then the tool may well be running.
+  useEffect(() => { setSkipConfirm(false); setOllamaSkipConfirm(false) }, [screen])
 
   // Docker-owned services can need longer than the app container to boot. Poll a
   // dedicated one-second endpoint instead of re-running the expensive capability
@@ -274,6 +278,25 @@ export default function SetupPage() {
     return () => { alive = false; clearTimeout(t) }
   }, [baseDir])
 
+  /* Switch which local LLM this install uses, from the wizard.
+
+     Why it lives HERE and not only in Settings: every LM Studio sentence on this
+     step is behind `step.isLmStudio`, so on the default install the wizard never
+     said the other provider existed. Someone who runs LM Studio and no Ollama was
+     walked through installing and starting Ollama, with no hint there was a
+     choice -- on the screen a new install trusts most. Found by running Setup. */
+  const pickProvider = async (provider) => {
+    if (provider === (config.local_llm || {}).provider || savingProvider) return
+    setSavingProvider(true)
+    const next = { ...config, local_llm: { ...(config.local_llm || {}), provider } }
+    try {
+      const saved = await putJson('/api/settings', { config: next })
+      setConfig(saved.config); savedConfigRef.current = JSON.stringify(saved.config)
+      await refresh(true)
+    } catch (e) { toast.error(`Save failed: ${e.message}`) }
+    finally { setSavingProvider(false) }
+  }
+
   // Apply a disk-scanned path suggestion (user-confirmed) into config + save.
   const applyDetectedPath = async (section, key, val) => {
     const next = { ...config, [section]: { ...config[section], [key]: val } }
@@ -338,13 +361,32 @@ export default function SetupPage() {
   // to ready with no app restart. A failure returns 502 -> apiFetch throws (and
   // auto-toasts the generic 5xx notice); the catch adds the specific reason,
   // matching the existing saveSecretThenTest pattern.
-  const startOllama = async () => {
+  const loadLlmModel = async () => {
     setStartingOllama(true)
     try {
-      const r = await postJson('/api/ollama/start', {})
-      if (r.reachable) { toast.success('Ollama started.'); await refresh(true) }
-      else { toast.error(r.error || 'Ollama did not become ready.') }
-    } catch (e) { toast.error(e.message || 'Could not start Ollama.') }
+      // Explicit click — probes never load. The backend resolves WHICH model
+      // (configured, else the downloaded VLM) and loads it through LM Studio's
+      // own API; a big model takes a while, so the button says so.
+      const r = await postJson('/api/local-llm/load', {})
+      if (r.ok) { toast.success(`Model ready — ${r.model || 'loaded'}.`); await refresh(true) }
+      else { toast.error(r.error || 'The model could not be loaded.') }
+    } catch (e) { toast.error(e.message || 'The model could not be loaded.') }
+    finally { setStartingOllama(false) }
+  }
+
+  const startLocalLlm = async (name) => {
+    setStartingOllama(true)
+    try {
+      // ONE routed path for both providers: /api/local-llm/start dispatches on the
+      // configured provider, so this button and the Settings one can never drift
+      // into starting different servers. `already_running` is a success, not a
+      // no-op to hide -- it is the honest answer to a click on a live server.
+      const r = await postJson('/api/local-llm/start', {})
+      if (r.reachable) {
+        toast.success(r.already_running ? `${name} is already running.` : `${name} started.`)
+        await refresh(true)
+      } else { toast.error(r.error || `${name} did not become ready.`) }
+    } catch (e) { toast.error(e.message || `Could not start ${name}.`) }
     finally { setStartingOllama(false) }
   }
 
@@ -957,6 +999,10 @@ export default function SetupPage() {
             onDone={() => refresh(true)} />
         </div>
       )
+      // Declared BEFORE `fields`, which uses it. `node --test` never executes JSX,
+      // so a temporal-dead-zone reference passes every test and throws on the real
+      // screen — this file has been bitten by exactly that before.
+      const llmName = step.isLmStudio ? 'LM Studio' : 'Ollama'
       const fields = (
         <>
           {!step.dockerManaged
@@ -972,11 +1018,173 @@ export default function SetupPage() {
             For the best captions the app pairs it with JoyCaption (ai-toolkit) — a Joy+Ollama combo.
           </p>
           {saveRecheckBtn}
+          {/* Discoverable, explicit exit — only when there is genuinely nothing here.
+              A reachable Ollama never offers to be skipped; a Docker install uses its
+              own "No Ollama" card instead. */}
+          {!step.dockerManaged && !step.reachable && !step.skipped && (
+            <button type="button" onClick={() => setOllamaSkipConfirm(true)}
+              className="min-h-10 text-left text-xs text-content-subtle underline hover:text-content lg:min-h-0">
+              Don’t need auto-framing? Continue without {llmName} →
+            </button>
+          )}
         </>
       )
+      // "Continue without Ollama": what turns off vs stays on, from the real gates,
+      // shown BEFORE the choice is committed. The captioning sentence is computed
+      // rather than listed, because it is the one line whose truth depends on this
+      // machine — JoyCaption present means captioning survives, absent means the
+      // install ends up with no captioner at all, and the user deserves to be told
+      // that in the same breath rather than discovering it later.
+      const ollamaSkipPanel = (
+        <div role="status" aria-live="polite"
+          className="space-y-3 rounded-md border border-border-strong bg-surface-raised px-4 py-3 text-sm">
+            <p className="font-medium text-content">Continue without {llmName}?</p>
+            <p className="text-xs text-content-muted">
+              {llmName} powers auto-framing, head-crop and the prompt helpers. You can come back
+              anytime — starting it later turns everything below back on automatically.
+            </p>
+            {step.joycaptionReady ? (
+              <p className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs text-content">
+                <span aria-hidden="true">✓</span> JoyCaption is installed — captioning keeps working
+                without Ollama, in prose or booru tags depending on what you train.
+              </p>
+            ) : (
+              <p className="rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-content">
+                <span aria-hidden="true">!</span> JoyCaption isn’t installed either, so this install
+                would have no captioner at all. You can set it up from the training step (ai-toolkit)
+                and captioning will work without Ollama.
+              </p>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <p className="mb-1 text-xs font-semibold text-amber-300">What you won’t have</p>
+                <ul className="space-y-1 text-xs text-content-muted">
+                  {OLLAMA_SKIP_LOST.map((t) => (
+                    <li key={t} className="flex gap-1.5"><span aria-hidden="true" className="text-amber-400">✗</span><span>{t}</span></li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-semibold text-emerald-400">What still works</p>
+                <ul className="space-y-1 text-xs text-content-muted">
+                  {/* The captioning line is the one claim that depends on THIS machine.
+                      Ticking it on an install with no JoyCaption would promise a
+                      captioner that isn't there — the amber note above already says
+                      how to get one, so the tick is simply withheld. */}
+                  {ollamaSkipKept(step.joycaptionReady).map((t) => (
+                    <li key={t} className="flex gap-1.5"><span aria-hidden="true" className="text-emerald-400">✓</span><span>{t}</span></li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <div className="flex items-center gap-4 pt-1">
+              <button type="button" onClick={skipOllama} disabled={busy}
+                className="rounded-lg bg-gradient-primary px-4 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50">
+                {busy ? 'Saving…' : `Continue without ${llmName}`}
+              </button>
+              <button type="button" onClick={() => setOllamaSkipConfirm(false)}
+                className="min-h-10 text-xs text-content-subtle underline hover:text-content lg:min-h-0">
+                Never mind — I’ll set it up
+              </button>
+            </div>
+        </div>
+      )
+      // Already skipped by choice: neutral confirmation, never a warning.
+      const ollamaSkipNotice = (
+        <div className="rounded-md border border-border bg-surface-raised px-3 py-2 text-sm text-content-muted">
+          ⊘ You chose to continue without {llmName}. Auto-framing, head-crop, Describe/Enhance
+          and the bank’s natural-language filter stay off — start {llmName} anytime to turn them
+          back on.
+        </div>
+      )
+      // Both notices are INSERTS above the step's own body, never a replacement for it.
+      // Returning the panel instead of the body is how the first cut of this went wrong:
+      // the gate says "click ▶ Start Ollama below" or "Pull the vision model below", and
+      // the panel had just taken that button off the screen. The exit and the remedy are
+      // not alternatives — the user is choosing between them, so both have to be visible.
+      const ollamaBody = (() => {
+      // Under LM Studio none of the branches below describe this install: there is
+      // no binary to download, no daemon to start from here, and no model to pull —
+      // its app owns all three. Sending someone to install Ollama because they
+      // picked the other provider is a wrong-product instruction, so this returns
+      // before any of it.
+      // NOT in Docker. There, the deployment cards below are the ONLY control in the
+      // whole app that writes `ollama.deployment_mode`, and scripts/docker-launch.ps1
+      // waits on that value — it prints "Choose the Ollama deployment mode in the
+      // Studio Setup page" and stalls fifteen minutes on EVERY start. Returning
+      // before them took that control off the page, so a Docker user who switched
+      // provider first could never make the choice the launcher is waiting for.
+      // The LM Studio status is shown as an insert instead, above the cards.
+      if (step.isLmStudio && !step.dockerManaged) {
+        return (
+          <div className="space-y-4">
+            <div className={`rounded-md border px-3 py-3 ${step.visionModelReady
+              ? 'border-emerald-500/30 bg-emerald-500/10'
+              : 'border-amber-500/30 bg-amber-500/10'}`}>
+              <p className="text-sm font-medium text-content">
+                {step.visionModelReady
+                  ? 'LM Studio is ready.'
+                  : step.reachable
+                    ? 'LM Studio is running, but no usable model is loaded.'
+                    : step.installed
+                    ? 'LM Studio is installed but not running.'
+                    : 'LM Studio is not answering.'}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-content-muted">
+                {step.visionModelReady
+                  ? step.lmDetail
+                  : step.reachable
+                    ? 'LDS can load it for you — press Load below, and it also happens automatically '
+                      + 'the first time captioning or framing needs it. Downloading NEW models still '
+                      + 'happens inside LM Studio, which shows progress and lets you cancel.'
+                    : step.installed
+                      ? `LM Studio is installed but its server is not running. Start it below — it will listen at ${step.lmUrl || 'http://127.0.0.1:1234'}.`
+                      : `Open LM Studio, go to Developer and press Start Server (expected at ${step.lmUrl || 'http://127.0.0.1:1234'}), then Save & re-check.`}
+              </p>
+              <p className="mt-2 text-xs text-content-muted">
+                Models are downloaded inside LM Studio itself — it shows progress and lets you
+                cancel, which this app cannot do for it.
+              </p>
+              {step.reachable && !step.visionModelReady && (
+                <button type="button" onClick={loadLlmModel} disabled={startingOllama}
+                  className="mt-2 rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50">
+                  {startingOllama ? 'Loading… (a big model takes a minute)' : '⏬ Load the vision model'}
+                </button>
+              )}
+              {!step.reachable && step.installed && (
+                <button type="button" onClick={() => startLocalLlm('LM Studio')}
+                  disabled={startingOllama}
+                  className="mt-2 rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50">
+                  {startingOllama ? 'Starting…' : '▶ Start LM Studio'}
+                </button>
+              )}
+            </div>
+            <SettingsLink section="local-tools" focus="local-llm-provider">
+              Change provider or URL in Settings ▸ Local tools →
+            </SettingsLink>
+            {saveRecheckBtn}
+          </div>
+        )
+      }
+
+      const lmStudioNote = step.isLmStudio ? (
+        <div className="rounded-md border border-border bg-surface-raised px-3 py-3 text-sm">
+          <p className="font-medium text-content">
+            This install is set to use LM Studio{step.visionModelReady ? ' — and it is ready.' : '.'}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-content-muted">
+            {step.visionModelReady
+              ? step.lmDetail
+              : 'Load a vision model in LM Studio (Developer tab) and make sure this container '
+                + 'can reach it — inside Docker that means http://host.docker.internal:1234, not '
+                + 'localhost. The Ollama choice below still applies to the Ollama features.'}
+          </p>
+        </div>
+      ) : null
       if (step.unconfigured) {
         return (
           <div className="space-y-4">
+            {lmStudioNote}
             <div className="rounded-md border border-border bg-surface-raised px-3 py-3">
               <p className="text-sm font-medium text-content">Ollama is optional.</p>
               <p className="mt-1 text-xs leading-relaxed text-content-muted">
@@ -991,6 +1199,7 @@ export default function SetupPage() {
       if (step.disabled) {
         return (
           <div className="space-y-4">
+            {lmStudioNote}
             <div role="status" className="rounded-md border border-border bg-surface-raised px-3 py-3">
               <p className="text-sm font-medium text-content">Ollama is optional and disabled.</p>
               <p className="mt-1 text-xs leading-relaxed text-content-muted">
@@ -1005,6 +1214,7 @@ export default function SetupPage() {
       if (step.managedInitializing) {
         return (
           <div className="space-y-4">
+            {lmStudioNote}
             {deploymentCards}
             <div role="status" aria-live="polite"
               className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-content">
@@ -1022,6 +1232,21 @@ export default function SetupPage() {
                 relaunch <span className="font-mono">{dockerLauncher}</span>.
               </p>
             </div>
+            {fields}
+          </div>
+        )
+      }
+      if (step.isLmStudio) {
+        // Docker only -- the native path returned far above. Every branch below
+        // describes OLLAMA, yet they all key on `reachable`, which under this
+        // provider means "LM Studio answers". That put "✓ Ollama is running at
+        // http://ollama:11434" and a "▶ Start Ollama" button on installs where
+        // Ollama had never run once. The deployment cards stay on the page: the
+        // BAT launcher waits on that choice, so removing them strands a Docker user.
+        return (
+          <div className="space-y-4">
+            {lmStudioNote}
+            {deploymentCards}
             {fields}
           </div>
         )
@@ -1102,7 +1327,7 @@ export default function SetupPage() {
               <p className="mb-2 text-xs text-content-muted">
                 Start it (it listens on port 11434) to unlock captioning and auto-framing — no restart needed.
               </p>
-              <button type="button" onClick={startOllama} disabled={startingOllama}
+              <button type="button" onClick={() => startLocalLlm('Ollama')} disabled={startingOllama}
                 className="rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50">
                 {startingOllama ? 'Starting…' : '▶ Start Ollama'}
               </button>
@@ -1118,6 +1343,46 @@ export default function SetupPage() {
           link={{ href: 'https://ollama.com/download', label: 'Download Ollama →' }}>
           {fields}
         </GuidedSteps>
+      )
+      })()
+      /* FIRST on the step, whichever provider is active and whichever branch the
+         body took: this is the only affordance that tells a new install the choice
+         exists at all. Neither option installs anything -- both servers are
+         external apps -- so this is a "which do you have", not a "which do you
+         want", and the sentence says so. */
+      const llmProviderPicker = (
+        <div className="rounded-md border border-border bg-surface-raised px-3 py-3">
+          <p className="text-sm font-medium text-content">Which local LLM do you run?</p>
+          <p className="mt-1 text-xs leading-relaxed text-content-muted">
+            One server does captioning, auto-framing and the prompt helpers. Pick the one
+            you already have — this app installs neither, and switching changes nothing
+            else about your setup.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2" role="group"
+            aria-label="Local LLM provider">
+            {[['ollama', 'Ollama'], ['lmstudio', 'LM Studio']].map(([id, label]) => {
+              const active = step.llmProvider === id
+              return (
+                <button key={id} type="button" aria-pressed={active}
+                  onClick={() => pickProvider(id)} disabled={savingProvider}
+                  className={`min-h-10 rounded-md border px-3 py-1.5 text-xs font-semibold lg:min-h-0
+                    disabled:opacity-50 ${active
+                      ? 'border-amber-400/60 bg-amber-500/15 text-content'
+                      : 'border-border text-content-muted hover:bg-surface hover:text-content'}`}>
+                  {active ? `✓ ${label}` : label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )
+      return (
+        <div className="space-y-4">
+          {llmProviderPicker}
+          {ollamaSkipConfirm && ollamaSkipPanel}
+          {step.skipped && !ollamaSkipConfirm && ollamaSkipNotice}
+          {ollamaBody}
+        </div>
       )
     }
     if (id === 'quality') {
@@ -1272,7 +1537,11 @@ export default function SetupPage() {
   const kind = SCREENS[screen]
   const DONE = SCREENS.length - 1
   const INSTALL = SCREENS.indexOf('install')   // the install/reinstall step, after config
-  const isReady = (id) => stepById[id].status === 'ready' || stepById[id].disabled
+  // 'skipped' counts as settled. A Docker "No Ollama" already did, through `disabled`;
+  // leaving the native skip out meant the welcome screen kept saying "Start setup" and
+  // kept landing the user back on the step they had just deliberately closed.
+  const isReady = (id) => ['ready', 'skipped'].includes(stepById[id].status)
+    || stepById[id].disabled
   const toolIdx = (id) => SETUP_STEP_IDS.indexOf(id)
   // welcome=0, tools=1..N — and, for the two screens that are not tool steps
   // ('install', 'done'), their index in SCREENS. Without that second lookup a
@@ -1295,33 +1564,6 @@ export default function SetupPage() {
     for (let i = fromIdx - 1; i >= 0; i -= 1)
       if (!isReady(SETUP_STEP_IDS[i])) return SETUP_STEP_IDS[i]
     return null
-  }
-  // Captioning is the ONE capability the wizard insists on. Z-Image (the default
-  // training type) needs Ollama's vision model for prose captions — JoyCaption only
-  // covers SDXL booru tags — so the Ollama gate does NOT lift just because JoyCaption
-  // is present. The MODEL, not merely Ollama being up, is what matters. Nothing else
-  // is hard-gated (build from your own photos + export to train elsewhere stays open).
-  // The global "Skip setup" link is still the deliberate bail-out.
-  // Pure gate check on a derived step object, so it can be re-evaluated against FRESH
-  // capabilities after a save (not just the render-time snapshot).
-  const ollamaGateReason = (s) => {
-    if (!s || s.status === 'ready' || s.disabled) return null
-    if (s.unconfigured) {
-      return 'Choose No Ollama, Existing host Ollama or Docker Ollama on this page before continuing.'
-    }
-    if (s.managedInitializing) {
-      return 'The companion Ollama container is still starting. This page will continue automatically when it is ready.'
-    }
-    if (!s.reachable) {
-      if (s.deploymentMode === 'host') {
-        return 'Host Ollama is selected but unreachable from Docker. Start it on the host and make port 11434 reachable from Docker, or choose Docker Ollama on this page.'
-      }
-      // Installed-but-stopped gets a Start nudge; genuinely absent gets install.
-      if (!s.installed) return "Ollama isn't installed — download it and start it (port 11434) to continue."
-      return 'Ollama is installed but not running — click ▶ Start Ollama below to continue.'
-    }
-    if (!s.visionModelReady) return 'Pull the vision model below to continue — Z-Image captioning needs it (JoyCaption only covers SDXL).'
-    return 'Finish this step to continue.'
   }
   const blockReason = (id) => (id === 'ollama' ? ollamaGateReason(stepById.ollama) : null)
   // The scan already knows what's installed — so "Start setup" / Next land on the
@@ -1382,10 +1624,18 @@ export default function SetupPage() {
       let fresh = null
       try { fresh = await apiFetch('/api/capabilities') } catch { /* keep going */ }
       if (fresh && kind === 'ollama') {
-        const reason = ollamaGateReason(
-          deriveSetupSteps(fresh, runtimeReadiness).find((x) => x.id === 'ollama'),
-        )
-        if (reason) { toast.warning(reason); return }
+        const s = deriveSetupSteps(fresh, runtimeReadiness).find((x) => x.id === 'ollama')
+        const reason = ollamaGateReason(s)
+        // A Docker install already has a first-class "No Ollama" card, so a blocked
+        // Next there is a choice the user can make on this page — say why and stay.
+        // A NATIVE install had no such card and no per-step exit: its Next was a wall.
+        // Show what continuing without Ollama costs, and let the user commit to it.
+        // The panel is an insert, so the remedy the reason names stays on screen next
+        // to it. The toast is kept either way: swapping it for a panel that appears
+        // far above the button under focus left a screen reader with nothing said.
+        if (reason) { toast.warning(reason) }
+        if (reason && s && !s.dockerManaged) { setOllamaSkipConfirm(true); return }
+        if (reason) { return }
       }
       goNext()
     } finally { setAdvancing(false) }
@@ -1401,6 +1651,21 @@ export default function SetupPage() {
       setConfig(data.config); savedConfigRef.current = JSON.stringify(data.config)
       await refresh(true)
       setSkipConfirm(false)
+      goNext()
+    } catch (e) { toast.error(`Save failed: ${e.message}`) }
+    finally { setBusy(false) }
+  }
+
+  // Same, for Ollama. Annulled by REACHABILITY rather than by a path (the backend
+  // derives ollama.skipped = setup_skipped AND not reachable), so starting Ollama
+  // later turns the step back into its real state on its own — nothing to undo.
+  const skipOllama = async () => {
+    setBusy(true)
+    try {
+      const data = await putJson('/api/settings', { config: { ollama: { setup_skipped: true } } })
+      setConfig(data.config); savedConfigRef.current = JSON.stringify(data.config)
+      await refresh(true)
+      setOllamaSkipConfirm(false)
       goNext()
     } catch (e) { toast.error(`Save failed: ${e.message}`) }
     finally { setBusy(false) }
@@ -1447,12 +1712,22 @@ export default function SetupPage() {
     // button fixes it), and genuinely absent (✗). The old triState collapsed the stopped
     // case into "✗ not found", which read as "you don't have Ollama".
     const oll = stepById.ollama
+    // Under LM Studio the ladder has one rung fewer -- no binary to detect, no ▶
+    // Start to offer -- so `oll.installed` tracks reachability there and the
+    // installed-but-stopped rung never fires. Before that, a machine holding an
+    // idle Ollama install told an LM Studio user their server was "installed --
+    // not running" and pointed them at a button for the other product.
+    const llmLabel = oll.isLmStudio ? 'LM Studio' : 'Ollama'
     const ollamaScan = oll.disabled
       ? { state: 'skipped', partial: 'disabled by this deployment' }
+      : (oll.skipped && !oll.installed)
+      ? { state: 'skipped', partial: 'you chose to continue without it' }
       : oll.managedInitializing
         ? { state: 'initializing', partial: 'companion container is starting' }
         : oll.reachable
-          ? { state: oll.visionModelReady ? 'ready' : 'partial', partial: 'running — pull the vision model' }
+          ? { state: oll.visionModelReady ? 'ready' : 'partial',
+              partial: oll.isLmStudio ? 'running — load a vision model in it'
+                : 'running — pull the vision model' }
           : oll.installed
             ? { state: 'partial', partial: 'installed — not running' }
             : { state: 'missing', partial: '' }
@@ -1468,7 +1743,12 @@ export default function SetupPage() {
             : triState(stepById.comfyui.reachable, stepById.comfyui.hasKlein),
         partial: stepById.comfyui.managedInitializing
           ? 'first startup in progress' : 'running — Klein model optional' },
-      { label: 'Captioning — Ollama + vision model', optional: oll.disabled, stepId: 'ollama',
+      // Optional whenever something else already covers captioning (JoyCaption), or
+      // the user has said they don't want it — not merely when a Docker deployment
+      // turned it off. What Ollama alone unlocks stays counted in the capability
+      // summary either way; this flag only stops the row reading like a failure.
+      { label: `Captioning — ${llmLabel} + vision model`, stepId: 'ollama',
+        optional: oll.disabled || oll.skipped || oll.joycaptionReady,
         state: ollamaScan.state, partial: ollamaScan.partial },
       { label: 'LoRA training — ai-toolkit', stepId: 'training',
         state: stepById.training.valid ? 'ready'

@@ -497,7 +497,13 @@ def _wilson_lower_bound(likes: int, voted: int, z: float = 1.96) -> float:
     return (centre - margin) / denom
 
 
-def identity_prompt(ds) -> str:
+def identity_prompt(ds, with_trigger=True) -> str:
+    """Prompt de test par défaut. `with_trigger=False` (case « Trigger word »
+    décochée) rend le MÊME prompt sans le token : sinon le repli d'un prompt
+    vide réinjectait le trigger PAR LE TEXTE alors que la ligne (et la
+    lightbox) annonçaient « no trigger »."""
+    if not with_trigger:
+        return IDENTITY_PROMPT_TEMPLATE.format(trigger='').lstrip(', ')
     return IDENTITY_PROMPT_TEMPLATE.format(trigger=(ds.trigger_word or '').strip())
 
 
@@ -1109,7 +1115,7 @@ def describe_test_prompt(image_bytes: bytes) -> str:
         raise ValueError('unreadable image — expected a webp, png or jpg file') from e
     # The /describe-image route owns the one GPU-exclusive Vision window. Keep
     # this service callable without recursively claiming it a second time.
-    from .vision_ollama import describe_image_ollama
+    from .vision_llm import describe_image as describe_image_ollama
     from .vision_keepalive import keep_alive_for_isolated_call
     text = describe_image_ollama(
         webp, STUDIO_DESCRIBE_PROMPT, num_predict=500, auto_start_local=True,
@@ -1143,11 +1149,13 @@ STUDIO_ENHANCE_PROMPT = (
     "PROMPT TO ENHANCE:\n{prompt}")
 
 
-def enhance_test_prompt(prompt: str) -> str:
-    """Enrich a Studio test prompt with the LOCAL Ollama text model — the same
+def enhance_test_prompt(prompt: str, model: str | None = None) -> str:
+    """Enrich a Studio test prompt with a LOCAL Ollama text model — by default the same
     abliterated model the app captions with (a vanilla model refuses the NSFW prompts
     this app produces), through the SAME client as captioning (`vision_ollama`); no
-    second Ollama seam exists.
+    second Ollama seam exists. `model` is the ⚙️ Enhance-options override: that exact
+    model is then verified and used instead, and the readiness error names IT — not the
+    Settings default the call never touched.
 
     A stopped LOCAL Ollama is started on demand, exactly like Describe. Whether the
     model stays resident afterwards is decided by contention (vision_keepalive), so
@@ -1161,21 +1169,31 @@ def enhance_test_prompt(prompt: str) -> str:
         raise ValueError('write a prompt first — there is nothing to enhance')
     if len(p) > STUDIO_ENHANCE_MAX_CHARS:
         raise ValueError(f'prompt too long to enhance (max {STUDIO_ENHANCE_MAX_CHARS} characters)')
-    from .ollama_control import ensure_captioning_ready
     from .vision_keepalive import keep_alive_for_isolated_call
-    from .vision_ollama import generate_text_ollama
-    ready = ensure_captioning_ready()
+    from .vision_llm import ensure_ready, generate_text as generate_text_ollama, label
+    ready = ensure_ready(model)
     if not ready.get('ok'):
-        raise RuntimeError(
-            (ready.get('error') or 'Ollama is unavailable')
-            + ' — Enhance needs the local Ollama model configured in Settings › Local tools.')
-    text = generate_text_ollama(STUDIO_ENHANCE_PROMPT.format(prompt=p), num_predict=500,
+        # The remedy is not the same word for the two providers: an Ollama model is
+        # PULLED, an LM Studio one is LOADED in its app. Saying "load" to an Ollama
+        # user was a regression this wave introduced; saying "pull" to an LM Studio
+        # user names an action their server does not have.
+        if model:
+            fix = (' — pick another model from the ✨ Enhance ⚙️ options, or load this '
+                   'one in LM Studio first.' if label() == 'LM Studio'
+                   else ' — pick another model from the ✨ Enhance ⚙️ options, or pull '
+                        'this one first.')
+        else:
+            fix = (f' — Enhance needs the local {label()} model configured in '
+                   'Settings › Local tools.')
+        raise RuntimeError((ready.get('error') or f'{label()} is unavailable') + fix)
+    text = generate_text_ollama(STUDIO_ENHANCE_PROMPT.format(prompt=p), model=model,
+                                num_predict=500,
                                 keep_alive=keep_alive_for_isolated_call(), strict=True)
     text = (text or '').strip().strip('"').strip()
     if not text:
         raise RuntimeError(
-            'The model returned an empty prompt — check the configured Ollama model in '
-            'Settings and the application log.')
+            f'The model returned an empty prompt — check the configured {label()} model '
+            'in Settings and the application log.')
     return text
 
 
@@ -1488,7 +1506,8 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
                                   filename_prefix=None, allowed_loras=None, extra_loras=None,
                                   rebalance=None, sampler=None, scheduler=None,
                                   weight_dtype=None, enhancer_strength=None,
-                                  base_model=None, allowed_bases=None):
+                                  base_model=None, allowed_bases=None,
+                                  sampler_preset=None):
     """Configure une cellule de test sur le workflow Krea 2 Turbo : le LoRA testé est
     injecté après le UNETLoader (node 20 → KSampler node 26), + prompt/seed/dims/steps/cfg.
     `extra_loras` = LoRA « always-on » (style/utilitaire) chaînés EN PLUS dans le même
@@ -1592,6 +1611,14 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
     # sinon ON à cette force (clampée 0..2 dans inject_krea2t_enhancer).
     if enhancer_strength is not None:
         inject_krea2t_enhancer(workflow, True, enhancer_strength)
+    # Preset sampler LAST, and it has to stay last: it reads KSampler.model, which
+    # both injections above rewrite. Ahead of them it would wire the guider to the
+    # bare UNETLoader and drop the whole stack, silently. `sampler_preset` None/off
+    # (the default) leaves the KSampler exactly as it is — which is also what keeps
+    # the shipped node OPTIONAL: no preset, no class in the graph, nothing to
+    # install. Pinned by test_krea_preset_sampler_contract.
+    from ..utils.comfyui import inject_krea_preset_sampler
+    inject_krea_preset_sampler(workflow, sampler_preset)
 
 
 # --- Node-class resolution (variant-tolerant custom nodes) --------------------
@@ -1663,7 +1690,8 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
                          cfg=None, steps=None, steps2=None, dataset_id=None, train_type='zimage',
                          extra_loras=None, rebalance=None, negative=None, sampler=None,
                          scheduler=None, weight_dtype=None, enhancer_strength=None,
-                         detail_amount=None, trigger_word=None, available_classes=None):
+                         detail_amount=None, trigger_word=None, available_classes=None,
+                         sampler_preset=None):
     """Load the ZTurbo (Z-Image) / HQ (SDXL) / Krea workflow and configure one grid cell.
     `extra_loras` = LoRA « always-on » (style/utilitaire) appliqués à CETTE cellule en plus
     du checkpoint testé (hors batch). `rebalance` = node 30 NSFW/texture (Krea uniquement,
@@ -1725,7 +1753,7 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
             batch_size=1, filename_prefix=fname, allowed_loras=allowed_krea,
             extra_loras=extra_loras, rebalance=rebalance,
             sampler=sampler, scheduler=scheduler, weight_dtype=weight_dtype,
-            enhancer_strength=enhancer_strength,
+            enhancer_strength=enhancer_strength, sampler_preset=sampler_preset,
             # Base Krea locale optionnelle (z_model, même canal que SDXL/Z-Image) ;
             # None = UNET câblé du workflow. Whitelist = scan disque (anti-injection).
             base_model=z_model, allowed_bases=set(get_krea_models()),
@@ -1868,7 +1896,7 @@ def _persist_and_enqueue_cell(img, user_id, dataset_id, prompt, build_workflow) 
 def _sanitize_gen_knobs(run_family, *, negative=None, sampler=None, scheduler=None,
                         weight_dtype=None, enhancer=None, enhancer_strength=None,
                         detail_amount=None, resolution_tier=None, resolution_multiplier=None,
-                        init_image=None, denoise=None) -> dict:
+                        init_image=None, denoise=None, sampler_preset=None) -> dict:
     """Normalise + valide les réglages de génération GLOBAUX d'un run (parité Generate),
     filtrés PAR FAMILLE (un sampler Krea n'a aucun sens en Z-Image). Renvoie un dict prêt
     à la fois à persister sur LoraTestImage ET à passer à `_build_cell_workflow`. Chaque
@@ -1880,6 +1908,15 @@ def _sanitize_gen_knobs(run_family, *, negative=None, sampler=None, scheduler=No
     fam = (run_family or 'zimage').lower()
     neg = ((negative or '').strip() or None) if fam == 'zimage' else None
     smp = sampler if (fam == 'krea' and sampler in KREA_ALLOWED_SAMPLERS) else None
+    # Preset du sampler maison. Whitelist SEPAREE de KREA_ALLOWED_SAMPLERS a
+    # dessein : les deux nourrissent le meme menu cote UI mais pas le meme endroit
+    # du graphe — un preset ecrit dans `sampler_name` serait un nom de sampler que
+    # ComfyUI ne connait pas, et le graphe serait refuse a la validation. Hors
+    # liste = None = KSampler standard.
+    from ..utils.comfyui import KREA_SAMPLER_PRESETS
+    smp_preset = (sampler_preset
+                  if (fam == 'krea' and sampler_preset in KREA_SAMPLER_PRESETS)
+                  else None)
     sch = scheduler if (fam == 'krea' and scheduler in KREA_ALLOWED_SCHEDULERS) else None
     wdt = weight_dtype if (fam == 'krea' and weight_dtype in KREA_ALLOWED_WEIGHT_DTYPES) else None
     enh = None
@@ -1906,7 +1943,8 @@ def _sanitize_gen_knobs(run_family, *, negative=None, sampler=None, scheduler=No
         except (TypeError, ValueError):
             den = None
     ini = ((init_image or '').strip() or None) if fam == 'krea' else None
-    return {'negative': neg, 'sampler': smp, 'scheduler': sch, 'weight_dtype': wdt,
+    return {'negative': neg, 'sampler': smp, 'sampler_preset': smp_preset,
+            'scheduler': sch, 'weight_dtype': wdt,
             'enhancer_strength': enh, 'detail_amount': dta, 'resolution_tier': tier,
             'resolution_multiplier': mult, 'init_image': ini, 'denoise': den}
 
@@ -2231,6 +2269,16 @@ STUDIO_NODE_PACKS = {
         'url': 'https://github.com/nova452/ComfyUI-Conditioning-Rebalance',
         'search': 'Krea 2 Conditioning',
     },
+    # Krea 2 preset sampler (the optional custom-sampling lane). Unlike every other
+    # entry here there is no `url` and no `search`: the code is already on the
+    # user's disk, shipped with the app, and the fix is a button on the Setup
+    # screen rather than a trip to ComfyUI-Manager. The banner branches on the
+    # missing `url` — sending someone to search a manager for a pack that is not
+    # published anywhere would be a dead end dressed as an instruction.
+    'LDSKrea2PresetSampler': {
+        'pack': 'Krea 2 preset sampler',
+        'setup': 'the Setup screen, under Krea 2',
+    },
     # Detail Daemon sampler (node 57 of image_real_HQ.json, the SDXL family's pass
     # 2) — EVERY fresh SDXL Studio install needs this pack, so its absence must
     # name the pack, not just the class (GitHub #36, KingyWolf).
@@ -2256,11 +2304,19 @@ def studio_missing_node_hints(nodes):
 
 
 def _preflight_run(user_id, run_family, checkpoint, bases, allowed, prompt, seed,
-                   dataset_id, trigger_word):
+                   dataset_id, trigger_word, sampler_preset=None):
     """Build a representative cell workflow for `run_family` (one per distinct base
     in `bases`) and run `preflight_family` on it. Raises StudioAssetsMissing when
     the target ComfyUI can't run the grid. A representative build that itself fails
-    is skipped (the enqueue loop would surface that path's own error)."""
+    is skipped (the enqueue loop would surface that path's own error).
+
+    `sampler_preset` has to be threaded in even though the preflight cares about
+    NOTHING else in the gen knobs: it is the one setting that changes which node
+    CLASSES the graph names. Left out, the representative build carries a plain
+    KSampler, the preflight finds nothing missing, and the run is enqueued to fail
+    tile by tile on a ComfyUI validation error — the exact grid of mute failures
+    this preflight exists to replace. Any future knob that adds a node class owes
+    the same thread."""
     wfs = []
     seen = set()
     for base in (bases or [None]):
@@ -2271,7 +2327,8 @@ def _preflight_run(user_id, run_family, checkpoint, bases, allowed, prompt, seed
         try:
             wfs.append(_build_cell_workflow(
                 user_id, checkpoint, 1.0, prompt or '', seed or 1, base, allowed,
-                dataset_id=dataset_id, train_type=run_family, trigger_word=trigger_word))
+                dataset_id=dataset_id, train_type=run_family, trigger_word=trigger_word,
+                sampler_preset=sampler_preset))
         except Exception as e:  # noqa: BLE001 — a bad representative build ≠ a missing asset
             logger.warning('studio preflight: representative build failed (base=%r): %s', base, e)
     preflight_family(run_family, wfs)
@@ -2517,6 +2574,23 @@ def _stack_signature(members) -> str:
 _STACK_SCAN_ROWS = 600
 
 
+def _shared_cell(r) -> dict:
+    """Une cellule du Studio publiée d'abord comme TOUTE image de gallery.
+
+    Le serializer partagé (cloud_training.gallery_image) EST la parité : le
+    viewer du Studio lit les mêmes faits que la Gallery — prompt, seed,
+    checkpoint, LoRAs annexes, base, sampler, dérivation, pose caméra. Chaque
+    payload du Studio étale ses clés spécifiques PAR-DESSUS ce socle, jamais à
+    la place : trois blocs de cellules avaient dérivé en trois formes, et
+    c'est ce que l'utilisateur a vu (« des infos qu'on ne retrouve pas »).
+    Import paresseux — cloud_training importe déjà ce module à l'exécution."""
+    from . import cloud_training as ct
+    cell = ct.gallery_image(r)
+    if not r.filename:
+        cell['url'] = None   # pending/failed : pas de fichier, pas d'URL mensongère
+    return cell
+
+
 def stack_variants(run_id, rows, limit=8) -> list:
     """Les runs de la MÊME pile (mêmes LoRA, poids éventuellement différents), du plus
     récent au plus ancien, run courant compris et marqué `active`.
@@ -2581,10 +2655,14 @@ def stack_variants(run_id, rows, limit=8) -> list:
             'likes': sum(1 for c in cells if c.rating == 1),
             'dislikes': sum(1 for c in cells if c.rating == -1),
             'done': sum(1 for c in cells if c.status == 'done' and c.filename),
-            'cells': [{'id': c.id, 'dataset_id': c.dataset_id, 'checkpoint': c.checkpoint,
+            # Superset du serializer PARTAGÉ (cloud_training.gallery_image) : le
+            # viewer du Studio lit désormais les mêmes faits que la Gallery
+            # (prompt, LoRAs, base, sampler…) — une cellule qui en sait moins
+            # qu'une image de gallery était le trou signalé. Les clés
+            # spécifiques du bloc restent par-dessus.
+            'cells': [{**_shared_cell(c),
                        'label': _basename(c.checkpoint or '').rsplit('.', 1)[0],
-                       'filename': c.filename, 'rating': c.rating, 'status': c.status,
-                       'seed': c.seed, 'aspect': c.aspect, 'strength': c.strength,
+                       'filename': c.filename, 'status': c.status,
                        'error': c.error if c.status == 'failed' else None} for c in cells],
         })
     # Le run courant d'abord, le reste dans l'ordre de scan (récent → ancien).
@@ -2620,6 +2698,8 @@ class StudioGenSettings:
     rebalance_strength: object = None
     negative: object = None
     sampler: object = None
+    # Preset du sampler maison (Krea). None = off = KSampler standard.
+    sampler_preset: object = None
     scheduler: object = None
     weight_dtype: object = None
     enhancer: object = None
@@ -2629,6 +2709,9 @@ class StudioGenSettings:
     resolution_multiplier: object = None
     init_image: object = None
     denoise: object = None
+    # Case « Trigger word » : False = ne pas préfixer le trigger word du dataset
+    # au prompt. None/True = comportement historique (injection au montage).
+    inject_trigger: object = None
 
     @classmethod
     def from_payload(cls, d):
@@ -2652,6 +2735,7 @@ class StudioGenSettings:
             rebalance_strength=d.get('rebalance_strength'),
             negative=d.get('negative'),
             sampler=d.get('sampler'),
+            sampler_preset=d.get('sampler_preset'),
             scheduler=d.get('scheduler'),
             weight_dtype=d.get('weight_dtype'),
             enhancer=d.get('enhancer'),
@@ -2660,7 +2744,8 @@ class StudioGenSettings:
             resolution_tier=d.get('resolution_tier'),
             resolution_multiplier=d.get('resolution_multiplier'),
             init_image=d.get('init_image'),
-            denoise=d.get('denoise'))
+            denoise=d.get('denoise'),
+            inject_trigger=d.get('inject_trigger'))
 
 
 def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
@@ -2699,6 +2784,7 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     rebalance_strength = settings.rebalance_strength
     negative = settings.negative
     sampler = settings.sampler
+    sampler_preset = settings.sampler_preset
     scheduler = settings.scheduler
     weight_dtype = settings.weight_dtype
     enhancer = settings.enhancer
@@ -2708,6 +2794,9 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     resolution_multiplier = settings.resolution_multiplier
     init_image = settings.init_image
     denoise = settings.denoise
+    # Case « Trigger word » (décochée → False) : le prompt part alors tel quel,
+    # sans le trigger du dataset — persisté par cellule pour un resume fidèle.
+    inject_trigger = settings.inject_trigger is not False
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -2776,6 +2865,7 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     # Réglages de génération GLOBAUX du run (parité Generate), validés + gatés par famille.
     knobs = _sanitize_gen_knobs(
         run_family, negative=negative, sampler=sampler, scheduler=scheduler,
+        sampler_preset=sampler_preset,
         weight_dtype=weight_dtype, enhancer=enhancer, enhancer_strength=enhancer_strength,
         detail_amount=detail_amount, resolution_tier=resolution_tier,
         resolution_multiplier=resolution_multiplier,
@@ -2830,8 +2920,10 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     _MAX = 2**31 - 1
     seeds = [1 + ((seed + i - 1) % _MAX) for i in range(count)]  # distincts, dans [1, 2^31-1]
 
-    # Prompt custom optionnel ; sinon prompt d'identité par défaut (trigger).
-    prompt = (prompt or '').strip() or identity_prompt(ds)
+    # Prompt custom optionnel ; sinon prompt d'identité par défaut — SANS le
+    # trigger quand la case est décochée (le repli doit suivre la décision,
+    # sinon la méta « no trigger » mentait sur le chemin du prompt vide).
+    prompt = (prompt or '').strip() or identity_prompt(ds, with_trigger=inject_trigger)
     # 📝 Lot de prompts : l'axe vaut [prompt] quand rien n'est coché → chemin
     # strictement identique à avant. Le preflight et les journaux parlent du 1er.
     prompt_axis = _prompt_axis(prompts, prompt)
@@ -2848,7 +2940,9 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     # frais reçoit un seul 409 actionnable au lieu d'une grille de tuiles muettes.
     # (Krea/SDXL n'avaient AUCUN preflight ; seul Klein en avait un.)
     _preflight_run(user_id, run_family, cells[0][0], valid_models, allowed,
-                   prompt, seeds[0], dataset_id, ds.trigger_word)
+                   prompt, seeds[0], dataset_id,
+                   ds.trigger_word if inject_trigger else None,
+                   sampler_preset=knobs['sampler_preset'])
 
     # Classes du ComfyUI cible, lues UNE fois pour toute la grille : le builder s'en
     # sert pour réécrire les nodes à variantes (node 30 Krea) vers le nom réellement
@@ -2889,12 +2983,16 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
                                 prompt=cell_prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
                                 extra_loras=cell_extra_json, krea_rebalance=cell_rebalance,
                                 negative=knobs['negative'], sampler=knobs['sampler'],
+                                sampler_preset=knobs['sampler_preset'],
                                 scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
                                 enhancer_strength=knobs['enhancer_strength'],
                                 detail_amount=knobs['detail_amount'],
                                 resolution_tier=knobs['resolution_tier'],
                                 resolution_multiplier=knobs['resolution_multiplier'],
                                 init_image=knobs['init_image'], denoise=knobs['denoise'],
+                                # NULL quand la case est cochée (défaut) : la ligne reste
+                                # octet pour octet celle d'avant la colonne.
+                                inject_trigger=None if inject_trigger else False,
                                 record_id=origin_of.get(checkpoint, (None, None))[0],
                                 step=origin_of.get(checkpoint, (None, None))[1])
             _persist_and_enqueue_cell(
@@ -2907,10 +3005,12 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
                                              train_type=run_family, extra_loras=wf_extra,
                                              rebalance=cell_rebalance,
                                              negative=knobs['negative'], sampler=knobs['sampler'],
+                                             sampler_preset=knobs['sampler_preset'],
                                              scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
                                              enhancer_strength=knobs['enhancer_strength'],
                                              detail_amount=knobs['detail_amount'],
-                                             trigger_word=ds.trigger_word,
+                                             trigger_word=(ds.trigger_word
+                                                           if inject_trigger else None),
                                              available_classes=available_classes))
             ids.append(img.id)
     logger.info(f"lora-test: run {run_id} dataset {dataset_id} -> {len(ids)} cellule(s) "
@@ -3090,7 +3190,8 @@ def _cmp_collect_extra_loras(run_type, permanent_loras, external_loras):
 def _cmp_cell_knobs(run_type, batch_loras, rebalance, rebalance_strength,
                     negative, sampler, scheduler, weight_dtype, enhancer,
                     enhancer_strength, detail_amount, resolution_tier,
-                    resolution_multiplier, init_image, denoise):
+                    resolution_multiplier, init_image, denoise,
+                    sampler_preset=None):
     """Les réglages portés par chaque cellule, déplacés tels quels : l'axe
     ⚖ batch, l'encodage du rebalance Krea, et les réglages globaux validés
     et gatés par famille. Retourne (batch_axis, cell_rebalance, knobs)."""
@@ -3110,6 +3211,7 @@ def _cmp_cell_knobs(run_type, batch_loras, rebalance, rebalance_strength,
     # Réglages de génération GLOBAUX (parité Generate), validés + gatés par famille.
     knobs = _sanitize_gen_knobs(
         run_type, negative=negative, sampler=sampler, scheduler=scheduler,
+        sampler_preset=sampler_preset,
         weight_dtype=weight_dtype, enhancer=enhancer, enhancer_strength=enhancer_strength,
         detail_amount=detail_amount, resolution_tier=resolution_tier,
         resolution_multiplier=resolution_multiplier,
@@ -3118,7 +3220,7 @@ def _cmp_cell_knobs(run_type, batch_loras, rebalance, rebalance_strength,
 
 
 def _cmp_preflight(user_id, run_type, selections, externals, valid_models,
-                   prompt_axis, seeds):
+                   prompt_axis, seeds, inject_trigger=True, sampler_preset=None):
     """Les preflights du run, déplacés tels quels : l'arch réelle de chaque
     checkpoint (externes compris) contre la famille, puis le workflow de la
     famille essayé sur la première sélection valable — un seul 409
@@ -3158,8 +3260,11 @@ def _cmp_preflight(user_id, run_type, selections, externals, valid_models,
         _pf_cp = _sel.get('checkpoint')
         if _pf_cp is not None and _norm_rel(_pf_cp) in _pf_allowed:
             _preflight_run(user_id, run_type, _pf_cp, valid_models, _pf_allowed,
-                           prompt_axis[0] or identity_prompt(_pf_ds), seeds[0],
-                           _sel.get('dataset_id'), getattr(_pf_ds, 'trigger_word', None))
+                           prompt_axis[0] or identity_prompt(_pf_ds, with_trigger=inject_trigger),
+                           seeds[0], _sel.get('dataset_id'),
+                           (getattr(_pf_ds, 'trigger_word', None)
+                            if inject_trigger else None),
+                           sampler_preset=sampler_preset)
             break
     return _dataset_and_checkpoints
 
@@ -3259,7 +3364,8 @@ def _cmp_build_cell_plan(valid_models, selections, combos, strengths,
 def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
                        knobs, run_type, batch_axis, prompt_axis, seeds, seed,
                        run_id, extra_loras, cell_rebalance, origin_of,
-                       combine, stack_triggers, available_classes):
+                       combine, stack_triggers, available_classes,
+                       inject_trigger=True):
     """La matérialisation du plan, déplacée telle quelle : pour chaque
     cellule planifiée, la pile persistée avec son identité, les dimensions
     de l'aspect, les axes batch/prompt/seed, la ligne LoraTestImage et la
@@ -3294,7 +3400,7 @@ def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
           wf_extra = extra_loras + stack_extra + ([batch_lora] if batch_lora else [])
           cell_extra_json = json.dumps(row_extra) if row_extra else None
           for axis_prompt in prompt_axis:  # AXE 📝 lot : une passe par prompt coché
-           cell_prompt = axis_prompt or identity_prompt(ds)
+           cell_prompt = axis_prompt or identity_prompt(ds, with_trigger=inject_trigger)
            for cell_seed in seeds:
             img = LoraTestImage(dataset_id=ds.id, checkpoint=cp, strength=strength,
                                 seed=cell_seed, run_seed=seed, run_id=run_id,
@@ -3302,12 +3408,14 @@ def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
                                 prompt=cell_prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
                                 extra_loras=cell_extra_json, krea_rebalance=cell_rebalance,
                                 negative=knobs['negative'], sampler=knobs['sampler'],
+                                sampler_preset=knobs['sampler_preset'],
                                 scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
                                 enhancer_strength=knobs['enhancer_strength'],
                                 detail_amount=knobs['detail_amount'],
                                 resolution_tier=knobs['resolution_tier'],
                                 resolution_multiplier=knobs['resolution_multiplier'],
                                 init_image=knobs['init_image'], denoise=knobs['denoise'],
+                                inject_trigger=None if inject_trigger else False,
                                 record_id=origin_of.get(cp, (None, None))[0],
                                 step=origin_of.get(cp, (None, None))[1])
             _persist_and_enqueue_cell(
@@ -3322,13 +3430,16 @@ def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
                                      train_type=run_type, extra_loras=wf_extra,
                                      rebalance=cell_rebalance,
                                      negative=knobs['negative'], sampler=knobs['sampler'],
+                                     sampler_preset=knobs['sampler_preset'],
                                      scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
                                      enhancer_strength=knobs['enhancer_strength'],
                                      detail_amount=knobs['detail_amount'],
                                      # Pile combinée : TOUS les triggers de la pile,
-                                     # celui du LoRA de tête en premier.
-                                     trigger_word=([ds.trigger_word] + stack_triggers
-                                                   if combine else ds.trigger_word),
+                                     # celui du LoRA de tête en premier. Case
+                                     # « Trigger word » décochée → aucun, pile comprise.
+                                     trigger_word=(([ds.trigger_word] + stack_triggers
+                                                    if combine else ds.trigger_word)
+                                                   if inject_trigger else None),
                                      available_classes=available_classes))
             ids.append(img.id)
     return ids
@@ -3380,6 +3491,7 @@ def create_comparison_run(user_id, selections, strengths, settings=None, *,
     rebalance_strength = settings.rebalance_strength
     negative = settings.negative
     sampler = settings.sampler
+    sampler_preset = settings.sampler_preset
     scheduler = settings.scheduler
     weight_dtype = settings.weight_dtype
     enhancer = settings.enhancer
@@ -3389,6 +3501,8 @@ def create_comparison_run(user_id, selections, strengths, settings=None, *,
     resolution_multiplier = settings.resolution_multiplier
     init_image = settings.init_image
     denoise = settings.denoise
+    # Case « Trigger word » — même contrat que create_run (False = prompt brut).
+    inject_trigger = settings.inject_trigger is not False
     run_type, models = _cmp_resolve_run_family(selections)
     valid_models, seed, count, seeds, prompt_axis = _cmp_seed_and_prompts(
         models, z_model, z_models, seed, count, prompt, prompts)
@@ -3398,11 +3512,12 @@ def create_comparison_run(user_id, selections, strengths, settings=None, *,
         run_type, batch_loras, rebalance, rebalance_strength, negative,
         sampler, scheduler, weight_dtype, enhancer, enhancer_strength,
         detail_amount, resolution_tier, resolution_multiplier, init_image,
-        denoise)
+        denoise, sampler_preset=sampler_preset)
 
     _dataset_and_checkpoints = _cmp_preflight(
         user_id, run_type, selections, externals, valid_models,
-        prompt_axis, seeds)
+        prompt_axis, seeds, inject_trigger=inject_trigger,
+        sampler_preset=knobs['sampler_preset'])
 
     # Classes du ComfyUI cible, lues UNE fois pour tout le run (cf. create_run) →
     # réécriture des nodes à variantes (node 30 Krea) vers le nom réellement enregistré.
@@ -3427,7 +3542,7 @@ def create_comparison_run(user_id, selections, strengths, settings=None, *,
         user_id, cell_plan, members, _dataset_and_checkpoints, knobs,
         run_type, batch_axis, prompt_axis, seeds, seed, run_id,
         extra_loras, cell_rebalance, origin_of, combine, stack_triggers,
-        available_classes)
+        available_classes, inject_trigger=inject_trigger)
     # `len(members)`, pas `len(stack_extra)` : celui-ci vit maintenant DANS la boucle
     # et vaudrait la dernière combinaison — ou n'existerait pas du tout sur un plan
     # vide. Le nombre de combinaisons est journalisé : c'est le premier chiffre
@@ -3659,13 +3774,21 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
         # (sinon table fixe / multiplicateur 1.0 sur les cellules legacy sans la colonne).
         width, height = _aspect_dims(aspect, cell_family, getattr(img, 'resolution_tier', None),
                                      getattr(img, 'resolution_multiplier', None) or 1.0)
-        prompt = (img.prompt or '').strip() or identity_prompt(cell_ds)
+        prompt = ((img.prompt or '').strip()
+                  or identity_prompt(cell_ds,
+                                     with_trigger=getattr(img, 'inject_trigger', None) is not False))
         seed = img.seed or random.randint(1, 2**31 - 1)
         # LoRA always-on stockés sur la cellule → réappliqués à l'identique au resume.
         try:
             cell_extra = json.loads(img.extra_loras) if img.extra_loras else None
         except (json.JSONDecodeError, TypeError):
             cell_extra = None
+        # Pile 🧬 : les triggers des MEMBRES vivent dans la copie persistée
+        # (entrées `combined`) — relus ici pour que le prompt du resume soit
+        # celui du lancement (ils étaient perdus : seul le trigger de tête
+        # repartait, cf. l'enfilement qui passe [tête] + stack_triggers).
+        _stack_trigs = [e.get('trigger') for e in (cell_extra or [])
+                        if isinstance(e, dict) and e.get('combined') and e.get('trigger')]
         try:
             # Tous les réglages globaux (parité Generate) relus depuis la cellule → resume fidèle.
             workflow = _build_cell_workflow(user_id, img.checkpoint, img.strength,
@@ -3677,11 +3800,20 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
                                             rebalance=img.krea_rebalance,
                                             negative=getattr(img, 'negative', None),
                                             sampler=getattr(img, 'sampler', None),
+                                            sampler_preset=getattr(img, 'sampler_preset', None),
                                             scheduler=getattr(img, 'scheduler', None),
                                             weight_dtype=getattr(img, 'weight_dtype', None),
                                             enhancer_strength=getattr(img, 'enhancer_strength', None),
                                             detail_amount=getattr(img, 'detail_amount', None),
-                                            trigger_word=getattr(cell_ds, 'trigger_word', None),
+                                            # Case « Trigger word » décochée au lancement
+                                            # (colonne False) → le resume reste fidèle ;
+                                            # sinon tête + triggers de pile, comme à l'enfilement.
+                                            trigger_word=(None
+                                                          if getattr(img, 'inject_trigger', None) is False
+                                                          else ([getattr(cell_ds, 'trigger_word', None)]
+                                                                + _stack_trigs
+                                                                if _stack_trigs
+                                                                else getattr(cell_ds, 'trigger_word', None))),
                                             available_classes=available_classes)
             job_id = _enqueue_cell(user_id, img.dataset_id, workflow, prompt,
                                    cell_id=img.id, run_id=img.run_id)
@@ -3910,7 +4042,6 @@ def undo_generated_repair(user_id, image_id) -> dict | None:
 
 IMPROVE_FILE_GONE = 'that image file is no longer on disk'
 IMPROVE_NOT_DONE = 'this image is still rendering'
-IMPROVE_ALREADY_DERIVED = 'an upscale & improve result cannot be improved again'
 
 
 def improve_canvas_image(user_id, image_id, engine=None):
@@ -3928,6 +4059,11 @@ def improve_canvas_image(user_id, image_id, engine=None):
     because the Test Studio's own resume path deliberately no longer picks these
     rows up (it would re-queue them as Z-Image cells, which is the wrong engine
     and the wrong workflow).
+
+    Improves CHAIN: a finished improve result (or a 📷 camera view) is as valid
+    a source as the render it came from, so Klein detail can be followed by a
+    SeedVR2 resolution pass on the same picture. Each pass is its own click and
+    its own row; only a source still rendering is refused.
     """
     row = db.session.get(LoraTestImage, image_id)
     if row is None:
@@ -3935,8 +4071,15 @@ def improve_canvas_image(user_id, image_id, engine=None):
     ds = fds.get_dataset(user_id, row.dataset_id)
     if not ds:
         return None
-    if row.derivation_kind:
-        raise ValueError(IMPROVE_ALREADY_DERIVED)
+    # A derived row is a legitimate source — asked for from the gallery on a
+    # phone, refused with "cannot be improved again", and the refusal had no
+    # ground to stand on: an upscale of an upscale (or of a 📷 camera view) is
+    # still the SAME picture, only worked further — nothing compounds the way a
+    # camera view OF a camera view invents a second backdrop. It is also the
+    # only way to run Klein detail THEN SeedVR2 resolution on one picture.
+    # Every chained candidate copies record_id/step/checkpoint from its source,
+    # so it lands in the same gallery, and the in-flight idempotence below is
+    # keyed on THIS row's id — a chain cannot collide with its parent's slot.
     if row.status != 'done' or not row.filename:
         raise ValueError(IMPROVE_NOT_DONE)
     source_path = os.path.join(fds._dataset_dir(row.dataset_id), row.filename)
@@ -4115,7 +4258,7 @@ def camera_views_for_canvas_image(user_id, image_id, poses):
     # model cannot leave a dataset full of failed tiles — the lesson the Klein
     # lane already paid for (preflight in generate_variations).
     missing = qch.camera_missing_assets()
-    if any(a in missing for a in qch.CAMERA_REQUIRED):
+    if not qch.camera_ready(missing):
         raise qch.CameraModelsMissing(missing)
 
     views = []
@@ -4190,6 +4333,26 @@ def _owned_test_image(user_id, image_id):
     """Single-user app: no cross-user ownership check (SRC compared the
     image's dataset.user_id against `user_id`) - just the row lookup."""
     return db.session.get(LoraTestImage, image_id)
+
+
+def image_render_status(user_id, image_id):
+    """One library image's render state — the heartbeat the ✨ modal polls.
+
+    Deliberately tiny: {status, url, error} is everything a "is my improve
+    done yet" question needs, and nothing a 4-second poll should pay more
+    for. None when the row is not the caller's."""
+    row = db.session.get(LoraTestImage, image_id)
+    if row is None:
+        return None
+    ds = fds.get_dataset(user_id, row.dataset_id)
+    if not ds:
+        return None
+    return {
+        'id': row.id, 'status': row.status,
+        'url': (f'/api/dataset/{row.dataset_id}/img/{row.filename}'
+                if row.filename else None),
+        'error': row.error if row.status == 'failed' else None,
+    }
 
 
 def rate_image(user_id, image_id, rating) -> bool:
@@ -4806,27 +4969,25 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         # ou null quand l'historique est trop court : l'estimation de durée du
         # panneau cesse d'être « ~12 s/image » sur toutes les cartes du monde.
         'seconds_per_image': measured_seconds_per_image(eff),
-        'cells': [{'id': r.id, 'checkpoint': r.checkpoint,
+        # Superset du serializer PARTAGÉ (cloud_training.gallery_image) — voir
+        # stack_variants : mêmes faits que la Gallery, plus les clés que seule
+        # cette grille lit. `run_id` : la colonne a toujours été écrite
+        # (`create_run`) mais n'était pas servie → la grille devinait un run
+        # depuis run_seed+prompt, et un batch de N prompts semblait N runs.
+        'cells': [{**_shared_cell(r),
                    'label': _checkpoint_display_label(r.checkpoint, known),
-                   'strength': r.strength, 'aspect': r.aspect, 'filename': r.filename,
-                   'rating': r.rating, 'seed': r.seed, 'run_seed': r.run_seed,
-                   # WHICH launch this cell belongs to. The column has always been
-                   # written (`create_run`), but it was never served, so the grid
-                   # had to guess a run from `run_seed` + prompt — and a batch of N
-                   # prompts then looked like N separate runs, of which it showed
-                   # one. Null on rows predating the column; the frontend keeps the
-                   # old grouping for those.
-                   'run_id': r.run_id, 'status': r.status,
+                   'filename': r.filename, 'run_seed': r.run_seed,
+                   'status': r.status,
                    'queue_status': activity['queue_status'].get(r.job_id),
                    'queue_error': activity['queue_error'].get(r.job_id),
-                   'prompt': r.prompt, 'z_model': r.z_model,
+                   'z_model': r.z_model,
                    'z_model_label': (_basename(r.z_model).rsplit('.', 1)[0] if r.z_model else None),
-                   'cfg': r.cfg, 'steps': r.steps, 'steps2': r.steps2,
+                   'steps2': r.steps2,
                    'batch_lora': _batch_lora_label(r),
                    'combined_loras': _combined_lora_labels(r),
                    # Why the tile is empty (failed cells only) → shown on hover (P0-b).
                    'error': r.error if r.status == 'failed' else None,
-                   'face_score': r.face_score, 'face_state': r.face_state}
+                   'face_state': r.face_state}
                   for r in rows],
         # cell_scores scanne la table une fois (filtré famille) → partagé entre
         # best_cell/best_preset/best_per_checkpoint (sinon 4 scans identiques).
@@ -4898,13 +5059,14 @@ def studio_payload_run(user_id, run_id) -> dict | None:
         'run_id': run_id,
         'loras': [{'dataset_id': d, 'lora_label': _lbl(d), 'dataset_name': _name(d)}
                   for d in sorted(ds_ids)],
-        'cells': [{'id': r.id, 'dataset_id': r.dataset_id, 'checkpoint': r.checkpoint,
-                   'label': _basename(r.checkpoint).rsplit('.', 1)[0], 'strength': r.strength,
-                   'aspect': r.aspect, 'filename': r.filename, 'rating': r.rating, 'seed': r.seed,
-                   'run_seed': r.run_seed, 'status': r.status,
+        # Superset du serializer PARTAGÉ (cloud_training.gallery_image) — même
+        # doctrine que studio_payload ci-dessus.
+        'cells': [{**_shared_cell(r),
+                   'label': _basename(r.checkpoint).rsplit('.', 1)[0],
+                   'filename': r.filename, 'run_seed': r.run_seed, 'status': r.status,
                    'queue_status': activity['queue_status'].get(r.job_id),
-                   'queue_error': activity['queue_error'].get(r.job_id), 'prompt': r.prompt,
-                   'z_model': r.z_model, 'cfg': r.cfg, 'steps': r.steps, 'steps2': r.steps2,
+                   'queue_error': activity['queue_error'].get(r.job_id),
+                   'z_model': r.z_model, 'steps2': r.steps2,
                    'batch_lora': _batch_lora_label(r),
                    'combined_loras': _combined_lora_labels(r),
                    'error': r.error if r.status == 'failed' else None} for r in rows],

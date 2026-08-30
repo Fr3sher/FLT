@@ -46,12 +46,15 @@ test('a picture the board holds only as a URL is refused, with a reason', () => 
   }
 });
 
-test('an improvement cannot be improved again, and says why', () => {
+test('an improvement CAN be improved again — passes chain', () => {
+  // The server lifted its derivation guard (improves chain: Klein detail then
+  // SeedVR2 resolution on one picture); the board must not keep a stale
+  // mirror of the refusal it used to give.
   const derived = { id: 9, derivation_kind: CANVAS_IMAGE_IMPROVE };
   assert.equal(isCanvasImproveRow(derived), true);
-  assert.match(canvasImproveRefusal(derived), /already an upscale/i);
-  assert.equal(canImproveCanvasImage(derived), false);
-  // An ordinary render is NOT one, whatever else it carries.
+  assert.equal(canvasImproveRefusal(derived), null);
+  assert.equal(canImproveCanvasImage(derived), true);
+  // An ordinary render is NOT an improve row, whatever else it carries.
   assert.equal(isCanvasImproveRow({ id: 9, derivation_kind: null }), false);
 });
 
@@ -95,12 +98,15 @@ test('the improve group is its own component, so useCapabilities never runs for 
 
 test('the engines, their labels and the Klein note are REUSED, not restated', () => {
   assert.match(lightbox, /lightboxImproveButtons\(\{/);
-  assert.match(lightbox, /import KleinImproveNote from '\.\.\/dataset\/KleinImproveNote'/);
-  // The pressed engine travels to the handler, exactly like the dataset lightbox.
+  // The Klein note moved INTO the shared ImproveModal (the ✨ button opens
+  // it) — still one component, reused, never restated; the viewer now mounts
+  // the modal instead of the prose.
+  assert.match(lightbox, /import ImproveModal from '\.\/ImproveModal'/);
+  const modal = fs.readFileSync(
+    new URL('../components/shared/ImproveModal.jsx', import.meta.url), 'utf8');
+  assert.match(modal, /import KleinImproveNote from '\.\.\/dataset\/KleinImproveNote'/);
+  // The pressed engine still travels to the handler for the direct engines.
   assert.match(lightbox, /onImprove\(img\.id, engineId\)/);
-  // Klein's amber note follows the group and only when Klein is in it — the
-  // rule lives in improveEngines.js and is read from the button, never retyped.
-  assert.match(lightbox, /buttons\.some\(\(b\) => b\.showKleinNote\)/);
   // No second copy of the engine names in this file.
   assert.doesNotMatch(lightbox, /SeedVR2/);
 });

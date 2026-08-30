@@ -52,6 +52,9 @@ import { useToast } from '../common/Toast';
 import ContinueDialog from './ContinueDialog';
 import { graphContinueRefusal } from './lineageContinue.js';
 import RunLineageGraph from './RunLineageGraph';
+import LineageDetailPanel from './LineageDetailPanel';
+import LineageDiffPanel from './LineageDiffPanel';
+import { toggleDiffSelection } from './lineageDetail.js';
 import { UseDatasetCaptionsButton } from './UseDatasetCaptionsButton';
 import TrainingProgress from './TrainingProgress';
 import PreflightModal from './PreflightModal';
@@ -201,6 +204,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // lineage is fetched when the graph view is showing and the browse filter/
   // dataset changes. {tree|loading|error} | null.
   const [datasetGraph, setDatasetGraph] = useState(null);
+  // ⚙ Run details / ⇄ compare, opened straight FROM a checkpoint card. The
+  // recipe panel and the two-run diff have always existed — one screen away,
+  // in the Lineage graph — and "one screen away" is exactly where nobody
+  // found them (user-reported: "you never see this simply from the dataset's
+  // checkpoints"). Same panels, same data; these two states only give the
+  // cards a handle on them. Stored as record IDS (the diff reducer's own
+  // contract), resolved to nodes at render time from the lineage tree.
+  const [ckptDetailId, setCkptDetailId] = useState(null);
+  const [ckptDiffIds, setCkptDiffIds] = useState([]);
   // Which view the manager opens on. Persisted; defaults to the graph — the
   // showcase surface — so a checkpoint's whole genealogy is the first thing seen.
   const [checkpointsView, setCheckpointsView] = useState(() => {
@@ -1256,6 +1268,41 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     if (!r.ok) throw new Error('unavailable');
     return r.json();
   };
+  // The lineage tree, fetched ON DEMAND when a card asks for a panel before
+  // the Graph view ever loaded it (the auto-load below only fires for the
+  // graph). Cached into the same state the graph uses — one tree, two readers.
+  const ensureLineageTree = async () => {
+    if (datasetGraph?.tree?.nodes) return datasetGraph.tree;
+    try {
+      const tree = await fetchDatasetLineage();
+      setDatasetGraph({ tree });
+      return tree;
+    } catch {
+      toast.error('Could not load this dataset’s run lineage.');
+      return null;
+    }
+  };
+  const lineageNodeById = (tree, recordId) =>
+    (tree?.nodes || []).find((n) => n.record_id === recordId) || null;
+  const openRunDetails = async (recordId) => {
+    const tree = await ensureLineageTree();
+    if (!tree) return;
+    if (!lineageNodeById(tree, recordId)) {
+      toast.error('This run is not in the lineage tree (filtered out by the current base/family).');
+      return;
+    }
+    setCkptDetailId(recordId);
+  };
+  const toggleRunCompare = async (recordId) => {
+    const tree = await ensureLineageTree();
+    if (!tree) return;
+    if (!lineageNodeById(tree, recordId)) {
+      toast.error('This run is not in the lineage tree (filtered out by the current base/family).');
+      return;
+    }
+    setCkptDiffIds((cur) => toggleDiffSelection(cur, recordId));
+  };
+
   // The manager is "open" when portaled to its sidebar host, or expanded inline.
   const checkpointManagerOpen = Boolean(checkpointHost) || checkpointsOpen;
   // Auto-load the lineage the moment the graph view is the one showing (default),
@@ -1695,7 +1742,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               {/* Full progress bar, loss curve and samples live on the Runs hub —
                   this panel's own TrainingProgress only covers THIS dataset. */}
               <Link to="/cloud" title="Open the Runs page — full progress, loss curve and samples"
-                className="px-1 py-0.5 text-indigo-300 hover:text-indigo-200 text-[0.6875rem] font-medium underline decoration-indigo-300/40">
+                className="min-h-10 lg:min-h-0 inline-flex items-center px-1 py-0.5 text-indigo-300 hover:text-indigo-200 text-[0.6875rem] font-medium underline decoration-indigo-300/40">
                 View in Runs ↗
               </Link>
             </span>
@@ -1874,7 +1921,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             )}
             {/* Full progress bar, loss curve and samples live on the Runs hub. */}
             <Link to="/cloud" title="Open the Runs page — full progress, loss curve and samples"
-              className="ml-auto px-1 py-0.5 text-sky-300 hover:text-sky-200 font-medium underline decoration-sky-300/40">
+              className="ml-auto min-h-10 lg:min-h-0 inline-flex items-center px-1 py-0.5 text-sky-300 hover:text-sky-200 font-medium underline decoration-sky-300/40">
               View in Runs ↗
             </Link>
             <button type="button" className="px-2 py-0.5 rounded bg-red-600/80 text-white text-[0.6875rem] font-semibold"
@@ -3530,14 +3577,14 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 const li = localRunIdentity(checkpoints);
                 return (
                   <div className="flex items-center gap-2 flex-wrap rounded-md border border-violet-500/25 bg-violet-500/5 px-2 py-1">
-                    {li && <RunIdChip source={li.source} id={li.id} />}
+                    {li && <RunIdChip source={li.source} recordId={li.recordId} cloudId={li.cloudId} />}
                     <span className="text-content-muted text-[0.6875rem]">
                       <b className="text-content">Active set</b> — used by Studio / Continue / Import; cloud epochs are mirrored here.
                     </span>
                     {li && (
                       <Link to={`/cloud#${runRowDomId(li.source, li.id)}`}
                         title="Jump to this run on the Runs page"
-                        className="ml-auto px-1 py-0.5 text-violet-300 hover:text-violet-200 text-[0.6875rem] font-medium underline decoration-violet-300/40">
+                        className="ml-auto min-h-10 lg:min-h-0 inline-flex items-center px-1 py-0.5 text-violet-300 hover:text-violet-200 text-[0.6875rem] font-medium underline decoration-violet-300/40">
                         View in Runs ↗
                       </Link>
                     )}
@@ -3680,12 +3727,14 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                   {/* Identity header: which run made these epochs — same facts as
                       its Runs row, so "this final" ties back to "that run". */}
                   <div className="flex items-center gap-2 flex-wrap">
+                    {/* ONE number, once: the chip prints the record id (the
+                        same #N as the lineage card and the inspector); the
+                        cloud id lives in its tooltip. The old header printed
+                        the cloud id twice — as the chip AND as "Run #N" text
+                        — while every other surface named the run differently. */}
                     {g.run_id != null
-                      ? <RunIdChip source="cloud" id={g.run_id} />
+                      ? <RunIdChip source="cloud" recordId={g.record_id} cloudId={g.run_id} />
                       : <span className="text-sky-200 text-[0.6875rem]" aria-hidden>☁ run unknown</span>}
-                    {g.run_id != null && (
-                      <span className="text-content-muted text-[0.6875rem] font-medium">Run #{g.run_id}</span>
-                    )}
                     <span className="text-content-subtle text-[0.625rem] uppercase">{groupFamLabel(g.train_type)}</span>
                     <DatasetVersionChip version={g.version} />
                     {g.status && (
@@ -3702,11 +3751,43 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                         .filter(Boolean).join(' · ')}
                     </span>
                     {g.run_id != null && (
-                      <Link to={`/cloud#${runRowDomId('cloud', g.run_id)}`}
-                        title="Jump to this run on the Runs page"
-                        className="ml-auto px-1 py-0.5 text-sky-300 hover:text-sky-200 text-[0.6875rem] font-medium underline decoration-sky-300/40">
-                        View in Runs ↗
-                      </Link>
+                      <span className="ml-auto flex items-center gap-1.5">
+                        {/* ⚙/⇄ address the lineage tree, whose nodes key on the
+                            RECORD id — passing the cloud id here chased a node
+                            that does not exist and answered with a misleading
+                            "not in the lineage tree" error (user-reported,
+                            2026-08-29). Gated on record_id: a pre-registry run
+                            recorded no recipe, so there is nothing to open —
+                            no button beats a dead-end toast after the click. */}
+                        {g.record_id != null && (<>
+                        {/* ⚙ The SAME recipe panel the Lineage graph opens —
+                            rank, LR, optimizer, resolution, notes — one click
+                            from the checkpoints it produced. */}
+                        <button type="button" data-testid="ckpt-run-details"
+                          onClick={() => openRunDetails(g.record_id)}
+                          title="Open this run's full recipe — rank, learning rate, optimizer, resolution, notes"
+                          className="min-h-10 lg:min-h-0 rounded border border-white/15 px-1.5 py-0.5 text-[0.6875rem] font-medium text-content hover:border-white/35">
+                          ⚙ Details
+                        </button>
+                        {/* ⇄ Two picks open the SAME two-run diff as the graph:
+                            recipe deltas, the frozen dataset (images added /
+                            removed / re-captioned), and the machine. */}
+                        <button type="button" data-testid="ckpt-run-compare"
+                          aria-pressed={ckptDiffIds.includes(g.record_id)}
+                          onClick={() => toggleRunCompare(g.record_id)}
+                          title="Pick this run for comparison — pick two to see what changed between them (recipe, dataset images and captions, machine)"
+                          className={`min-h-10 lg:min-h-0 rounded border px-1.5 py-0.5 text-[0.6875rem] font-medium ${ckptDiffIds.includes(g.record_id)
+                            ? 'border-indigo-400/70 bg-indigo-500/25 text-indigo-100'
+                            : 'border-white/15 text-content hover:border-white/35'}`}>
+                          ⇄ Compare{ckptDiffIds.includes(g.record_id) ? ' ✓' : ''}
+                        </button>
+                        </>)}
+                        <Link to={`/cloud#${runRowDomId('cloud', g.run_id)}`}
+                          title="Jump to this run on the Runs page"
+                          className="min-h-10 lg:min-h-0 inline-flex items-center px-1 py-0.5 text-sky-300 hover:text-sky-200 text-[0.6875rem] font-medium underline decoration-sky-300/40">
+                          View in Runs ↗
+                        </Link>
+                      </span>
                     )}
                   </div>
                   {g.checkpoints.map((c) => (
@@ -3779,7 +3860,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                       different runs are now distinguishable at a glance. Files
                       imported before run tagging carry no id → "run unknown". */}
                   {c.run_id != null
-                    ? <RunIdChip source={c.run_source} id={c.run_id} />
+                    ? <RunIdChip source={c.run_source} recordId={c.record_id}
+                        cloudId={c.run_source === 'cloud' ? c.run_id : null} />
                     : <span className="text-content-subtle text-[0.625rem]"
                         title="Imported before run tagging — its source run is unknown">run ?</span>}
                   <span className="text-content break-all">{c.label}</span>
@@ -3893,6 +3975,27 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           busy={continueSubmitting || (status.in_progress && !continueLanes.cloud.available)}
           error={continueError}
           onResolve={runContinue} />
+      ), document.body)}
+
+      {/* ⚙ / ⇄ opened from a checkpoint CARD — the same panels the Lineage
+          graph mounts, portaled to body for the same reason as the Continue
+          dialog above: a modal must live where it is seen, whichever section
+          opened it. Nodes are resolved at render time from the shared tree;
+          a node retired by a refetch simply closes its panel. */}
+      {ckptDetailId != null && lineageNodeById(datasetGraph?.tree, ckptDetailId) && createPortal((
+        <LineageDetailPanel
+          node={lineageNodeById(datasetGraph?.tree, ckptDetailId)}
+          onClose={() => setCkptDetailId(null)}
+          onNodeChanged={() => loadDatasetGraph()}
+          onNodeDeleted={() => { setCkptDetailId(null); loadDatasetGraph(); }} />
+      ), document.body)}
+      {ckptDiffIds.length === 2
+        && lineageNodeById(datasetGraph?.tree, ckptDiffIds[0])
+        && lineageNodeById(datasetGraph?.tree, ckptDiffIds[1]) && createPortal((
+        <LineageDiffPanel
+          a={lineageNodeById(datasetGraph?.tree, ckptDiffIds[0])}
+          b={lineageNodeById(datasetGraph?.tree, ckptDiffIds[1])}
+          onClose={() => setCkptDiffIds([])} />
       ), document.body)}
 
     </div>

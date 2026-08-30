@@ -112,11 +112,13 @@ def _scan(comfy_type, canonical, tokens, rel_dest=None):
          level of subfolders.
     Never a blind first-file guess.
 
-    ⚠️ Step 3 descends one level, and that is the difference from the Klein
-    lane's finder (which lists the root only). It has to: every asset here ships
-    into a `qwen/` subfolder, and a scan that could not see into it would report
-    an installed model as missing and offer to download 20 GB again. One level,
-    not a full walk — `models/loras` on a working install holds tens of
+    ⚠️ Step 3 descends one level, and that is the difference from the shared
+    `comfy_model_paths.find_model_by_name` the Klein/Krea encoder-and-VAE slots
+    use (which walks to any depth). It has to descend at all: every asset here
+    ships into a `qwen/` subfolder, and a scan that could not see into it would
+    report an installed model as missing and offer to download 20 GB again. And
+    it stays at ONE level rather than the shared full walk because this finder
+    also scans `loras` — `models/loras` on a working install holds tens of
     thousands of files across dozens of families, and a recursive scan of it on
     every status poll is a stall, not a search.
     """
@@ -154,9 +156,24 @@ def _scan(comfy_type, canonical, tokens, rel_dest=None):
 
 
 def _configured(comfy_type, cfg_key):
-    """A user-pinned model for this slot, respelled as a loader wants it, or None."""
+    """A user-pinned model for this slot, respelled as a loader wants it, or None.
+
+    `resolve_model_ref` answers ``(name, status)`` — and the status is the half a
+    caller must not drop. This used to return the whole tuple: truthy even as
+    ``(None, 'missing')``, so a stale pin skipped the fallback scan AND the tuple
+    itself went into the workflow as a loader name. The config comment on
+    `camera.*` promises the opposite ("a pin that cannot be resolved falls back
+    to auto-detection; it never blocks a render"); Klein's `_configured_model`
+    is the shape that keeps that promise, and this now matches it."""
     value = (cfg.get(cfg_key) or '').strip()
-    return resolve_model_ref(comfy_type, value) if value else None
+    if not value:
+        return None
+    rel, status = resolve_model_ref(comfy_type, value)
+    if status == 'ok':
+        return rel
+    logger.warning('%s: pinned file %r is %s (%s roots) — falling back to '
+                   'auto-detection', cfg_key, value, status, comfy_type)
+    return None
 
 
 def resolve_camera_unet():
@@ -175,6 +192,29 @@ def resolve_camera_unet():
         if found:
             return found
     return None
+
+
+def qwen_unet_candidates():
+    """``(prefix, [model files])`` candidates for this lane's base model across
+    every diffusion-model search root — the list the `camera_unet` picker slot
+    offers. Mirrors `klein_edit_helper._klein_unet_folders`: 'qwen'-named
+    folders at any depth plus the root of each search folder, so anything
+    listed is a name a UNETLoader will load. Nothing narrower than that on
+    purpose: a finetune's filename rarely says what it is, choosing is the
+    user's call (the Krea list's doctrine), and the config comment on
+    `camera.unet` already blesses a deliberate different-model pin. The
+    AUTOMATIC path stays as narrow as ever — this list feeds the explicit
+    picker, never the scan."""
+    return comfy_model_paths.scan_family_folders(
+        comfy_model_paths.search_roots('diffusion_models'), ('qwen',),
+        suffixes=_MODEL_SUFFIXES)
+
+
+def camera_default_unet():
+    """Filename of the Setup-installed base model — what an empty `camera.unet`
+    resolves to on an ordinary install, so the picker can NAME the default
+    instead of calling it 'auto'."""
+    return _canonical('camera_model')
 
 
 def resolve_camera_text_encoder():
@@ -199,10 +239,9 @@ def _resolve_lora(action, cfg_key, tokens):
     """(relative name, absolute path) for one of the lane's LoRAs. The path is
     None when the file is not on disk — the NAME is still returned, so a log or
     a refusal can print what was looked for rather than an empty string."""
-    pinned = (cfg.get(cfg_key) or '').strip()
+    pinned = _configured('loras', cfg_key)
     if pinned:
-        rel = resolve_model_ref('loras', pinned)
-        return normalize_rel_model_name(rel), _lora_abs(rel)
+        return normalize_rel_model_name(pinned), _lora_abs(pinned)
     found = _scan('loras', _canonical(action), tokens, rel_dest=_rel_dest(action))
     if found:
         return found, _lora_abs(found)
@@ -233,6 +272,28 @@ def resolve_camera_speed_lora():
 STEPS_WITH_SPEED_LORA = 4
 STEPS_WITHOUT_SPEED_LORA = 20
 
+# Name tokens that say a PICKED base model already carries its own few-step
+# distillation (Rapid/Lightning/Turbo merges, all-in-one packs). Chaining the
+# speed LoRA on top of one of those is distillation applied twice, and it does
+# not degrade politely: it renders confetti-like texture patches over skin and
+# tiles while every job reports success. Measured on a real photo with
+# Phr00t's Rapid AIO v23 — same seed, same pose: chained = artifacts on every
+# surface, unchained at the SAME 4 steps = clean. The official
+# qwen_image_edit_2511 repack matches none of these, so the default install
+# keeps its historical chain.
+DISTILLED_UNET_TOKENS = ('rapid', 'lightning', 'turbo', 'aio', 'distill',
+                         'hyper', 'lcm', '4step', '4-step', '8step', '8-step')
+
+
+def unet_is_distilled(unet_ref):
+    """True when the resolved base model's FILENAME says it is already a
+    few-step build. A heuristic, deliberately visible everywhere it acts (the
+    catalog reports it, the enqueue logs it) and overridable: pinning
+    `camera.speed_lora` explicitly always wins, because a name is a claim,
+    not a measurement."""
+    name = os.path.basename(str(unet_ref or '')).lower()
+    return any(t in name for t in DISTILLED_UNET_TOKENS)
+
 
 def camera_missing_assets():
     """Setup action keys for every camera-angle asset that is NOT on disk.
@@ -253,9 +314,18 @@ def camera_missing_assets():
     return missing
 
 
-def camera_ready():
-    """True when a view can actually be rendered right now."""
-    return not any(a in camera_missing_assets() for a in CAMERA_REQUIRED)
+def camera_ready(missing=None):
+    """True when a view can actually be rendered right now.
+
+    THE lane's readiness verdict — capabilities, the catalog route and both
+    enqueue preflights all ask this function, so no surface can re-derive
+    readiness from a different subset of the gaps. `missing` takes an already
+    computed camera_missing_assets() list, so a caller that has paid for the
+    disk scan does not pay for it twice.
+    """
+    if missing is None:
+        missing = camera_missing_assets()
+    return not any(a in missing for a in CAMERA_REQUIRED)
 
 
 def _comfy_input_dir() -> str:
@@ -290,9 +360,9 @@ def enqueue_camera_view(user_id, source_filename, source_path, pose_prompt,
     unet_ref = resolve_camera_unet()
     te_ref = resolve_camera_text_encoder()
     vae_ref = resolve_camera_vae()
-    angles_lora, angles_path = resolve_camera_lora()
+    angles_lora = resolve_camera_lora()[0]
     missing = camera_missing_assets()
-    if any(a in missing for a in CAMERA_REQUIRED):
+    if not camera_ready(missing):
         raise CameraModelsMissing(missing)
 
     comfy_input_dir = comfy_fs.ensure_input_usable(_comfy_input_dir())
@@ -312,11 +382,25 @@ def enqueue_camera_view(user_id, source_filename, source_path, pose_prompt,
     workflow['106']['inputs']['seed'] = (int(seed) if seed is not None
                                          else random.randint(0, 2 ** 64 - 1))
 
-    # The speed LoRA is the only optional node. Absent, it is removed from the
-    # chain AND the step count is raised to match — dropping it while leaving 4
-    # steps is what would render noise.
+    # The speed LoRA is the only optional node, and it has THREE regimes, not
+    # two. Installed + ordinary base: chain it, 4 steps. Absent: remove it AND
+    # raise the steps — dropping it while leaving 4 is what would render noise.
+    # Installed + a base whose NAME says it is already distilled (a Rapid/AIO
+    # pick from the Model row): remove it but KEEP 4 steps — the distillation
+    # is baked into the weights, and chaining it again renders confetti over
+    # every textured surface while reporting success. An explicit
+    # `camera.speed_lora` pin overrides the name-based skip: a pin is the user
+    # saying they know better, and this lane always lets them.
     speed_lora, speed_path = resolve_camera_speed_lora()
-    if speed_path:
+    speed_pinned = bool((cfg.get('camera.speed_lora') or '').strip())
+    if unet_is_distilled(unet_ref) and not speed_pinned:
+        logger.info('camera lane: %s reads as an already-distilled build — '
+                    'the speed LoRA is skipped, steps stay at %d',
+                    os.path.basename(str(unet_ref)), STEPS_WITH_SPEED_LORA)
+        workflow['94']['inputs']['model'] = ['109', 0]      # skip node 102
+        workflow.pop('102', None)
+        workflow['106']['inputs']['steps'] = STEPS_WITH_SPEED_LORA
+    elif speed_path:
         workflow['102']['inputs']['lora_name'] = speed_lora
         workflow['106']['inputs']['steps'] = STEPS_WITH_SPEED_LORA
     else:

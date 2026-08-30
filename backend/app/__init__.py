@@ -216,6 +216,7 @@ event.listen(Engine, 'connect', _configure_sqlite_connection)
 # column already exists) and is additive only — never a drop. Names/types are
 # hardcoded constants (no user input) → safe to interpolate into the ALTER.
 _SCHEMA_ADDITIONS = (
+    ('video_dataset', 'trigger_word', 'VARCHAR(100)'),
     ('face_dataset', 'kind', 'VARCHAR(16)'),
     ('face_dataset', 'subject_type', 'VARCHAR(16)'),
     ('face_dataset', 'concept_desc', 'TEXT'),
@@ -264,6 +265,9 @@ _SCHEMA_ADDITIONS = (
     # route at random (same rule the bank's identical pair already follows).
     ('face_dataset_image', 'watermark_source', 'VARCHAR(16)'),
     ('face_dataset_image', 'watermark_score', 'REAL'),
+    # 🔤 Find text pass memory (NULL | 'none' | 'detected' | 'error'). Existing
+    # rows stay NULL — "never scanned", which is true of them.
+    ('face_dataset_image', 'text_state', 'VARCHAR(16)'),
     ('face_dataset_image', 'source_metadata', 'TEXT'),
     # Back-link to the bank_image a promotion copied here. Existing rows keep
     # NULL: a bank that was promoted before this column existed still relies on
@@ -295,6 +299,7 @@ _SCHEMA_ADDITIONS = (
     ('cloud_training_run', 'dataset_table', 'VARCHAR(32)'),
     ('lora_test_image', 'error', 'TEXT'),
     ('lora_test_image', 'resolution_multiplier', 'REAL'),
+    ('lora_test_image', 'sampler_preset', 'VARCHAR(24)'),
     # WHICH checkpoint produced this image, written at generation time instead of
     # re-parsed from the filename on every render. Existing rows stay NULL until
     # services.checkpoint_link_backfill attributes the ones it can prove.
@@ -315,6 +320,8 @@ _SCHEMA_ADDITIONS = (
     # 📷 The camera position a view was rendered at ('right/low/medium').
     ('lora_test_image', 'camera_pose', 'VARCHAR(64)'),
     ('face_dataset_image', 'camera_pose', 'VARCHAR(64)'),
+    # ⚙ What a generated dataset row was made with (JSON, stamped at enqueue).
+    ('face_dataset_image', 'generation_meta', 'TEXT'),
     # Bank V2 scoring pass — the image_bank/bank_image tables shipped in the Beta,
     # so these columns need the additive path (db.create_all never ALTERs an
     # existing table).
@@ -347,6 +354,9 @@ _SCHEMA_ADDITIONS = (
     # "unknown" for them rather than inventing a source.
     ('bank_image', 'watermark_source', 'VARCHAR(16)'),
     ('bank_image', 'watermark_score', 'REAL'),
+    # 🔤 Find text pass memory (NULL | 'none' | 'detected' | 'error'). Existing
+    # rows stay NULL — "never scanned", which is true of them.
+    ('bank_image', 'text_state', 'VARCHAR(16)'),
     # Bank provenance pass — effective resolution, letterbox, JPEG quality and the
     # ai/camera/unknown origin. Same additive path: existing banks keep every row
     # and simply carry NULLs until the next quality scan fills them in.
@@ -457,6 +467,11 @@ _SCHEMA_ADDITIONS = (
     # cut before the detector's second head was kept — no label rather than a
     # guessed one.
     ('video_clip', 'transition_json', 'TEXT'),
+    # Studio "Trigger word" checkbox: False = this cell's prompt was sent
+    # without the dataset's trigger word. NULL on every row that predates the
+    # column — those were all launched with the trigger injected, so NULL must
+    # keep meaning "injected", never "unknown".
+    ('lora_test_image', 'inject_trigger', 'BOOLEAN'),
 )
 
 # Indexes that only a FRESH database ever got. `index=True` on a model column is

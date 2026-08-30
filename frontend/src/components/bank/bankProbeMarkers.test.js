@@ -64,7 +64,30 @@ test('the review lightbox is a layer', () => {
 test('the bank list names its opener, so the probe can prime the workspace', () => {
   assert.match(page, /aria-label=\{`Open the bank \$\{b\.name\}`\}/);
   assert.match(probe, /'#\/bank': \{/);
-  assert.match(probe, /prime: \['\[aria-label\^="Open the bank"\]'\]/);
+  // `:visible` is not decoration: the library renders its rows twice (compact
+  // list + card grid, one hidden per breakpoint) and the HIDDEN twin comes
+  // first in the DOM. Without it the prime waits on an element that will never
+  // appear, reports "absent", and every state of the page is skipped — a run
+  // that measures nothing while printing no violations.
+  assert.match(probe, /prime: \['\[aria-label\^="Open the bank"\]:visible'\]/);
+});
+
+test('an anchor that exists but cannot be clicked STOPS the run — it never skips', () => {
+  /* The `:visible` above is the fix; this is the guard that makes the same
+     mistake impossible to repeat quietly. "absent" used to answer two opposite
+     questions with one word: an instance with nothing to open (benign, and the
+     coverage line says so) and an anchor sitting right there that the probe
+     could not reach (the run is void — it measures the LIST while claiming the
+     workspace). Only the second is a failure, and it exits 2, the code this
+     script reserves for "did not run".
+     Proved on fixtures, 2026-08-29: a page whose anchor is display:none exits
+     2 with the cause named; a page with no anchor at all still exits 0. */
+  assert.match(probe, /const exists = await page\.locator\(selector\.replace\(\/:visible\\b\/g, ''\)\)\.count\(\);/);
+  assert.match(probe, /\} else if \(exists\) \{[^]{0,400}unreachable = \{/);
+  assert.match(probe, /but none can be clicked/);
+  // The teardown ordering is load-bearing: exiting inside the loop would leave
+  // a headless browser alive on every void run.
+  assert.match(probe, /await browser\.close\(\);\s*\n\s*\}[^]{0,240}if \(unreachable\) cannotRun\(/);
 });
 
 test('the header gives the fold back on a phone', () => {

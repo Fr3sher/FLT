@@ -2077,6 +2077,11 @@ def _bp_pass_scopes(bank_id, counts, th, todo_keep, todo_pending,
         # every 'all' here is a measured query rather than a reused total.
         'watermark': {'todo': _todo_by_status(bank_id, _watermark_todo_clause()),
                       'all': _todo_by_status(bank_id, _watermark_not_dismissed())},
+        # 🔤 Find text — same two figures, same dismissed exclusion as the
+        # watermark scan: even its rescan line never re-examines a row the user
+        # ruled on, so quoting the pile size would offer images the run skips.
+        'text_scan': {'todo': _todo_by_status(bank_id, _text_todo_clause()),
+                      'all': _todo_by_status(bank_id, _watermark_not_dismissed())},
         # ✂ AUTO-CROP AND 🧽 REPAINT — the two levels that produce a new IMAGE.
         # Their pool is not "the images in that pile": it is the flagged rows
         # that carry an authorised geometry (_clean_todo_clause), which is why
@@ -7520,8 +7525,15 @@ def _watermark_scan_query(bank_id, rescan, statuses=None, ids=None):
     return q
 
 
-def start_watermark(app, user_id, bank_id, rescan=False, statuses=None, ids=None):
+def start_watermark(app, user_id, bank_id, rescan=False, statuses=None, ids=None,
+                    limit=None):
     """Launch the overlaid-watermark scan over the bank's non-rejected images.
+
+    ``limit`` is the launch window's "try on a sample first" — the first N rows
+    of the scope by id, DETERMINISTIC, exactly the 🔤 text scan's dial: re-run
+    the sample after moving the threshold and the SAME images are re-judged.
+    Everything the sample does not reach stays unscanned, which the resume
+    contract already handles ("Scan the remaining …").
 
     TWO routes, and which one runs is decided here, once:
 
@@ -7534,11 +7546,19 @@ def start_watermark(app, user_id, bank_id, rescan=False, statuses=None, ids=None
         one that has always worked.
 
     Serialized against training/vision (503 when the GPU is held)."""
-    from ..capabilities import probe_ollama_model
+    from .vision_llm import probe_model as probe_ollama_model
     from . import watermark_detector
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            raise ValueError('limit must be a number of images')
+        if limit < 1:
+            raise ValueError('limit must be at least 1')
+        limit = min(limit, 10000)
     # Occupancy BEFORE the model probe, and the order is the whole point: a bank
     # that is already busy is busy whether or not Ollama answers. Probing first
     # made a busy bank report "the vision model is not available" whenever the
@@ -7563,27 +7583,33 @@ def start_watermark(app, user_id, bank_id, rescan=False, statuses=None, ids=None
     if reason:
         raise RuntimeError(reason)
     want = normalize_pass_statuses(statuses)
+    total = _watermark_scan_query(bank_id, rescan, want, ids).count()
+    if limit is not None:
+        total = min(total, limit)
     return bank_jobs.start(app, bank_id, 'watermark',
                            _watermark_job(bank_id, rescan, use_detector=use_detector,
                                           statuses=want, ids=ids,
-                                          note=resolution['detail'] if resolution['fell_back'] else ''),
-                           total=_watermark_scan_query(bank_id, rescan, want, ids).count())
+                                          note=resolution['detail'] if resolution['fell_back'] else '',
+                                          limit=limit),
+                           total=total)
 
 
-def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None, note=''):
+def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None, note='',
+                   limit=None):
     if use_detector:
-        return _watermark_detector_job(bank_id, rescan, statuses, ids)
+        return _watermark_detector_job(bank_id, rescan, statuses, ids, limit=limit)
 
     def run(job):
         import json as _json
         from .face_dataset_service import WATERMARK_BBOX_PROMPT, _parse_watermark_bbox
-        from .vision_ollama import describe_image_ollama, unload_vision_model
+        from .vision_llm import describe_image as describe_image_ollama, unload_vision_model
         from .vision_pool import map_vision
         from ..gpu_window import gpu_exclusive_vision_window
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        rows = _watermark_scan_query(bank_id, rescan, statuses, ids).order_by(BankImage.id.asc()).all()
+        q = _watermark_scan_query(bank_id, rescan, statuses, ids).order_by(BankImage.id.asc())
+        rows = (q.limit(limit) if limit else q).all()
         # `note` is set only when the user PINNED the detector and it could not
         # run. Said at the start (so it is visible while the pass runs) and again
         # in the final sentence (so it survives the pass).
@@ -7712,13 +7738,28 @@ def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None,
                         # per image rather than per bank.
                         row.watermark_source = 'vision'
                         row.watermark_score = None      # this route has no score
+                        # 🔤 guard: a row whose zones the text pass owns keeps
+                        # them — a 'none' verdict here is about WATERMARKS and
+                        # must not unflag text still waiting for a repaint, and
+                        # a found box folds into the regions (they win over the
+                        # bbox at cleaning time, so a box left outside them
+                        # would never be repainted).
+                        text_zones = row.text_state == 'detected'
                         if bbox:
                             row.watermark_state = 'detected'
                             # Keep the box — the crop/inpaint levels route on it.
                             row.watermark_bbox = _json.dumps([round(v, 4) for v in bbox])
+                            if text_zones:
+                                from .text_regions import text_mask_regions
+                                existing, _m, _p = _clean_regions(row)
+                                merged, _ = text_mask_regions(
+                                    [], [list(b) for b in existing]
+                                    + [[round(v, 4) for v in bbox]])
+                                row.watermark_regions = _json.dumps(merged)
                             detected += 1
                         else:
-                            row.watermark_state = 'none'
+                            if not text_zones:
+                                row.watermark_state = 'none'
                             row.watermark_bbox = None
                             clean += 1
                     bank_jobs.bump(job)
@@ -7759,7 +7800,7 @@ def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None,
     return run
 
 
-def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
+def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None, limit=None):
     """The same pass, run by the dedicated detector extra instead of the vision
     model. Deliberately the same SHAPE as the vision job above, because the two
     have to be interchangeable: same resume semantics, same per-image commit,
@@ -7781,7 +7822,8 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        rows = _watermark_scan_query(bank_id, rescan, statuses, ids).order_by(BankImage.id.asc()).all()
+        q = _watermark_scan_query(bank_id, rescan, statuses, ids).order_by(BankImage.id.asc())
+        rows = (q.limit(limit) if limit else q).all()
         bank_jobs.progress(job, done=0, total=len(rows), detail='watermark scan')
         if not rows:
             return
@@ -7878,6 +7920,10 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
                     row.watermark_source = 'detector'
                     row.watermark_score = (round(float(score), 4)
                                            if score is not None else None)
+                    # 🔤 guard, same as the vision route: text zones survive
+                    # this scan, a 'none' verdict never unflags them, and a
+                    # found box folds into the regions they live in.
+                    text_zones = row.text_state == 'detected'
                     if state == 'error':
                         # One bad file never sinks the pass, same as the vision route.
                         row.watermark_state = 'error'
@@ -7890,15 +7936,22 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
                         # a crop on the subject). watermark_bbox holds
                         # one rectangle (it is what both cleaning levels route
                         # on), and the multi-zone column next to it means
-                        # something else entirely — it is the HAND-DRAWN
-                        # override, and writing machine output there would make
-                        # every flagged image look hand-corrected and silently
-                        # exclude it from ✂ Auto-crop. Losing the smaller boxes
-                        # is the honest cost; the mask editor still lets the user
-                        # add them back.
+                        # something else entirely — it is the HAND-DRAWN (or 🔤
+                        # text-pass) override, and writing machine output there
+                        # would make every flagged image look hand-corrected and
+                        # silently exclude it from ✂ Auto-crop. Losing the
+                        # smaller boxes is the honest cost; the mask editor
+                        # still lets the user add them back.
                         if regions:
                             row.watermark_bbox = _json.dumps(
                                 [round(float(v), 4) for v in regions[0][:4]])
+                            if text_zones:
+                                from .text_regions import text_mask_regions
+                                existing, _m, _p = _clean_regions(row)
+                                merged, _ = text_mask_regions(
+                                    [], [list(b) for b in existing]
+                                    + [[round(float(v), 4) for v in regions[0][:4]]])
+                                row.watermark_regions = _json.dumps(merged)
                             located += 1
                         else:
                             # Flagged with no box: known to be marked, position
@@ -7908,7 +7961,8 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
                             row.watermark_bbox = None
                         detected += 1
                     else:
-                        row.watermark_state = 'none'
+                        if not text_zones:
+                            row.watermark_state = 'none'
                         row.watermark_bbox = None
                         clean += 1
                     bank_jobs.bump(job)
@@ -7952,6 +8006,331 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
                               else _watermark_todo_clause(), statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
+
+
+# --- 🔤 Find text: the OCR pass that feeds the same funnel -------------------
+# Burned-in text — speech bubbles, subtitles, captions, sound effects — is the
+# same problem as a watermark once found: pixels stamped over the picture that a
+# LoRA would learn. So this pass does NOT grow a second funnel. It reads the
+# text with the SAME RapidOCR engine the Video bank's 🔳 Safe zone pass ships
+# (capability `video_text`: Apache-2.0, CPU-only, weights inside the wheel),
+# folds the per-line boxes into zones (services/text_regions.py), and writes
+# those zones into the one channel the cleaning levels already consume —
+# watermark_regions + watermark_state='detected'. From there 🧽 Inpaint, the
+# mask editor, ↩ Undo, dismiss and promote all behave as if the user had drawn
+# the zones by hand, which is the intent: "repaint exactly these" (and ✂
+# Auto-crop skips them BY CONSTRUCTION — _crop_todo_clause excludes region-
+# carrying rows — because cropping a bubble out of the middle of a page is not
+# a thing).
+#
+# The machine-into-the-hand-channel worry (see _watermark_detector_job, which
+# refuses to do this for the WATERMARK box) does not apply here: for text the
+# two effects that refusal protects against are exactly the wanted behaviour —
+# no crop routing, every zone repainted.
+#
+# `text_state` is the pass's own memory (resume + report), never a state the
+# cleaning levels read. 'dismissed' rows are excluded like every other machine
+# pass: dismiss means the MACHINE must stop asking (set_watermark_regions says
+# so in as many words), and the hand editor remains the way back in.
+TEXT_SCAN_CHUNK = 40   # images per OCR child — the video lane's measured chunk
+
+
+def _text_todo_clause():
+    """Rows the plain 🔤 button still owes an answer: never scanned, or errored
+    (a retry adopts those, same as every other pass's todo)."""
+    return and_(_watermark_not_dismissed(),
+                or_(BankImage.text_state.is_(None),
+                    BankImage.text_state == 'error'))
+
+
+def _text_scan_query(bank_id, rescan, statuses=None, ids=None):
+    """The rows the text pass should look at. Not a rescan = finish the job;
+    rescan = re-read everything except 'dismissed' (the user already ruled on
+    those, and this pass would re-flag them — the exact frustration dismiss
+    exists to end)."""
+    q = _scoped_pool(bank_id, statuses, ids).filter(_watermark_not_dismissed())
+    if not rescan:
+        q = q.filter(_text_todo_clause())
+    return q
+
+
+def start_text_scan(app, user_id, bank_id, rescan=False, statuses=None, ids=None,
+                    limit=None):
+    """Launch the 🔤 burned-in text scan over the bank's non-rejected images.
+
+    CPU only, by construction: RapidOCR runs on the onnxruntime this app
+    installs, so this pass NEVER takes the GPU window — it can measure a bank
+    while a training run owns the card, exactly like the video lane's safe-zone
+    pass. That is also why there is no _gpu_busy_reason() gate here.
+
+    ``limit`` is the launch window's "try on a sample first": only the first N
+    rows of the scope (by id — DETERMINISTIC, so re-running the sample with the
+    redo line re-reads the SAME images under a new Sensitivity). Everything the
+    sample does not reach simply stays unscanned, which the resume contract
+    already handles: the button then offers "Read the remaining …"."""
+    from ..capabilities import probe_video_text
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            raise ValueError('limit must be a number of images')
+        if limit < 1:
+            raise ValueError('limit must be at least 1')
+        limit = min(limit, 10000)
+    if bank_jobs.running(bank_id):
+        raise bank_jobs.BankJobBusy((bank_jobs.get(bank_id) or {}).get('kind') or 'background')
+    probe = probe_video_text()
+    if not probe.get('ok'):
+        detail = probe.get('detail')
+        raise RuntimeError('the text reader is not installed'
+                           + (f' — {detail}' if detail else '')
+                           + '. Install "Burned-in text" from Setup, then run it again.')
+    want = normalize_pass_statuses(statuses)
+    total_query = _text_scan_query(bank_id, rescan, want, ids)
+    total = total_query.count()
+    if limit is not None:
+        total = min(total, limit)
+    return bank_jobs.start(app, bank_id, 'text_scan',
+                           _text_scan_job(bank_id, rescan, want, ids, limit=limit),
+                           total=total)
+
+
+def _text_scan_job(bank_id, rescan, statuses=None, ids=None, limit=None):
+    """Same discipline as the two watermark scan jobs, deliberately: paths are
+    resolved on the owning thread, verdicts commit per image, a deletion
+    mid-pass is counted and skipped, and a stop keeps everything already
+    learned. The one structural difference is the engine seam — the video
+    lane's `read_text_boxes` (one child per chunk of 40, the measured shape),
+    borrowed rather than re-derived so the two surfaces cannot drift."""
+    def run(job):
+        import json as _json
+        from .text_regions import text_mask_regions
+        from .video_safe_zone import read_text_boxes, text_score_min
+        bank = _detach_bank(db.session.get(ImageBank, bank_id))
+        if not bank:
+            return
+        rows_query = (_text_scan_query(bank_id, rescan, statuses, ids)
+                      .order_by(BankImage.id.asc()))
+        if limit is not None:
+            rows_query = rows_query.limit(limit)
+        rows = rows_query.all()
+        bank_jobs.progress(job, done=0, total=len(rows),
+                           detail='text scan (sample)' if limit is not None
+                           else 'text scan')
+        if not rows:
+            return
+        found = clean = errors = vanished = stale = missing = 0
+        uncovered = 0     # zones past the 32-zone mask cap, summed — never silent
+        planned = []
+        for row_id in [r.id for r in rows]:
+            row = _live_image(row_id)
+            if row is None:      # deleted since the pass started — see _live_image
+                logger.info('bank text scan: image %s was deleted mid-pass, '
+                            'skipping it', row_id)
+                vanished += 1
+                bank_jobs.bump(job)
+                continue
+            path = abs_image_path(bank, row)
+            if not path:
+                vanished += 1
+                bank_jobs.bump(job)
+                continue
+            if not os.path.isfile(path):
+                # The whole source folder can be gone (moved, renamed, a
+                # disconnected drive — the bank header says so): counted as
+                # "no longer on disk" and NOT sent to the OCR child, which
+                # would burn a whole chunk discovering the same absence one
+                # file at a time. The row keeps its state — reconnect the
+                # folder and a plain run picks it up.
+                missing += 1
+                bank_jobs.bump(job)
+                continue
+            planned.append((row_id, path))
+        db.session.commit()
+        if not planned:
+            # The same clauses as the full ending — this early exit is exactly
+            # where a whole vanished source folder lands (every file counted
+            # 'no longer on disk'), and it must say so, not just "nothing left".
+            bank_jobs.progress(
+                job, detail='done — nothing left to scan'
+                + _skipped_note(vanished=vanished, missing=missing))
+            return
+        for chunk_start in range(0, len(planned), TEXT_SCAN_CHUNK):
+            if bank_jobs.cancelled(job):
+                break
+            chunk = planned[chunk_start:chunk_start + TEXT_SCAN_CHUNK]
+            frames = [{'key': str(rid), 'path': path} for rid, path in chunk]
+            try:
+                boxes_by_key = read_text_boxes(
+                    frames, should_stop=lambda: bank_jobs.cancelled(job),
+                    score_min=text_score_min())
+            except RuntimeError as e:
+                # The engine could not run (uninstalled mid-pass, a broken
+                # onnxruntime DLL). Say so and leave every unscanned row
+                # untouched — a retry finishes the job. Same shape as the
+                # watermark scan's DetectorUnavailable exit.
+                db.session.commit()
+                logger.warning('bank text scan: reader unavailable (%s)', e)
+                bank_jobs.progress(
+                    job, detail=f'stopped — the text reader could not run ({e}). '
+                                'Nothing was mis-flagged; the images it had not '
+                                'reached are still unscanned.')
+                return
+            for rid, path in chunk:
+                key = str(rid)
+                if key not in boxes_by_key:
+                    # Absent ≠ empty is the child's contract, and absence has
+                    # exactly two causes. During a Stop it means "never
+                    # reached": leave the row unscanned for the next run. With
+                    # NO stop asked it means the child could not READ the file
+                    # (its reader keys everything it opens, readable-but-empty
+                    # included) — that is a per-image error, counted and
+                    # retryable, never a reason to call the whole pass
+                    # cancelled. A real bank hit this on all 81 images at once
+                    # (an unreadable path) and the pass reported "cancelled —
+                    # 0 with text" over a stop nobody had asked for.
+                    if bank_jobs.cancelled(job):
+                        continue
+                    row = _live_image(rid)
+                    if row is None:
+                        vanished += 1
+                        bank_jobs.bump(job)
+                        continue
+                    row.text_state = 'error'
+                    errors += 1
+                    bank_jobs.bump(job)
+                    db.session.commit()
+                    continue
+                row = _live_image(rid)
+                if row is None:
+                    logger.info('bank text scan: image %s was deleted while it '
+                                'was being read, skipping it', rid)
+                    vanished += 1
+                    bank_jobs.bump(job)
+                    continue
+                fingerprint = bank_transfer_metadata.content_fingerprint_path(path)
+                if not _prepare_watermark_write(row, path, fingerprint):
+                    stale += 1      # same silent skip as both watermark routes
+                    bank_jobs.bump(job)
+                    db.session.commit()
+                    continue
+                line_boxes = boxes_by_key[key]
+                if not line_boxes:
+                    # The OCR read NOTHING here — verdict BEFORE the merge, and
+                    # the stored geometry untouched. Merging first made a page
+                    # that already carried a watermark box come back non-empty
+                    # and get refiled as text; 'What to clean' splits the
+                    # repaint on text_state, so that misfiling would steal 🚩
+                    # pages into the 🔤 family.
+                    row.text_state = 'none'
+                    clean += 1
+                    bank_jobs.bump(job)
+                    db.session.commit()
+                    continue
+                existing, _manual, problem = _clean_regions(row)
+                if problem:
+                    # An unreadable stored mask is a broken state, not a value —
+                    # this pass replaces it with valid geometry rather than
+                    # merging into garbage.
+                    existing = []
+                regions, dropped = text_mask_regions(
+                    line_boxes, [list(b) for b in existing])
+                if not regions:
+                    row.text_state = 'none'
+                    clean += 1
+                else:
+                    if row.watermark_clean_method:
+                        # Re-flagging a cleaned image: the next repaint restarts
+                        # from the SOURCE pixels, so the already-cleaned blob is
+                        # dropped now — keeping it would show a "cleaned" badge
+                        # over an image the funnel says needs work. The old
+                        # zones were folded into `regions` above, so nothing the
+                        # previous clean covered is lost on the way back.
+                        _discard_clean_blob(bank_id, row)
+                        _invalidate_effective_analysis(row)
+                    row.watermark_regions = _json.dumps(regions)
+                    row.watermark_state = 'detected'
+                    row.text_state = 'detected'
+                    found += 1
+                    uncovered += dropped
+                bank_jobs.bump(job)
+                # Per image, same reason as every scan here: never hold the one
+                # SQLite write lock across an unbounded run.
+                db.session.commit()
+        db.session.commit()
+        skipped = _skipped_note(vanished=vanished, missing=missing, stale=stale,
+                                unreadable=errors)
+        if bank_jobs.cancelled(job):
+            bank_jobs.progress(job, detail=f'cancelled — {found} with text so far'
+                                           + skipped)
+            return
+        detail = f'done — {found} with text, {clean} without'
+        if uncovered:
+            # The mask channel holds 32 zones per image; a text-heavy page can
+            # produce more. The kept zones are the biggest blocks — say what the
+            # cap left out rather than reporting "done" over a partial mask.
+            detail += (f', {uncovered} zone(s) beyond the 32-zone mask cap '
+                       '(draw them in ▶ Review if they matter)')
+        detail += skipped
+        if limit is not None:
+            # A sample run exists to be JUDGED: say where to look and what the
+            # next click is, instead of a bare count that reads like the pass
+            # covered everything it could.
+            detail = ('sample ' + detail
+                      + ' — open ▶ Review (flagged) to judge the zones, then '
+                        'run again for the rest, or re-read the same sample '
+                        'after changing the sensitivity')
+        detail += _scope_note(bank_id, _text_todo_clause(), statuses, ids)
+        bank_jobs.progress(job, detail=detail)
+    return run
+
+
+def text_preview(user_id, bank_id, limit=24) -> dict | None:
+    """The 🔤 launch window's own result gallery: the text-flagged pages with
+    their zones, oldest-id first — the SAME deterministic order the sample
+    walks, so "the first 20 of the scope" and "the first 20 shown here"
+    are the same pages. None when the bank is gone."""
+    import json as _json
+    if not get_bank(user_id, bank_id):
+        return None
+    limit = max(1, min(int(limit or 24), 60))
+    rows = (BankImage.query.filter_by(bank_id=bank_id, text_state='detected')
+            .filter(BankImage.status != 'reject')
+            .order_by(BankImage.id.asc()).limit(limit).all())
+    items = []
+    for row in rows:
+        try:
+            regions = _json.loads(row.watermark_regions or '') or []
+        except (ValueError, TypeError):
+            regions = []
+        items.append({'id': row.id, 'regions': regions})
+    total = (BankImage.query.filter_by(bank_id=bank_id, text_state='detected')
+             .filter(BankImage.status != 'reject').count())
+    return {'items': items, 'total': total}
+
+
+def watermark_preview(user_id, bank_id, limit=24) -> dict | None:
+    """The 🚩 launch window's own result gallery: the WATERMARK-family flagged
+    pages (flagged, and NOT 🔤 text-flagged — the same page-level partition
+    'What to clean' repaints by) with their zones, oldest-id first. Zones go
+    through _clean_regions, because a detector row often carries only its bbox
+    — the box IS the zone the funnel routes on. None when the bank is gone."""
+    if not get_bank(user_id, bank_id):
+        return None
+    limit = max(1, min(int(limit or 24), 60))
+    q = (BankImage.query.filter_by(bank_id=bank_id, watermark_state='detected')
+         .filter(BankImage.status != 'reject')
+         .filter(or_(BankImage.text_state.is_(None),
+                     BankImage.text_state != 'detected')))
+    rows = q.order_by(BankImage.id.asc()).limit(limit).all()
+    items = []
+    for row in rows:
+        boxes, _manual, _problem = _clean_regions(row)
+        items.append({'id': row.id, 'regions': [list(b) for b in boxes]})
+    return {'items': items, 'total': q.count()}
 
 
 # --- watermark cleaning: two MANUAL levels ----------------------------------
@@ -8001,7 +8380,22 @@ def _crop_todo_clause():
     return and_(_clean_todo_clause(), BankImage.watermark_regions.is_(None))
 
 
-def _clean_pool_query(bank_id, statuses=None, ids=None):
+def _clean_target_clause(target):
+    """'text' = pages 🔤 flagged, 'watermark' = every other flagged page.
+
+    The split is BY IMAGE, deliberately: once a watermark box was folded into a
+    text page's regions the zones carry no per-zone origin any more, so the
+    honest unit of separation is the page — a mixed page counts as 'text'
+    (Find text flagged it) and its clean covers everything it carries."""
+    if target == 'text':
+        return BankImage.text_state == 'detected'
+    if target == 'watermark':
+        return or_(BankImage.text_state.is_(None),
+                   BankImage.text_state != 'detected')
+    return None
+
+
+def _clean_pool_query(bank_id, statuses=None, ids=None, target='all'):
     """Images a cleaning level can act on, inside the run's scope.
     'cleaned'/'dismissed'/'none' rows are out by construction.
 
@@ -8010,7 +8404,9 @@ def _clean_pool_query(bank_id, statuses=None, ids=None):
     (``statuses=None``) _scope_clause yields ``status != 'reject'``, which is
     character for character the filter this pool has always carried, so an
     untouched run walks exactly the rows it walked before."""
-    return _scoped_pool(bank_id, statuses, ids).filter(_clean_todo_clause())
+    q = _scoped_pool(bank_id, statuses, ids).filter(_clean_todo_clause())
+    clause = _clean_target_clause(target)
+    return q.filter(clause) if clause is not None else q
 
 
 def _needs_rescan_count(bank_id) -> int:
@@ -8569,7 +8965,7 @@ def _improve_job(bank_id, engine, statuses=None, ids=None):
     return run
 
 
-def start_watermark_inpaint(app, user_id, bank_id, method='auto',
+def start_watermark_inpaint(app, user_id, bank_id, method='auto', target='all',
                             statuses=None, ids=None):
     """Level 2 — repaint what is STILL flagged after the crop level.
     ``method``: 'auto'/'lama' (LaMa, non-generative, small off-centre marks; marks
@@ -8588,12 +8984,22 @@ def start_watermark_inpaint(app, user_id, bank_id, method='auto',
     method = (method or 'auto').lower()
     if method not in ('auto', 'lama', 'klein'):
         raise ValueError("method must be 'auto', 'lama' or 'klein'")
+    target = (target or 'all').lower()
+    if target not in ('all', 'text', 'watermark'):
+        raise ValueError("target must be 'all', 'text' or 'watermark'")
     want = normalize_pass_statuses(statuses)
-    total = _clean_pool_query(bank_id, want, ids).count()
+    total = _clean_pool_query(bank_id, want, ids, target=target).count()
     if not total:
         # "Nothing HERE" and "nothing anywhere" are two situations with two
         # different next moves. Saying "every flagged image is handled" while
-        # thousands sit in another pile is the refusal reading as a lie.
+        # thousands sit in another pile is the refusal reading as a lie — and
+        # with a target picked, "the flagged pages are in the OTHER family" is
+        # a third situation with its own next move.
+        if target != 'all' and _clean_pool_query(bank_id, want, ids).count():
+            other = 'watermark' if target == 'text' else 'text'
+            raise ValueError(f'nothing to repaint in the {target} family — '
+                             f'the flagged pages here are {other}-flagged '
+                             '(switch What to clean)')
         if _clean_pool_query(bank_id, list(PASS_SCOPES)).count():
             raise ValueError('nothing to repaint in this scope — the flagged '
                              'images are in another pile (kept / undecided / unkept)')
@@ -8605,38 +9011,52 @@ def start_watermark_inpaint(app, user_id, bank_id, method='auto',
     if reason:
         raise RuntimeError(reason)
     return bank_jobs.start(app, bank_id, 'watermark_inpaint',
-                           _watermark_inpaint_job(bank_id, method, want, ids),
+                           _watermark_inpaint_job(bank_id, method, want, ids,
+                                                  target=target),
                            total=total)
 
 
-def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None):
+def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None,
+                           target='all'):
     def run(job):
         from contextlib import nullcontext
-        from . import watermark_klein, watermark_lama
+        from . import text_fill, watermark_klein, watermark_lama
         from .face_dataset_service import _clean_inpaint_engine, _route_watermark
         from ..gpu_window import gpu_exclusive_vision_window
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        rows = (_clean_pool_query(bank_id, statuses, ids)
+        rows = (_clean_pool_query(bank_id, statuses, ids, target=target)
                 .order_by(BankImage.id.asc()).all())
         bank_jobs.progress(job, done=0, total=len(rows), detail='inpainting')
         row_ids = [r.id for r in rows]
-        counts = {'inpainted': 0, 'klein': 0, 'review': 0, 'failed': 0,
-                  'skipped': 0, 'empty': 0, 'vanished': 0}
+        counts = {'inpainted': 0, 'klein': 0, 'text_filled': 0, 'review': 0,
+                  'failed': 0, 'skipped': 0, 'empty': 0, 'vanished': 0}
         error = None
         lama_ok = watermark_lama.is_available()
+        # The bubble-aware filler shares video_text's imports, so a bank that
+        # flagged text can always fill it — this only goes False when the extra
+        # was removed after the scan, and then text rows fall back to the
+        # whole-rectangle route rather than being refused.
+        text_ok = text_fill.is_available()
         klein_ok = method == 'klein' and watermark_klein.is_available()
         # LaMa on the GPU pauses ComfyUI through the exclusive vision window;
         # Klein must NOT take that window — ComfyUI owns the GPU there and
         # holding it would deadlock its worker (same split as the dataset route).
         device = 'cpu' if method == 'klein' else watermark_lama.resolve_device()
-        # (image_id, dst_path, [bbox], raw_path, raw_fingerprint) for the single
-        # LaMa batch — ids, not ORM rows: this list is held across a batch that
-        # can run for minutes, and a row deleted in that window must be skippable
-        # rather than fatal. The raw identity closes that same minutes-long
-        # window for external source replacements.
+        # (image_id, dst_path, [bbox], raw_path, raw_fingerprint, method_label)
+        # for the single LaMa batch — ids, not ORM rows: this list is held
+        # across a batch that can run for minutes, and a row deleted in that
+        # window must be skippable rather than fatal. The raw identity closes
+        # that same minutes-long window for external source replacements.
+        # method_label is what the write-back stamps: 'lama' for watermark
+        # rows, 'text_fill' for text rows whose busy leftovers LaMa finishes.
         pending = []
+        # Text-flagged rows take the bubble-aware filler FIRST (one batch, like
+        # LaMa): it empties balloons outline-safe and returns glyph-tight boxes
+        # for whatever sat on art — which is all the repaint engine then gets,
+        # instead of the whole rectangle that used to eat balloon outlines.
+        pending_text = []
         window = (gpu_exclusive_vision_window(flag_ttl=1800)
                   if device == 'cuda' else nullcontext())
         try:
@@ -8712,6 +9132,15 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None):
                         counts['failed'] += 1
                         bank_jobs.bump(job)
                         continue
+                    if text_ok and row.text_state == 'detected':
+                        # Text rows: filler first; the engine (LaMa or Klein)
+                        # only ever sees what the filler hands back. Queued for
+                        # ONE batch — a child per image would pay the cv2
+                        # import N times for milliseconds of work each.
+                        pending_text.append((rid, dst, [list(b) for b in boxes],
+                                             src, expected_raw_fingerprint))
+                        bank_jobs.bump(job)
+                        continue
                     if engine == 'klein':
                         # No klein_model on purpose. The Klein model choice lives on
                         # the DATASET (it describes what a dataset is made of) and a
@@ -8739,21 +9168,83 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None):
                         bank_jobs.bump(job)
                         continue
                     pending.append((rid, dst, [list(b) for b in boxes], src,
-                                    expected_raw_fingerprint))
+                                    expected_raw_fingerprint, 'lama'))
                     bank_jobs.bump(job)
-                if pending and bank_jobs.cancelled(job):
+                if bank_jobs.cancelled(job):
                     # Stop means stop: the staged copies of rows we never got to
                     # repaint are thrown away rather than running a long batch
                     # after the user asked out (they stay 'detected', retryable).
-                    for pid, _dst, _boxes, _src, _fingerprint in pending:
+                    for pid, _dst, _boxes, _src, _fingerprint, _label in pending:
+                        _drop_clean_blob_by_id(bank_id, pid)
+                    for pid, _dst, _boxes, _src, _fingerprint in pending_text:
                         _drop_clean_blob_by_id(bank_id, pid)
                     pending = []
+                    pending_text = []
+                if pending_text:
+                    try:
+                        fill_results = text_fill.fill_batch(
+                            [{'image_path': str(dst), 'regions': boxes}
+                             for _rid, dst, boxes, _src, _fp in pending_text],
+                            should_stop=lambda: bank_jobs.cancelled(job))
+                    except RuntimeError as fill_exc:
+                        # The filler could not run at all: fall back to the
+                        # whole-rectangle route for every text row — the
+                        # pre-filler behaviour, never a refused clean.
+                        logger.warning('bank inpaint: text filler unavailable '
+                                       '(%s), falling back to rectangles',
+                                       fill_exc)
+                        fill_results = {}
+                    for rid, dst, boxes, src, fp in pending_text:
+                        res = fill_results.get(str(dst))
+                        if res is None:
+                            pending.append((rid, dst, boxes, src, fp, 'lama'))
+                            continue
+                        if not res.get('ok'):
+                            row = _live_image(rid)
+                            if row is not None:
+                                _discard_clean_blob(bank_id, row)
+                            else:
+                                _drop_clean_blob_by_id(bank_id, rid)
+                            counts['failed'] += 1
+                            error = error or {
+                                'kind': 'failed',
+                                'detail': str(res.get('error')
+                                              or 'text fill failed')}
+                            db.session.commit()
+                            continue
+                        busy = [list(b) for b in (res.get('busy_boxes') or [])]
+                        if busy:
+                            # LaMa finishes the glyph-tight leftovers in the
+                            # shared batch below — ALWAYS LaMa, whatever the
+                            # engine toggle says: the toggle picks the engine
+                            # for WATERMARKS, while text leftovers are small
+                            # glyph boxes on art, exactly LaMa's case, and the
+                            # dataset surface does the same (full parity). The
+                            # stamp stays 'text_fill' — the funnel the user
+                            # ran, not the helper engine.
+                            pending.append((rid, dst, busy, src, fp, 'text_fill'))
+                            continue
+                        row = _live_image(rid)
+                        if row is None:
+                            _drop_clean_blob_by_id(bank_id, rid)
+                            counts['vanished'] += 1
+                            continue
+                        if not _prepare_watermark_write(row, src, fp):
+                            _discard_clean_blob(bank_id, row)
+                            counts['failed'] += 1
+                            db.session.commit()
+                            continue
+                        row.watermark_state = 'cleaned'
+                        row.watermark_clean_method = 'text_fill'
+                        _invalidate_effective_analysis(row)
+                        counts['text_filled'] += 1
+                        db.session.commit()
                 if pending:
                     results = watermark_lama.inpaint_batch(
                         [{'image_path': str(dst), 'bboxes': boxes}
-                         for _rid, dst, boxes, _src, _fingerprint in pending],
+                         for _rid, dst, boxes, _src, _fingerprint, _label in pending],
                         device=device)
-                    for pid, dst, _boxes, src, expected_raw_fingerprint in pending:
+                    for pid, dst, _boxes, src, expected_raw_fingerprint, label in pending:
                         row = _live_image(pid)
                         if row is None:
                             # Deleted while the batch ran: no row is left to point
@@ -8769,9 +9260,10 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None):
                             row, src, expected_raw_fingerprint)
                         if ok and generation_ok:
                             row.watermark_state = 'cleaned'
-                            row.watermark_clean_method = 'lama'
+                            row.watermark_clean_method = label
                             _invalidate_effective_analysis(row)
-                            counts['inpainted'] += 1
+                            counts['text_filled' if label == 'text_fill'
+                                   else 'inpainted'] += 1
                         else:
                             _discard_clean_blob(bank_id, row)
                             counts['skipped' if (err or {}).get('kind') == 'unavailable'
@@ -8779,13 +9271,17 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None):
                             error = err or error
         finally:
             db.session.commit()
-            if counts['inpainted'] or counts['klein']:
+            if counts['inpainted'] or counts['klein'] or counts['text_filled']:
                 reset_score_memo()
-        done = counts['inpainted'] + counts['klein']
+        done = counts['inpainted'] + counts['klein'] + counts['text_filled']
         if bank_jobs.cancelled(job):
             bank_jobs.progress(job, detail=f'cancelled — {done} inpainted so far')
             return
         detail = f'done — {done} inpainted'
+        if target != 'all':
+            detail += f' ({target}-flagged pages only)'
+        if counts['text_filled']:
+            detail += (f" ({counts['text_filled']} text-filled outline-safe)")
         if counts['review']:
             detail += (f", {counts['review']} on the subject "
                        '(switch the engine to Klein to repaint those)')
@@ -9029,7 +9525,8 @@ def watermark_levels(user_id, bank_id) -> dict | None:
         'empty_masks': empty_masks,
         'cropped': base.filter_by(watermark_clean_method='crop').count(),
         'inpainted': base.filter(
-            BankImage.watermark_clean_method.in_(('lama', 'klein'))).count(),
+            BankImage.watermark_clean_method.in_(
+                ('lama', 'klein', 'text_fill'))).count(),
         'dismissed': base.filter(
             BankImage.watermark_state == 'dismissed',
             ~_watermark_history_inactive_clause()).count(),
@@ -9052,6 +9549,15 @@ def watermark_levels(user_id, bank_id) -> dict | None:
         'cleaned_sample': [r.id for r in
                            base.filter(BankImage.watermark_clean_method.isnot(None))
                            .order_by(BankImage.id.asc()).limit(8).all()],
+        # 🔤 Find text — the OCR pass's own tallies, next to the levels it
+        # feeds. `found` rows are also counted in `flagged` above (their zones
+        # went into the same funnel); this block is what lets the panel say the
+        # pass's own progress and label its button, nothing routes on it.
+        'text': {
+            'scanned': base.filter(BankImage.text_state.isnot(None)).count(),
+            'found': base.filter(BankImage.text_state == 'detected').count(),
+            'unscanned': _text_scan_query(bank_id, rescan=False).count(),
+        },
     }
 
 
@@ -9075,7 +9581,7 @@ def start_framing(app, user_id, bank_id, rescan=False, statuses=None, ids=None):
     the 📐 Framing filter chips and the coverage advice. Needs the vision model
     pulled; serialized against training/vision like the watermark pass (503 when
     the GPU is held). ``rescan`` re-classifies rows that already have a framing."""
-    from ..capabilities import probe_ollama_model
+    from .vision_llm import probe_model as probe_ollama_model
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
@@ -9110,8 +9616,8 @@ _FENCE_STREAK_WARN = 5
 def _framing_job(bank_id, rescan, statuses=None, ids=None):
     def run(job):
         from .face_dataset_service import CLASSIFY_PROMPT, _parse_classify
-        from .vision_ollama import (LocalOllamaFenceError, describe_image_ollama,
-                                    unload_vision_model)
+        from .vision_llm import describe_image as describe_image_ollama, unload_vision_model
+        from .vision_ollama import LocalOllamaFenceError
         from .vision_pool import map_vision
         from ..gpu_window import gpu_exclusive_vision_window
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
@@ -9496,6 +10002,89 @@ def _caption_scope_q(bank_id, statuses):
     return _scoped_pool(bank_id, statuses)
 
 
+@_serialized_bank_mutation('caption')
+def preview_caption(user_id, bank_id, image_id, *, backend=None, ollama_model='',
+                    vocabulary=None, length=None, instructions=None,
+                    _bank_lease=None) -> dict | None:
+    """🧪 Caption Lab, Bank side: run ONE candidate config on ONE bank image and
+    return the caption WITHOUT writing it. The Bank's half of
+    face_dataset_service.preview_caption, and the two share their WHOLE definition of a
+    candidate (preview_caption_path). What differs here is only what genuinely differs
+    between the surfaces: a BankImage row instead of a dataset row, the resolved path the
+    Bank's own passes read (cleaned, turn baked in), and the Bank lease instead of
+    dataset_activity.
+
+    IT TAKES THE LEASE UNDER KIND 'caption', the same kind as the batch pass, even though
+    it writes nothing. Two reasons, both measured elsewhere in this file: it holds the GPU
+    for seconds, so a caption pass admitted mid-bench would leave both fighting for it;
+    and reusing the kind means the Bank's existing ▶ Stop and progress affordances abort
+    a bench with no new vocabulary to learn.
+
+    Returns None when the image is unknown (404). Raises ValueError (bad bank or bad
+    config) -> 400, BankJobBusy -> 409, GpuBusyError -> 503."""
+    from .face_dataset_service import preview_caption_path
+    from ..gpu_window import gpu_exclusive_vision_window
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    row = BankImage.query.filter_by(bank_id=bank_id, id=int(image_id)).first()
+    if row is None:
+        return None
+    path = analysis_image_path(bank, row, refresh_rotation=True)
+    if not _is_safe_bank_source(path, label='bank caption preview'):
+        raise ValueError('the image could not be read from its folder')
+    # SAY WHAT IS RUNNING. The lease is taken under kind 'caption', which is what makes
+    # the existing Stop work — but with no detail the bank announces (and refuses with)
+    # a plain 'Captioning', indistinguishable from a pass over the whole pile. The
+    # dataset route names its own the same way (dataset_activity.begin(..., detail=)).
+    bank_jobs.progress(_bank_lease, done=0, total=1, detail='Caption Lab')
+    with gpu_exclusive_vision_window(flag_ttl=600):
+        return preview_caption_path(
+            path, backend=backend, ollama_model=ollama_model, vocabulary=vocabulary,
+            length=length, instructions=instructions,
+            should_cancel=lambda: bank_jobs.cancelled(_bank_lease))
+
+
+@_serialized_bank_mutation('caption_edit')
+def set_image_caption(user_id, bank_id, image_id, caption, *,
+                      _bank_lease=None) -> dict | None:
+    """Write ONE bank image's caption, by hand. Returns the stored text and its origin,
+    or None when the image is unknown (404).
+
+    THIS IS NEW GROUND FOR THE BANK, and it is here because the 🧪 Caption Lab needs
+    somewhere to put a winning candidate: ✓ Keep this one has always dropped its text
+    into the per-image caption editor, and until now that editor existed only on the
+    Dataset side (face_dataset_service still calls itself "THE APP'S ONLY CAPTION
+    EDITOR"). A bench whose Keep button had nowhere to write would be a mirror in name.
+
+    The text lands stamped ASSERTED, which is not a detail: the whole
+    protect-what-you-wrote machinery on this surface — caption_origin.is_protected, the
+    "kept (written by you)" figure, the include_asserted opt-out on 🔄 Re-caption — is
+    already built and already honoured by the batch pass. This gives it its first local
+    writer instead of inventing a second notion of authorship."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    row = BankImage.query.filter_by(bank_id=bank_id, id=int(image_id)).first()
+    if row is None:
+        return None
+    if caption is not None and not isinstance(caption, str):
+        raise ValueError('caption must be a string')
+    # The SAME cap as the dataset editor (face_dataset_service.set_image_caption): a
+    # caption is a caption on both surfaces, and an unbounded write here would be the
+    # one place in the app where 200 kB of pasted text lands in a row read by the
+    # search, the promotion and the training export.
+    from .face_dataset_service import _cap_caption
+    text = (_cap_caption(caption) or '').strip()
+    # Same gesture as every other writer: text and origin together, never two lines.
+    # An emptied box clears the stamp too, so a blanked caption never keeps a
+    # "written by you" label that would then be spared by a forced pass.
+    caption_origin.stamp(row, text or None, caption_origin.ASSERTED)
+    stored_origin = row.caption_origin
+    db.session.commit()
+    return {'caption': row.caption or '', 'caption_origin': stored_origin}
+
+
 def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
                   length=None, backend=None, ollama_model=None, statuses=None,
                   include_asserted=False):
@@ -9662,7 +10251,12 @@ def export_scene_captions(user_id, bank_id, statuses=None):
 # it did not do. Keys are the stored values (services/caption_origin.py) — frozen.
 _CAPTION_WRITER_NAMES = {
     caption_origin.JOYCAPTION: 'JoyCaption',
-    caption_origin.OLLAMA: 'the Ollama vision model',
+    # Neutral, and deliberately the SAME words the dataset's own writer summary
+    # uses (frontend utils/captionEngines.js). The stored key is still 'ollama' --
+    # it is in every user's database -- but it has meant "the configured local
+    # provider" since LM Studio joined, and a run through LM Studio told the user
+    # Ollama had written its captions. Identical behaviour, recognisable wording.
+    caption_origin.OLLAMA: 'the local LLM vision model',
 }
 
 
@@ -9895,7 +10489,7 @@ def _score_prereq() -> str | None:
 
 
 def _watermark_prereq() -> str | None:
-    from ..capabilities import probe_ollama_model
+    from .vision_llm import probe_model as probe_ollama_model
     if not probe_ollama_model().get('ok'):
         return 'vision model not available (Settings ▸ Local tools)'
     return None
@@ -9909,7 +10503,7 @@ def _faces_prereq() -> str | None:
 
 
 def _framing_prereq() -> str | None:
-    from ..capabilities import probe_ollama_model
+    from .vision_llm import probe_model as probe_ollama_model
     if not probe_ollama_model().get('ok'):
         return 'vision model not available (Settings ▸ Local tools)'
     return None

@@ -1,4 +1,9 @@
 import sys, pathlib
+from urllib.parse import urlsplit
+
+# The two local LLM daemons a developer machine may be running. The unit suite
+# must reach neither, so that every machine agrees with CI (which runs neither).
+_LOCAL_LLM_PORTS = frozenset({11434, 1234})
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import pytest
 
@@ -249,3 +254,107 @@ def _ollama_fence_never_reads_this_machine(request, monkeypatch):
     _fence.reset_for_tests()
     yield
     _fence.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _nothing_else_reads_this_machines_ollama(request, monkeypatch):
+    """Keep the unit suite off THIS machine's local LLM daemons.
+
+    The fence guard above closed one door in 2026-08-02 and left the building
+    open. Measured 2026-08-29 with a socket tripwire on port 11434, full suite:
+    **119 real connections, 59 tests, 24 files**. Two distinct leaks, and they
+    do not cost the same thing:
+
+    * `capabilities.probe_ollama` / `probe_ollama_model` — GET /api/tags, 118 of
+      them, from every test that builds a capabilities payload (diagnostic,
+      cloud routes, krea bases, seedvr2, setup_state, watermark…). A read: it
+      lists installed models, loads nothing, reserves no VRAM. Cheap, but it
+      still lets a daemon nobody declared decide a verdict.
+    * `vision_ollama.describe_image_ollama` — **POST /api/generate**, reached by
+      `detect_head_bbox` whenever a test uploads an image (test_dataset_routes,
+      test_json_body_strict). That one is not a read: it LOADS the 8 GB vision
+      model onto the shared GPU. Through LDS's own GPU fence that can stall a
+      running Test Studio queue, and it competes with whatever else holds the
+      card. A unit suite must never be able to do that.
+
+    Forcing both to the "no daemon" answer is what CI already sees (no Ollama on
+    the runner), so every machine agrees with CI instead of inventing a third
+    behaviour. The stubs return exactly what the real failure path returns —
+    False / [] / '' — so no caller learns a shape it would not see in the wild.
+
+    `/api/tags` is the discriminator for the probe half on purpose: it is
+    Ollama's path and nothing else's — ComfyUI probes `/history` through the
+    same `_http_ok` and must keep working.
+
+    LM Studio (port 1234) is covered by the same guard for the same reasons: a
+    developer running it would otherwise have their suite load a model onto the
+    shared card, and would get different verdicts from CI, which runs neither.
+
+    Tests that are ABOUT any of this opt back in with @pytest.mark.ollama_http
+    (or @pytest.mark.lmstudio_http) and drive `requests` themselves, so the
+    behaviour stays covered.
+    """
+    if request.node.get_closest_marker('ollama_http'):
+        return
+    if request.node.get_closest_marker('lmstudio_http'):
+        return
+    import errno as _errno
+
+    import requests as _requests
+
+    # Cut the SOCKET, not the functions. The first version of this guard
+    # stubbed `describe_image_ollama` & co. and turned 30 tests red — because
+    # test_captioning (26 of them), test_vision_keepalive and test_studio_service
+    # mock `vision_ollama.requests.post` and then exercise the REAL function to
+    # assert its parsing, its retries and its lease bookkeeping. Replacing the
+    # function stepped over their mock and tested nothing. Refusing the
+    # connection underneath leaves every line of app logic running, on the exact
+    # path a machine with no daemon takes; a test that installs its own
+    # `requests` double still wins, because its setattr comes after this one.
+    real_get, real_post = _requests.get, _requests.post
+
+    def _refuse(url):
+        # Shaped like the refusal a machine with no daemon actually produces —
+        # a ConnectionRefusedError carrying ECONNREFUSED, wrapped by requests.
+        # The shape is load-bearing, not decoration: ollama_gpu_fence walks the
+        # exception chain (`_connection_refused`) to tell "nothing is listening"
+        # from "something went wrong", and a bare ConnectionError would be filed
+        # as `unknown` instead of `down`. A guard whose whole argument is "every
+        # machine agrees with CI" must not invent a third answer of its own.
+        # Same constructor as tests/test_ollama_gpu_fence.py::_refused.
+        raise _requests.exceptions.ConnectionError(
+            ConnectionRefusedError(
+                _errno.ECONNREFUSED,
+                f'the unit suite must not reach this machine\'s Ollama ({url}). '
+                'A test that means to drive it takes @pytest.mark.ollama_http.'))
+
+    def _is_local_llm_daemon(url):
+        # Compare the PARSED port, never a substring. ':11434' happened to be
+        # collision-free; ':1234' is not — it matches ':12345', a perfectly
+        # ordinary fixture port, and would refuse those requests with a message
+        # about a daemon the test never mentioned. The socket tripwire in
+        # test_suite_is_hermetic_about_ollama.py already compares ports exactly;
+        # this now agrees with it.
+        try:
+            return urlsplit(str(url)).port in _LOCAL_LLM_PORTS
+        except ValueError:
+            return False           # an unparseable port is not this machine's daemon
+
+    def _get(url, *args, **kwargs):
+        if _is_local_llm_daemon(url):
+            _refuse(url)
+        return real_get(url, *args, **kwargs)
+
+    def _post(url, *args, **kwargs):
+        if _is_local_llm_daemon(url):
+            _refuse(url)
+        return real_post(url, *args, **kwargs)
+
+    # Port, not path: 11434 IS "the Ollama daemon on this machine" and 1234 is
+    # "LM Studio's server", while a test that points either URL at a fixture
+    # server of its own is not talking to them and must keep working. Everything
+    # else on `requests` — ComfyUI, Hugging Face, the cloud provider — is
+    # delegated untouched.
+    _get.lds_ollama_guard = _post.lds_ollama_guard = True
+    monkeypatch.setattr(_requests, 'get', _get)
+    monkeypatch.setattr(_requests, 'post', _post)

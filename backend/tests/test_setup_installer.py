@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 
@@ -674,13 +676,29 @@ def _fake_popen_capturing(seen, returncode=0, lines=()):
     FakeProc.returncode = returncode
     def fake_popen(cmd, **kw):
         seen['cmd'] = cmd
+        # Read any -c file WHILE it exists: the watermark install builds its
+        # constraints in a TemporaryDirectory, so after the call there is
+        # nothing left on disk to assert against.
+        if '-c' in cmd:
+            target = cmd[cmd.index('-c') + 1]
+            try:
+                with open(target, encoding='utf-8') as fh:
+                    seen.setdefault('constraints', []).append(fh.read())
+            except OSError:
+                seen.setdefault('constraints', []).append(None)
         return FakeProc()
     return fake_popen
 
 
 def test_run_watermark_inpaint_targets_watermark_python(app, monkeypatch):
     """watermark.python wins the interpreter resolution and the pip target IS it,
-    with the parsed spec and requirements-ml.txt pinned as a constraint (-c)."""
+    with the parsed spec and a constraints file pinned (-c).
+
+    This used to assert the constraint was requirements-ml.txt ITSELF, and that
+    assertion pinned the bug of GitHub #59: the app's own `pillow>=12,<13` rode
+    into the one environment built to hold Pillow 9. The constraint is still
+    passed — the floors it carries are worth having — it is simply no longer the
+    raw file. What it must NOT contain is asserted in the test below."""
     from app import setup_installer, config
     seen = {}
     monkeypatch.setattr(setup_installer.subprocess, 'Popen',
@@ -696,7 +714,44 @@ def test_run_watermark_inpaint_targets_watermark_python(app, monkeypatch):
     assert cmd[0] == '/wm/py'                      # exact interpreter, not sys.executable
     assert cmd[1:4] == ['-m', 'pip', 'install']
     assert spec in cmd
-    assert '-c' in cmd and any('requirements-ml.txt' in str(p) for p in cmd)
+    assert '-c' in cmd
+
+
+def test_the_watermark_install_never_inherits_the_apps_pillow_pin(app, monkeypatch):
+    """GitHub #59: `pip install simple-lama-inpainting -c requirements-ml.txt`
+    is an unsatisfiable request, and pip refuses the whole install.
+
+    simple-lama-inpainting requires `pillow>=9.5,<10`; requirements-ml.txt pins
+    `pillow>=12,<13` for the app's burned-in-text reader. The watermark venv
+    exists PRECISELY to hold the old Pillow next to the app's new one — so
+    handing pip the app's pin there asks it to satisfy both at once. It answers
+    ResolutionImpossible, naming "The user requested (constraint) pillow<13,>=12",
+    and the feature cannot be installed at all.
+
+    Asserted on the CONTENT of whatever file is passed, not on its name: a later
+    refactor may build that file differently, it may not put Pillow back in it.
+    The other floors must survive, or the constraint would stop earning its keep
+    (it is what keeps a torch pull from bumping numpy past insightface's <2)."""
+    from app import setup_installer, config
+    seen = {}
+    monkeypatch.setattr(setup_installer.subprocess, 'Popen',
+                        _fake_popen_capturing(seen, 0))
+    with app.app_context():
+        config.save_config({'watermark': {'python': '/wm/py'}})
+        setup_installer._runs['watermark_inpaint'] = setup_installer._new_run()
+        setup_installer._run_watermark_inpaint('watermark_inpaint')
+
+    written = [c for c in seen.get('constraints') or [] if c]
+    assert written, 'no -c file was read back — the capture seam broke, not the guard'
+    for body in written:
+        for line in body.splitlines():
+            name = re.split(r'[<>=!~;\[\s]', line.strip(), maxsplit=1)[0]
+            assert setup_installer._canon(name) != 'pillow', (
+                f'the app Pillow pin rode into the watermark env: {line!r}')
+        # The constraint still has a job: keep the numpy ceiling insightface needs.
+        assert 'numpy' in body, (
+            'the filtered constraints dropped everything useful — pass the file '
+            'minus Pillow, not an empty one')
 
 
 def test_run_watermark_inpaint_falls_back_to_masks_python(app, monkeypatch):
@@ -1225,6 +1280,64 @@ def test_run_watermark_inpaint_rebuilds_missing_managed_env(app, monkeypatch):
         rc = setup_installer._run_watermark_inpaint('watermark_inpaint')
     assert rc == 0
     assert any(c[1:3] == ['-m', 'venv'] for c in seen)       # rebuilt
+
+
+# --- managed-venv pip freshness (the old-pip wheel refusal) ----------------
+
+
+def test_ensure_modern_pip_upgrades_an_old_pip(monkeypatch):
+    """A 3.10 base seeds the venv with pip 21.x, which rejects current wheels
+    ("inconsistent Name") and then fails their sdist build against the CPU torch
+    index. Anything below the floor gets one upgrade."""
+    from app import setup_installer
+    calls = []
+    monkeypatch.setattr(setup_installer, '_pip_version', lambda p: (21, 2))
+    monkeypatch.setattr(setup_installer, '_run_pip',
+                        lambda a, cmd: (calls.append(cmd), 0)[1])
+    setup_installer._runs['bank_scoring'] = setup_installer._new_run()
+    setup_installer._ensure_modern_pip('bank_scoring', r'C:\envs\x\python.exe')
+    assert len(calls) == 1
+    assert calls[0][1:] == ['-m', 'pip', 'install', '--upgrade', 'pip']
+    assert calls[0][0] == r'C:\envs\x\python.exe'   # the venv's own python, never PATH pip
+
+
+def test_ensure_modern_pip_leaves_recent_and_unreadable_pips_alone(monkeypatch):
+    """At or above the floor: nothing to do. Unreadable (missing/fake interpreter):
+    no blind upgrade either — the guard must never touch what it cannot read."""
+    from app import setup_installer
+    calls = []
+    monkeypatch.setattr(setup_installer, '_run_pip',
+                        lambda a, cmd: (calls.append(cmd), 0)[1])
+    setup_installer._runs['bank_scoring'] = setup_installer._new_run()
+    for version in ((23, 1), (25, 0), None):
+        monkeypatch.setattr(setup_installer, '_pip_version', lambda p, v=version: v)
+        setup_installer._ensure_modern_pip('bank_scoring', r'C:\envs\x\python.exe')
+    assert calls == []
+
+
+def test_reused_managed_envs_get_the_pip_freshness_check(app, monkeypatch):
+    """The check runs on REUSE too, not only on creation: installs out there
+    already carry a venv seeded with the old pip, and a re-click of Install must
+    repair it — that is the whole retrofit path."""
+    import os
+    from app import setup_installer
+    seen = []
+    monkeypatch.setattr(setup_installer, '_ensure_modern_pip',
+                        lambda a, p: seen.append(p))
+    with app.app_context():
+        for ensure, managed_python, action in (
+            (setup_installer._ensure_bank_scoring_env,
+             setup_installer._bank_scoring_env_python(), 'bank_scoring'),
+            (setup_installer._ensure_watermark_env,
+             setup_installer._watermark_env_python(), 'watermark_inpaint'),
+        ):
+            os.makedirs(os.path.dirname(managed_python), exist_ok=True)
+            open(managed_python, 'w').close()             # the venv already exists
+            setup_installer._runs[action] = setup_installer._new_run()
+            got = ensure(action)
+            assert got == managed_python
+    assert seen == [setup_installer._bank_scoring_env_python(),
+                    setup_installer._watermark_env_python()]
 
 
 # --- base-Python discovery (version checked by EXECUTION, not name) --------

@@ -25,8 +25,18 @@ def test_cloud_defaults_present(app):
     assert cfg.get('cloud.disk_gb') == 60
     # flux2klein: 32 — the key is per FAMILY (not per variant) and the 9B size
     # (32-48 GB) is that family's cloud lane; a 32 GB pod also trains the 4B.
+    # video: 48 — that lane's pods run with low_vram OFF, so the weights are
+    # resident (H3: ~21 GB transformer + ~16 GB text encoder; Wan 2.2: two
+    # experts); the 24 GB fallback rented pods that could only OOM.
     assert cfg.get('cloud.min_vram_gb') == {'zimage': 24, 'sdxl': 16, 'krea': 24,
-                                            'flux2klein': 32}
+                                            'flux2klein': 32, 'video': 48}
+    # The video lane boots its own, fresher image (minimax_h3 landed in
+    # ai-toolkit on 2026-08-03; the face pin above predates it on purpose).
+    assert cfg.get('cloud.video_image', '').startswith('vastai/ostris-ai-toolkit:')
+    # …and rents its own disk: 42.5 GB of MiniMax H3 weights plus an unpacked
+    # image do not fit the 60 GB above, and a pod that fills up mid-download has
+    # already been paid for.
+    assert cfg.get('cloud.video_disk_gb') == 120
 
 
 def test_vast_api_key_is_a_secret(app):

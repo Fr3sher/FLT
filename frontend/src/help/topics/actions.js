@@ -38,6 +38,12 @@ export const ACTION_TOPICS = [
      'watermark source', 'detector', 'vision model', 'why is this flagged',
      'watermark score', 'sensitivity', 'threshold', 'false positive'],
     '/bank', 'using-the-app', 'clean-the-watermarks-a-bank-found'),
+  action('action-find-text', 'Erase burned-in text (bubbles, subtitles, captions)',
+    ['find text', 'text', 'ocr', 'burned-in', 'burned in', 'speech bubble',
+     'bubble', 'subtitle', 'subtitles', 'caption', 'sound effect', 'sfx',
+     'manga', 'comic', 'webtoon', 'lettering', 'erase text', 'remove text',
+     'clean text', 'rapidocr', 'korean', 'japanese', 'meme'],
+    '/bank', 'using-the-app', 'erase-burned-in-text-bubbles-subtitles-captions'),
   /* ✂ and ✨ share one guide section but get a topic EACH, for the same reason
      🎨 Medium and ⤢ Angle do below: they are two different gestures asked about
      in two different vocabularies ("how do I crop in the bank?" vs "can I
@@ -125,14 +131,16 @@ export const ACTION_TOPICS = [
     ['filter', 'decision', 'undecided', 'awaiting', 'pending', 'kept', 'keep', 'rejected',
      'reject', 'improve', 'candidates', 'klein', 'isolate', 'triage', 'select all', 'grid'],
     '/datasets?section=images', 'dataset-guide', '2-how-many-images-and-which-ones'),
-  // ✎ Edit this instruction here — the improve prompt, editable from the note
-  // under the ✨ button instead of only from Settings. Its own topic because the
-  // question it answers is "how do I change this sentence WITHOUT leaving my
-  // images", and because the panel has a property the Settings card does not:
-  // it writes the app-wide value from a per-dataset-looking screen, which is the
-  // one thing a user must be told before they use it.
+  // ✎ Edit this instruction here — the improve prompt, editable from the
+  // settings window the ✨ button opens (inline note on the bulk toolbar)
+  // instead of only from Settings. Its own topic because the question it
+  // answers is "how do I change this sentence WITHOUT leaving my images", and
+  // because the panel has a property the Settings card does not: it writes the
+  // app-wide value from a per-dataset-looking screen, which is the one thing a
+  // user must be told before they use it.
   action('action-edit-improve-instruction', 'Edit the improve instruction without leaving the images',
     ['improve', 'upscale', 'instruction', 'prompt', 'edit', 'edit here', 'inline', 'in place',
+     'window', 'modal', 'popup', 'settings window', 'generate button',
      'change the prompt', 'turn off', 'disable', 'toggle', 'no prompt', 'upscale only',
      'klein', 'anime', 'drawn', 'realistic', 'texture', 'skin', 'detail', 'lightbox',
      'reset to default', 'built-in default', 'global', 'app-wide', 'every dataset',
@@ -166,9 +174,28 @@ export const ACTION_TOPICS = [
     { trigger: 'camera-angles-picker',
       text: 'Pick axes, not pictures: the sides you tick times the heights times '
         + 'the distances is the run — the count under the button is what it will cost.' }),
+  /* 📷 The picker's Model row — a SETTING (app-wide camera.unet), so it owes a
+     topic, and the words it is asked with ("can I run this on a finetune / an
+     NSFW build") appear in none of the other camera topics. */
+  action('action-camera-model', 'Run camera angles on another Qwen-Image-Edit build',
+    ['camera model', 'qwen model', 'qwen build', 'qwen edit', '2511', 'swap model',
+     'another model', 'different model', 'change model', 'custom model', 'finetune',
+     'fine-tune', 'merge', 'aio', 'nsfw', 'uncensored', 'rapid', 'which model',
+     'model not found', 'camera.unet', 'model row', 'camera picker model'],
+    '/gallery', 'settings-reference', 'image-engines'),
   /* 📷 In a dataset the same verb answers a different question — "how do I get
      training coverage of the back of my character" — and adds the captioning
      angle, so it earns its own topic with the dataset vocabulary. */
+  /* ⚙ The folded Made-with block in the dataset lightbox's actions panel:
+     what a GENERATED image was made with (engine, base model, LoRAs, steps,
+     seed). Its own topic because the words it is asked with — "which engine
+     made this", "what seed" — appear nowhere else. */
+  action('action-dataset-made-with', 'See what a generated dataset image was made with',
+    ['made with', 'generated with', 'which engine', 'which model made this',
+     'what settings', 'seed', 'what seed', 'lora used', 'which lora', 'base model',
+     'generation settings', 'provenance', 'metadata', 'stamp'],
+    '/datasets?section=images', 'using-the-app',
+    'the-character-walkthrough-reference-photo-trained-lora'),
   action('action-dataset-camera-angles', 'Cover a dataset subject from more angles',
     ['camera angles dataset', 'multi-angle dataset', 'coverage', 'training coverage',
      'back of my character', 'more angles', 'angle caption', 'seen from behind',
@@ -320,6 +347,14 @@ export const ACTION_TOPICS = [
     ['caption', 'options', 'engine', 'model', 'ollama', 'pull', 'instructions', 'prompt',
      'method', 'vocabulary', 'explicit', 'clinical', 'nsfw', 'abliterated', 'uncensored'],
     '/datasets?section=captions&panel=generate', 'dataset-guide', '3-captions-the-make-or-break-step'),
+  // The bench had no topic at all while its keywords sat on the SECTION topic,
+  // which routed to a screen that did not carry it. It has its own address now.
+  action('action-caption-lab', 'Caption Lab — compare caption configs on one image',
+    ['caption lab', 'lab', 'bench', 'compare', 'comparison', 'a/b', 'ab test', 'side by side',
+     'candidate', 'preview', 'try', 'test a model', 'which model', 'engine', 'joycaption',
+     'ollama', 'vision model', 'vocabulary', 'explicit', 'clinical', 'safe',
+     'length', 'concise', 'detailed'],
+    '/datasets?section=captions&panel=lab', 'dataset-guide', '3-captions-the-make-or-break-step'),
   action('action-caption-stop', 'Stop a captioning batch',
     ['caption', 'stop', 'cancel', 'abort', 'interrupt', 'batch', 'graceful', 'halt'],
     '/datasets?section=captions&panel=generate', 'dataset-guide', '3-captions-the-make-or-break-step'),

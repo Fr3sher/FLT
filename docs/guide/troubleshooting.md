@@ -104,7 +104,26 @@ In Docker, host binary detection is not the deployment selector. Open **Setup �
 
 On a native install, LDS still distinguishes **not installed**, **installed but stopped**, and **running**. The **▶ Start Ollama** button applies only to a detected native binary.
 
+**You do not have to install Ollama to finish Setup.** If JoyCaption is installed, captioning already works without it and the step is only a recommendation. With neither installed, the step offers **Continue without Ollama**, which lists what turns off (auto-classify framing, auto head-crop, Test Studio Describe & Enhance, the bank's "Describe filter", the vision route of watermark detection, short captions) before you commit, and then stops asking. Starting Ollama later cancels the skip on its own — nothing to undo.
+
 No launcher or **Install everything** action pulls the large vision model. Once the selected service is reachable, use the explicit **Pull** button in LDS Setup; it shows progress and supports cancellation/resume. Keep the **Instruct** tag. The Thinking variant reasons instead of returning the compact captions these workflows expect.
+
+## LM Studio is running but LDS says nothing is loaded
+
+That is usually correct, not a bug. LM Studio ships with **JIT loading off**, so the server answers every request that lists models and refuses every request that generates one. Load a model in its **Developer** tab (a vision model if you want captioning, framing or head-crop) and the status turns green.
+
+Three more things worth knowing when the two disagree:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Every call fails, and the message talks about Ollama holding the GPU | The URL carries a path — LM Studio's Developer tab shows `http://localhost:1234/v1` and that is what gets pasted | Nothing to do on recent builds: the `/v1` is stripped automatically. If you typed something else after the port, remove it. |
+| **"No usable model is loaded"** | LM Studio ships with just-in-time loading OFF, and older LDS builds left the loading to you — then unloaded your own copy when their keep-warm expired, which read as "load it, again and again" | Update LDS: it now loads the model itself — automatically when a pass needs it, or from the **⏬ Load the vision model** button in Setup and Settings ▸ Local tools. Only **downloading** a new model still happens inside LM Studio, which shows progress and lets you cancel. |
+| The card says the server answers but cannot tell what is loaded | Only the OpenAI-compatible API is answering; it reports neither model type nor residency | Name a model explicitly in **Settings ▸ Local tools ▸ LM Studio model**, or update LM Studio so its native API answers |
+| Captioning works but framing/head-crop do not | The loaded model is a text model, not a vision one | Load a VLM (a model LM Studio lists with vision support) |
+
+**In Docker, `127.0.0.1` is the container, not your machine.** LM Studio runs on the host, so a containerised LDS must be pointed at **`http://host.docker.internal:1234`** — the Settings card shows that address as the placeholder when it detects a container. LM Studio's server also has to be reachable from Docker (it listens on localhost only by default; enable serving on the local network in its Developer tab).
+
+**▶ Start LM Studio** appears on the Local tools card and the Setup step when the server is down and LM Studio's command-line tool is present — it is installed the first time you open LM Studio, so an install that has never been launched gets the Developer-tab sentence instead of a button that could not work. Pressing it leaves a model alone if only the server had stopped; if LM Studio itself was closed, the server comes back empty and you load a model in its Developer tab. Either way it starts the server on the port your settings name. In Docker the button is not offered: the container cannot start an application on your desktop, whatever the URL says.
 
 ## Training log looks frozen for several minutes
 

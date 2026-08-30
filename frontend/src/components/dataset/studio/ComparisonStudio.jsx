@@ -7,7 +7,7 @@
  * /api/studio/run → useStudioRun(run_id) pilote l'affichage (poll + vote +
  * cancel/resume). Grille colonnes = LoRA × lignes = strength (LoraComparisonGrid),
  * panneau « 🏆 Classement LoRA » (data.lora_ranking). Vote rapide (file + swipe)
- * et lightbox réutilisent useQuickVote / QuickVoteModal / ResultLightbox.
+ * et lightbox réutilisent useQuickVote / QuickVoteModal / StudioResultViewer.
  *
  * Le LoraPicker reste dans StudioShell (partagé avec la branche 1-LoRA) ; ici on
  * reçoit la sélection figée et on pilote uniquement le run.
@@ -25,6 +25,7 @@ import { axisPayload, axisTotal, effectiveAxis, toggleAxisValue } from './studio
 import AxisPickers from './AxisPickers';
 import { isStackRun, stackMembers } from './stackResults';
 import StudioRunSetup from './StudioRunSetup';
+import { readInjectTrigger, writeInjectTrigger } from './triggerPref';
 import LoraStackPanel from './LoraStackPanel';
 import StackCompositionPanel from './StackCompositionPanel';
 import StackVariantsGrid from './StackVariantsGrid';
@@ -35,7 +36,7 @@ import LoraComparisonGrid from './LoraComparisonGrid';
 import LoraRankingPanel from './LoraRankingPanel';
 import RunSelector from './RunSelector';
 import QuickVoteModal from './QuickVoteModal';
-import ResultLightbox from './ResultLightbox';
+import StudioResultViewer from './StudioResultViewer';
 
 const rollSeed = () => Math.floor(Math.random() * 2 ** 31);
 
@@ -53,6 +54,13 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   const [prompt, setPrompt] = useState(() => {
     try { return localStorage.getItem('studioComp_prompt') || ''; } catch { return ''; }
   });
+  // 🔤 Case « Trigger word » — MÊME préférence que le panneau du Test Studio et
+  // le canvas (module partagé triggerPref) : décocher ici vaut partout.
+  const [injectTrigger, setInjectTrigger] = useState(readInjectTrigger);
+  const toggleInjectTrigger = (v) => {
+    setInjectTrigger(v);
+    writeInjectTrigger(v);
+  };
   const [seed, setSeed] = useState(() => rollSeed());
   // 'compare' (historique : un LoRA seul par cellule) ou 'combine' (pile : tous les
   // LoRA cochés dans la MÊME image, chacun à son poids). Persisté comme le reste.
@@ -264,6 +272,9 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
         ...axisPayload({ cfgs: effectiveCfgs, steps: effectiveSteps, steps2: effectiveSteps2 }),
       };
       if (prompt.trim()) body.prompt = prompt.trim();
+      // Case « Trigger word » décochée → prompt envoyé tel quel. Absent quand
+      // cochée : le corps reste octet pour octet celui d'avant.
+      if (!injectTrigger) body.inject_trigger = false;
       const dResp = await postJson('/api/studio/run', body);
       // Keep this defensive path even though apiFetch currently throws on
       // non-2xx: alternate clients/tests may return the structured 409 body.
@@ -331,6 +342,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
           onToggleChip={toggleStackChip}
           count={count}
           secondsPerImage={axes?.seconds_per_image ?? null}
+          injectTrigger={injectTrigger}
           onWeight={(k, v) => setStackWeights((cur) => ({ ...cur, [k]: v }))} />
         <div id="st-setup" className="scroll-mt-16">
           <StudioRunSetup
@@ -352,6 +364,8 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
             configCount={blendConfigCount(selection, { weights: stackWeights, sets: stackSets })}
             axisTotal={axisTotal({ cfgs: effectiveCfgs, steps: effectiveSteps, steps2: effectiveSteps2 })}
             secondsPerImage={axes?.seconds_per_image ?? null}
+            injectTrigger={injectTrigger}
+            onInjectTrigger={toggleInjectTrigger}
             /* 🎛 Les axes de rendu, dans le panneau de réglage du run et pas dans
                un bloc à part : c'est le même geste que choisir une strength. Le
                MÊME composant que le studio mono-LoRA et le canvas — base et format
@@ -392,7 +406,10 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
             ligne et n'apprend rien. À sa place, ce qui la définit — sa composition. */}
         {showStackView ? (
           <StackCompositionPanel members={shownStack} onSaveBest={saveStackBest}
-            saving={savingBest} savedAt={bestSavedAt} />
+            saving={savingBest} savedAt={bestSavedAt}
+            // La vérité du RUN affiché, pas de la case : une seule cellule
+            // False suffit (toutes le sont sur un run décoché).
+            injectTrigger={!cells.some((c) => c.inject_trigger === false)} />
         ) : (
           <LoraRankingPanel ranking={data?.lora_ranking} />
         )}
@@ -469,8 +486,8 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
 
       <QuickVoteModal vote={vote} datasetId={vote.current?.dataset_id} fmt={fmt} />
       {lbImg && (
-        <ResultLightbox img={lbImg} items={navImages} datasetId={lbImg.dataset_id}
-          onRate={rateLightbox} onNavigate={setLbImg} onClose={() => setLbImg(null)} fmt={fmt} />
+        <StudioResultViewer img={lbImg} items={navImages}
+          onRate={rateLightbox} onNavigate={setLbImg} onClose={() => setLbImg(null)} />
       )}
 
       {/* Barre de commande fixe : Run toujours visible + raccourcis de sections. */}

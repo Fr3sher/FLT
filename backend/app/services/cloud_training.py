@@ -3186,7 +3186,23 @@ def _maybe_auto_retry(run, error):
         retry_flags = _confirmation_flags(params)
         retry_flags['allow_parallel_run'] = True
         try:
-            result = launch_cloud_training(
+            if crd.is_video(run):
+                # A video run retried down the FACE path dies on "dataset not
+                # found": the id points at the video table. Found live — run
+                # #169's boot-timeout retry. The video launcher replays the
+                # run's own stamps (its _relaunch_args is pinned to carry every
+                # training flag) plus the same bookkeeping the face path stamps.
+                from . import cloud_video_training as cvt
+                result = cvt.launch_cloud_video_training(
+                    'local', run.dataset_id,
+                    steps=params.get('steps') or 1000,
+                    **cvt._relaunch_args(params) | {'gpu_name': gpu_name},
+                    resume_ckpt_paths=params.get('resume_ckpt_paths'),
+                    resume_step=params.get('resume_step'),
+                    auto_retry_of=run.id,
+                    auto_retry_count=retry_count + 1)
+            else:
+                result = launch_cloud_training(
                 'local', run.dataset_id,
                 steps=params.get('steps'),
                 base_model=params.get('base_model', ''),
@@ -3203,7 +3219,7 @@ def _maybe_auto_retry(run, error):
                 strict_gpu=bool(gpu_name),
                 train_settings_snapshot=resume_snapshot,
                 train_slider_snapshot=params.get(_TRAIN_SLIDER_SNAPSHOT, _UNSET),
-                resume_topology=topology)
+                    resume_topology=topology)
         except Exception as retry_error:
             params['auto_retry_pending'] = False
             params['auto_retry_error'] = str(retry_error)[:300]
@@ -3339,13 +3355,34 @@ def _build_pod_job_config(run, staging_dataset: str, pod_settings: dict) -> dict
         vds = crd.dataset_row(run)
         if vds is None:
             raise RuntimeError(f'run {run.id} trained a video dataset that is gone')
+        # Reference dirs ride as SIBLING names of the dataset path, because
+        # that is the seam _cloudify already rewrites: its staging->pod text
+        # replacement turns '<staging>_ref1' into '<pod_ds>_ref1', which is
+        # precisely the name the upload gives each dir on the pod — the exact
+        # contract the masks folder has used all along.
+        from . import video_bank_service as _vbs
+        _ref_dirs = _vbs.reference_dirs(vds)
+        control_dirs = ([f'{staging_dataset}_ref{k}'
+                         for k in range(1, len(_ref_dirs) + 1)]
+                        if _ref_dirs else None)
         job_config = video_training.build_job_config(
             vds, staging_dataset, steps=params.get('steps') or 1000,
             training_folder='__POD__', base_model=params.get('base_model') or None,
             # The measured reason this run is on a rented GPU at all: low_vram
             # cost 170-185 s a step on 24 GB by shuttling the idle expert over
             # PCIe. Stamped at launch so the pod cannot be re-decided later.
-            low_vram=bool(params.get('low_vram', False)))
+            low_vram=bool(params.get('low_vram', False)),
+            do_i2v=bool(params.get('do_i2v', False)),
+            # Asked of the image this pod actually boots, not assumed from ours:
+            # the pin is a config value and someone may move it backwards.
+            sample_prompts=params.get('sample_prompts') or None,
+            # The stamped 'off' beats capability: it exists so the SAME dataset
+            # can run with and without the recipe and the previews be compared.
+            training_adapter=(
+                params.get('distillation') != 'off'
+                and video_training.image_supports_training_adapter(
+                    _pod_image_for(run, cfg.get('cloud') or {}))),
+            control_dirs=control_dirs)
     else:
         ds = fds.get_dataset('local', run.dataset_id)
         job_config = lt.build_job_config(
@@ -3388,9 +3425,23 @@ def _assert_pod_can_decode(run, remote, pod_settings):
 
     A refusal RAISES, and the monitor's generic handler turns it into a failed
     run with the pod released. Standing down "just in case the probe is wrong"
-    would restore exactly the blind launch this exists to remove."""
+    would restore exactly the blind launch this exists to remove.
+
+    A probe that cannot be RUN is the other case entirely, and it is not
+    hypothetical: vast's remote-exec endpoint accepts `ls`, `rm` and `du` and
+    nothing else, so on that provider this program never reaches the pod at all
+    (measured, run #165). Treating that as a refusal would ground every video
+    run for as long as the restriction lasts — a check standing between the user
+    and the feature it was written to protect. So the absence of a verdict is
+    carried forward as an absence: logged, named in the phase, and the launch
+    continues, exactly as blind as it was before the probe existed and no
+    blinder."""
     from . import pod_video_probe
     if not crd.is_video(run):
+        return None
+    # A stills set (frames == 1) uploads images: there is no mp4 to decode and
+    # the probe's own program would report an empty folder as a refusal.
+    if int(_run_param(run, 'frames') or 0) == 1:
         return None
     profile = video_targets.get(_run_param(run, 'target_profile')
                                 or getattr(crd.dataset_row(run),
@@ -3401,10 +3452,16 @@ def _assert_pod_can_decode(run, remote, pod_settings):
     want_audio = bool((profile.get('audio') or {}).get('muxed'))
     pod_dir = (pod_settings['DATASETS_FOLDER'].rstrip('/') + '/' + run.job_name)
     _set(run, phase_detail='Checking the pod can read the clips…')
-    verdict = pod_video_probe.probe_decoder(
-        remote, instance_id=run.vast_instance_id, pod_dataset_dir=pod_dir,
-        want_audio=want_audio, tmp_dir=run.staging_dir or str(_staging_root()),
-        should_cancel=lambda: _stop_event_for(run.id).is_set())
+    try:
+        verdict = pod_video_probe.probe_decoder(
+            remote, instance_id=run.vast_instance_id, pod_dataset_dir=pod_dir,
+            want_audio=want_audio, tmp_dir=run.staging_dir or str(_staging_root()),
+            should_cancel=lambda: _stop_event_for(run.id).is_set())
+    except pod_video_probe.PodProbeUnavailable as e:
+        logger.warning('run %s: the pod check could not run — %s', run.id, e)
+        _set(run, phase_detail='Pod check unavailable on this provider — '
+                               'starting the job anyway')
+        return None
     logger.info('run %s: the pod decoded %s with %s (%s frames)', run.id,
                 verdict.get('clip'), verdict.get('decoder'), verdict.get('frames'))
     _set(run, phase_detail=f'Pod reads the clips with '
@@ -3676,6 +3733,13 @@ def _pick_offer(offers, requested_gpu, strict=False):
     return _best_of(offers)
 
 
+# The video lane's pod disk, in GB, below which a run cannot be provisioned.
+# Not a tuning knob: 42.5 GB of MiniMax H3 weights, pulled through a transfer
+# that holds the chunks AND the reconstructed file at once, against the 60 GB
+# the face lane rents — and the overflow arrives after the rental is paid for.
+_VIDEO_DISK_FLOOR_GB = 120
+
+
 def _disk_gb_for(cloud_cfg, params) -> int:
     """Pod disk size: the configured default, bumped when the run trains on a
     LARGE custom base (stamped remote size). The pod holds the raw download
@@ -3687,6 +3751,17 @@ def _disk_gb_for(cloud_cfg, params) -> int:
         # Safety floor, even when an old/user-edited config carries a smaller
         # number: base + working weights + one ~26 GB save do not fit below it.
         disk_gb = max(200, int(dense.get('disk_gb') or 200))
+    elif params.get('train_type') == 'video':
+        # Same shape as the dense floor above, for the same reason: the video
+        # lane's base does not fit the shared default. Its weights are pulled
+        # file by file from the Comfy repack (42.5 GB for MiniMax H3) and land
+        # beside an unpacked image on ONE vast allocation, and this arch caches
+        # its latents to disk on top. The floor is in code rather than in the
+        # config alone because `config.json` freezes whatever `cloud` block was
+        # saved before the key existed — a user who saved Settings in July would
+        # otherwise still rent 60 GB and lose the run at 58.
+        disk_gb = max(_VIDEO_DISK_FLOOR_GB,
+                      int(cloud_cfg.get('video_disk_gb') or _VIDEO_DISK_FLOOR_GB))
     else:
         disk_gb = int(cloud_cfg.get('disk_gb') or 60)
     try:
@@ -3771,6 +3846,19 @@ def rent_with_fresh_offers(*, search, create, pick=None, on_offer=None,
             sleep(_CREATE_INSTANCE_BACKOFF)
 
 
+def _pod_image_for(run, c):
+    """The image tag THIS run's lane boots. The video lane trains architectures
+    that entered ai-toolkit after the face lane's pinned tag was cut
+    (minimax_h3 landed 2026-08-03; the pin is 2026-07-12) — on the old tag the
+    pod refuses the job only after the rental. The face lane keeps its pin
+    because the dense recipe's supported/refused verdicts were read against
+    that exact commit. A video config without `video_image` falls back to the
+    shared pin: an older trainer beats no trainer, and Wan runs still work on it."""
+    if crd.table_of(run) == crd.VIDEO:
+        return c.get('video_image') or c.get('image')
+    return c.get('image')
+
+
 def _provision(run):
     """Search offers and create the instance, honoring the launch-time GPU
     choice when the picked class is still available.
@@ -3807,7 +3895,16 @@ def _provision(run):
             secure_cloud_only=bool(c.get('secure_cloud_only', False)),
             # Ask only machines that HAVE the disk this pod is about to claim —
             # a dense run asks for 200 GB and the market is full of 60 GB boxes.
-            min_disk_gb=disk_gb)
+            min_disk_gb=disk_gb,
+            # …and machines whose GPU can run the recipe's dtype. Every video
+            # job this app writes trains in bf16, which Turing does not have —
+            # and Turing is exactly where the cheapest offer lives: on
+            # 2026-08-29 the cheapest board clearing this lane's 48 GB and
+            # 120 GB floors was a Quadro RTX 8000 at $0.261/h, compute_cap 750,
+            # against $0.802 for the next one up. Picking by price alone rents
+            # the one card in the list that cannot do the work. Per family and
+            # absent by default: nothing here changes what the face lane sees.
+            min_compute_cap=int((c.get('min_compute_cap') or {}).get(fam, 0)))
 
     def _stamp(offer):
         # Stamp the host identity so a boot failure can blacklist THIS machine —
@@ -3836,7 +3933,7 @@ def _provision(run):
             return vast_client.create_instance(
                 offer['offer_id'], disk_gb=disk_gb,
                 label=run.vast_label, template_hash=template_hash,
-                image=(c.get('image') or None))
+                image=(_pod_image_for(run, c) or None))
         # Raw-image fallback (config escape hatch): direct port publish +
         # our own bearer token on the UI itself.
         token = pysecrets.token_urlsafe(24)
@@ -3847,7 +3944,7 @@ def _provision(run):
             env['HF_TOKEN'] = hf
         return vast_client.create_instance(
             offer['offer_id'], disk_gb=disk_gb,
-            label=run.vast_label, image=c.get('image'), env=env,
+            label=run.vast_label, image=_pod_image_for(run, c), env=env,
             onstart=(c.get('onstart') or None))
 
     instance_id, offer = rent_with_fresh_offers(
@@ -5976,6 +6073,17 @@ def _monitor(app, run_id):
                     remote.upload_dataset(
                         run.job_name + '_masks', masks_dir,
                         on_progress=_upload_heartbeat(run, 'Uploading the masks'))
+                # ref2va identity references, one pod folder per reference —
+                # named to match what _build_pod_job_config emitted (see the
+                # control_dirs comment there).
+                if crd.is_video(run):
+                    from . import video_bank_service as _vbs
+                    for k, ref_dir in enumerate(
+                            _vbs.reference_dirs(crd.dataset_row(run)), start=1):
+                        remote.upload_dataset(
+                            f'{run.job_name}_ref{k}', str(ref_dir),
+                            on_progress=_upload_heartbeat(
+                                run, f'Uploading reference {k}'))
 
                 # A rented pod that cannot decode these clips is a job that runs
                 # and yields nothing. Asked here, one command after the bytes
@@ -6889,6 +6997,21 @@ def launch_view(run, *, now=None, cloud_cfg=None):
     }
 
 
+def _record_id_for_cloud(cloud_run_id) -> int | None:
+    """THE run number behind a cloud run: its TrainingRunRecord id. Every
+    surface prints this ONE number (a local run has no cloud id at all, so the
+    cloud id cannot be a run's identity); the cloud id stays a secondary for
+    tooltips and debugging. None for runs that predate the provenance registry
+    — the chips then fall back to the cloud id and say so."""
+    if cloud_run_id is None:
+        return None
+    from ..models import TrainingRunRecord
+    rec = (TrainingRunRecord.query
+           .filter_by(cloud_run_id=int(cloud_run_id))
+           .order_by(TrainingRunRecord.id.asc()).first())
+    return rec.id if rec else None
+
+
 def _run_payload(run) -> dict:
     family = _run_family(run)
     training_mode = _run_training_mode(run)
@@ -6918,6 +7041,10 @@ def _run_payload(run) -> dict:
     diagnostic = lt.zimage_recipe_diagnostic(
         family, variant, effective_base, training_adapter, recipe_version)
     payload = {'run_id': run.id, 'dataset_id': run.dataset_id, 'status': run.status,
+            # THE run number for the ☁ #N chip (see _record_id_for_cloud):
+            # actives and legacy fallback rows get it here; registry-backed
+            # history rows overwrite it with the same value via all_runs.
+            'record_id': _record_id_for_cloud(run.id),
             # Stable id for the per-run "Share configuration" download. Every
             # cloud row (active/finished/legacy) addresses by its pod row id;
             # local rows use 'rec-<record id>' (set in all_runs).
@@ -7153,6 +7280,10 @@ def all_runs(limit: int = 20) -> dict:
             row.update(_run_payload(crun))
             if row.get('steps') is None:
                 row['steps'] = registry_steps
+            # This row IS the record — its own id beats the payload's reverse
+            # lookup (identical in the single-record case, and the record in
+            # hand wins if a cloud run ever gains two).
+            row['record_id'] = rec.id
             row['settings'] = settings
             row['source'] = 'cloud'
         _annotate_preview(row, crun, rec)
@@ -7610,14 +7741,17 @@ def checkpoint_gallery(record_id, step, limit=120) -> dict:
         # Where a deleted image WOULD land, resolved the same way the deletion
         # resolves it, so the confirmation never promises the wrong thing.
         'delete_mode': trash.disposal_mode(),
-        'images': [_gallery_image(r) for r in rows],
+        'images': [gallery_image(r) for r in rows],
     }
 
 
-def _gallery_image(r) -> dict:
-    """One image row as the galleries publish it. Extracted so the checkpoint
-    gallery and the run gallery can never drift into two shapes — the panel is
-    ONE component and it reads these keys."""
+def gallery_image(r) -> dict:
+    """One image row as EVERY surface publishes it. Extracted so the checkpoint
+    gallery and the run gallery can never drift into two shapes — and now the
+    Test Studio's cell payloads build on it too (lora_test_studio spreads it
+    under their cell-specific keys), because the Studio viewer reads the same
+    facts the Gallery viewer does. One serializer, one shape, no surface where
+    a row quietly knows less about itself."""
     return {
         'id': r.id,
         'dataset_id': r.dataset_id,
@@ -7656,6 +7790,10 @@ def _gallery_image(r) -> dict:
         'scheduler': r.scheduler,
         'aspect': r.aspect,
         'extra_loras': r.extra_loras,
+        # False = the "Trigger word" box was unticked for this launch (prompt
+        # sent as written). NULL on every row that predates the box — absent
+        # line in the viewer, never a guessed one.
+        'inject_trigger': r.inject_trigger,
         'face_score': r.face_score,
         # ✨ Whether this row IS an Upscale & improve result, and of what. The
         # galleries and canvas_image_nodes read this table WITHOUT the studio's
@@ -7764,7 +7902,7 @@ def run_gallery(record_id, limit=RUN_GALLERY_LIMIT,
             'step': step, 'count': n,
             'truncated': len(rows) < n,
             'note': notes.get(step) or '',
-            'images': [_gallery_image(r) for r in rows],
+            'images': [gallery_image(r) for r in rows],
         })
     return {
         'record_id': record_id, 'count': total, 'shown': shown,
@@ -7799,7 +7937,7 @@ def app_gallery(limit=APP_GALLERY_PAGE, before_id=None, dataset_id=None,
     this one answers "what did I make", across every dataset and every surface
     at once (Test Studio cells, inline canvas previews, comparison runs, and
     the ✨ Upscale & improve results derived from them). Same rows, same
-    serializer (`_gallery_image`) — a third shape here would be a third chance
+    serializer (`gallery_image`) — a third shape here would be a third chance
     for the viewers to disagree about what an image row carries.
 
     Pagination is a cursor, not an offset: `before_id` returns rows strictly
@@ -7858,7 +7996,7 @@ def app_gallery(limit=APP_GALLERY_PAGE, before_id=None, dataset_id=None,
         # the feed is exhausted, so the client never asks for a page that can
         # only be empty.
         'next_before_id': rows[-1].id if rows and has_more else None,
-        'images': [_gallery_image(r) for r in rows],
+        'images': [gallery_image(r) for r in rows],
         'datasets': datasets,
         # Where a deleted image WOULD land — same promise, same source as the
         # checkpoint gallery, so the confirmation never promises the wrong thing.
@@ -8816,7 +8954,7 @@ def canvas_image_nodes(user_id, dataset_ids=None) -> dict:
             # every row of a database that predates the columns.
             'group_id': r.group_id or None,
             'group_pos': None if r.group_pos is None else int(r.group_pos),
-            'image': _gallery_image(img),
+            'image': gallery_image(img),
         })
     if pruned:
         db.session.commit()
@@ -9225,6 +9363,11 @@ def cloud_checkpoint_groups(dataset_id, train_type=None, variant=None,
             continue
         entries.sort(key=lambda e: (e['step'], e['final']))
         groups.append({
+            # THE run number (TrainingRunRecord id) — what the header chip
+            # prints and what ⚙ Details / ⇄ Compare address the lineage tree
+            # with (its nodes key on record_id, never on the cloud id). None
+            # on a pre-registry run: no record means no recipe to open.
+            'record_id': _record_id_for_cloud(run.id),
             'run_id': run.id, 'source': 'cloud', 'status': run.status,
             'active': run.status in ACTIVE_STATES, 'gpu': run.gpu_name,
             'price_per_hour': run.price_per_hour,

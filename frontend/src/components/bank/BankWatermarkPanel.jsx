@@ -34,9 +34,11 @@ import { useToast } from '../common/Toast'
 import {
   cropLevelState, findLevelState, hasCleanedImages, inpaintLevelState,
   levelCounts, maskNote, progressSummary, rescanNote, sourceNote,
+  textLevelState,
 } from './bankWatermark.js'
 import { openerLabel } from './scoringPython.js'
 import { localEngineUnavailableReason } from '../../utils/localEngineReason'
+import { activeLocalLlm } from '../../utils/localLlm'
 
 // How many cleaned images the before/after strip offers. A sample is enough to
 // judge a pass; the grid holds the full set.
@@ -65,13 +67,19 @@ function LevelCard({ index, title, blurb, state, onRun }) {
 }
 
 export default function BankWatermarkPanel({
-  bankId, live, onFind, onChanged, payload = null, selectedIds = [],
-  gpuPresent = true, onPickPython = null,
+  bankId, live, onFind, onFindText = null, onChanged, payload = null,
+  selectedIds = [], gpuPresent = true, onPickPython = null,
 }) {
   const { caps } = useCapabilities()
   const toast = useToast()
   const [levels, setLevels] = useState(null)
   const [method, setMethod] = useState('auto')
+  /* What 🧽 Repaint aims at: every flagged page, only the 🔤 text-flagged ones,
+     or only the 🚩 watermark-flagged ones. The split is BY PAGE (a page carrying
+     both counts as text — its zones share one channel, so one page is never
+     split between two runs). Lives on the panel like the engine toggle, so the
+     launch window names it without owning a second copy. */
+  const [target, setTarget] = useState('all')
   const [comparing, setComparing] = useState(false)
   const [showOriginal, setShowOriginal] = useState(false)
   /* Which cleaning level's launch window is open ('watermark_crop' /
@@ -135,9 +143,10 @@ export default function BankWatermarkPanel({
   const kleinReason = localEngineUnavailableReason('klein', caps)
   const find = findLevelState(levels, {
     live,
-    visionReady: !!caps.ollama?.vision_model_ready,
+    visionReady: !!activeLocalLlm(caps).vision_model_ready,
     detectorReady: !!caps.watermark_detect,
   })
+  const findText = textLevelState(levels, { live, ocrReady: !!caps.video_text })
   const source = sourceNote(levels)
   /* The bin is invisible to /watermark/levels (its pool has always excluded
      rejected images), so the two levels read their bin figure from the bank
@@ -204,6 +213,15 @@ export default function BankWatermarkPanel({
         <LevelCard index={1} title="Find them" state={find}
           blurb="Scans the images you choose for an overlaid logo/URL and records WHERE it sits — the two steps below route on that box."
           onRun={onFind} />
+        {/* The OTHER level-1 detection: same rung of the same ladder, different
+            instrument. Its zones land in the mask channel, so 🧽 below repaints
+            them and ✂ skips them (cropping a bubble out of a page is not a
+            thing). Only rendered where the parent wires it. */}
+        {onFindText && (
+          <LevelCard index={1} title="Find text" state={findText}
+            blurb="Reads burned-in text — speech bubbles, subtitles, captions, sound effects — and marks each zone for 🧽 Repaint below. CPU only, never the GPU."
+            onRun={onFindText} />
+        )}
         <LevelCard index={2} title="Crop it off" state={crop}
           blurb="Cuts the border strip holding the mark. No model, no GPU, and no invented pixel — try this one first."
           onRun={() => setCleanOpen('watermark_crop')} />
@@ -263,6 +281,37 @@ export default function BankWatermarkPanel({
             w-full: this drops onto its own line rather than squeezing the
             toggle at 400 px. */}
         {method === 'klein' && <KleinModelSetting className="w-full" />}
+        {/* 🔤/🚩 WHAT to clean — only offered once Find text flagged something,
+            because with no text-flagged page the three choices collapse into
+            one and the control would be a dead dial. */}
+        {c.textFound > 0 && (
+          <>
+            <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-content-subtle">
+              What to clean
+            </span>
+            <div role="group" aria-label="What to clean"
+              className="flex items-center gap-1 rounded-lg border border-border bg-app/60 p-0.5 text-xs">
+              <button type="button" aria-pressed={target === 'all'} onClick={() => setTarget('all')}
+                title="Repaint every flagged page — text and watermarks alike."
+                className={`rounded-md px-2.5 py-1 font-semibold ${target === 'all'
+                  ? 'bg-amber-500/25 text-amber-100' : 'text-content-subtle hover:text-content'}`}>
+                Both
+              </button>
+              <button type="button" aria-pressed={target === 'text'} onClick={() => setTarget('text')}
+                title="Only pages 🔤 Find text flagged. A page carrying both a watermark and text counts here — one page is never split between two runs."
+                className={`rounded-md px-2.5 py-1 font-semibold ${target === 'text'
+                  ? 'bg-amber-500/25 text-amber-100' : 'text-content-subtle hover:text-content'}`}>
+                🔤 Text
+              </button>
+              <button type="button" aria-pressed={target === 'watermark'} onClick={() => setTarget('watermark')}
+                title="Only pages 🚩 flagged with no text flag on them."
+                className={`rounded-md px-2.5 py-1 font-semibold ${target === 'watermark'
+                  ? 'bg-amber-500/25 text-amber-100' : 'text-content-subtle hover:text-content'}`}>
+                🚩 Marks
+              </button>
+            </div>
+          </>
+        )}
         {cleaned && (
           <>
             <button type="button" disabled={live}
@@ -316,7 +365,10 @@ export default function BankWatermarkPanel({
           onLaunch={(r) => runLevel(
             cleanOpen === 'watermark_crop' ? 'watermark/crop' : 'watermark/inpaint',
             r,
-            cleanOpen === 'watermark_inpaint' ? { method } : {},
+            /* target only when narrowed: 'all' posts the SAME body as before the
+               selector existed — the spread-if-set contract runLevel documents. */
+            cleanOpen === 'watermark_inpaint'
+              ? { method, ...(target !== 'all' ? { target } : {}) } : {},
           )}>
           {cleanOpen === 'watermark_inpaint' && (
             /* WHICH engine this run will use. The toggle stays on the panel —
@@ -330,7 +382,14 @@ export default function BankWatermarkPanel({
               </span>{method === 'klein'
                 ? ' — slower, and the only one that clears a mark ON the subject.'
                 : ' — fast; a mark on the subject stays flagged instead of being smeared.'}
-              {' '}Change it on the Watermarks panel, next to this level.
+              {target !== 'all' && (
+                <>
+                  {' '}What to clean: <span className="font-semibold text-content">
+                    {target === 'text' ? '🔤 text-flagged pages only' : '🚩 watermark-flagged pages only'}
+                  </span> — a page carrying both counts as text-flagged and is repainted whole.
+                </>
+              )}
+              {' '}Change these on the Watermarks panel, next to this level.
             </p>
           )}
         </PassDialog>

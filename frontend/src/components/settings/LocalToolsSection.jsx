@@ -14,6 +14,16 @@ import { defaultValueAt } from './settingDefaults.js'
    your private custom-base repos — it lives with the ComfyUI card because that's
    where local training/generation is set up. The Klein generation download itself
    (9B KV) is public and needs no token. */
+/* LM Studio can be configured to require a bearer token. It is a SECRET, so it
+   lives in the secret store like every other credential here — never in
+   config.json, where it would come back out of /api/settings in clear. Most local
+   setups never need it, which is why it sits at the bottom of the card. */
+const LMSTUDIO_SECRET = {
+  key: 'LMSTUDIO_API_KEY', label: 'LM Studio API key (optional)', testTarget: null,
+  help: 'Only if you turned on authentication in LM Studio. Left empty — the usual '
+    + 'case for a local server — no Authorization header is sent at all.',
+}
+
 const HF_SECRET = {
   key: 'HF_TOKEN', label: 'Hugging Face token', testTarget: null,
   help: (
@@ -76,6 +86,116 @@ const HF_CLOUD_SECRET = {
      running         → confirmation, plus whether the vision model is pulled.
    Detecting the install independently of the server running is the whole point:
    an installed-but-stopped Ollama used to read as simply "unreachable". */
+function LmStudioStatus({ caps, active, refreshCaps, toast }) {
+  const l = (caps && caps.lmstudio) || {}
+  const [starting, setStarting] = useState(false)
+
+  /* This card used to carry a written reason for having NO Start button: "LM
+     Studio has no reliable way to be launched from here". That was wrong -- its
+     CLI sits at a fixed per-user path and `lms server start` is a one-shot
+     command that returns in well under a second, with the loaded model surviving
+     the cycle. The button exists now, and only when the CLI was actually found. */
+  const loadModel = async () => {
+    setStarting(true)
+    try {
+      const r = await postJson('/api/local-llm/load', {})
+      if (r.ok) {
+        toast?.success(`Model ready — ${r.model || 'loaded'}.`)
+        await refreshCaps?.(true)
+      } else {
+        toast?.error(r.error || 'The model could not be loaded.')
+      }
+    } catch (e) {
+      toast?.error(e.message || 'The model could not be loaded.')
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const start = async () => {
+    setStarting(true)
+    try {
+      const r = await postJson('/api/local-llm/start', {})
+      if (r.reachable) {
+        toast?.success(r.already_running ? 'LM Studio is already running.' : 'LM Studio is running.')
+        await refreshCaps?.(true)   // force re-probe → the card flips, no app restart
+      } else {
+        toast?.error(r.error || 'LM Studio did not start — start its server from the app.')
+      }
+    } catch (e) {
+      toast?.error(e.message || 'Could not start LM Studio.')
+    } finally {
+      setStarting(false)
+    }
+  }
+  if (!active) {
+    return (
+      <p className="text-xs text-content-muted">
+        <span aria-hidden="true">○</span> Not the provider in use — press Test to check it
+        without switching.
+      </p>
+    )
+  }
+  if (l.reachable && l.model_ready) {
+    return (
+      <p className="text-xs text-emerald-400">
+        <span aria-hidden="true">✓</span> Running · {l.detail}
+      </p>
+    )
+  }
+  if (l.reachable) {
+    return (
+      <div className="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+        <p className="text-sm text-content"><span aria-hidden="true">●</span> Running, but not ready.</p>
+        <p className="text-xs text-content-muted">{l.detail}</p>
+        <button type="button" onClick={loadModel} disabled={starting}
+          className="inline-flex items-center gap-1.5 rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50">
+          {starting ? 'Loading…' : '⏬ Load the vision model'}
+        </button>
+      </div>
+    )
+  }
+  if (!l.probed) {
+    // Selected here but not yet saved, so the status snapshot still describes the
+    // OTHER provider. Announcing "not answering" for a server nobody has asked yet
+    // is a scary sentence about nothing — say what is actually true instead.
+    return (
+      <p className="text-xs text-content-muted">
+        <span aria-hidden="true">○</span> Selected — save to check it, or press Test now.
+      </p>
+    )
+  }
+  if (l.installed) {
+    return (
+      <div className="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+        <p className="text-sm text-content">
+          <span aria-hidden="true">●</span> Installed but its server is not running.
+        </p>
+        <p className="text-xs text-content-muted">
+          Restarting the server leaves a model you already had loaded alone. If LM
+          Studio was fully closed it comes back empty — load a model in its
+          Developer tab afterwards.
+        </p>
+        <button
+          type="button"
+          onClick={start}
+          disabled={starting}
+          className="inline-flex items-center gap-1.5 rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50"
+        >
+          {starting ? 'Starting…' : '▶ Start LM Studio'}
+        </button>
+      </div>
+    )
+  }
+  return (
+    <p className="text-xs text-content-muted">
+      <span aria-hidden="true">✗</span> Not answering at {l.url || 'the configured URL'} — open
+      LM Studio, go to <span className="font-medium text-content">Developer</span> and press
+      Start Server.
+    </p>
+  )
+}
+
 function OllamaStatus({ caps, refreshCaps, toast }) {
   const o = (caps && caps.ollama) || {}
   const [starting, setStarting] = useState(false)
@@ -244,6 +364,10 @@ export default function LocalToolsSection(props) {
           configDefaults } = props
   // Shipped values come from the server payload, never retyped here.
   const ollamaDefault = (key) => defaultValueAt(configDefaults, 'ollama', key)
+  const lmstudioDefault = (key) => defaultValueAt(configDefaults, 'lmstudio', key)
+  // Total: a config.json written before this setting existed has no local_llm
+  // section at all, and every such install means Ollama.
+  const provider = ((config.local_llm || {}).provider) || 'ollama'
   const comfyDefault = (key) => defaultValueAt(configDefaults, 'comfyui', key)
   // Summary + collapsible groups, one per tool — same shells as Image engines
   // (SettingsGroupsView), and the ?focus= reveal opens a collapsed group on
@@ -319,6 +443,31 @@ export default function LocalToolsSection(props) {
       </SettingsGroup>
 
       <SettingsGroup {...groupProps(ollamaGroup)}>
+      <Card
+        title="Which local LLM"
+        help="Captioning, framing, head-crop and the prompt helpers all run on one local model server. This is which one."
+      >
+        <div>
+          <label htmlFor="local-llm-provider" className="block text-sm font-medium text-content">
+            Local LLM provider
+          </label>
+          <select
+            id="local-llm-provider"
+            value={provider}
+            onChange={(e) => setField('local_llm', 'provider', e.target.value)}
+            className={INPUT_CLASS}
+          >
+            <option value="ollama">Ollama — the default</option>
+            <option value="lmstudio">LM Studio</option>
+          </select>
+          <p className="mt-1 text-xs text-content-muted">
+            Both cards below stay editable whichever you pick, so you can set the other one up
+            and press Test before switching to it. Only the selected provider is used — and only
+            it is checked when the app refreshes its status, so nothing pays for a server you are
+            not running.
+          </p>
+        </div>
+      </Card>
       <Card
         title="Ollama"
         help="Lightweight local vision backend — captioning, framing auto-classify and head-crop."
@@ -401,6 +550,93 @@ export default function LocalToolsSection(props) {
         </div>
       </Card>
 
+      <Card
+        title={provider === 'lmstudio' ? 'LM Studio — in use' : 'LM Studio'}
+        help="A local model server with a graphical app. Unlike Ollama it cannot be started from here, and it only serves a model that is already loaded."
+      >
+        <LmStudioStatus caps={caps} active={provider === 'lmstudio'}
+          refreshCaps={refreshCaps} toast={toast} />
+        <div className="flex items-end gap-3">
+          <div className="flex-1 space-y-4">
+            <TextField
+              id="lmstudio-url"
+              label="LM Studio URL"
+              value={(config.lmstudio || {}).url || ''}
+              onChange={(v) => setField('lmstudio', 'url', v)}
+              placeholder={(caps?.lmstudio?.docker_runtime)
+                ? 'http://host.docker.internal:1234' : 'http://127.0.0.1:1234'}
+              help={(caps?.lmstudio?.docker_runtime)
+                ? 'This app is running in a container, so 127.0.0.1 means the container itself. '
+                  + 'LM Studio runs on your machine — use http://host.docker.internal:1234 and make '
+                  + 'sure its server is reachable from Docker.'
+                : "The server root. LM Studio's Developer tab shows it with /v1 on the end — either form is accepted."}
+            />
+            <TextField
+              id="lmstudio-vision-model"
+              label="LM Studio model"
+              value={(config.lmstudio || {}).vision_model || ''}
+              onChange={(v) => setField('lmstudio', 'vision_model', v)}
+              placeholder="leave empty to use whatever is loaded"
+              help="Left empty, the app uses whichever model LM Studio has loaded — usually what you want, since it only serves a loaded one."
+            />
+            <TestResult result={testResults.lmstudio} />
+          </div>
+          <TestButton target="lmstudio" beforeTest={() => saveConfigSection('lmstudio')}
+            onResult={(r) => recordTestResult('lmstudio', r)} />
+        </div>
+        <div>
+          <label htmlFor="lmstudio-vision-concurrency" className="block text-sm font-medium text-content">
+            Images analysed at once
+          </label>
+          <select
+            id="lmstudio-vision-concurrency"
+            value={String((config.lmstudio || {}).vision_concurrency ?? lmstudioDefault('vision_concurrency'))}
+            onChange={(e) => setField('lmstudio', 'vision_concurrency', Number(e.target.value))}
+            className={INPUT_CLASS}
+          >
+            <option value="1">1 — one at a time (slowest, gentlest)</option>
+            <option value="2">2</option>
+            <option value="4">4 — recommended</option>
+            <option value="6">6</option>
+            <option value="8">8</option>
+          </select>
+          <p className="mt-1 text-xs text-content-muted">
+            The same dial as Ollama's, kept separate because the two servers do not take the
+            same load: LM Studio serves as many parallel requests as its own Parallel setting
+            allows, and going wider here than that gains nothing.
+          </p>
+          <ResetToDefault label="Images analysed at once" section="lmstudio" field="vision_concurrency"
+            config={config} configDefaults={configDefaults} setField={setField} />
+        </div>
+        <div>
+          <label htmlFor="lmstudio-vision-keep-warm" className="block text-sm font-medium text-content">
+            Keep the vision model warm
+          </label>
+          <select
+            id="lmstudio-vision-keep-warm"
+            value={String((config.lmstudio || {}).vision_keep_warm_seconds
+              ?? lmstudioDefault('vision_keep_warm_seconds'))}
+            onChange={(e) => setField('lmstudio', 'vision_keep_warm_seconds', Number(e.target.value))}
+            className={INPUT_CLASS}
+          >
+            <option value="0">Off — unload after every single image</option>
+            <option value="60">1 minute</option>
+            <option value="120">2 minutes — recommended</option>
+            <option value="300">5 minutes</option>
+            <option value="600">10 minutes</option>
+          </select>
+          <p className="mt-1 text-xs text-content-muted">
+            Honoured differently from Ollama&rsquo;s, and worth knowing: Ollama takes a
+            per-request keep-alive, while LM Studio has no expiry of its own and holds a
+            loaded model until something unloads it. So this is how long the app waits
+            before actively unloading &mdash; and unlike Ollama, that unload really does hand
+            the memory back. A model you loaded yourself is never unloaded by this.
+          </p>
+          <ResetToDefault label="Keep the vision model warm" section="lmstudio" field="vision_keep_warm_seconds"
+            config={config} configDefaults={configDefaults} setField={setField} />
+        </div>
+        <SecretField field={LMSTUDIO_SECRET} {...props} />
+      </Card>
       </SettingsGroup>
 
       <SettingsGroup {...groupProps(aitkGroup)}>

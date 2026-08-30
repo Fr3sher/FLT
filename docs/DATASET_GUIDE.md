@@ -180,6 +180,15 @@ trigger. Keep *person* masking **off** for concepts — a person mask would eras
 very thing you're training. Masking **faces** is the opposite polarity and is
 available on purpose: see §8.
 
+**Trying before you commit.** 🧪 **Caption Lab** in the **Captions** section runs up
+to four caption configurations — engine, vision model, vocabulary register and length —
+on one image you pick, and lays the results side by side with the caption already
+stored. Nothing is written until you keep one, so an engine or a register can be
+settled on a single image instead of on a pass over the whole set. The same bench is
+a tab of the per-image caption editor in **Images**, on whichever tile you opened — and
+of an image bank's 🏷️ Caption window, so a captioner can be settled on the bank before
+anything is promoted.
+
 **Stopping a run.** Started a big caption pass and realized it's captioning badly,
 or an option was mis-set? A **⏹ Stop** button sits in the captioning progress
 banner. It finishes the image being written (an inference is never cut off
@@ -330,9 +339,10 @@ Check two or more LoRAs and Studio asks what you want to do with them:
   swept across the strengths you picked. This is what you want to answer "which of
   these is better".
 - **🧬 Blend** loads them **together in the same image**, each at its own weight,
-  and injects **every trigger word** into the prompt for you. This is what you want
-  to answer "do these two work together" — a character plus a style, or a character
-  plus a concept.
+  and — while the **Trigger word** box next to the prompt is ticked — injects
+  **every trigger word** into the prompt for you. This is what you want to answer
+  "do these two work together" — a character plus a style, or a character plus a
+  concept.
 
 > This mode was called **🧬 Combine** until August 2026. Only the name changed;
 > the ◉ LoRA Canvas offers the very same thing from the board, and calling it two
@@ -382,11 +392,40 @@ refused with both family names in the message.
 **✨ Enhance** rewrites what you typed into a fuller prompt using your local Ollama
 model — it adds framing, pose, lighting, background and mood, and deliberately
 leaves identity and trigger words alone (the LoRA supplies the identity, and Studio
-injects the trigger itself at generation time).
+injects the trigger itself at generation time — while the **Trigger word** box is
+ticked, see below).
+
+By default it runs the same model your captions use. The **⚙️ next to the button**
+picks any other pulled Ollama model instead — the choice applies immediately, is
+remembered on that browser, and drives the same button on the Canvas run panel. A
+vanilla model can refuse NSFW prompts; the abliterated captioning default is the
+safe choice there.
 
 It is a local feature: without Ollama installed, running, and with its model pulled,
 the button is **greyed out and says which of the three is missing** rather than
 failing when you press it. Install or start it from **Settings › Local tools**.
+(With a ⚙️ model picked, the last check moves server-side: the refusal names the
+picked model instead of greying the button on the default one.)
+
+### Send the prompt as written — the Trigger word box
+
+Studio normally prefixes the dataset's trigger word to whatever you type, at
+generation time — that is what activates the LoRA, and it is why you never have
+to type the trigger yourself. The **Trigger word** box next to the prompt (on
+the Test Studio, the Compare page and the Canvas run panel — one shared,
+remembered preference) makes that explicit and optional:
+
+- **Ticked** (the default) — the historical behaviour, unchanged.
+- **Unticked** — the prompt is sent **exactly as written**. Useful when a render
+  keeps typing the trigger back into the image (a speech bubble or a sign asked
+  to "say" something will happily spell out the first token it finds), or for
+  pure style and scene tests where the token only adds noise.
+
+Images generated with the box unticked say **"no trigger"** in their details, so
+two runs of the same prompt never look inexplicably different later. One honest
+limit: with the box unticked and an **empty** prompt, the default test prompt is
+used without the trigger — which usually means the LoRA's subject will not
+appear; type a prompt when testing without the trigger.
 
 ### Reuse a dataset caption in Studio
 
@@ -398,6 +437,26 @@ button to change the source dataset.
 
 The source needs at least one kept image with a nonblank caption. If you have
 typed a prompt, Studio asks before replacing it.
+
+### Borrow a prompt from Civitai's top images
+
+**🌐 Civitai** (next to the prompt field, on every generation surface) browses
+the most-reacted Civitai images of the day, week, month, year or all time —
+each image shown side by side with the generation prompt it was posted with.
+**⤵ Use prompt** drops it into your prompt field (asking first if you typed
+something), **📋 Copy** puts it on the clipboard, and clicking the picture
+opens it on Civitai.
+
+Two honest limits:
+
+- **Not every image publishes its prompt.** The browser keeps only the ones
+  that do by default; untick *Only images with a prompt* to see the full top.
+- **Reading prompts needs a Civitai API key** (free account) — the same key
+  the scraper uses, stored once in **Settings › Scraping & sources**. Without
+  it the top images still show, but Civitai refuses the prompt data.
+
+The content-level select is a ceiling (*Safe* by default, up to *Everything*);
+your filters are remembered in this browser's localStorage.
 
 ### Continue a run instead of starting over
 

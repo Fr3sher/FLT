@@ -513,3 +513,246 @@ def test_retry_and_continue_never_relaunch_a_video_run_as_a_face_one(
             ct.continue_cloud_run('local', run.id)
         assert 'checkpoint' in str(e2.value).lower()
     assert len(called) == 1
+
+
+def test_a_video_pod_boots_the_video_image_and_a_face_pod_keeps_the_pin(app, tmp_path):
+    """The face lane's image tag is pinned to the ai-toolkit commit its dense
+    recipe was validated against (2026-07-12). The video lane cannot use it: the
+    `minimax_h3` architecture landed in ai-toolkit on 2026-08-03, so a video pod
+    booted on the face pin refuses the job only AFTER the rental. Same colliding
+    setup as everything in this file — the resolver must answer per RUN, not per
+    config, or the fresher tag would leak into face runs (whose verdicts were
+    read against the old one) the day it was added."""
+    from app.services.cloud_training import _pod_image_for
+    c = {'image': 'toolkit:face-pin', 'video_image': 'toolkit:video-fresh'}
+    with app.app_context():
+        _face_dataset('portraits')
+        vid = _video_dataset(tmp_path, 'surf clips')
+        video_run = _run(vid.id, crd.VIDEO)
+        face_run = _run(vid.id)                      # NULL table = face, always
+        assert _pod_image_for(video_run, c) == 'toolkit:video-fresh'
+        assert _pod_image_for(face_run, c) == 'toolkit:face-pin'
+        # No video_image configured: an older trainer beats no trainer — Wan
+        # runs still work on the shared pin, so the lane falls back rather than
+        # refusing to provision at all.
+        assert _pod_image_for(video_run, {'image': 'toolkit:face-pin'}) \
+            == 'toolkit:face-pin'
+
+
+def test_the_video_family_rents_at_least_48_gb_of_vram():
+    """`_provision` resolves min VRAM as `min_vram_gb.get(family, 24)`. Before
+    the 'video' entry existed that fallback rented 24 GB pods for a lane that
+    runs with low_vram OFF — resident weights alone (H3: ~21 GB transformer +
+    ~16 GB text encoder; Wan 2.2: two experts) exceed that, and the OOM arrives
+    after the money is spent. The default the resolution reads must say so."""
+    from app.config import DEFAULTS
+    floors = DEFAULTS['cloud']['min_vram_gb']
+    assert floors.get('video', 24) >= 48
+
+
+def test_a_video_pod_is_never_rented_with_the_face_lane_s_disk():
+    """A video pod holds its base, its transfer's working copy and a latent
+    cache on ONE vast allocation, and MiniMax H3's base alone is 42.5 GB — the
+    60 GB the face lane rents cannot hold that, and the shortfall surfaces
+    mid-download, after the pod is paid for. Third of the same family as the image pin and the VRAM
+    floor: everything that decides whether the money buys a training must be
+    decided BEFORE the rental.
+
+    The floor lives in code and not only in DEFAULTS because `config.json`
+    freezes the whole `cloud` block as it was saved: an install that opened
+    Settings before this key existed carries `disk_gb: 60` and no
+    `video_disk_gb` at all, and a resolver reading the config alone would rent
+    60 GB from it forever."""
+    from app.config import DEFAULTS
+    from app.services.cloud_training import _VIDEO_DISK_FLOOR_GB, _disk_gb_for
+    from app.services.video_training_local import WEIGHT_FOOTPRINTS
+    stale = {'disk_gb': 60}                      # a cloud block frozen in July
+    assert _disk_gb_for(stale, {'train_type': 'video'}) >= _VIDEO_DISK_FLOOR_GB
+    # The face lane is untouched by all of this — its pin is its own verdict.
+    assert _disk_gb_for(stale, {'train_type': 'zimage'}) == 60
+    # Not a round number picked for comfort: the floor has to clear the largest
+    # base this lane declares AND still leave the face lane's entire allocation
+    # over for the image, the caches and the saves. Declaring a bigger base
+    # later fails HERE rather than on a rented pod.
+    biggest = max(f['gigabytes'] for f in WEIGHT_FOOTPRINTS.values())
+    assert _VIDEO_DISK_FLOOR_GB > biggest + 60
+    assert DEFAULTS['cloud']['video_disk_gb'] >= _VIDEO_DISK_FLOOR_GB
+
+
+def test_only_the_video_family_carries_a_compute_capability_floor():
+    """Fourth of the "decide before the rental" family, and the one that only a
+    price list makes visible: every video job this app writes sets dtype bf16,
+    Turing has no bf16 — and Turing is where the cheapest offer lives. Measured
+    on the live market (2026-08-29): the cheapest board clearing this lane's
+    48 GB VRAM and 120 GB disk floors was a Quadro RTX 8000, compute_cap 750, at
+    $0.261/h against $0.802 for the next one up. Cheapest-above-the-floors
+    therefore reaches for the single card in the list that cannot do the work.
+
+    Scoped to 'video' on purpose: the face families' offer pools are what their
+    recipes were measured against, and widening or narrowing them here would be
+    a change nobody asked for, made invisibly."""
+    from app.config import DEFAULTS
+    floors = DEFAULTS['cloud']['min_compute_cap']
+    assert floors['video'] >= 800          # Ampere is the first bf16 generation
+    assert set(floors) == {'video'}
+
+
+def test_video_gpu_tiers_prices_every_class_and_refuses_to_invent_estimates(
+        app, tmp_path, monkeypatch):
+    """The face lane's launch shows tiers; the video lane picked the cheapest
+    suitable offer silently. Tiers now exist here too, with two honesty rules:
+    the search applies the SAME floors the launch does (VRAM, disk, compute
+    generation — a picker listing cards the launch refuses is a menu of dead
+    ends), and the estimate comes from one measured run scaled by latent rows,
+    so a frame count off the 17n+5 grid gets None, never a made-up number."""
+    from app.services import cloud_video_training as cvt
+    from app.services import cloud_training as ct
+    from app.services import vast_client
+    seen = {}
+
+    def fake_search(**kw):
+        seen.update(kw)
+        return [
+            {'gpu_name': 'A100 SXM4', 'offer_id': 1, 'dph_total': 1.0,
+             'gpu_ram_gb': 80, 'reliability': 0.99, 'machine_id': 1},
+            {'gpu_name': 'A100 SXM4', 'offer_id': 2, 'dph_total': 0.9,
+             'gpu_ram_gb': 80, 'reliability': 0.99, 'machine_id': 2},
+            {'gpu_name': 'H100 PCIE', 'offer_id': 3, 'dph_total': 2.3,
+             'gpu_ram_gb': 80, 'reliability': 0.99, 'machine_id': 3},
+        ]
+
+    monkeypatch.setattr(vast_client, 'search_offers', fake_search)
+    monkeypatch.setattr(ct.cfg, 'secret', lambda k: 'key' if k == 'VAST_API_KEY' else None)
+    with app.app_context():
+        vid = _video_dataset(tmp_path, 'surf clips')      # frames=81: off H3 grid
+        data = cvt.video_gpu_tiers('local', vid.id, steps=100)
+    assert seen['min_vram_gb'] == 48
+    assert seen['min_compute_cap'] == 800
+    assert seen['min_disk_gb'] >= 120
+    by_name = {t['gpu_name']: t for t in data['tiers']}
+    assert by_name['A100 SXM4']['dph_total'] == 0.9       # cheapest of the class
+    # 81 frames is legal for Wan and OFF the measured H3 grid: no estimate.
+    assert by_name['A100 SXM4']['est_minutes'] is None
+    assert by_name['A100 SXM4']['estimate_status'] == 'unavailable'
+
+
+def test_the_video_estimate_reproduces_the_measured_run():
+    """21 s/step at 107 frames on an A100 SXM4 is the one number this model was
+    built from; 100 steps of it took ~35 minutes on run #166. The estimate must
+    give that back exactly - it is a citation, not a curve fit."""
+    from app.services import gpu_speed
+    assert round(gpu_speed.video_estimate_minutes('A100 SXM4', 107, 100)) == 35
+    assert gpu_speed.video_estimate_minutes('A100 SXM4', 40, 100) is None
+    assert gpu_speed.video_latent_rows(39) == 12
+
+
+def test_a_replayed_run_keeps_every_stamped_training_flag():
+    """_relaunch_args exists so a retry replays the ORIGINAL training, not
+    today's dataset row. That promise is only as good as the list of flags it
+    copies - do_i2v was missed the day it shipped, and a retried i2v run would
+    have silently trained t2v. Pinned here so the next flag cannot repeat it."""
+    from app.services.cloud_video_training import _relaunch_args
+    args = _relaunch_args({'base_model': '', 'low_vram': True, 'do_i2v': True,
+                           'sample_prompts': ['a wave'], 'distillation': 'off',
+                           'requested_gpu': 'A100 SXM4'})
+    assert args == {'base_model': None, 'low_vram': True, 'do_i2v': True,
+                    'sample_prompts': ['a wave'], 'distillation': 'off',
+                    'gpu_name': 'A100 SXM4'}
+
+
+def test_previews_and_the_distillation_override_ride_the_stamp(
+        app, tmp_path, monkeypatch):
+    """Two launch-time levers, both stamped so the pod rebuild minutes later
+    replays the launch and not the present: `sample_prompts` (capped at 4 -
+    each preview is a full video generation on the paid GPU) and
+    `distillation: off`, which exists for MEASUREMENT - it is the only way to
+    run one dataset with and without upstream's de-distillation recipe and
+    compare the previews. 'auto' stamps nothing and keeps the gated default."""
+    from app.services import cloud_video_training as cvt
+    calls = []
+    with app.app_context():
+        vid = _video_dataset(tmp_path, 'surf clips')
+        monkeypatch.setattr(cvt, '_start_pod', lambda run: calls.append(run))
+        out = cvt.launch_cloud_video_training(
+            'local', vid.id, steps=100, sample_prompts=['a wave', '  ', 'a dog'],
+            distillation='off', _provision=lambda run: calls.append(run))
+        from app.models import CloudTrainingRun
+        run = db.session.get(CloudTrainingRun, out['run_id'])
+        p = json.loads(run.train_params)
+        assert p['sample_prompts'] == ['a wave', 'a dog']    # blanks dropped
+        assert p['distillation'] == 'off'
+        with pytest.raises(ValueError):
+            cvt.launch_cloud_video_training(
+                'local', vid.id, steps=100,
+                sample_prompts=['1', '2', '3', '4', '5'],
+                _provision=lambda run: None)
+        with pytest.raises(ValueError):
+            cvt.launch_cloud_video_training(
+                'local', vid.id, steps=100, distillation='sideways',
+                _provision=lambda run: None)
+
+
+def test_the_off_stamp_beats_a_capable_image_and_prompts_reach_the_config(
+        app, tmp_path, monkeypatch):
+    """A capable image normally arms the recipe; the experiment stamp must win
+    or the A/B has no control arm. And the stamped prompts come out as the
+    sample block, sized to the dataset's own frames and fps."""
+    from app.services import cloud_training as ct
+    with app.app_context():
+        vid = _video_dataset(tmp_path, 'surf clips')
+        run = _run(vid.id, crd.VIDEO)
+        run.train_params = json.dumps({
+            'train_type': 'video', 'steps': 100,
+            'target_profile': vid.target_profile, 'frames': vid.frames,
+            'distillation': 'off', 'sample_prompts': ['a wave at dusk']})
+        db.session.commit()
+        monkeypatch.setattr(ct.cfg, 'get', lambda k=None: {
+            'video_image': 'vastai/ostris-ai-toolkit:x-2026-08-27-cuda-12.9'}
+            if k == 'cloud' else {})
+        cfg = ct._build_pod_job_config(run, str(tmp_path / 'stage'),
+                                       {'DATASETS_FOLDER': '/workspace/datasets',
+                                        'TRAINING_FOLDER': '/workspace/output'})
+        proc = cfg['config']['process'][0]
+        assert 'assistant_lora_path' not in proc['model']       # off won
+        assert 'do_guidance_loss' not in proc['train']
+        assert proc['sample']['prompts'] == ['a wave at dusk']
+        assert proc['sample']['num_frames'] == vid.frames
+        assert proc['sample']['fps'] == vid.fps
+
+
+def test_the_automatic_retry_of_a_video_run_goes_down_the_video_lane(
+        app, tmp_path, monkeypatch):
+    """Found live on run #169: a video run's boot-timeout retry went down the
+    FACE path, whose dataset lookup reads the face table, and died on "dataset
+    not found" — the safety net that exists to survive a bad host was the one
+    thing that could not. The retry now branches on the run's own table and
+    replays the video stamps, with the same bookkeeping the face path writes
+    (auto_retry_of is how a crash finds its child; the count bounds the
+    ladder)."""
+    from app.services import cloud_training as ct
+    from app.services import cloud_video_training as cvt
+    seen = {}
+
+    def fake_launch(user_id, dataset_id, **kw):
+        seen.update(kw, dataset_id=dataset_id)
+        return {'run_id': 999, 'status': 'preparing'}
+
+    monkeypatch.setattr(cvt, 'launch_cloud_video_training', fake_launch)
+    with app.app_context():
+        vid = _video_dataset(tmp_path, 'surf clips')
+        run = _run(vid.id, crd.VIDEO, status='error')
+        run.vast_instance_id = '123'
+        run.gpu_name = 'A100 SXM4'
+        run.train_params = json.dumps({
+            'train_type': 'video', 'steps': 100, 'distillation': 'off',
+            'sample_prompts': ['a wave'], 'do_i2v': False})
+        db.session.commit()
+        out = ct._maybe_auto_retry(run, 'pod did not become ready in time')
+        assert out == {'run_id': 999, 'status': 'preparing'}
+        assert seen['dataset_id'] == vid.id
+        assert seen['distillation'] == 'off'          # the experiment survives
+        assert seen['sample_prompts'] == ['a wave']
+        assert seen['auto_retry_of'] == run.id
+        assert seen['auto_retry_count'] == 1
+        assert seen['gpu_name'] == 'A100 SXM4'
+

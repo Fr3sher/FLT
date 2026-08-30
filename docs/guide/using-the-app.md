@@ -258,6 +258,33 @@ Two things still take the GPU exclusively and are not queued behind anything:
 a training run, and a vision pass (captioning, framing, face analysis). While
 one of those is running, new generations wait for it and the app says so.
 
+### When the queue waits for something that is not LDS
+
+Ollama shares your graphics card with ComfyUI, and only one of them can have it.
+So before every generation LDS checks that the local Ollama is not holding a
+model — and if one is loaded that LDS did not load itself, it waits rather than
+evict somebody else's work. The dock says exactly what is in the way and, once
+the wait passes a minute, how long it has been standing there.
+
+That wait usually ends on its own: Ollama drops an idle model after a few
+minutes and the queue resumes with nobody touching anything. When it does not —
+another app is captioning, a second LDS instance is running a batch, or the
+runner in the Ollama slot never unloads at all — you have two answers, and
+neither is "quit and come back":
+
+- **Unload it and continue** evicts the other model. Right when you know what it
+  is and that it is idle; it is never done automatically, because LDS cannot
+  tell your live work from a leftover.
+- **Run anyway** shares the card instead: LDS starts generating next to the other
+  model. Nothing of yours is unloaded. The cost is real — two loaded models on
+  one card do not crash on Windows, they page, and generation can get much
+  slower — so it asks once, in those words, and the guard comes back on its own
+  after fifteen minutes.
+
+An Ollama URL the app cannot use at all (a typo, or an address with a path on the
+end) is not treated as a busy card: captioning will tell you it cannot reach its
+model, and image generation keeps running.
+
 ## The Gallery (every image you generated)
 
 **🖼 Gallery** in the top bar is one feed of everything the app ever rendered —
@@ -283,12 +310,14 @@ From the viewer you can also:
 - **⬇ Download** — the file lands under a name that still says which dataset,
   run, step and seed made it.
 - **✨ Upscale & improve** — Klein (re-renders detail; sharper, but skin can
-  shift) or SeedVR2 (upscales and keeps the look). The result arrives at the
-  top of this gallery as its own ✨ image; the original is untouched. The
-  amber note under the buttons is where the Klein instruction is edited in
-  place, the Klein model is chosen, a **LoRA preset** can be chained into
-  every improve and the **output size (MP)** picked — all app-wide, the same
-  values Settings shows.
+  shift) or SeedVR2 (upscales and keeps the look). **Klein opens a small
+  window first**: the exact instruction it is about to send (editable in
+  place, or switched off), the Klein model, a **LoRA preset** to chain and
+  the **output size (MP)** — all app-wide, the same values Settings shows —
+  then **✨ Generate** starts the pass and the finished picture appears right
+  in that window. Close it early and nothing is lost: the result arrives at
+  the top of this gallery as its own ✨ image. SeedVR2 has no dials, so it
+  runs straight away. Either way the original is untouched.
 - **↩ Use these improve settings** — on a ✨ result you like: the
   instruction, LoRA preset, strength, steps, output size and model that made
   THIS image become the app-wide improve settings again, so the next
@@ -626,6 +655,14 @@ The funnel itself:
    🔍 box — `red dress`, `sunset`, a file name — and the grid filters to
    matching images, combinable with every other filter. It's the fast way to
    find shots in a 9 000-image dump.
+   → **🧪 Caption Lab**, in the same 🏷️ Caption window, benches up to four
+   configurations — engine, vision model, vocabulary register and length — on ONE
+   image you pick, side by side, before you spend a pass on thousands. Nothing is
+   written until you keep a result; **⚙️ Use for the next run** loads the winning
+   configuration into the dials above (a bank picks its caption method per run rather
+   than storing one, which is what that button means here). A bank caption can also be
+   edited by hand from that window — what you write is stamped as yours, so a forced
+   🔄 Re-caption spares it unless you tick the opt-out.
 6. **⬆ Promote** — the kept images are **copied** into the dataset you choose
    through the normal import path: normalized to webp, near-duplicates already
    in the dataset skipped. Any bank caption **rides along**, so a captioned
@@ -2122,6 +2159,22 @@ If a bank was scanned by an older version, its flagged images carry no recorded
 mark position; the panel says so and one more **🚩 Find watermarks** run makes
 them cleanable.
 
+### The 🚩 launch window: sample, threshold, and the result in place
+
+**🚩 Find watermarks opens the same kind of window as 🔤 Find text now, on
+both surfaces** — the dataset button used to fire straight from the click.
+*Try on a sample first* judges only the first N images of the scope
+(deterministic — a re-run re-judges the same ones), so on a huge bank you can
+check the flags before paying for the whole scan. When the dedicated detector
+is installed, the *Detector threshold* slider edits the stored score an image
+needs to be flagged — lower flags fainter marks at the cost of false flags —
+one value, both surfaces (the vision route carries no score, and the window
+says so instead of showing a dead slider). And the flagged pages appear below
+the dials with their boxes drawn on them, filling in live while the scan
+runs. The strip shows the **watermark-family** pages; pages flagged by 🔤
+Find text live in that pass's own window — the same page-level split **What
+to clean** repaints by.
+
 ### Who decided an image is watermarked
 
 **🚩 Find watermarks** can run two ways, and the panel says which one produced
@@ -2159,6 +2212,88 @@ and not a constant.
 Images flagged **without** a position — the detector was sure there is a mark but
 could not place it — stay flagged and are counted separately in the pass's report.
 Draw a zone on them with **🚩 Edit mask** below, or leave them as a filter.
+
+
+## Erase burned-in text — bubbles, subtitles, captions
+
+A comic page carries its dialogue, a screencap its subtitle, a meme its
+caption — and a LoRA trained on them learns the lettering along with the
+subject. **🔤 Find text** reads that text and feeds the exact same cleaning
+funnel as the watermarks: every block of text becomes a zone in the image's
+mask, the image is flagged, and **🧽 Inpaint** repaints the zones. One funnel,
+one ↩ Undo, one mask editor — a text zone behaves exactly like a zone you drew
+by hand. **✂ Auto-crop never touches them**, on purpose: cropping a speech
+bubble out of the middle of a page is not a thing.
+
+The reading is done by the same OCR engine as the Video bank's **🔳 Safe
+zone** pass (one Setup install serves both — *Burned-in text*, a small
+Apache-2.0 package that works offline). It runs on the **CPU only**, never the
+GPU, so it can scan a bank while a training run owns the card. Regular
+lettering is found whatever the script — Latin, Korean, Japanese, Chinese
+dialogue, subtitles and captions are all boxes to it. **Heavily stylised
+lettering can escape it**: a calligraphic sound-effect with thick outlines is
+drawn more than written, and the detector can miss it entirely (measured on a
+real page — no threshold recovers it). Those get the hand mask in **🚩 Edit
+mask**, like any zone the machine missed.
+
+**How the repaint treats these zones.** A text zone is not handed to the
+repaint model as a rectangle any more — that is what used to eat balloon
+outlines. The clean now runs an outline-safe filler first: every letter is a
+small closed ink shape *inside* the zone, so anything drawn **across** the
+zone's edge (the balloon outline, the art) is preserved by construction; the
+letters are then erased with the bubble's own background colour —
+including the faint JPEG haze around them — or rebuilt by a local
+inpaint when the background is graded. Only lettering sitting on busy art
+still goes to the repaint model, and it gets letter-sized boxes, never the
+whole rectangle. Pages cleaned before this shipped can be upgraded:
+**↩ Undo cleaning**, then Clean again.
+
+What it does *not* do, said plainly:
+
+- it reads **positions, not words** — no transcript of your images is stored
+  anywhere, the boxes are all that is kept;
+- the mask holds at most **32 zones per image**; a text-heavy page that
+  produces more keeps the 32 biggest blocks and the pass's report says how
+  many were left out (draw those in **🚩 Edit mask** if they matter);
+- images you **dismissed** stay dismissed — this pass never re-flags a row you
+  already ruled on, exactly like a watermark re-scan;
+- a **🚩 Find watermarks** run afterwards will not undo it: text zones survive
+  the scan, and a watermark box found on the same image joins them.
+
+**Try it on a sample before paying for the whole bank.** The launch window
+carries two dials. *Try on a sample first* reads only the first N images of
+the scope (deterministic — a re-read hits the same pages), so on a 9 000-page
+bank you can judge the result on twenty before committing to the rest.
+*Sensitivity* is the OCR confidence a line needs to become a zone — lower
+catches fainter or more stylised lettering at the cost of false zones. It is
+stored (one value, both surfaces), and the zones are always yours to edit
+afterwards in **🚩 Edit mask**.
+
+**The result shows up in the same window.** Launching does not close it: the
+flagged pages appear below the dials with every zone drawn on them, filling
+in live while the scan runs — on both surfaces (the strip shows the first
+pages and says how many are flagged in total, and each tile opens the
+full-size page).
+Judge the zones, adjust the two dials, re-run — all without leaving the
+window; a zone that landed wrong is fixed by hand in **▶ Review** /
+**🚩 Edit mask** as before. Close it whenever you are done looking.
+
+**Clean text and watermarks separately.** Once Find text has flagged
+something, the repaint level grows a **What to clean** switch — *Both*,
+*🔤 Text*, *🚩 Marks* — next to the LaMa/Klein engine toggle (the bank's
+Watermarks panel and the dataset's Clean row both carry it, and the Clean
+button's count follows the choice). The split is **by page**: a page carrying
+both a watermark and text counts as text and is repainted whole — its zones
+live in one mask, so one page is never split between two runs. With no
+text-flagged page the switch stays hidden, because all three choices would
+mean the same thing.
+
+It works on both surfaces, at full parity — a bank's Watermarks panel
+carries the **🔤 Find text** card next to 🚩 Find, and a dataset's curation
+row carries the same button next to its watermark scan. Both open the same
+launch window: the sample dial, the Sensitivity slider (one stored value,
+whichever side you move it from), the measured count of what the run will
+actually read, and the flagged-pages strip.
 
 
 ## Fix a watermark mask — or mark one the scan missed
@@ -3309,17 +3444,26 @@ badges and hover highlights are not in it — and a picture whose file has been
 cleaned off the disk comes out as a labelled placeholder rather than silently
 missing.
 
-**Machine load.** The right-hand end of the board toolbar carries four small
-numbers for the machine *running LDS* — **CPU**, **GPU**, **VRAM**, **RAM** —
-refreshed every five seconds while the tab is in front. It answers the one
-question the board could not: whether a run that shows no new pictures is
-working or wedged. Every number carries a colour: green below 50 % of its
-resource, amber 50-80 %, red past 80 %; **▾** folds the readout away and stops
-the polling with it, and the choice is remembered. It is a glance, not a
-monitor: there is no history, no graph and
-no per-process breakdown. On a machine with no NVIDIA card (or with `nvidia-smi`
-unavailable, as in some containers) the GPU and VRAM numbers are simply absent
-rather than shown as zeros, and the row is hidden on phone-width screens.
+**Machine load.** The right-hand end of the board toolbar carries five small
+numbers for the machine *running LDS* — **CPU**, **GPU**, **VRAM**, **RAM** and
+the GPU **temperature** — refreshed every five seconds while the tab is in
+front. It answers the one question the board could not: whether a run that
+shows no new pictures is working or wedged. Every number carries a colour:
+green below 50 % of its resource, amber 50-80 %, red past 80 % (for the
+temperature: amber from 70°, red from 85°, the band where a GPU starts
+throttling); **▾** folds the readout away and stops the polling with it, and
+the choice is remembered. It is a glance, not a monitor: there is no history,
+no graph and no per-process breakdown. On a machine with no NVIDIA card (or
+with `nvidia-smi` unavailable, as in some containers) the GPU, VRAM and
+temperature numbers are simply absent rather than shown as zeros. On a phone
+the readout rides in the board's **⋯** shelf rather than the toolbar.
+
+The same readout is available on *every* page: the **📊** button at the right
+of the top bar (in the menu panel, on a phone) unfolds an identical line next
+to the navigation, so you can watch a training or a generation work from the
+Test Studio, the Bank or a dataset without keeping Task Manager — or a ComfyUI
+resource monitor — open. It starts folded, polls only while it is unfolded and
+the tab is visible, and remembers your choice separately from the board's.
 
 **Deleting a picture from the board.** A pinned image carries **✕** and **🗑**,
 and they are not the same thing. **✕** takes it off the board and remembers where
@@ -3746,8 +3890,10 @@ you are already comparing a checkpoint's renders when you decide one of them
 deserves a bigger pass. Both surfaces are the same action on the same picture:
 
 - **✨ Improve via Klein** re-renders detail and texture. Sharper, but skin and
-  colour can shift. The note under the button quotes the exact instruction it is
-  about to send and links to where you can edit it or switch it off.
+  colour can shift. Pressing it opens a small settings window that quotes the
+  exact instruction it is about to send — editable in place, or switched off —
+  with the Klein model, LoRA preset and output size, and a **✨ Generate**
+  button. Stay, and the finished picture appears right in that window.
 - **🔍 Upscale via SeedVR2** resolves detail at a higher resolution and keeps the
   original look. It appears once SeedVR2 is installed; until then Setup ▸ ComfyUI
   can download it for you, and pressing ✨ before that answers with the same
@@ -3757,9 +3903,11 @@ deserves a bigger pass. Both surfaces are the same action on the same picture:
 improvement arrives as its **own image in that checkpoint's gallery**, right next
 to the original — open the gallery from the checkpoint pill (🖼) and you can
 compare the two, download either, or pin the improved one onto the board beside
-its source. Nothing moves on its own, which is why the confirmation says where to
-look. The pass takes minutes, and a gallery already open does not refresh by
-itself: close it and open it again to find the new picture waiting at the top.
+its source. A Klein pass shows its result **in the ✨ window itself** if you stay
+on it; close the window early (or run SeedVR2, which has no window) and nothing
+moves on its own, which is why the confirmation says where to look. The pass
+takes minutes, and a gallery already open does not refresh by itself: close it
+and open it again to find the new picture waiting at the top.
 
 Two things it deliberately will not do. An **improvement cannot be improved
 again** — running two passes over the same pixels is how a face turns to

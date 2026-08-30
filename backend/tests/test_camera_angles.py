@@ -149,6 +149,8 @@ def test_a_missing_required_asset_names_the_setup_buttons(app, monkeypatch):
     monkeypatch.setattr(qch, 'resolve_camera_speed_lora', lambda: ('y', 'path'))
     assert qch.camera_missing_assets() == ['camera_model', 'camera_lora']
     assert qch.camera_ready() is False
+    # The reuse form agrees with the scan form — one verdict, either way in.
+    assert qch.camera_ready(qch.camera_missing_assets()) is False
 
 
 def test_the_speed_lora_alone_missing_does_not_block_the_lane(app, monkeypatch):
@@ -162,7 +164,136 @@ def test_the_speed_lora_alone_missing_does_not_block_the_lane(app, monkeypatch):
     monkeypatch.setattr(qch, 'resolve_camera_speed_lora', lambda: ('s', None))
     assert qch.camera_missing_assets() == ['camera_speed_lora']
     assert qch.camera_ready() is True
+    assert qch.camera_ready(['camera_speed_lora']) is True
     assert qch.STEPS_WITHOUT_SPEED_LORA > qch.STEPS_WITH_SPEED_LORA
+
+
+# --- the pin (the picker's Model row writes camera.unet) ----------------------
+
+def test_a_resolvable_pin_is_a_loader_name_never_the_status_tuple(app, monkeypatch):
+    """`resolve_model_ref` answers (name, status), and this helper used to hand
+    the whole tuple back: truthy even as (None, 'missing'), so a stale pin
+    skipped the fallback scan AND the tuple itself was written into node 108 as
+    `unet_name`. Latent until now — the picker's Model row is the first UI that
+    writes `camera.unet` — which is exactly why it gets a test the day the path
+    is exercised."""
+    from app import config as cfg
+    from app.services import qwen_camera_helper as qch
+    with app.app_context():
+        cfg.save_config({'camera': {'unet': 'qwen/picked.safetensors'}})
+        monkeypatch.setattr(qch, 'resolve_model_ref',
+                            lambda _t, _v: ('qwen/picked.safetensors', 'ok'))
+        got = qch.resolve_camera_unet()
+    assert got == 'qwen/picked.safetensors'
+    assert isinstance(got, str)
+
+
+def test_a_stale_pin_falls_back_to_the_scan_as_the_config_comment_promises(app, monkeypatch):
+    """config.py: "a pin that cannot be resolved falls back to auto-detection;
+    it never blocks a render". The promise is only true if the status is READ."""
+    from app import config as cfg
+    from app.services import qwen_camera_helper as qch
+    with app.app_context():
+        cfg.save_config({'camera': {'unet': 'qwen/deleted.safetensors'}})
+        monkeypatch.setattr(qch, 'resolve_model_ref', lambda _t, _v: (None, 'missing'))
+        monkeypatch.setattr(qch, '_scan',
+                            lambda *a, **k: 'qwen/found-by-scan.safetensors')
+        assert qch.resolve_camera_unet() == 'qwen/found-by-scan.safetensors'
+
+
+def test_a_stale_lora_pin_degrades_to_the_scan_instead_of_crashing(app, monkeypatch):
+    """The LoRA twin of the same bug — the old pinned path handed the tuple to
+    normalize_rel_model_name, which is an AttributeError, not a render."""
+    from app import config as cfg
+    from app.services import qwen_camera_helper as qch
+    with app.app_context():
+        cfg.save_config({'camera': {'angles_lora': 'qwen/deleted.safetensors'}})
+        monkeypatch.setattr(qch, 'resolve_model_ref', lambda _t, _v: (None, 'missing'))
+        monkeypatch.setattr(qch, '_scan', lambda *a, **k: None)
+        name, path = qch.resolve_camera_lora()
+    assert path is None
+    assert isinstance(name, str) and name  # the refusal can still print what was sought
+
+
+# --- the distilled-build regime (Model row picks a Rapid/AIO merge) -----------
+
+def _enqueue_capturing_workflow(app, monkeypatch, tmp_path, *, unet, speed_pin=''):
+    """Run enqueue_camera_view with resolvers pinned and the queue captured.
+
+    Returns the workflow dict the job would carry — the ONLY honest way to
+    assert the three speed-LoRA regimes, because the regime decision lives at
+    enqueue time, not in any resolver."""
+    from app import config as cfg
+    from app.services import qwen_camera_helper as qch
+    src = tmp_path / 'src.png'
+    src.write_bytes(b'\x89PNG\r\n\x1a\n')
+    captured = {}
+    with app.app_context():
+        cfg.save_config({'camera': {'speed_lora': speed_pin}})
+        monkeypatch.setattr(qch, 'resolve_camera_unet', lambda: unet)
+        monkeypatch.setattr(qch, 'resolve_camera_text_encoder', lambda: 'te.safetensors')
+        monkeypatch.setattr(qch, 'resolve_camera_vae', lambda: 'vae.safetensors')
+        monkeypatch.setattr(qch, 'resolve_camera_lora',
+                            lambda: ('angles.safetensors', str(src)))
+        monkeypatch.setattr(qch, 'resolve_camera_speed_lora',
+                            lambda: ('speed.safetensors', str(src)))
+        monkeypatch.setattr(qch, '_comfy_input_dir', lambda: str(tmp_path))
+        monkeypatch.setattr(qch.comfy_fs, 'ensure_input_usable', lambda d: d)
+        monkeypatch.setattr(qch.comfy_fs, 'stage_input_image',
+                            lambda _s, name, d: str(tmp_path / name))
+        monkeypatch.setattr(qch.queue_manager, 'add_job',
+                            lambda **kw: captured.update(kw))
+        qch.enqueue_camera_view('u', 'src.png', str(src), '<sks> back view')
+    return captured['workflow_data']
+
+
+def test_a_distilled_pick_skips_the_chained_speed_lora_and_keeps_4_steps(
+        app, monkeypatch, tmp_path):
+    """Chaining the 4-step LoRA onto a build that already bakes its own
+    distillation is distillation twice — measured on a real photo (Rapid AIO
+    v23, same seed, same pose): chained = confetti patches over skin and
+    tiles with every job reporting success; unchained at the SAME 4 steps =
+    clean. The name-based read is deliberately visible (catalog + log)."""
+    from app.services import qwen_camera_helper as qch
+    wf = _enqueue_capturing_workflow(
+        app, monkeypatch, tmp_path,
+        unet='qwen\\phr00tQwenImageEditRapid_v230.safetensors')
+    assert '102' not in wf, 'the speed LoRA must not be chained on a distilled build'
+    assert wf['106']['inputs']['steps'] == qch.STEPS_WITH_SPEED_LORA
+    assert wf['94']['inputs']['model'] == ['109', 0]
+
+
+def test_an_ordinary_build_still_chains_the_speed_lora(app, monkeypatch, tmp_path):
+    from app.services import qwen_camera_helper as qch
+    wf = _enqueue_capturing_workflow(
+        app, monkeypatch, tmp_path,
+        unet='qwen\\qwen_image_edit_2511_fp8mixed.safetensors')
+    assert wf['102']['inputs']['lora_name'] == 'speed.safetensors'
+    assert wf['106']['inputs']['steps'] == qch.STEPS_WITH_SPEED_LORA
+
+
+def test_a_pinned_speed_lora_overrides_the_distilled_skip(app, monkeypatch, tmp_path):
+    """A pin is the user saying they know better than the filename heuristic —
+    the lane always lets them."""
+    wf = _enqueue_capturing_workflow(
+        app, monkeypatch, tmp_path,
+        unet='qwen\\phr00tQwenImageEditRapid_v230.safetensors',
+        speed_pin='qwen/my-own-speed.safetensors')
+    assert '102' in wf, 'an explicit camera.speed_lora pin must win over the name read'
+
+
+def test_the_distilled_read_is_by_name_and_the_official_build_is_not_one():
+    from app.services import qwen_camera_helper as qch
+    assert qch.unet_is_distilled('qwen\\phr00tQwenImageEditRapid_v230.safetensors')
+    assert qch.unet_is_distilled('turbo-merge.safetensors')
+    assert qch.unet_is_distilled('some-lightning-8step.gguf')
+    assert not qch.unet_is_distilled('qwen\\qwen_image_edit_2511_fp8mixed.safetensors')
+    assert not qch.unet_is_distilled(None)
+
+
+def test_the_catalog_reports_the_distilled_read(client, app):
+    body = client.get('/api/camera/catalog').get_json()
+    assert isinstance(body['unet']['distilled'], bool)
 
 
 def test_the_shipped_workflow_still_has_the_nodes_the_helper_edits(app):
@@ -201,6 +332,16 @@ def test_the_catalog_route_serves_the_vocabulary_and_the_readiness(client, app):
     assert body['trigger'] == '<sks>'
     assert isinstance(body['ready'], bool)
     assert isinstance(body['missing'], list)
+
+
+def test_the_catalog_route_names_the_model_that_will_run(client, app):
+    """The picker's Model row reads this: the saved pin, what a run would load
+    right now, and the NAME of the Setup default — so 'empty' can say which
+    build it means instead of 'auto-detect'."""
+    body = client.get('/api/camera/catalog').get_json()
+    assert set(body['unet']) == {'setting', 'effective', 'default', 'distilled'}
+    assert body['unet']['setting'] == ''
+    assert body['unet']['default'].endswith('.safetensors')
 
 
 def test_a_camera_view_cannot_be_re_shot_from_another_angle(client, app):
@@ -296,10 +437,14 @@ def test_the_route_refuses_an_unknown_pose(client, app, monkeypatch, tmp_path):
     assert ca.UNKNOWN_POSE in (r.get_json() or {}).get('error', '')
 
 
-def test_an_unknown_image_is_a_404_not_a_crash(client, app):
+def test_an_unknown_image_is_a_404_that_says_the_picture_is_gone(client, app):
+    """A stale grid entry can outlive its row (deleted in another tab). The
+    refusal family words every other camera refusal; the vanished-row case
+    gets its wording too, not a bare 'not found'."""
     r = client.post('/api/canvas/image/999999/camera',
                     json={'poses': ['back/eye/medium']})
     assert r.status_code == 404
+    assert r.get_json()['error'] == ca.SOURCE_GONE
 
 
 # --- Setup: the group install -------------------------------------------------
@@ -472,3 +617,4 @@ def test_the_dataset_route_answers_like_its_canvas_twin(client, app,
     r = client.post('/api/dataset/image/999999/camera',
                     json={'poses': ['back/eye/medium']})
     assert r.status_code == 404
+    assert r.get_json()['error'] == ca.SOURCE_GONE

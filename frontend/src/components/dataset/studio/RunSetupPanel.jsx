@@ -12,6 +12,7 @@ import StudioGenerationSettings from './StudioGenerationSettings';
 import StudioActionBar from './StudioActionBar';
 import StudioPreflightBanner from './StudioPreflightBanner';
 import { launchSettings, launchText as batchLaunchText, visibleBatch } from './promptBatch';
+import { readInjectTrigger, writeInjectTrigger } from './triggerPref';
 import ScenePromptsPanel from './ScenePromptsPanel';
 import { combinedPromptBatch } from './scenePrompts';
 import { heavyRunConfirm, heavyRunNotice, runCost } from './runCost';
@@ -43,7 +44,11 @@ import { heavyRunConfirm, heavyRunNotice, runCost } from './runCost';
 //                           compteur ne doit plus le multiplier.
 export default function RunSetupPanel({ d, studio, form, datasetId,
   checkpointSlot = null, launchBlocked = false, launchLabel = null, launchHint = null, actionBar = true,
-  showStrengths = true, cellTotal = null, genStoragePrefix = null }) {
+  showStrengths = true, cellTotal = null, genStoragePrefix = null,
+  // 🔤 Contrôle optionnel de la case « Trigger word » par le PARENT (le canvas la
+  // partage avec son panneau 🧬 Blend, qui doit dire la vérité sur l'injection).
+  // Absent → le panneau tient l'état lui-même, comportement historique.
+  injectTrigger: injectTriggerProp = null, onInjectTrigger: onInjectTriggerProp = null }) {
   const navigate = useNavigate();
   // Réglages de génération GLOBAUX (parité Generate, hors prompt builder) remontés par
   // StudioGenerationSettings : objet snake_case déjà prêt à fusionner dans le POST /run
@@ -75,9 +80,22 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
   // 🎬 Scenes : les captions d'une banque OU d'un dataset DANS L'ORDRE, chaque
   // scène cochée devenant une passe du même axe 📝. Non persisté, même raison que
   // le lot d'historique ci-dessus. La règle vit dans scenePrompts.js (pur, testé).
-  const [sceneBatch, setSceneBatch] = useState({ source: null, scenes: [], picked: [] });
+  const [sceneBatch, setSceneBatch] = useState({ source: null, scenes: [], picked: [], extras: {} });
   const allPickedPrompts = combinedPromptBatch(
-    pickedPrompts, sceneBatch.scenes, sceneBatch.picked);
+    pickedPrompts, sceneBatch.scenes, sceneBatch.picked, sceneBatch.extras);
+
+  // 🔤 Case « Trigger word » : préfixer (défaut, comportement historique) ou non le
+  // trigger du dataset au prompt monté. Préférence de navigateur PARTAGÉE entre les
+  // surfaces de lancement — lecture/écriture dans triggerPref (module pur : ce
+  // panneau ne touche pas au stockage lui-même, le contrat du lot de prompts
+  // l'interdit). Décochée → `inject_trigger: false` part dans le POST ; cochée →
+  // champ absent, corps octet pour octet celui d'avant.
+  const [ownInjectTrigger, setOwnInjectTrigger] = useState(readInjectTrigger);
+  const injectTrigger = injectTriggerProp ?? ownInjectTrigger;
+  const toggleInjectTrigger = onInjectTriggerProp ?? ((v) => {
+    setOwnInjectTrigger(v);
+    writeInjectTrigger(v);
+  });
 
   // Le nombre de cellules RÉELLEMENT lancées. `cellTotal` n'est fourni que par un
   // mode qui change la formule (🧬 Blend : une pile = une configuration) — sinon
@@ -109,7 +127,13 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
     // hooks étalent cet objet dans le corps du POST) — donc aucune signature à
     // changer, et le lot arrive identiquement sur les deux routes. Absent quand
     // rien n'est coché : le corps envoyé est alors octet pour octet celui d'avant.
-    const settings = launchSettings(genSettings, allPickedPrompts);
+    const base = launchSettings(genSettings, allPickedPrompts);
+    // Lot vide ⇒ `base` EST l'objet d'état genSettings (identité, épinglée par
+    // promptBatch.test.js) : ne JAMAIS écrire dedans — y graver la clé la
+    // rendait collante (un lancement décoché puis la case recochée continuait
+    // d'envoyer inject_trigger:false). Cochée = identité, corps octet pour
+    // octet celui d'avant ; décochée = copie qui porte le champ.
+    const settings = injectTrigger ? base : { ...base, inject_trigger: false };
     const res = await studio.launch(
       form.chosenCps, form.selSts, form.nextSeed(), form.effectivePrompt,
       form.effectiveModels, form.effectiveAspects, form.effectiveCfgs, form.effectiveSteps,
@@ -217,6 +241,8 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
             batchPrompts={pickedPrompts}
             onToggleBatchPrompt={toggleBatchPrompt}
             onClearBatchPrompts={() => setBatchPrompts([])}
+            injectTrigger={injectTrigger}
+            onInjectTrigger={toggleInjectTrigger}
           />
 
           {/* 🎬 Les captions d'une banque ou d'un dataset, dans l'ordre, comme

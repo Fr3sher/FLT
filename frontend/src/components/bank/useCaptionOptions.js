@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '../../api/fetchClient';
 import { OLLAMA_RELEVANT } from '../dataset/CaptionOptionsPopover';
+import { activeLocalLlm, modelPickerCopy } from '../../utils/localLlm'
 
 export function useCaptionOptions({ caps }) {
   // Caption register for the 🏷️ Caption pass ('' = model's own wording). Explicit is
@@ -26,6 +27,7 @@ export function useCaptionOptions({ caps }) {
   // configured vision model), so it is its own always-200 fetch — an unreachable Ollama
   // is an empty list, never an error.
   const [ollamaModels, setOllamaModels] = useState([])
+  const [modelsProvider, setModelsProvider] = useState('ollama')
   /* The ESCAPE HATCH, and the reason it is a piece of state and not a request key: it has
      to be visible, deliberate and re-read in the confirmation. Never persisted, so it
      resets with the panel — an opt-out of a protection is not a preference. */
@@ -37,8 +39,12 @@ export function useCaptionOptions({ caps }) {
   // exactly the truth on that machine.
   useEffect(() => {
     let alive = true
-    apiFetch('/api/ollama/models').catch(() => ({ models: [] }))
-      .then((d) => { if (alive) setOllamaModels(d?.models || []) })
+    apiFetch('/api/local-llm/models').catch(() => ({ models: [] }))
+      .then((d) => {
+        if (!alive) return
+        setOllamaModels(d?.models || [])
+        setModelsProvider(d?.provider || 'ollama')
+      })
     return () => { alive = false }
   }, [])
 
@@ -60,7 +66,7 @@ export function useCaptionOptions({ caps }) {
   // It reads the EFFECTIVE model — this run's override if one was picked, else the
   // configured one. Warning about the global model while the run uses another is worse
   // than not warning at all.
-  const visionModel = captionModel || caps.ollama?.vision_model || ''
+  const visionModel = captionModel || activeLocalLlm(caps).vision_model || ''
   const visionModelLooksUncensored = /abliterat|uncensor|huihui|nsfw/i.test(visionModel)
   // The Ollama model choice only bites when the resolved engine can reach Ollama.
   const ollamaPicksApply = OLLAMA_RELEVANT.has(captionEngine)
@@ -74,6 +80,7 @@ export function useCaptionOptions({ caps }) {
     captionEngine, setCaptionEngine, captionModel, setCaptionModel,
     ollamaModels, captionIncludeAsserted, setCaptionIncludeAsserted,
     visionModel, visionModelLooksUncensored, ollamaPicksApply,
+    llmPicker: modelPickerCopy(modelsProvider),
     captionModelChoices, captionRunOptions,
   };
 }

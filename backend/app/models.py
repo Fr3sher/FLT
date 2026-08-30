@@ -206,6 +206,17 @@ class FaceDatasetImage(db.Model):
     # for any row carrying a pose, because a back view left undescribed binds
     # "back-facing" to the trigger word. Additive column (_SCHEMA_ADDITIONS).
     camera_pose = db.Column(String(64), nullable=True)
+    # ⚙ What a GENERATED row was actually made with — JSON dict, stamped at
+    # enqueue time by every generating lane (variations, ✨ improve, 📷 camera,
+    # regenerate) with whatever that lane knows: engine, base model, chained
+    # LoRAs, steps, seed… NULL on imports and on every row that predates the
+    # column. The keys deliberately mirror the lora_test_image facts the
+    # unified viewer already shows, because the gap this closes was exactly
+    # "the dataset knows less about its own generated images than the Gallery
+    # does" — one vocabulary, both tables. Published as-is by the dataset
+    # image payload (parsed, never raw JSON). Additive column
+    # (_SCHEMA_ADDITIONS).
+    generation_meta = db.Column(Text, nullable=True)
     # De combien la box recadrée (head-crop auto à l'import OU recadrage manuel) est
     # en-dessous de la résolution d'entraînement : size / côté_de_la_box. NULL =
     # jamais croppé (import plein cadre) ou pas encore recalculé (anciennes lignes).
@@ -244,6 +255,13 @@ class FaceDatasetImage(db.Model):
     # migration); rows written before them stay NULL and read as 'unknown'.
     watermark_source = db.Column(String(16), nullable=True)
     watermark_score = db.Column(Float, nullable=True)
+    # 🔤 Find text — the OCR pass's own memory: NULL (never scanned) | 'none'
+    # (scanned, no text) | 'detected' (text found → its zones were folded into
+    # watermark_regions and the row was flagged) | 'error'. Deliberately NOT a
+    # second flag the cleaning levels read: the ACTIONABLE state stays
+    # watermark_state + watermark_regions (one funnel, one undo, one editor);
+    # this column only lets the pass resume and report. Additive (create_app).
+    text_state = db.Column(String(16), nullable=True)
     # Métadonnées de provenance génériques, sérialisées en JSON. La première
     # intégration prise en charge est Pexels : plateforme, page photo et crédit
     # photographe. Toute écriture passe par la validation stricte du service.
@@ -422,6 +440,15 @@ class BankImage(db.Model):
     # of the whole bank to answer "what would 0.92 have flagged?", and the
     # threshold is the one knob this feature offers.
     watermark_score = db.Column(Float, nullable=True)
+    # 🔤 Find text — the OCR pass's own memory: NULL (never scanned) | 'none'
+    # (scanned, no burned-in text) | 'detected' (text found → its zones were
+    # folded into watermark_regions and the row was flagged) | 'error'. NOT a
+    # second flag the cleaning levels read — the actionable state stays
+    # watermark_state + watermark_regions (one funnel, one ↩ Undo, one mask
+    # editor). This column is what lets the pass resume where it stopped and
+    # report per route. Same meaning as face_dataset_image.text_state (one
+    # feature, two surfaces). Additive column (see _SCHEMA_ADDITIONS).
+    text_state = db.Column(String(16), nullable=True)
     # Caption pass — a plain DESCRIPTIVE caption (no trigger, no identity omission:
     # a bank has no trigger word and nothing to protect). It doubles as the bank's
     # search text (the search bar matches caption + relpath) AND rides along to the
@@ -706,6 +733,9 @@ class LoraTestImage(db.Model):
     # Parité Generate (2026-07-01) — réglages persistés par cellule pour un resume fidèle.
     negative = db.Column(Text, nullable=True)             # Z-Image : prompt négatif (node 5)
     sampler = db.Column(String(32), nullable=True)        # Krea : node 26 sampler_name
+    # Krea : preset du sampler maison (voie SamplerCustomAdvanced). NULL = off,
+    # c.-a-d. le KSampler standard — et donc aucun node maison dans le graphe.
+    sampler_preset = db.Column(String(24), nullable=True)
     scheduler = db.Column(String(32), nullable=True)      # Krea : node 26 scheduler
     weight_dtype = db.Column(String(24), nullable=True)   # Krea : node 20 précision UNET (weight_dtype)
     enhancer_strength = db.Column(Float, nullable=True)   # Krea2T-Enhancer : NULL=OFF, sinon force ON
@@ -714,6 +744,11 @@ class LoraTestImage(db.Model):
     resolution_multiplier = db.Column(Float, nullable=True)  # multiplicateur linéaire du palier [1.0,1.9] ; NULL/1.0=palier inchangé (resume fidèle)
     init_image = db.Column(String(255), nullable=True)    # Krea img2img : fichier init copié dans COMFYUI_INPUT_DIR
     denoise = db.Column(Float, nullable=True)             # Krea img2img : node 26 denoise
+    # Case « Trigger word » du Studio : False = le prompt de cette cellule est
+    # parti SANS le trigger word du dataset (aucune injection au montage du
+    # workflow). NULL = lignes d'avant la colonne / défaut → trigger injecté,
+    # ce qui est le comportement historique. Le resume relit cette colonne.
+    inject_trigger = db.Column(db.Boolean, nullable=True)
     # Scoring facial objectif (« best epoch », méthode jandordoe) : similarité
     # cosinus InsightFace vs la référence du dataset + état de scorabilité
     # ('scorable'/'no_face'/'low_det'/…). NULL = cellule pas encore scorée.
@@ -769,7 +804,7 @@ class LoraTestImage(db.Model):
     # stored can never drift from what executed. Klein only (a restoration
     # pass has no knobs to record); NULL on every row that is not an improve
     # result and on rows that predate the column. Read by ↩ "Use these
-    # improve settings"; keys are published as-is by _gallery_image, so they
+    # improve settings"; keys are published as-is by gallery_image, so they
     # are part of the frontend contract (improveSettingsRestore.js) — never
     # rename one without an alias. Additive column (see _SCHEMA_ADDITIONS).
     improve_profile = db.Column(Text, nullable=True)
@@ -1487,6 +1522,12 @@ class VideoDataset(db.Model):
     width = db.Column(Integer, nullable=True)
     height = db.Column(Integer, nullable=True)
     output_dir = db.Column(Text, nullable=False)
+    # One trigger, one place. It is PREPENDED to every sidecar at promote time —
+    # the captions road, deliberately, because that is the only path every
+    # trainer provably reads; a config-level trigger on top of it would be the
+    # duplication fal measured degrading prompt adherence. Nullable: a style
+    # set legitimately has none.
+    trigger_word = db.Column(String(100), nullable=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
     updated_at = db.Column(DateTime, default=db.func.current_timestamp(),
                            onupdate=db.func.current_timestamp())

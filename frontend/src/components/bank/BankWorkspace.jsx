@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Archive, BarChart3, FolderInput, FolderOpen, Lightbulb, Palette, Rocket, Search, Target, Trash2, Type, Undo2, UserRoundCheck, Wand2 } from 'lucide-react';
-import { apiFetch, patchJson, postJson } from '../../api/fetchClient'
+import { apiFetch, patchJson, postJson, putJson } from '../../api/fetchClient'
 import { useFolderPersons } from './useFolderPersons'
 import { useReviewLightbox } from './useReviewLightbox'
 import { useCaptionOptions } from './useCaptionOptions'
@@ -10,6 +10,14 @@ import { useCapabilities } from '../../context/CapabilitiesContext'
 import { useConnectionStatus } from '../../hooks/useConnectionStatus'
 import useBatchThumbs from '../../hooks/useBatchThumbs'
 import DupGroupsPanel from './DupGroupsPanel'
+/* 🧪 The Caption Lab, shared with the Dataset side. Lazy for the same reason the
+   dataset lazies it: both only exist behind a click, and the bank entry chunk already
+   sits near vite's size warning. `bankLabSurface` is where the two surfaces differ —
+   see captionLabSurface.js. */
+import { bankLabSurface, imageDisplayName } from '../dataset/captionLabSurface'
+import { imageVersionQuery } from './bankEdits.js'
+const CaptionLabPicker = lazy(() => import('../dataset/CaptionLabPicker'))
+const CaptionEditorDialog = lazy(() => import('../dataset/CaptionEditorDialog'))
 // ── The pieces this screen used to define inline ────────────────────────────
 // Split out by the Encre redesign: the top bar, the filter rail, the passes
 // panel and the grid are four files now, and all four drew the same chips.
@@ -68,6 +76,7 @@ import { passScopeOption } from './bankPassScope.js'
 // 🎛 The launch window every pass now opens, and the two pure modules behind it:
 // what each pass is (blocks, offered scopes, refusals) and how big a run is.
 import PassDialog from './PassDialog.jsx'
+import BankZonesPreview from './BankZonesPreview.jsx'
 import { BANK_PASSES } from './bankPasses.js'
 import {
   semanticEngineLabel, semanticEnginePatchBody, semanticEngineState,
@@ -104,6 +113,7 @@ import {
   flagCandidateLabel, flagPrereq, pickedCandidates, unscannedNotice,
 } from './autoRejectReadiness.js'
 import { chipCounts, facetDataKey, isFacetFiltered } from './bankFacetCounts.js'
+import { activeLocalLlm, localLlmLabel } from '../../utils/localLlm'
 
 
 const PAGE_SIZE = 120
@@ -283,7 +293,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     captionEngine, setCaptionEngine, captionModel, setCaptionModel,
     captionIncludeAsserted, setCaptionIncludeAsserted,
     visionModel, visionModelLooksUncensored, ollamaPicksApply,
-    captionModelChoices, captionRunOptions,
+    captionModelChoices, captionRunOptions, llmPicker,
   } = useCaptionOptions({ caps })
   /* WHICH PILE each pass runs on, and whether it re-does rows that already have a
      result — kept HERE, not inside the windows, so closing one does not silently
@@ -292,6 +302,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
 
      🏷️ Caption reads its entry under the name it has always used, because the
      re-caption arithmetic beside it is written against that name. */
+  /* 🧪 Caption Lab: which image to bench (picker), then the image it named. The
+     Bank's half of the entry point the Dataset's Captions section carries. */
+  const [labPickerOpen, setLabPickerOpen] = useState(false)
+  const [labImage, setLabImage] = useState(null)
   const [passScopes, setPassScopes] = useState({})
   const [passRedo, setPassRedo] = useState({})
   const setPassScope = (id, v) => setPassScopes((p) => ({ ...p, [id]: v }))
@@ -1078,7 +1092,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     curateOpen, setCurateOpen, diverseN, setDiverseN, diverseTypicality,
     setDiverseTypicality, diverseBusy, balanceN, setBalanceN, balanceAxis,
     setBalanceAxis, balanceBusy, balanceResult, setBalanceResult, similarN,
-    setSimilarN, similarBusy, textQuery, setTextQuery, textN, setTextN,
+    setSimilarN, similarBusy, similarLast, similarAddN, setSimilarAddN,
+    addMoreSimilar, textQuery, setTextQuery, textN, setTextN,
     textExclude, setTextExclude, textExcludeW, setTextExcludeW, textStatus,
     setTextStatus, textPending, textResult, setTextResult, pickDiverse,
     pickBalanced, findSimilar, openTextSearch, releaseTextEncoder,
@@ -1171,7 +1186,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const angleCounts = chipPrint.angles
   const shownAngles = shownBuckets(ANGLE_BUCKETS, chipWide.angles, filter.angle)
   const angleState = angleReadiness(payload)
-  const visionReady = !!caps.ollama?.vision_model_ready
+  const visionReady = !!activeLocalLlm(caps).vision_model_ready
   // The explicit lane only spells acts out with an uncensored (abliterated) vision
   // model. We can't prove abliteration, but the common builds name themselves — a soft
   // heuristic drives an honest "may soften" hint (never a hard block: a differently
@@ -1201,12 +1216,175 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
      is the lever it names. It re-computes as the engine changes, so ticking
      JoyCaption turns the warning into its own confirmation instead of leaving an
      alarm on screen about a half that will no longer run. */
+  /* 🔤 Find text — the launch window's own dials. The sample is PER RUN
+     (session state: a tryout is a gesture, not a preference); the sensitivity
+     is the STORED text_scan.score_min both surfaces read, edited here because
+     this window is where its effect is judged (scan a sample → ▶ Review the
+     zones → adjust → re-read the same sample). Written through on release,
+     like the dataset's allow-crop switch. */
+  const [textSampleOn, setTextSampleOn] = useState(false)
+  const [textSampleSize, setTextSampleSize] = useState(20)
+  const storedTextSensitivity = Number.isFinite(Number(caps.text_scan_score_min))
+    ? Number(caps.text_scan_score_min) : 0.5
+  const [textSensitivity, setTextSensitivity] = useState(null)
+  const effectiveTextSensitivity = textSensitivity ?? storedTextSensitivity
+  const saveTextSensitivity = async (value) => {
+    try {
+      await putJson('/api/settings', { config: { text_scan: { score_min: value } } })
+    } catch { /* the run still uses the stored value; the slider shows what failed */ }
+  }
+  const textScanRunOptions = () => (textSampleOn
+    ? { limit: Math.max(1, Math.min(10000, Math.round(Number(textSampleSize) || 20))) }
+    : {})
+  /* 🚩 Find watermarks — brought to the SAME standard as 🔤 on the
+     maintainer's ask ("the same kind of menu — tuning and visualisation —
+     dataset and bank alike"): a per-run sample, the STORED detector threshold
+     edited where its effect is judged (write-through; the dataset window edits
+     the same value), and the flagged pages drawn in the window. */
+  const [wmSampleOn, setWmSampleOn] = useState(false)
+  const [wmSampleSize, setWmSampleSize] = useState(20)
+  const storedWmThreshold = Number.isFinite(Number(caps.watermark_detect_threshold))
+    ? Number(caps.watermark_detect_threshold) : 0.94
+  const [wmThreshold, setWmThreshold] = useState(null)
+  const effectiveWmThreshold = wmThreshold ?? storedWmThreshold
+  const saveWmThreshold = async (value) => {
+    try {
+      await putJson('/api/settings', { config: { watermark_detect: { threshold: value } } })
+    } catch { /* the run still uses the stored value; the slider shows what failed */ }
+  }
+  const wmScanRunOptions = () => (wmSampleOn
+    ? { limit: Math.max(1, Math.min(10000, Math.round(Number(wmSampleSize) || 20))) }
+    : {})
+  const watermarkScanControls = (
+    <div className="space-y-2 rounded-md border border-border bg-surface-raised p-2">
+      <p className="m-0 text-[11px] font-semibold uppercase tracking-wide text-content-muted">
+        Options for this run
+      </p>
+      <label className="flex items-start gap-2 text-[11px] text-content-subtle">
+        <input type="checkbox" className="mt-0.5" checked={wmSampleOn}
+          onChange={(e) => setWmSampleOn(e.target.checked)} disabled={live} />
+        <span>
+          <span className="font-medium text-content">Try on a sample first</span>
+          {' — judge only the first '}
+          <input type="number" min="1" max="10000" value={wmSampleSize}
+            onChange={(e) => setWmSampleSize(e.target.value)}
+            disabled={live || !wmSampleOn} aria-label="Sample size"
+            className="mx-1 w-16 rounded border border-border bg-app px-1 py-0.5 text-content" />
+          {' images of the scope. Judge the boxes below, then run again for the '}
+          {'rest — or tick “re-check” above to re-judge the SAME sample at '}
+          {'another threshold.'}
+        </span>
+      </label>
+      {caps.watermark_detect ? (
+        <label className="block text-[11px] text-content-subtle">
+          <span className="font-medium text-content">Detector threshold</span>
+          {' — the score an image needs to be flagged as watermarked. Lower '}
+          {'flags fainter marks at the cost of false flags; higher keeps only '}
+          {'the confident ones. Stored: the dataset scan reads the same value.'}
+          <span className="mt-1 flex items-center gap-2">
+            <input type="range" min="0.50" max="0.99" step="0.01"
+              value={effectiveWmThreshold} disabled={live}
+              aria-label="Detector threshold"
+              onChange={(e) => setWmThreshold(Number(e.target.value))}
+              onMouseUp={() => saveWmThreshold(effectiveWmThreshold)}
+              onTouchEnd={() => saveWmThreshold(effectiveWmThreshold)}
+              onKeyUp={() => saveWmThreshold(effectiveWmThreshold)}
+              className="w-40" />
+            <span className="tabular-nums text-content">{effectiveWmThreshold.toFixed(2)}</span>
+            <span className="text-content-subtle">(default 0.94)</span>
+          </span>
+        </label>
+      ) : (
+        <p className="m-0 text-[11px] leading-snug text-content-subtle">
+          This run takes the vision route (the dedicated detector is not
+          installed), which answers yes/no with no score — so there is no
+          threshold to tune here. Install “Watermark detector” from Setup for
+          the ~10× faster scored route.
+        </p>
+      )}
+      {/* The run's RESULT: the 🚩-family flagged pages (text-flagged ones live
+          in the 🔤 window) with their boxes, filling in live while the scan
+          runs — the window stays open on launch, like 🔤. */}
+      <BankZonesPreview bankId={bankId} kind="watermark" live={live} />
+    </div>
+  )
+  const textScanControls = (
+    <div className="space-y-2 rounded-md border border-border bg-surface-raised p-2">
+      <p className="m-0 text-[11px] font-semibold uppercase tracking-wide text-content-muted">
+        Options for this run
+      </p>
+      <label className="flex items-start gap-2 text-[11px] text-content-subtle">
+        <input type="checkbox" className="mt-0.5" checked={textSampleOn}
+          onChange={(e) => setTextSampleOn(e.target.checked)} disabled={live} />
+        <span>
+          <span className="font-medium text-content">Try on a sample first</span>
+          {' — read only the first '}
+          <input type="number" min="1" max="10000" value={textSampleSize}
+            onChange={(e) => setTextSampleSize(e.target.value)}
+            disabled={live || !textSampleOn} aria-label="Sample size"
+            className="mx-1 w-16 rounded border border-border bg-app px-1 py-0.5 text-content" />
+          {' images of the scope. Judge the zones in ▶ Review (flagged), then '}
+          {'run again for the rest — or tick “re-read” above to try the SAME '}
+          {'sample at another sensitivity.'}
+        </span>
+      </label>
+      <label className="block text-[11px] text-content-subtle">
+        <span className="font-medium text-content">Sensitivity</span>
+        {' — the OCR confidence a line needs to become a zone. Lower catches '}
+        {'fainter or stylised lettering, at the cost of false zones. Stored: '}
+        {'the dataset scan reads the same value.'}
+        <span className="mt-1 flex items-center gap-2">
+          <input type="range" min="0.30" max="0.70" step="0.05"
+            value={effectiveTextSensitivity} disabled={live}
+            aria-label="Text sensitivity"
+            onChange={(e) => setTextSensitivity(Number(e.target.value))}
+            onMouseUp={() => saveTextSensitivity(effectiveTextSensitivity)}
+            onTouchEnd={() => saveTextSensitivity(effectiveTextSensitivity)}
+            onKeyUp={() => saveTextSensitivity(effectiveTextSensitivity)}
+            className="w-40" />
+          <span className="tabular-nums text-content">{effectiveTextSensitivity.toFixed(2)}</span>
+          <span className="text-content-subtle">(default 0.50)</span>
+        </span>
+      </label>
+      {/* The run's RESULT, in the window that launched it: the flagged pages
+          with their zones, filling in live while the scan runs (the window
+          stays open on launch — stayOpenOnLaunch below). Judge, adjust the two
+          dials above, re-run — without leaving. */}
+      <BankZonesPreview bankId={bankId} live={live} />
+    </div>
+  )
   const captionNsfw = captionNsfwNotice({
     payload,
     scopeId: captionScope,
     piles: passScopeOption(captionScope).piles,
     engineId: captionEngine,
+    providerLabel: localLlmLabel(caps),
   })
+  /* WHICH images the bench offers. A dataset hands its whole KEPT pile to the picker;
+     a bank cannot — it pages over SQL and can hold six figures of rows, so a picker
+     rendering "every non-rejected image" would be a different feature. It offers what
+     you are actually looking at: your selection when there is one, otherwise this page.
+     Same behaviour ("pick one of these and bench it"), in this surface's mechanics —
+     the parity rule's "two surfaces, two mechanics, ONE contract". */
+  const labPile = useMemo(() => {
+    const rows = page.images || []
+    /* A selection SURVIVES paging and sorting (only a filter change clears it), so the
+       intersection can legitimately be empty while rows are right there on screen — and
+       the button would then grey out saying "nothing on this page to bench", which is
+       false. The page is the honest fallback. */
+    const scoped = rows.filter((im) => selected.has(im.id))
+    return selected.size && scoped.length ? scoped : rows
+  }, [page.images, selected])
+  /* ⚙️ "Use for the next run" — what ⚙️ Make default means on a surface with nothing
+     to persist to. The four dials ARE the bank's caption method (useCaptionOptions:
+     "a bank has no caption_options row"), so loading them keeps the dataset button's
+     promise: the next pass runs the config that won the bench. */
+  const applyLabConfig = useCallback((config) => {
+    setCaptionEngine(config.backend || '')
+    setCaptionModel(config.ollama_model || '')
+    setCaptionVocab(config.vocabulary || '')
+    setCaptionLength(config.length || '')
+  }, [setCaptionEngine, setCaptionModel, setCaptionVocab, setCaptionLength])
   const captionRunControls = (
     <div className="space-y-2 rounded-md border border-border bg-surface-raised p-2">
       <p className="m-0 text-[11px] font-semibold uppercase tracking-wide text-content-muted">
@@ -1216,6 +1394,28 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
         These override your Settings for this run only — the global values are never
         written from here.
       </p>
+      {/* 🧪 The bench, in the window that launches the pass — the Bank's half of the
+          entry point the Dataset's Captions section carries. Same bench, same shared
+          definition of a candidate (one backend function, pinned by
+          test_bank_caption_lab.py); what it offers to bench and what "use this config"
+          means are this surface's own. */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border pb-2">
+        <button type="button" onClick={() => setLabPickerOpen(true)}
+          disabled={live || labPile.length === 0}
+          aria-label="Open the Caption Lab"
+          title={labPile.length === 0
+            ? 'Nothing on this page to bench — clear a filter, or select the images you want.'
+            : 'Try up to four caption configs (engine, vision model, register, length) on '
+              + 'one image and read them side by side. Nothing is written until you keep a '
+              + 'result, and the winning config can be loaded into the dials above.'}
+          className="inline-flex min-h-10 items-center rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-content disabled:opacity-40 lg:min-h-0">
+          🧪 Caption Lab
+        </button>
+        <span className="text-[11px] leading-snug text-content-subtle">
+          Compare engines, models and registers on ONE image before paying for a pass
+          over the pile.
+        </span>
+      </div>
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="block text-[11px] text-content-subtle">
           Engine
@@ -1232,17 +1432,15 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           Vision model
           <select value={captionModel} onChange={(e) => setCaptionModel(e.target.value)}
             disabled={live || !ollamaPicksApply} aria-label="Caption vision model"
-            title={ollamaPicksApply
-              ? 'Which pulled Ollama vision model writes this run. Your Settings model stays the default and is not changed. Which model writes a caption is not a matter of taste: one that describes things in evasive terms produces captions that are about something slightly other than the images.'
-              : 'Only used when the engine can reach Ollama.'}
+            title={ollamaPicksApply ? llmPicker.perRunHint : llmPicker.inertHint}
             className={`${captionSelectClass} sm:max-w-[11rem]`}>
             <option value="">Configured model</option>
             {captionModelChoices.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
           {!ollamaPicksApply && (
             <span className="mt-0.5 block text-[11px] leading-snug text-amber-300/90">
-              The engine you picked does not reach Ollama, so this choice would change
-              nothing — disabled rather than quietly ignored.
+              The engine you picked does not reach {llmPicker.label}, so this choice would
+              change nothing — disabled rather than quietly ignored.
             </span>
           )}
         </label>
@@ -1250,7 +1448,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           Register
           <select value={captionVocab} onChange={(e) => setCaptionVocab(e.target.value)}
             disabled={live} aria-label="Caption vocabulary register"
-            title="How captions name nude or sexual content. Explicit needs an uncensored (abliterated) Ollama vision model. Richer, more explicit captions also make the search find more."
+            title={llmPicker.registerHint}
             className={`${captionSelectClass} sm:max-w-[16rem]`}>
             {VOCABULARY_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
           </select>
@@ -1912,13 +2110,17 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           <div className="relative">
             <button type="button"
               disabled={live || !semanticReady || selected.size !== 1 || similarBusy}
+              disabled={live || !semanticReady || similarBusy
+                || (selected.size !== 1 && !similarLast)}
               onClick={() => setCurateOpen((v) => (v === 'similar' ? null : 'similar'))}
               aria-expanded={curateOpen === 'similar'}
               title={!semanticReady
                 ? semanticBlocked
                 : selected.size === 1
                   ? `Rank the current filter against the ONE selected image with the ${semanticState.label} semantic index and select the closest N.`
-                  : 'Select exactly one image to use as the reference'}
+                  : similarLast
+                    ? 'Extend the last run — add the next closest images from the same ranking.'
+                    : 'Select exactly one image to use as the reference'}
               className={CURATE_BTN}>
               <Target aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Similar to selected…{similarBusy && ' (ranking…)'}
             </button>
@@ -1931,16 +2133,46 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                     the closest — a fast way to extract one person or look. The reference is kept in
                     the selection.
                   </p>
-                  <label className="flex items-center gap-2 text-sm text-content">
-                    How many
-                    <input type="number" min={1} max={2000} value={similarN}
-                      onChange={(e) => setSimilarN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
-                      className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
-                  </label>
-                  <button type="button" onClick={findSimilar} disabled={similarBusy}
-                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-60">
-                    {similarBusy ? 'Ranking…' : `Select ${similarN} most similar`}
-                  </button>
+                  {selected.size === 1 && (
+                    <>
+                      <label className="flex items-center gap-2 text-sm text-content">
+                        How many
+                        <input type="number" min={1} max={2000} value={similarN}
+                          onChange={(e) => setSimilarN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
+                          className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
+                      </label>
+                      <button type="button" onClick={findSimilar} disabled={similarBusy}
+                        className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-60">
+                        {similarBusy ? 'Ranking…' : `Select ${similarN} most similar`}
+                      </button>
+                    </>
+                  )}
+                  {similarLast && (
+                    /* The follow-up the first run makes impossible otherwise:
+                       the selection now holds N images, so the one-reference
+                       gate cannot re-open — this block extends the LAST
+                       ranking instead. Re-ranking is deterministic, so images
+                       hand-unselected since then come back; said here rather
+                       than discovered. */
+                    <div className={`space-y-2 ${selected.size === 1 ? 'border-t border-border pt-2' : ''}`}>
+                      <p className="m-0 text-xs text-content-muted">
+                        Last run selected {similarLast.taken} around its reference.
+                        Add the NEXT closest from the same ranking — anything you
+                        unselected by hand since then is selected again.
+                      </p>
+                      <label className="flex items-center gap-2 text-sm text-content">
+                        Add
+                        <input type="number" min={1} max={2000} value={similarAddN}
+                          onChange={(e) => setSimilarAddN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
+                          className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
+                        more
+                      </label>
+                      <button type="button" onClick={addMoreSimilar} disabled={similarBusy}
+                        className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-60">
+                        {similarBusy ? 'Ranking…' : `Add ${similarAddN} more`}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -2211,13 +2443,20 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           redo={!!passRedo[passOpen]}
           onRedo={(v) => setPassRedoFor(passOpen, v)}
           onClose={() => setPassOpen(null)}
+          stayOpenOnLaunch={passOpen === 'text_scan' || passOpen === 'watermark'}
           onLaunch={(run) => (passOpen === 'faces'
             ? launchFacesFromDialog()
             : (passOpen === 'caption'
               ? startCaption(run)
-              : runPass(passOpen, run)))}
+              : (passOpen === 'text_scan'
+                ? runPass('text_scan', run, textScanRunOptions())
+                : (passOpen === 'watermark'
+                  ? runPass('watermark', run, wmScanRunOptions())
+                  : runPass(passOpen, run)))))}
           secondary={passOpen === 'caption' ? captionSecondary : null}>
-          {passOpen === 'caption' ? captionRunControls : null}
+          {passOpen === 'caption' ? captionRunControls
+            : passOpen === 'text_scan' ? textScanControls
+              : passOpen === 'watermark' ? watermarkScanControls : null}
         </PassDialog>
       )}
 
@@ -2266,6 +2505,52 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           onClose={() => setForgettingMissing(false)}
           onDone={() => { refreshPayload({ force: true }); refreshImages() }} />
       )}
+
+      {/* 🧪 Caption Lab — pick the subject, then the shared caption editor opens on
+          its bench tab. ‹ Another image comes back to the picker instead of closing:
+          benching is a comparison across rows. */}
+      <Suspense fallback={null}>
+        {labPickerOpen && (
+          <CaptionLabPicker images={labPile}
+            thumbUrl={(img) => `/api/bank/${bankId}/thumb/${img.id}${imageVersionQuery(img)}`}
+            emptyNote="Nothing on this page to bench — clear a filter, or select the images you want."
+            onClose={() => setLabPickerOpen(false)}
+            onPick={(img) => { setLabPickerOpen(false); setLabImage(img) }} />
+        )}
+        {labImage && (
+          <CaptionEditorDialog initialMode="lab"
+            initialCaption={labImage.caption || ''}
+            imageUrl={`/api/bank/${bankId}/file/${labImage.id}${imageVersionQuery(labImage)}`}
+            imageLabel={imageDisplayName(labImage)}
+            /* A bank caption is a plain description whose job is SEARCH — the dataset's
+               "without the face" rule is about binding identity to a trigger and does
+               not apply here. */
+            captionPlaceholder="Caption — a plain description, used for search…"
+            labSurface={bankLabSurface({
+              bankId, imageId: labImage.id, onApplyRunConfig: applyLabConfig })}
+            captionOrigin={labImage.caption_origin}
+            onPickAnotherImage={() => { setLabImage(null); setLabPickerOpen(true) }}
+            onClose={() => setLabImage(null)}
+            /* Awaited, and the refusal handed BACK so the dialog draws it beside the
+               text instead of closing on top of an unsaved caption — the same contract
+               the dataset editor has had since a refused save destroyed one. */
+            onSave={async (nextCaption) => {
+              if (nextCaption === (labImage.caption || '')) return { ok: true }
+              try {
+                await putJson(`/api/bank/${bankId}/image/${labImage.id}/caption`,
+                              { caption: nextCaption })
+              } catch (e) {
+                return { ok: false, error: e.message || 'Could not save the caption' }
+              }
+              setLabImage((cur) => (cur ? { ...cur, caption: nextCaption } : cur))
+              // BOTH: the rows carry the caption, but the 🏷️ Caption window's figures
+              // (and the re-caption arithmetic beside them) read payload.counts.
+              refreshPayload({ force: true })
+              refreshImages()
+              return { ok: true }
+            }} />
+        )}
+      </Suspense>
     </div>
   )
 }

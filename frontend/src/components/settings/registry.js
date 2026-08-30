@@ -54,7 +54,11 @@ export function sectionStatus(id, caps) {
     case 'local-tools': {
       const parts = [
         !!(c.comfyui && c.comfyui.reachable),
-        !!(c.ollama && c.ollama.reachable),
+        // The ACTIVE provider's reachability. Keyed on Ollama alone, this LED
+        // read "off" on a perfectly healthy LM Studio install.
+        (((c.local_llm && c.local_llm.provider) || 'ollama') === 'lmstudio'
+          ? !!(c.lmstudio && c.lmstudio.reachable)
+          : !!(c.ollama && c.ollama.reachable)),
         !!(c.aitoolkit && c.aitoolkit.valid),
       ]
       const n = parts.filter(Boolean).length
@@ -62,7 +66,10 @@ export function sectionStatus(id, caps) {
     }
     case 'captioning': {
       const cap = c.captioners || {}
-      return (cap.joycaption || cap.ollama) ? 'ready' : 'off'
+      // The active provider, falling back to the old expression for an older
+      // caps payload: a healthy LM Studio install lit this LED off.
+      return (cap.joycaption
+        || (cap.local_llm !== undefined ? cap.local_llm : cap.ollama)) ? 'ready' : 'off'
     }
     case 'training':
       return c.training_visible ? (c.cloud_training ? 'ready' : 'partial') : 'off'

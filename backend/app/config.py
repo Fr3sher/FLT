@@ -30,7 +30,13 @@ load_dotenv(ENV_PATH)
 # and set_secrets() stamps os.environ on save, so changes apply without restart.
 SECRET_KEYS = ('GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'HF_TOKEN',
                'HF_CLOUD_TOKEN', 'VAST_API_KEY', 'REDDIT_CLIENT_ID',
-               'CIVITAI_API_KEY', 'PEXELS_API_KEY')
+               'CIVITAI_API_KEY', 'PEXELS_API_KEY',
+               # LM Studio's optional bearer token. It began life as an ordinary
+               # `lmstudio.api_key` config field, which meant config.json held it in
+               # clear and GET /api/settings handed it back verbatim — while every
+               # other credential in this app is reported as presence only. A token
+               # is a secret whatever it unlocks.
+               'LMSTUDIO_API_KEY')
 
 # A Krea install saved by a previous release can carry its old *defaults* in
 # config.json, so a changed DEFAULTS value alone would never reach it. This
@@ -101,7 +107,33 @@ DEFAULTS = {
                # Seconds an ISOLATED vision call may keep the model resident when
                # nothing else wants the GPU (0 = always unload, the old
                # behaviour). See services/vision_keepalive.py.
-               'vision_keep_warm_seconds': 120},
+               'vision_keep_warm_seconds': 120,
+               # setup_skipped (default False): the user consciously chose "continue
+               # without Ollama" in the Setup wizard — the same shape as
+               # comfyui.setup_skipped above. It ONLY makes the Setup step render a
+               # neutral "skipped" instead of blocking; it never gates a capability,
+               # and the per-feature gates (framing, head-crop, Describe/Enhance) keep
+               # reading the live probe. A REACHABLE Ollama annuls it (the DERIVED
+               # ollama.skipped in capabilities.probe), so it can never mask a real
+               # error of a running Ollama — a stopped one has nothing to error on.
+               'setup_skipped': False},
+    # Which local LLM serves captioning, framing, head-crop and the prompt helpers.
+    # Default 'ollama' so every existing install behaves exactly as before — this
+    # setting only ever ADDS a second door. The per-dataset `captioning.backend`
+    # value 'ollama' keeps its stored spelling (it lives in user databases) and now
+    # means "the configured local provider"; see docs/guide/settings-reference.md.
+    'local_llm': {'provider': 'ollama'},          # 'ollama' | 'lmstudio'
+    # LM Studio speaks an OpenAI-compatible API plus two native ones. Measured on
+    # 0.4.23 rather than assumed: images go in as the STANDARD data: URI (bare
+    # base64 is rejected with "Invalid url."), residency reads from
+    # /api/v1 `loaded_instances` or /api/v0 `state`, and /api/v1/models/unload
+    # genuinely frees the card. An empty vision_model means "whatever is loaded".
+    'lmstudio': {'url': 'http://127.0.0.1:1234',
+                 'vision_model': '',
+                 # Same meaning and defaults as the ollama.* pair above, read per
+                 # provider by vision_llm so the Settings dials are never inert.
+                 'vision_concurrency': 4,
+                 'vision_keep_warm_seconds': 120},
     'aitoolkit': {'dir': '', 'datasets_dir': '', 'output_dir': '', 'hf_home': '',
                   # Explicit interpreter for installs without venv/.venv
                   # (conda, uv, system python). Empty = auto-detect.
@@ -212,6 +244,18 @@ DEFAULTS = {
         # read against. Bumping it means a different trainer: re-read the lever
         # comments in services/lora_training.py first (a test enforces the pin).
         'image': 'vastai/ostris-ai-toolkit:4625406-2026-07-12-cuda-12.9',
+        # The VIDEO lane's pods override the template with THIS tag instead.
+        # Two pins, deliberately independent: the face lane's tag above names
+        # the ai-toolkit commit its dense-recipe verdicts were read against and
+        # must not move casually, while the video lane needs an ai-toolkit from
+        # 2026-08-03 or later — that is when the `minimax_h3` architecture
+        # landed, and a pod on the older tag refuses the job AFTER the rental.
+        # A SECOND date now rides on this pin: from 2026-08-06 the image can also
+        # load H3's training adapter, which is upstream's own default recipe. The
+        # job builder reads the date out of this tag rather than assuming it, so
+        # moving the pin backwards silently drops the recipe instead of arming
+        # something the image cannot run.
+        'video_image': 'vastai/ostris-ai-toolkit:da79ebc-2026-08-27-cuda-12.9',
         'max_price_per_hour': 0.80,    # background safety cap on offer price, $/h
         'offer_scan_limit': 100,       # offers fetched when listing GPU speed tiers
         'pod_overhead_minutes': 35,    # boot+model download+quantize (measured ~40 min live), in cost estimates
@@ -259,10 +303,45 @@ DEFAULTS = {
         'unreachable_grace_minutes': 6,  # tolerated mid-run network blackout before giving up on the pod
         'monthly_budget_usd': 0,       # 0 = unlimited; launches blocked past this
         'disk_gb': 60,                 # instance disk (base model + dataset + checkpoints)
+        # The VIDEO lane rents its disk separately, and the number is not a
+        # preference. Its base is an order of magnitude larger than the face
+        # lane's — MiniMax H3's four Comfy repack files measure 42.5 GB, read
+        # off the Hub API — and the way they LAND costs more than they weigh:
+        # the pod pulls them through Xet, which fetches chunks and then
+        # reconstructs the file, so for a while both exist (watched live on run
+        # #166: "downloading bytes 20.7GB" and "reconstructing file 5.97GB /
+        # 21.0GB" on the same file, at the same time). The largest weight
+        # transiently costs about twice itself, on top of everything already
+        # down: the pod read 42 GB with the base in place, and roughly 52 GB at
+        # the peak of the second file. Against 60 GB that is single-digit
+        # headroom for the latent cache this arch writes to disk, the dataset
+        # and the saves — and the dense lane has already lost runs to
+        # "[Errno 28] No space left on device". Floored in code like that
+        # lane's, so a config frozen before this key existed cannot undercut it.
+        'video_disk_gb': 120,
         # min_vram_gb est PAR FAMILLE (pas par variante) : pour flux2klein on prend
         # 32 — le 9B (32-48 GB) est la voie cloud principale de cette famille, et un
         # pod 32 GB entraîne aussi le 4B sans problème (l'inverse serait faux).
-        'min_vram_gb': {'zimage': 24, 'sdxl': 16, 'krea': 24, 'flux2klein': 32},
+        # 'video' covers the whole video-dataset lane, whose pods run with
+        # low_vram OFF (paying cloud prices for the PCIe shuttle is the thing
+        # the lane exists to avoid) — so the weights are RESIDENT: MiniMax H3's
+        # pruned int8 transformer alone is ~21 GB with a ~16 GB nvfp4 text
+        # encoder beside it, and Wan 2.2 A14B holds two experts. The 24 GB
+        # fallback that applied before this entry existed rented pods that
+        # could only OOM after the money was spent.
+        'min_vram_gb': {'zimage': 24, 'sdxl': 16, 'krea': 24, 'flux2klein': 32,
+                        'video': 48},
+        # Compute capability floor, per family, as vast reports it: 750 Turing,
+        # 800 Ampere, 900 Hopper, 1200 Blackwell. Only 'video' has one, and it
+        # is not a performance preference — every video job this app writes
+        # trains in bf16, and on Turing bf16 is not slow, it is missing. The
+        # entry exists because that is precisely where the cheapest offer sits:
+        # a 48 GB Quadro RTX 8000 at $0.261/h undercuts the next board by a
+        # factor of three, so "cheapest above the floors" reaches for the one
+        # card in the list that cannot run the recipe. Families absent from
+        # this map send no predicate at all and keep the offer pool they were
+        # measured against.
+        'min_compute_cap': {'video': 800},
         # Dedicated dense Krea 2 lane.  A full-transformer checkpoint is ~26 GB
         # and training keeps the official base, working weights/caches and the
         # save side by side; it must never inherit the 24 GB / 60 GB LoRA lane.
@@ -418,6 +497,12 @@ DEFAULTS = {
     # engine). A persisted user preference (Settings ▸ Watermark inpainting AND the
     # batch Clean bar both edit it); the review lightbox can still override it per image.
     'watermark': {'python': '', 'device': 'auto', 'allow_crop': True},  # auto|cuda|cpu
+    # 🔤 Find text (bank + dataset). score_min: the OCR confidence a line must
+    # carry to become a repaint zone — the launch window's Sensitivity slider
+    # writes it through. 0.5 is the engine's conventional floor (the video
+    # lane's TEXT_SCORE_MIN); lower catches fainter/stylised lettering at the
+    # cost of false zones. Read by BOTH surfaces so one slider rules them.
+    'text_scan': {'score_min': 0.5},
     # 🚩 Dedicated watermark DETECTOR (optional extra: a SigLIP2 classifier that
     # ranks + a Grounding DINO pass that locates). When installed, the Find pass
     # uses it instead of asking the vision model image by image; when not, nothing

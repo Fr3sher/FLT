@@ -352,7 +352,10 @@ export const PAGE_TOPICS = [
      'custom nodes', 'custom_nodes', 'identity lora', 'krea2_identity_edit', 'civitai',
      'qwen3-vl', 'restart comfyui', 'second engine', 'local engine', '20 gb',
      'corrupted', 'truncated', 'unreadable', 'cannot be loaded', 'download again',
-     'krea not ready', 'everything is in place']),
+     'krea not ready', 'everything is in place',
+     // The optional preset sampler is installed from this same card.
+     'preset sampler', 'krea preset sampler', 'sampler preset', 'install the sampler',
+     'neutral', 'balanced', 'detailed', 'multistep', 'optional sampler']),
   setting('seedvr2.tiling', 'engines', 'seedvr2-tiling', 'High-resolution tiling',
     ['tiling', 'tile', 'tiles', 'seedvr2 tiling', 'TTP', 'Comfyui_TTP_Toolset',
      'high resolution', '4k', 'detail', 'artifacts', 'seam', 'seams', 'vram',
@@ -432,7 +435,12 @@ export const PAGE_TOPICS = [
      'steps with two loras', 'two loras', 'multi lora', 'compare', 'blend',
      'steps in blend', 'steps in comparison', 'render settings', 'second pass',
      'detail daemon', 'sdxl pass 2', 'sweep steps', 'try several steps',
-     'default steps', 'always 8 steps', 'ignored steps'],
+     'default steps', 'always 8 steps', 'ignored steps',
+     // Krea's Sampler menu now carries the shipped preset sampler beside the
+     // stock ComfyUI names — someone searching for either should land here.
+     'sampler', 'sampler menu', 'preset sampler', 'krea sampler', 'er_sde',
+     'euler', 'scheduler', 'neutral preset', 'more detail', 'texture',
+     'sampler not in the list', 'preset missing'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
   action('studio-guest-checkpoints', 'Compare with other LoRAs',
     ['studio', 'test studio', 'theirs', 'guest checkpoint', 'external lora',
@@ -458,6 +466,17 @@ export const PAGE_TOPICS = [
      'how long will this take', 'estimated time', 'duration', 'at your current pace',
      'this run will queue', 'confirmation before a long run', 'seconds per image'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
+  // 🌐 Un seul composant (bouton + navigateur) monté par les TROIS surfaces de
+  // génération — Studio du dataset, comparaison multi-LoRA, « Generate from the
+  // board » : un seul sujet d'aide pour les trois.
+  action('studio-civitai-browser', '🌐 Civitai: browse top images and reuse their prompts',
+    ['studio', 'test studio', 'canvas', 'generate from the board', 'civitai',
+     'civitai prompts', 'top images', 'browse civitai', 'prompt ideas',
+     'prompt inspiration', 'find a prompt', 'copy a prompt', 'use prompt',
+     'trending images', 'most reactions', 'popular prompts', 'image with prompt',
+     'no prompt published', 'prompts missing', 'civitai api key', 'load more',
+     'safe mature everything', 'content level', 'top of the week'],
+    '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
   // 🎬 Les scènes vivent dans le même rail que le lot d'historique, monté par le
   // Studio de test ET par « Generate from the board » : un seul sujet pour les deux.
   // Les DEUX sources (banque et dataset) partagent ce sujet : c'est le même
@@ -471,6 +490,12 @@ export const PAGE_TOPICS = [
      'one pass per scene', 'run captions in order', 'choose a bank',
      'no scenes loaded', 'scene skipped', 'image without a caption',
      'caption pass', 'thumbnail of the page', 'which page',
+     // Le champ ✏️ par scène : ce qu'on tape pour le trouver, et ce qu'on
+     // se demande une fois trouvé (où le texte atterrit dans le prompt).
+     'custom prompt', 'custom prompt per scene', 'add to a scene',
+     'extra prompt', 'append to the caption', 'add text to a caption',
+     'edit a scene prompt', 'change one scene', 'modifiers per scene',
+     'per scene text', 'scene input', 'where does the custom text go',
      // Ce que quelqu'un tape quand la source qu'il veut rejouer est son dataset
      // — et ce qu'il cherchait avant que le dataset soit offert : un moyen de ne
      // PAS réexporter son dataset vers une banque pour atteindre ce panneau.
@@ -483,6 +508,9 @@ export const PAGE_TOPICS = [
     ['studio', 'test studio', 'enhance', 'enhance prompt', 'improve prompt', 'better prompt',
      'rewrite prompt', 'llm', 'ollama', 'local model', 'prompt magic', 'button greyed out',
      'enhance disabled', 'ollama not running', 'model not downloaded',
+     // The ⚙️ next to the button: pick which pulled Ollama model runs Enhance.
+     'enhance options', 'enhance model', 'choose model', 'which model', 'change model',
+     'different model', 'pick a model', 'gear', '⚙️', 'enhance settings',
      // The fence: the words people type when another tool is holding the model.
      'already in use outside LDS', 'model in use', 'unload it and continue',
      'unload model', 'waiting for the model', 'model busy', 'another app is using ollama'],
@@ -493,6 +521,14 @@ export const PAGE_TOPICS = [
      'dropdown', '▾', 'kept caption', 'nonblank caption', 'test prompt', 'replace prompt',
      'overwrite prompt', 'confirmation'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
+  action('studio-inject-trigger', 'Trigger word checkbox: send the prompt as written',
+    ['studio', 'test studio', 'trigger', 'trigger word', 'inject trigger', 'no trigger',
+     'without trigger', 'prompt as written', 'raw prompt', 'verbatim prompt',
+     // The symptom that leads people here: the trigger token rendered INSIDE
+     // the image when the prompt asks for typed text.
+     'trigger in the image', 'trigger in speech bubble', 'text in image', 'speech bubble',
+     'weird word in bubble', 'token in the render', 'why is my trigger word visible'],
+    '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
   // The dock is app-wide (it is mounted in the shell, not on one screen), so the
   // route here is just somewhere the queue is normally being fed from — the
   // topic's real destination is the guide section, which is where the ⤒ / ✕
@@ -502,7 +538,12 @@ export const PAGE_TOPICS = [
       'why is it greyed out', 'greyed out', 'disabled button', 'cannot generate',
       'too many generations in flight', 'run next', 'reorder', 'priority',
       'cancel one job', 'what is the gpu doing', 'still generating', 'dock',
-      'bottom left', 'improve batch blocks', 'klein batch blocks'],
+      'bottom left', 'improve batch blocks', 'klein batch blocks',
+      // The words people type when the queue is held by a model LDS does not
+      // own — and the answer the dock now offers instead of an open wait.
+      'nothing is starting', 'queue stuck', 'queue frozen', 'nothing happens',
+      'run anyway', 'share the gpu', 'generate anyway', 'keep waiting',
+      'a local model outside LDS', 'holding the gpu', 'it has been waiting'],
     '/datasets', 'using-the-app', 'the-generation-queue'),
   action('studio-recover-paused-batch', 'Recover a paused Test Studio batch',
     ['studio', 'test studio', 'paused', 'pause', 'stalled', 'queue', 'queue error',
@@ -510,4 +551,15 @@ export const PAGE_TOPICS = [
       'start comfyui', 'cancel and resume', 'batch did not continue', 'no later prompt',
       '.bat', 'bat file', 'safe local profile'],
     '/setup?step=comfyui', 'using-the-app', 'recover-a-paused-test-studio-batch'),
+  // The Bank's half of 🧪 Caption Lab. Its own topic rather than keywords bolted
+  // onto the dataset one: the two live on different screens, and a topic carries ONE
+  // route — a user searching from a bank must land on the bank, not be told to open
+  // a dataset they may not have.
+  action('bank-caption-lab', '🧪 Caption Lab on a bank — compare caption configs',
+    ['caption lab', 'bank caption lab', 'bench', 'bench captions', 'compare captions',
+      'a/b', 'ab test', 'side by side', 'which model', 'try a model', 'candidate',
+      'engine', 'joycaption', 'ollama', 'vision model', 'vocabulary', 'register',
+      'explicit', 'clinical', 'length', 'concise', 'detailed',
+      'edit a bank caption', 'fix a caption', 'rewrite one caption'],
+    '/bank', 'using-the-app', 'the-image-bank-triage-a-big-folder'),
 ];
