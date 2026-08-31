@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Archive, Ban, FolderInput, Plus, X } from 'lucide-react'
-import { apiFetch, del, postJson } from '../api/fetchClient'
+import { apiFetch, del, postFormWithCsrfRetry, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { HelpBadge } from '../help/HelpMode'
 import BankWorkspace from '../components/bank/BankWorkspace'
@@ -99,6 +99,7 @@ export default function BankPage() {
   const [name, setName] = useState('')
   const [folder, setFolder] = useState('')
   const [creating, setCreating] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [relocating, setRelocating] = useState(null)   // the bank being repointed
   const [forgetting, setForgetting] = useState(null)   // the bank forgetting its missing rows
   // Dataset storage folders, so a folder that belongs to a dataset can be named
@@ -179,6 +180,57 @@ export default function BankPage() {
     }
   }
 
+  const uploadFolder = async (e) => {
+    const files = Array.from(e.target.files || [])
+    e.target.value = '' // allow re-selecting the same folder
+    if (!files.length || uploading) return
+    let finalName = name.trim()
+    if (!finalName) {
+      const first = files[0].webkitRelativePath || files[0].name || ''
+      finalName = first.split('/')[0] || 'Uploaded bank'
+    }
+    setUploading(true)
+    try {
+      // Upload file-by-file: a single giant multipart POST was getting reset
+      // mid-flight on flaky network paths. Small per-file requests are far more
+      // robust; /bank/upload-folder/complete then inventories them into a bank.
+      const uploadId = Date.now().toString(36) + Math.random().toString(36).slice(2)
+      const uploadOne = async (f) => {
+        const fd = new FormData()
+        fd.append('name', finalName)
+        fd.append('upload_id', uploadId)
+        fd.append('path', f.webkitRelativePath || f.name)
+        fd.append('file', f, f.name)
+        const res = await postFormWithCsrfRetry('/api/bank/upload-file', fd)
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || `Upload failed (HTTP ${res.status})`)
+        }
+      }
+      for (const f of files) {
+        try {
+          await uploadOne(f)
+        } catch (err) {
+          console.error('File upload failed, retrying once:', f.name, err)
+          await uploadOne(f)
+        }
+      }
+      const complete = new FormData()
+      complete.append('name', finalName)
+      complete.append('upload_id', uploadId)
+      const res = await postFormWithCsrfRetry('/api/bank/upload-folder/complete', complete)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`)
+      toast.success(`Bank created — ${data.added} image(s) uploaded.`)
+      setName(''); setFolder('')
+      open(data.id)
+    } catch (err) {
+      console.error('Upload folder failed:', err)
+      toast.error(err?.message || 'Could not upload the folder.')
+    } finally {
+      setUploading(false)
+    }
+  }
   const remove = async (bank) => {
     if (!window.confirm(`Remove the bank “${bank.name}”?\n\nOnly the triage data (decisions, scores, thumbnails) is deleted — the source folder and its images are NOT touched.`)) return
     try {
@@ -225,6 +277,14 @@ export default function BankPage() {
             value={folder} onChange={setFolder} required
             placeholder="C:\path\to\unsorted-images (subfolders included)" />
         </div>
+        <label title="Pick a folder on this computer and upload its images into a new bank"
+          className={`inline-flex items-center gap-1 rounded-md border border-border bg-surface-raised px-4 py-2 text-sm font-semibold text-content hover:bg-surface ${
+            uploading || creating ? 'pointer-events-none opacity-50' : 'cursor-pointer'
+          }`}>
+          <input type="file" webkitdirectory="" multiple="" className="sr-only"
+            onChange={uploadFolder} />
+          {uploading ? 'Uploading…' : '⬆ Upload folder'}
+        </label>
         <button type="submit" disabled={creating || !!folderNotice}
           title={folderNotice ? 'That folder belongs to a dataset' : undefined}
           className="rounded-md bg-gradient-primary px-4 py-2 text-sm font-semibold text-gray-950 disabled:opacity-50">
