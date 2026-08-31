@@ -215,12 +215,7 @@ export default function BankPage() {
           await uploadOne(f)
         }
       }
-      const complete = new FormData()
-      complete.append('name', finalName)
-      complete.append('upload_id', uploadId)
-      const res = await postFormWithCsrfRetry('/api/bank/upload-folder/complete', complete)
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`)
+      const data = await postJson('/api/bank/upload-folder/complete', { name: finalName, upload_id: uploadId })
       toast.success(`Bank created — ${data.added} image(s) uploaded.`)
       setName(''); setFolder('')
       open(data.id)
