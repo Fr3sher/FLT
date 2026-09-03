@@ -284,8 +284,58 @@ _CAMERA_DOWNLOADS = {
 # Every streamed model download, whatever engine it belongs to. The worker,
 # destination resolution, disk precondition and extra_model_paths de-duplication
 # are engine-agnostic; only the catalog entries differ.
+# MiniMax H3 - the Video Test Studio's engine. Four required files, 39.5 GB
+# measured on disk, all from Comfy-Org's own conversion (verified against the
+# hub's file list: not gated, and these exact paths). They land in ComfyUI's
+# standard subfolders, which are also the paths the repository uses - so the
+# training lane's WEIGHT_FOOTPRINTS and these entries name the same four files
+# and cannot drift into two different opinions of what H3 needs.
+#
+# `min_free_gb` is the file's own size plus room to write it, not the lane's
+# total: each action is downloaded on its own, and a machine that can take three
+# of them should be told about the fourth rather than refused up front.
+_H3_DOWNLOADS = {
+    'h3_base': {
+        'url': 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors',
+        'dest': ('diffusion_models', 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'),
+        'min_free_gb': 24, 'gated': False, 'min_bytes': 8 * 1024 ** 3,
+        'license_url': 'https://huggingface.co/Comfy-Org/MiniMax-H3',
+    },
+    'h3_text_encoder': {
+        'url': 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors',
+        'dest': ('text_encoders', 'qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors'),
+        'min_free_gb': 19, 'gated': False, 'min_bytes': 6 * 1024 ** 3,
+        'license_url': 'https://huggingface.co/Comfy-Org/MiniMax-H3',
+    },
+    'h3_video_vae': {
+        'url': 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors',
+        'dest': ('vae', 'minimax_h3_video_vae_fp16.safetensors'),
+        'min_free_gb': 8, 'gated': False, 'min_bytes': 2 * 1024 ** 3,
+        'license_url': 'https://huggingface.co/Comfy-Org/MiniMax-H3',
+    },
+    # Small, and not optional despite it: H3 emits video and audio in ONE latent,
+    # so the graph decodes both. Without this the render stops at the decode.
+    'h3_audio_vae': {
+        'url': 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors',
+        'dest': ('vae', 'minimax_h3_audio_vae_fp32.safetensors'),
+        'min_free_gb': 3, 'gated': False, 'min_bytes': 128 * 1024 ** 2,
+        'license_url': 'https://huggingface.co/Comfy-Org/MiniMax-H3',
+    },
+    # The 4-step distillation LoRA (larryvrh, apache-2.0, not gated - checked on
+    # the hub). Optional in the sense that the lane runs without it, at twenty
+    # steps instead of six: the difference between a clip in minutes and a clip
+    # in tens of minutes, which is why the checkbox defaults on wherever it CAN
+    # run.
+    'h3_turbo_lora': {
+        'url': 'https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora/resolve/main/minimax_h3_turbo_v4_step600_ema.safetensors',
+        'dest': ('loras', 'minimax_h3_turbo_v4_step600_ema.safetensors'),
+        'min_free_gb': 3, 'gated': False, 'min_bytes': 128 * 1024 ** 2,
+        'license_url': 'https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora',
+    },
+}
+
 _MODEL_DOWNLOADS = {**_KLEIN_DOWNLOADS, **_KREA_DOWNLOADS, **_SEEDVR2_DOWNLOADS,
-                    **_CAMERA_DOWNLOADS}
+                    **_CAMERA_DOWNLOADS, **_H3_DOWNLOADS}
 
 # Custom-node packs the app can install itself. The first git-cloned
 # dependencies this app installs at all, so the rules are written down rather
@@ -326,6 +376,23 @@ _NODE_PACKS = {
     },
 }
 
+# WHY THE VIDEO STUDIO'S NODE PACKS ARE NOT HERE (maintainer's call, 2026-08-31)
+# --------------------------------------------------------------------------
+# "Downloading models is fine, but we do not take responsibility for breaking a
+# ComfyUI install." A weight is an inert file in a models folder: worst case it
+# is unused. A custom node is CODE that ComfyUI imports at startup, and one bad
+# import takes the whole server down for every other lane the user has — a cost
+# they did not agree to when they clicked a button in this app.
+#
+# So the three optional packs of the video lane (MiniMax-H3-Turbo,
+# H3-Optimizations, MMH3-UltimateUpscale) and SageAttention (ComfyUI-KJNodes)
+# are NAMED and LINKED by the studio, and installed by the user on the ComfyUI
+# side, through ComfyUI-Manager or a clone. `video_test_studio.OPTION_NODE_PACKS`
+# holds those links; nothing here fetches them.
+#
+# The two packs above (krea/lanpaint) predate that rule and keep their buttons —
+# what changed is the direction, not a retrofit of somebody's working install.
+
 # Node packs the app SHIPS (backend/comfy_nodes/<folder>), installed by COPY into
 # the user's ComfyUI instead of fetched from a remote. See
 # backend/comfy_nodes/README.md for the contract these folders sign.
@@ -358,7 +425,11 @@ INSTALL_ACTIONS = ('ml_extras', 'scrape_extras', 'ollama_model',
                    'face_scoring', 'masks', 'watermark_inpaint',
                    'bank_scoring', 'bank_siglip2',
                    'watermark_detect',
-                   'video', 'shot_detect', 'video_text') + tuple(_MODEL_DOWNLOADS) + _ALL_NODE_PACKS
+                   'video', 'shot_detect', 'video_text',
+                   # ✨ DLSS 5 neural rendering bridge (two MIT DLLs, pinned release —
+                   # see services/neural_render.BRIDGE_RELEASE). The MODEL is the
+                   # user's own file and has no action on purpose.
+                   'dlss5nr_bridge') + tuple(_MODEL_DOWNLOADS) + _ALL_NODE_PACKS
 
 _ML_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-ml.txt'
 _SCRAPE_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-scrape.txt'
@@ -859,6 +930,10 @@ def manual_command(action) -> str:
     if action == 'ollama_model':
         # The Studio container need not have an Ollama CLI; this action is HTTP-only.
         return ''
+    if action == 'dlss5nr_bridge':
+        from .services import neural_render
+        return (f'curl -L -o bridge.zip "{neural_render.BRIDGE_RELEASE["url"]}"  '
+                f'&&  unzip bridge.zip -d "{neural_render.runtime_dir()}"')
     if action in _MODEL_DOWNLOADS:
         spec = _MODEL_DOWNLOADS[action]
         try:
@@ -1108,6 +1183,10 @@ def _broken_or_missing(missing, invalid) -> set:
 def _action_needed(action, caps) -> bool:
     """Is `action` both MISSING and satisfiable right now, from live capabilities?
     Pure (caps in, bool out) — the single rule install_all_plan is built from."""
+    if action == 'dlss5nr_bridge':
+        # Never part of "Install everything": a Windows-and-NVIDIA-only lane
+        # whose model the user must bring is an opt-in card, not a default.
+        return False
     if action == 'scrape_extras':
         # Pure-python wheels into THIS interpreter, so no ML-range gate: runnable on
         # any Python the app itself starts on. scrape_deps is False as soon as ONE of
@@ -3279,7 +3358,16 @@ def _verify_shot_detect_import(action, python) -> bool:
     return False
 
 
+def _run_dlss5nr_bridge(action) -> int:
+    """✨ The neural rendering bridge: a pinned zip, verified by size and SHA-256,
+    two DLLs unpacked under the app's data folder. Everything it says goes to
+    the run log, including the one thing it cannot do — the model file."""
+    from .services import neural_render
+    return neural_render.install_bridge(log=lambda line: _append(action, line))
+
+
 _WORKERS = {**{a: _run_ml_extras for a in _PIP_REQUIREMENTS},   # ml_extras + scrape_extras
+            'dlss5nr_bridge': _run_dlss5nr_bridge,
             'ollama_model': _run_ollama_model,
             **{a: _run_ml_capability for a in _CAPABILITY_ML_ACTIONS},  # face_scoring + masks + video
             'watermark_inpaint': _run_watermark_inpaint,

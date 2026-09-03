@@ -170,6 +170,23 @@ def _dispatch_auto_resolved_cancellation(job_id) -> None:
         job = ImageGenerationQueue.query.filter_by(
             job_id=str(job_id), status='cancelled').first()
         if job is not None:
+            # SAY WHY, once, for every lane's card. Without this the linked row
+            # falls back to its own "generation failed — see the ComfyUI error"
+            # default and sends the user hunting for an error that was never
+            # logged: nothing failed in the graph, the prompt DISAPPEARED when
+            # ComfyUI restarted. Observed on a real clip (2026-08-31): a video
+            # rendering when the app was updated came back as a failure blaming
+            # a ComfyUI error, on a run whose graph was fine.
+            #
+            # Written on the job rather than passed down, because every
+            # completion branch already reads `job.error_message` — one sentence
+            # reaches the Test Studio grid, the video clips and the dataset
+            # images without any of them learning about this path.
+            if job.error_message in (None, '', 'generation failed'):
+                job.error_message = (
+                    'ComfyUI restarted while this was rendering, so the job was '
+                    'lost — nothing failed in the graph. Launch it again.')
+                db.session.commit()
             _dispatch_completion(job, None, True)
     except Exception:
         logger.exception(
@@ -433,9 +450,19 @@ def _poll_outputs(prompt_id, timeout=POLL_TIMEOUT_SECONDS):
             entry = history.get(prompt_id, history) if isinstance(history, dict) else {}
             outputs = (entry or {}).get('outputs') or {}
             for node_output in outputs.values():
-                for img in (node_output or {}).get('images') or []:
-                    if isinstance(img, dict) and img.get('filename') and img.get('type', 'output') != 'temp':
-                        return img['filename'], False
+                # `images` is what SaveImage and SaveVideo report under.
+                # `gifs` is what VideoHelperSuite reports EVERY video under —
+                # the name is a leftover from its AnimateDiff days and covers
+                # mp4 just the same. Without it a VHS_VideoCombine job runs to
+                # completion in ComfyUI, writes its file, and is never claimed
+                # here: the card stays on "Rendering…" until the poll deadline
+                # (measured 2026-09-01 on the ↗ Smooth pass, which is the one
+                # graph in this app that ends on a VHS node).
+                for key in ('images', 'gifs'):
+                    for img in (node_output or {}).get(key) or []:
+                        if (isinstance(img, dict) and img.get('filename')
+                                and img.get('type', 'output') != 'temp'):
+                            return img['filename'], False
             status = (entry or {}).get('status') or {}
             if status.get('status_str') == 'error' or (status.get('completed') and not outputs):
                 detail = _execution_error_detail(status)
@@ -560,6 +587,15 @@ def _dispatch_completion(job, filename, failed):
             reason = job.error_message if job.error_message != 'generation failed' else None
             face_dataset_service.link_completed_reference_edit(
                 job.job_id, filename, failed=failed, reason=reason)
+        elif md.get('is_video_test'):
+            # A Video Test Studio clip. Its own branch rather than a model_name
+            # match: the mp4 arrives under the history's `images` key like any
+            # image does, so nothing upstream distinguishes it — only the
+            # metadata this lane wrote can.
+            from .services import video_test_studio
+            reason = job.error_message if job.error_message != 'generation failed' else None
+            video_test_studio.link_completed_clip(job.job_id, filename,
+                                                  failed=failed, reason=reason)
         elif md.get('is_bank_improve'):
             # A Bank ✨ Upscale & improve. It rides the very same enqueue helpers
             # as the dataset lane, so it necessarily carries their model_name —
@@ -582,8 +618,8 @@ def _dispatch_completion(job, filename, failed):
         # The link callback crashed before flipping its row out of 'pending' -
         # without this it strands the row looking like it's still generating.
         try:
-            from .models import FaceDatasetImage, LoraTestImage
-            for model in (FaceDatasetImage, LoraTestImage):
+            from .models import FaceDatasetImage, LoraTestImage, VideoTestClip
+            for model in (FaceDatasetImage, LoraTestImage, VideoTestClip):
                 row = model.query.filter_by(job_id=job.job_id).first()
                 if row is not None:
                     row.status = 'failed'

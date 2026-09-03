@@ -34,7 +34,7 @@ from urllib.parse import urlsplit
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from ..extensions import db
-from ..models import (CanvasImageNode, CanvasNodePosition, FaceDataset,
+from ..models import (CanvasImageNode, CanvasLanePlacement, CanvasNodePosition, FaceDataset,
                       FaceDatasetImage, LoraTestImage)
 from .. import config as cfg
 from . import (bank_transfer_metadata, caption_origin, dataset_activity,
@@ -2896,6 +2896,13 @@ def delete_dataset(user_id, dataset_id):
     # 🖼 Pinned-image nodes: same story, same trap. They reference
     # lora_test_image rows that are being deleted in this very transaction.
     canvas_imgs = CanvasImageNode.query.filter_by(dataset_id=dataset_id).all()
+    # Where the lane itself sat and how much room it kept: same story again, and
+    # at most one row.
+    canvas_lane = CanvasLanePlacement.query.filter_by(dataset_id=dataset_id).all()
+    # 📤 Civitai links of its checkpoints: nothing left to post under them once
+    # the dataset's pictures are gone (the pages on the site are untouched).
+    from ..models import CivitaiLink
+    civitai_links = CivitaiLink.query.filter_by(dataset_id=dataset_id).all()
     dataset_path = _dataset_path(dataset_id)
     trashed_path = None
     try:
@@ -2928,6 +2935,10 @@ def delete_dataset(user_id, dataset_id):
             db.session.delete(pos)
         for pin in canvas_imgs:
             db.session.delete(pin)
+        for placement in canvas_lane:
+            db.session.delete(placement)
+        for link in civitai_links:
+            db.session.delete(link)
         # Force the child DELETEs to reach the DB BEFORE the parent's. The child
         # models declare only a table-level ForeignKey (no relationship()), so the
         # unit of work has no ordering dependency between them and would otherwise
@@ -8072,6 +8083,7 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
         if remaining:
             try:
                 from .vision_llm import describe_image as describe_image_ollama, unload_vision_model
+                from .vision_llm import label as _llm_label
             except ImportError:
                 raise RuntimeError('vision (Ollama) service not configured/available yet')
             try:
@@ -8083,7 +8095,11 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                         break
                     dataset_activity.progress(
                         token,
-                        detail=f'Captioning with Ollama — image {index}/{len(remaining)}…')
+                        # Reddit report, within a day of the provider shipping:
+                        # "It says 'Captioning with Ollama' even though it's
+                        # configured to use LM Studio." The one running-progress
+                        # sentence this sweep missed.
+                        detail=f'Captioning with {_llm_label()} — image {index}/{len(remaining)}…')
                     with open(p, 'rb') as fh:
                         cap = describe_image_ollama(
                             fh.read(), cap_prompt, num_predict=2000, model=ollama_model,
@@ -9263,6 +9279,7 @@ def _detect_watermarks_vision(dataset_id, row_ids, *, include_dismissed,
     except ImportError:
         raise RuntimeError('vision (Ollama) service not configured/available yet')
     counts = {'detected': 0, 'none': 0, 'checked': 0}
+    unanswered = 0
     # Deliberately NOT a key in `counts`: that dict is this route's response
     # shape and four tests pin it exactly. A counter that is zero on every
     # ordinary run does not justify changing an API contract — and surfacing it
@@ -9300,6 +9317,11 @@ def _detect_watermarks_vision(dataset_id, row_ids, *, include_dismissed,
                 # Vision unreachable/empty != "no watermark" (same reasoning as
                 # classify_images): leave the state UNTOUCHED (retry possible) instead
                 # of falsely marking every image clean when Ollama is just down.
+                # COUNTED — the bank's twin loop has counted this for a while and
+                # this one never got the port, so a scan whose every call came
+                # back empty reported "0 found · 0 clean (of 0)" under a green
+                # tick. That exact toast is how the maintainer found it.
+                unanswered += 1
                 continue
             # 🔤 zones live in watermark_regions and must SURVIVE a watermark
             # scan: resetting them here (the pre-text behaviour) would erase a
@@ -9337,6 +9359,13 @@ def _detect_watermarks_vision(dataset_id, row_ids, *, include_dismissed,
     finally:
         unload_vision_model()  # rend la VRAM a ComfyUI en fin de batch
         dataset_activity.end(token)
+    if report is not None and unanswered:
+        from .vision_llm import label as _llm_label
+        report['unanswered'] = unanswered
+        report['unanswered_note'] = (
+            f'{unanswered} image(s) got no answer from the vision model '
+            f'({_llm_label()}) — check it is running (Settings ▸ Local tools), '
+            'then run the scan again.')
     if vanished:
         logger.info('watermark detect: %s image(s) were deleted while the pass ran, '
                     'skipped', vanished)
@@ -9378,6 +9407,12 @@ def _detect_watermarks_detector(dataset_id, row_ids, *, include_dismissed,
             continue
         planned.append((image_id, path))
     located = unlocated = errors = vanished = 0
+    # The best score among images ruled CLEAN this run. When nothing is flagged,
+    # this is the one number that tells the user whether the threshold is the
+    # reason: a blatant watermark scoring 0.88 under a 0.94 bar is a dial away,
+    # not a detector failure. Measured need: two tiled stock photos read clean
+    # at 0.99 and flagged at 0.50 — with nothing on screen saying why.
+    top_clean_score = None
     stopped = False
     if not planned:
         if report is not None:
@@ -9432,16 +9467,27 @@ def _detect_watermarks_detector(dataset_id, row_ids, *, include_dismissed,
             if state == 'detected':
                 img.watermark_state = 'detected'
                 if regions:
-                    # ONE box, the child's first — it orders them
-                    # most-peripheral-first precisely because this line takes one
-                    # (see the bank's identical write for the full reasoning).
-                    img.watermark_bbox = json.dumps(
-                        [round(float(v), 4) for v in regions[0][:4]])
+                    rounded = [[round(float(v), 4) for v in r[:4]] for r in regions]
+                    # bbox stays the child's FIRST (most-peripheral) box — the
+                    # crop/inpaint ROUTING reads one rectangle and that contract
+                    # does not move. What moves is the rest: EVERY extra zone now
+                    # lands in watermark_regions, because "losing the smaller
+                    # boxes is the honest cost" did not survive contact with a
+                    # real image — eight logos, one boxed, Clean repainting one
+                    # eighth of the problem (maintainer's call, 2026-08-30, the
+                    # Luke Collins test pair). Single-zone rows write NO regions,
+                    # byte-for-byte the old behaviour, so ✂ Auto-crop keeps its
+                    # whole pool: a lone border mark is still croppable, while a
+                    # multi-mark image never was one crop anyway.
+                    img.watermark_bbox = json.dumps(rounded[0])
+                    if len(rounded) >= 2 and not text_zones:
+                        img.watermark_regions = json.dumps(rounded)
                     if text_zones:
                         from .text_regions import text_mask_regions
+                        # Fold ALL boxes into the text zones, not just the first —
+                        # the same eight-logo case, on a page 🔤 also flagged.
                         merged, _ = text_mask_regions(
-                            [], _stored_mask_regions(img)
-                            + [[round(float(v), 4) for v in regions[0][:4]]])
+                            [], _stored_mask_regions(img) + rounded)
                         img.watermark_regions = json.dumps(merged)
                     located += 1
                 else:
@@ -9453,6 +9499,10 @@ def _detect_watermarks_detector(dataset_id, row_ids, *, include_dismissed,
                     img.watermark_state = 'none'
                 img.watermark_bbox = None
                 counts['none'] += 1
+                if score is not None:
+                    s = round(float(score), 4)
+                    if top_clean_score is None or s > top_clean_score:
+                        top_clean_score = s
             counts['checked'] += 1
             db.session.commit()
         stopped = bool(should_cancel and should_cancel())
@@ -9477,7 +9527,8 @@ def _detect_watermarks_detector(dataset_id, row_ids, *, include_dismissed,
                     'skipped', vanished)
     if report is not None:
         report.update({'stopped': stopped, 'located': located,
-                       'unlocated': unlocated, 'errors': errors})
+                       'unlocated': unlocated, 'errors': errors,
+                       'top_clean_score': top_clean_score})
     return counts
 
 
@@ -10119,9 +10170,14 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
       - 'auto'/'lama' → LaMa (fast, non-generative) for small off-center marks; on-subject
         marks stay 'review'. Uses the resolved CPU/GPU `device`; GPU mode is protected by
         the route's exclusive window.
-      - 'klein' → masked Flux.2 Klein inpaint + pixel-space composite for the off-center
-        AND the on-subject marks (making 'review' actionable). Each image is one serialized
-        ComfyUI round-trip; `device` is irrelevant (ComfyUI owns the GPU).
+      - 'klein' → the stored boxes are ERASED on the photo, then Flux.2 Klein is handed
+        the WHOLE frame with the instruction to remove the watermarks, for the off-center
+        AND the on-subject marks (making 'review' actionable). The boxes no longer scope
+        the repaint — they keep Klein from re-inventing a mark it can see — and the frame
+        comes back re-rendered, so what the detector MISSED is cleaned too
+        (watermark_klein's module docstring carries the 2026-08-31 measurements). Each
+        image is one serialized ComfyUI round-trip; `device` picks the erase engine's
+        device only (ComfyUI owns the GPU for the render itself).
 
     LaMa absent (probe False) is NOT an error: LaMa-routed images are counted as
     `skipped` (crop still runs) so the UI can nudge "install the ML extras". Klein absent
@@ -10379,7 +10435,11 @@ def repair_image_region(user_id, dataset_id, image_id, boxes, prompt, *,
     TWO GEOMETRIES, ONE GESTURE. `boxes` alone keeps the crop-and-stitch lane:
     a square is cut around the box and magnified to ~1 MP, which is fast and
     bounds VRAM whatever the photo weighs — the right tool for a mark in a
-    corner. A painted `mask` instead sends the WHOLE frame with that mask, so
+    corner. It is the caller's free `text` that holds this lane there: an
+    `inpaint_watermark_klein` call with no prompt is the 🧽 CLEAN, which since
+    2026-08-31 re-renders the entire photo. A repair keeps its byte-exact
+    outside, which is the whole reason the button exists.
+    A painted `mask` instead sends the WHOLE frame with that mask, so
     Klein reconstructs a necklace or a pair of glasses while actually seeing the
     face they sit on. Same preserve/snapshot/promote safety either way; only the
     geometry handed to the model differs. (Masked lane contributed by OneCodingDude
@@ -12408,6 +12468,93 @@ def generate_variations_nanobanana(app, user_id, dataset_id, variations, multipl
 
 
 # --- Completion linking (called from the job queue) -------------------------
+def _finishing_profile(engine) -> dict:
+    """The finishing pass's dials for ONE improve engine, from `improve.*`.
+
+    Colour matching is Klein-only and that is not a policy, it is arithmetic:
+    SeedVR2 already grades its result back onto its source inside the node
+    (`seedvr2.color_correction`), so running ours as well is two transforms
+    estimated from the same statistics fighting over the same image. Sharpening
+    and grain apply to both — neither engine does either.
+
+    Every value degrades to 0 (= that stage does not run) rather than to a
+    default, because a malformed setting must not silently start altering
+    finished renders."""
+    def _num(key, ceiling):
+        try:
+            value = float(cfg.get(f'improve.{key}'))
+        except (TypeError, ValueError):
+            return 0.0
+        # NaN has to be rejected BEFORE the clamp, not by it. Every comparison
+        # against NaN is False, so `min(ceiling, nan)` returns the CEILING and
+        # `max(0.0, ...)` keeps it: a corrupt config.json would not turn the dial
+        # off, it would turn it up to maximum. Measured, not theorised.
+        if not math.isfinite(value):
+            return 0.0
+        return max(0.0, min(ceiling, value))
+    return {
+        'colour_strength': _num('colour_match', 1.0) if engine != 'seedvr2' else 0.0,
+        'sharpen': _num('sharpen', 3.0),
+        'grain': _num('grain', 0.2),
+        'grain_saturation': _num('grain_saturation', 1.0),
+    }
+
+
+def _finish_improved_image(img, dst):
+    """Run the app-side finishing pass over a just-linked ✨ improve result.
+
+    Only for `KLEIN_IMAGE_IMPROVE` rows: this callback links every dataset image
+    job — variations, reference edits, the small-image rescue — and a finishing
+    pass on a freshly GENERATED variation is not what any of these dials mean.
+
+    The colour reference is the improve's own source (its parent row's file on
+    disk), which is the only image whose grade this result is supposed to keep.
+    No readable parent -> the colour stage drops out and the other two still run;
+    `photo_finish.apply_to_file` decides that, so the rule lives in one place.
+
+    Wrapped whole: a finishing pass is a nicety, and it may never be the reason a
+    render the user waited for is lost."""
+    if getattr(img, 'derivation_kind', None) != KLEIN_IMAGE_IMPROVE:
+        return
+    try:
+        # The engine that RAN, read off the row's own stamp — never the
+        # `improve.engine` setting, which is only the default the single-tile
+        # button starts on: the lightbox offers one button per engine and the
+        # bulk toolbar names its engine on the button, so a SeedVR2 lot on an
+        # install whose setting says 'klein' is an ordinary path, and it must
+        # not receive the Klein colour match on top of the node's own grading.
+        # The setting remains the fallback for rows that predate the stamp.
+        meta = parsed_generation_meta(getattr(img, 'generation_meta', None)) or {}
+        engine = meta.get('engine') or cfg.get('improve.engine') or 'klein'
+        profile = _finishing_profile(engine)
+        if not any(profile[k] > 0 for k in ('colour_strength', 'sharpen', 'grain')):
+            return
+        reference_path = None
+        if profile['colour_strength'] > 0 and getattr(img, 'parent_image_id', None):
+            parent = db.session.get(FaceDatasetImage, img.parent_image_id)
+            if parent is not None and parent.filename:
+                candidate = os.path.join(_dataset_dir(parent.dataset_id), parent.filename)
+                if os.path.isfile(candidate):
+                    reference_path = candidate
+        try:
+            from ..utils import photo_finish
+        except ImportError as exc:
+            # numpy lives in requirements-ml, not in the base install. A user who
+            # turned finishing on without it gets ONE plain line, not a trace.
+            logger.warning('dataset link: finishing pass skipped for image %s — %s '
+                           '(install the ML requirements to enable it)', img.id, exc)
+            return
+        # Seeded on the row id: the same image re-finished gives the same grain,
+        # so a re-run is comparable to what it replaced instead of differing by
+        # noise nobody asked to change.
+        photo_finish.apply_to_file(
+            dst, reference_path=reference_path, seed=int(img.id or 0),
+            colour_strength=profile['colour_strength'], sharpen=profile['sharpen'],
+            grain=profile['grain'], grain_saturation=profile['grain_saturation'])
+    except Exception:
+        logger.exception('dataset link: finishing pass failed for image %s', img.id)
+
+
 def link_completed_dataset_image(job_id, filename, failed=False, reason=None):
     """Attach a finished fan-out job to its FaceDatasetImage row.
 
@@ -12466,11 +12613,10 @@ def link_completed_dataset_image(job_id, filename, failed=False, reason=None):
             dst = os.path.join(_dataset_dir(img.dataset_id), filename)
             logger.warning(f"dataset link: name collision, storing as {filename}")
         img.filename = filename
-        if src and os.path.exists(src):
-            shutil.move(src, dst)          # file where we expected it on disk
-        elif os.path.exists(dst):
-            pass                           # already brought in (retry / dup completion)
-        else:
+        from ..utils import comfy_fs
+        claimed = (comfy_fs.claim_output_file(src, dst) if src
+                   else os.path.isfile(dst))
+        if not claimed:
             # The file isn't on disk where we look — ComfyUI was pointed at a
             # custom output path, or none is configured. Fetch it over the /view
             # API instead (path-independent, like other ComfyUI front-ends). #2
@@ -12485,6 +12631,12 @@ def link_completed_dataset_image(job_id, filename, failed=False, reason=None):
                 img.fail_reason = ('The finished image could not be retrieved from ComfyUI '
                                    '(not on disk, and the /view API fetch failed).')
                 logger.warning(f"dataset link: file not on disk and /view API fetch failed (job {job_id})")
+        # The app-side finishing pass (colour match / unsharp / grain), on the
+        # file now sitting at `dst`. Before _unkeep_parent_for_kept_improvement,
+        # so the parent is still readable as the colour reference whatever that
+        # helper decides; off by default, and a no-op for every derivation kind
+        # but the ✨ improve.
+        _finish_improved_image(img, dst)
         # A user may have marked this in-flight improvement Keep while waiting.
         # Only the freshly linked, on-disk result may now replace its parent;
         # the helper also preserves a later explicit return to Pending.

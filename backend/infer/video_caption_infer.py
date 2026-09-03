@@ -4,13 +4,17 @@ The fourth model worker in this project and the first that reads TIME. ✨ Score
 embeds one image, the CLIP towers encode one image or one phrase; this one is
 handed a sequence of frames and asked what the movement is.
 
-⛔ WHY NOT OLLAMA, pinned here because it is the mistake available for free.
-Ollama fails SILENTLY on video on this machine: the request returns an EMPTY
-response with no error, the fence swallowing everything (`text generate skipped`
-in its logs). A captioner that returns "" and reports success fills a bank with
-empty sidecars — and an empty sidecar is not a neutral default, ai-toolkit trains
-it as an empty prompt and says nothing. So this lane talks to transformers
-directly, where a failure is an exception.
+WHY THIS LANE IS TRANSFORMERS (dated, because the first reason expired):
+on 2026-08-04 Ollama returned EMPTY on multi-frame requests on this machine —
+no error, `text generate skipped` in its logs — and an empty caption stored as
+success fills a bank with empty sidecars ai-toolkit trains as empty prompts.
+Remeasured 2026-09-01 (Ollama 0.32, qwen3-vl): full answers, 16 frames per
+call — so the app now ALSO captions through the user's local LLM when this
+worker's interpreter is missing (see video_caption.resolve_backend). This
+worker stays the default because it holds what an HTTP server cannot offer:
+real per-frame timestamps (VideoMetadata below), bf16 weights, and the umT5
+token count. The structural guard is engine-independent: an empty generation
+is reported as an error, never as a caption.
 
 VERIFIED ON THIS MACHINE BEFORE THIS FILE EXISTED — the video lane's absolute
 rule, no unverified model claim:
@@ -39,10 +43,11 @@ Protocol — a WARM WORKER, because loading 8.3 GB costs far more than captionin
 one shot, and the parent commits per clip so a stopped pass loses nothing:
 
   stdin,  once      : {"models_root": path|null, "device": "auto"|"cpu",
-                       "max_new_tokens": 96}
-  stdout, once ready: {"ok": true, "ready": true, "device": "cuda"}
+                       "max_new_tokens": 400, "tokenizer_dir": path|null}
+  stdout, once ready: {"ok": true, "ready": true, "device": "cuda",
+                       "token_counter": "sentencepiece"|"transformers"|null}
   stdin,  per clip  : {"frames": ["abs.jpg", ...], "prompt": "..."}\n
-  stdout, per clip  : {"ok": true, "caption": "..."}\n
+  stdout, per clip  : {"ok": true, "caption": "...", "tokens": 187|null}\n
                       {"ok": false, "error": "..."}\n   ← one bad clip, worker lives
   EOF on stdin      : clean exit.
 A fatal load failure prints {"ok": false, "ready": false, "error": ...} and exits.
@@ -79,6 +84,64 @@ import import_report  # noqa: E402
 MODEL_ID = 'Qwen/Qwen3-VL-4B-Instruct'
 
 
+def _load_caption_fields():
+    """The parent's caption_fields module, imported BY PATH.
+
+    Stdlib-only by contract (see its docstring), so it loads in an interpreter
+    that has none of the app. It is what lets the token count below be taken on
+    the PROSE the trainer reads, never on the labelled tail the model appends
+    (C12-C). None when it cannot load — the count then covers the whole text
+    and is a little high, which errs on the safe side of a budget."""
+    import importlib.util
+    path = os.path.join(_HERE, os.pardir, 'app', 'services', 'caption_fields.py')
+    try:
+        spec = importlib.util.spec_from_file_location('lds_caption_fields', path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as e:  # noqa: BLE001 — a missing helper costs precision, never the pass
+        _log(f'[caption] caption_fields unavailable, counting whole captions: '
+             f'{type(e).__name__}: {e}')
+        return None
+
+
+def _load_token_counter(tokenizer_dir):
+    """(callable text -> int, backend name), or (None, None).
+
+    The umT5 tokenizer behind every Wan 2.x text encoder, from a folder holding
+    `spiece.model`. Its encoder truncates past 512 tokens IN SILENCE, and a word
+    count is a guess about that — so when the parent found the tokenizer, the
+    caption is measured in the encoder's own tokens.
+
+    sentencepiece FIRST, on purpose: transformers 5.3 refuses to rebuild this
+    tokenizer's precompiled normalizer from the .model file ("Cannot parse
+    precompiled_charsmap" — measured 2026-09-01 in ComfyUI's python, the very
+    interpreter this worker borrows), while the raw model loads in every
+    version and yields the SAME piece inventory; the HF wrapper only appends the
+    EOS, which is the +1 below. transformers second, for a folder that ships a
+    tokenizer.json and no .model. Neither → None, and the parent falls back to
+    a words×ratio estimate it labels as one."""
+    folder = str(tokenizer_dir or '').strip()
+    if not folder:
+        return None, None
+    spm_file = os.path.join(folder, 'spiece.model')
+    if os.path.isfile(spm_file):
+        try:
+            import sentencepiece as spm
+            sp = spm.SentencePieceProcessor(model_file=spm_file)
+            return (lambda text: len(sp.encode(str(text))) + 1), 'sentencepiece'
+        except Exception as e:  # noqa: BLE001
+            _log(f'[caption] sentencepiece counter unavailable: {type(e).__name__}: {e}')
+    try:
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(folder)
+        return (lambda text: len(tok(str(text), add_special_tokens=True).input_ids)), \
+            'transformers'
+    except Exception as e:  # noqa: BLE001
+        _log(f'[caption] token counter unavailable: {type(e).__name__}: {e}')
+    return None, None
+
+
 def main() -> int:
     raw = sys.stdin.readline()
     try:
@@ -88,13 +151,15 @@ def main() -> int:
         return 1
     models_root = req.get('models_root') or None
     want = str(req.get('device') or 'auto').lower()
-    max_new_tokens = int(req.get('max_new_tokens') or 96)
+    max_new_tokens = int(req.get('max_new_tokens') or 400)
     # Explicit dtype, for the one case the default gets wrong: a CPU fallback in
     # float32 needs ~16 GB for a 4B model, which is more than most machines have
     # free — and "captioning is impossible here" is a worse answer than "slower
     # and half the memory". Unset keeps the safe default below.
     want_dtype = str(req.get('dtype') or '').lower()
     model_id = str(req.get('model') or '').strip() or MODEL_ID
+    count_tokens, token_counter = _load_token_counter(req.get('tokenizer_dir'))
+    fields_mod = _load_caption_fields() if count_tokens is not None else None
 
     if want == 'cpu':
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -150,6 +215,40 @@ def main() -> int:
                              duration=float(span_s),
                              frames_indices=list(range(n_frames)))
 
+    def _reconcile_video_grid(inputs):
+        """transformers >= 5: one `video_grid_thw` row PER TEMPORAL PATCH.
+
+        The Qwen3-VL chat template writes the video as several timestamped
+        spans — `<t s><|vision_start|>…<|vision_end|>` once per temporal
+        patch — while the processor still returns ONE grid row `[t, h, w]` for
+        the whole clip. transformers 4.57's rope indexing walked the spans and
+        reused that row; 5.x pulls one grid per span and dies on the second
+        with a bare `StopIteration` — every shot of a pass "failed" with no
+        reason anywhere (measured 2026-09-01: 1550 of 2450 shots, the first
+        pass run after ComfyUI's python carried transformers 5.3).
+
+        Expanding the row to `t` rows of `[1, h, w]` is exactly what the 5.x
+        indexer expects (verified: identical caption to the 4.57 path on the
+        same frames). Applied ONLY when the spans outnumber the rows, so an
+        interpreter whose processor already agrees with its model is left
+        alone — including 4.57, where the mismatch is handled internally."""
+        try:
+            grid = inputs.get('video_grid_thw')
+            ids = inputs.get('input_ids')
+            if grid is None or ids is None:
+                return inputs
+            start_id = processor.tokenizer.convert_tokens_to_ids('<|vision_start|>')
+            spans = int((ids == start_id).sum())
+            if grid.shape[0] >= spans or grid.shape[0] != 1:
+                return inputs
+            t, h, w = (int(v) for v in grid[0])
+            if t != spans:
+                return inputs
+            inputs['video_grid_thw'] = torch.tensor([[1, h, w]] * t, dtype=grid.dtype)
+        except Exception as e:  # noqa: BLE001 — a failed reconcile must not hide the real error
+            _log(f'[caption] grid reconcile skipped: {type(e).__name__}: {e}')
+        return inputs
+
     def _caption(frame_paths, prompt, span_s=None):
         images = [Image.open(p).convert('RGB') for p in frame_paths]
         try:
@@ -178,6 +277,7 @@ def main() -> int:
                      'falling back to default timestamps')
                 inputs = processor(text=[text], videos=[images],
                                    return_tensors='pt')
+            inputs = _reconcile_video_grid(inputs)
             inputs = inputs.to(device)
             with torch.no_grad():
                 out = model.generate(**inputs, max_new_tokens=max_new_tokens,
@@ -195,7 +295,8 @@ def main() -> int:
 
     # The id is echoed so the parent records what REALLY loaded rather than what
     # it asked for — the two differ the moment any fallback creeps in.
-    _emit({'ok': True, 'ready': True, 'device': device, 'model': model_id})
+    _emit({'ok': True, 'ready': True, 'device': device, 'model': model_id,
+           'token_counter': token_counter})
     _log('[caption] ready')
 
     for line in sys.stdin:
@@ -224,7 +325,18 @@ def main() -> int:
             # is trained as an empty prompt with nothing said anywhere.
             _emit({'ok': False, 'error': 'the model returned an empty caption'})
             continue
-        _emit({'ok': True, 'caption': caption})
+        # The count is taken on the PROSE — what the trainer reads — not on
+        # the labelled tail the parent strips (C12-C). None = no counter here.
+        tokens = None
+        if count_tokens is not None:
+            prose = caption
+            if fields_mod is not None:
+                prose = fields_mod.split_caption_fields(caption)[0] or caption
+            try:
+                tokens = int(count_tokens(prose))
+            except Exception as e:  # noqa: BLE001 — a lost count never costs the caption
+                _log(f'[caption] token count skipped: {type(e).__name__}: {e}')
+        _emit({'ok': True, 'caption': caption, 'tokens': tokens})
     _log('[caption] stdin closed — exiting')
     return 0
 

@@ -8,6 +8,7 @@ import {
   folderEffectiveNote, folderWarning, detectedSuggestion, foldersQuery, hasAnyOverride,
 } from './comfyFolders'
 import ResetToDefault from './ResetToDefault'
+import LmStudioDownload from './LmStudioDownload'
 import { defaultValueAt } from './settingDefaults.js'
 
 /* HF token is for gated TRAINING bases (Krea 2 / FLUX.1 / FLUX.2 Klein) and reading
@@ -361,7 +362,7 @@ function ComfyFolderRow({ comfy, setField, state, fieldKey, id }) {
 
 export default function LocalToolsSection(props) {
   const { config, setField, testResults, recordTestResult, saveConfigSection, caps, refreshCaps, toast,
-          configDefaults } = props
+          configDefaults, saveSecretIfPending } = props
   // Shipped values come from the server payload, never retyped here.
   const ollamaDefault = (key) => defaultValueAt(configDefaults, 'ollama', key)
   const lmstudioDefault = (key) => defaultValueAt(configDefaults, 'lmstudio', key)
@@ -469,7 +470,13 @@ export default function LocalToolsSection(props) {
         </div>
       </Card>
       <Card
-        title="Ollama"
+        // Reddit report, day one: "both config sections are visible regardless of
+        // the dropdown" — read as a bug because nothing SAID it was a choice. Both
+        // cards staying editable is deliberate (configure and Test the other
+        // provider before switching), so both titles now say which one is live,
+        // instead of only LM Studio's.
+        title={provider === 'ollama' ? 'Ollama — in use'
+          : 'Ollama — not in use (Test still works)'}
         help="Lightweight local vision backend — captioning, framing auto-classify and head-crop."
       >
         <OllamaStatus caps={caps} refreshCaps={refreshCaps} toast={toast} />
@@ -551,7 +558,8 @@ export default function LocalToolsSection(props) {
       </Card>
 
       <Card
-        title={provider === 'lmstudio' ? 'LM Studio — in use' : 'LM Studio'}
+        title={provider === 'lmstudio' ? 'LM Studio — in use'
+          : 'LM Studio — not in use (Test still works)'}
         help="A local model server with a graphical app. Unlike Ollama it cannot be started from here, and it only serves a model that is already loaded."
       >
         <LmStudioStatus caps={caps} active={provider === 'lmstudio'}
@@ -579,9 +587,22 @@ export default function LocalToolsSection(props) {
               placeholder="leave empty to use whatever is loaded"
               help="Left empty, the app uses whichever model LM Studio has loaded — usually what you want, since it only serves a loaded one."
             />
+            {/* ⏬ The missing half of the Ollama pull, asked for in those words.
+                The job runs inside LM Studio itself, so it survives navigation
+                and an LDS restart — the component re-attaches on mount. */}
+            <LmStudioDownload refreshCaps={refreshCaps} toast={toast} />
             <TestResult result={testResults.lmstudio} />
           </div>
-          <TestButton target="lmstudio" beforeTest={() => saveConfigSection('lmstudio')}
+          <TestButton target="lmstudio"
+            beforeTest={async () => {
+              // Reddit report, day one: "the test button doesn't use the API key
+              // I've set until I save the API key." The probe reads config AND
+              // secrets from disk, so a freshly-typed key has to land before the
+              // Test fires — same contract as saveConfigSection for the URL, and
+              // the same saveSecretThenTest shape Setup already uses.
+              await saveSecretIfPending?.(LMSTUDIO_SECRET.key)
+              await saveConfigSection('lmstudio')
+            }}
             onResult={(r) => recordTestResult('lmstudio', r)} />
         </div>
         <div>

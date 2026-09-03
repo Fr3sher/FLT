@@ -29,8 +29,13 @@ import { Flag } from 'lucide-react';
 import { apiFetch, postJson } from '../../api/fetchClient'
 import PassDialog from './PassDialog.jsx'
 import KleinModelSetting from '../shared/KleinModelSetting'
+import KleinCleanOptions from '../shared/KleinCleanOptions'
+import KleinCompareDialog from '../shared/KleinCompareDialog'
 import { useCapabilities } from '../../context/CapabilitiesContext'
 import { useToast } from '../common/Toast'
+import {
+  CLEAN_ENGINES_BLURB, KLEIN_CLEAN_SHORT, kleinCleanTitle,
+} from '../../utils/watermarkCleanEngine.js'
 import {
   cropLevelState, findLevelState, hasCleanedImages, inpaintLevelState,
   levelCounts, maskNote, progressSummary, rescanNote, sourceNote,
@@ -70,7 +75,7 @@ export default function BankWatermarkPanel({
   bankId, live, onFind, onFindText = null, onChanged, payload = null,
   selectedIds = [], gpuPresent = true, onPickPython = null,
 }) {
-  const { caps } = useCapabilities()
+  const { caps, refresh: refreshCaps } = useCapabilities()
   const toast = useToast()
   const [levels, setLevels] = useState(null)
   const [method, setMethod] = useState('auto')
@@ -80,6 +85,13 @@ export default function BankWatermarkPanel({
      split between two runs). Lives on the panel like the engine toggle, so the
      launch window names it without owning a second copy. */
   const [target, setTarget] = useState('all')
+  // ⚖ Compare-before-the-batch. `kleinRunModel` is a PER-RUN override, armed by
+  // the dialog's "use for this run" and spent by the next Klein inpaint launch —
+  // a bank deliberately STORES no Klein pick (the dataset is the one authority),
+  // so this lives and dies with the panel.
+  const [kleinCompareOpen, setKleinCompareOpen] = useState(false)
+  const [kleinCompare, setKleinCompare] = useState({ choices: [], stored: null })
+  const [kleinRunModel, setKleinRunModel] = useState(null)
   const [comparing, setComparing] = useState(false)
   const [showOriginal, setShowOriginal] = useState(false)
   /* Which cleaning level's launch window is open ('watermark_crop' /
@@ -226,7 +238,7 @@ export default function BankWatermarkPanel({
           blurb="Cuts the border strip holding the mark. No model, no GPU, and no invented pixel — try this one first."
           onRun={() => setCleanOpen('watermark_crop')} />
         <LevelCard index={3} title="Repaint what's left" state={inpaint}
-          blurb="Repaints the marks a crop can't remove. LaMa is fast; Klein is slower but also clears marks on the subject."
+          blurb={`Repaints the marks a crop can't remove. ${CLEAN_ENGINES_BLURB}`}
           onRun={() => setCleanOpen('watermark_inpaint')} />
       </div>
 
@@ -268,7 +280,7 @@ export default function BankWatermarkPanel({
           <button type="button" aria-pressed={method === 'klein'} onClick={() => setMethod('klein')}
             disabled={!caps.watermark_klein}
             title={caps.watermark_klein
-              ? 'Klein: masked Flux.2 inpaint through ComfyUI. Slower, and the only engine that clears a mark ON the subject.'
+              ? kleinCleanTitle(caps)
               : (kleinReason || 'Klein inpainting needs ComfyUI running + the Klein models (Setup ▸ ComfyUI).')}
             className={`rounded-md px-2.5 py-1 font-semibold disabled:opacity-40 ${method === 'klein'
               ? 'bg-amber-500/25 text-amber-100' : 'text-content-subtle hover:text-content'}`}>
@@ -280,7 +292,38 @@ export default function BankWatermarkPanel({
             but "no choice" was never a reason to stay silent about the model.
             w-full: this drops onto its own line rather than squeezing the
             toggle at 400 px. */}
-        {method === 'klein' && <KleinModelSetting className="w-full" />}
+        {method === 'klein' && (
+          <>
+          <div className="w-full flex flex-wrap items-center gap-x-3 gap-y-1">
+            <KleinModelSetting className="min-w-0 flex-1" />
+            <button type="button"
+              onClick={async () => {
+                const d = await apiFetch('/api/klein-model').catch(() => null)
+                setKleinCompare({ choices: d?.choices || [], stored: d?.stored || null })
+                setKleinCompareOpen(true)
+              }}
+              title="Run each ticked Klein model on one flagged image (same zones, same seed) and pick the winner for THIS run — a bank stores no Klein choice."
+              className="min-h-10 lg:min-h-0 px-2.5 py-1 rounded-lg border border-border text-xs font-semibold text-content-subtle hover:text-content hover:bg-surface-raised">
+              ⚖ Compare models…
+            </button>
+            {kleinRunModel && (
+              <span className="text-[0.6875rem] text-amber-200">
+                Next Klein clean runs on <span className="font-mono break-all">{kleinRunModel}</span>{' '}
+                <button type="button" onClick={() => setKleinRunModel(null)}
+                  className="underline text-content-muted hover:text-content">use auto</button>
+              </span>
+            )}
+          </div>
+          {/* WHAT the clean will actually do, and the three dials that change it: the
+              prompt Klein is sent, the size the photo travels at, and whether the file
+              keeps its dimensions. Stored, so the dataset side reads the same values —
+              the shared feature rule (CLAUDE.md), applied to the dials and not just to
+              the pass. `refreshCaps` re-reads the resolved values so the engine tooltip
+              beside it quotes the prompt the user just typed. */}
+          <KleinCleanOptions caps={caps} disabled={live} className="w-full"
+            onChanged={() => refreshCaps(true, { background: true })} />
+          </>
+        )}
         {/* 🔤/🚩 WHAT to clean — only offered once Find text flagged something,
             because with no text-flagged page the three choices collapse into
             one and the control would be a dead dial. */}
@@ -356,6 +399,16 @@ export default function BankWatermarkPanel({
           blocks, same measured scope lines as the passes above — the point being
           that these two are not a different kind of action just because they live
           inside the funnel. */}
+      {kleinCompareOpen && (
+        <KleinCompareDialog
+          choices={kleinCompare.choices}
+          stored={kleinCompare.stored}
+          compareUrl={`/api/bank/${bankId}/watermark/klein-compare`}
+          adoptLabel="Use for this run"
+          onAdopt={(model) => { setKleinRunModel(model); setKleinCompareOpen(false) }}
+          onClose={() => setKleinCompareOpen(false)}
+        />
+      )}
       {cleanOpen && (
         <PassDialog passId={cleanOpen} payload={payload} live={live}
           selectionSize={selectedIds.length}
@@ -368,7 +421,12 @@ export default function BankWatermarkPanel({
             /* target only when narrowed: 'all' posts the SAME body as before the
                selector existed — the spread-if-set contract runLevel documents. */
             cleanOpen === 'watermark_inpaint'
-              ? { method, ...(target !== 'all' ? { target } : {}) } : {},
+              ? { method,
+                  ...(target !== 'all' ? { target } : {}),
+                  /* spread-if-set: absent, the body is byte-identical to before
+                     the ⚖ dialog existed, and the run keeps auto resolution. */
+                  ...(method === 'klein' && kleinRunModel
+                    ? { klein_model: kleinRunModel } : {}) } : {},
           )}>
           {cleanOpen === 'watermark_inpaint' && (
             /* WHICH engine this run will use. The toggle stays on the panel —
@@ -380,7 +438,7 @@ export default function BankWatermarkPanel({
               Engine: <span className="font-semibold text-content">
                 {method === 'klein' ? 'Klein' : 'LaMa'}
               </span>{method === 'klein'
-                ? ' — slower, and the only one that clears a mark ON the subject.'
+                ? KLEIN_CLEAN_SHORT
                 : ' — fast; a mark on the subject stays flagged instead of being smeared.'}
               {target !== 'all' && (
                 <>

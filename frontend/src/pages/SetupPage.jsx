@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router'
 import { apiFetch, getCsrfToken, putJson, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { useCapabilities } from '../context/CapabilitiesContext'
+import LmStudioDownload from '../components/settings/LmStudioDownload'
 import { deriveSetupSteps, deriveCapabilitySummary, SETUP_STEP_IDS, kleinMissingLabels,
   comfyuiDirVerdict, comfyuiLauncherState, COMFYUI_SKIP_LOST, COMFYUI_SKIP_KEPT, installAllPlan,
   OLLAMA_SKIP_LOST, ollamaSkipKept, ollamaGateReason,
@@ -37,10 +38,19 @@ const KEY_FIELDS = [
     href: 'https://openrouter.ai/keys',
     help: 'Powers the OpenRouter engine — one key and one balance for the same '
       + 'upstream models. Pick the model in Settings \u203a Image engines.' },
+  // 📤 Not an image engine, but a key like the three above and read on the
+  // same "what can this install do" screen: the Overview row and the final
+  // summary count it, so the field that turns it on must be here too.
+  { key: 'CIVITAI_API_KEY', label: 'Civitai API key (optional)', engine: 'civitai',
+    href: 'https://civitai.com/user/account',
+    help: 'Publishes your checkpoints as Civitai model pages and posts generated '
+      + 'images under them from the app; also reads the prompts in the 🌐 Civitai '
+      + 'browser and unlocks adult results in Civitai scans. A free account has one.' },
 ]
 
 /** Which capability probe the "Save & test" button runs for each key field. */
-const KEY_TEST_TARGET = { nanobanana: 'gemini', chatgpt: 'openai', openrouter: 'openrouter' }
+const KEY_TEST_TARGET = { nanobanana: 'gemini', chatgpt: 'openai', openrouter: 'openrouter',
+  civitai: 'civitai' }
 
 // Default local vision model + rough VRAM notes surfaced in the wizard. The
 // ABLITERATED Qwen3-VL is required — vanilla qwen3-vl refuses to caption the NSFW
@@ -90,6 +100,10 @@ const CAPABILITY_STEP_ID = {
   // (CameraInstallCard) lives on the install screen, and the comfyui step
   // carries Klein's weights only — mapping there would land on nothing to press.
   '📷 Camera angles (local)': 'install',
+  // Same screen, same reason: VideoStudioInstallCard is what downloads its
+  // 39.5 GB, and it lives on the install step. The comfyui step would land on
+  // nothing to press.
+  '🎬 Video Test Studio (beta)': 'install',
   'Captioning': 'ollama',
   'Auto-framing & head-crop': 'ollama',
   'Face-similarity scoring': 'quality',
@@ -106,6 +120,10 @@ const CAPABILITY_STEP_ID = {
   'SigLIP2 Bank semantics (optional)': 'quality',
   'Watermark detector (optional)': 'quality',
   'Scraping extras (optional)': 'quality',
+  // 📤 A credential like the three above it: its field sits on the same
+  // keys screen (the wizard's optional keys block), so the row lands on the
+  // control that turns it on.
+  '📤 Civitai publishing': 'image',
   'LoRA training': 'training',
   'Test Studio': 'comfyui',
 }
@@ -490,7 +508,11 @@ export default function SetupPage() {
         <div className="space-y-4">
           {KEY_FIELDS.map((f) => {
             const isChatgpt = f.engine === 'chatgpt'
-            const laneOk = isChatgpt ? chatgpt.keySet : !!step.engines[f.engine]
+            // The Civitai key is not an image engine: its readiness is the
+            // capability probe's own row, not a member of `step.engines`.
+            const laneOk = isChatgpt ? chatgpt.keySet
+              : f.engine === 'civitai' ? !!(caps && caps.civitai && caps.civitai.ok)
+                : !!step.engines[f.engine]
             const field = (
               <div key={f.key}>
                 <div className="flex items-center justify-between gap-2">
@@ -1135,16 +1157,15 @@ export default function SetupPage() {
                   ? step.lmDetail
                   : step.reachable
                     ? 'LDS can load it for you — press Load below, and it also happens automatically '
-                      + 'the first time captioning or framing needs it. Downloading NEW models still '
-                      + 'happens inside LM Studio, which shows progress and lets you cancel.'
+                      + 'the first time captioning or framing needs it. Need a model? Download one '
+                      + 'right here — the download runs inside LM Studio, so it survives a reload.'
                     : step.installed
                       ? `LM Studio is installed but its server is not running. Start it below — it will listen at ${step.lmUrl || 'http://127.0.0.1:1234'}.`
                       : `Open LM Studio, go to Developer and press Start Server (expected at ${step.lmUrl || 'http://127.0.0.1:1234'}), then Save & re-check.`}
               </p>
-              <p className="mt-2 text-xs text-content-muted">
-                Models are downloaded inside LM Studio itself — it shows progress and lets you
-                cancel, which this app cannot do for it.
-              </p>
+              <div className="mt-2">
+                <LmStudioDownload refreshCaps={(f) => refresh(f)} toast={toast} />
+              </div>
               {step.reachable && !step.visionModelReady && (
                 <button type="button" onClick={loadLlmModel} disabled={startingOllama}
                   className="mt-2 rounded-md bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-gray-950 disabled:opacity-50">

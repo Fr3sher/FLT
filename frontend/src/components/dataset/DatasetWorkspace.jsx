@@ -18,6 +18,8 @@ import { faceAnalysisState, faceAnalysisLabel } from './faceScoringGate.js';
 import DatasetGrid from './DatasetGrid';
 import { datasetBusyReason } from './datasetBusyReason.js';
 import KleinModelSetting from '../shared/KleinModelSetting';
+import KleinCleanOptions from '../shared/KleinCleanOptions';
+import KleinCompareDialog from '../shared/KleinCompareDialog';
 import SmallImageRescueReview from './SmallImageRescueReview';
 import CaptionToolsBar from './CaptionToolsBar';
 import CaptionOptionsPopover from './CaptionOptionsPopover';
@@ -26,6 +28,7 @@ import { datasetThumbUrl } from '../../utils/datasetThumbUrl.js';
 import { recaptionConfirmation } from './captionCategory';
 import { defaultEditEngine } from './referenceEdit';
 import { localEngineUnavailableReason, hasComfyui } from '../../utils/localEngineReason.js';
+import { kleinCleanTitle } from '../../utils/watermarkCleanEngine.js';
 import { captionEnginesSummary, CAPTION_ENGINE_WHY } from '../../utils/captionEngines.js';
 // …and the per-image half of the same question, for the captions listed in full here.
 import { captionOriginInfo } from '../../utils/captionOrigin.js';
@@ -79,7 +82,7 @@ import {
 } from '../../utils/smallImageRescue';
 import { describeDerivedComparison } from '../../utils/derivedCompare';
 import { WORKSPACE_SECTIONS, SECTION_FOR_TARGET } from './workspaceSections';
-import { postJson, putJson } from '../../api/fetchClient';
+import { apiFetch, postJson, putJson } from '../../api/fetchClient';
 import { datasetToBankRequest, datasetToBankUrl } from './datasetToBank';
 import { HelpBadge } from '../../help/HelpMode';
 import { requestHelpTip } from '../../help/helpTips';
@@ -315,6 +318,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
   const [labImage, setLabImage] = useState(null);
   const [installInpaintOpen, setInstallInpaintOpen] = useState(false);  // panneau d'install LaMa
   const [watermarkMethod, setWatermarkMethod] = useState('lama');  // moteur d'inpaint batch : lama | klein
+  const [kleinCompareOpen, setKleinCompareOpen] = useState(false); // ⚖ essai des modeles avant le batch
+  const [kleinCompareState, setKleinCompareState] = useState({ choices: [], stored: null });
   /* What 🧽 Clean aims at: every flagged page ('all'), only the 🔤 text-flagged
      ones ('text'), or only the 🚩 watermark-flagged ones ('watermark'). The
      split is BY PAGE — a page carrying both counts as text (its zones share one
@@ -1548,6 +1553,22 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     ? `Scanning…${act?.kind === 'watermark_detect' && act.total ? ` ${act.done}/${act.total}` : ''}`
                     : 'Find watermarks…'}
                 </button>
+                {kleinCompareOpen && (
+                  <KleinCompareDialog
+                    choices={kleinCompareState.choices}
+                    stored={kleinCompareState.stored}
+                    compareUrl={`/api/dataset/${d.id}/watermarks/klein-compare`}
+                    adoptLabel="Use for this dataset"
+                    onAdopt={async (model) => {
+                      // The dataset's ONE authority for the Klein model — the
+                      // batch clean already honours it, so adopting IS arming.
+                      await postJson(`/api/dataset/${d.id}/klein-model`, { klein_model: model }).catch(() => null);
+                      setKleinCompareOpen(false);
+                      setKleinCompareState((st) => ({ ...st, stored: model }));
+                    }}
+                    onClose={() => setKleinCompareOpen(false)}
+                  />
+                )}
                 {wmScanOpen && (
                   <WatermarkScanDialog
                     onClose={() => setWmScanOpen(false)}
@@ -1556,7 +1577,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     dismissed={images.filter(
                       (i) => i.status === 'keep' && i.watermark_state === 'dismissed').length}
                     threshold={caps.watermark_detect_threshold}
-                    detectorInstalled={!!caps.watermark_detect}
+                    caps={caps}
                     live={ds.busy}
                     datasetId={d.id} />
                 )}
@@ -1591,10 +1612,15 @@ export default function DatasetWorkspace({ ds, onBack }) {
                 <HelpBadge topic="action-watermark-clean" />
                 {watermarkDetected > 0 && (
                   <>
-                  {/* Inpaint engine: LaMa (fast, non-generative) vs Klein (masked
-                      Flux.2 inpaint — better on complex texture AND makes on-subject
-                      marks actionable, but GPU + slower). Klein is greyed until ComfyUI
-                      + the Klein models are ready (caps.watermark_klein). */}
+                  {/* Clean engine: LaMa (fast, non-generative, repaints the marked
+                      zones only) vs Klein (Flux.2 re-renders the WHOLE photo with the
+                      instruction to remove the marks — reaches what a box cannot, at
+                      the price of a regenerated image and with no guarantee on a
+                      distinct logo; GPU + slower). The sentence is shared
+                      with the bank panel and the review lightbox (utils/
+                      watermarkCleanEngine) because all three offer the same engine.
+                      Klein is greyed until ComfyUI + the Klein models are ready
+                      (caps.watermark_klein). */}
                   <div role="group" aria-label="Watermark inpaint method"
                     className="flex items-center rounded-lg border border-border bg-surface p-0.5 text-xs">
                     <button type="button" aria-pressed={watermarkMethod === 'lama'}
@@ -1607,7 +1633,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     <button type="button" aria-pressed={watermarkMethod === 'klein'}
                       onClick={() => setWatermarkMethod('klein')} disabled={ds.busy || !caps.watermark_klein}
                       title={caps.watermark_klein
-                        ? 'Klein: masked Flux.2 inpaint (crop-and-stitch). Better on skin/fabric/busy backgrounds and can clean marks ON the subject. Uses the GPU via ComfyUI — slower.'
+                        ? kleinCleanTitle(caps)
                         : (localEngineUnavailableReason('klein', caps)
                           || 'Klein inpaint needs ComfyUI running + the Klein models installed (Setup ▸ ComfyUI).')}
                       className={`px-2.5 py-1 rounded-md font-semibold disabled:opacity-40 ${watermarkMethod === 'klein'
@@ -1651,7 +1677,38 @@ export default function DatasetWorkspace({ ds, onBack }) {
                       changeable here. basis-full: its own row rather than a squeezed
                       column at 400 px. */}
                   {watermarkMethod === 'klein' && (
-                    <KleinModelSetting datasetId={d.id} className="basis-full" />
+                    <div className="basis-full flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <KleinModelSetting datasetId={d.id} className="min-w-0 flex-1" />
+                      {/* ⚖ The judging half: try the candidates on ONE flagged image
+                          (same zones, same seed) before the batch overwrites all of
+                          them — the same intermediate-window shape as detection. */}
+                      {cleanTargetCount > 0 && (
+                        <button type="button"
+                          onClick={async () => {
+                            // Same endpoint as the picker beside it — one scanner,
+                            // one truth about what is on disk.
+                            const resp = await apiFetch(`/api/dataset/${d.id}/klein-model`).catch(() => null);
+                            setKleinCompareState({ choices: resp?.choices || [], stored: resp?.stored || null });
+                            setKleinCompareOpen(true);
+                          }}
+                          disabled={ds.busy}
+                          title="Run each ticked Klein model on one flagged image (same zones, same seed) and pick the winner before cleaning the batch."
+                          className="min-h-10 lg:min-h-0 px-2.5 py-1 rounded-lg border border-border text-xs font-semibold text-content-subtle hover:text-content hover:bg-surface-raised disabled:opacity-40">
+                          ⚖ Compare models…
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {/* WHAT the clean will actually do, and the three dials that change
+                      it: the prompt Klein is sent, the size the photo travels at, and
+                      whether the file keeps its dimensions. Stored, so the bank panel
+                      reads the same values — the shared feature rule (CLAUDE.md)
+                      applied to the dials, not just to the pass. `refreshCaps` re-reads
+                      the resolved values so the engine tooltip above quotes the prompt
+                      that was just typed. */}
+                  {watermarkMethod === 'klein' && (
+                    <KleinCleanOptions caps={caps} disabled={ds.busy} className="basis-full"
+                      onChanged={() => refreshCaps(true, { background: true })} />
                   )}
                   {/* Allow auto-crop: the SAME persisted preference as Settings ▸ Watermark
                       inpainting (write-through). Off → a border mark is repainted (LaMa/
@@ -1672,8 +1729,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     disabled={ds.busy || savingAllowCrop || cleanTargetCount === 0}
                     title={watermarkMethod === 'klein'
                       ? (allowAutoCrop
-                        ? 'Removes them with masked Flux.2 Klein inpaint: border marks are cropped, every other mark (off-center AND on-subject) is repainted then composited back — only the mark changes'
-                        : 'Auto-crop off: EVERY mark (border included) is repainted with masked Flux.2 Klein inpaint then composited back — only the mark changes')
+                        ? 'Removes them with Flux.2 Klein: border marks are cropped, and every image still marked (off-center AND on-subject) has its zones erased then the whole photo re-rendered with the instruction to remove the watermarks — check the result, a mark nobody detected can survive'
+                        : 'Auto-crop off: EVERY marked image (border included) has its zones erased then the whole photo re-rendered by Flux.2 Klein with the instruction to remove the watermarks — check the result, a mark nobody detected can survive')
                       : caps.watermark_inpaint
                       ? (allowAutoCrop
                         ? 'Removes them: border marks are cropped, small off-center marks are inpainted (LaMa), on-subject marks are flagged for manual review'

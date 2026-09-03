@@ -780,7 +780,34 @@ def bank_watermark_inpaint(bank_id):
     data = request.get_json(silent=True) or {}
     return _start(banks.start_watermark_inpaint, _app(), LOCAL_USER, bank_id,
                   method=data.get('method') or 'auto',
-                  target=data.get('target') or 'all', **_scope(data))
+                  target=data.get('target') or 'all',
+                  klein_model=(data.get('klein_model') or '').strip() or None,
+                  **_scope(data))
+
+
+@bp.post('/bank/<int:bank_id>/watermark/klein-compare')
+def bank_watermark_klein_compare(bank_id):
+    """The bank half of "compare Klein models before the batch" — same service,
+    same contract as the dataset route, on the bank's own flagged rows. The
+    sample path goes through resolved_image_path (the one resolver every bank
+    reader must use), so a previously cleaned image is compared on what the
+    user actually sees."""
+    bank = banks.get_bank(LOCAL_USER, bank_id)
+    if not bank:
+        return jsonify({'error': 'not found'}), 404
+    data = request.get_json(silent=True) or {}
+    from ..models import BankImage
+    from ..services import watermark_klein
+    flagged = (BankImage.query
+               .filter_by(bank_id=bank_id, watermark_state='detected')
+               .order_by(BankImage.id.asc()).all())
+    rows = [(r.id, r.relpath, banks.resolved_image_path(bank, r),
+             r.watermark_regions, r.watermark_bbox)
+            for r in flagged]
+    out = watermark_klein.run_compare(
+        LOCAL_USER, rows, model=data.get('model'),
+        image_id=data.get('image_id'), seed=data.get('seed'))
+    return jsonify(out), 200
 
 
 @bp.post('/bank/<int:bank_id>/watermark/undo')
@@ -1207,6 +1234,52 @@ def bank_dups_resolve(bank_id):
                                  group=data.get('group'),
                                  keep_ids=data.get('keep_ids'),
                                  respect_existing_keep=False)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **out})
+
+
+@bp.post('/bank/<int:bank_id>/dups/distinct')
+def bank_dups_distinct(bank_id):
+    """≠ — "this group is not duplicates". Keeps every copy and stops proposing
+    the group; ``restore: true`` takes it back (for one group, or for the whole
+    bank when no group is named)."""
+    data = request.get_json(silent=True) or {}
+    return _distinct_action(bank_id, data, banks.mark_group_distinct,
+                            banks.restore_distinct, BankImage.dup_group)
+
+
+@bp.post('/bank/<int:bank_id>/semantic-dups/distinct')
+def bank_semantic_dups_distinct(bank_id):
+    """bank_dups_distinct for stage 2 (semantic near-duplicates)."""
+    data = request.get_json(silent=True) or {}
+    return _distinct_action(bank_id, data, banks.mark_semantic_group_distinct,
+                            banks.restore_distinct, BankImage.semantic_dup_group)
+
+
+def _distinct_action(bank_id, data, mark, restore, col):
+    """The ≠ pair of verbs, shared by both stages — they differ only in the column
+    the group id is read from, exactly like the resolve pair above."""
+    restoring = bool(data.get('restore'))
+    group = data.get('group')
+    # A group id is a NUMBER. Left to int() alone, {"group": true} became group 1
+    # — a veto on a group the caller never named — and {"group": {}} raised a
+    # TypeError that int()'s ValueError guard below does not catch, so a 500.
+    # bool is rejected explicitly because it IS an int in Python.
+    if group is not None and (isinstance(group, bool)
+                              or not isinstance(group, (int, str))):
+        return jsonify({'error': 'group must be a group id'}), 400
+    if not restoring and group is None:
+        # There is no "mark every group distinct": ≠ is a judgement about ONE
+        # group's copies, and a bulk form of it would silently answer questions
+        # the user has not looked at.
+        return jsonify({'error': 'group is required'}), 400
+    try:
+        if restoring:
+            out = restore(LOCAL_USER, bank_id,
+                          group=None if group is None else int(group), col=col)
+        else:
+            out = mark(LOCAL_USER, bank_id, int(group))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, **out})

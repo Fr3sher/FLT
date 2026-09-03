@@ -1275,6 +1275,9 @@ def dataset_watermarks_detect(dataset_id):
                     'stopped': bool(report.get('stopped')),
                     'located': report.get('located', counts['detected']),
                     'unlocated': report.get('unlocated', 0),
+                    'unanswered': report.get('unanswered', 0),
+                    'unanswered_note': report.get('unanswered_note'),
+                    'top_clean_score': report.get('top_clean_score'),
                     'errors': report.get('errors', 0)})
 
 
@@ -1395,7 +1398,8 @@ def dataset_watermarks_clean(dataset_id):
     """Apply crop/inpaint/review routing to the 'detected' images. Crop uses PIL. The
     inpaint engine follows {method:'auto'|'lama'|'klein'} (default 'auto'): LaMa follows
     Settings > Captioning & quality (Auto/GPU/CPU) and pauses ComfyUI through the
-    exclusive vision window on a GPU pass; Klein does masked crop-and-stitch inpaint
+    exclusive vision window on a GPU pass; Klein erases the detected zones and then
+    re-renders the whole photo (one "remove watermark" edit of the entire frame)
     through the serialized ComfyUI queue (no vision window — that would deadlock the
     worker). Returns counts + the inpaint error. Optional {image_ids:[...]} scopes the
     pass to a subset (the review lightbox cleans one image at a time); omitted → every
@@ -1445,6 +1449,31 @@ def dataset_watermarks_clean(dataset_id):
             return _klein_missing_response(e.missing)
         return _map_error(e)
     return jsonify({'ok': True, 'error': error, **counts})
+
+
+@bp.post('/dataset/<int:dataset_id>/watermarks/klein-compare')
+def dataset_watermarks_klein_compare(dataset_id):
+    """Try ONE Klein model on ONE flagged image, without touching it — the
+    judging half of "compare models before the batch". The dialog calls this
+    once per ticked model with the SAME image and seed, so the only variable
+    across its grid is the model. Always 200; failures ride in the body,
+    because the dialog renders them inline per candidate."""
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
+        return jsonify({'error': 'not found'}), 404
+    data = request.get_json(silent=True) or {}
+    from ..models import FaceDatasetImage
+    from ..services import watermark_klein
+    flagged = (FaceDatasetImage.query
+               .filter_by(dataset_id=dataset_id, watermark_state='detected')
+               .filter(FaceDatasetImage.filename.isnot(None))
+               .order_by(FaceDatasetImage.id.asc()).all())
+    rows = [(i.id, i.filename, svc._img_path(i), i.watermark_regions, i.watermark_bbox)
+            for i in flagged]
+    out = watermark_klein.run_compare(
+        LOCAL_USER, rows, model=data.get('model'),
+        image_id=data.get('image_id'), seed=data.get('seed'))
+    return jsonify(out), 200
 
 
 @bp.post('/dataset/<int:dataset_id>/watermarks/dismiss')
@@ -2502,4 +2531,9 @@ def index_config():
         # and it isn't there" into an actionable 409, and hiding the option instead
         # would leave someone who wants it with nothing to click and no explanation.
         'krea_sampler_presets': list(KREA_SAMPLER_PRESETS),
+        # The krea_hires.* setting as numbers, so the Studio panel's "Settings
+        # default" option can SAY what it is ("off" / "1.5x") instead of being a
+        # blind deferral. Numbers, not the injector's resolved form: a panel
+        # needs the 1.0 to print "off", not a None it would have to translate.
+        'krea_hires_defaults': lts.krea_hires_defaults(),
     })

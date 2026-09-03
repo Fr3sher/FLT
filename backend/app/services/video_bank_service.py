@@ -37,6 +37,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -70,7 +71,22 @@ BANK_MAX_FILES = 5000
 # Canonical order. Detection needs the probe's fps and duration; thumbnails need
 # the bounds detection produced. Running them out of order is not a preference,
 # it is a pass that finds nothing to do.
-PIPELINE_STEPS = ('probe', 'detect', 'thumbs')
+# Every pass the pipeline can chain, in the order their inputs demand: probe
+# reads the files, detect needs the probe, thumbs need the shots, measure and
+# embed need the shots, dedup reuses the vectors embed cached (running it first
+# finds nothing and says so honestly, which reads like a bug), camera consumes
+# nothing and produces nothing anyone else needs.
+#
+# 🗣 Describe is deliberately NOT here: its wording choice belongs at the moment
+# of the click (see DescribeShotsDialog), and folding it into a walk-away chain
+# would caption a whole bank with whatever the default happened to be.
+PIPELINE_STEPS = ('probe', 'detect', 'thumbs', 'measure', 'embed', 'dedup',
+                  'camera')
+
+# What `steps=None` means — the three the chain has always run. The extras are
+# per-run choices the launch window ticks, never a silent widening of an
+# existing caller's request.
+PIPELINE_DEFAULT_STEPS = ('probe', 'detect', 'thumbs')
 
 TRIAGE_STATUSES = ('pending', 'keep', 'reject')
 
@@ -558,6 +574,24 @@ def shot_detect_info(bank: VideoBank) -> dict:
     }
 
 
+def _caption_runtime() -> dict:
+    """WHAT RUNS THE MODEL, stated up front on the polled payload. This app
+    drives Ollama, LM Studio and JoyCaption for image work, so "which engine is
+    this?" is a fair question with a wrong-guess cost — and since the backend
+    now follows what the machine HAS, the answer is the resolver's, cached, not
+    a hardcoded sentence."""
+    from . import video_caption
+    from ..capabilities import bank_scoring_gpu_available
+    resolved = video_caption.resolve_backend()
+    return {'engine': resolved['engine'], 'label': resolved['label'],
+            'backend': resolved['backend'], 'model': resolved['model'],
+            'available': resolved['available'], 'reason': resolved['reason'],
+            # 'gpu'/'cpu' is the pinned vocabulary of this payload; a local
+            # server's device is ITS business, so that side says nothing.
+            'device': (('gpu' if bank_scoring_gpu_available() else 'cpu')
+                       if resolved['backend'] == 'transformers' else None)}
+
+
 def caption_model_info() -> dict:
     """Which checkpoint will caption, and whether this machine already has it.
 
@@ -572,7 +606,17 @@ def caption_model_info() -> dict:
             # The prompt style matters MORE than the checkpoint on real footage
             # (see video_caption's measurement), so the picker rides here too.
             'style': video_caption.configured_style(),
-            'styles': video_caption.style_choices()}
+            'styles': video_caption.style_choices(),
+            # And the vetted checkpoints, `cached` included per entry — the
+            # launch window must be able to say "this one downloads first".
+            'models': video_caption.model_choices(),
+            # WHAT RUNS THE MODEL, stated up front. This app drives Ollama,
+            # LM Studio and JoyCaption for image work, so "which engine is
+            # this?" is a fair question with a wrong-guess cost (waiting on an
+            # Ollama that has nothing to do with it). Video captioning is LDS's
+            # own local worker — Hugging Face Transformers in the inference
+            # venv — and the device is the same answer start_caption will give.
+            'runtime': _caption_runtime()}
 
 
 def _capability() -> dict:
@@ -682,6 +726,8 @@ def _clip_row(clip: VideoClip, relpaths: dict, thresholds=None) -> dict:
         # shows why a hybrid search moved a shot up, and the promotion dialog
         # counts what has none. One field, three readers, no second request.
         'caption': clip.caption, 'caption_state': clip.caption_state,
+        'caption_fields': _fields_dict(clip.caption_fields),
+        'caption_tokens': clip.caption_tokens,
         'promoted_dataset_id': clip.promoted_dataset_id,
         'metrics': metrics if metrics and metrics.get('metrics_state') == 'ok' else None,
         'flags': flags,
@@ -1132,12 +1178,16 @@ def _reusable_probs(bank_id, src: VideoSource, path):
         threshold=shot_threshold_for(bank_id, src))
 
 
-def _insert_clips(bank_id, src: VideoSource, shots) -> int:
+def _insert_clips(bank_id, src: VideoSource, shots, *, skip_bounds=None) -> int:
     """Persist the detector's bounds AS GIVEN.
 
     start_s/end_s are copied verbatim because they are canonical; the frame
     indices are stored because they are what the detector actually said, and they
-    make a later disagreement debuggable. Nothing ever cuts from them."""
+    make a later disagreement debuggable. Nothing ever cuts from them.
+
+    `skip_bounds` names the spans this file ALREADY has a row for — kept by the
+    re-cut, promoted, or hand-made — so the same shot is never stored twice."""
+    skip = set(skip_bounds or ())
     rows = []
     for shot in shots or []:
         try:
@@ -1146,6 +1196,8 @@ def _insert_clips(bank_id, src: VideoSource, shots) -> int:
         except (KeyError, TypeError, ValueError):
             continue
         if end_s <= start_s:
+            continue
+        if _bounds_key(start_s, end_s) in skip:
             continue
         transition = shot.get('transition')
         rows.append({
@@ -1275,7 +1327,19 @@ def _load_probs_or_raise(bank_id, source_id):
     return probs
 
 
-def _drop_clips_of(bank_id, source_id, *, replace_manual) -> dict:
+def _bounds_key(start_s, end_s):
+    """The identity of a SPAN, for matching a re-cut against what exists.
+
+    Rounded to the microsecond: the detector recomputes bounds from the same
+    cached probabilities with the same arithmetic, so equal shots come back
+    bit-identical — the rounding only protects against a float that made a
+    round trip through SQLite in a different build. Never a tolerance window:
+    two spans that differ by a millisecond are two different spans, and
+    inheriting a caption across them would describe the wrong footage."""
+    return (round(float(start_s), 6), round(float(end_s), 6))
+
+
+def _drop_clips_of(bank_id, source_id, *, replace_manual, keep_bounds=None) -> dict:
     """Delete the clips a re-cut is about to replace, and everything that
     described them.
 
@@ -1296,13 +1360,26 @@ def _drop_clips_of(bank_id, source_id, *, replace_manual) -> dict:
     the bank's .npz on purpose (rewriting tens of megabytes inside a click), and
     are unreachable the moment their row is gone — the same trade
     `_forget_measurements` documents for a trim.
+
+    A SHOT WHOSE BOUNDS DID NOT MOVE IS NOT REPLACED. `keep_bounds` carries the
+    spans the re-cut is about to produce; a clip landing on one of them keeps
+    its row — and with it its triage decision, its caption, its measurements and
+    its thumbnail, all of which describe that exact span and remain true of it.
+    That is sound precisely because a threshold change selects a SUBSET of the
+    same boundaries and never shifts one (shot_boundaries.apply_min_length), so
+    an equal span is the SAME shot rather than a coincidence. A MERGED shot
+    (A∪B, one boundary gone) matches nothing and is rebuilt from scratch, which
+    is the honest outcome: it is new footage in one clip and nothing measured
+    about A still describes it.
     """
+    keep = set(keep_bounds or ())
     query = (VideoClip.query.filter_by(bank_id=bank_id, source_id=int(source_id))
              .filter(VideoClip.promoted_dataset_id.is_(None)))
     if not replace_manual:
         query = query.filter(db.or_(VideoClip.detector.is_(None),
                                     VideoClip.detector != 'manual'))
-    doomed = query.all()
+    doomed = [c for c in query.all()
+              if _bounds_key(c.start_s, c.end_s) not in keep]
     manual = sum(1 for clip in doomed if clip.detector == 'manual')
     for clip in doomed:
         try:
@@ -1312,7 +1389,20 @@ def _drop_clips_of(bank_id, source_id, *, replace_manual) -> dict:
                         '%s', bank_id, clip.id)
         db.session.delete(clip)
     db.session.flush()
-    return {'removed': len(doomed), 'replaced_manual': manual}
+    return {'removed': len(doomed), 'replaced_manual': manual,
+            'kept': len(keep & _existing_bounds(bank_id, source_id))}
+
+
+def _existing_bounds(bank_id, source_id) -> set:
+    """The spans this file still holds — every row a re-cut must not duplicate.
+
+    Includes the clips the drop SPARED for any reason: promoted (never touched),
+    hand-made on a bank-wide pass, and now the unmoved ones. Re-inserting a shot
+    on a span that already has a row is how a re-cut used to hand a promoted
+    clip a twin — measured against this set at insert time instead."""
+    rows = (db.session.query(VideoClip.start_s, VideoClip.end_s)
+            .filter_by(bank_id=bank_id, source_id=int(source_id)).all())
+    return {_bounds_key(a, b) for a, b in rows}
 
 
 def recut_source(user_id, bank_id, source_id, threshold=None) -> dict | None:
@@ -1334,12 +1424,21 @@ def recut_source(user_id, bank_id, source_id, threshold=None) -> dict | None:
         raise ValueError('this file has not been probed, so its frame rate is '
                          'unknown — run Probe first')
     clips = _shot_config().clips_from_probs(probs, fps_native=fps, threshold=thr)
-    dropped = _drop_clips_of(bank_id, src.id, replace_manual=True)
-    made = _insert_clips(bank_id, src, clips)
+    # What the new threshold produces, so the drop can spare the shots it
+    # reproduces exactly — their triage and captions still describe them.
+    bounds = {_bounds_key(c['start_s'], c['end_s']) for c in clips
+              if c.get('start_s') is not None and c.get('end_s') is not None}
+    dropped = _drop_clips_of(bank_id, src.id, replace_manual=True,
+                             keep_bounds=bounds)
+    made = _insert_clips(bank_id, src, clips,
+                         skip_bounds=_existing_bounds(bank_id, src.id))
     src.detect_state = 'ok'
     db.session.commit()
-    return {'clips': made, 'threshold': thr, 'counts': _counts(bank_id),
-            **dropped}
+    # `clips` stays what it always meant — how many shots this file HAS now —
+    # so a caller that only reads that number is unaffected by the keeping.
+    # `kept` says how many of them are the old rows, work and all.
+    return {'clips': made + dropped['kept'], 'threshold': thr,
+            'counts': _counts(bank_id), **dropped}
 
 
 def recut_bank(user_id, bank_id, threshold=None) -> dict | None:
@@ -1354,7 +1453,7 @@ def recut_bank(user_id, bank_id, threshold=None) -> dict | None:
     rows = (VideoSource.query.filter_by(bank_id=bank_id)
             .order_by(VideoSource.id.asc()).all())
     from . import shot_probs
-    done = made = skipped = single = 0
+    done = made = skipped = single = kept = 0
     for src in rows:
         if src.detect_state == SINGLE_SHOT_STATE:
             single += 1
@@ -1369,14 +1468,22 @@ def recut_bank(user_id, bank_id, threshold=None) -> dict | None:
                else shot_threshold_for(bank_id, src))
         clips = _shot_config().clips_from_probs(probs, fps_native=src.fps_native,
                                                 threshold=thr)
-        _drop_clips_of(bank_id, src.id, replace_manual=False)
-        made += _insert_clips(bank_id, src, clips)
+        bounds = {_bounds_key(c['start_s'], c['end_s']) for c in clips
+                  if c.get('start_s') is not None and c.get('end_s') is not None}
+        outcome = _drop_clips_of(bank_id, src.id, replace_manual=False,
+                                 keep_bounds=bounds)
+        kept += outcome['kept']
+        # Same meaning as the per-file path: shots the file now has.
+        made += outcome['kept'] + _insert_clips(
+            bank_id, src, clips, skip_bounds=_existing_bounds(bank_id, src.id))
         done += 1
     db.session.commit()
     # `single_shot` is counted apart from `skipped`: one is "this file has no
     # cache and needs a real pass", the other is "you told me not to". Merging
     # them would offer the user a fix for something that is not broken.
-    return {'sources': done, 'clips': made, 'skipped': skipped,
+    # `kept` is the answer to the question that stops people from touching the
+    # slider at all: what happens to the shots I already triaged and captioned.
+    return {'sources': done, 'clips': made, 'kept': kept, 'skipped': skipped,
             'single_shot': single, 'counts': _counts(bank_id)}
 
 
@@ -2048,13 +2155,17 @@ def _camera_job(bank_id, rescan):
 
 
 def _caption_available():
-    """None when this install can caption, else the sentence saying why not."""
-    from .video_caption_worker import unavailable_reason
-    return unavailable_reason()
+    """None when this install can caption, else the sentence saying why not.
+
+    Asks the backend RESOLVER, not the transformers probe alone: a machine
+    without a torch Python but with Ollama or LM Studio running CAN caption,
+    and refusing it the old sentence was the lie this replaces."""
+    from . import video_caption
+    return video_caption.caption_unavailable_reason()
 
 
 def start_caption(app, user_id, bank_id, recaption=False, include_edited=False,
-                  style=None):
+                  style=None, model=None):
     """🗣 Wave 5's pass: what HAPPENS in each shot, in prose.
 
     The caption is the text the hybrid search matches AND the training prompt the
@@ -2067,21 +2178,30 @@ def start_caption(app, user_id, bank_id, recaption=False, include_edited=False,
     whenever the card is usable — and is refused outright while a training run
     owns it, rather than competing with it."""
     from ..capabilities import bank_scoring_gpu_available
+    from . import video_caption
     _require_free_bank(user_id, bank_id)
     reason = _caption_available()
     if reason:
         raise RuntimeError(reason)
     use_gpu = bank_scoring_gpu_available()
-    if use_gpu:
+    # A local-LLM pass drives the SAME GPU through Ollama/LM Studio while
+    # `use_gpu` (the Score interpreter's CUDA probe) reads False on exactly the
+    # machines that route there. Without this, a multi-hour caption pass ran
+    # beside a training run with no refusal and no exclusive window — while the
+    # image lane takes the window unconditionally around its Ollama passes.
+    local_llm = video_caption.resolve_backend()['backend'] == 'local_llm'
+    if use_gpu or local_llm:
         busy = _gpu_busy_reason()
         if busy:
             raise RuntimeError(busy)
     return bank_jobs.start(app, job_key(bank_id), 'caption',
                            _caption_job(bank_id, bool(recaption),
-                                        bool(include_edited), use_gpu, style))
+                                        bool(include_edited), use_gpu, style,
+                                        model))
 
 
-def _caption_job(bank_id, recaption, include_edited, use_gpu, style=None):
+def _caption_job(bank_id, recaption, include_edited, use_gpu, style=None,
+                 model_choice=None):
     def run(job):
         from contextlib import nullcontext
 
@@ -2089,31 +2209,51 @@ def _caption_job(bank_id, recaption, include_edited, use_gpu, style=None):
         from . import video_caption
         total = video_caption.pending_clips(bank_id, recaption,
                                             include_edited).count()
-        model = video_caption.configured_model()
-        # A per-run choice with the config key as its default: captioning ONE
-        # bank plainly must not silently re-point every other bank.
+        # Both per-run choices resolve the same way: an explicit legal pick, else
+        # the config default — captioning ONE bank plainly (or on the 8B) must
+        # not silently re-point every other bank.
+        model = video_caption.resolve_model(model_choice)
         chosen_style = (style if style in video_caption.CAPTION_STYLES
                         else video_caption.configured_style())
-        # WHICH model, in the line the user is already watching: two checkpoints
-        # do not write comparable captions, so "captioning shots" alone leaves a
-        # bank nobody can reason about after the setting changes.
-        detail = (f'captioning shots with {model} / {chosen_style} prompt '
-                  f'({"GPU" if use_gpu else "CPU"})')
-        # And whether it is even here yet. The download is allowed — blocking it
-        # would ship a model setting that cannot point anywhere new — but never
-        # in silence: a pass sitting at 0/470 while gigabytes cross someone's
-        # connection is indistinguishable from a hang.
-        notice = video_caption.download_notice(model)
+        backend = video_caption.resolve_backend()
+        # WHICH engine and model, in the line the user is already watching: two
+        # checkpoints do not write comparable captions, so "captioning shots"
+        # alone leaves a bank nobody can reason about after a setting changes.
+        if backend['backend'] == 'local_llm':
+            detail = (f'captioning shots through {backend["label"]} with '
+                      f'{backend["model"] or "its vision model"} / '
+                      f'{chosen_style} prompt')
+            # No HF download can happen on this path — the model lives on the
+            # user's own server — so no download notice either.
+            notice = ''
+        else:
+            detail = (f'captioning shots with {model} / {chosen_style} prompt '
+                      f'({"GPU" if use_gpu else "CPU"})')
+            # And whether it is even here yet. The download is allowed — blocking
+            # it would ship a model setting that cannot point anywhere new — but
+            # never in silence: a pass sitting at 0/470 while gigabytes cross
+            # someone's connection is indistinguishable from a hang.
+            notice = video_caption.download_notice(model)
         if notice:
             detail = f'{detail} — {notice}'
         bank_jobs.progress(job, done=0, total=total, detail=detail)
-        window = (gpu_exclusive_vision_window(flag_ttl=3600) if use_gpu
+        # The window also wraps a local-LLM run: it is the same card, whatever
+        # answers the Score interpreter's CUDA probe (see start_caption).
+        window = (gpu_exclusive_vision_window(flag_ttl=3600)
+                  if (use_gpu or backend['backend'] == 'local_llm')
                   else nullcontext())
         with window:
             out = video_caption.run_captions(
                 bank_id, recaption, include_edited=include_edited,
                 use_gpu=use_gpu, model=model, style=chosen_style,
+                backend=backend,
                 on_clip=lambda: bank_jobs.bump(job),
+                # The failure streak, surfaced WHILE it happens (the image
+                # lane's _FENCE_STREAK_WARN doctrine): a dead server fails
+                # every clip the same way, and the user watching the bar must
+                # be able to stop instead of paying for a pass that writes
+                # nothing but error rows.
+                on_detail=lambda msg: bank_jobs.progress(job, detail=msg),
                 should_stop=lambda: bank_jobs.cancelled(job))
         detail = (f'done — {out["captioned"]} shot(s) captioned by '
                   f'{out["model"]} ({out["style"]} prompt)')
@@ -2175,30 +2315,60 @@ def _thumbs_job(bank_id, rethumb):
 
 def _sanitize_steps(steps):
     if not steps:
-        return list(PIPELINE_STEPS)
+        return list(PIPELINE_DEFAULT_STEPS)
     wanted = {s for s in steps if s in PIPELINE_STEPS}
     return [s for s in PIPELINE_STEPS if s in wanted]      # canonical order
 
 
+# The steps that will want the card. Named rather than inferred so adding a
+# runner cannot silently skip the refusal above.
+_GPU_PIPELINE_STEPS = ('embed', 'camera')
+
+
 def start_pipeline(app, user_id, bank_id, steps=None):
-    """Probe → detect → thumbnails, chained, with a report that survives the night.
+    """The preparation passes, chained, with a report that survives the night.
 
     The passes are also individually reachable, but chaining them is what a user
     actually wants on a fresh bank: each one's input is the previous one's output,
     and running them by hand in the wrong order finds nothing to do and says so in
-    a way that reads like a bug."""
+    a way that reads like a bug.
+
+    `steps` picks which — omitted means the three this chain has always run
+    (PIPELINE_DEFAULT_STEPS). The launch window offers the rest, minus 🗣
+    Describe, whose wording belongs to its own window."""
     _require_free_bank(user_id, bank_id)
     wanted = _sanitize_steps(steps)
     if not wanted:
         raise ValueError('no pipeline steps selected')
+    # The same courtesy refusal the GPU passes make on their own: a chain that
+    # will take the card must not start while a training run owns it. Checked
+    # once, here, rather than three steps in — a pipeline that dies mid-way has
+    # already spent the cheap steps.
+    if any(step in _GPU_PIPELINE_STEPS for step in wanted):
+        busy = _gpu_busy_reason()
+        if busy:
+            raise RuntimeError(busy)
     return bank_jobs.start(app, job_key(bank_id), 'pipeline',
                            _pipeline_job(user_id, bank_id, wanted))
 
 
+def _pipeline_embed_job(bank_id):
+    from ..capabilities import bank_scoring_gpu_available
+    return _embed_job(bank_id, False, bank_scoring_gpu_available())
+
+
+# Each entry builds the SAME job the standalone button builds — the chain adds
+# no second implementation of any pass, so a fix to one is a fix to both. The
+# GPU-hungry ones take the exclusive vision window themselves, inside their own
+# job, exactly as they do when launched alone.
 _STEP_RUNNERS = {
     'probe': lambda bank_id: _probe_job(bank_id, False),
     'detect': lambda bank_id: _detect_job(bank_id, False),
     'thumbs': lambda bank_id: _thumbs_job(bank_id, False),
+    'measure': lambda bank_id: _measure_job(bank_id, False),
+    'embed': _pipeline_embed_job,
+    'dedup': lambda bank_id: _dedup_job(bank_id, None),
+    'camera': lambda bank_id: _camera_job(bank_id, False),
 }
 
 
@@ -2367,9 +2537,17 @@ def _resolve_edge_inset(value):
     return inset
 
 
+# How many clips ONE shot may contribute when long shots are sliced. A single
+# forty-minute take would otherwise become the whole dataset on its own —
+# `top_source_share` already warns about that at the source level, and this is
+# the same guard one level down. Eight is generous: at the longest H3 clip
+# length that is seventy seconds of one shot.
+MAX_SLICES_PER_CLIP = 8
+
+
 def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
                   frames=None, size=None, max_per_source=None,
-                  edge_inset_s=None, trigger_word=None):
+                  edge_inset_s=None, trigger_word=None, slice_long=False):
     """Encode the KEPT clips into a new video dataset.
 
     Everything that can be refused is refused HERE, synchronously, before a single
@@ -2426,6 +2604,17 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
                     and not video_clip_export.fits_frames(span - 2 * inset, frames,
                                                           profile['fps'])):
                 would_drop += 1
+    # What SLICING would add, counted before the encode like every other limit
+    # here: a shot long enough for several clips yields them all instead of its
+    # first N frames. Zero when the option is off, so the line only appears for
+    # someone who asked for it.
+    extra_slices = 0
+    if slice_long and profile.get('fps'):
+        for clip in rows:
+            n = len(video_clip_export.slice_spans(
+                clip.start_s, clip.end_s, frames, profile['fps'],
+                inset_s=inset, limit=MAX_SLICES_PER_CLIP))
+            extra_slices += max(0, n - 1)
     # An empty sidecar trains as an EMPTY PROMPT and ai-toolkit says nothing about
     # it, so how many clips are about to ship without one is a limit that has to
     # be visible BEFORE the encode rather than discovered in a training run.
@@ -2438,6 +2627,24 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
     high_fps_ids = {vs.id for vs in VideoSource.query.filter(
         VideoSource.id.in_({c.source_id for c in rows}),
         VideoSource.fps_native >= 48).all()} if rows else set()
+    # Words of the COMPOSED prompt — trigger, caption, measured camera and
+    # audio lines, exactly what the .txt will hold — against the budget the
+    # target's OWN vendor published (WAN: 200/100 words; nothing invented for
+    # targets without one). The trainers truncate past their encoder budget in
+    # silence, so an over-long caption has to be visible BEFORE the encode,
+    # like the uncaptioned count next to it.
+    budget = profile.get('caption_word_budget')
+    token_budget = profile.get('caption_token_budget')
+    keeps_audio = bool(profile.get('audio'))
+    # The SERVED text — the short form where the paragraph would not fit the
+    # encoder window (C12-C) — so both gauges below describe what the .txt
+    # will hold, not a paragraph the export replaced.
+    plans = [plan_sidecar(trigger_word, c.caption, c.metrics_json,
+                          keeps_audio=keeps_audio, fields_json=c.caption_fields,
+                          caption_tokens=c.caption_tokens, token_budget=token_budget)
+             for c in rows]
+    word_counts = [len(p['text'].split()) for p in plans]
+    token_counts = [p['tokens'] for p in plans]
     composition = {
         'high_fps_clips': sum(1 for c in rows if c.source_id in high_fps_ids),
         'sources': len(per_source),
@@ -2448,6 +2655,26 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
         # Clips the INSET removes — not clips that were never long enough. Those
         # keep their own count, because only the first is fixed by lowering it.
         'inset_would_drop': would_drop,
+        # Clips the slicing would ADD (never the total): the number that says
+        # what the option is worth on THIS bank.
+        'slice_extra_clips': extra_slices,
+        'caption_word_budget': budget,
+        'caption_words_max': max(word_counts) if word_counts else 0,
+        'over_caption_budget': (sum(1 for w in word_counts if w > budget)
+                                if budget else 0),
+        # Tokens — the count that decides, where words only warn (C12-C).
+        # Measured by the caption pass when it had umT5's tokenizer, estimated
+        # otherwise; `tokens_measured` says how many of the counts are real.
+        'caption_token_budget': token_budget,
+        'caption_tokens_max': max(token_counts) if token_counts else 0,
+        'over_token_budget': (sum(1 for t in token_counts if t > token_budget)
+                              if token_budget else 0),
+        'served_short': sum(1 for p in plans if p['served_short']),
+        # Over the window WITH a tail the floor refused (cut mid-write, or too
+        # thin): these ship whole and stay in over_token_budget — this counter
+        # keeps them distinguishable from healthy substitutions.
+        'short_blocked': sum(1 for p in plans if p.get('tail_incomplete')),
+        'tokens_measured': sum(1 for p in plans if p['measured']),
     }
     if not clip_ids:
         raise ValueError('nothing to promote — keep some clips first')
@@ -2489,7 +2716,8 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
 
     bank_jobs.start(app, job_key(bank_id), 'promote',
                     _promote_job(bank.id, dataset.id, clip_ids, target_profile,
-                                 frames, size, inset, trigger),
+                                 frames, size, inset, trigger,
+                                 slice_long=bool(slice_long)),
                     total=len(clip_ids))
     return {'id': dataset.id, 'name': dataset.name,
             'output_dir': dataset.output_dir, 'clips': len(clip_ids),
@@ -2497,7 +2725,7 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
 
 
 def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size,
-                 edge_inset_s=0.0, trigger_word=None):
+                 edge_inset_s=0.0, trigger_word=None, slice_long=False):
     """One ffmpeg per kept clip, straight into a FLAT folder.
 
     NOT ONE SUBFOLDER, EVER. ai-toolkit's dataset scan is os.walk — recursive —
@@ -2529,9 +2757,17 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size,
         # "too short once the inset was taken off". None only for a profile that
         # declares no fps, which start_promote already refused.
         profile_fps = (video_targets.get(profile_key) or {}).get('fps')
+        # Whether this target keeps its audio track — the gate on the measured
+        # `Audio:` line: a Wan sidecar must never discuss a soundtrack its own
+        # export strips.
+        profile_now = video_targets.get(profile_key) or {}
+        keeps_audio = bool(profile_now.get('audio'))
+        # The encoder window the sidecars are planned against (C12-C) — read
+        # HERE, in the job that writes them, not smuggled from the preflight.
+        token_budget = profile_now.get('caption_token_budget')
 
         index = 0
-        encoded = too_short = failed = dropped_by_inset = 0
+        encoded = too_short = failed = dropped_by_inset = sliced = 0
         for clip_id in clip_ids:
             if bank_jobs.cancelled(job):
                 break
@@ -2544,22 +2780,35 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size,
                 failed += 1
                 bank_jobs.bump(job)
                 continue
-            # The filename index advances only on a clip that LANDED, so the folder
-            # is contiguous: trainers walk it in filename order and a gap reads as
-            # a dataset someone edited by hand.
-            candidate = index + 1
-            dst = out_dir / video_clip_export.clip_filename(candidate)
             # Both bounds pulled inwards: a shot boundary is where a cut just
             # happened, so the frames around BOTH ends are disproportionately
             # dissolves and fades. Zero by default — see _resolve_edge_inset.
             start_s = clip.start_s + edge_inset_s
             end_s = clip.end_s - edge_inset_s
-            try:
+            # SLICING (opt-in): a shot long enough for several clips yields them
+            # all, end to end, instead of its first N frames. The inset is
+            # already in the bounds above and is NOT re-applied per slice — the
+            # joins between slices are not shot boundaries. Off, the shot is one
+            # span exactly as before, so nothing about the default path moved.
+            spans = ([(a, b) for a, b in video_clip_export.slice_spans(
+                start_s, end_s, frames, profile_fps,
+                limit=MAX_SLICES_PER_CLIP)]
+                if (slice_long and profile_fps) else [(start_s, end_s)])
+            if not spans:
+                spans = [(start_s, end_s)]      # let the encoder speak the refusal
+            landed_any = False
+            for span_start, span_end in spans:
+              # The filename index advances only on a clip that LANDED, so the
+              # folder is contiguous: trainers walk it in filename order and a
+              # gap reads as a dataset someone edited by hand.
+              candidate = index + 1
+              dst = out_dir / video_clip_export.clip_filename(candidate)
+              try:
                 args = video_clip_export.command_for_profile(
                     ffmpeg=ffmpeg, src=src, dst=str(dst),
-                    start_s=start_s, end_s=end_s,
+                    start_s=span_start, end_s=span_end,
                     profile_key=profile_key, frames=frames, size=size)
-            except video_clip_export.ClipTooShort:
+              except video_clip_export.ClipTooShort:
                 # Loud, and it leaves NOTHING behind: a short clip encoded anyway
                 # is a file ai-toolkit trains as repeated stills without a word.
                 #
@@ -2574,22 +2823,19 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size,
                     dropped_by_inset += 1
                 else:
                     too_short += 1
-                bank_jobs.bump(job)
-                continue
-            except ValueError as e:
+                break                       # a shorter later slice cannot fit either
+              except ValueError as e:
                 failed += 1
                 logger.warning('video promote: %s', e)
-                bank_jobs.bump(job)
-                continue
-            code, err = _run_ffmpeg(args)
-            if code != 0 or not dst.exists():
+                break
+              code, err = _run_ffmpeg(args)
+              if code != 0 or not dst.exists():
                 failed += 1
                 logger.warning('video promote: ffmpeg exited %s: %s', code, err)
                 try:
                     dst.unlink()            # never leave a half file in a dataset
                 except OSError:
                     pass
-                bank_jobs.bump(job)
                 continue
             # THE SIDECAR IS THE PROMPT. Written for every clip that lands, with
             # the caption when there is one — and still written, empty, when
@@ -2597,19 +2843,30 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size,
             # future on a missing one, and diffusion-pipe drops the clip. An
             # EMPTY sidecar is not neutral either, it trains as an empty prompt
             # in silence, which is what the pre-flight count exists to surface.
-            video_clip_export.write_sidecar(
-                str(dst), _with_trigger(trigger_word, clip.caption))
-            index = candidate
-            encoded += 1
-            db.session.add(VideoDatasetClip(
-                dataset_id=dataset_id, filename=dst.name, caption=clip.caption,
-                source_bank_id=bank_id, source_clip_id=clip.id,
-                src_relpath=relpath, start_s=clip.start_s, end_s=clip.end_s))
-            clip.promoted_dataset_id = dataset_id
-            db.session.commit()
+              video_clip_export.write_sidecar(
+                  str(dst), plan_sidecar(trigger_word, clip.caption, clip.metrics_json,
+                                         keeps_audio=keeps_audio,
+                                         fields_json=clip.caption_fields,
+                                         caption_tokens=clip.caption_tokens,
+                                         token_budget=token_budget)['text'])
+              index = candidate
+              encoded += 1
+              if landed_any:
+                  sliced += 1               # every slice past the first is new footage
+              landed_any = True
+              # The row carries THIS slice's bounds, not the shot's: they are
+              # what the file holds, and what a later edit or re-encode reads.
+              db.session.add(VideoDatasetClip(
+                  dataset_id=dataset_id, filename=dst.name, caption=clip.caption,
+                  source_bank_id=bank_id, source_clip_id=clip.id,
+                  src_relpath=relpath, start_s=span_start, end_s=span_end))
+              clip.promoted_dataset_id = dataset_id
+              db.session.commit()
             bank_jobs.bump(job)
 
         detail = f'done — {encoded} clips encoded'
+        if sliced:
+            detail += f' ({sliced} from slicing long shots)'
         if too_short:
             detail += f', {too_short} too short for {frames} frames'
         if dropped_by_inset:
@@ -2621,7 +2878,7 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size,
         if failed:
             detail += f', {failed} failed'
         bank_jobs.progress(job, detail=detail)
-        return {'encoded': encoded, 'too_short': too_short,
+        return {'encoded': encoded, 'too_short': too_short, 'sliced': sliced,
                 'dropped_by_inset': dropped_by_inset, 'failed': failed}
     return run
 
@@ -2650,6 +2907,181 @@ def _with_trigger(trigger, caption) -> str:
     return f'{trigger}, {caption}' if caption else trigger
 
 
+# A clip counts as effectively silent when nearly every measured window sat at
+# the floor. 0.98 and not 1.0: one window of handling noise in a five-second
+# clip does not make it audible footage, and the training sentence it earns is
+# still the true one.
+_NEAR_SILENCE_RATIO = 0.98
+
+
+# --- C12-C: tokens, where the word counts are only a proxy ---------------------------
+# Measured with umT5's own tokenizer, twice: 48 bench captions (1.35-1.36 per
+# word) and, adversarially, the 984 captions of a live bank (mean 1.371,
+# p95 1.536, max 1.79 — refutation run, 2026-09-01). So 1.4 does NOT round up
+# per caption (it undercounts 26% of them); what it IS is safe against the
+# 512-token window for this prompt's English, because the ratio FALLS with
+# length (1.40 at 25-50 words → 1.33 at 75-100) and none of 984 real + 1600
+# synthetic captions crossed the window undetected. The structural blind spot
+# was CJK — str.split() saw 42 tokens where umT5 saw 540 — which is what the
+# character term in estimate_tokens() exists for.
+TOKENS_PER_WORD = 1.4
+# Han, kana, hangul and fullwidth forms: umT5 spends roughly one to two tokens
+# PER CHARACTER there (the refutation's ZH caption measured ~1.8/char), and
+# spaces are no word boundary at all. Counted on top of the word term — the
+# slight double-count on mixed text errs, deliberately, toward "over budget".
+CJK_TOKENS_PER_CHAR = 2.0
+# What the measured lines append: the worst camera phrase costs 19 umT5 tokens
+# ("pan right, pan down, zoom out, rolling camera, handheld shot"), the audio
+# line 6 (today no budgeted profile keeps audio, but a future one must not
+# starve), one more for the join. The TRIGGER is no longer in here: it is an
+# arbitrary user string, and a 5-word invented one measured 42 tokens on its
+# own — no flat reserve survives that. plan_sidecar bounds it per sidecar at
+# sentencepiece's provable ceiling instead (one token per input byte).
+SIDECAR_TOKEN_RESERVE = 26
+
+
+_CJK_CHARS = re.compile(r'[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff'
+                        r'\uac00-\ud7af\uff00-\uffef]')
+
+
+def estimate_tokens(text) -> int:
+    """umT5 tokens a text costs, estimated — the fallback for a caption the
+    pass could not measure (no tokenizer on this machine, or a human edit).
+
+    Words × 1.4 for spaced scripts, plus a per-character term for CJK — where
+    str.split() is blind and the refutation measured a 540-token caption
+    estimated at 42, waved through a 512 window that then cut 68 tokens in
+    silence. Mixed text double-counts a little; that error points at "over
+    budget", which is the survivable direction."""
+    t = str(text or '')
+    words = len(t.split())
+    cjk = len(_CJK_CHARS.findall(t))
+    if not words and not cjk:
+        return 0
+    return int(math.ceil(words * TOKENS_PER_WORD + cjk * CJK_TOKENS_PER_CHAR))
+
+
+def trigger_token_bound(trigger) -> int:
+    """An upper bound on what the trigger costs the encoder, in tokens.
+
+    A trigger is an arbitrary rare string — the exact distribution word-based
+    estimates fail on ('zylphraxian_cinematic_style_v3' is 2 words and 16
+    tokens; five invented words measured 42). The one ceiling sentencepiece
+    cannot exceed is ONE TOKEN PER INPUT BYTE (byte fallback), so that is the
+    bound: provable, and the overshoot on a friendly trigger only makes the
+    budget check stricter — the survivable direction again."""
+    return len(str(trigger or '').strip().encode('utf-8'))
+
+
+def _fields_dict(raw):
+    """The stored caption_fields JSON as a dict, or None — never an exception."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def plan_sidecar(trigger, caption, metrics_json, keeps_audio=False, *,
+                 fields_json=None, caption_tokens=None, token_budget=None) -> dict:
+    """What the .txt will hold, and why.
+
+    The paragraph is served whenever it fits the target's encoder window. When
+    its tokens — measured by the caption pass, else estimated — plus the reserve
+    for the lines this project appends would overrun that window, and the
+    caption carries its labelled fields, the SHORT form is served instead:
+    Subject, Motion, Setting, Style, in the model's own words. Nothing is cut
+    mid-sentence here, ever: a caption without fields is served whole and the
+    preflight counts it over budget, so the user sees the cut the trainer would
+    otherwise make in silence. No window published (token_budget None) = the
+    paragraph, always — the vendors' word caps stay a warning, never a knife.
+
+    Returns {'text', 'served_short', 'tokens', 'measured'}: `tokens` is the
+    sidecar's ceiling (caption count + reserve), `measured` whether that count
+    came from the tokenizer rather than the estimate."""
+    from . import caption_fields
+    body = (caption or '').strip()
+    measured = isinstance(caption_tokens, int) and caption_tokens >= 0
+    count = caption_tokens if measured else estimate_tokens(body)
+    # The lines' measured reserve plus THIS sidecar's trigger at its provable
+    # ceiling — a flat number was refuted by a five-word invented trigger that
+    # cost 42 tokens on its own.
+    overhead = SIDECAR_TOKEN_RESERVE + trigger_token_bound(trigger)
+    served_short = False
+    tail_incomplete = False
+    if token_budget and body and count + overhead > int(token_budget):
+        fields = _fields_dict(fields_json)
+        short = caption_fields.fields_to_prose(fields)
+        # THE FLOOR (review finding, 2026-09-01). The tail is written LAST, so
+        # the caption long enough to need the short form is exactly the one
+        # whose tail the generation cap was most likely to cut — and the parse
+        # is (rightly) tolerant enough to return a single mutilated label. Serve
+        # the short form only when the model demonstrably FINISHED writing it:
+        # all four served fields present, at least twenty words between them
+        # (the prompt asks for 12-20 in `short` alone). Below the floor the
+        # paragraph ships WHOLE and stays counted over the window — the
+        # preflight then says "N past the encoder window" instead of hiding an
+        # amputation behind one more `served_short`.
+        complete = bool(fields) and all(
+            (fields.get(k) or '').strip()
+            for k in ('subject', 'motion', 'setting', 'style'))
+        if complete and short and len(short.split()) >= 20:
+            body, served_short = short, True
+            count, measured = estimate_tokens(short), False
+        elif fields is not None:
+            tail_incomplete = True
+    text = compose_sidecar_text(trigger, body, metrics_json, keeps_audio=keeps_audio)
+    return {'text': text, 'served_short': served_short,
+            'tail_incomplete': tail_incomplete,
+            'tokens': (count + overhead) if text else 0,
+            'measured': measured}
+
+
+def compose_sidecar_text(trigger, caption, metrics_json, keeps_audio=False) -> str:
+    """The full training prompt for one exported clip: trigger, caption, the
+    MEASURED camera line — and, for targets that keep their audio track, the
+    measured audio line.
+
+    The camera comes from our homography classifier, never from the VLM — that
+    was tried and refuted twice (the caption prompt now explicitly forbids it),
+    so this is the one place the camera can enter the prompt, in words the
+    classifier can prove. The `Camera:` label is the H3 idiom (the model's own
+    prompts carry labeled blocks — `Audio:` — so a labeled camera line is what
+    its encoder expects to read). No phrase when the classifier had nothing
+    honest to say (unmeasured, or subject motion drowning the signal): a
+    caption silent about the camera teaches nothing false.
+
+    The audio line follows the same doctrine, harder: we have LEVEL metrics and
+    no content classifier, so the only sentences we may write are the ones the
+    numbers prove — a missing track, or near-total silence. Audible audio gets
+    NO line rather than a guessed one ("ambient sound" claims a content type
+    nobody measured). Only targets that keep audio get any line at all: telling
+    a Wan model, whose clips ship with `-an`, about its soundtrack would be a
+    sentence about nothing.
+    """
+    from . import video_camera_motion
+    base = _with_trigger(trigger, caption)
+    try:
+        scores = json.loads(metrics_json) if metrics_json else {}
+    except (TypeError, ValueError):
+        scores = {}
+    parts = [base] if base else []
+    phrase = video_camera_motion.camera_phrase(scores)
+    if phrase:
+        parts.append(f'Camera: {phrase}.')
+    if keeps_audio:
+        state = scores.get('audio_state')
+        ratio = scores.get('silence_ratio')
+        if state == 'none':
+            parts.append('Audio: silent.')
+        elif state == 'ok' and isinstance(ratio, (int, float)) \
+                and ratio >= _NEAR_SILENCE_RATIO:
+            parts.append('Audio: near silence.')
+    return ' '.join(parts)
+
+
 def _dataset_row(ds: VideoDataset) -> dict:
     profile = video_targets.get(ds.target_profile) or {}
     seconds = video_targets.clip_seconds(ds.target_profile, ds.frames) \
@@ -2674,6 +3106,10 @@ def _dataset_row(ds: VideoDataset) -> dict:
         'trigger_word': ds.trigger_word,
         'references': len(reference_dirs(ds)),
         'requires_references': bool(profile.get('requires_references')),
+        # Where a removed clip goes, for the confirmation that speaks BEFORE the
+        # request — see remove_dataset_clips. Constant here on purpose: the
+        # sentence must come from utils/deletionWording.js, never be typed again.
+        'delete_mode': DATASET_CLIP_DELETE_MODE,
         'created_at': ds.created_at.isoformat() if ds.created_at else None,
     }
 
@@ -2795,6 +3231,26 @@ def create_stills_dataset_from_face_dataset(user_id, face_dataset_id,
             'output_dir': dataset.output_dir}
 
 
+def kept_spans(user_id, bank_id, ids=None) -> dict | None:
+    """How long the clips a promotion would encode actually are.
+
+    Read once when the Promote window opens — never on the bank's 2 s poll: it
+    is a question about a decision being made, not a live statistic. Returns the
+    spans themselves (a few thousand floats at most) so the client can answer
+    "how many of these survive length L" for every length its target offers,
+    without a round trip per option.
+
+    `ids` narrows it to a selection, exactly like the promotion it describes."""
+    if get_bank(user_id, bank_id) is None:
+        return None
+    q = (db.session.query(VideoClip.start_s, VideoClip.end_s)
+         .filter(VideoClip.bank_id == bank_id, VideoClip.status == 'keep'))
+    if ids:
+        q = q.filter(VideoClip.id.in_([int(i) for i in ids]))
+    spans = sorted(round(float(b) - float(a), 3) for a, b in q.all())
+    return {'spans': spans, 'count': len(spans)}
+
+
 def list_video_datasets(user_id) -> list:
     rows = (VideoDataset.query.filter_by(user_id=user_id)
             .order_by(VideoDataset.id.desc()).all())
@@ -2833,13 +3289,212 @@ def set_dataset_clip_caption(user_id, dataset_id, clip_id, caption) -> dict | No
     db.session.commit()
     clip_path = os.path.join(ds.output_dir, row.filename)
     written = True
+    # COMPOSED, never pasted (refutation finding, 2026-09-01): the promote-time
+    # export writes trigger + caption + the MEASURED Camera:/Audio: lines
+    # through plan_sidecar, and this edit path used to bypass it — editing one
+    # caption silently deleted those lines from the .txt, and every budget rule
+    # with them. The source clip still holds the measurements; a clip whose
+    # bank was deleted since loses them (the composition is then shorter —
+    # stated by what it holds, never invented). The human's words carry no
+    # machine fields and no measured count, so the estimate path speaks.
+    src = (db.session.get(VideoClip, row.source_clip_id)
+           if row.source_clip_id else None)
+    profile = video_targets.get(ds.target_profile) or {}
     try:
         video_clip_export.write_sidecar(
-            clip_path, _with_trigger(ds.trigger_word, row.caption))
+            clip_path,
+            plan_sidecar(ds.trigger_word, row.caption,
+                         src.metrics_json if src else None,
+                         keeps_audio=bool(profile.get('audio')),
+                         fields_json=None, caption_tokens=None,
+                         token_budget=profile.get('caption_token_budget'))['text'])
     except OSError as e:
         written = False
         logger.warning('video dataset %s: could not write sidecar: %s', ds.id, e)
     return {'ok': True, 'caption': row.caption, 'sidecar_written': written}
+
+
+# One destination, on purpose, and it is the DATASET lane's: delete_image (the
+# per-image delete of an image dataset, this verb's true twin) moves through
+# send_to_trash — the app's own trash under data/trash — and not through
+# dispose(), which prefers the OS recycle bin. send_to_trash answers with the
+# path it moved to, and that path is what makes a failed commit REVERSIBLE
+# (see the except below); the OS recycle bin gives nothing back to move. The
+# constant is exposed on the payload and in the answer so the confirmation and
+# the toast NAME the destination through the app-wide wording helper instead
+# of inventing a sentence of their own — the mistake this replaced.
+DATASET_CLIP_DELETE_MODE = 'app_trash'
+
+
+def dataset_clip_filenames(user_id, dataset_id, clip_ids) -> list:
+    """The filenames behind ``clip_ids`` in this dataset — read before a removal
+    so what else hangs off a clip (its kept original, see neural_render) can be
+    dropped with it. Unknown ids and other datasets' ids are simply absent."""
+    ds = get_video_dataset(user_id, dataset_id)
+    if ds is None:
+        return []
+    ids = {int(i) for i in (clip_ids or []) if str(i).lstrip('-').isdigit()}
+    if not ids:
+        return []
+    rows = (VideoDatasetClip.query
+            .filter(VideoDatasetClip.dataset_id == ds.id, VideoDatasetClip.id.in_(ids)).all())
+    return [r.filename for r in rows]
+
+
+def remove_dataset_clips(user_id, dataset_id, clip_ids) -> dict | None:
+    """Drop clips OUT of a built dataset — the encode, never the triage.
+
+    The one verb the dataset workspace could not have without this: a promotion
+    is a bulk decision (a target, a length, everything you kept), and the clip
+    that turns out to be three frames of a hand is only visible afterwards, in
+    the set. Until now the only exit was deleting the whole dataset and cutting
+    it again.
+
+    Exactly the same promise as delete_video_dataset, applied to a subset: the
+    .mp4 and its homonym .txt go, and the SOURCE shot in the bank is merely
+    un-promoted — every bound, every decision and every caption it carries
+    survive, so the clip can be promoted again without re-triaging anything.
+
+    Missing files are not an error. A user who cleaned the output folder by hand
+    still needs the row gone, and refusing on a file that is already absent would
+    leave a dataset permanently claiming a clip nobody can play.
+
+    A LOCKED file is a different answer, and it is the one this used to get
+    wrong. The folder IS the dataset — every trainer reads the directory, not our
+    database — so a row deleted while its .mp4 stays on disk removes the clip
+    from the app and leaves it in the training set. Worse in the old order, which
+    deleted the .mp4 and the .txt independently: the .mp4 could survive while its
+    caption left, which is precisely the orphan write_sidecar exists to prevent
+    (a crash in musubi-tuner, a silent drop in diffusion-pipe). So the clip is
+    ONE unit: the .mp4 goes first, the .txt is only touched once the .mp4 really
+    left, and a clip whose file will not move keeps its row and is reported in
+    ``files_kept`` rather than counted as removed.
+
+    The files go to the app TRASH, and they COME BACK if the commit fails. Both
+    halves matter. `trash.py`: "NOTHING the app deletes is destroyed directly",
+    and this verb's twin on the image side (face_dataset_service.delete_image)
+    restores the file when the row's commit is refused — because the state
+    "files gone, rows still there, app says nothing happened" is exactly the
+    database/disk divergence this whole lane is built to refuse. What is thrown
+    away here is not only an encode: the caption edited in the dataset's own
+    Captions section lives on that row and in that .txt, and promoting the shot
+    again brings back the BANK's caption, not the one just written.
+    """
+    from . import trash
+    ds = get_video_dataset(user_id, dataset_id)
+    if ds is None:
+        return None
+    ids = {int(i) for i in (clip_ids or []) if str(i).lstrip('-').isdigit()}
+    if not ids:
+        return {'removed': 0, 'clips': VideoDatasetClip.query.filter_by(
+            dataset_id=ds.id).count(), 'files_missing': 0, 'files_kept': 0,
+            'delete_mode': DATASET_CLIP_DELETE_MODE}
+    rows = (VideoDatasetClip.query
+            .filter(VideoDatasetClip.dataset_id == ds.id,
+                    VideoDatasetClip.id.in_(ids)).all())
+    missing = 0
+    kept = 0
+    removed = 0
+    moved = []                       # (trashed_path, original_path) — the undo list
+    source_clip_ids = set()
+    for row in rows:
+        clip_path = os.path.join(ds.output_dir, row.filename)
+        context = f'video-dataset-{ds.id}-clip-{row.id}'
+        try:
+            state, trashed = _trash_dataset_file(clip_path, context)
+        except OSError as e:
+            # Held open by an antivirus scan, a player, or a training run
+            # reading this very folder. Leave the clip whole and say so.
+            kept += 1
+            logger.warning('video dataset %s: %s stays on disk: %s',
+                           ds.id, row.filename, e)
+            continue
+        if state == 'missing':
+            missing += 1
+        else:
+            moved.append((trashed, clip_path))
+        sidecar = video_clip_export.sidecar_path(clip_path)
+        try:
+            state, trashed = _trash_dataset_file(sidecar, context)
+        except OSError as e:
+            # The .mp4 is already gone, so a stranded .txt is inert — trainers
+            # pair by basename and never look at a caption with no media. Worth
+            # a line in the log, not worth keeping the row.
+            logger.warning('video dataset %s: sidecar of %s stays on disk: %s',
+                           ds.id, row.filename, e)
+        else:
+            if state == 'missing':
+                missing += 1
+            else:
+                moved.append((trashed, sidecar))
+        if row.source_clip_id:
+            source_clip_ids.add(row.source_clip_id)
+        db.session.delete(row)
+        removed += 1
+    try:
+        # The rows have to be GONE from the session before the survivors are
+        # counted, or a deleted slice still answers the query below and nothing
+        # is ever un-promoted.
+        db.session.flush()
+        # Un-promote the shots these clips were cut from — and only the shots
+        # that have NO slice left in this dataset. `slice_long` gives one bank
+        # shot several rows sharing a source_clip_id, so un-promoting on the
+        # first removal was not merely a wrong badge: promoted_dataset_id IS
+        # NULL is the filter that lets a later re-cut DELETE the shot
+        # (_drop_clips_of), and the dataset would go on holding slices of a
+        # shot that no longer exists.
+        if source_clip_ids:
+            survivors = {r.source_clip_id for r in VideoDatasetClip.query
+                         .filter(VideoDatasetClip.dataset_id == ds.id,
+                                 VideoDatasetClip.source_clip_id.in_(source_clip_ids))
+                         .all()}
+            orphaned = source_clip_ids - survivors
+            if orphaned:
+                # The second clause is not redundant with the first:
+                # source_clip_id is deliberately NOT a foreign key (the bank is
+                # a scratch container the user may delete, and SQLite reuses
+                # rowids), so a shot promoted into ANOTHER dataset that happens
+                # to share a rowid keeps its mark.
+                (VideoClip.query
+                 .filter(VideoClip.id.in_(orphaned),
+                         VideoClip.promoted_dataset_id == ds.id)
+                 .update({'promoted_dataset_id': None}, synchronize_session=False))
+        db.session.commit()
+    except Exception:
+        # The files left the folder on the strength of a commit that did not
+        # happen. Put them back — every one of them, in reverse — before the
+        # error reaches the route, so the answer "could not remove" is TRUE of
+        # the disk and not only of the database.
+        db.session.rollback()
+        for trashed, original in reversed(moved):
+            trash.restore(trashed, original)
+        raise
+    return {
+        'removed': removed,
+        'clips': VideoDatasetClip.query.filter_by(dataset_id=ds.id).count(),
+        # Counted per FILE, not per clip: a clip whose .mp4 and .txt were both
+        # already gone counts 2. The caller only ever asks "was anything already
+        # missing", so the unit has never mattered — it is said here so nobody
+        # reads it as a clip count.
+        'files_missing': missing,
+        'files_kept': kept,
+        'delete_mode': DATASET_CLIP_DELETE_MODE,
+    }
+
+
+def _trash_dataset_file(path, context) -> tuple:
+    """Move one dataset file into the app trash. ('gone', trashed_path) or
+    ('missing', None).
+
+    Raises OSError (TrashLockError included) when the file is THERE and will
+    not move — the caller has to tell those two apart, because one is
+    bookkeeping and the other leaves a clip in a training set the app claims
+    it removed. send_to_trash and not dispose(): the returned path is what makes
+    a failed commit reversible, and the OS recycle bin gives none back."""
+    from . import trash
+    if not os.path.exists(path):
+        return 'missing', None
+    return 'gone', trash.send_to_trash(path, context=context)
 
 
 def delete_video_dataset(user_id, dataset_id) -> bool:

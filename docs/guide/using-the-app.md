@@ -331,6 +331,75 @@ leave the Test Studio too, which the confirmation says before anything is
 armed), or **⬇ ZIP** to download the picked images as one archive under their
 lineage names.
 
+## Publish a LoRA and its images to Civitai
+
+Two gestures, one key. Both need the **Civitai API key** from **Settings →
+Scraping & sources** — the same one the scraper and the 🌐 prompt browser use
+(a free account has one).
+
+**1. The checkpoint → a model page.** Open a checkpoint pill's popover (on the
+◉ LoRA Canvas or a run's graph) and press **📤 Civitai**:
+
+- **Create the page from this checkpoint** — the form arrives pre-filled from
+  the run: model name, version name, the base model as Civitai names it
+  (Z-Image Turbo/Base, Krea 2, SDXL 1.0, FLUX.1 D, FLUX.2 Klein 4B-base /
+  9B-base — the official Klein weights this app trains on, which Civitai files
+  apart from the distilled lineage — Anima), the trigger word, a description
+  with the training facts (steps, epochs, rank/alpha, dataset version and image
+  count), tags and the licence toggles. A run trained on a **custom base** (a
+  ComfyUI checkpoint picked in the dropdown) leaves the base model **empty**
+  where Civitai distinguishes lineages — SDXL (Pony, Illustrious, NoobAI…),
+  Z-Image, Klein — because the app cannot honestly name it; pick it before
+  uploading. Press **Upload as a draft** and the `.safetensors` goes up in the
+  background; the page is created as a **draft** so you give it a last look on
+  Civitai (cover images, final read) before pressing Publish there. Tick
+  **Publish the page right away** to skip that step.
+- **Mark an existing page** — the LoRA already has a page? Paste its address,
+  press **Look up**: the page's name and its versions appear, the one the
+  address points at (`?modelVersionId=`) preselected, the newest otherwise.
+  Pick which version this checkpoint is and press **Link this version**.
+  Nothing is uploaded; the checkpoint is simply remembered as that version,
+  which is all the next gesture needs. The same two tabs open from a
+  picture's 📤 dialog: the picture names the checkpoint it was made with (its
+  stamp and the deployed LoRA name it ran with), and the app resolves which
+  save that is — no file to pick. **Unlink** forgets the link (the page on
+  Civitai is untouched); linking again simply retargets it.
+
+A linked pill shows **On Civitai** in its popover; the dialog opens the page,
+relinks it, or forgets the link (the page itself is never touched).
+
+**2. An image → a post under that page.** In the image viewer (Gallery,
+Canvas, checkpoint galleries, Test Studio), press **📤 Civitai**: the picture
+is posted under the page its checkpoint is linked to, with its prompt (the
+trigger word included, as it was actually sent), negative prompt, seed,
+sampler, CFG, steps, size and the LoRA weight — as Civitai generation data,
+so the post files itself under the right model (Civitai shows it in the
+model's gallery once its own scan of the image is done). **Publish the post
+right away** is on by default; untick it to leave a draft post you finish on
+Civitai.
+
+A picture carries the checkpoint it was made with only when that save has a
+step in its name. Every picture generated with a run's **final** save (the
+step-less `lora_<trigger>.safetensors`) — and every picture of a run you
+removed from the graph — has no stamp: the dialog then offers a **picker over
+the dataset's linked checkpoints**, which is the ordinary path for those, not a
+fallback. A run that ends on a numbered save writes two files at its last step
+(the numbered one and the final); each is its own page or version, linked by
+file, and the popover of each pill says which.
+
+What never leaves your machine: every image goes out as a **fresh PNG with no
+embedded metadata** (no EXIF, no ComfyUI workflow — the generation data
+travels explicitly), every text is stripped of local paths, and the
+checkpoint's own safetensors metadata is scanned for a machine path before a
+byte is uploaded — a file that names your machine is refused, and the dialog
+says which field.
+
+Links open on **civitai.com** by default; **Settings → Scraping & sources →
+Civitai publishing** switches them to **civitai.red** (the same site and
+account behind a second domain — pick the one you are signed in on, because a
+draft page is private and the sign-in is per domain). Uploads run in the
+background: closing the dialog loses nothing.
+
 ## Recover a paused Test Studio batch
 
 If ComfyUI drops while Test Studio is processing a batch, the affected tile says
@@ -716,7 +785,7 @@ other filter and search), so balancing a character set's angles is a couple of
 clicks. It's a GPU vision pass; add it to **🚀 Launch all** to have it run
 overnight with the rest.
 
-**📊 Coverage advice** (idea by [@antonp](https://github.com/Fr3sher/FLT))
+**📊 Coverage advice** (idea by [@antonp](https://github.com/antonp))
 is a read-only panel next to the Curate row. From what you've **kept** (or every
 non-rejected image before you've kept anything), it says in plain sentences what
 leans and what's thin for a good LoRA — *"70% face shots, add body/back"*,
@@ -1482,6 +1551,86 @@ after the other:
 The ▶ button on a tile starts the same review **at that image**. A plain click
 on a tile still selects it for the bulk ✓/✕/⬆ bar, so both ways of working stay.
 
+## Compare the copies of a duplicate group
+
+The **≈ Duplicates** and **✂ Same shot** filters replace the grid with one card
+per unresolved group, and those cards used to offer three ways to settle a
+group: *Resolve ALL — keep best*, *keep first*, or clicking one of the
+thumbnails. The first two are verdicts you take on trust; the third asks you to
+tell two copies of the same shot apart in a 96-pixel stamp. **⤢ Compare** — on
+the group's card, or *⤢ Compare & pick* at the top for the whole list — opens
+those same copies at a size where the choice can actually be made.
+
+- **Side by side** puts every copy of the group on screen at once, each as big
+  as the screen allows. This is the view that settles *framing* — which one is
+  cropped, which one has the shoulder in it.
+- **⛶ Full screen** (**F**) shows one copy filling the frame, and **← →** flips
+  between them *in the same frame*. That is the view that settles *detail*: the
+  difference lands on the same pixels instead of asking your eye to carry it
+  across a gap.
+- **Under each copy, the numbers that separate them** — resolution, sharpness,
+  aesthetic score, file weight — with the group's best value **lit**. The copy
+  with nothing lit is the one that loses on everything. When two copies have the
+  same dimensions *and* the same weight they are marked **≡ same file as 2**:
+  they are the identical file, so keeping either keeps the same pixels.
+- The cursor **opens on the copy the app elected** (the BEST badge), so **K**
+  is "yes, that one" and moving off it is a deliberate disagreement. The badge's
+  tooltip says what it wins on — or admits that nothing measured separates the
+  copies and the tie-break was import order.
+
+The keyboard is the same grammar as ▶ Review, at the level this screen decides
+at: **K** keeps the copy under the cursor and rejects the rest of its group,
+**R** rejects only that copy and moves to the next (which is how a group of five
+is worked down one obvious loser at a time), **S** skips the group without
+deciding, **Esc** leaves. What is this screen's own: **← →** move between the
+copies of a group, **1**-**9** jump straight to one, **⇧← ⇧→** move between
+groups, **B** puts the cursor back on the app's pick, **F** switches the layout.
+
+A skipped group stays unresolved and is not shown again *in that run* — it is
+"not now", not "no". When the walk runs out, the run refills itself from what is
+still unresolved, so a bank with 300 duplicate groups is worked through without
+going back to the list. Every verdict is saved on the spot, and the losers are
+**rejected**, never deleted: the ✕ Rejected filter brings any of them back.
+
+## Say "these are not duplicates"
+
+Both grouping passes answer a question about pixels, and both are sometimes
+wrong in the one direction you could not correct: a burst of frames, a series
+shot on a tripod, two crops that a threshold called one picture. Every verdict
+on offer ended in a rejection — *keep best*, *keep first*, a manual pick — and
+**⏭ Skip** writes nothing at all, so the group came back on the next run, and the
+one after that. The only ways out were to reject a photo you wanted, or to keep
+saying "not now" forever.
+
+**≠ Not duplicates** (on the group's card, or **N** in ⤢ Compare) is the missing
+answer. It keeps **every** copy, rejects nothing, and the group stops being
+proposed.
+
+- **It decides nothing about the images.** They keep whatever status they had,
+  kept or undecided, and they stay in every other filter. The claim is about the
+  *relation* between two pictures, not about either one of them.
+- **It survives a re-group**, which is the whole reason it works. Both passes
+  renumber the entire bank from scratch on every run, so a verdict remembered as
+  "group #7" would quietly apply to a different set of images next time. What is
+  stored is the **pairs**: *this photo and that photo are not the same shot*.
+  That sentence means the same thing before and after any renumbering.
+- So a re-group that **splits** the group leaves it answered, and one that
+  **adds a copy** asks you again — with the new copy on screen. A new member is
+  a new question, and you were never asked about it.
+- One answer covers **both stages**: ≠ on a ≈ Duplicates group also settles the
+  ✂ Same shot group holding the same images. It is a fact about the pictures,
+  not about which algorithm found them.
+- **The way back is a line above the list** — *≠ N groups marked not duplicates
+  — Put them back* — and it stays visible when marking the last group has
+  emptied the panel, because an undo that vanishes with the thing it undoes is
+  not an undo. Re-running *Keep best* on a group by name also overrides it: naming
+  a group is ruling on it again, and you are allowed to change your mind.
+
+**One limit, stated plainly:** ≠ records a decision about every *pair* in the
+group, so a group of 80 copies costs 3 160 of them. Above 80 it is refused, with
+the reason — a group that size means the duplicate distance is too loose, and the
+fix is the 🎚 threshold, not 3 000 stored verdicts.
+
 ## Promote a shortlist into a new bank
 
 **⬆ Promote…** has two destinations, and picking the right one saves you a mess.
@@ -2142,10 +2291,43 @@ launch by hand** — cheapest and safest first:
    GPU, no invented pixel: it simply trims the band up to the mark, and only
    when the image stays big enough to train on. Anything it can't crop that way
    is left flagged, on purpose.
-2. **🧽 Inpaint** repaints what's left. **LaMa** (fast, non-generative) handles
-   small off-centre marks and leaves marks *on the subject* flagged; **Klein**
-   (slower, via ComfyUI) also clears those. Each engine says what to install
-   when it isn't ready, and the button stays off rather than failing mid-pass.
+2. **🧽 Inpaint** repaints what's left. **LaMa** (fast, non-generative) repaints
+   the marked zones and leaves marks *on the subject* flagged. **Klein** (slower,
+   via ComfyUI) works in two steps: the zones the scan found are **erased** on the
+   photo, and then the **whole photo** is re-rendered with the instruction to
+   remove the watermarks. The erasing is what stops the model handing the mark
+   back; the whole-photo pass is what also clears the marks the scan *missed* — a
+   mark tiled across the picture, one on the subject, one the detector boxed in
+   the wrong place. The price is an image whose every pixel is regenerated. Each
+   engine says what to install when it isn't ready, and the button stays off
+   rather than failing mid-pass.
+
+   **It is a generative pass, not a mask, so read the result.** Measured on the
+   shipped settings: a photo tiled wall-to-wall with a mark came back with all
+   twelve zones gone and looking clean — the case that was hopeless before,
+   because there was no unmarked area to copy from. A photo carrying seven
+   distinct logos came back with all seven gone. What can still survive is a mark
+   **nobody found**: nothing erased that one, so the model is free to keep it.
+
+   **Why the erasing matters, in one measured example.** Run without it, the same
+   photo came back with a round logo *redrawn* as a plausible **moon in the sky**
+   — the model reinterpreting a mark it could still see rather than deleting it.
+   A re-run of 🚩 Find watermarks sees nothing wrong with an image like that (a
+   moon is not a watermark), so it would stay marked *cleaned* and no later step
+   would catch it. Erasing the zones first removed every trace of that. It is
+   still worth a look at the picture.
+
+   **Three dials, right there under the engine.** Picking Klein reveals the
+   **prompt it is actually sent** (`remove watermark` by default, editable, with
+   *Reset to default* to get it back), the **processing size** the photo travels
+   at (1 – 4 MP, default 2 — higher means finer regenerated detail and more VRAM
+   and time, and a photo already smaller than the setting is never enlarged), and
+   **what size the cleaned file is written at**: back at your file's own
+   dimensions, as before, or at the render's size — in which case **the file
+   changes dimensions**. The dataset's Clean bar offers exactly the same three,
+   and they are one stored choice, so setting them on either side arms both.
+   Every clean also writes the prompt, size and write-back mode it used to
+   🪵 Server log, so you can tell afterwards what actually ran.
 
 Each step shows how many images it still has to work on and how many it has
 already handled, so you can see where the funnel stands. **Your source files are
@@ -2324,8 +2506,14 @@ exists; use **↩ Undo cleaning** first.
 
 What the two cleaning steps then do with your mask:
 
-- **🧽 Inpaint repaints exactly the zones you drew** — all of them, including a
-  zone sitting on the subject, which is precisely what a hand mask is for.
+- **🧽 Inpaint acts on the zones you drew** — all of them, including a zone
+  sitting on the subject, which is precisely what a hand mask is for. **On
+  LaMa** they are exactly what gets repainted, and nothing else is touched. **On
+  Klein** they are erased from the photo first and then the whole picture is
+  re-rendered, so your zones decide what is guaranteed to go, while the pass also
+  clears marks you did not draw — and everything else is re-rendered with them.
+  Drawing zones therefore buys precision on LaMa, and on Klein it buys certainty
+  about the marks you pointed at.
 - **✂ Auto-crop skips a hand-masked image.** A crop can only cut one border
   band; it cannot express several zones or a mark on the subject, so cropping
   the old box would remove pixels you did not point at.
@@ -3264,8 +3452,12 @@ ranking computed over one bucket has nothing to say about another.
 
 🔎 Find scenes ranks by what a moment **looks like**. It cannot find an action —
 "turns and walks away" is a fact about *time*, and no single frame carries it. The
-**🗣 Describe shots** pass closes that gap: it watches eight frames spread across
-each shot and writes one or two sentences about what happens in it.
+**🗣 Describe shots** pass closes that gap: it watches sixteen frames spread
+across each shot and writes a full paragraph — the action as it unfolds, the
+subject, the setting and the mood, in the 150-200 words the published
+measurements converge on. The camera is deliberately not the model's job: no
+VLM describes it reliably, so the 🎥 Camera pass's own classifier writes that
+line into the exported prompt instead, in words it measured.
 
 That line does two jobs, and the second is the one nobody sees coming:
 
@@ -3360,6 +3552,289 @@ Two labels sit next to every target, and both are there to save a wasted week:
 Deleting a video dataset deletes the encoded clips and nothing else: the bank
 keeps every shot and every decision, so you can re-cut at another length or for
 another target without triaging again.
+
+## Work on a video training set
+
+Opening a set from **🎬 Video training sets** takes you to its own workspace —
+the same relationship an image dataset has with the library, and the same rail
+down the side. Everything below happens on the clips that were actually encoded,
+not on the bank's shots.
+
+**Clips.** A grid of every clip, with the source rush and the timecode it was cut
+from behind each tile. The grid holds thumbnails and no video players at all: a
+browser stops loading new players after about sixty of them, silently, so a
+128-clip set would fail halfway down the page with nothing in the console.
+Clicking a tile opens the one player the page ever mounts — `←` and `→` step
+through the set, `Esc` closes it.
+
+Filter by *All / Captioned / No caption*, type in the box to narrow by file name,
+caption or source rush (terms are ANDed; `-word` excludes), and sort by file
+order, length, or "uncaptioned first" — which is the working list when you are
+finishing a set. **File order is the default and it is the order the trainer
+reads the folder in.**
+
+**Removing a clip** moves its `.mp4` and its `.txt` into the app's own Trash
+(Settings ▸ Storage, recoverable until you empty it) — the same place a deleted
+image of an image dataset goes — and touches nothing else: the bank keeps the
+shot, its bounds and every decision, so you can re-cut and promote it again with
+no triage to redo. The confirmation names that destination before you click,
+from the same wording every other delete in the app uses. It is the exit the
+promote dialog never had: you find the three-frame clip *after* the encode, in
+the set, not while triaging. (A stills set built from an image dataset has no
+bank behind it, and the confirmation says so rather than promising one.)
+
+If the database refuses the change after the files have moved, they are put
+back where they were before the error is reported — "could not remove" is true
+of the folder as well as of the app.
+
+If a clip's file is **held open** — an antivirus scan, a player, or a training
+run reading this very folder — it is not removed at all, and the app says so
+instead of claiming success. That matters more than it sounds: the folder *is*
+the dataset, so a clip taken out of the app while its file stayed on disk would
+still be trained on.
+
+**Captions.** Every clip's caption is a `.txt` file sitting next to its `.mp4`,
+and that file is what the trainer opens — never the app's database. So every save
+here rewrites the file, and if the write fails the app says so out loud instead
+of showing you text the training will not use. A clip with no caption is not
+skipped: its sidecar is written with the trigger word alone, or empty if the set
+has no trigger. The coverage line under the grid says which of the two you are
+getting.
+
+The caption tools apply to your selection, or to the whole set when nothing is
+selected: find & replace (whole-word by default; an empty replacement removes the
+term and tidies the commas), add a prefix — which reaches the silent clips too —
+or add a suffix, which never invents a caption out of an empty one. Nothing is
+written until you have seen how many captions actually change; a prefix already
+present is not added twice. The most repeated words are listed underneath, because
+a term in every caption is a term the LoRA binds to your trigger whether you meant
+it or not. They are there from the start, on a set that has no caption at all —
+that is exactly when a prefix is worth running.
+
+Pressing `Esc` in the player **saves** what you typed before closing; it is a way
+of clicking away, not a way of throwing the text out. And if a caption reaches
+the database but its `.txt` cannot be written, the report says so in those words
+rather than calling it a failure — the app would be showing you text the training
+will not read.
+
+**References** appears only for a target that trains on control images (MiniMax
+H3 ref2va). Without them the trainer runs unconditioned and says nothing, so the
+server refuses the launch — attaching 1 to 4 images here is what satisfies it,
+and replacing is whole-set: they are one identity, not an album.
+
+**Training** holds one set of dials and two destinations, this PC or a rented
+pod, and **Checkpoints** appears in the rail once a run has really brought files
+back. Above the dials sits the same readiness card an image dataset has — what
+still stands in the way (no clips, a target nobody can train yet, missing
+references, an ai-toolkit too old for this model, weights not yet downloaded),
+each with a Fix → that jumps to where it is fixed.
+
+**☁ Train in the cloud…** opens the same window an image dataset gets: every GPU
+class the market offers under your price cap, its price per hour, a *rough*
+duration and total for this set (one measured run, scaled — the window says
+so), a warning when the run would outlive the runtime cap, and this month's spend
+against your budget. Nothing is rented until you pick a class and press the
+button. Before the window even opens, the cloud-lane preflight runs: a blocker
+(no vast.ai key, no clips) stops there and says why; warnings are put to you once,
+together. And when the account already has a run on a pod for this set, "second
+pod, billed separately — launch anyway?" is a question you answer, not an error
+you read.
+
+**Checkpoints & LoRAs** lists every save either lane brought back — the local
+run's folder and each cloud run's harvest — grouped by *step*, never by file: a
+Wan 2.2 checkpoint is two files (`_high_noise` / `_low_noise`) and the section
+refuses to offer half of one. Each step carries the verbs an image dataset's
+checkpoints have. **⬇** downloads a file (both of a pair, side by side, is what
+every loader expects). **📦 Deploy** copies the step into ComfyUI's loras folder
+under `h3/lds/` — the same folder and name the Video Test Studio uses, so the
+Studio's picker lists it as deployed at once; **⏏ Undeploy** moves that copy to
+the app's Trash and keeps the training save. **▶ Continue from here** rents a
+fresh pod and trains further from *that* step (the Training section's *Train
+further* always resumes from the newest); a local run cannot pick a step — it
+resumes from its newest save on the next launch, because its folder *is* the
+resume state — and the row says so instead of offering a button that would do
+something else. **ⓘ Details** shows what a cloud run was launched with. **🗑
+Delete** moves every file of the step to the app's Trash (Settings ▸ Storage) —
+refused while the lane is still writing them, a local training in progress or a
+cloud run still on its pod. The run-level 🗑 next to a cloud run's name is the
+older, larger verb: it removes the run's files *and* its history line, for
+good. A LoRA you dropped into `h3/` by hand shows as deployed but is never
+undeployed from here.
+
+**Studio** opens the Video tab of the Test Studio, where a deployed LoRA is
+judged on the clip it renders rather than on its loss curve.
+
+What is *not* here yet, and deliberately: the quality passes (duplicates,
+watermarks, safe zone, defects) run on the bank's shots and on the source files,
+before any encode exists; trimming a clip means re-encoding it, so the honest
+gesture is to re-cut in the bank — which is why the player names the source rush
+and the timecode. And there is no export button because there is nothing to
+export to: the dataset **is** its folder, flat, `.mp4` plus homonym `.txt`, which
+is exactly what every trainer reads.
+
+## Neural render for video clips
+
+NVIDIA's **DLSS 5 Neural Rendering** model re-renders a frame's materials and
+lighting: skin, hair and fabric gain structure the source only implied. It was
+built for games, but a plain video is a valid input, and the app runs it over a
+finished clip in two places:
+
+- **A video dataset, Clips section** — select clips, then **✨ Neural render**.
+  The render **replaces the clip in place** (the folder IS the dataset, so the
+  file the trainer reads must be the render) and the **original is kept** outside
+  the dataset. **🩹 Restore** brings it back at any time, for the selection or
+  for every rendered clip. A clip rendered twice is rendered from its original
+  both times — renders never stack.
+- **The Video Test Studio, clip history** — **✨ Neural** on a finished clip
+  makes a **new clip** in the list, tagged `neural render`; the original stays,
+  so the pair can be compared.
+
+**Compare.** A rendered dataset clip's lightbox and a rendered studio clip's card
+carry **⇔ Compare**: the original and the render play side by side, in step —
+the left player leads (play, pause, seek there), the right one follows, muted;
+**Swap sides** puts the render first. On a phone the two stack.
+
+**The dials.** *Tone* is how much the model relights (0 keeps the clip's own
+tones — the setting for flat art and anime, where the default greys pure whites).
+*Structure* is how much micro-detail is added. *Automatic mask* lets the model
+decide where it acts (marginal). The other controls the model exposes do nothing
+through this bridge and are not offered.
+
+**Making it visible.** The model's own answer is subtle on video (about 7 % more
+fine detail on a photoreal frame, measured). Three levers push past it, and all
+three are in the dialog: **Strength** above 1 carries the render beyond the
+model's answer (2 roughly doubles the added detail, 3 triples it — the same
+control the game mod calls Detail strength); **Passes** feed the render back
+through the model (extra passes run in still mode); **Render at 2×** works on
+four times the pixels and delivers the clip at its own size. The Render button
+says how much longer than a plain pass the combination takes. And in the
+comparison, press **1:1**: fitted to the pane, the pixels the render changed
+vanish; at their real size they show.
+
+**Frames.** *Temporal* keeps the model's history across frames with motion the
+driver estimates; it needs a clip **at least 704 px wide** (measured: 700 fails,
+704 passes, whatever the height). *Auto* picks it when the clip allows and falls
+back to *Still* otherwise, and says so. A scene cut resets the history.
+
+**What it needs.** Windows and an NVIDIA GPU with a recent driver — the model is a
+Direct3D 12 library, so there is no Linux or Docker path. Setup installs the
+small open-source **bridge**; the **model file** (`nvngx_dlssnr.dll`) is NVIDIA's
+and yours to place in the folder Setup names — the app does not download it and
+offers no link. NVIDIA ships it for the RTX 50 series; the model itself decides
+on which GPU it runs, and a refusal is shown in its own words on the first clip
+you render. On an RTX 4090 a 1080p frame takes about 30 ms (the model alone),
+about 130 ms end to end with decoding and encoding.
+
+## Test a video LoRA before you trust it
+
+Training a video LoRA gives you a `.safetensors` and a loss curve. Neither of
+them tells you whether it learned the thing you wanted, so the **Video** tab of
+the Test Studio renders a clip with it — the same MiniMax H3 pipeline the app
+uses everywhere else, driven from one panel.
+
+**What it needs, once.** The engine is MiniMax H3 and its four required files
+are about **39.5 GB** — Setup ▸ **🎬 Video Test Studio** downloads them into
+ComfyUI's own folders. A plain clip needs *nothing else*: no custom node, no
+add-on, deliberately, so that a fresh install can render something the moment
+the weights land. The optional 4-step **turbo LoRA** is downloaded there too
+(0.7 GB, and it is the difference between a clip in minutes and one in tens of
+minutes).
+
+The three accelerator options — turbo, sparse attention and the latent upscale —
+need ComfyUI **custom node packs**, and the app does not install those: it names
+each pack, links it and gives you its ComfyUI-Manager search term, and you add
+it on the ComfyUI side. A weight is an inert file in a folder; a custom node is
+code your ComfyUI imports at startup, and one bad import takes the whole server
+down for every other thing you use it for. That is not a risk this app takes on
+your behalf. An option whose pack is absent is shown greyed out with the pack
+named, never as a button that fails. Two more files — the latent upscaler's
+model and the third-party 10Eros base — are yours to place by hand if you want
+them; the Setup card says where.
+
+**Pick the LoRA, then say what moves.** A checkpoint that came out of a training
+run is not visible to ComfyUI until it is copied into its `loras` folder; the
+picker does that for you the first time you select one (a 300 MB copy, once).
+LoRAs you dropped into `models/loras/h3` yourself are listed too. **No LoRA** is
+the first choice on the list on purpose: the only way to know what yours changed
+is to have seen the same seed without it.
+
+**A start frame, or none.** Image-to-video animates a picture — uploaded, taken
+from a bank, picked from the Gallery (every picture the app has rendered,
+Canvas previews included), or lifted from the first frame of a clip in a
+training set (that last one is the honest baseline, since it is material the
+LoRA actually saw). The bank, Gallery and Dataset clip tabs show their pictures
+as a grid of tiles — a clip's tile is the poster its training set shows for it
+— and the 🔍 **Preview size** slider above the grid enlarges them, more than
+three times over, when a face is too small to judge at the default; the size is
+remembered by the browser. Pick **several** and each goes into a strip under
+the tabs — several files at once from the upload tab, or tile after tile from
+a bank, the Gallery or a training set; a tile already in the strip shows as
+pressed and a second click takes it out again, and each frame in the strip has
+its ✕ (the strip knows a frame by where it came from, so the same picture
+picked from two tabs is two frames; a picture the server refuses is skipped
+and said so, the others still go in). Generate then queues **one clip per
+frame, on one seed and one prompt**: a random seed — or a negative one, which
+counts as random — is drawn once, for the first clip, and re-used for the
+rest, and ✨ Enrich at launch rewrites the prompt once, for that first clip,
+the rest running the rewrite it got (the vision model shares the GPU with
+ComfyUI and is not asked again once a clip sits in its queue), so the clips
+differ by their picture and nothing else — the button says how
+many clips a click will queue, and ✨ Auto reads the first frame. Text-only
+skips the picture entirely and composes the shot from the prompt. Either way,
+describe the *movement*: the start frame already says what the scene looks
+like.
+
+**Or let a local model write the movement.** ✨ **Auto** looks at the start frame
+and proposes a motion for it; anything already in the field is read as the
+movement you are after and steers the proposal rather than being ignored — the
+answer still takes the field, as ✨ Enrich's does. ✨ **Enrich** rewrites what
+you typed with more detail, anchored on the frame that will actually be
+animated — a text-only clip enriches from the words alone, so nothing is
+invented about a picture the encoder is never given. Both answer in H3's own
+three-field prompt (`integrated_multimodal_description`, `overall_soundscape`,
+`non_diegetic_music`), paced to the clip length you set: three seconds hold one
+gesture carried to its end, ten seconds get a sequence of beats. With a start
+frame the subject is named `<Picture 1>`, the tag H3 binds to the picture it is
+handed, and the reference line the encoder expects is put in front — at launch
+too, for a prompt you typed yourself, and never twice; a text-only prompt
+carries neither, even one written for a frame and then launched without it. The ⚙ button chooses **the model that writes the
+motion** from whatever your local server lists — Ollama or LM Studio, whichever
+the app is set to — and it is its own choice: tuning the writer never re-points
+the captioner, and leaving it empty uses the provider's vision model. The
+writer takes the GPU the way every vision pass does: it refuses while ComfyUI
+has work queued or rendering — a clip, an image — and says so, and on its way
+in it asks ComfyUI to let go of its models, so the next clip loads H3 again: a
+few seconds, paid once per click. When the writer's model is busy for something
+that is not LDS, the panel says so where you clicked: it waits, watches, and
+replays the click by itself the moment the model is free — or you **Unload it
+and continue**. It is the same hold the queue reports (see *When the queue
+waits for something that is not LDS*), answered here with the panel's own two
+offers. **✨ Enrich at launch** does the rewrite when you press Generate
+instead, so the clip records the prompt that really ran while your field stays
+as you typed it — and if the writer cannot run at that moment, the clip still
+launches with your words and the panel says so.
+
+**The four options are not free, and the panel says what each one costs.**
+⚡ Turbo swaps in a 4-step distillation LoRA and its double-clock sampler —
+minutes instead of tens of minutes, and a different model rather than merely a
+faster one; it is on by default because an undistilled first clip is long enough
+to look like a hang. 🔬 Latent upscale enlarges before anything is decoded, so
+the audio track survives untouched — and it is where most of the time goes.
+Sparse attention buys speed by attending to less, which costs prompt adherence;
+with the upscale on, the first pass deliberately stays dense so the prompt keeps
+its grip on the composition, and only **Max** accelerates both passes. 🔥 The
+10Eros base replaces the official model with a third-party finetune that brings
+its own faces — which is exactly what you do not want while testing whether
+*your* LoRA reproduces an identity.
+
+**One clip at a time, and a history.** A clip is minutes, so there is no grid
+here. Every clip keeps the settings that made it, and **Reuse** loads them back —
+seed included. Changing one dial on the same seed is the only comparison that
+says anything about that dial.
+
+If the panel refuses to launch, it is telling you the graph cannot run on this
+install: the message names the missing weights and the ComfyUI node packs to
+install, rather than letting the job fail silently a minute later.
 
 ## Stopping Score, and what a relaunch costs
 
@@ -3465,6 +3940,22 @@ Test Studio, the Bank or a dataset without keeping Task Manager — or a ComfyUI
 resource monitor — open. It starts folded, polls only while it is unfolded and
 the tab is visible, and remembers your choice separately from the board's.
 
+**🧹 Free memory.** Beside the unfolded numbers sits a broom, for the case the
+readout keeps showing: RAM full and not coming down while nothing runs. Two
+things hold it. ComfyUI keeps every model it loaded in the session cached in
+system RAM once it leaves the card (measured: 34 GB on an idle ComfyUI after
+a day of Krea, Klein and video models) and never lets go on its own; the
+vision model LDS loaded for captioning stays warm so a batch does not reload
+it per image. **🧹** asks ComfyUI to unload and free (`/free`, the same lever
+LDS pulls before a training) and releases the vision model LDS itself loaded,
+then reads the machine again and says what actually came back — "Freed 32 GB
+of RAM · RAM now 12/48 GB · VRAM 16 → 0.9 GB". The models reload on the next
+job (a minute at most), nothing else changes. It is refused, with the reason,
+while ComfyUI's queue is not empty or a training runs — unloading under a job
+would only make that job reload everything — and a model another tool loaded
+into Ollama or LM Studio is never touched (that is the fence's rule; the
+Ollama-fence dialog is where a consented eviction lives).
+
 **Deleting a picture from the board.** A pinned image carries **✕** and **🗑**,
 and they are not the same thing. **✕** takes it off the board and remembers where
 it was, so re-pinning it from its gallery puts it back at the same spot and size.
@@ -3534,12 +4025,31 @@ the automatic tree centres each run over its continuations, so one new branch
 re-flows the lane around it. Lanes you have never touched keep following the
 automatic tree, because there is no arrangement to protect there.
 
+**Moving a whole dataset's block, and giving it room.** A lane — the dataset's
+title strip and everything under it — has two grips of its own:
+
+- **its title strip** moves the whole block. Drag `● name  N runs` and the lane
+  goes where you put it, with its cards and its pictures. Every other lane stays
+  exactly where it was; moving one lane moves one lane.
+- **its bottom edge** sets how much **room** the lane keeps, and the datasets
+  below move with it. That edge exists because of one thing: 📌 Pin all hangs a
+  contact sheet *below* the tree, and the board only ever counted the tree — so
+  on a lane with a few dozen pinned pictures the sheet landed on top of the next
+  dataset's cards. The edge turns **amber** when a lane draws past its own room,
+  which is exactly that collision, named where it happens. **Double-click** it
+  to fit the lane to what it actually draws.
+
+A lane you have never dragged keeps following the automatic stack, and pictures
+still hang freely below and beside their lane — a picture you drag somewhere is
+never what decides how much room a dataset takes; you are.
+
 **✦ Tidy up** is the way back: it forgets every card you have moved on the lanes
-currently shown, rebuilds the automatic tree, and brings every pinned picture
-back beside the run that made it — including one you dragged clean off its lane.
-Positions are only ever a display preference — moving a card or a picture never
-changes which run continued which or which checkpoint made which image, and Tidy
-up never deletes a run, a checkpoint, a note or a picture.
+currently shown, hands every lane back to the automatic stack, rebuilds the
+automatic tree, and brings every pinned picture back beside the run that made
+it — including one you dragged clean off its lane. Positions are only ever a
+display preference — moving a card, a lane or a picture never changes which run
+continued which or which checkpoint made which image, and Tidy up never deletes
+a run, a checkpoint, a note or a picture.
 
 **Generating from the board.** Every checkpoint pill carries a small **✓** box.
 Tick one and the run settings open beside the board: the prompt, the seed, the

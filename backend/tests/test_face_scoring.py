@@ -200,8 +200,11 @@ def test_score_dataset_faces_stdin_payload_includes_models_root(app, monkeypatch
     assert payload['models_root'] == 'C:/models/insightface'
 
 
-def test_score_dataset_faces_stdin_payload_models_root_none_when_unconfigured(app, monkeypatch):
-    from app.services import face_similarity as fsim
+def test_score_dataset_faces_stdin_payload_falls_back_to_the_managed_root(app, monkeypatch):
+    """Unconfigured is NOT "let insightface decide": it used to send None, which
+    sent the ~350 MB pack to ~/.insightface -- a folder no Docker stack mounts
+    (see test_face_models_root.py)."""
+    from app.services import face_models, face_similarity as fsim
 
     monkeypatch.setattr(fsim, 'is_available', lambda: True)
     captured = {}
@@ -221,8 +224,10 @@ def test_score_dataset_faces_stdin_payload_models_root_none_when_unconfigured(ap
             with open(img_path, 'wb') as fh:
                 fh.write(_png())
             fsim.score_dataset_faces(ref, [img_path])
+            expected = str(face_models.models_root())
     payload = json.loads(captured['input'])
-    assert payload['models_root'] is None
+    assert payload['models_root'] == expected
+    assert payload['models_root']          # never None — that was the Docker bug
 
 
 def test_score_dataset_faces_native_crash_returns_empty_not_exception(app, monkeypatch):
@@ -939,6 +944,10 @@ def test_score_faces_builds_centroid_payload(app, monkeypatch):
     legacy ref is folded into refs by the endpoint, not here."""
     from app.services import face_similarity as fsim
     monkeypatch.setattr(fsim, 'is_available', lambda: True)
+    monkeypatch.setattr(fsim.face_models, 'models_root',
+                        lambda: 'C:/managed/insightface')
+    monkeypatch.setattr('app.capabilities.resolve_face_device',
+                        lambda: ('cpu', False))
     captured = {}
 
     def _fake_run(*args, **kwargs):
@@ -960,6 +969,8 @@ def test_score_faces_builds_centroid_payload(app, monkeypatch):
     assert payload['images'] == [im]
     assert payload['quality_only'] is False
     assert 'ref' not in payload
+    assert payload['models_root'] == 'C:/managed/insightface'
+    assert payload['device'] == 'cpu'
 
 
 def test_score_faces_quality_only_payload(app, monkeypatch):

@@ -17,14 +17,17 @@ import { useEffect, useRef, useState } from 'react';
 import { putJson } from '../../api/fetchClient';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import DatasetZonesPreview from './DatasetZonesPreview.jsx';
+import WatermarkEngineChoice from '../shared/WatermarkEngineChoice.jsx';
+import { watermarkEngineStatus } from '../../utils/watermarkEngine.js';
 
 export default function WatermarkScanDialog({
   onClose, onLaunch, kept = 0, dismissed = 0, threshold = 0.94,
-  detectorInstalled = false, live = false, datasetId,
+  live = false, datasetId, caps = {},
 }) {
   const [includeDismissed, setIncludeDismissed] = useState(false);
   const [sampleOn, setSampleOn] = useState(false);
   const [sampleSize, setSampleSize] = useState(20);
+  const [engine, setEngine] = useState(caps.watermark_detect_backend || 'auto');
   const [level, setLevel] = useState(
     Number.isFinite(Number(threshold)) ? Number(threshold) : 0.94);
   const [busy, setBusy] = useState(false);
@@ -80,7 +83,7 @@ export default function WatermarkScanDialog({
     <div className="fixed inset-0 z-[9991] flex items-center justify-center bg-black/80 p-3 sm:p-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Find watermarks"
-        className="w-full max-w-lg space-y-3 overflow-y-auto rounded-xl border border-border bg-surface p-4 shadow-xl"
+        className="w-full max-w-3xl space-y-3 overflow-y-auto rounded-xl border border-border bg-surface p-4 shadow-xl"
         style={{ maxHeight: 'min(38rem, calc(100vh - 2rem))' }}>
         <h2 className="m-0 text-base font-bold text-content">🚩 Find watermarks</h2>
         <p className="m-0 text-[11px] leading-snug text-content-subtle">
@@ -120,7 +123,9 @@ export default function WatermarkScanDialog({
               {'re-judges the SAME first images, the way to try another threshold.'}
             </span>
           </label>
-          {detectorInstalled ? (
+          <WatermarkEngineChoice caps={caps} disabled={busy || live}
+            onChanged={(engine) => setEngine(engine)} />
+          {watermarkEngineStatus(engine, caps).runs === 'detector' ? (
             <label className="block text-[11px] text-content-subtle">
               <span className="font-medium text-content">Detector threshold</span>
               {' — the score an image needs to be flagged as watermarked. Lower '}
@@ -140,10 +145,8 @@ export default function WatermarkScanDialog({
             </label>
           ) : (
             <p className="m-0 text-[11px] leading-snug text-content-subtle">
-              This run takes the vision route (the dedicated detector is not
-              installed), which answers yes/no with no score — so there is no
-              threshold to tune here. Install “Watermark detector” from Setup
-              for the ~10× faster scored route.
+              The vision route answers yes/no with no score — so there is no
+              threshold to tune here.
             </p>
           )}
         </div>

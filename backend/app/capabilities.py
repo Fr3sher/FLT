@@ -177,6 +177,35 @@ def probe_gemini() -> dict:
     return {'ok': ok, 'detail': 'key set' if ok else 'key missing'}
 
 
+def probe_civitai() -> dict:
+    """📤 Publish to Civitai (and the 🌐 prompt browser's prompts, and adult
+    results in Civitai scans): ready when the one Civitai credential resolves,
+    through the same chain every Civitai feature reads (env > cookies dir >
+    stored secret). A key's presence, never its validity — the site is asked
+    nothing here, this runs on every capabilities poll."""
+    try:
+        from .services.civitai_browser import civitai_api_key
+        ok = bool(civitai_api_key())
+    except Exception:
+        ok = bool(cfg.secret('CIVITAI_API_KEY'))
+    return {'ok': ok, 'detail': 'key set' if ok else 'key missing'}
+
+
+def probe_civitai_test() -> dict:
+    """The Test button's version of the above: the key is shown to Civitai
+    (`/api/v1/me`) and the answer names the account. Network, on demand only
+    — never part of the capabilities poll."""
+    from .services import civitai_publish
+    key = civitai_publish.api_key()
+    if not key:
+        return {'ok': False, 'detail': 'key missing'}
+    who = civitai_publish.whoami(key)
+    if who:
+        return {'ok': True, 'detail': f'signed in as {who}'}
+    return {'ok': False, 'detail': 'key set, but Civitai did not accept it (refused, '
+                                   'or unreachable right now)'}
+
+
 def probe_openai() -> dict:
     """ChatGPT engine readiness: a pay-per-use API key OR a connected ChatGPT
     subscription (Codex OAuth) both light the engine up."""
@@ -1032,6 +1061,18 @@ def probe_video() -> dict:
     }
 
 
+def probe_dlss5nr() -> dict:
+    """✨ DLSS 5 neural rendering — a FILE probe, on purpose. The bridge's real
+    init loads a 165 MB model onto a D3D12 device; doing that on every poll of
+    the Setup screen is not a probe, it is a workload. What CAN be read cheaply
+    is what Setup can act on: the OS, the driver's NGX files, the two bridge
+    DLLs this app installs and the model file the user supplies. The model's
+    own refusal (an unsupported GPU, a stock build on an older card) surfaces
+    at the first render, in the model's words, on the clip that asked."""
+    from .services import neural_render
+    return neural_render.status()
+
+
 def probe_bank_scoring() -> dict:
     """Bank scoring extra (CLIP aesthetic + NSFW + style). Dedicated interpreter
     key (bank_scoring.python), else the app's own. Same subprocess-import probe as
@@ -1139,6 +1180,20 @@ def watermark_detect_gpu_available() -> bool:
 def _watermark_detect_threshold() -> float:
     from .services import watermark_detector
     return watermark_detector.threshold()
+
+
+def _watermark_clean_options() -> dict:
+    """The 🧽 Klein clean's three dials, RESOLVED — not the raw config values.
+
+    Published so the bank panel and the dataset Clean bar can show, and edit, the
+    exact prompt / cap / write-back the next run will use. Reading the raw config
+    instead would let a screen quote a hand-edited `klein_max_mp: 12` that the pass
+    silently clamps to 4, which is the failure mode `watermark_detect_threshold`
+    above exists to avoid."""
+    from .services import watermark_klein
+    return {'prompt': watermark_klein.clean_prompt(),
+            'max_mp': watermark_klein.clean_max_mp(),
+            'output': watermark_klein.clean_output_mode()}
 
 
 def watermark_detect_weights_present() -> bool:
@@ -2019,6 +2074,19 @@ def _comfyui_caps_section(comfy, base_dir, comfy_dir, comfy_launcher,
     # surface reads, so the picker and the Setup card cannot disagree about
     # whether a view can be rendered.
     camera_missing = _qch.camera_missing_assets()
+    # The Video Test Studio, on the same terms as the camera lane: a list of
+    # setup_installer action names the Setup screen turns into buttons, and ONE
+    # readiness verdict every surface reads.
+    #
+    # Two things are deliberately different here. The list carries dicts, not
+    # bare action names, because two of this lane's files have NO action — the
+    # latent upscaler has no verifiable source and the third-party base is
+    # opt-in — and a machine that is missing them must be told where to put them
+    # rather than shown a button that cannot exist. And readiness counts the
+    # REQUIRED weights only: the options degrade one checkbox each, never the
+    # lane.
+    from .services import video_test_studio as _vts
+    _vstudio_missing = _vts.missing_weights()
     return {
         'reachable': comfy['ok'],
         # WHY it isn't reachable, when it isn't: 'ok' | 'slow' | 'unreachable'
@@ -2115,6 +2183,22 @@ def _comfyui_caps_section(comfy, base_dir, comfy_dir, comfy_launcher,
         # The speed LoRA missing does NOT make the lane un-ready: it renders at
         # 20 steps instead of 4. Only the four REQUIRED assets gate it.
         'camera_ready': _qch.camera_ready(camera_missing),
+        'video_studio_missing': _vstudio_missing,
+        'video_studio_ready': _vts.studio_ready(_vstudio_missing),
+        # Per-option node availability: {option: {available, action, nodes}}.
+        # `available: null` means /object_info could not be read — the panel
+        # keeps offering the option, because a probe that could not run is not
+        # a verdict. Costs nothing extra: the class set is already fetched here
+        # for the other engines.
+        'video_studio_options': (_vts.option_availability()
+                                 if comfy['ok'] else {}),
+        # SageAttention is not an option and has no checkbox — it is a speed
+        # patch the graph keeps when present and drops when absent. The pack is
+        # published here so the install card can link it rather than leave a
+        # user wondering why their clips are slower than the notes say.
+        'video_studio_sage': {**_vts.SAGE_PACK,
+                              'present': _vts.sage_available()
+                              if comfy['ok'] else None},
         # Klein assets PRESENT on disk but not real, loadable weights:
         # [{asset, filename, verdict, blocking, reason}]. Distinct from
         # klein_missing (the file exists, it just can't load) — drives the Setup
@@ -2148,6 +2232,7 @@ def probe(force=False) -> dict:
     ollama_installed = probe_ollama_installed()
     from .services import vision_llm as _vision_llm
     _llm_provider = _vision_llm.provider()
+    _wm_clean = _watermark_clean_options()
     _lmstudio_url = ''
     # A filesystem stat, not a round-trip, so it runs for the INACTIVE provider
     # too: "LM Studio is installed on this machine" is worth knowing on the card
@@ -2180,6 +2265,7 @@ def probe(force=False) -> dict:
     watermark_inpaint = probe_watermark_inpaint()
     watermark_detect = probe_watermark_detect()
     video = probe_video()
+    dlss5nr = probe_dlss5nr()
     video_text = probe_video_text()
     scrape_deps = probe_scrape_deps()
     joycaption = probe_joycaption(aitoolkit)
@@ -2349,6 +2435,15 @@ def probe(force=False) -> dict:
         # work, so this only ever unlocks a faster route, never blocks the old one.
         'watermark_detect': watermark_detect['ok'],
         'watermark_detect_detail': watermark_detect['detail'],
+        # The persisted ENGINE choice (auto|detector|vision). The whole resolver
+        # existed and the config key existed — with no UI anywhere, which is how
+        # the maintainer came to ask "we can't choose the detection model?"
+        # about a choice the backend had been honouring all along. Published so
+        # the two scan windows can edit it where its effect is judged, exactly
+        # like the threshold above.
+        'watermark_detect_backend': (lambda v: v if v in ('auto', 'detector', 'vision')
+                                     else 'auto')(
+            str(cfg.get('watermark_detect.backend') or 'auto').strip().lower()),
         # Will the detector actually reach CUDA in ITS interpreter? The Setup
         # install pins the app-managed CPU-torch venv, so on a machine with a
         # card this is routinely False until the user picks a GPU Python — and
@@ -2360,12 +2455,25 @@ def probe(force=False) -> dict:
         # The measured flag threshold, published so the panel and the Settings
         # field quote the SAME number the pass will actually use.
         'watermark_detect_threshold': _watermark_detect_threshold(),
+        # The 🧽 CLEAN's three dials, same doctrine as the threshold above: the
+        # screens that offer them must quote what the pass will really do, and
+        # both surfaces write them back through PUT /api/settings so one stored
+        # choice rules the bank, the dataset and the review lightbox alike.
+        # The prompt in particular was invisible until now — it was a constant in
+        # the source, which is not a place a user can look ("we can't see what is
+        # sent?"). None of the three is a secret and none carries a path.
+        'watermark_clean_prompt': _wm_clean['prompt'],
+        'watermark_clean_max_mp': _wm_clean['max_mp'],
+        'watermark_clean_output': _wm_clean['output'],
         # The video lane, reported as its three independent pieces. A single
         # boolean would be a lie here: decoding, shot detection and encoding come
         # from three different installs and fail apart. The front uses the parts to
         # say WHICH one to fix — never "video unavailable", which is how a user
         # reinstalls the wrong thing.
         'video': video['ok'],
+        # ✨ DLSS 5 neural rendering: the whole status dict (ready + the sentences
+        # naming what is missing), read by the Setup card and both video verbs.
+        'dlss5nr': dlss5nr,
         'video_detail': video['detail'],
         'video_decode': video['decode'],
         'video_detect': video['detect'],
@@ -2396,6 +2504,10 @@ def probe(force=False) -> dict:
         'dataset_import': _dataset_import_policy(),
         'python': python_ml_status(),
         'scrape_deps': scrape_deps['ok'],
+        # 📤 Civitai publishing — a credential, not an install: the Overview row
+        # and the Setup summary count it like the engine keys, and its door is
+        # the key field under Scraping & sources.
+        'civitai': probe_civitai(),
         # WHICH modules are absent, same convention as joycaption/video/siglip2
         # above. The install banner used to recite a hand-written list of three
         # package names; the probe watches seven, so a machine flagged because

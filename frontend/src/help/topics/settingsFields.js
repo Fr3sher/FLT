@@ -178,7 +178,9 @@ export const SETTINGS_FIELD_TOPICS = [
   setting('REDDIT_CLIENT_ID', 'scraping', 'REDDIT_CLIENT_ID', 'Reddit client ID',
     ['reddit', 'client id', 'scrape', '429', 'rate limit', 'quota', 'key']),
   setting('CIVITAI_API_KEY', 'scraping', 'CIVITAI_API_KEY', 'Civitai API key',
-    ['civitai', 'api key', 'nsfw', 'adult', 'scrape', 'key']),
+    ['civitai', 'api key', 'nsfw', 'adult', 'scrape', 'key', 'publish', 'post', 'prompt browser']),
+  setting('civitai.link_host', 'scraping', 'civitai-link-host', 'Civitai site for links',
+    ['civitai', 'civitai.red', 'domain', 'mirror', 'links', 'publish', 'open on', 'draft 404']),
   setting('PEXELS_API_KEY', 'scraping', 'PEXELS_API_KEY', 'Pexels API key',
     ['pexels', 'api key', 'scrape', 'stock', 'key']),
   setting('klein.small_image_prompt', 'scraping', 'klein-small-image-prompt', 'Klein rescue — small scraped images',
@@ -565,6 +567,39 @@ export const SETTINGS_FIELD_TOPICS = [
       'reference edit', 'edit reference', 'rescue', 'small images', 'under 768',
       'watermark', 'watermark clean', 'inpaint', 'klein inpaint', 'bank'],
     guide: { chapter: 'settings-reference', anchor: 'image-engines' },
+    app: { route: '/datasets' } },
+  // The 🧽 Klein clean's three dials (2026-08-31). They are NOT on the Settings screen:
+  // they live next to the Klein model choice in the bank's Level 3 panel and the
+  // dataset's Clean bar, because that is where the result is judged — so like
+  // dataset.klein_model above these are hand-built topics pointing at the workspace,
+  // not `setting()` entries pointing at a Settings field that does not exist. The
+  // guide chapter is the one that documents them (Captioning & quality ▸ Watermark
+  // inpainting).
+  { id: 'watermark_clean.klein_prompt', kind: 'setting',
+    title: 'Prompt sent to Klein (watermark clean)',
+    keywords: ['klein', 'prompt', 'instruction', 'remove watermark', 'what is sent',
+      'sent to klein', 'wording', 'text', 'edit prompt', 'custom prompt', 'clean',
+      'watermark', 'inpaint', 'bank', 'dataset',
+      // The words somebody writes when the pass did not remove their mark and they are
+      // looking for something — anything — to turn.
+      'still there', 'not removed', 'survived', 'did not work', 'logo remains',
+      'signature', 'tiled', 'reset to default', 'default prompt'],
+    guide: { chapter: 'settings-reference', anchor: 'captioning-quality' },
+    app: { route: '/datasets' } },
+  { id: 'watermark_clean.klein_max_mp', kind: 'setting',
+    title: 'Processing size for the Klein clean (megapixels)',
+    keywords: ['klein', 'megapixel', 'megapixels', 'mp', 'processing size', 'resolution',
+      'quality', 'detail', 'sharper', 'blurry', 'soft', 'downscaled', '2 mp', '4 mp',
+      'clean', 'watermark', 'vram', 'out of memory', 'oom', 'slow', 'faster', 'time',
+      'bank', 'dataset'],
+    guide: { chapter: 'settings-reference', anchor: 'captioning-quality' },
+    app: { route: '/datasets' } },
+  { id: 'watermark_clean.klein_output', kind: 'setting',
+    title: 'What size the cleaned file is written at',
+    keywords: ['klein', 'output', 'write back', 'dimensions', 'size', 'resized',
+      'smaller', 'shrunk', 'my images got smaller', 'changed size', 'render size',
+      'original dimensions', 'resample', 'clean', 'watermark', 'bank', 'dataset'],
+    guide: { chapter: 'settings-reference', anchor: 'captioning-quality' },
     app: { route: '/datasets' } },
   // Concept face masking (issue #15) is a per-DATASET Advanced training option,
   // so like Dual captions it points at the dataset guide rather than

@@ -13,6 +13,7 @@ from contextlib import nullcontext
 from ..gpu_window import GpuBusyError
 
 from .. import config as cfg
+from . import face_models
 from .infer_stream import run_infer_script, stderr_tail as _tail
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ def score_dataset_faces(ref_path, image_paths, timeout: int | None = None,
     from ..capabilities import resolve_face_device
     device, use_gpu = resolve_face_device()
     payload = json.dumps({"ref": ref_path, "images": image_paths,
-                          "models_root": cfg.get('face_scoring.models_root') or None,
+                          "models_root": face_models.models_root(),
                           "device": device})
     # GPU is EXCLUSIVE or it is nothing. The window unloads ComfyUI and holds off
     # a training start for the whole pass, which is precisely why this scorer was
@@ -179,7 +180,8 @@ def score_faces(ref_paths, image_paths, quality_only=False, lenient=False,
     strict default (only 'scorable' faces score).
 
     Returns ({path: {state, det, bbox_frac, yaw, sim?}}, error|None); error kinds
-    mirror score_dataset_faces ('unavailable' | 'failed' | 'ref_unusable')."""
+    mirror score_dataset_faces
+    ('unavailable' | 'failed' | 'ref_unusable' | 'gpu_busy')."""
     image_paths = [p for p in (image_paths or []) if p and os.path.isfile(p)]
     if quality_only:
         if not image_paths:
@@ -194,13 +196,27 @@ def score_faces(ref_paths, image_paths, quality_only=False, lenient=False,
     n = len(image_paths) + (0 if quality_only else len(ref_paths))
     if timeout is None:
         timeout = default_timeout(n)
+    from ..capabilities import resolve_face_device
+    device, use_gpu = resolve_face_device()
     payload = json.dumps({"refs": ref_paths, "images": image_paths,
                           "quality_only": bool(quality_only),
                           "lenient": bool(lenient),
-                          "models_root": cfg.get('face_scoring.models_root') or None})
+                          "models_root": face_models.models_root(),
+                          "device": device})
     try:
-        stdout, stderr_lines, returncode, timed_out = _run_scorer(
-            _scoring_python(), payload, timeout, on_progress)
+        if use_gpu:
+            from ..gpu_window import gpu_exclusive_vision_window
+            window = gpu_exclusive_vision_window(flag_ttl=1800)
+        else:
+            window = nullcontext()
+        with window:
+            stdout, stderr_lines, returncode, timed_out = _run_scorer(
+                _scoring_python(), payload, timeout, on_progress)
+    except GpuBusyError as e:
+        logger.info('face_similarity: GPU occupe : %s', e)
+        return {}, {'kind': 'gpu_busy',
+                    'detail': f'the GPU is busy ({e}) - retry when it frees up, '
+                              f'or set face_scoring.device to cpu'}
     except OSError as e:
         return {}, {'kind': 'failed', 'detail': str(e)}
     if timed_out:

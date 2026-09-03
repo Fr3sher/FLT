@@ -350,8 +350,8 @@ def ensure_model_loaded(model: str, *, url: str | None = None,
         instance (":2") and doubles the VRAM. Hence the residency check first,
         and the lock, so a concurrent batch cannot double-load either.
       · an unknown model → {"error": {"type": "model_not_found", ...}} -- turned
-        into a sentence naming the one gesture left to the user: downloading,
-        which stays in LM Studio (it shows progress and lets you cancel).
+        into a sentence pointing at the download field (Settings ▸ Local tools),
+        which lmstudio_download drives through the server's own job API.
 
     A load LDS performs is a residency LDS OWNS: it is registered with the GPU
     fence, so the keep-warm lease may legitimately unload it later and a ComfyUI
@@ -388,9 +388,9 @@ def ensure_model_loaded(model: str, *, url: str | None = None,
         if resp.status_code >= 400:
             body = resp.text or ''
             if 'model_not_found' in body:
-                return False, (f'"{model}" is not downloaded in LM Studio. Download it '
-                               'there (it shows progress and lets you cancel), or name '
-                               'a downloaded one in Settings ▸ Local tools.')
+                return False, (f'"{model}" is not downloaded yet — download it from '
+                               'Settings ▸ Local tools (or inside LM Studio), or name '
+                               'a downloaded one there.')
             return False, failure_sentence(resp.status_code, body)
         from . import ollama_gpu_fence
         ollama_gpu_fence.register_lds_load(endpoint, model)
@@ -518,7 +518,8 @@ def _json_response_format(kind: str) -> dict:
             'json_schema': {'name': 'lds_object', 'schema': {'type': 'object'}}}
 
 
-def _chat(messages, *, model, max_tokens, temperature, timeout, url=None, as_json=False):
+def _chat(messages, *, model, max_tokens, temperature, timeout, url=None, as_json=False,
+          top_p=None, stop=None):
     """POST one chat completion. Retries ONCE on a rejected JSON-mode spelling.
 
     Ollama's `format='json'` has an OpenAI-compatible equivalent, and it is not
@@ -537,6 +538,13 @@ def _chat(messages, *, model, max_tokens, temperature, timeout, url=None, as_jso
     global _json_format
     payload = {'model': model, 'messages': messages,
                'max_tokens': max_tokens, 'temperature': temperature, 'stream': False}
+    # Both are OpenAI-standard, so they travel to whatever LM Studio is
+    # fronting; sent only when a caller asked, so every existing pass keeps the
+    # exact payload it was measured on.
+    if top_p is not None:
+        payload['top_p'] = float(top_p)
+    if stop:
+        payload['stop'] = list(stop)
     headers = {'Content-Type': 'application/json', **_headers()}
     target = f'{url or base_url()}/v1/chat/completions'
     if not as_json:
@@ -563,6 +571,73 @@ def _answer(resp) -> str:
 
 def _image_field(b64: str, data_uri: bool) -> str:
     return f'data:image/jpeg;base64,{b64}' if data_uri else b64
+
+
+def describe_frames(frames, prompt, *,
+                    url: str | None = None,
+                    model: str | None = None,
+                    num_predict: int = 600,
+                    timeout: tuple[float, float] | float = (10, 300)) -> str:
+    """N frames of one shot -> a caption, or '' best-effort — the video door of
+    :func:`describe_image`: one chat call, one image part per frame.
+
+    Each frame passes the same safety gate; an unreadable one is dropped with a
+    log rather than sinking the shot. temperature 0 on purpose — training
+    captions, not conversation — and the same data-URI/bare-b64 memory the
+    image door keeps."""
+    global _data_uri_ok
+    b64s = []
+    for fb in frames:
+        safe = vision_image.ensure_vision_safe_jpeg(fb, provider='vision_lmstudio')
+        if safe is None:
+            logger.warning('vision_lmstudio: a frame was unsafe or unreadable — dropped')
+            continue
+        b64s.append(base64.b64encode(safe).decode())
+    if not b64s:
+        return ''
+    endpoint = _suffix_free(url) if url else base_url()
+    target = resolve_model(model, url=endpoint)
+    if not target:
+        logger.warning('vision_lmstudio: describe_frames skipped: %s',
+                       _no_model_sentence(endpoint))
+        return ''
+    loaded_ok, load_detail = ensure_model_loaded(target, url=endpoint)
+    if not loaded_ok:
+        logger.warning('vision_lmstudio: describe_frames skipped: %s', load_detail)
+        return ''
+    order = [True, False] if _data_uri_ok is not False else [False, True]
+    if _data_uri_ok is True:
+        order = [True]
+    last_status, last_body = None, ''
+    for use_data_uri in order:
+        content = [{'type': 'text', 'text': prompt}] + [
+            {'type': 'image_url', 'image_url': {'url': _image_field(b, use_data_uri)}}
+            for b in b64s]
+        messages = [{'role': 'user', 'content': content}]
+        try:
+            _admit(endpoint, target)
+            resp = _chat(messages, model=target, max_tokens=num_predict,
+                         temperature=0, timeout=timeout, url=endpoint,
+                         as_json=False)
+        except LocalLmStudioFenceError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - reported below
+            last_status, last_body = None, str(exc)
+            break
+        if getattr(resp, 'status_code', 0) < 400:
+            try:
+                answer = _answer(resp)
+            except Exception as exc:  # noqa: BLE001 - a proxy's HTML error page
+                last_status, last_body = resp.status_code, str(exc)
+                break
+            _data_uri_ok = use_data_uri
+            return answer
+        last_status, last_body = resp.status_code, resp.text or ''
+        if _INVALID_URL_MARKER not in last_body.lower():
+            break
+    logger.warning('vision_lmstudio: describe_frames failed: %s',
+                   failure_sentence(last_status, last_body))
+    return ''
 
 
 def describe_image(image_bytes: bytes, prompt: str, *,
@@ -646,6 +721,9 @@ def generate_text(prompt: str, *,
                   model: str | None = None,
                   num_predict: int = 400,
                   strict: bool = False,
+                  temperature: float = 0.2,
+                  top_p: float | None = None,
+                  stop: list[str] | None = None,
                   timeout: tuple[float, float] | float = (10, 120)) -> str:
     """Text-only generation through the same loaded model. Mirrors the Ollama seam."""
     endpoint = _suffix_free(url) if url else base_url()
@@ -665,7 +743,8 @@ def generate_text(prompt: str, *,
     try:
         _admit(endpoint, target)
         resp = _chat([{'role': 'user', 'content': prompt}], model=target,
-                     max_tokens=num_predict, temperature=0.2, timeout=timeout, url=endpoint)
+                     max_tokens=num_predict, temperature=float(temperature),
+                     top_p=top_p, stop=stop, timeout=timeout, url=endpoint)
     except LocalLmStudioFenceError:
         raise                              # the fence speaks for itself, 409 upstream
     except Exception as exc:               # noqa: BLE001 - reported below

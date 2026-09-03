@@ -6,7 +6,8 @@ import {
   frameLabelPhrase, matchLine, seekFragment, playFromSecond,
   VIDEO_CLIP_LIMITS, limitsSentence,
   searchBasisNote, captionMatchNote, captionStateNote, uncaptionedWarning,
-  captionModelNote, captionStyleLabel,
+  captionModelNote, captionStyleLabel, overBudgetWarning,
+  overTokenBudgetWarning, servedShortNote,
 } from './videoClipSearch.js'
 
 // ---- what stops a search before it starts ------------------------------------
@@ -232,4 +233,42 @@ test('the caption style is named in words a user can weigh', () => {
   assert.match(captionStyleLabel(styles, 'plain'), /explicit/i)
   assert.equal(captionStyleLabel(styles, 'nope'), '')
   assert.equal(captionStyleLabel(null, 'plain'), '')
+})
+
+test('overBudgetWarning fires only past a PUBLISHED budget, and says the worst case', () => {
+  assert.equal(overBudgetWarning({ over_caption_budget: 0, caption_word_budget: 200 }), '')
+  assert.equal(overBudgetWarning({ over_caption_budget: 3, caption_word_budget: 0 }), '')
+  assert.equal(overBudgetWarning(null), '')
+  const note = overBudgetWarning({
+    over_caption_budget: 3, caption_word_budget: 200, caption_words_max: 241 })
+  assert.match(note, /3 caption\(s\)/)
+  assert.match(note, /200-word/)
+  assert.match(note, /241 words/)
+  assert.match(note, /without saying so/)
+})
+
+test('overTokenBudgetWarning fires only past a PUBLISHED window, and says the worst case', () => {
+  assert.equal(overTokenBudgetWarning({ over_token_budget: 0, caption_token_budget: 512 }), '')
+  assert.equal(overTokenBudgetWarning({ over_token_budget: 2, caption_token_budget: 0 }), '')
+  const note = overTokenBudgetWarning({
+    over_token_budget: 2, caption_token_budget: 512, caption_tokens_max: 540,
+  })
+  assert.match(note, /2 prompt\(s\)/)
+  assert.match(note, /512-token/)
+  assert.match(note, /540 tokens/)
+  // Stumps are told apart from healthy substitutions (review finding 5).
+  const withStumps = overTokenBudgetWarning({
+    over_token_budget: 3, caption_token_budget: 512, caption_tokens_max: 600,
+    short_blocked: 2,
+  })
+  assert.match(withStumps, /2 of them wrote an unfinished short form/)
+  assert.doesNotMatch(note, /unfinished short form/)
+})
+
+test('servedShortNote says how many prompts went out in their short form, and which lines', () => {
+  assert.equal(servedShortNote({ served_short: 0 }), '')
+  assert.equal(servedShortNote(undefined), '')
+  const note = servedShortNote({ served_short: 3 })
+  assert.match(note, /3 prompt\(s\)/)
+  assert.match(note, /Subject \/ Motion \/ Setting \/ Style/)
 })

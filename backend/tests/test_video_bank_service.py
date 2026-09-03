@@ -500,8 +500,31 @@ def test_the_pipeline_outcome_survives_the_night(app, tmp_path, seams):
         svc.start_pipeline(app, LOCAL_USER, bank_id)
 
         report = svc.bank_payload(LOCAL_USER, bank_id)['pipeline_report']
-        assert [s['step'] for s in report['steps']] == list(svc.PIPELINE_STEPS)
+        # Asking for nothing runs the three this chain has always run — the
+        # extra passes are per-run choices the launch window ticks, never a
+        # silent widening of an existing caller's request.
+        assert [s['step'] for s in report['steps']] == list(svc.PIPELINE_DEFAULT_STEPS)
         assert all(s['status'] == 'done' for s in report['steps'])
+
+
+def test_the_pipeline_can_chain_the_preparation_passes_it_offers(app, tmp_path, seams):
+    """▶ Run everything used to stop after thumbnails while its own tooltip
+    promised 'measure, embeddings and the rest' — so a fresh bank still cost
+    four to nine clicks after the button that claimed to do it all. Every
+    offered step now has a runner, in the order their inputs demand."""
+    with app.app_context():
+        bank_id, _ = _bank(app, tmp_path, ('a.mp4',))
+        # Every offered step is runnable — a step in the list with no runner
+        # would fail at the worst moment, three passes into a night run.
+        assert set(svc.PIPELINE_STEPS) <= set(svc._STEP_RUNNERS)
+        # Order is the one the inputs demand, whatever order they arrive in.
+        assert svc._sanitize_steps(['camera', 'probe', 'embed']) == [
+            'probe', 'embed', 'camera']
+        # 🗣 Describe stays out: its wording belongs to its own window.
+        assert 'caption' not in svc.PIPELINE_STEPS
+        # And the GPU-hungry ones are named rather than inferred, so adding a
+        # runner cannot silently skip the training-run refusal.
+        assert set(svc._GPU_PIPELINE_STEPS) <= set(svc.PIPELINE_STEPS)
 
 
 # --- deletion ------------------------------------------------------------------
@@ -763,3 +786,91 @@ def test_references_cover_every_clip_or_are_refused(app, tmp_path, monkeypatch):
         with pytest.raises(ValueError):
             svc.set_dataset_references('local', ds.id, [('x.png', b'x')])
 
+
+
+# --- the sidecar carries the MEASURED camera line (C12, 2026-08-30) ------------------
+
+def _pan_scores():
+    """A metrics blob the camera pass could have written: measured, panning
+    right, camera clearly dominant — the STORED RATES, not label names, because
+    labels() derives at read time from exactly these keys."""
+    from app.services import video_camera_motion as vcm
+    return {vcm.STATE_KEY: 'ok', 'camera_coverage': 1.0,
+            'camera_pan_rate': vcm.PAN_FLOOR * 10}
+
+
+def test_the_sidecar_gains_the_classifier_camera_line():
+    import json as _json
+    from app.services import video_camera_motion as vcm
+    from app.services.video_bank_service import compose_sidecar_text
+    scores = _pan_scores()
+    phrase = vcm.camera_phrase(scores)
+    assert phrase, 'fixture scores must produce a phrase for this test to mean anything'
+
+    text = compose_sidecar_text('mychar', 'a woman walks', _json.dumps(scores))
+
+    assert text.startswith('mychar, a woman walks')
+    assert f'Camera: {phrase}.' in text
+
+
+def test_no_camera_line_when_the_classifier_had_nothing_honest_to_say():
+    """Unmeasured metrics, unreadable JSON, no JSON at all: the caption stays
+    exactly what it was — a prompt silent about the camera teaches nothing
+    false, a guessed one teaches the wrong word."""
+    from app.services.video_bank_service import compose_sidecar_text
+
+    assert compose_sidecar_text('mychar', 'a woman walks', None) \
+        == 'mychar, a woman walks'
+    assert compose_sidecar_text('mychar', 'a woman walks', 'not json{') \
+        == 'mychar, a woman walks'
+    assert compose_sidecar_text('mychar', 'a woman walks', '{"cam_state": "unreadable"}') \
+        == 'mychar, a woman walks'
+
+
+def test_a_camera_line_alone_is_still_a_sidecar():
+    """A clip with no caption but a measured camera writes the one honest thing
+    it knows rather than an empty prompt."""
+    import json as _json
+    from app.services.video_bank_service import compose_sidecar_text
+    text = compose_sidecar_text('', None, _json.dumps(_pan_scores()))
+    assert text.startswith('Camera: ')
+
+
+# --- the measured Audio: line (C12-B) ------------------------------------------------
+
+def test_audio_line_only_for_targets_that_keep_audio_and_only_when_measured():
+    import json as _json
+    from app.services.video_bank_service import compose_sidecar_text
+
+    no_track = _json.dumps({'audio_state': 'none'})
+    near_silent = _json.dumps({'audio_state': 'ok', 'silence_ratio': 1.0,
+                               'rms_dbfs': -120.0})
+    audible = _json.dumps({'audio_state': 'ok', 'silence_ratio': 0.1,
+                           'rms_dbfs': -18.0})
+    unreadable = _json.dumps({'audio_state': 'unreadable'})
+
+    # For a target that keeps audio: the two sentences the numbers prove.
+    assert compose_sidecar_text('', 'a scene', no_track, keeps_audio=True) \
+        == 'a scene Audio: silent.'
+    assert compose_sidecar_text('', 'a scene', near_silent, keeps_audio=True) \
+        == 'a scene Audio: near silence.'
+    # Audible audio: NO line — we have level metrics, not a content classifier,
+    # and "ambient sound" would claim a content type nobody measured.
+    assert compose_sidecar_text('', 'a scene', audible, keeps_audio=True) \
+        == 'a scene'
+    assert compose_sidecar_text('', 'a scene', unreadable, keeps_audio=True) \
+        == 'a scene'
+    # For a target whose export strips audio (Wan, -an): never a word about a
+    # soundtrack the clip will not have.
+    assert compose_sidecar_text('', 'a scene', no_track, keeps_audio=False) \
+        == 'a scene'
+
+
+def test_published_word_budgets_and_only_published_ones():
+    """WAN's own rewriter caps at 200 (T2V) / 100 (I2V) words — published, so
+    carried. H3 published none, so it carries none: an invented budget is a
+    figure somebody plans around."""
+    from app.services import video_targets as vt
+    assert vt.get('wan22_14b').get('caption_word_budget') == 200
+    assert vt.get('wan22_14b_i2v').get('caption_word_budget') == 100
+    assert 'caption_word_budget' not in vt.get('minimax_h3')

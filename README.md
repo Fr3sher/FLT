@@ -6,6 +6,17 @@
 
 No account, paid tier or telemetry. API engines and rented GPUs are optional; local and manual workflows remain available.
 
+<h3 align="center">☕ Keep the project in development</h3>
+
+<p align="center">
+  <a href="https://ko-fi.com/perfectgf"><img src="https://storage.ko-fi.com/cdn/kofi3.png?v=3" alt="Support the project on Ko-fi" height="44"></a>
+</p>
+
+<p align="center">
+  <strong><a href="https://ko-fi.com/perfectgf">ko-fi.com/perfectgf</a></strong> — one-off, no account needed, from the price of a coffee.<br>
+  No paid tier, now or ever, so this is what funds the work: the API credits and rented GPUs every release is tested on, and the hours that go into the next one. <a href="#support-the-project">What it pays for →</a>
+</p>
+
 > New here? Start with [Setup & install](#setup--install), then follow the [end-to-end workflow](docs/guide/workflow.md). The [documentation index](docs/README.md) links every guide. Project news and current development live on [Discord](https://discord.gg/j6hnJBFtXE).
 
 ### 📖 [The complete guide — every feature, screen by screen →](docs/guide/using-the-app.md)
@@ -192,7 +203,7 @@ the target model accepts.
 | **Caption Lab and recovery** | Find/replace, tag frequencies, expanded editing, targeted re-captioning, stoppable batches and reload-proof recovery |
 | **External caption round trip** | Export ordinary image/`.txt` pairs, caption them in any tool, then re-import without duplicating images or overwriting non-empty LDS captions |
 | **Dual long + short captions** | ai-toolkit text-side augmentation for supported local families; both wordings remain editable per image |
-| **Watermark review** | Detect, review and edit masks; choose crop or LaMa/Klein inpaint; every edit keeps an `.orig` backup and **Restore original** supports another attempt. 🔤 Find text feeds the same funnel with burned-in lettering (speech bubbles, subtitles), on datasets as on banks |
+| **Watermark review** | Detect, review and edit masks; choose crop, LaMa inpaint or a Klein whole-photo re-render (found zones erased first); every edit keeps an `.orig` backup and **Restore original** supports another attempt. 🔤 Find text feeds the same funnel with burned-in lettering (speech bubbles, subtitles), on datasets as on banks |
 
 ### Train, compare and continue
 
@@ -278,9 +289,11 @@ The detailed journey, screenshots and operational notes now live in the [workflo
 Directions, not dates. These are discussed openly on the project's Discord, and the most-requested ideas move up the list.
 
 - **🧬 Merge Lab** *(its first bricks are live)* — baking your LoRAs into a standalone checkpoint has landed, and so has full-model training on Krea 2. What the Lab adds is the workshop part: per-block merge ratios, producing several variants of one merge and **comparing them side by side** in the Test Studio on fixed seeds, merging two checkpoints with each other, and a one-click "Turbo transplant".
-- **🎬 Video LoRAs** — *the dataset half exists and training now launches from the app* (see **Video Bank** above): shot detection, quality measures (motion, exposure, freeze, audio), captions that describe the action, keyword search across shots, target-aware cutting into a trainable folder, and a ▶ Train button that runs the set through your local ai-toolkit or a rented pod. What remains is proving the targets beyond Wan 2.2 with a finished run each, and testing the resulting video LoRAs in-app. Community-driven.
+- **🎬 Video LoRAs** — *the dataset, training and in-app test lanes now exist* (see **Video Bank** above): shot detection, quality measures (motion, exposure, freeze, audio), captions that describe the action, keyword search across shots, target-aware cutting into a trainable folder, a ▶ Train button that runs the set through your local ai-toolkit or a rented pod, and a Video Test Studio that renders a clip with the resulting LoRA. What remains is proving the targets beyond Wan 2.2 with a finished run each. Community-driven.
 - **🧠 Watermark cleaning during import** — cleaning that happens **during import** instead of as a separate errand, and automation you can trust unattended. *(Detection keeps catching up: a dedicated detector that needs no vision model ships alongside the Ollama path, manual two-pass cleaning works in datasets and in the Image Bank — and 🔤 Find text now reads burned-in lettering, speech bubbles and subtitles into the same mask funnel.)*
 - **🧩 More base models** — additional Flux-family bases (Chroma, Qwen-Image…) with the same one-click flow as Krea 2.
+
+These are built on personal time, and how fast they arrive depends on how much of it there is. [**Support the project on Ko-fi ☕**](https://ko-fi.com/perfectgf) if you want to see them sooner.
 
 ## Why this instead of ai-toolkit?
 
@@ -320,7 +333,7 @@ Missing dependencies are shown in Setup/Settings and gated features stay unavail
 | Character person masks | `backend/requirements-ml.txt` (rembg); Concept/Style intentionally disable them |
 | Image Bank scoring, crops and semantic tools | The Bank scoring extra provides CLIP and ✨ Score. Each Bank can instead select the optional pinned SigLIP 2 engine from Setup; it builds a separate index, while aesthetic/NSFW/style/medium remain on CLIP. Balanced picks also need Framing. Both ship **CPU-only PyTorch** on purpose; on a machine that already has a CUDA Python (ai-toolkit's, ComfyUI's) each can be pointed at it instead — checked package by package, never installed into, and separately for ✨ Score and for SigLIP 2. |
 | Watermark detection | A local LLM (Ollama or LM Studio) with a vision model, **or** the dedicated detector (torch + transformers — the bank-scoring extra's environment is reused when present — plus ~0.9 GB of model downloads at first use) |
-| Watermark inpainting | LaMa extra from `backend/requirements-ml.txt`, or ComfyUI + Klein for the refine lane; crop remains model-free |
+| Watermark inpainting | LaMa extra from `backend/requirements-ml.txt`, or ComfyUI + Klein, which erases the found zones and re-renders the whole photo; crop remains model-free |
 | Scraping | `backend/requirements-scrape.txt`; Pexels also needs `PEXELS_API_KEY` and explicit authorization. Gallery/URL scanning goes through gallery-dl for any site it recognizes, whatever its bundled extractors cover; an unrecognized site returns "No images found" in the picker (the single item gallery-dl's yt-dlp fallback can still fetch is video-typed, so it never reaches the image list), and a listing of albums returns one cover per album unless **Scan full albums** is ticked. A scan that was cut short — by the time budget, a result cap, or a source that blocked or rate-limited it — now says so under the results ("this scan stopped before the end of the listing"), instead of presenting a partial list as the whole thing. Web image search needs no key — it queries a metasearch layer over several backends and asks for photos, but the filter is not honored uniformly, so some non-photo results can still come through; results are capped per search rather than guaranteed — a request for the 120 maximum routinely comes back with far fewer — come from third-party sites whose licence is your responsibility, and a few links — mainly stock-photo CDNs that redirect to the actual file — are refused by the hardened fetch that protects every import |
 | Video Bank — reading and triaging | `backend/requirements-ml.txt` (PyAV). Shot detection additionally needs `transnetv2-pytorch` (weights bundled, nothing to download), which rides the bank-scoring environment because it pulls torch. The three pieces install and fail **apart**, and Setup reports them as three separate rows |
 | Video Bank — cutting clips into a dataset | An ffmpeg binary: `imageio-ffmpeg` ships one, or any ffmpeg on PATH. Needed **only to promote** — without it you can still scan, detect shots, watch and triage a whole bank |
@@ -368,7 +381,7 @@ From a git checkout, the same launcher works and **Update & restart** can pull f
 
 ```bash
 git clone https://github.com/Fr3sher/FLT.git
-cd lora-dataset-studio
+cd FLT
 start.bat
 ```
 
@@ -518,6 +531,10 @@ The symptom-first fixes — including Windows blank pages, RTX 50-series PyTorch
 Still stuck? **Guide → Getting help** generates a paste-safe diagnostic report, then [Discord](https://discord.gg/j6hnJBFtXE) and [GitHub issues](https://github.com/Fr3sher/FLT/issues) are the best places to share it.
 
 ## Support the project
+
+<p align="center">
+  <a href="https://ko-fi.com/perfectgf"><img src="https://storage.ko-fi.com/cdn/kofi3.png?v=3" alt="Support the project on Ko-fi" height="44"></a>
+</p>
 
 FLT - Fresh LoRa Trainer is free, open source, and has no paid tier, no telemetry and
 no upsell. It is built and maintained by one person, on personal time — every

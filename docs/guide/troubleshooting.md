@@ -21,7 +21,7 @@ old build must be used temporarily, repair the `.js` Content Type to a
 JavaScript MIME type, then restart the browser. Updating is safer than making a
 registry edit by hand.
 
-*(Reported and diagnosed in [GitHub #12](https://github.com/Fr3sher/FLT/issues/12).)*
+*(Reported and diagnosed in [GitHub #12](https://github.com/perfectgf/lora-dataset-studio/issues/12).)*
 
 ## "No Z-Image model available" in the Test Studio or training panel
 
@@ -117,7 +117,7 @@ Three more things worth knowing when the two disagree:
 | Symptom | Cause | Fix |
 |---|---|---|
 | Every call fails, and the message talks about Ollama holding the GPU | The URL carries a path — LM Studio's Developer tab shows `http://localhost:1234/v1` and that is what gets pasted | Nothing to do on recent builds: the `/v1` is stripped automatically. If you typed something else after the port, remove it. |
-| **"No usable model is loaded"** | LM Studio ships with just-in-time loading OFF, and older LDS builds left the loading to you — then unloaded your own copy when their keep-warm expired, which read as "load it, again and again" | Update LDS: it now loads the model itself — automatically when a pass needs it, or from the **⏬ Load the vision model** button in Setup and Settings ▸ Local tools. Only **downloading** a new model still happens inside LM Studio, which shows progress and lets you cancel. |
+| **"No usable model is loaded"** | LM Studio ships with just-in-time loading OFF, and older LDS builds left the loading to you — then unloaded your own copy when their keep-warm expired, which read as "load it, again and again" | Update LDS: it now loads the model itself — automatically when a pass needs it, or from the **⏬ Load the vision model** button in Setup and Settings ▸ Local tools. A missing model can be **downloaded from Settings ▸ Local tools** as well — model id or huggingface.co URL; the job runs inside LM Studio, so it survives an LDS restart. |
 | The card says the server answers but cannot tell what is loaded | Only the OpenAI-compatible API is answering; it reports neither model type nor residency | Name a model explicitly in **Settings ▸ Local tools ▸ LM Studio model**, or update LM Studio so its native API answers |
 | Captioning works but framing/head-crop do not | The loaded model is a text model, not a vision one | Load a VLM (a model LM Studio lists with vision support) |
 
@@ -284,7 +284,7 @@ to and matches it. This also covers the reverse case — the app on Windows driv
 a ComfyUI in WSL, Docker or on another machine, which needs forward slashes — so
 there is nothing to configure either way.
 
-*(Found and diagnosed by 1Tomber, [GitHub #21](https://github.com/Fr3sher/FLT/issues/21).)*
+*(Found and diagnosed by 1Tomber, [GitHub #21](https://github.com/perfectgf/lora-dataset-studio/issues/21).)*
 
 ## Klein engine stays greyed out
 

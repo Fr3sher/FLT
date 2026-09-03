@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import itertools
 import logging
 import math
 import os
@@ -55,9 +56,10 @@ from sqlalchemy import and_, case, func, or_, text
 
 from .. import config as cfg
 from ..extensions import db
-from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
+from ..models import (BankDupDistinct, BankImage, FaceDataset, FaceDatasetImage,
+                      ImageBank)
 from . import (bank_jobs, bank_semantic_engine, bank_transfer_metadata, bank_undo, caption_origin,
-               dataset_activity, image_encoding, path_guard, trash)
+               dataset_activity, face_models, image_encoding, path_guard, trash)
 # The scope vocabulary is a leaf (pass_scopes.py) so face_dataset_service never
 # imports this module; the three names stay readable as banks.* for every caller.
 from .pass_scopes import PASS_SCOPES, CAPTION_SCOPES, normalize_pass_statuses  # noqa: F401
@@ -101,6 +103,12 @@ REVIEW_MAX_SIDE = 1280
 _COMMIT_EVERY = 25          # scan DB flush cadence
 _PROMOTE_CHUNK = 20         # files per import_images call (bounded memory)
 _SQL_IN_CHUNK = 500         # SQLite bound-variable ceiling is 999
+# Biggest group ≠ ("not duplicates") will take. It records a decision about every
+# PAIR, so the cost is n²/2 rows: 3 160 at this limit and still nothing, but four
+# and a half million at 3 000 — one long video's worth of near-identical frames.
+# A group that size means the threshold is wrong, not that all 3 000 are
+# different pictures, so the refusal names the dial instead of the limit.
+_DISTINCT_MAX_MEMBERS = 80
 # --- duplicate regrouping budgets (see rebuild_dup_groups) -------------------
 # Rows written between two commits. The whole regrouping used to be ONE
 # transaction: a global clear plus one UPDATE per group, ~5 000 of them on a
@@ -1198,6 +1206,7 @@ def forget_missing(user_id, bank_id, *, _bank_lease=None) -> dict:
         raise ValueError('bank not found')
     gone, present = _rows_missing_on_disk(bank)
     ids = [rid for rid, _rel in gone]
+    drop_distinct_for_images(bank_id, ids)   # their ≠ verdicts go with them
     for i0 in range(0, len(ids), _SQL_IN_CHUNK):
         BankImage.query.filter(
             BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])
@@ -1275,6 +1284,7 @@ def delete_bank(user_id, bank_id, *, _allow_busy=False,
     from . import folder_person
     folder_person.drop_for_bank(bank_id)   # children first — no relationship()
     folder_person.drop_probes_for_bank(bank_id)
+    BankDupDistinct.query.filter_by(bank_id=bank_id).delete(synchronize_session=False)
     BankImage.query.filter_by(bank_id=bank_id).delete(synchronize_session=False)
     db.session.delete(bank)
     db.session.commit()
@@ -1769,13 +1779,82 @@ def _subfolder_of(relpath: str) -> str:
 
 def _unresolved_dup_groups_q(bank_id, col=BankImage.dup_group):
     """Groups still holding ≥2 NON-rejected members — i.e. still to resolve. ``col``
-    selects the stage: dup_group (exact/resized) or semantic_dup_group (crops)."""
+    selects the stage: dup_group (exact/resized) or semantic_dup_group (crops).
+
+    RAW: this is the pixel answer, and it does not know about the user's ≠ veto.
+    Everything that shows a group to a user, or counts what is left to do, must
+    go through :func:`unresolved_dup_group_ids` instead."""
     return (db.session.query(col)
             .filter(BankImage.bank_id == bank_id,
                     col.isnot(None),
                     BankImage.status != 'reject')
             .group_by(col)
             .having(func.count(BankImage.id) >= 2))
+
+
+def _distinct_pairs(bank_id) -> set:
+    """Every (low, high) pair this bank's user has declared NOT the same shot."""
+    return {(a, b) for a, b in
+            db.session.query(BankDupDistinct.image_a, BankDupDistinct.image_b)
+            .filter(BankDupDistinct.bank_id == bank_id).all()}
+
+
+def _group_live_members(bank_id, col, gids) -> dict:
+    """{group id: [live member ids]} for the given groups, in one query per chunk."""
+    out: dict = {}
+    gids = [int(g) for g in gids]
+    for i0 in range(0, len(gids), _SQL_IN_CHUNK):
+        rows = (db.session.query(col, BankImage.id)
+                .filter(BankImage.bank_id == bank_id,
+                        BankImage.status != 'reject',
+                        col.in_(gids[i0:i0 + _SQL_IN_CHUNK]))
+                .order_by(BankImage.id.asc()).all())
+        for gid, image_id in rows:
+            out.setdefault(gid, []).append(image_id)
+    return out
+
+
+def _vetoed_group_ids(bank_id, col) -> set:
+    """Groups the user has ruled on with ≠ — every live pair declared distinct.
+
+    Cost is proportional to how many pairs the user has vetoed, NEVER to the size
+    of the bank: with no veto the function returns on its first line, and with a
+    few it only ever looks at the groups those images are in. That matters
+    because this sits behind a COUNTER on the overview payload, which every page
+    load asks for.
+
+    A group is vetoed only when EVERY pair among its live members is vetoed.
+    Anything less means there is still a question to answer — a new member joined,
+    or the user vetoed a different group that happens to share an image — and the
+    group comes back with the unruled copy on screen, which is the whole point."""
+    pairs = _distinct_pairs(bank_id)
+    if not pairs:
+        return set()
+    marked = sorted({i for pair in pairs for i in pair})
+    # The groups those images are in — the only ones that can possibly be vetoed.
+    candidates = set()
+    for i0 in range(0, len(marked), _SQL_IN_CHUNK):
+        candidates |= {g for (g,) in db.session.query(col)
+                       .filter(BankImage.bank_id == bank_id,
+                               col.isnot(None),
+                               BankImage.status != 'reject',
+                               BankImage.id.in_(marked[i0:i0 + _SQL_IN_CHUNK]))
+                       .distinct().all()}
+    vetoed = set()
+    for gid, members in _group_live_members(bank_id, col, candidates).items():
+        if len(members) < 2:
+            continue
+        if all((a, b) in pairs for a, b in itertools.combinations(sorted(members), 2)):
+            vetoed.add(gid)
+    return vetoed
+
+
+def unresolved_dup_group_ids(bank_id, col=BankImage.dup_group) -> list:
+    """The groups a user still has to rule on: unresolved by the pixels, minus
+    the ones they have already answered with ≠. Sorted, so a page of them is
+    stable between two calls."""
+    return sorted(set(g for (g,) in _unresolved_dup_groups_q(bank_id, col).all())
+                  - _vetoed_group_ids(bank_id, col))
 
 
 def _res_bucket_case():
@@ -2168,9 +2247,13 @@ def _bp_similarity_summaries(bank_id, base):
                 .filter(BankImage.bank_id == bank_id,
                         BankImage.dup_group.isnot(None))
                 .group_by(BankImage.dup_group).all())
+    # 'unresolved' is what the ≈ chip counts and what the user reads as "still to
+    # do", so it is the VETO-AWARE number: a group answered with ≠ is done, and
+    # counting it as outstanding would send them back to a decision they made.
     dup = {'groups': len(dup_rows),
            'images': sum(n for _g, n in dup_rows),
-           'unresolved': _unresolved_dup_groups_q(bank_id).count()}
+           'unresolved': len(unresolved_dup_group_ids(bank_id)),
+           'not_duplicates': len(_vetoed_group_ids(bank_id, BankImage.dup_group))}
     # Stage-2 semantic near-duplicate groups (crops/variants), same summary shape.
     sem_rows = (db.session.query(BankImage.semantic_dup_group, func.count(BankImage.id))
                 .filter(BankImage.bank_id == bank_id,
@@ -2179,8 +2262,10 @@ def _bp_similarity_summaries(bank_id, base):
     semantic_dup = {
         'groups': len(sem_rows),
         'images': sum(n for _g, n in sem_rows),
-        'unresolved': _unresolved_dup_groups_q(
-            bank_id, BankImage.semantic_dup_group).count()}
+        'unresolved': len(unresolved_dup_group_ids(
+            bank_id, BankImage.semantic_dup_group)),
+        'not_duplicates': len(_vetoed_group_ids(
+            bank_id, BankImage.semantic_dup_group))}
     # Person clusters, biggest first; cover = the member with the surest face.
     cl_rows = (db.session.query(BankImage.face_cluster, func.count(BankImage.id))
                .filter(BankImage.bank_id == bank_id,
@@ -4622,8 +4707,7 @@ def dup_groups_payload(user_id, bank_id, offset=0, limit=50,
     if not bank:
         return None
     th = thresholds()
-    gids = [g for (g,) in _unresolved_dup_groups_q(bank_id, col)
-            .order_by(col.asc()).all()]
+    gids = unresolved_dup_group_ids(bank_id, col)
     total = len(gids)
     page = gids[max(0, int(offset)):max(0, int(offset)) + max(1, min(200, int(limit)))]
     groups = []
@@ -4700,7 +4784,12 @@ def resolve_dups(user_id, bank_id, strategy='best', group=None, keep_ids=None,
     elif group is not None:
         gids = [int(group)]
     else:
-        gids = [g for (g,) in _unresolved_dup_groups_q(bank_id, col).all()]
+        # "Resolve ALL" means all the groups the user still has to rule on — a
+        # group they answered with ≠ has been ruled on, and collapsing it here
+        # would reject copies they explicitly asked to keep. An explicit
+        # ``group=`` still resolves whatever it names: naming a group IS ruling
+        # on it again, and the user is allowed to change their mind.
+        gids = unresolved_dup_group_ids(bank_id, col)
     resolved = rejected = 0
     for gid in gids:
         rows = (BankImage.query.filter(BankImage.bank_id == bank_id, col == gid)
@@ -4740,6 +4829,139 @@ def resolve_semantic_dups(user_id, bank_id, strategy='best', group=None,
                         attr='semantic_dup_group', reason='semantic_dup',
                         respect_existing_keep=respect_existing_keep,
                         snapshot=snapshot, _bank_lease=_bank_lease)
+
+
+@_serialized_bank_mutation('dup_distinct')
+def mark_group_distinct(user_id, bank_id, group, col=BankImage.dup_group, *,
+                        _bank_lease=None) -> dict:
+    """≠ — "these are not the same shot". Records every pair among the group's
+    live members, so the group stops being proposed and NOTHING is rejected.
+
+    This is the answer the panel never had. Its three neighbours all end with a
+    rejection ("keep best", "keep first", a manual pick) and ``skip`` writes
+    nothing at all, so a group the user had genuinely settled — a burst, a
+    tripod series, two crops a threshold called one picture — came back on every
+    single run. The only ways out were to reject a picture they wanted or to
+    keep saying "not now" forever.
+
+    Deliberately NOT a status on the images: they keep whatever they had, kept or
+    undecided, and stay in every other filter. The claim is about the RELATION
+    between two images and nothing else.
+
+    Idempotent — re-vetoing a group inserts only the pairs it does not already
+    have, so pressing ≠ twice is not an error and re-vetoing a group that grew
+    adds only the new member's pairs."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    members = _group_live_members(bank_id, col, [int(group)]).get(int(group), [])
+    if len(members) < 2:
+        # Nothing to declare distinct FROM. Answered as a no-op rather than an
+        # error: a group can collapse to one live copy between the click and the
+        # request, and that is already the outcome the user wanted.
+        return {'group': int(group), 'pairs': 0, 'members': len(members)}
+    if len(members) > _DISTINCT_MAX_MEMBERS:
+        # Said out loud rather than absorbed. ≠ records a decision about every
+        # PAIR, which is n²/2 rows: at 80 members that is 3 160 and still cheap,
+        # at 3 000 — one long video's worth of near-identical frames — it is four
+        # and a half million, and the honest reading of a group that size is that
+        # the threshold is wrong, not that all 3 000 are different pictures. The
+        # remedy names the dial rather than the limit.
+        raise ValueError(
+            f'this group holds {len(members)} copies — too many for ≠, which '
+            f'records a decision about every pair. A group that size usually '
+            f'means the duplicate distance is too loose: lower it in 🎚 filter '
+            f'thresholds and re-group, then rule on what is left.')
+    known = _distinct_pairs(bank_id)
+    fresh = [(a, b) for a, b in itertools.combinations(sorted(members), 2)
+             if (a, b) not in known]
+    for a, b in fresh:
+        db.session.add(BankDupDistinct(bank_id=bank_id, image_a=a, image_b=b))
+    db.session.commit()
+    return {'group': int(group), 'pairs': len(fresh), 'members': len(members)}
+
+
+def mark_semantic_group_distinct(user_id, bank_id, group, *, _bank_lease=None) -> dict:
+    """mark_group_distinct for stage 2 (semantic_dup_group)."""
+    return mark_group_distinct(user_id, bank_id, group,
+                               col=BankImage.semantic_dup_group,
+                               _bank_lease=_bank_lease)
+
+
+@_serialized_bank_mutation('dup_distinct_restore')
+def restore_distinct(user_id, bank_id, group=None, col=BankImage.dup_group, *,
+                     _bank_lease=None) -> dict:
+    """Take the ≠ back — for one group, or for every group of ONE STAGE.
+
+    A veto is a decision, so it owes a way out that is as easy to find as it was
+    to make. ``group`` restores just that one (the pairs among ITS live members,
+    leaving any other group's verdict alone); no group at all restores the vetoed
+    groups of ``col``, which is what the panel's "restore" line offers.
+
+    SCOPED TO ``col`` ON PURPOSE, and it used to be a plain "delete every row of
+    this bank". That was wrong in the one way a user cannot see coming: the
+    ≈ Duplicates panel offers the line with ITS OWN count ("≠ 3 groups marked
+    not duplicates"), and pressing it also threw away every verdict made on the
+    ✂ Same shot panel — decisions the sentence never mentioned. A veto stays a
+    fact about the images (marking a group on one stage answers the other), but
+    UNDOING it must not reach past what the button counted.
+
+    Restoring cannot lose anything else: the images were never rejected, so the
+    only effect is that the group is proposed again."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    gids = ([int(group)] if group is not None
+            else sorted(_vetoed_group_ids(bank_id, col)))
+    n = 0
+    for gid in gids:
+        members = _group_live_members(bank_id, col, [gid]).get(gid, [])
+        # A group too big to have been vetoed holds no pair to restore, and
+        # skipping it is also what keeps the IN list below SQLite's parameter
+        # ceiling: 2 × _DISTINCT_MAX_MEMBERS, never 2 × "however many copies
+        # a loose threshold piled into one group".
+        if len(members) < 2 or len(members) > _DISTINCT_MAX_MEMBERS:
+            continue
+        # A row whose BOTH endpoints sit in this group IS a pair of this group —
+        # no row-value IN needed, which SQLite handles poorly anyway.
+        n += (BankDupDistinct.query
+              .filter(BankDupDistinct.bank_id == bank_id,
+                      BankDupDistinct.image_a.in_(members),
+                      BankDupDistinct.image_b.in_(members))
+              .delete(synchronize_session=False))
+    db.session.commit()
+    return {'restored': n}
+
+
+def drop_distinct_for_images(bank_id, image_ids) -> int:
+    """Forget the vetoes that name images being removed from the bank.
+
+    CORRECTNESS, not hygiene — the comment here used to claim a leftover row was
+    "inert because it can no longer match a live group", and that is false.
+    SQLite allocates ``max(rowid) + 1``, so deleting the newest images FREES
+    their ids and the next import takes them back. A surviving pair then matches
+    two images nobody ever ruled on, and vetoes their group: the failure hides a
+    question instead of asking a spurious one, which is the direction nobody
+    notices.
+
+    So every path that removes BankImage rows owes this call. There are exactly
+    three, and they all make it: ``forget_missing``, ``delete_rejected._drop``
+    and ``delete_bank`` (which drops the whole bank's rows outright).
+
+    Does NOT commit — each caller commits the image deletion it belongs to, in
+    the same transaction, so the two can never come apart."""
+    ids = [int(i) for i in (image_ids or [])]
+    if not ids:
+        return 0
+    n = 0
+    for i0 in range(0, len(ids), _SQL_IN_CHUNK):
+        chunk = ids[i0:i0 + _SQL_IN_CHUNK]
+        n += (BankDupDistinct.query
+              .filter(BankDupDistinct.bank_id == bank_id,
+                      or_(BankDupDistinct.image_a.in_(chunk),
+                          BankDupDistinct.image_b.in_(chunk)))
+              .delete(synchronize_session=False))
+    return n
 
 
 # --- statuses & flag application --------------------------------------------
@@ -4862,7 +5084,17 @@ def crop_image(user_id, bank_id, image_id, x, y, w, h, *,
     The user's file is never written to (the crop is a blob in the bank's own
     ``edited/``), the previous generation is kept until the new one is published,
     and every measured lane is invalidated so the next pass re-reads THIS image —
-    which is what makes "crop, then re-analyse, then curate" work at all."""
+    which is what makes "crop, then re-analyse, then curate" work at all.
+
+    ONE decode, ONE encode. nofaceman came back about the speed ("sometimes takes
+    3-5 seconds or more to do the cropping"): the crop used to stage an upright
+    lossless WebP of the WHOLE image first — the working file the ✨ improve and
+    the watermark cleaners need, because they edit a file — and then reopen that
+    copy, cut it, and encode the cut a second time. Lossless WebP at the app's
+    effort costs about a second per megapixel written on a Windows desktop (half
+    that on Linux), so a plain reframing paid for the full frame plus the box
+    and threw the full frame away. The box is now cut straight from the
+    resolved source by ``_cut_edited_copy``."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
@@ -4881,21 +5113,16 @@ def crop_image(user_id, bank_id, image_id, x, y, w, h, *,
     src = resolved_image_path(bank, row)
     if not src or not os.path.isfile(src):
         raise ValueError('the image could not be read from its folder')
-    from .face_dataset_service import _apply_watermark_crop
     generation = int(row.edit_generation or 0) + 1
     baked = (row.edit_baked_rotation if row.edit_method
              else (int(row.rotation or 0) % 360 or None))
     try:
-        dst = _stage_edited_copy(bank_id, row, src, generation)
+        dst = _cut_edited_copy(bank_id, row, src, generation, box)
+    except _EmptyCropBox:
+        raise ValueError('invalid crop box') from None
     except (OSError, ValueError, MemoryError, Image.DecompressionBombError,
             Image.DecompressionBombWarning) as exc:
         raise ValueError(f'the image could not be prepared for cropping: {exc}') from exc
-    if not _apply_watermark_crop(str(dst), box):
-        try:
-            dst.unlink(missing_ok=True)
-        except OSError:
-            pass   # rollback is best-effort: the crop target may never have landed
-        raise ValueError('invalid crop box')
     row.edit_method = 'crop'
     row.edit_generation = generation
     row.edit_baked_rotation = baked
@@ -6146,6 +6373,7 @@ def delete_rejected(user_id, bank_id, job=None, *, _bank_lease=None) -> dict:
         """Commit one chunk of row removals. Done as we go, not at the end: a
         Stop (or a crash) must not leave files gone from disk with their rows
         still claiming they are there."""
+        drop_distinct_for_images(bank_id, ids)   # their ≠ verdicts go with them
         for i0 in range(0, len(ids), _SQL_IN_CHUNK):
             BankImage.query.filter(
                 BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])
@@ -6591,7 +6819,7 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
         cache_path = _face_cache_path(bank_id)
         payload = _json.dumps({
             'images': paths,
-            'models_root': cfg.get('face_scoring.models_root') or None,
+            'models_root': face_models.models_root(),
             'cache': str(cache_path),
             'cancel_file': str(cache_path) + '.cancel',
             'threshold': th['face_threshold'],
@@ -7828,6 +8056,7 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None, limit=None
         if not rows:
             return
         detected = clean = errors = vanished = stale = 0
+        top_clean_score = None
         threshold = watermark_detector.threshold()
 
         # Paths are resolved HERE, on the owning thread, exactly like the vision
@@ -7930,27 +8159,32 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None, limit=None
                         errors += 1
                     elif state == 'detected':
                         row.watermark_state = 'detected'
-                        # Only ONE box is persisted: the child's FIRST, which it
-                        # orders most-peripheral-first precisely because this
-                        # line only takes one (see _merge_boxes — "biggest" put
-                        # a crop on the subject). watermark_bbox holds
-                        # one rectangle (it is what both cleaning levels route
-                        # on), and the multi-zone column next to it means
-                        # something else entirely — it is the HAND-DRAWN (or 🔤
-                        # text-pass) override, and writing machine output there
-                        # would make every flagged image look hand-corrected and
-                        # silently exclude it from ✂ Auto-crop. Losing the
-                        # smaller boxes is the honest cost; the mask editor
-                        # still lets the user add them back.
+                        # watermark_bbox stays the child's FIRST box, most-
+                        # peripheral-first (see _merge_boxes — "biggest" put a
+                        # crop on the subject): the crop/inpaint ROUTING reads
+                        # one rectangle and that contract does not move. The
+                        # rest of this comment used to defend losing every
+                        # other box as "the honest cost" — it did not survive
+                        # contact with a real image (eight logos, one boxed,
+                        # Clean repainting an eighth of the problem;
+                        # maintainer's call, 2026-08-30). Multi-zone rows now
+                        # keep EVERY zone in watermark_regions — which the
+                        # clean, the editor and the previews already honour —
+                        # while single-zone rows write no regions, byte-for-
+                        # byte the old behaviour, so ✂ Auto-crop keeps its
+                        # whole pool: a lone border mark stays croppable, and a
+                        # multi-mark image never was one crop anyway.
                         if regions:
-                            row.watermark_bbox = _json.dumps(
-                                [round(float(v), 4) for v in regions[0][:4]])
+                            rounded = [[round(float(v), 4) for v in r[:4]]
+                                       for r in regions]
+                            row.watermark_bbox = _json.dumps(rounded[0])
+                            if len(rounded) >= 2 and not text_zones:
+                                row.watermark_regions = _json.dumps(rounded)
                             if text_zones:
                                 from .text_regions import text_mask_regions
                                 existing, _m, _p = _clean_regions(row)
                                 merged, _ = text_mask_regions(
-                                    [], [list(b) for b in existing]
-                                    + [[round(float(v), 4) for v in regions[0][:4]]])
+                                    [], [list(b) for b in existing] + rounded)
                                 row.watermark_regions = _json.dumps(merged)
                             located += 1
                         else:
@@ -7965,6 +8199,13 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None, limit=None
                             row.watermark_state = 'none'
                         row.watermark_bbox = None
                         clean += 1
+                        # Parity with the dataset route: the best CLEAN score is
+                        # the one number separating "nothing there" from
+                        # "everything under the bar" when 0 end up flagged.
+                        if score is not None:
+                            _s = round(float(score), 4)
+                            if top_clean_score is None or _s > top_clean_score:
+                                top_clean_score = _s
                     bank_jobs.bump(job)
                     # Per image, for the same reason the vision route commits per
                     # image: never hold the single SQLite write lock across an
@@ -7997,6 +8238,11 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None, limit=None
         ran_on = {'cuda': ' on GPU', 'cpu': ' on CPU'}.get(run_info.get('device'), '')
         detail = (f'done — {detected} with a watermark, {clean} clean '
                   f'(detector{ran_on}, score ≥ {threshold:g})')
+        if not detected and top_clean_score is not None:
+            # Parity with the dataset toast: 0 flagged is two different stories,
+            # and the near-miss number is what separates them.
+            detail += (f' · highest score {top_clean_score} — nothing crossed the '
+                       f'threshold ({threshold}); lower it to flag fainter marks')
         if detected and located < detected:
             detail += (f', {detected - located} flagged without a position '
                        '(they cannot be cropped or repainted until you draw a zone '
@@ -8522,11 +8768,13 @@ def _source_size(bank, row):
 def _stage_upright_webp(dst: Path, src_path, *, label: str) -> Path:
     """Create an upright, metadata-free WebP copy of ``src_path`` at ``dst``.
 
-    Crop, LaMa and Klein all consume visual/VLM boxes. They therefore edit a
-    freshly rebuilt WebP in one of the Bank's own working directories, never a
-    byte copy of a raw EXIF-tagged source. The source remains read-only and
-    recoverable; the blob is atomically published only once its staging write
-    succeeded.
+    LaMa and Klein consume visual/VLM boxes and need a FILE to work on. They
+    therefore edit a freshly rebuilt WebP in one of the Bank's own working
+    directories, never a byte copy of a raw EXIF-tagged source. The source
+    remains read-only and recoverable; the blob is atomically published only
+    once its staging write succeeded. The two crops do NOT come through here —
+    a crop only needs pixels, so staging the whole frame first cost a second
+    lossless encode for nothing (see ``_cut_upright_webp``).
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(f'.{dst.name}.part-{uuid.uuid4().hex[:8]}')
@@ -8557,11 +8805,88 @@ def _stage_clean_copy(bank_id, row, src_path) -> Path:
                                label='bank watermark clean')
 
 
-def _stage_edited_copy(bank_id, row, src_path, generation) -> Path:
-    """The ✂ crop / ✨ improve working image, in the Bank's ``edited/``."""
-    return _stage_upright_webp(
-        edited_image_path(bank_id, row.id, generation), src_path,
-        label='bank image edit')
+class _EmptyCropBox(ValueError):
+    """The box, once clamped to the image, has no pixel left in it."""
+
+
+def _cut_upright_webp(dst: Path, src_path, box, *, label: str) -> Path:
+    """Cut ``box`` out of ``src_path`` into ``dst`` as ONE metadata-free
+    lossless WebP: one decode, one encode — of the box alone.
+
+    The staging copy (``_stage_upright_webp``) exists for the editors that need
+    a FILE to work on (LaMa, Klein). A crop only needs pixels, so writing a
+    full-frame lossless WebP first — to reopen it, cut it and encode the cut a
+    second time — paid for the whole frame and threw it away: about a second
+    per megapixel written on a Windows desktop, half that on Linux. Both crops
+    of the Bank come through here instead: the manual ✂ (``_cut_edited_copy``)
+    and the auto-crop level of the watermark clean (``_cut_clean_copy``).
+
+    Same contract as the staging copy followed by ``_apply_watermark_crop``:
+    the cut is made on the upright pixels the box was drawn on
+    (``exif_transpose``), the box is clamped to the image the same way, the
+    blob carries no metadata (an orientation tag would make the browser turn it
+    a second time), and it is published atomically so whatever ``dst`` held
+    keeps serving until the new bytes exist. Raises ``_EmptyCropBox`` when the
+    clamped box has no pixel (nothing is written) and lets the source's own
+    errors through."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f'.{dst.name}.part-{uuid.uuid4().hex[:8]}')
+    try:
+        with safe_bank_source(src_path, label=label) as source:
+            source.load()
+            oriented = ImageOps.exif_transpose(source)
+            box = (max(0, int(box[0])), max(0, int(box[1])),
+                   min(oriented.width, int(box[2])),
+                   min(oriented.height, int(box[3])))
+            if box[2] - box[0] < 1 or box[3] - box[1] < 1:
+                raise _EmptyCropBox('invalid crop box')
+            mode = ('RGBA' if ('A' in oriented.getbands()
+                               or 'transparency' in getattr(oriented, 'info', {}))
+                    else 'RGB')
+            # A fresh image, like the staging copy: the cut brings no `info`
+            # (EXIF, ICC) along, so the blob is exactly the pixels.
+            cut = Image.new(mode, (box[2] - box[0], box[3] - box[1]))
+            cut.paste(oriented.crop(box).convert(mode))
+        image_encoding.save_edit(cut, str(tmp), 'WEBP', image_encoding.LOSSLESS)
+        os.replace(tmp, dst)
+    except (OSError, ValueError, MemoryError, Image.DecompressionBombError,
+            Image.DecompressionBombWarning):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass   # rollback is best-effort: the temp may never have landed
+        raise
+    return dst
+
+
+def _cut_edited_copy(bank_id, row, src_path, generation, box) -> Path:
+    """The ✂ crop's blob in the Bank's ``edited/``, cut straight from the
+    resolved source — the previous generation keeps serving until this one
+    exists.
+
+    nofaceman came back about the speed ("sometimes takes 3-5 seconds or more
+    to do the cropping"): the crop used to stage the whole image first.
+    Measured through the real route (Flask test client, a real photograph,
+    Pillow 12.3 / libwebp 1.6, best of three, on a Windows desktop): the POST
+    went from 3.4 s to 0.7 s at 2 MP and from 7.0 s to 1.6 s at 6 MP — the
+    encoder was 97 % of it before and after, two calls then one. Linux runs
+    both halves about twice as fast; the ratio is the same."""
+    return _cut_upright_webp(edited_image_path(bank_id, row.id, generation),
+                             src_path, box, label='bank image edit')
+
+
+def _cut_clean_copy(bank_id, row, src_path, box) -> Path:
+    """The auto-crop level's cleaned blob in the Bank's ``clean/``: the border
+    band cut straight from the source.
+
+    The same two-pass waste as the manual crop, found by the refutation of that
+    fix, and worse placed: this is a BATCH pass (one click, the whole bank), so
+    the full-frame encode was paid once per image. Measured through the real
+    route on the same photograph, per image: 3.5 s → 1.4 s at 2 MP, 7.0 s →
+    3.2 s at 6 MP (the band kept is most of the frame, so what remains is the
+    one encode of the kept pixels)."""
+    return _cut_upright_webp(clean_image_path(bank_id, row.id), src_path, box,
+                             label='bank watermark clean')
 
 
 def start_watermark_crop(app, user_id, bank_id, statuses=None, ids=None):
@@ -8602,7 +8927,7 @@ def start_watermark_crop(app, user_id, bank_id, statuses=None, ids=None):
 
 def _watermark_crop_job(bank_id, statuses=None, ids=None):
     def run(job):
-        from .face_dataset_service import _apply_watermark_crop, _route_watermark
+        from .face_dataset_service import _route_watermark
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
@@ -8643,15 +8968,19 @@ def _watermark_crop_job(bank_id, statuses=None, ids=None):
                     left += 1              # level 2's job — stays 'detected'
                     bank_jobs.bump(job)
                     continue
+                # One cut straight from the source — no full-frame staging copy
+                # (that is the inpainters' need, not the crop's).
                 try:
-                    dst = _stage_clean_copy(bank_id, row, src)
+                    _cut_clean_copy(bank_id, row, src, box)
+                    cleaned_ok = True
+                except _EmptyCropBox:
+                    cleaned_ok = False     # the box has no pixel: an unusable result, judged below
                 except (OSError, ValueError, MemoryError, Image.DecompressionBombError,
                         Image.DecompressionBombWarning):
                     _discard_clean_blob(bank_id, row)
                     failed += 1
                     bank_jobs.bump(job)
                     continue
-                cleaned_ok = _apply_watermark_crop(str(dst), box)
                 generation_ok = _prepare_watermark_write(
                     row, src, expected_raw_fingerprint)
                 if cleaned_ok and generation_ok:
@@ -8838,6 +9167,36 @@ def start_improve(app, user_id, bank_id, statuses=None, ids=None, engine=None):
                            _improve_job(bank_id, engine, want, ids), total=total)
 
 
+def _finish_improved_blob(engine, dst, src, row_id):
+    """The app-side finishing pass over a just-published Bank ✨ improve blob —
+    the SAME pass the dataset and Canvas improves get, because the button, the
+    engines and the enqueue helper are the same and a user who learns the
+    behaviour on one surface expects it on the other (CLAUDE.md, Bank↔Dataset).
+
+    `src` is the image AS IT WAS before the pass (the bank publishes a NEW
+    generation, so the previous blob is still on disk): that is the colour
+    reference. The engine rule is the shared helper's — colour matching is
+    forced off for SeedVR2, which grades itself inside the node. Off by default,
+    and wrapped whole: a nicety may never be the reason a render is lost."""
+    try:
+        from . import face_dataset_service as fds
+        profile = fds._finishing_profile(engine)
+        if not any(profile[k] > 0 for k in ('colour_strength', 'sharpen', 'grain')):
+            return
+        try:
+            from ..utils import photo_finish
+        except ImportError as exc:
+            logger.warning('bank improve: finishing pass skipped for image %s — %s '
+                           '(install the ML requirements to enable it)', row_id, exc)
+            return
+        photo_finish.apply_to_file(
+            str(dst), reference_path=(str(src) if src else None), seed=int(row_id or 0),
+            colour_strength=profile['colour_strength'], sharpen=profile['sharpen'],
+            grain=profile['grain'], grain_saturation=profile['grain_saturation'])
+    except Exception:
+        logger.exception('bank improve: finishing pass failed for image %s', row_id)
+
+
 def _improve_job(bank_id, engine, statuses=None, ids=None):
     def run(job):
         from . import face_dataset_service as fds
@@ -8938,6 +9297,10 @@ def _improve_job(bank_id, engine, statuses=None, ids=None):
                     failed += 1
                     bank_jobs.bump(job)
                     continue
+                # The finishing pass, on the blob just published, before the
+                # measurement below reads it. `src` still names the PREVIOUS
+                # generation — the colour reference.
+                _finish_improved_blob(engine, dst, src, row.id)
                 row.edit_method = 'improve'
                 row.edit_generation = generation
                 row.edit_baked_rotation = baked
@@ -8966,12 +9329,16 @@ def _improve_job(bank_id, engine, statuses=None, ids=None):
 
 
 def start_watermark_inpaint(app, user_id, bank_id, method='auto', target='all',
-                            statuses=None, ids=None):
+                            statuses=None, ids=None, klein_model=None):
     """Level 2 — repaint what is STILL flagged after the crop level.
     ``method``: 'auto'/'lama' (LaMa, non-generative, small off-centre marks; marks
-    on the subject stay flagged for manual review) or 'klein' (masked Flux.2 Klein
-    through ComfyUI, which also handles on-subject marks). RuntimeError (→ 503) on
-    a missing engine or a busy GPU, ValueError (→ 400) on a bad method / empty pool.
+    on the subject stay flagged for manual review) or 'klein' (the detected zones are
+    ERASED, then Flux.2 Klein is handed the WHOLE photo through ComfyUI with the
+    instruction to remove the watermarks — so it also reaches on-subject and tiled
+    marks the scan missed, generatively, and re-renders the rest of the frame with
+    them; a mark nothing detected can survive. Measurements in watermark_klein's
+    module docstring). RuntimeError (→ 503) on a missing engine or a busy GPU,
+    ValueError (→ 400) on a bad method / empty pool.
 
     ``statuses``/``ids`` narrow WHERE the repaint applies — the same two dials as
     every other pass, and the same intersection rule. This level REPAINTS PIXELS,
@@ -9012,12 +9379,13 @@ def start_watermark_inpaint(app, user_id, bank_id, method='auto', target='all',
         raise RuntimeError(reason)
     return bank_jobs.start(app, bank_id, 'watermark_inpaint',
                            _watermark_inpaint_job(bank_id, method, want, ids,
-                                                  target=target),
+                                                  target=target,
+                                                  klein_model=klein_model),
                            total=total)
 
 
 def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None,
-                           target='all'):
+                           target='all', klein_model=None):
     def run(job):
         from contextlib import nullcontext
         from . import text_fill, watermark_klein, watermark_lama
@@ -9142,16 +9510,17 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None,
                         bank_jobs.bump(job)
                         continue
                     if engine == 'klein':
-                        # No klein_model on purpose. The Klein model choice lives on
-                        # the DATASET (it describes what a dataset is made of) and a
-                        # bank has none to inherit — so this pass keeps the auto
-                        # resolution it has always used. Deliberately NOT a global
-                        # setting and NOT a third picker on the bank: that would be a
-                        # second authority for the same UNETLoader. What the bank DOES
-                        # owe the user is the name of the model that will run, which
-                        # the panel now states (BankWatermarkPanel → /api/klein-model).
+                        # `klein_model` is a PER-RUN override (the ⚖ compare
+                        # dialog's "use for this run"), or None = the auto
+                        # resolution this pass has always used. A bank still
+                        # STORES no Klein pick — a stored one would be a second
+                        # authority for the same UNETLoader beside the dataset's
+                        # (the doctrine the old comment here defended, and which
+                        # per-run does not break: same shape as the bank
+                        # caption's per-run {backend, ollama_model}).
                         ok, err = watermark_klein.inpaint_watermark_klein(
-                            bank.user_id, str(dst), [list(b) for b in boxes])
+                            bank.user_id, str(dst), [list(b) for b in boxes],
+                            klein_model=klein_model)
                         generation_ok = _prepare_watermark_write(
                             row, src, expected_raw_fingerprint)
                         if ok and generation_ok:

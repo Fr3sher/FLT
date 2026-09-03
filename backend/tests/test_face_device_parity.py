@@ -87,6 +87,9 @@ def test_a_cpu_pass_never_opens_the_gpu_window(app, monkeypatch, tmp_path):
     results, err = fs.score_dataset_faces(str(ref), [str(img)])
     assert err is None
     assert seen['payload']['device'] == 'cpu'
+    results, err = fs.score_faces([str(ref)], [str(img)], lenient=True)
+    assert err is None
+    assert seen['payload']['device'] == 'cpu'
 
 
 def test_a_gpu_pass_runs_inside_the_exclusive_window(app, monkeypatch, tmp_path):
@@ -109,7 +112,11 @@ def test_a_gpu_pass_runs_inside_the_exclusive_window(app, monkeypatch, tmp_path)
     results, err = fs.score_dataset_faces(str(ref), [str(img)])
     assert err is None
     assert seen['payload']['device'] == 'cuda'
-    assert entered, 'the GPU lane must go through the arbiter, not around it'
+    results, err = fs.score_faces([str(ref)], [str(img)], lenient=True)
+    assert err is None
+    assert seen['payload']['device'] == 'cuda'
+    assert entered == [1800, 1800], (
+        'both face-scoring paths must go through the arbiter, not around it')
 
 
 def test_a_busy_gpu_is_reported_as_busy_not_as_a_failure(app, monkeypatch, tmp_path):
@@ -128,6 +135,10 @@ def test_a_busy_gpu_is_reported_as_busy_not_as_a_failure(app, monkeypatch, tmp_p
 
     monkeypatch.setattr(gw, 'gpu_exclusive_vision_window', _busy)
     results, err = fs.score_dataset_faces(str(ref), [str(img)])
+    assert results == {}
+    assert err['kind'] == 'gpu_busy'
+    assert 'busy' in err['detail']
+    results, err = fs.score_faces([str(ref)], [str(img)], lenient=True)
     assert results == {}
     assert err['kind'] == 'gpu_busy'
     assert 'busy' in err['detail']

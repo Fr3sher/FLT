@@ -143,7 +143,8 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
                                 distillation='auto',
                                 resume_ckpt_paths=None, resume_step=None,
                                 parent_run_id=None, auto_retry_of=None,
-                                auto_retry_count=0, _provision=None) -> dict:
+                                auto_retry_count=0, allow_parallel_run=False,
+                                _provision=None) -> dict:
     """Rent a pod and train a LoRA on a built video dataset.
 
     `low_vram` defaults to FALSE here and True in the builder, and the asymmetry
@@ -213,7 +214,12 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
 
     fam = 'video'
     with ct._launch_reservation_lock:
-        ct._assert_launch_guardrails(ds.id, fam, crd.VIDEO)
+        # `allow_parallel_run` is the answer to the guardrails' own question
+        # (the confirmable `PARALLEL_RUN:` refusal). The face lane relays it;
+        # the video lane dropped it on the floor, which turned "second pod,
+        # billed separately — launch anyway?" into a dead error.
+        ct._assert_launch_guardrails(ds.id, fam, crd.VIDEO,
+                                     allow_parallel_run=bool(allow_parallel_run))
         run = CloudTrainingRun(
             dataset_id=ds.id, status='preparing',
             dataset_table=crd.VIDEO,
@@ -308,10 +314,12 @@ def _relaunch_args(p) -> dict:
     }
 
 
-def retry_cloud_video_run(user_id, run_id) -> dict:
+def retry_cloud_video_run(user_id, run_id, allow_parallel_run=False) -> dict:
     """↻ Relaunch a FAILED video run with the exact parameters of the original.
     A real launch on a fresh pod — same guardrails as any other — not a
-    resurrection of the dead one."""
+    resurrection of the dead one. `allow_parallel_run` is the user's answer
+    to the guardrails' PARALLEL_RUN question, relayed like the launch relays
+    it: dropped here, the question could be asked but never answered."""
     run = db.session.get(CloudTrainingRun, int(run_id))
     if not run:
         raise ValueError('unknown cloud run')
@@ -319,7 +327,8 @@ def retry_cloud_video_run(user_id, run_id) -> dict:
         raise ValueError('only a failed run can be retried')
     p = _params_of(run)
     return launch_cloud_video_training(
-        user_id, run.dataset_id, steps=p.get('steps') or 1000, **_relaunch_args(p))
+        user_id, run.dataset_id, steps=p.get('steps') or 1000,
+        allow_parallel_run=bool(allow_parallel_run), **_relaunch_args(p))
 
 
 def harvested_steps(run) -> list:
@@ -336,7 +345,16 @@ def harvested_steps(run) -> list:
     saves = ct.run_checkpoint_files(run)
     if not saves:
         return []
-    target = int(ct._run_param(run, 'steps') or 0)
+    return group_saves_by_step(saves, target=int(ct._run_param(run, 'steps') or 0))
+
+
+def group_saves_by_step(saves, target=None) -> list:
+    """The grouping behind `harvested_steps`, over any ``{filename: path}`` —
+    the local run folder uses it too (`video_checkpoints.local_group`), so
+    both lanes cut a Wan pair at the same seam.
+
+    `target` numbers the FINAL save (a cloud run stamps its step count; the
+    local lane passes None and the final is reported with `step: None`)."""
     by_step = {}
     for name, path in saves.items():
         step, _stage = video_training.split_checkpoint_name(name)
@@ -344,16 +362,17 @@ def harvested_steps(run) -> list:
         key = (target if final else step, final)
         by_step.setdefault(key, []).append((name, path))
     out = []
-    for (step, final), items in sorted(by_step.items()):
+    for (step, final), items in sorted(by_step.items(),
+                                       key=lambda kv: (kv[0][1], kv[0][0] or 0)):
         items.sort()
-        out.append({'step': int(step), 'final': final,
+        out.append({'step': None if step is None else int(step), 'final': final,
                     'files': [n for n, _ in items],
                     'paths': [p for _, p in items]})
     return out
 
 
 def continue_cloud_video_run(user_id, run_id, extra_steps=1000,
-                             from_step=None) -> dict:
+                             from_step=None, allow_parallel_run=False) -> dict:
     """▶ Resume a TERMINAL video run from one of its harvested steps and train
     `extra_steps` further. A fresh pod: the monitor drops every file of the
     chosen step into the new job's save_root before starting it, and ai-toolkit
@@ -392,4 +411,59 @@ def continue_cloud_video_run(user_id, run_id, extra_steps=1000,
     return launch_cloud_video_training(
         user_id, run.dataset_id, steps=chosen['step'] + extra,
         resume_ckpt_paths=list(chosen['paths']), resume_step=chosen['step'],
-        parent_run_id=run.id, **_relaunch_args(p))
+        parent_run_id=run.id, allow_parallel_run=bool(allow_parallel_run),
+        **_relaunch_args(p))
+
+
+def delete_cloud_video_run(user_id, run_id) -> dict:
+    """Remove one TERMINAL run of a video dataset: its harvested LoRA files
+    and its row. The card accumulates every run ever made — smokes, a
+    contaminated continuation, superseded step counts — with no exit until
+    this; asked for from the card, four runs deep (maintainer, 2026-08-30).
+
+    Refusals first, and they are the contract:
+      * an ACTIVE run is never deletable — its pod is on the clock and its
+        monitor owns the row (stop it first; the stop route exists);
+      * ownership is the caller's job (`_video_run` resolves the (id, table)
+        pair) — this function trusts the run it is handed.
+
+    What goes: the run's checkpoint STORE directory (`<store>/run_<id>` —
+    deleted by that exact name, never an arbitrary rmtree), any of its
+    `.safetensors` still in legacy staging (file by file, the staging dir
+    itself is left alone), and the `CloudTrainingRun` row. Child runs that
+    continued from this one keep their `parent_run_id` stamp: the label
+    "continued from #N" stays true as history even when #N's files are gone.
+
+    Files go AFTER the commit: a filesystem hiccup must never roll back a
+    database deletion, and a row that outlives its files is a lesser evil
+    than files that outlive their row (the ghost-checkpoint incident)."""
+    import shutil
+    run = db.session.get(CloudTrainingRun, int(run_id))
+    if run is None:
+        raise ValueError('that run is gone already')
+    if run.status in ct.ACTIVE_STATES:
+        raise RuntimeError('that run is still on a pod — stop it before '
+                           'deleting it')
+    files = ct.run_checkpoint_files(run)
+    total_bytes = 0
+    for path in files.values():
+        try:
+            total_bytes += os.path.getsize(path)
+        except OSError:
+            pass
+    store = ct.checkpoint_store_dir(run)
+    staging_files = [p for p in files.values()
+                     if not store or not p.startswith(store)]
+    run_number = run.id
+    db.session.delete(run)
+    db.session.commit()
+    if store:
+        shutil.rmtree(store, ignore_errors=True)
+    for path in staging_files:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    logger.info('cloud video run %s deleted: %d checkpoint file(s), %d bytes',
+                run_number, len(files), total_bytes)
+    return {'deleted': run_number, 'files': len(files), 'bytes': total_bytes}

@@ -455,6 +455,13 @@ def scrape_face_filter():
     def _fetch(u):
         return _fetch_image_to_temp(u)
 
+    def _cleanup(paths):
+        for path in paths:
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
+
     if suggest_best:
         # Fetch candidates to temp, score quality only, rank, clean up.
         paths, by_path = [], {}
@@ -465,32 +472,35 @@ def scrape_face_filter():
         if not paths:
             return jsonify({'error': 'none of the images could be fetched'}), 502
         try:
-            results, _err = score_faces([], paths, quality_only=True)
-        except Exception as e:
-            return jsonify({'error': f'face scoring failed: {e}'}), 502
-        ranked = []
-        for p, r in (results or {}).items():
-            u = by_path.get(p)
-            if not u: continue
-            state = r.get('state')
-            # Quality rank: usable face first, then larger/more frontal beats small/posed.
-            if state == 'scorable':
-                base = 1.0
-            elif state in ('low_det', 'too_small', 'extreme_pose'):
-                base = 0.5
-            else:
-                base = 0.0
-            score = round(base + float(r.get('det') or 0) * 0.3
-                          + float(r.get('bbox_frac') or 0) * 0.2
-                          - min(1.0, abs(float(r.get("yaw") or 0)) / 40.0) * 0.1, 3)
-            ranked.append({'url': u, 'state': state,
-                           'det': r.get('det'), 'bbox_frac': r.get('bbox_frac'),
-                           'yaw': r.get('yaw'), 'score': score})
-        ranked.sort(key=lambda x: x['score'], reverse=True)
-        for p in paths:
-            try: os.unlink(p)
-            except Exception: pass
-        return jsonify({'suggestions': ranked[:top_n]})
+            try:
+                results, err = score_faces([], paths, quality_only=True)
+            except Exception as e:
+                return jsonify({'error': f'face scoring failed: {e}'}), 502
+            if err is not None:
+                return jsonify({'error': err.get('detail') or 'face scoring failed'}), 502
+            ranked = []
+            for p, r in (results or {}).items():
+                u = by_path.get(p)
+                if not u:
+                    continue
+                state = r.get('state')
+                # Quality rank: usable face first, then larger/more frontal beats small/posed.
+                if state == 'scorable':
+                    base = 1.0
+                elif state in ('low_det', 'too_small', 'extreme_pose'):
+                    base = 0.5
+                else:
+                    base = 0.0
+                score = round(base + float(r.get('det') or 0) * 0.3
+                              + float(r.get('bbox_frac') or 0) * 0.2
+                              - min(1.0, abs(float(r.get("yaw") or 0)) / 40.0) * 0.1, 3)
+                ranked.append({'url': u, 'state': state,
+                               'det': r.get('det'), 'bbox_frac': r.get('bbox_frac'),
+                               'yaw': r.get('yaw'), 'score': score})
+            ranked.sort(key=lambda x: x['score'], reverse=True)
+            return jsonify({'suggestions': ranked[:top_n]})
+        finally:
+            _cleanup(paths)
 
     # Match mode: fetch refs + candidates, score against centroid.
     ref_paths, cand_paths, by_path = [], [], {}
@@ -514,27 +524,27 @@ def scrape_face_filter():
     # included). A full-body Instagram shot with a small face is still the same
     # person and should be kept — only the threshold decides what matches now.
     try:
-        results, err = score_faces(ref_paths, cand_paths, lenient=True)
-    except Exception as e:
-        return jsonify({'error': f'face scoring failed: {e}'}), 502
+        try:
+            results, err = score_faces(ref_paths, cand_paths, lenient=True)
+        except Exception as e:
+            return jsonify({'error': f'face scoring failed: {e}'}), 502
 
-    if err is not None:
-        return jsonify({'error': err.get('detail') or 'face scoring failed',
-                        'reference_ok': False}), 502
+        if err is not None:
+            return jsonify({'error': err.get('detail') or 'face scoring failed',
+                            'reference_ok': False}), 502
 
-    out = {}
-    for p, r in (results or {}).items():
-        u = by_path.get(p)
-        if not u: continue
-        state = r.get('state')
-        sim = r.get('sim')
-        # Any embedded face (scorable or small/posed) with a similarity at/above
-        # the threshold is a match. no_face/unreadable have no embedding -> no sim.
-        match = bool(sim is not None and sim >= threshold)
-        out[u] = {'match': match, 'sim': sim, 'state': state}
+        out = {}
+        for p, r in (results or {}).items():
+            u = by_path.get(p)
+            if not u:
+                continue
+            state = r.get('state')
+            sim = r.get('sim')
+            # Any embedded face (scorable or small/posed) with a similarity at/above
+            # the threshold is a match. no_face/unreadable have no embedding -> no sim.
+            match = bool(sim is not None and sim >= threshold)
+            out[u] = {'match': match, 'sim': sim, 'state': state}
 
-    for p in cand_paths + ref_paths:
-        try: os.unlink(p)
-        except Exception: pass
-
-    return jsonify({'reference_ok': True, 'threshold': threshold, 'results': out})
+        return jsonify({'reference_ok': True, 'threshold': threshold, 'results': out})
+    finally:
+        _cleanup(cand_paths + ref_paths)
