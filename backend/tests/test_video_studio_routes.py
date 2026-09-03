@@ -342,6 +342,36 @@ def test_clips_history_rates_and_deletes(client, app, tmp_path, monkeypatch):
     assert client.get('/api/video-studio/clips').get_json()['clips'] == []
 
 
+def test_history_cursor_comes_from_the_page_not_an_old_carried_source(client, app):
+    """A render source can be far older than the page that carries it.
+
+    It must not become the next cursor or the clips between it and the real page
+    boundary disappear from the client's history.
+    """
+    from app.extensions import db
+    from app.models import VideoTestClip
+    with app.app_context():
+        ids = [_clip(app, job_id=f'job-page-{i}') for i in range(5)]
+        newest = db.session.get(VideoTestClip, ids[-1])
+        newest.nr_of = ids[0]
+        db.session.commit()
+
+    first = client.get('/api/video-studio/clips?limit=2').get_json()
+    assert [row['id'] for row in first['clips']] == [ids[4], ids[3], ids[0]]
+    assert first['next_before'] == ids[3]
+    assert first['has_more'] is True
+
+    second = client.get(
+        f'/api/video-studio/clips?limit=2&before={first["next_before"]}'
+    ).get_json()
+    assert [row['id'] for row in second['clips']] == [ids[2], ids[1]]
+    assert second['next_before'] == ids[1]
+    assert second['has_more'] is True
+
+    exact = client.get('/api/video-studio/clips?limit=5').get_json()
+    assert exact['has_more'] is False
+
+
 def test_a_clip_with_no_file_is_a_404_not_a_500(client, app):
     with app.app_context():
         cid = _clip(app, job_id='job-nofile')
@@ -514,3 +544,140 @@ def test_launch_facts_never_raise_when_the_request_fails(app, monkeypatch):
     for exc in (requests.ConnectionError('down'), requests.Timeout('slow')):
         facts, _ = _facts_with(app, monkeypatch, raising=exc)
         assert facts == (None, None, None)
+
+
+# --- ⏱ the render time ---------------------------------------------------------
+
+def _job(app, job_id='job-1', started=None, completed=None, status='completed'):
+    from app.extensions import db
+    from app.models import ImageGenerationQueue
+    row = ImageGenerationQueue(job_id=job_id, user_id='local', status=status,
+                               started_at=started, completed_at=completed)
+    db.session.add(row)
+    db.session.commit()
+
+
+def test_a_finished_clip_records_how_long_the_queue_spent_on_it(app, monkeypatch):
+    from datetime import datetime, timedelta
+    from app.extensions import db
+    from app.models import VideoTestClip
+    from app.routes.video_studio import _clip_dict
+    from app.services import video_test_studio as vts
+    with app.app_context():
+        cid = _clip(app)
+        t0 = datetime(2026, 9, 2, 22, 0, 0)
+        _job(app, started=t0, completed=t0 + timedelta(seconds=347.64))
+        monkeypatch.setattr(vts, '_bring_clip_home', lambda fn: None)
+        vts.link_completed_clip('job-1', 'clip_00001.mp4')
+        row = db.session.get(VideoTestClip, cid)
+        assert row.status == 'done'
+        assert row.render_seconds == 347.6           # rounded once, here
+        assert _clip_dict(row)['render_seconds'] == 347.6
+
+
+def test_a_failed_clip_keeps_how_long_it_ran_before_dying(app):
+    from datetime import datetime, timedelta
+    from app.extensions import db
+    from app.models import VideoTestClip
+    from app.services import video_test_studio as vts
+    with app.app_context():
+        cid = _clip(app)
+        t0 = datetime(2026, 9, 2, 22, 0, 0)
+        _job(app, started=t0, completed=t0 + timedelta(seconds=240), status='failed')
+        vts.link_completed_clip('job-1', None, failed=True, reason='ComfyUI KSampler: boom')
+        row = db.session.get(VideoTestClip, cid)
+        assert row.status == 'failed' and row.render_seconds == 240.0
+
+
+def test_render_time_is_null_whenever_the_queue_cannot_say(app, monkeypatch):
+    from datetime import datetime, timedelta
+    from app.extensions import db
+    from app.models import VideoTestClip
+    from app.services import video_test_studio as vts
+    monkeypatch.setattr(vts, '_bring_clip_home', lambda fn: None)
+    t0 = datetime(2026, 9, 2, 22, 0, 0)
+    cases = {
+        'no-row': None,                                    # settled by hand, or a pruned queue
+        'no-start': dict(started=None, completed=t0),
+        'no-end': dict(started=t0, completed=None),
+        'backwards': dict(started=t0, completed=t0 - timedelta(seconds=5)),
+    }
+    with app.app_context():
+        for job_id, stamps in cases.items():
+            cid = _clip(app, job_id=job_id)
+            if stamps is not None:
+                _job(app, job_id=job_id, **stamps)
+            vts.link_completed_clip(job_id, 'clip.mp4')
+            row = db.session.get(VideoTestClip, cid)
+            assert row.status == 'done', job_id          # the clip still lands
+            assert row.render_seconds is None, job_id    # a guess is not a measurement
+
+
+def test_a_job_the_queue_cancelled_gets_no_render_time(app, monkeypatch):
+    # The ComfyUI-restart path: the job stalls with its start kept, the barrier
+    # is reconciled hours later and stamps completed_at THEN. That difference
+    # measures the outage; the card must say nothing rather than "6 h".
+    from datetime import datetime, timedelta
+    from app.extensions import db
+    from app.models import VideoTestClip
+    from app.services import video_test_studio as vts
+    with app.app_context():
+        cid = _clip(app)
+        t0 = datetime(2026, 9, 2, 22, 0, 0)
+        _job(app, started=t0, completed=t0 + timedelta(hours=6), status='cancelled')
+        vts.link_completed_clip('job-1', None, failed=True, reason='ComfyUI restarted')
+        row = db.session.get(VideoTestClip, cid)
+        assert row.status == 'failed' and row.render_seconds is None
+
+
+def test_a_job_settled_within_the_same_tick_measures_zero_not_nothing(app, monkeypatch):
+    from datetime import datetime
+    from app.extensions import db
+    from app.models import VideoTestClip
+    from app.services import video_test_studio as vts
+    with app.app_context():
+        cid = _clip(app)
+        t0 = datetime(2026, 9, 2, 22, 0, 0)
+        _job(app, started=t0, completed=t0)
+        monkeypatch.setattr(vts, '_bring_clip_home', lambda fn: None)
+        vts.link_completed_clip('job-1', 'clip.mp4')
+        assert db.session.get(VideoTestClip, cid).render_seconds == 0.0
+
+
+def test_the_render_time_survives_the_queues_real_completion_path(app, monkeypatch):
+    """Everything above fabricates the stamps. This one lets the queue stamp
+    them the way it does in production — update_status('processing') at the
+    claim, update_status('completed') then commit BEFORE the dispatch — so the
+    test is the one that reddens if that order is ever reversed."""
+    import json
+    import time
+    from app import job_queue
+    from app.extensions import db
+    from app.models import ImageGenerationQueue, VideoTestClip
+    from app.services import video_test_studio as vts
+    monkeypatch.setattr(job_queue, '_drop_staged_inputs', lambda md: None)
+    monkeypatch.setattr(vts, '_bring_clip_home', lambda fn: None)
+    with app.app_context():
+        cid = _clip(app, job_id='job-real')
+        job = ImageGenerationQueue(job_id='job-real', user_id='local', status='pending',
+                                   job_metadata=json.dumps({'is_video_test': True, 'clip_id': cid}))
+        db.session.add(job)
+        db.session.commit()
+        job.update_status('processing')
+        db.session.commit()
+        time.sleep(0.01)
+        job.update_status('completed', result_filename='clip.mp4')
+        db.session.commit()
+        job_queue._dispatch_completion(job, 'clip.mp4', False)
+        row = db.session.get(VideoTestClip, cid)
+        assert row.status == 'done' and row.filename == 'clip.mp4'
+        assert row.render_seconds is not None and row.render_seconds >= 0.0
+
+
+def test_the_render_time_column_is_declared_to_the_additive_migration():
+    # An existing database only gains the column through _SCHEMA_ADDITIONS;
+    # a model column missing there is invisible on every install but a fresh one.
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = open(os.path.join(here, '..', 'app', '__init__.py'), encoding='utf-8').read()
+    assert "('video_test_clip', 'render_seconds', 'FLOAT')" in src

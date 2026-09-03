@@ -48,7 +48,8 @@ import {
 } from './videoStartFrames';
 import {
   clipRateUrl, clipSeconds, clipUrl, clipsUrl, generateUrl,
-  isRunning, launchAdviceLines, optionsUrl, clipVfiUrl, clipNeuralRenderUrl, clipVideoUrl,
+  isRunning, launchAdviceLines, mergeHistoryClips, mergeHistoryPaging, optionsUrl,
+  clipVfiUrl, clipNeuralRenderUrl, clipVideoUrl,
   motionEnhanceUrl, motionSuggestUrl,
 } from './videoStudioApi';
 
@@ -118,15 +119,45 @@ export default function VideoTestStudio() {
     }).catch(() => setOptions(null));
   }, []);
 
+  // Whether a page older than what is loaded exists (the server says so).
+  const [paging, setPaging] = useState({ before: null, hasMore: false });
+  const [loadingMore, setLoadingMore] = useState(false);
+  /* The newest page REPLACES what it covers and KEEPS what it does not: the
+     poll re-reads the first page every three seconds while a clip renders,
+     and a poll that replaced the whole list would throw away every older
+     page the user had asked for with Load more. Deleted rows leave through
+     the page they belonged to, which the fresh page no longer carries. */
   const refreshClips = useCallback(async () => {
     try {
       const d = await apiFetch(clipsUrl(24));
-      setClips(d.clips || []);
-      return d.clips || [];
+      const fresh = d.clips || [];
+      setClips((prev) => mergeHistoryClips(prev, d, { refresh: true }));
+      setPaging((prev) => mergeHistoryPaging(prev, d, { refresh: true }));
+      return fresh;
     } catch {
       return [];
     }
   }, []);
+  const loadMore = useCallback(async () => {
+    if (!paging.before) return;
+    setLoadingMore(true);
+    try {
+      const d = await apiFetch(clipsUrl(24, paging.before));
+      setClips((prev) => mergeHistoryClips(prev, d));
+      setPaging((prev) => mergeHistoryPaging(prev, d));
+    } catch {
+      toast.error('Could not load older clips.');
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [paging.before, toast]);
+  // ↑ Scroll a render's source into view. The server lists it whatever its
+  // age, so the card is there; the scroll just finds it.
+  const jumpTo = (id) => {
+    const el = document.getElementById(`video-clip-${id}`);
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus?.(); }
+    else toast.info?.(`Clip #${id} is no longer in the history.`);
+  };
   useEffect(() => { refreshClips(); }, [refreshClips]);
 
   /* Poll only while something is actually rendering, and stop the moment
@@ -548,7 +579,8 @@ export default function VideoTestStudio() {
         </h2>
         <VideoClipHistory clips={clips} onRate={rate} onDelete={remove} onReuse={reuse} onVfi={smooth} vfiBusy={vfiBusy}
           onNeuralRender={(clip) => setNrClip(clip)} nrBusy={nrBusy}
-          onCompare={(clip) => setCompareClip(clip)} />
+          onCompare={(clip) => setCompareClip(clip)}
+          onJumpTo={jumpTo} hasMore={paging.hasMore} loadingMore={loadingMore} onLoadMore={loadMore} />
       </section>
 
       <StudioActionBar shortcuts={SHORTCUTS} canRun={!blocked} running={busy}
@@ -559,6 +591,7 @@ export default function VideoTestStudio() {
           in words on a machine without the model. */}
       {nrClip && (
         <NeuralRenderDialog status={options?.neural_render} busy={nrBusy === nrClip.id}
+          initial={nrClip.nr_params || null}
           subject={`Clip #${nrClip.id}${nrClip.seconds ? ` (${nrClip.seconds}s)` : ''}.`}
           consequence="The render is a NEW clip in this list; the original stays as it is."
           onRender={(params) => neuralRender(nrClip, params)}

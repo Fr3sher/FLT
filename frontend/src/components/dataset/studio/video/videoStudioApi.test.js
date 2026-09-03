@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  buildGeneratePayload, clipSeconds, clipSummary, isRunning, launchAdviceLines, SPARSE_CHOICES,
-  studioFrameChoices,
+  buildGeneratePayload, clipSeconds, clipSummary, isRunning, launchAdviceLines, renderTimeLabel,
+  mergeHistoryClips, mergeHistoryPaging, SPARSE_CHOICES, studioFrameChoices,
 }  from './videoStudioApi.js';
 
 test('an option left off is absent from the payload, never false', () => {
@@ -77,6 +77,34 @@ test('running is one predicate', () => {
   assert.equal(isRunning(null), false);
 });
 
+test('an old carried render source never becomes the history page cursor', () => {
+  const first = {
+    clips: [{ id: 100 }, { id: 99 }, { id: 20 }],
+    next_before: 99,
+    has_more: true,
+  };
+  let clips = mergeHistoryClips([], first, { refresh: true });
+  let paging = mergeHistoryPaging(null, first, { refresh: true });
+  assert.deepEqual(clips.map((clip) => clip.id), [100, 99, 20]);
+  assert.deepEqual(paging, { before: 99, hasMore: true });
+
+  const second = {
+    clips: [{ id: 98 }, { id: 97 }],
+    next_before: 97,
+    has_more: true,
+  };
+  clips = mergeHistoryClips(clips, second);
+  paging = mergeHistoryPaging(paging, second);
+  assert.deepEqual(clips.map((clip) => clip.id), [100, 99, 98, 97, 20]);
+  assert.deepEqual(paging, { before: 97, hasMore: true });
+
+  // A three-second refresh of the newest page keeps the deeper cursor and rows.
+  clips = mergeHistoryClips(clips, first, { refresh: true });
+  paging = mergeHistoryPaging(paging, first, { refresh: true });
+  assert.deepEqual(clips.map((clip) => clip.id), [100, 99, 98, 97, 20]);
+  assert.deepEqual(paging, { before: 97, hasMore: true });
+});
+
 // --- the sampling steps, once they became reachable (2026-09-01) --------------
 
 test('an explicit step count travels; auto sends nothing at all', () => {
@@ -146,4 +174,19 @@ test('the launch advice phrases exactly what the server sent, flag names include
   // Nothing sent, nothing said.
   assert.equal(launchAdviceLines(null), null)
   assert.equal(launchAdviceLines({}), null)
+})
+
+test('the render time reads the way a person says it, and is null for anything else', () => {
+  assert.equal(renderTimeLabel(24.4), '24 s')
+  assert.equal(renderTimeLabel(59.6), '1 min')          // rounds to 60, and 60 is a minute
+  assert.equal(renderTimeLabel(348.03), '5 min 48 s')
+  assert.equal(renderTimeLabel(120), '2 min')
+  assert.equal(renderTimeLabel(0.4), '1 s')             // a measured fraction is rounded up, never hidden
+  assert.equal(renderTimeLabel(3600), '1 h')
+  assert.equal(renderTimeLabel(5400), '1 h 30 min')
+  assert.equal(renderTimeLabel(28800), '8 h')
+  assert.equal(renderTimeLabel(3661), '1 h 1 min')       // seconds drop past the hour
+  for (const junk of [null, undefined, 0, -3, 'abc', NaN, Infinity]) {
+    assert.equal(renderTimeLabel(junk), null, String(junk))
+  }
 })

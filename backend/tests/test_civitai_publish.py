@@ -900,9 +900,12 @@ def test_the_publish_image_route_runs_the_job_to_its_result(client, app, civitai
     assert r.status_code == 200, r.get_json()
     assert r.get_json()['link']['model_name'] == 'Nova'
     job_id = r.get_json()['job_id']
-    for _ in range(200):
+    # A wall-clock deadline, not an iteration count: the job may take longer on
+    # a loaded release runner, and this poll must yield to its worker thread.
+    deadline = time.monotonic() + 30
+    while True:
         j = client.get(f'/api/civitai/jobs/{job_id}').get_json()
-        if j['state'] in ('done', 'error'):
+        if j['state'] in ('done', 'error') or time.monotonic() > deadline:
             break
         time.sleep(0.02)
     assert j['state'] == 'done', j

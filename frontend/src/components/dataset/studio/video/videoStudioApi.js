@@ -37,10 +37,45 @@ export const motionModelsUrl = () => '/api/video-studio/motion/models';
 export const motionModelUrl = () => '/api/video-studio/motion/model';
 export const sourceUrl = () => `${VIDEO_STUDIO_BASE}/source`;
 export const generateUrl = () => `${VIDEO_STUDIO_BASE}/generate`;
-export const clipsUrl = (limit = 24) => `${VIDEO_STUDIO_BASE}/clips?limit=${limit}`;
+/** The history, newest first: one page of `limit`, `before` (a clip id) for the
+ * page after it. The server appends the SOURCE of every listed render, so the
+ * pair a comparison needs is always on screen together. */
+export const clipsUrl = (limit = 24, before = null) =>
+  `${VIDEO_STUDIO_BASE}/clips?limit=${limit}${before ? `&before=${before}` : ''}`;
 export const clipUrl = (id) => `${VIDEO_STUDIO_BASE}/clip/${id}`;
 export const clipVideoUrl = (id) => `${VIDEO_STUDIO_BASE}/clip/${id}/video`;
 export const clipRateUrl = (id) => `${VIDEO_STUDIO_BASE}/clip/${id}/rate`;
+
+const historyCursor = (page) => {
+  const value = Number(page?.next_before);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+};
+
+/** Merge a history response without confusing its carried render sources with
+ * the page itself. On a newest-page refresh, only rows older than the server's
+ * real page boundary survive from the previous list. */
+export function mergeHistoryClips(previous, page, { refresh = false } = {}) {
+  const fresh = Array.isArray(page?.clips) ? page.clips : [];
+  const boundary = historyCursor(page);
+  const byId = new Map(fresh.map((clip) => [clip.id, clip]));
+  for (const clip of (Array.isArray(previous) ? previous : [])) {
+    if ((!refresh || (boundary !== null && clip.id < boundary)) && !byId.has(clip.id)) {
+      byId.set(clip.id, clip);
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.id - a.id);
+}
+
+/** Keep the deepest cursor already loaded when the three-second newest-page
+ * poll runs. A Load-more response, by contrast, always advances the cursor. */
+export function mergeHistoryPaging(previous, page, { refresh = false } = {}) {
+  const incoming = { before: historyCursor(page), hasMore: !!page?.has_more };
+  const prior = historyCursor({ next_before: previous?.before });
+  if (refresh && prior !== null && incoming.before !== null && prior < incoming.before) {
+    return { before: prior, hasMore: !!previous?.hasMore };
+  }
+  return incoming;
+}
 
 /* The sparse levels, in the order they cost adherence. The wording says what
  * each one DOES to the picture rather than naming a budget: "0.3 video budget"
@@ -181,4 +216,21 @@ export function launchAdviceLines(advice) {
     title,
     action: `${change} on the command that starts ComfyUI, then start it again.`,
   };
+}
+
+// ⏱ Render time as a person reads it: "24 s", "5 min 48 s", "2 min", "1 h 12 min".
+// The number is the queue's own measurement (claim → settled, model loading
+// included); null for anything that is not a positive number, so a card never
+// prints "rendered in null" for a clip the queue could not time. A measured
+// fraction of a second reads "1 s" — a real measurement is rounded, never hidden.
+export function renderTimeLabel(seconds) {
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s <= 0) return null;
+  const t = Math.max(1, Math.round(s));
+  if (t < 60) return `${t} s`;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const r = t % 60;
+  if (h) return m ? `${h} h ${m} min` : `${h} h`;
+  return r ? `${m} min ${r} s` : `${m} min`;
 }
