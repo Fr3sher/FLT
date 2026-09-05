@@ -359,8 +359,38 @@ const PAGES = {
          that could only be checked by hand. The gallery state opens the tab
          whose grid and "Show older" row live one level deeper still. */
       { name: 'video', open: ['[data-testid="studio-lane-video"]'] },
+      /* ✨ The DLSS 5 neural render dialog. It has carried `data-probe-layer`
+         since it shipped, but no state ever OPENED it — and a layer nobody
+         opens is a layer nobody measures. It went out at z-50 under the
+         z-[9960] action bar: at 360 px its ✨ Render button sat INSIDE the
+         viewport (so "is it visible" said yes) while elementFromPoint at its
+         centre returned a pill of the bar. Reported from a phone, 2026-09-03.
+         The fold-opener is optional — the clip list is already on screen on a
+         desktop — but the click that opens the dialog is REQUIRED: without it
+         the state would measure the page behind it and read clean. */
+      { name: 'video-neural-render',
+        open: ['[data-testid="studio-lane-video"]', '?button:has-text("Clips")',
+               'button[title*="DLSS 5 Neural"]'] },
+      /* 🔴 The Live lane: a take sheet, a rail of six dials and the player —
+         another tab the Images run would never open. */
+      { name: 'live', open: ['[data-testid="studio-lane-live"]'] },
+      /* ↗ The Smooth window: three rate segments and two buttons, on the
+         first finished clip of the history (absent → NOT covered, said so). */
+      { name: 'video-smooth', open: ['[data-testid="studio-lane-video"]', 'button:has-text("Smooth")'] },
+      /* ⏭ Continue: the first finished clip's last frame lands in the strip
+         with the "lands joined behind it" notice under the picker, and the
+         page scrolls to the Motion section (absent clip → NOT covered). */
+      { name: 'video-continue',
+        open: ['[data-testid="studio-lane-video"]', '?button:has-text("Clips")', 'button:has-text("Continue")'] },
       { name: 'video-gallery',
         open: ['[data-testid="studio-lane-video"]', '[data-testid="video-source-gallery"]'] },
+      /* The per-picture prompt segments: they only exist once TWO pictures
+         are staged, and ⏭ ADDS to the strip — so two ⏭ clicks on two finished
+         clips stage two frames without a Gallery (a history with fewer than
+         two finished clips leaves the control unmeasured, said so). */
+      { name: 'video-batch-prompt',
+        open: ['[data-testid="studio-lane-video"]', '?button:has-text("Clips")',
+               'button:has-text("Continue") >> nth=0', 'button:has-text("Continue") >> nth=1'] },
       /* The Dataset clip tab: its select and footnote. The clip grid behind
          the select cannot be opened by a click (a native <select> takes a
          choice, not a click), so the grid is measured by hand at 400 px — it

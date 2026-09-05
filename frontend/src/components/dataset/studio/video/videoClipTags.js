@@ -6,6 +6,7 @@
  * ordered by how much it changed the render: base first, LoRA and strength,
  * then the accelerators, then the numbers that make a run repeatable. */
 import { neuralRenderTags } from '../../../videobank/neuralRenderParams.js';
+import { accelLabel, clipAccel } from './videoStudioApi.js';
 
 export function clipTags(clip) {
   if (!clip) return [];
@@ -18,7 +19,8 @@ export function clipTags(clip) {
   } else {
     tags.push('no LoRA');
   }
-  if (clip.turbo) tags.push('turbo');
+  const accel = clipAccel(clip);
+  if (accel) tags.push(accel === 'turbo' ? 'turbo' : accelLabel(accel));
   if (clip.sparse) tags.push(`sparse ${clip.sparse}`);
   if (clip.latent_upscale) tags.push('upscale ×2');
   // ✨ A neural-rendered clip: same settings as its source, different pixels —
@@ -27,6 +29,10 @@ export function clipTags(clip) {
   // ↗ A smoothed clip has the same settings as its source and is NOT the same
   // artefact — without this the pair is two identical-looking cards.
   if (clip.vfi_of) tags.push(`smoothed → ${Math.round(clip.fps || 0)} fps`);
+  // ⏭ A continuation: joined behind its parent, or left as the part when the
+  // join failed — `joined` is null while the part still renders, and that is
+  // no verdict, so the pill says nothing about it yet.
+  if (clip.continues_of) tags.push(clip.joined === false ? `continues #${clip.continues_of} (not joined)` : `continues #${clip.continues_of}`);
   if (clip.steps) tags.push(`${clip.steps} steps`);
   if (clip.seed !== null && clip.seed !== undefined) tags.push(`seed ${clip.seed}`);
   return tags;
