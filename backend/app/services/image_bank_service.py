@@ -3538,7 +3538,7 @@ def _scope_note(bank_id, todo_clause, statuses, ids=None):
 
 
 def _skipped_note(*, vanished=0, missing=0, unanswered=0, fenced=0, stale=0,
-                  unreadable=0) -> str:
+                  unreadable=0, fence_reason='', verb='analysed') -> str:
     """The clauses a pass owes about the images it did NOT write, in ONE
     definition — same reasoning as `_framing_pool`, and the same failure when it
     was four copies.
@@ -3557,6 +3557,13 @@ def _skipped_note(*, vanished=0, missing=0, unanswered=0, fenced=0, stale=0,
     The wording is deliberately about the IMAGE, not about the internals: an
     image that changed under an analysis is "changed while the pass ran", never
     a fingerprint mismatch.
+
+    ``verb`` is what the pass does to an image ('analysed', 'captioned'), so a
+    caption pass says "not captioned". ``fence_reason`` is the refusal's own
+    sentence when the pass has it; the fence refuses for more than one reason
+    (an expired GPU window, a model another tool loaded — Discord, 2026-09-03)
+    and each names its own remedy, so a pass that knows quotes it instead of
+    the historical GPU-window sentence.
     """
     note = ''
     if vanished:
@@ -3564,14 +3571,18 @@ def _skipped_note(*, vanished=0, missing=0, unanswered=0, fenced=0, stale=0,
     if missing:
         note += f', {missing} skipped (the file was no longer on disk)'
     if unanswered:
-        note += (f', {unanswered} not analysed (the vision model returned '
+        note += (f', {unanswered} not {verb} (the vision model returned '
                  'nothing — check Ollama in Settings, then run it again)')
     if fenced:
         # NOT "unreadable": the file was fine and the model never saw it. The
         # row was left empty on purpose so a re-run finishes it, and that is the
         # half the user cannot guess.
-        note += (f', {fenced} not analysed (the vision GPU window expired before '
-                 'the model could start — run the pass again to finish them)')
+        reason = (fence_reason or '').strip().rstrip('.')
+        if reason:
+            note += f', {fenced} not {verb} ({reason} — run the pass again to finish them)'
+        else:
+            note += (f', {fenced} not {verb} (the vision GPU window expired before '
+                     'the model could start — run the pass again to finish them)')
     if stale:
         note += f', {stale} skipped (the image changed while the pass ran)'
     if unreadable:
@@ -10007,6 +10018,7 @@ def _framing_job(bank_id, rescan, statuses=None, ids=None):
         classified = errors = vanished = stale = fenced = 0
         missing = unanswered = 0
         fence_streak = 0
+        fence_reason = ''      # the FIRST refusal's own sentence, for the last line
 
         def prepared():
             """Path resolution reads the row, so it belongs on the job's own
@@ -10049,9 +10061,11 @@ def _framing_job(bank_id, rescan, statuses=None, ids=None):
                 # A fence refusal is kept apart from a bad file: the image was
                 # never shown to the model, so it is neither unreadable nor
                 # classified, and only a re-run fixes it (see _skipped_note).
+                fenced_call = isinstance(exc, LocalOllamaFenceError)
                 return {'raw': None, 'fingerprint': fingerprint,
                         'error': f'{type(exc).__name__}: {exc}',
-                        'fenced': isinstance(exc, LocalOllamaFenceError)}
+                        'fenced': fenced_call,
+                        'fence_reason': str(exc) if fenced_call else ''}
 
         with gpu_exclusive_vision_window(flag_ttl=1800):
             try:
@@ -10114,6 +10128,7 @@ def _framing_job(bank_id, rescan, statuses=None, ids=None):
                     if call_error is not None:  # one bad file never sinks the pass
                         if answer.get('fenced'):
                             fenced += 1
+                            fence_reason = fence_reason or (answer.get('fence_reason') or '')
                         else:
                             errors += 1
                     elif raw is None:      # file gone: leave the row as it was
@@ -10158,6 +10173,7 @@ def _framing_job(bank_id, rescan, statuses=None, ids=None):
                 unload_vision_model()  # hand the VRAM back to ComfyUI
         skipped = _skipped_note(vanished=vanished, missing=missing,
                                 unanswered=unanswered, fenced=fenced,
+                                fence_reason=fence_reason,
                                 stale=stale, unreadable=errors)
         if bank_jobs.cancelled(job):
             bank_jobs.progress(
@@ -10772,6 +10788,12 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
         # Lab uses (caption_paths already takes both); None on either means "the
         # global setting", so a run that picks nothing is byte-identical.
         extra = caption_preset_instructions(vocabulary, length)
+        # What the brick handled WITHOUT a caption. `_on_caption` only ever hears
+        # about captions that landed, so a pass whose images were refused by the
+        # GPU fence — 29 of 30, on the install that reported it — used to end on
+        # "done — 1 captioned" and nothing else, which reads as "looked at them
+        # all". These numbers are the missing half of that line.
+        left = {}
         with gpu_exclusive_vision_window(flag_ttl=1800):
             caption_paths(
                 paths,
@@ -10780,14 +10802,20 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
                 extra_instructions=extra,
                 should_cancel=lambda: bank_jobs.cancelled(job),
                 on_caption=_on_caption,
-                progress=lambda d, t: bank_jobs.progress(job, done=d, total=t))
+                progress=lambda d, t: bank_jobs.progress(job, done=d, total=t),
+                outcome=left)
         skipped = ''
         if skipped_asserted:
             # Named in the RESULT, not only in the warning before the click: the
             # user has to be able to see afterwards that the protection did
             # something, otherwise it is a promise with no evidence.
             skipped += f', {skipped_asserted} kept (written by you)'
-        skipped += _skipped_note(vanished=vanished, stale=stale)
+        skipped += _skipped_note(vanished=vanished, stale=stale,
+                                 fenced=left.get('fenced', 0),
+                                 fence_reason=left.get('fence_reason', ''),
+                                 unanswered=left.get('unanswered', 0),
+                                 unreadable=left.get('failed', 0),
+                                 verb='captioned')
         if spared_mid_pass:
             skipped += f', {spared_mid_pass} kept (newer caption won)'
         if bank_jobs.cancelled(job):

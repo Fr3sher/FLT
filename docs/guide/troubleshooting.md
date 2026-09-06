@@ -155,6 +155,56 @@ tools → ai-toolkit Python interpreter**. The preflight/failure panel recognize
 this specific `sm_120` mismatch. For another architecture mismatch, use the
 torch build appropriate to that card instead of copying this command blindly.
 
+## Local training crawls: GPU near idle, RAM climbing, ETA in the hundreds of hours
+
+The run started, the training panel shows a step counter, but the ETA reads
+like `ETA 300:12:45`, the GPU sits at a few percent and the only number that
+moved is system RAM. Nothing failed, and that is the problem.
+
+**What it is.** The run no longer fits in the card's memory. On Windows the
+NVIDIA driver, by default (Control Panel → *CUDA - Sysmem Fallback Policy*),
+does not answer that with an out-of-memory error: it pages the overflow into
+system RAM and keeps going, tens of times slower. Measured here: Krea 2 at 1024
+on a saturated 24 GB card, about 180 s per step and an ETA of seven days; the
+same run at 768, 3.5 s per step. Linux, or Windows with *Prefer No Sysmem
+Fallback* set, fails loudly instead (`CUDA out of memory`), which is the kinder
+failure.
+
+**Why it happens on a card that should fit.** The Krea 2 and FLUX.1 recipes are
+calibrated to fit a 24 GB card that is *empty*, and they do: measured with the
+shipped Krea 2 recipe on an otherwise idle 24 GB card, the run peaks at about
+21.6 GB, so a little under 3 GB is all the room there is. Anything else holding
+that much tips them over, and the usual culprit on a machine that also runs ComfyUI is
+ComfyUI itself: it keeps the models it last used resident (in VRAM while it
+has the room, in system RAM once they leave the card) and does not let go on
+its own. A
+browser with many tabs, a second monitor and a game launcher add up too.
+
+**Two readings settle it.** Task Manager → Performance → GPU: *Dedicated GPU
+memory* pinned near the top with *Shared GPU memory* at several GB means the
+driver is paging. The GPU % in the app's 📊 readout comes straight from
+`nvidia-smi` and is the figure to trust.
+
+**Fix.** ⏹ Stop the run, unfold the 📊 readout in the top bar and press
+🧹 **Free memory** (ComfyUI unloads its cached models and the vision model is
+released; the VRAM figure should fall to a couple of GB), or simply close
+ComfyUI, then launch again. A healthy run shows the GPU at 90-100 % and a few
+seconds per step once the first minutes are over. If it still crawls with an
+empty card, ⚙️ Advanced options → **Resolution** → *768 only (low VRAM)*, and
+leave Expert → **Memory saving** on: that trio of switches is what makes a 12B
+model fit at all.
+
+The app also asks ComfyUI to unload before every local run (the same request
+the 🧹 button and the vision passes make), so with a reachable ComfyUI this
+trap closes by itself; the app log's launch line says what the card held
+before the request and at spawn.
+
+**Not this.** The first minutes of an image run legitimately show a low GPU and
+a high RAM: the weights are read into RAM and quantised, the text embeddings and
+latents are cached, and the step-0 preview images are rendered before step 1 (a
+video run skips the previews). Read the ETA after five minutes of steps, not
+before.
+
 ## ai-toolkit isn't detected (conda / uv / no venv)
 
 **Why:** the app auto-detects ai-toolkit's Python from a `venv/` or `.venv/`
@@ -240,7 +290,9 @@ ComfyUI's own `/view`, whether it can see the file that was just written. When t
 answer is no, the generation is refused with a message naming **the folder the app
 used** and **what ComfyUI reported about its own** — quoted from the command line
 ComfyUI echoes in `/system_stats`, so a second install or a `--base-directory` is
-named rather than guessed. This replaced the failure that started it: ComfyUI
+named rather than guessed. When ComfyUI also says where it reads (an absolute
+`--input-directory` in that command line), the Setup wizard's ComfyUI card offers
+that folder in one click. This replaced the failure that started it: ComfyUI
 answering `Invalid image file: krea_source_….png` to its own console while the app
 showed a tile that stopped instantly with no error at all (GitHub #64). If ComfyUI
 cannot be asked — stopped, behind a proxy that refuses `HEAD`, too old — nothing is
@@ -423,7 +475,7 @@ Open the **Cloud** tab: every run shows its live phase, and the stall watchdog
 progress happens for too long. Orphaned pods are also destroyed automatically
 at every app start — you never pay for a forgotten GPU.
 
-**Decide without opening the vast.ai console.** The longest phase of a fresh
+**Decide without opening the [vast.ai](https://cloud.vast.ai/?ref_id=683073) console.** The longest phase of a fresh
 run is the pod pulling its base weights — 26 GB for Krea 2, half an hour on a
 healthy host. The card shows that download as it happens: how much has landed,
 of how much, at what speed and its ETA. Two readings tell you everything:

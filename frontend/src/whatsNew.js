@@ -115,11 +115,25 @@ export const WHATS_NEW = [
     blurb: 'A cancelled read no longer triggers the offline banner or a connection-error notification.',
   },
   {
+    id: '2026-09-05-zz-vast-referral-link',
+    date: '2026-09-05',
+    title: 'Creating a vast.ai account through the app now supports the project, at no cost to you',
+    blurb: 'Every vast.ai link in the app and its docs is a referral link: vast.ai pays this project 3% of what a referred account spends there. Prices are identical, nothing in the app changes, and the untagged link sits right next to the disclosure.',
+    to: '/settings/training',
+  },
+  {
     id: '2026-09-05-zz-setup-scan-startup',
     date: '2026-09-05',
     title: 'Spend less time waiting for the Setup scan',
     blurb: 'Setup checks your installed tools sooner after an app restart. Opening it reuses the current machine scan; Re-scan still checks again when you need it.',
     to: '/setup',
+  },
+  {
+    id: '2026-09-05-setup-adopts-comfyui-input-folder',
+    date: '2026-09-05',
+    title: "Setup points you at the input folder ComfyUI really reads",
+    blurb: "If your ComfyUI keeps its input folder somewhere else (Comfy Desktop's shared folder, a --input-directory launch), the Setup wizard's ComfyUI card now says so and offers that folder in one click, instead of leaving the fix inside an Advanced fold of Settings. Reported on GitHub (#64).",
+    to: '/setup?step=comfyui',
   },
   {
     id: '2026-09-04-zzzzzzzz-workspace-header-refresh',

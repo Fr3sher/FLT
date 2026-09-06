@@ -438,6 +438,9 @@ def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
             raise GpuBusyError(
                 'Ollama still owns the GPU, so local training cannot start '
                 'safely. Wait for the vision task to finish or unload it.')
+        # Same lever as the image lane, same place: after Ollama, before the
+        # identity is published (lora_training._comfyui_free_before_training).
+        _comfy_free = lt._comfyui_free_before_training('video')
 
         queue_manager._set_system_state('training_error', None, ttl_seconds=1)
         identity = {
@@ -482,6 +485,8 @@ def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
                 'could not persist the spawned video training identity; '
                 'keeping the GPU fence fail-closed')
 
+    # Second VRAM reading outside the lock pair, as on the image lane.
+    lt._comfyui_free_report(_comfy_free)
     threading.Thread(
         target=lt._watch_training,
         args=(app, proc, log_path, dataset_id),

@@ -52,6 +52,15 @@ logger = logging.getLogger(__name__)
 # mais on libère le Qwen3-VL via cache_text_embeddings + unload_text_encoder (~4-8 Go) pour
 # tenir sans offload. Si 1024 sature encore → baisser ce SEUL curseur à 896 (mesurer), puis 768
 # (cadence prouvée). Curseur de tuning #1, un seul endroit.
+# MESURÉ 2026-09-05 (RTX 4090 24,5 Go, carte VIDE hors bureau 1,6 Go, Windows/WDDM, recette
+# livrée telle quelle : 768+1024, qfloat8 + qfloat8 TE + low_vram, TE déchargé après cache,
+# 12 images, 20 pas) : pic 21,6 Go à nvidia-smi, mémoire partagée WDDM max 194 Mio = AUCUNE
+# pagination, 3,4-5,6 s/it (médiane 3,9), preview 1024 à 25 pas = 23,6 s, run complet 6 min 28.
+# Donc la recette TIENT sur 24 Go avec ~3 Go de marge — et c'est toute la marge : un ComfyUI
+# qui garde un modèle résident, un navigateur chargé, un second écran suffisent à la manger,
+# et sous WDDM le run ne meurt pas, il pagine (GPU à 3 %, ETA en centaines d'heures — le
+# rapport Discord du 05/09). D'où le /free ComfyUI avant chaque training local
+# (_comfyui_free_before_training) plutôt qu'un seuil VRAM : _pf_vram reste muet à 24 Go à raison.
 KREA_TRAIN_RESOLUTION = 1024
 
 # Dense checkpoints are roughly 26 GB.  These values are intentionally NOT
@@ -1689,11 +1698,15 @@ _QTYPE_CHOICES = ('qfloat8', 'float8', 'int8')
 _SAVE_DTYPE_CHOICES = ('float16', 'bf16')
 _OFFLOADING_PERCENT_RANGE = (0.0, 1.0)
 
-# --- Memory-saving levers (quantisation + low-VRAM streaming) --------------------
+# --- Memory-saving levers (quantisation + low-VRAM loading) ----------------------
 # Community request (GitHub issue #14, bobba84): the recipes hard-coded quantize /
 # quantize_te / low_vram, calibrated so a 12B DiT fits in 24 GB. On a card with MORE
 # than the target, that calibration is a tax nobody asked for — quantisation costs
-# precision and low_vram costs a lot of speed (it streams blocks CPU↔GPU).
+# precision and low_vram costs start-up time: ai-toolkit parks the transformer (and,
+# on Krea 2 and FLUX.2 Klein, the text encoder) in system RAM while it loads and
+# quantises, then moves it to the card for the run — a loading strategy, not block
+# streaming during the steps (krea2.py, flux2_model.py, z_image.py and
+# stable_diffusion_model.py, local copy and upstream, 2026-09-05).
 #
 # VÉRIFIÉ dans l'ai-toolkit installé : `quantize`, `quantize_te`, `qtype` et
 # `low_vram` sont des champs de ModelConfig (toolkit/config_modules.py L658-662),
@@ -1711,7 +1724,7 @@ _MEMORY_SETTING_KEYS = ('quantize', 'quantize_te', 'low_vram')
 # a preflight sentence names the checkbox the user has to go and tick back.
 _MEMORY_LABELS = {'quantize': 'Quantise base model',
                   'quantize_te': 'Quantise text encoder',
-                  'low_vram': 'Low-VRAM streaming'}
+                  'low_vram': 'Low-VRAM loading'}
 
 # Ce que chaque famille émet quand l'utilisateur ne choisit rien. NE PAS TOUCHER :
 # la majorité du parc est à 24 Go ou moins et c'est ce qui fait tenir l'entraînement.
@@ -8717,6 +8730,78 @@ def _lt_publish_bridge_context(run_dir, config_path, env, masked, _prepared,
     return _bridge_candidate, env, _bridge_identity_path, _bridge_status_path
 
 
+# -- ComfyUI's resident models, before a LOCAL training takes the card ----------
+# ComfyUI keeps the models it last used resident once a render is done (its
+# default "smart memory": nothing is unloaded until ComfyUI itself needs the
+# room, and a second process asking the driver for VRAM is not that). Every guard in the
+# spawn transaction reads LDS's OWN state -- its queue table, its vision flag, its
+# Ollama fence -- so a ComfyUI that finished a Klein edit ten minutes ago and still
+# holds ~15 GB passed all of them, and a Krea 2 run calibrated for an EMPTY 24 GB
+# card started on what was left. On Windows/WDDM that is not an OOM, it is a
+# crawl: the driver pages the overflow to system RAM, GPU utilisation drops to a
+# few percent and the ETA reads in hundreds of hours (acontentsheltie, Discord
+# #help 2026-09-05, RTX 3090). `gpu_exclusive_vision_window` has pulled `/free`
+# before every vision pass since July for exactly this reason; the training
+# launch never did -- while memory_release.py's docstring already said it did.
+#
+# Best-effort on purpose, unlike the vision window's fail-closed gate: a training
+# does not need ComfyUI at all, so an offline, unreachable or silent ComfyUI is
+# logged and the launch goes on. A verdict alone would never tell whether the
+# lever mattered, so the card is read before the request and again once the
+# child exists and the lock pair is released (the identity writes and the spawn
+# sit between the two; ComfyUI unloads from its worker loop within that second)
+# and both numbers go to the log.
+#
+# The import stays INSIDE the function: tests/conftest.py stubs
+# `app.utils.comfyui.free_comfyui_vram` by attribute, and a module-level import
+# here would bind the real function first and POST /free to a developer's live
+# ComfyUI from the unit suite (test_training_launch_frees_comfyui pins this).
+# 4 s, not the helper's default 10: a live ComfyUI answers /free at once (the
+# unload happens later, on its worker loop); only a dead host ever waits, and it
+# would wait under _queue_lock + GPU_ARBITER_LOCK, where Stop also waits.
+_COMFYUI_FREE_TIMEOUT_S = 4
+
+
+def _comfyui_free_before_training(lane='image') -> dict:
+    """Ask ComfyUI to unload its models before a local training takes the card.
+
+    Returns the first half of the report (`lane`, `verdict`, `vram_before_gb`,
+    `asked_at`) for `_comfyui_free_report`; never raises, never refuses."""
+    state = {'lane': lane, 'verdict': 'error', 'vram_before_gb': None,
+             'asked_at': time.time()}
+    try:
+        from . import system_stats
+        state['vram_before_gb'] = system_stats.gpu_vram_used_gb()
+    except Exception:
+        logger.debug('VRAM reading before ComfyUI /free failed', exc_info=True)
+    try:
+        from ..utils.comfyui import free_comfyui_vram   # late import, see above
+        verdict = free_comfyui_vram(timeout=_COMFYUI_FREE_TIMEOUT_S)
+        state['verdict'] = getattr(verdict, 'value', None) or str(verdict)
+    except Exception:
+        logger.exception('ComfyUI /free before %s training raised; launching anyway',
+                         lane)
+    return state
+
+
+def _comfyui_free_report(state) -> None:
+    """Second half, once the child exists and the locks are released: read the
+    card again, log both numbers. Diagnostic only -- it never raises."""
+    try:
+        from . import system_stats
+        after = system_stats.gpu_vram_used_gb()
+    except Exception:
+        after = None
+    s = state or {}
+    try:
+        elapsed = time.time() - float(s.get('asked_at') or time.time())
+    except (TypeError, ValueError):
+        elapsed = 0.0
+    logger.info('ComfyUI /free before %s training: %s - VRAM %s GB before, %s GB at '
+                'spawn (%.1f s later)', s.get('lane'), s.get('verdict'),
+                s.get('vram_before_gb'), after, elapsed)
+
+
 def _lt_spawn_transaction(ds, user_id, dataset_id, steps, masked, launch_fam,
                           variant, base_model, recipe, allow_not_ready,
                           parent_record_id, resumed_from, run_token,
@@ -8786,6 +8871,10 @@ def _lt_spawn_transaction(ds, user_id, dataset_id, steps, masked, launch_fam,
             raise RuntimeError(
                 'could not persist the Dataset provenance for local training; '
                 'no training process was started')
+        # Ollama has let go and the run record exists: ComfyUI is asked last, right
+        # before the identity is published, so a refusal above never costs the
+        # user's ComfyUI a reload for a run that did not start.
+        _comfy_free = _comfyui_free_before_training('image')
         queue_manager._set_system_state('training_error', None, ttl_seconds=1)
         identity = {
             'training_in_progress': True,
@@ -8867,6 +8956,9 @@ def _lt_spawn_transaction(ds, user_id, dataset_id, steps, masked, launch_fam,
                 # earlier launching intent + durable fence remain recoverable.
                 logger.exception(
                     'could not attach process identity to exact-resume journal')
+    # The second VRAM reading, outside the lock pair: the child exists and the
+    # fence is published, so nothing here holds Stop up for an nvidia-smi.
+    _comfyui_free_report(_comfy_free)
     return proc
 
 

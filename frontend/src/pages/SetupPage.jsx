@@ -18,6 +18,7 @@ import InstallRunner from '../components/setup/InstallRunner'
 import InstallEverything from '../components/setup/InstallEverything'
 import { HelpBadge } from '../help/HelpMode'
 import { kleinAssetBlocks } from '../utils/kleinAssets.js'
+import CloudSignupNote from '../components/setup/CloudSignupNote'
 
 const INPUT_CLASS =
   'mt-1 w-full rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-sm text-content ' +
@@ -168,6 +169,10 @@ export default function SetupPage() {
   const [runtimeReadiness, setRuntimeReadiness] = useState(null)
   const [readinessRevision, setReadinessRevision] = useState(0)
   const [dirCheck, setDirCheck] = useState(null)    // live classify of the typed ComfyUI dir
+  // Bumped when an override changes what the SAME typed dir resolves to (the input
+  // folder adopted from ComfyUI's own report, GitHub #64): the debounce below is keyed
+  // on the string and would otherwise keep showing a verdict that is no longer true.
+  const [dirCheckRevision, setDirCheckRevision] = useState(0)
   const [skipConfirm, setSkipConfirm] = useState(false) // "continue without ComfyUI" panel open
   const [ollamaSkipConfirm, setOllamaSkipConfirm] = useState(false) // same, for Ollama
   const [savingProvider, setSavingProvider] = useState(false)   // local-LLM switch in flight
@@ -303,7 +308,7 @@ export default function SetupPage() {
       } catch { if (alive) setDirCheck(null) }
     }, 350)
     return () => { alive = false; clearTimeout(t) }
-  }, [baseDir])
+  }, [baseDir, dirCheckRevision])
 
   /* Switch which local LLM this install uses, from the wizard.
 
@@ -647,6 +652,21 @@ export default function SetupPage() {
                     at 400px. */}
                 {v.note && (
                   <p className="break-words text-xs text-amber-400">⚠ {v.note}</p>
+                )}
+                {/* ComfyUI has said where it reads (an absolute --input-directory in the
+                    command line it echoes): one click saves that folder as the input
+                    override and asks the verdict again. This offer used to live only in
+                    Settings > Advanced: ComfyUI folder overrides, which is how a Comfy
+                    Desktop user with its shared folder ended up on GitHub (#64). */}
+                {v.inputSuggestion && (
+                  <button type="button"
+                    onClick={async () => {
+                      await applyDetectedPath('comfyui', 'input_dir', v.inputSuggestion)
+                      setDirCheckRevision((n) => n + 1)
+                    }}
+                    className="break-all rounded-md border border-border-strong px-2.5 py-1 text-left text-xs font-medium text-primary hover:bg-surface-raised">
+                    Use the input folder ComfyUI reports: {v.inputSuggestion}
+                  </button>
                 )}
                 {v.suggestion && (
                   <button type="button" onClick={() => setField('comfyui', 'base_dir', v.suggestion)}
@@ -1490,11 +1510,10 @@ export default function SetupPage() {
       <>
         {guidedField('ai-toolkit directory', 'aitoolkit', 'dir', 'C:\\ai-toolkit')}
         {saveRecheckBtn}
-        <p className="mt-2 text-content-muted text-xs">
-          No GPU? You can skip this step: add a <strong>vast.ai API key</strong> in
-          Settings instead and train in the cloud (the app rents a GPU per run,
-          ~$1-2, and shuts it down automatically).
-        </p>
+        {/* "No GPU?" note — the wizard's one "create a vast.ai account" moment. Its own
+            component (components/setup/CloudSignupNote.jsx) so the sign-up link and its
+            disclosure are rendered by tests in both states; this page is not mountable. */}
+        <CloudSignupNote />
       </>
     )
     if (step.valid) {

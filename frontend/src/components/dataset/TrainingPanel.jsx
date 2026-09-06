@@ -1,3 +1,4 @@
+import VastLink from '../common/VastLink';
 // react-frontend/src/components/dataset/TrainingPanel.jsx
 import { useEffect, useRef, useState } from 'react';
 import { Dna, Drama, Eraser, FolderOpen, GraduationCap, Microscope, Package, Rocket, Save, SlidersHorizontal, Trash2, Trophy } from 'lucide-react';
@@ -1737,7 +1738,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     return (
       <div className="flex items-center gap-2 rounded-lg border border-border bg-surface p-3 text-content-muted text-sm">
         <GraduationCap aria-hidden="true" className="h-4 w-4 shrink-0" />
-        Training needs ai-toolkit (local GPU) or a vast.ai API key (cloud) — set either in Settings.
+        Training needs ai-toolkit (local GPU) or a <VastLink className="underline" /> API key (cloud) — set either in Settings.
       </div>
     );
   }
@@ -3021,7 +3022,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 expandDefault={undefined}
                 onToggle={(v) => saveAdv({ mask_faces: v })}
               />
-              {/* Memory saving — quantisation + low-VRAM streaming (issue #14).
+              {/* Memory saving — quantisation + low-VRAM loading (issue #14).
                   The recipes are calibrated for 24 GB; on a bigger card that is a
                   tax nobody asked for. Defaults are UNCHANGED — this only makes
                   them a choice. Sending 'auto' when a box returns to its family
@@ -3065,7 +3066,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 )}
                 <span className="text-content-subtle text-[0.6875rem] leading-relaxed">
                   <b className="text-content-muted font-medium">Why:</b> the recipes are tuned so a 12B model fits in
-                  24 GB — quantisation costs precision and low-VRAM streaming costs a lot of speed. If your card is
+                  24 GB — quantisation costs precision and low-VRAM loading costs start-up time. If your card is
                   bigger than the target, you are paying for nothing.
                   <b className="text-content-muted font-medium"> How:</b> {advMemAdviceText}
                 </span>
