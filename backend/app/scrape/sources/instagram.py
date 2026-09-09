@@ -77,6 +77,28 @@ _CFFI_COOKIE_DOMAINS = {}
 # Sous-chaînes signalant un blocage anti-bot dans un message d'exception.
 _BLOCK_HINTS = ("429", "403", "forbidden", "too many", "login", "rate", "checkpoint")
 
+# Sous-chaînes signalant un RATE-LIMIT (à distinguer d'un vrai blocage auth) :
+# web_profile_info répond 400/401 {"fail": ..., "feedback_required", "Try Again
+# Later", "Please wait a few minutes"} quand le compte est throttle. Ce n'est PAS
+# un problème de login — c'est un refus anti-bot temporaire.
+_THROTTLE_HINTS = (
+    "429", "401", "400", "fail", "feedback_required", "try again later",
+    "please wait a few minutes", "too many requests", "rate-limit", "rate limit",
+    "spam",
+)
+
+# Backoff (secondes) entre tentatives d'un fetch de profil throttlé. Progressif :
+# 15s, 30s, 60s, 60s — on laisse le throttle refroidir au lieu de marteler.
+# Un scan échoué renvoie le message honnête "attends ~10 min" plutôt que le
+# trompeur _AUTH_ERROR.
+_RETRY_BACKOFFS = (15, 30, 60, 60)
+
+
+def _is_throttle(error) -> bool:
+    """True si l'exception signale un rate-limit Instagram (pas un vrai blocage auth)."""
+    msg = str(error or "").lower()
+    return any(h in msg for h in _THROTTLE_HINTS)
+
 
 # --------------------------------------------------------------------------- #
 # Auth — session instaloader + auto-import cookies navigateur.
@@ -262,7 +284,7 @@ class _FastRateController(instaloader.RateController):
     retenté tout de suite au lieu d'attendre 11 min.
     """
 
-    MAX_BACKOFF = 2.0  # secondes max de backoff par réponse 429
+    MAX_BACKOFF = 30.0  # secondes max de backoff par réponse 429 (wait au lieu de marteler)
 
     def sleep(self, secs):
         time.sleep(min(secs, self.MAX_BACKOFF))
@@ -453,18 +475,37 @@ def _scan_profile(loader, username, resume_from=None, save_cursor=False):
     des posts déjà collectés). None = scan frais depuis le haut. `save_cursor` :
     si True, on persiste le dernier shortcode renvoyé sur disque pour permettre
     une reprise ultérieure."""
-    try:
-        profile = instaloader.Profile.from_username(loader.context, username)
-    except instaloader.ProfileNotExistsException:
-        return None, f"Instagram profile not found: {username}."
-    except instaloader.TooManyRequestsException:
-        logger.warning("Instagram rate-limit sur le profil %s", username)
+    # Fetch du profil avec retry anti-throttle : web_profile_info répond 400/401
+    # "fail"/"feedback_required"/"Try Again Later" quand le compte est rate-limité.
+    # On laisse le throttle refroidir (backoff progressif) au lieu de marteler, et
+    # on renvoie le message honnête si le refus persiste — jamais le trompeur
+    # _AUTH_ERROR qui fait croire à un problème de login.
+    profile = None
+    attempts = 1 + len(_RETRY_BACKOFFS)
+    for attempt in range(attempts):
+        try:
+            profile = instaloader.Profile.from_username(loader.context, username)
+            break
+        except instaloader.ProfileNotExistsException:
+            return None, f"Instagram profile not found: {username}."
+        except instaloader.TooManyRequestsException:
+            logger.warning("Instagram rate-limit sur le profil %s", username)
+        except Exception as e:
+            if _is_throttle(e):
+                logger.warning("Instagram rate-limit sur le profil %s : %s",
+                               username, e)
+            else:
+                # ConnectionException / LoginRequired / Forbidden / ... (vrai blocage).
+                logger.warning("Chargement profil %s échoué : %s", username, e)
+                return None, _AUTH_ERROR
+        if attempt < len(_RETRY_BACKOFFS):
+            wait = _RETRY_BACKOFFS[attempt]
+            logger.warning("Instagram rate-limit %s, nouvelle tentative dans %ds",
+                           username, wait)
+            time.sleep(wait)
+    if profile is None:
         return None, ("Instagram rate-limit: trop de requêtes. "
                       "Attends ~10 min avant de relancer le scan.")
-    except Exception as e:
-        # ConnectionException / LoginRequired / Forbidden / TooManyRequests / ...
-        logger.warning("Chargement profil %s échoué : %s", username, e)
-        return None, _AUTH_ERROR
 
     items = []
     posts_seen = 0
