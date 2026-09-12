@@ -15,10 +15,16 @@ import test from 'node:test'
 import { getHelpTopic } from '../src/help/helpRegistry.js'
 import { WHATS_NEW } from '../src/whatsNew.js'
 import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
+import { pluginWhatsNew, resetRegistry, setEnabled, whatsNewEntries } from '../src/plugins/registry.js'
+import { registerBundledDescriptor } from './support/bundledDescriptors.mjs'
+import canvasDescriptor from '../../bundled/canvas/frontend/index.js'
+
+test.beforeEach(() => { resetRegistry(); setEnabled([]) })
+test.afterEach(() => { resetRegistry(); setEnabled([]) })
 
 // The entry under test may have moved to the archive since it shipped
 // (see whatsNew.js, rule "Keep the list tidy") — search the union.
-const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
+const allWhatsNew = () => [...WHATS_NEW, ...WHATS_NEW_ARCHIVE, ...whatsNewEntries()]
 
 const read = readSource
 const BLEND = read('../bundled/canvas/frontend/components/canvas/CanvasBlendPanel.jsx')
@@ -107,14 +113,23 @@ test('the honest line about what blending two identities does is on screen', () 
 })
 
 test('the toggle has a help topic and the wave has a What\'s-new entry', () => {
+  assert.equal(getHelpTopic('canvas-blend'), undefined, 'the absent owner contributes no help')
+  assert.ok(!allWhatsNew().some(e => e.id === '2026-08-03-canvas-blend'))
+  assert.deepEqual(pluginWhatsNew('canvas'), [])
+  assert.equal(registerBundledDescriptor(canvasDescriptor), true)
+  setEnabled(['canvas'])
   const topic = getHelpTopic('canvas-blend')
   assert.ok(topic, 'canvas-blend must be a registered help topic')
   assert.equal(topic.app.route, '/canvas')
   assert.ok(topic.keywords.includes('blend'))
   assert.match(BLEND, /topic="canvas-blend"/)
 
-  const entry = ALL_WHATS_NEW.find((e) => e.id === '2026-08-03-canvas-blend')
+  const entry = allWhatsNew().find((e) => e.id === '2026-08-03-canvas-blend')
   assert.ok(entry, 'the blend wave needs a What\'s-new entry')
   // Archived → no in-app target, by doctrine (whatsNew.js, "Keep the list tidy").
   assert.equal(entry.to, undefined)
+  setEnabled([])
+  assert.equal(getHelpTopic('canvas-blend'), undefined, 'a disabled owner contributes no help')
+  assert.ok(!allWhatsNew().some(e => e.id === '2026-08-03-canvas-blend'))
+  assert.ok(pluginWhatsNew('canvas').some(e => e.id === entry.id), 'installed owner history remains readable')
 })

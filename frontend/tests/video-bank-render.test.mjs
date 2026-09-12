@@ -34,6 +34,9 @@ import assert from 'node:assert/strict'
 
 import { createElement, render, renderToStaticMarkup } from './support/mountJsx.mjs'
 import { installRuntimeHost } from './support/runtimeHost.mjs'
+import { registerBundledDescriptor } from './support/bundledDescriptors.mjs'
+import { pluginWhatsNew, setEnabled, whatsNewEntries } from '../src/plugins/registry.js'
+import videoDescriptor from '../../bundled/video/frontend/index.js'
 
 test.beforeEach(installRuntimeHost)
 
@@ -361,7 +364,16 @@ test('the video bank is announced and documented', async () => {
   const { WHATS_NEW } = await import('../src/whatsNew.js')
   // The entry may have moved to the archive since it shipped — search the union.
   const { WHATS_NEW_ARCHIVE } = await import('../src/whatsNewArchive.js')
-  const entry = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE].find((e) => e.id === '2026-08-04-video-bank')
+  const { getHelpTopic } = await import('../src/help/helpRegistry.js')
+  const allWhatsNew = () => [...WHATS_NEW, ...WHATS_NEW_ARCHIVE, ...whatsNewEntries()]
+  const helpIds = ['page-video-bank', 'video-bank-passes', 'video-capability-pieces',
+    'video-datasets', 'video-promote-target']
+  for (const id of helpIds) assert.equal(getHelpTopic(id), undefined, `absent owner: ${id}`)
+  assert.ok(!allWhatsNew().some(e => e.id === '2026-08-04-video-bank'))
+  assert.deepEqual(pluginWhatsNew('video'), [])
+  assert.equal(registerBundledDescriptor(videoDescriptor), true)
+  setEnabled(['video'])
+  const entry = allWhatsNew().find((e) => e.id === '2026-08-04-video-bank')
   assert.ok(entry, 'the What’s-new entry is what a release note is generated from')
   // Archived entries drop their in-app target by doctrine (whatsNew.js,
   // rule "Keep the list tidy") — the deep link lived while the entry was live.
@@ -369,10 +381,12 @@ test('the video bank is announced and documented', async () => {
   // Benefit-first, and it names the silence it removes.
   assert.match(entry.title, /rushes/)
 
-  const { getHelpTopic } = await import('../src/help/helpRegistry.js')
-  for (const id of ['page-video-bank', 'video-bank-passes', 'video-capability-pieces',
-    'video-datasets', 'video-promote-target']) {
+  for (const id of helpIds) {
     assert.ok(getHelpTopic(id), `missing help topic ${id}`)
   }
   assert.equal(getHelpTopic('page-video-bank').app.route, '/video-bank')
+  setEnabled([])
+  for (const id of helpIds) assert.equal(getHelpTopic(id), undefined, `disabled owner: ${id}`)
+  assert.ok(!allWhatsNew().some(e => e.id === '2026-08-04-video-bank'))
+  assert.ok(pluginWhatsNew('video').some(e => e.id === entry.id), 'installed owner history remains readable')
 })
