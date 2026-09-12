@@ -1,4 +1,7 @@
 import test from 'node:test';
+import { installRuntimeHost } from '../../tests/support/runtimeHost.mjs';
+
+test.beforeEach(installRuntimeHost);
 import assert from 'node:assert/strict';
 import { externalMembersOf, externalEdgesFor } from "../../../bundled/canvas/frontend/utils/canvasExternalEdges.js";
 

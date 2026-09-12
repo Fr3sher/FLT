@@ -23,6 +23,9 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { installRuntimeHost } from './support/runtimeHost.mjs'
+
+test.beforeEach(installRuntimeHost)
 
 import { layoutImageNodes } from "../../bundled/canvas/frontend/utils/canvasImageGroups.js"
 import { groupBarHeight } from '../src/utils/canvasNodeChrome.js'

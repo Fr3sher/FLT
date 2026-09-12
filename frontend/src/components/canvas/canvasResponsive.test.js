@@ -15,6 +15,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { contributions, resetRegistry, setEnabled } from '../../plugins/registry.js';
+import { registerBundledDescriptor } from '../../../tests/support/bundledDescriptors.mjs';
+import resourceMonitor from '../../../../bundled/resource_monitor/frontend/index.js';
 
 const canvas = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
 const page = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/pages/CanvasPage.jsx", import.meta.url), 'utf8');
@@ -255,7 +258,7 @@ test('the shelf’s chips carry their words, and the toolbar keeps its targets',
    when you are not sitting at it. The line itself lives in the shared
    SystemStatsReadout (the header mounts it too); the board's mount keeps its
    historical testid and localStorage key. */
-test('the load readout is reachable from a phone', () => {
+test('the load readout is reachable from a phone', (t) => {
   const stats = fs.readFileSync(
     new URL("../../../../bundled/resource_monitor/frontend/components/SystemStatsReadout.jsx", import.meta.url), 'utf8');
   assert.doesNotMatch(stats, /className="hidden items-center gap-1\.5 sm:flex"/);
@@ -266,8 +269,22 @@ test('the load readout is reachable from a phone', () => {
   assert.match(stats, /shouldPoll\(\{ enabled: enabledRef\.current, visibility \}\)/);
   // …and the board still mounts it under the ids the probe holds on to.
   const mount = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasSystemStats.jsx", import.meta.url), 'utf8');
-  assert.match(mount, /testId="canvas-system-stats"/);
-  assert.match(mount, /prefKey=\{MACHINE_LOAD_PREF_KEY\}/);
+  assert.match(mount, /<PluginSlot slot="resource_monitor.readout" surface="canvas"/);
+  const readout = fs.readFileSync(new URL('../../../../bundled/resource_monitor/frontend/components/Readout.jsx', import.meta.url), 'utf8');
+  assert.match(readout, /const canvas = surface === 'canvas'/);
+  assert.match(readout, /testId=\{canvas \? 'canvas-system-stats' : 'header-system-stats'\}/);
+  assert.match(readout, /prefKey=\{canvas \? MACHINE_LOAD_PREF_KEY : HEADER_MACHINE_LOAD_PREF_KEY\}/);
+  resetRegistry();
+  setEnabled([]);
+  t.after(() => { resetRegistry(); setEnabled([]); });
+  assert.deepEqual(contributions('resource_monitor.readout', 'canvas'), []);
+  assert.equal(registerBundledDescriptor(resourceMonitor), true);
+  setEnabled(['resource_monitor']);
+  const [item] = contributions('resource_monitor.readout', 'canvas');
+  assert.equal(item.plugin, 'resource_monitor');
+  assert.match(String(item.panel), /components\/Readout\.jsx/);
+  setEnabled([]);
+  assert.deepEqual(contributions('resource_monitor.readout', 'canvas'), []);
 });
 
 /* 📏 360 px: the toolbar needed 326 of the 316 it had, and 12 of the missing 10

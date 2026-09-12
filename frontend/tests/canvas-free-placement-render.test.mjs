@@ -19,6 +19,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { installRuntimeHost } from './support/runtimeHost.mjs'
+
+test.beforeEach(installRuntimeHost)
 
 import { clampImageBox, imageNodeExtent } from "../../bundled/canvas/frontend/utils/canvasImageNodes.js"
 import { layoutImageNodes } from "../../bundled/canvas/frontend/utils/canvasImageGroups.js"

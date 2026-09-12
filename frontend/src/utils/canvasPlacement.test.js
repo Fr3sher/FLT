@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { installRuntimeHost } from '../../tests/support/runtimeHost.mjs';
+
+test.beforeEach(installRuntimeHost);
 import { buildLineageGraph, CARD_W, PAD } from './lineageGraph.js';
 import {
   NEW_NODE_GAP, applyPlacement, clampNodePosition, freeSpotBelow, pinSnapshot,
