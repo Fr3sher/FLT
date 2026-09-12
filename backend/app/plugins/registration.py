@@ -31,8 +31,12 @@ def _containers(value):
 @contextmanager
 def registration_transaction(app, csrf, registry):
     # Registration is a boot-only operation, before application workers start.
-    defaults = _containers(cfg.DEFAULTS)
-    engine_specs = engines.all_specs()
+    with cfg._lock:
+        defaults = _containers(cfg.DEFAULTS)
+    with engines._lock:
+        # Preserve the registered specs themselves: their callbacks and opaque
+        # metadata are not copied or mutated by the registration API.
+        engine_specs = dict(engines._specs)
     fields = ('view_functions', 'blueprints', 'before_request_funcs', 'after_request_funcs',
               'teardown_request_funcs', 'teardown_appcontext_funcs', 'error_handler_spec',
               'url_value_preprocessors', 'url_default_functions', 'template_context_processors',
@@ -55,10 +59,12 @@ def registration_transaction(app, csrf, registry):
         with cfg._lock:
             cfg.DEFAULTS.clear()
             cfg.DEFAULTS.update(defaults)
+            # register(ctx) may have read config after adding defaults/engines.
+            # The next reader must merge from the restored catalog and defaults.
             cfg._cache = None
         with engines._lock:
             engines._specs.clear()
-            engines._specs.update((spec.id, spec) for spec in engine_specs)
+            engines._specs.update(engine_specs)
         for name, value in snapshot.items():
             setattr(app, name, value)
         app.url_map = saved_map

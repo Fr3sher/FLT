@@ -325,11 +325,11 @@ def _register_discovered(app, csrf, registry):
             record.state, record.disabled_by = 'disabled', blockers
             continue
         try:
-            from .registration import registration_transaction
-            with registration_transaction(app, csrf, registry):
-                if record.legacy is not None:
-                    register_legacy(app, csrf, registry, record)
-                elif manifest.python_package:
+            if record.legacy is not None:
+                register_legacy(app, csrf, registry, record)  # Owns its registration transaction.
+            elif manifest.python_package:
+                from .registration import registration_transaction
+                with registration_transaction(app, csrf, registry):
                     if record.dir not in sys.path:
                         sys.path.append(record.dir)
                     module = importlib.import_module(manifest.python_package)
