@@ -21,12 +21,22 @@ import { getHelpTopic } from '../src/help/helpRegistry.js'
 import { WHATS_NEW } from '../src/whatsNew.js'
 import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
 
+import canvasPlugin from '../../bundled/canvas/frontend/index.js'
+import { registerDescriptor, resetRegistry, setEnabled } from '../src/plugins/registry.js'
+test.beforeEach(() => {
+  resetRegistry()
+  const manifest = JSON.parse(readFileSync(new URL('../../bundled/canvas/plugin.json', import.meta.url), 'utf8'))
+  assert.equal(registerDescriptor(canvasPlugin, { guideOwnership: manifest.guide_ownership }), true)
+  setEnabled(['canvas'])
+})
+test.afterEach(() => resetRegistry())
+
 // The entry under test may have moved to the archive since it shipped
 // (see whatsNew.js, rule "Keep the list tidy") — search the union.
 const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
 
 const readStudio = (name) => readFileSync(
-  new URL(`../src/components/dataset/studio/${name}`, import.meta.url), 'utf8')
+  new URL(`../src/components/dataset/studio/${name}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 const SEL = [
   { dataset_id: 1, checkpoint: 'z image\\a.safetensors', lora_label: 'A', family: 'zimage' },

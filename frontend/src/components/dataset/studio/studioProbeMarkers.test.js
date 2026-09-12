@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8');
+const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const shell = read('./StudioShell.jsx');
 const actionBar = read('./StudioActionBar.jsx');
 const setup = read('./RunSetupPanel.jsx');
@@ -65,7 +65,8 @@ test('the probe opens the VIDEO lane, and the tab whose grid lives deeper', () =
   // The lane's header is the chrome the probe budgets there, as the Video lane's is:
   // without one the probe measures nothing and says so, which is not a pass.
   assert.match(liveLane, /<header data-probe-chrome="live-studio-header"/);
-  assert.match(lanes, /\{ id: 'live', label: 'Live', icon: Radio, badge: 'beta' \}/);
+  assert.match(read('../../../../../bundled/live/frontend/index.js'), /id: 'live', label: 'Live', icon: 'radio', badge: 'beta'/);
+  assert.match(lanes, /contributions\('studio.tab', 'studio'\)/);
   assert.match(probe, /'\[data-testid="video-source-gallery"\]'/);
   assert.match(probe, /'\[data-testid="video-source-clip"\]'/);
   // ⏭ Continue and the per-picture prompt segments: the probe clicks the

@@ -11,14 +11,35 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const read = (p) => readFileSync(join(here, p), 'utf8');
+const read = (p) => readFileSync(join(here, p), 'utf8').replace(/\r\n/g, '\n');
 const page = read('../../../../pages/StudioPage.jsx');
 const lane = read("../../../../../../bundled/live/frontend/studio/live/LiveStudio.jsx");
 
-test('the Studio page offers the Live lane as a third tab and remembers it', () => {
-  assert.match(page, /\{ id: 'live', label: 'Live', icon: Radio, badge: 'beta' \}/, 'the tab says beta next to Live');
-  assert.match(page, /const LANES = \['image', 'video', 'live'\]/);
-  assert.match(page, /lane === 'live' \? \(\s*<LiveStudio \/>/);
+import livePlugin from '../../../../../../bundled/live/frontend/index.js';
+import videoPlugin from '../../../../../../bundled/video/frontend/index.js';
+import { registerDescriptor, resetRegistry, setEnabled, contributions } from '../../../../plugins/registry.js';
+
+test('the Studio remembers its lane and offers Live independently of Video', () => {
+  resetRegistry();
+  try {
+    for (const plugin of [livePlugin, videoPlugin]) {
+      const manifest = JSON.parse(read(`../../../../../../bundled/${plugin.id}/plugin.json`));
+      assert.equal(registerDescriptor(plugin, { guideOwnership: manifest.guide_ownership }), true);
+    }
+    setEnabled(['live']);
+    const [live] = contributions('studio.tab', 'studio');
+    assert.deepEqual({ id: live.id, label: live.label, icon: live.icon, badge: live.badge },
+      { id: 'live', label: 'Live', icon: 'radio', badge: 'beta' });
+    assert.equal(live.plugin, 'live');
+    setEnabled(['video']);
+    assert.deepEqual(contributions('studio.tab', 'studio').map(tab => tab.id), ['video']);
+    setEnabled([]);
+    assert.deepEqual(contributions('studio.tab', 'studio'), []);
+    assert.match(page, /contributions\('studio.tab', 'studio'\)/);
+    assert.match(page, /const LANES = \(\) => studioTabs\(\).map/);
+    assert.match(page, /localStorage.setItem\(LANE_KEY, next\)/);
+    assert.match(page, /importer=\{pluginTab.panel\}/);
+  } finally { resetRegistry(); }
 });
 
 test('hls.js is loaded on demand, only when there is a playlist to play', () => {

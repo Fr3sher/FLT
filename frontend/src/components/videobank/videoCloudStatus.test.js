@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   isActive, launchBlockedReason, runSummary, canRetry, canContinue, stepLabel,
-} from './videoCloudStatus.js'
+} from '../../../../bundled/cloud_training/frontend/video/videoCloudStatus.js'
 import {
   videoDatasetCloudUrl, videoDatasetCloudProgressUrl,
   videoDatasetCloudCheckpointsUrl, videoDatasetCheckpointUrl,

@@ -15,6 +15,20 @@ const { default: VideoLineageGraph, VideoCheckpointPopover } =
 const { default: VideoSampleLightbox } = await import("../../bundled/video/frontend/videobank/VideoSampleLightbox.jsx")
 const { pillActionModel } = await import("../../bundled/video/frontend/videobank/videoLineage.js")
 
+const { configureHostRuntime } = await import('../src/plugins/runtimeHost.jsx')
+const { publishRuntime } = await import('../src/plugins/loadPlugins.js')
+const { ToastProvider } = await import('../src/components/common/Toast.jsx')
+const { MemoryRouter } = await import('react-router')
+test.beforeEach(t => {
+  const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch }
+  t.after(() => Object.assign(globalThis, saved))
+  globalThis.window = {}
+  globalThis.document = { cookie: '', querySelector: () => null }
+  globalThis.fetch = () => { throw new Error('A render must not contact a service') }
+  configureHostRuntime()
+  publishRuntime()
+})
+
 const file = (filename, extra = {}) => ({ filename, size: 314572800, deployed_as: null, undeployable: false, ...extra })
 const POSTER = '/api/video-dataset/9/train/sample/poster?run_id=12&filename=1725__000000100_0.mp4'
 const TREE = {
@@ -57,8 +71,9 @@ const TREE = {
   ],
   edges: [{ parent: 12, child: 13, resumed_from: 100, superseded: false }],
 }
-const html = (props) => renderToStaticMarkup(createElement(VideoLineageGraph,
-  { datasetId: 9, tree: TREE, onPlaySample: () => {}, ...props }))
+const html = (props) => renderToStaticMarkup(createElement(MemoryRouter, null,
+  createElement(ToastProvider, null, createElement(VideoLineageGraph,
+    { datasetId: 9, tree: TREE, onPlaySample: () => {}, ...props }))))
 
 test('a card per run, labelled Video, and one pill per STEP — a Wan pair is one pill', () => {
   const h = html()

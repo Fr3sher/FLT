@@ -54,7 +54,7 @@ function fullScreenOverlays(dir = HERE, prefix = '') {
     if (entry.isDirectory()) {
       out.push(...fullScreenOverlays(at, `${prefix}${entry.name}/`));
     } else if (entry.name.endsWith('.jsx')) {
-      const source = readFileSync(at, 'utf8');
+      const source = readFileSync(at, 'utf8').replace(/\r\n/g, '\n');
       if (/className="fixed inset-0/.test(source)) {
         out.push({ file: prefix + entry.name, source });
       }
@@ -63,8 +63,15 @@ function fullScreenOverlays(dir = HERE, prefix = '') {
   return out;
 }
 
+// The relocated Video subtree stays in the inventory: removing the folder
+// from core must not remove its modal obligations.
+function studioFullScreenOverlays() {
+  return [...fullScreenOverlays(),
+    ...fullScreenOverlays(new URL('../../../../../bundled/video/frontend/studio/', HERE))];
+}
+
 test('la liste des modales du Studio n’est pas vide — sinon la garde ne garde rien', () => {
-  const found = fullScreenOverlays();
+  const found = studioFullScreenOverlays();
   assert.ok(found.length >= 2,
     `attendu au moins 2 plein-écrans dans ce dossier, trouvé ${found.length} `
     + '— le motif de détection a dû changer, la garde ne prouve plus rien');
@@ -79,7 +86,7 @@ test('l’énumération DESCEND vraiment dans les sous-dossiers', () => {
      invisible.
      On exige donc que l'énumération RAPPORTE au moins un fichier venu d'un
      sous-dossier : un compte n'est une preuve que s'il est EXERCÉ. */
-  const found = fullScreenOverlays();
+  const found = studioFullScreenOverlays();
   const nested = found.filter(({ file }) => file.includes('/'));
   assert.ok(nested.length >= 1,
     'aucun plein-écran trouvé sous un sous-dossier : la récursion est morte, '
@@ -90,7 +97,7 @@ test('l’énumération DESCEND vraiment dans les sous-dossiers', () => {
 });
 
 test('CHAQUE modale plein-écran du Studio est portaillée sur document.body', () => {
-  const offenders = fullScreenOverlays()
+  const offenders = studioFullScreenOverlays()
     .filter(({ source }) => !(/from 'react-dom'/.test(source)
       && /createPortal\(/.test(source)
       && /document\.body/.test(source)));
@@ -107,6 +114,6 @@ test('l’aside qui piège l’empilement est toujours celui décrit ci-dessus',
   /* Si ce panneau perd son `sticky`/`overflow`, la raison d’être du portail
      change — et quelqu’un doit le relire plutôt que de trouver un commentaire
      qui parle d’un CSS disparu. Épingler la cause, pas seulement le remède. */
-  const owner = readFileSync(new URL('./ComparisonStudio.jsx', HERE), 'utf8');
+  const owner = readFileSync(new URL('./ComparisonStudio.jsx', HERE), 'utf8').replace(/\r\n/g, '\n');
   assert.match(owner, /<aside className="[^"]*lg:sticky[^"]*lg:overflow-auto/);
 });

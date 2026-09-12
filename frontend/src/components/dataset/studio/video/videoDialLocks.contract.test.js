@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 
-const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
+const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const PANELS = {
   'VideoOptionsPanel.jsx': read("../../../../../../bundled/video/frontend/studio/video/VideoOptionsPanel.jsx"),
   'VideoLoraPicker.jsx': read("../../../../../../bundled/video/frontend/studio/video/VideoLoraPicker.jsx"),
@@ -65,7 +65,7 @@ test('the picker’s Preview size is the one dial that goes without a lock — o
 test('the lock is the app’s one implementation, not a second one', () => {
   // The video lane wearing its own padlock is how the two lanes drift apart.
   for (const [name, src] of Object.entries(PANELS)) {
-    assert.match(src, /import SliderLock, \{ useSliderLock \} from '\.\.\/\.\.\/\.\.\/shared\/SliderLock'/,
+    assert.match(src, /import \{ SliderLock, useSliderLock \} from '@lds\/plugin-sdk\/ui'/,
       `${name} does not use the shared lock`)
     assert.doesNotMatch(src, /localStorage/,
       `${name} keeps its own lock memory instead of the shared one`)

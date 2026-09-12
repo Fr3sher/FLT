@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 
-const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
+const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const STUDIO = read("../../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx")
 
 test('the strip is the state, and `source` is its first frame — what the ✨ helpers read', () => {
@@ -63,7 +63,7 @@ test('the button counts the clips — in the rail and in the phone bar — and t
   // 3…" from the one screen where the rail is scrolled away (refuted
   // 2026-09-02) — so the bar is handed the running text too.
   assert.match(STUDIO, /runLabel=\{`▶ \$\{label\}`\} runningLabel=\{`▶ \$\{label\}`\}/)
-  const BAR = fs.readFileSync(new URL('../StudioActionBar.jsx', import.meta.url), 'utf8')
+  const BAR = fs.readFileSync(new URL('../StudioActionBar.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
   assert.match(BAR, /\{running \? \(runningLabel \|\| '…'\) : runLabel\}/)
   assert.doesNotMatch(STUDIO, /'Queueing…' : 'Generate clip'|runLabel="▶ Generate clip"/)
   // ↻ Reuse replaces the strip, and the frames it drops let go of their
