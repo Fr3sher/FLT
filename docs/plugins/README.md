@@ -29,3 +29,11 @@ The manifest describes compatibility and permissions; it does not establish
 publisher identity or sandbox plugin code. Packaging and installation trust are
 separate checks. The developer tools described here create local artifacts and
 do not publish them to a Store.
+
+`lds_sdk.database.for_plugin(id, tables=...)` supplies the plugin's mapped base
+and owned session. Its `func` and `or_` helpers construct SQLAlchemy expressions
+for aggregates and boolean filters; querying or chaining a filter still checks
+the complete statement against the plugin's tables. Use the named media SDKs,
+such as `GalleryImages(user_id)` and `GalleryExports(user_id)`, to read host
+gallery records and confined file paths instead of passing host models to the
+plugin's session.

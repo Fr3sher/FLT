@@ -9,6 +9,7 @@ This is an API ownership boundary, not a Python sandbox.
 
 import re
 
+from sqlalchemy import func, or_
 
 from sqlalchemy.sql import visitors
 
@@ -175,6 +176,10 @@ class _PluginDatabase:
 
         self.BaseMapped = BaseMapped
         self.session = _OwnedSession(self)
+        # Expression constructors do not open a session. Every query still
+        # validates its complete statement against this owner's mapped tables.
+        self.func = func
+        self.or_ = or_
 
     def table(self, name):
         if name not in self.tables:

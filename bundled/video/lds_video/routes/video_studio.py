@@ -547,15 +547,14 @@ def _resolve_source(req):
         # Served at full size from the dataset folder it lives in, exactly as
         # /api/dataset/<id>/img/<name> serves it, so what gets animated is the
         # picture the user is looking at rather than a thumbnail of it.
-        from lds_video.models import db
-        from lds_sdk.video_host.models import LoraTestImage
-        from lds_sdk.video_host.dataset_storage import dataset_path
-        row = db.session.get(LoraTestImage, int(data['gallery_image_id']))
+        from lds_sdk.gallery_exports import GalleryExports
+        from lds_sdk.images import GalleryImages
+        image_id = int(data['gallery_image_id'])
+        row = GalleryImages(LOCAL_USER).get(image_id)
         if row is None or not row.filename or not row.dataset_id:
             raise ValueError('that generated image is not in the gallery any more')
-        path = os.path.join(str(dataset_path(int(row.dataset_id))),
-                            os.path.basename(str(row.filename)))
-        if not os.path.isfile(path):
+        path = GalleryExports(LOCAL_USER).path(image_id)
+        if not path:
             raise ValueError('that generated image is no longer on disk')
         return path, False
 
