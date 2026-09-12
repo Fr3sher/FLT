@@ -48,7 +48,7 @@ def test_registration_matches_exact_public_manifest_ownership(app):
     assert ctx.calls['register_request_limit'] == [
         (('video_live.live_lora_import', 1024 * 1024 * 1024), {})]
     assert {args[0] for args, kw in ctx.calls['register_hook']} == {
-        'comfyui.restart_blockers', 'plugin.disable_blockers'}
+        'comfyui.restart_blockers', 'system.free_memory_blockers', 'plugin.disable_blockers'}
     assert [args[0] for args, kw in ctx.calls['register_probe']] == manifest['owns']['probes'] == ['live']
     assert [args[0] for args, kw in ctx.calls['register_job_handler']] == manifest['owns']['job_kinds'] == ['is_live']
     assert ctx.calls['register_job_handler'][0][1]['presentation']['cancel_scope'] == 'owner'
@@ -73,10 +73,11 @@ def test_completion_keeps_origin_session_metadata(monkeypatch):
 @pytest.mark.parametrize('state,blocked', [('starting', True), ('running', True), ('stopping', True),
                                           ('stopped', False), ('idle', False), (None, False)])
 def test_lifecycle_blockers_only_cover_live_active_sessions(monkeypatch, state, blocked):
-    monkeypatch.setattr(live, 'current', lambda: SimpleNamespace(state=state) if state else None)
+    monkeypatch.setattr(live, 'current', lambda: SimpleNamespace(state=state, params={'gpu': 'local'}) if state else None)
     reasons = ['Existing blocker']
     assert len(lds_live._restart_blockers(reasons)) == 1 + blocked
     assert len(lds_live._disable_blockers(reasons, 'live')) == 1 + blocked
+    assert len(lds_live._free_memory_blockers(reasons)) == 1 + blocked
     assert lds_live._disable_blockers(reasons, 'unrelated') == reasons
     assert reasons == ['Existing blocker'], 'Hooks must not mutate the host list.'
 
