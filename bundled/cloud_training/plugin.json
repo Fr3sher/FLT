@@ -47,7 +47,6 @@
       "training.full_model_base",
       "training.full_model_quality",
       "training.full_model_fp8_export",
-      "training.fp8_deliver",
       "paths.cloud_runs_dir",
       "workspace-dense-models",
       "parallel-cloud-runs",

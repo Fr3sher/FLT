@@ -42,6 +42,7 @@ test('stored checkpoint labels preserve public main representations', () => {
 test('every exported product descriptor imports with the public SDK and declares no required sibling', async () => {
   const bundled = new URL('../../bundled/', import.meta.url)
   const checked = []
+  const fp8HelpOwners = []
   for (const entry of await fs.readdir(bundled, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
     const root = new URL(entry.name + '/', bundled)
@@ -50,10 +51,12 @@ test('every exported product descriptor imports with the public SDK and declares
     assert.equal(descriptor.id, manifest.id)
     assert.deepEqual(manifest.requires, [], manifest.id)
     const help = new Set(manifest.owns.help_topics)
+    if (help.has('training.fp8_deliver')) fp8HelpOwners.push(manifest.id)
     for (const topic of descriptor.help || []) assert.ok(help.has(topic.id), `${manifest.id}: ${topic.id}`)
     const news = new Set(manifest.owns.whats_new_ids)
     for (const item of descriptor.whatsNew || []) assert.ok(news.has(item.id), `${manifest.id}: ${item.id}`)
     checked.push(manifest.id)
   }
+  assert.deepEqual(fp8HelpOwners, ['model_tools'])
   assert.ok(checked.includes('live') && checked.includes('resource_monitor') && checked.includes('civitai_publish'))
 })

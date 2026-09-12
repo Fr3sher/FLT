@@ -20,13 +20,27 @@ import { render } from './support/mountJsx.mjs'
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 const { VAST_REFERRAL_ID, vastSignupUrl } = await import('../src/utils/vastReferral.js')
-const { VastKeyGuide } = await import('../src/components/settings/TrainingSection.jsx')
-const { default: CloudSignupNote } = await import('../src/components/setup/CloudSignupNote.jsx')
+const { VastKeyGuide } = await import('../../bundled/cloud_training/frontend/settings/CloudTrainingGroup.jsx')
+const { default: CloudSignupNote } = await import('../../bundled/cloud_training/frontend/setup/CloudSignupNote.jsx')
 const { default: VastReferralDisclosure } = await import('../src/components/common/VastReferralDisclosure.jsx')
 const { default: VastLink } = await import('../src/components/common/VastLink.jsx')
 const { default: Markdown } = await import('../src/components/common/Markdown.jsx')
 
 const hrefs = (html) => [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1])
+
+const { configureHostRuntime } = await import('../src/plugins/runtimeHost.jsx')
+const { publishRuntime } = await import('../src/plugins/loadPlugins.js')
+const { GUIDE } = await import('../../bundled/cloud_training/frontend/guide.js')
+const { composeGuide } = await import('../src/plugins/guideContent.js')
+test.beforeEach(t => {
+  const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch }
+  t.after(() => Object.assign(globalThis, saved))
+  globalThis.window = {}
+  globalThis.document = { cookie: '', querySelector: () => null }
+  globalThis.fetch = () => { throw new Error('Rendering must not contact any service') }
+  configureHostRuntime()
+  publishRuntime()
+})
 
 test('VastLink: any console page, tagged with the id, plain without one', () => {
   assert.deepEqual(hrefs(render(VastLink, { path: '/instances/', referralId: '12345', children: 'console' })),
@@ -97,7 +111,9 @@ test('the default renders use the id shipped in vastReferral.js', () => {
 })
 
 test('the settings-guide key line renders IN-APP with both links clickable and nothing relative', { skip: !VAST_REFERRAL_ID && 'no id shipped' }, () => {
-  const guide = readFileSync(resolve(REPO, 'docs/guide/settings-reference.md'), 'utf8')
+  const [chapter] = composeGuide([{ id: 'settings-reference',
+    source: readFileSync(resolve(REPO, 'docs/guide/settings-reference.md'), 'utf8') }], [{ guide: GUIDE }])
+  const guide = chapter.source
   const line = guide.split('\n').find((l) => l.includes('VAST_API_KEY') && l.includes('ref_id='))
   assert.ok(line, 'the guide names the tagged link on the key line')
   const html = render(Markdown, { source: line })

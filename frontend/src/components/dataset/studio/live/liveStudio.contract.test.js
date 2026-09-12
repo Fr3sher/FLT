@@ -44,7 +44,9 @@ test('the Studio remembers its lane and offers Live independently of Video', () 
 
 test('hls.js is loaded on demand, only when there is a playlist to play', () => {
   assert.match(lane, /await import\('hls\.js'\)/, 'a dynamic import keeps it out of the Studio chunk');
-  assert.doesNotMatch(lane, /^import .*hls\.js/m, 'never a static import');
+  assert.doesNotMatch(lane, /^import .*from ['"]hls\.js['"]/m, 'the player code must remain lazy');
+  assert.match(lane, /import hlsWorkerUrl from 'hls\.js\/dist\/hls\.worker\.js\?url&no-inline'/);
+  assert.match(lane, /workerPath: hlsWorkerUrl/);
   assert.match(lane, /canPlayType\('application\/vnd\.apple\.mpegurl'\)/, 'Safari plays HLS natively');
   assert.match(lane, /hlsRef\.current\.destroy\(\)/, 'the player is torn down with the playlist');
 });

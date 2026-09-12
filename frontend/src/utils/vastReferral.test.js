@@ -4,6 +4,8 @@ import { dirname, join, relative, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { GUIDE as CLOUD_GUIDE } from '../../../bundled/cloud_training/frontend/guide.js'
+
 import { VAST_CONSOLE_URL, VAST_REFERRAL_ID, vastSignupUrl, vastUrl } from './vastReferral.js'
 
 /* The maintainer's rule (2026-09-05): wherever we talk about vast.ai, our link
@@ -25,7 +27,7 @@ import { VAST_CONSOLE_URL, VAST_REFERRAL_ID, vastSignupUrl, vastUrl } from './va
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = resolve(HERE, '..')             // frontend/src
 const REPO = resolve(SRC, '../..')          // repo root
-const read = (abs) => readFileSync(abs, 'utf8')
+const read = (abs) => readFileSync(abs, 'utf8').replace(/\r\n/g, '\n')
 
 /* Global regexes are used ONLY through matchAll (a `/g` regex shared across
    .test() calls carries its lastIndex from one file to the next). */
@@ -44,7 +46,11 @@ function walk(dir, keep, out = []) {
   return out
 }
 
-const SOURCES = walk(SRC, (f) => /\.(jsx?|mjs)$/.test(f) && !/\.test\.(jsx?|mjs)$/.test(f))
+const isCode = f => /\.(jsx?|mjs)$/.test(f) && !/\.test\.(jsx?|mjs)$/.test(f)
+const SOURCES = [...walk(SRC, isCode),
+  ...walk(resolve(REPO, 'bundled'), f => isCode(f) && /[/\\]frontend[/\\]/.test(f)
+    && !/[/\\](guide|whatsNew|migratedNews)\.js$/.test(f))]
+
 const DOCS = walk(resolve(REPO, 'docs'), (f) => f.endsWith('.md'))
 const README = resolve(REPO, 'README.md')
 const GUIDE = resolve(REPO, 'docs/guide/settings-reference.md')
@@ -59,11 +65,14 @@ const MODULE = 'utils/vastReferral.js'
 const DISCLOSURE = 'components/common/VastReferralDisclosure.jsx'
 const LINK = 'components/common/VastLink.jsx'
 /* The two "create an account" moments of the product. */
-const SIGNUP_SURFACES = ['components/settings/TrainingSection.jsx', 'components/setup/CloudSignupNote.jsx']
+const SIGNUP_SURFACES = ['../../bundled/cloud_training/frontend/settings/CloudTrainingGroup.jsx',
+  '../../bundled/cloud_training/frontend/setup/CloudSignupNote.jsx']
 /* Every file that may import the referral module (build a URL), and every file
    that may render <VastLink>. Extend on purpose, never by accident. */
-const MODULE_IMPORTERS = [DISCLOSURE, LINK, ...SIGNUP_SURFACES, 'pages/CloudRunsPage.jsx'].sort()
-const LINK_USERS = ['components/dataset/TrainingPanel.jsx', 'components/settings/TrainingSection.jsx', 'pages/CloudRunsPage.jsx'].sort()
+const MODULE_IMPORTERS = [DISCLOSURE, LINK, 'plugins/runtimeHost.jsx', 'plugins/guideContent.js',
+  ...SIGNUP_SURFACES, '../../bundled/cloud_training/frontend/CloudRunsHub.jsx'].sort()
+const LINK_USERS = ['../../bundled/cloud_training/frontend/settings/CloudTrainingGroup.jsx',
+  '../../bundled/cloud_training/frontend/CloudRunsHub.jsx'].sort()
 
 test('vastUrl tags any console page with the id; no id → the plain page; the sign-up link is the root', () => {
   assert.equal(vastUrl('/', ''), VAST_CONSOLE_URL)
@@ -86,7 +95,7 @@ test('the sources never spell a vast.ai URL or a ref_id out — vastUrl is the o
 })
 
 test('the referral module and <VastLink> are used by the listed files, nowhere else', () => {
-  const importers = SOURCES.filter((f) => /from '[^']*utils\/vastReferral(\.js)?'/.test(read(f))).map(rel).sort()
+  const importers = SOURCES.filter((f) => /from ['"][^'"]*(?:utils\/vastReferral(?:\.js)?|@lds\/plugin-sdk\/links)['"]/.test(read(f))).map(rel).sort()
   assert.deepEqual(importers, MODULE_IMPORTERS, 'a new importer is a new surface — list it on purpose')
   const users = SOURCES.filter((f) => read(f).includes('<VastLink')).map(rel).sort()
   assert.deepEqual(users, LINK_USERS, 'a new <VastLink> user is a new surface — list it on purpose')
@@ -105,10 +114,13 @@ test('the disclosure decides its own visibility, renders once beside each sign-u
   assert.deepEqual(wording, [DISCLOSURE], 'the disclosure sentence is written in one component so the surfaces cannot drift')
 })
 
-test('the Setup wizard mounts the note component instead of building the link inline', () => {
-  const setup = read(resolve(SRC, 'pages/SetupPage.jsx'))
-  assert.equal((setup.match(/<CloudSignupNote\b/g) || []).length, 1, 'SetupPage renders the note once')
-  assert.ok(!setup.includes('vastSignupUrl('), 'SetupPage never builds the link itself: the page cannot be rendered by a test, the component can')
+test('the Cloud preparation card is mounted by its product settings, through the declared slot', () => {
+  const host = read(resolve(SRC, 'pages/pluginSettingsGroups.jsx'))
+  const contributions = read(resolve(REPO, 'bundled/cloud_training/frontend/settings/contributions.js'))
+  assert.match(contributions, /'setup.card':[\s\S]*?import\('\.\.\/setup\/CloudSignupNote\.jsx'\)/)
+  assert.match(host, /contributions\('setup.card', 'setup'\).filter\(item => item.plugin === pluginId\)/)
+  assert.match(host, /importer=\{card.panel\}/)
+  assert.doesNotMatch(read(resolve(SRC, 'pages/SetupPage.jsx')), /<CloudSignupNote|vastSignupUrl\(/)
 })
 
 /* Markdown sections, with fenced code blocks left out. */
@@ -131,41 +143,45 @@ const masked = (line) => line
   .replace(/\*"[^"]*"\*/g, ' ').replace(/<[^>]*>/g, ' ')
 const mentionsVast = (lines) => lines.some((l) => /(?<![\w./-])vast\.ai(?![\w-])/i.test(masked(l)))
 
-test('README, the guides and .env.example: every vast.ai URL carries the id, and every section that talks about vast.ai carries the link', () => {
-  const textFiles = [README, ENV_EXAMPLE, ...DOCS]
+test('README, the core and owned guides and .env.example keep the same disclosed referral links', () => {
+  // Moved guide sections remain in the census: the core chapter alone can no
+  // longer prove the product's links, and generated JS is not executable UI.
+  const textFiles = [README, ENV_EXAMPLE, ...DOCS].map(f => ({ name: relRepo(f), text: read(f) }))
+  const productDocs = CLOUD_GUIDE.sections.map(section => ({
+    name: `bundled/cloud_training/frontend/guide.js#${section.chapter}/${section.anchor}`, text: section.markdown,
+  }))
+  textFiles.push(...productDocs)
   if (!VAST_REFERRAL_ID) {
-    for (const f of textFiles) assert.ok(!/ref_id=/.test(read(f)), `${relRepo(f)} carries a ref_id the app does not have`)
-    assert.doesNotMatch(read(README), /Affiliate disclosure/, 'a disclosure with no link to disclose')
+    for (const { name, text } of textFiles) assert.ok(!/ref_id=/.test(text), `${name} carries an id the app does not have`)
+    assert.doesNotMatch(read(README), /Affiliate disclosure/)
     return
   }
-  for (const f of textFiles) {
-    const text = read(f)
+  for (const { name, text } of textFiles) {
     for (const line of text.split('\n')) {
-      if (/untagged/i.test(line)) continue                       // the disclosure's escape hatch
+      if (/untagged/i.test(line)) continue
       for (const url of vastUrls(line)) {
-        if (/console\.vast\.ai\/api/.test(url)) continue         // API endpoints, not links
-        assert.ok(url.includes(`ref_id=${VAST_REFERRAL_ID}`), `${relRepo(f)}: untagged vast.ai link ${url}`)
+        if (/console\.vast\.ai\/api/.test(url)) continue
+        assert.ok(url.includes(`ref_id=${VAST_REFERRAL_ID}`), `${name}: untagged vast.ai link ${url}`)
       }
     }
-    for (const id of taggedIds(text)) assert.equal(id, VAST_REFERRAL_ID, `${relRepo(f)}: a foreign referral id`)
+    for (const id of taggedIds(text)) assert.equal(id, VAST_REFERRAL_ID, `${name}: a foreign referral id`)
   }
-  for (const f of [README, ...DOCS]) {
-    for (const s of sections(read(f))) {
-      if (!mentionsVast(s.lines)) continue
-      assert.ok(s.lines.some((l) => l.includes(`ref_id=${VAST_REFERRAL_ID}`)),
-        `${relRepo(f)} — section "${s.heading}" talks about vast.ai without our link`)
+  for (const { name, text } of [...[README, ...DOCS].map(f => ({ name: relRepo(f), text: read(f) })), ...productDocs]) {
+    for (const section of sections(text)) {
+      if (!mentionsVast(section.lines)) continue
+      assert.ok(section.lines.some(line => line.includes(`ref_id=${VAST_REFERRAL_ID}`)),
+        `${name} — section "${section.heading}" talks about vast.ai without the link`)
     }
   }
   const readme = read(README)
-  assert.match(readme, /\*\*Affiliate disclosure\.\*\*/, 'README: the disclosure block under the API-keys table')
-  assert.match(readme, UNTAGGED_ROOT, 'README: the untagged link is what turns a disclosure into a choice')
-  assert.match(readme, /no upsell[\s\S]{0,600}referral links/, 'README: "no upsell" must say in what sense it stays true')
-  const guide = read(GUIDE)
-  assert.match(guide, /referral links/, 'settings guide: says its vast.ai links are referral links')
-  assert.match(guide, UNTAGGED_ROOT, 'settings guide: the untagged link beside the tagged ones')
-  /* The guide is also rendered INSIDE the app (GuidePage, the help modal) by the
-     in-house Markdown.jsx, which knows [text](url) but not <autolinks>, and which
-     opens hrefs as-is: a relative README path lands on a 404 there. */
-  assert.doesNotMatch(guide, /<https:\/\/cloud\.vast\.ai\/>/, 'settings guide: never an autolink — plain text in-app')
-  assert.doesNotMatch(guide, /\]\(\.\.\/\.\.\/README\.md/, 'settings guide: no relative README link — a 404 in-app')
+  assert.match(readme, /\*\*Affiliate disclosure\.\*\*/)
+  assert.match(readme, UNTAGGED_ROOT)
+  assert.match(readme, /no upsell[\s\S]{0,600}referral links/)
+  const guide = read(GUIDE) + CLOUD_GUIDE.sections
+    .filter(section => section.chapter === 'settings-reference')
+    .map(section => section.markdown).join('\n')
+  assert.match(guide, /referral links/)
+  assert.match(guide, UNTAGGED_ROOT)
+  assert.doesNotMatch(guide, /<https:\/\/cloud\.vast\.ai\/>/)
+  assert.doesNotMatch(guide, /\]\(\.\.\/\.\.\/README\.md/)
 })

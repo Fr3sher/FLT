@@ -169,7 +169,9 @@ test('the Runs hub fetches that plan and sends the chosen road', () => {
 test('the Runs hub offers the picker too, with its own lane rule', () => {
   // It used to pass no `lanes` (a deliberate scope choice) and silently
   // relaunched a pod — Continue opened from the Runs page gave no choice at all.
-  assert.match(controller, /const lanes = target \? \{ local, \.\.\.\(remote \? \{ cloud: remote \}/);
+  assert.match(controller, /const lanes = target \? \{ local, cloud: remote \|\| \{/);
+  assert.match(controller, /available: false, reason: 'Cloud training is disabled in this install\.'/);
+  assert.match(controller, /explicitRunContinuation\(run, \{ lane: 'local' \}\)/);
   // the hub's guards differ from the panel's (many datasets, machine-wide local
   // single-flight), so they live in their own unit-tested rule
   assert.match(cloud, /runsHubContinueLanes\(run/);

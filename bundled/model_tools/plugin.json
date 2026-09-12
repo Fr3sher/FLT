@@ -21,6 +21,7 @@
     ],
     "config_keys_in_shared_sections": {},
     "help_topics": [
+      "training.fp8_deliver",
       "storage.fp8_quantize",
       "training.fp8_quantize_local",
       "workspace-lora-merge"
