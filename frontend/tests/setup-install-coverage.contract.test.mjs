@@ -27,8 +27,20 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { installCatalog, INSTALL_ALL_ACTION_LABELS } from '../src/hooks/useSetupSteps.js'
+import { resetRegistry, setEnabled } from '../src/plugins/registry.js'
+import { registerBundledDescriptor } from './support/bundledDescriptors.mjs'
+
+const BUNDLED = path.join(process.cwd(), '..', 'bundled')
+const products = await Promise.all(fs.readdirSync(BUNDLED).filter(id =>
+  fs.existsSync(path.join(BUNDLED, id, 'plugin.json'))).map(async id => ({
+  id, manifest: JSON.parse(fs.readFileSync(path.join(BUNDLED, id, 'plugin.json'), 'utf8')),
+  descriptor: (await import(pathToFileURL(path.join(BUNDLED, id, 'frontend/index.js')))).default,
+})))
+test.beforeEach(resetRegistry)
+test.afterEach(resetRegistry)
 
 const BACKEND = path.join(process.cwd(), '..', 'backend', 'app')
 const installer = fs.readFileSync(path.join(BACKEND, 'setup_installer.py'), 'utf8')
@@ -52,10 +64,8 @@ function backendActions() {
   const downloads = [
     ...pyDictKeys(installer, '_KLEIN_DOWNLOADS'),
     ...pyDictKeys(installer, '_KREA_DOWNLOADS'),
-    ...pyDictKeys(installer, '_SEEDVR2_DOWNLOADS'),
-    ...pyDictKeys(installer, '_CAMERA_DOWNLOADS'),
-    ...pyDictKeys(installer, '_H3_DOWNLOADS'),
     ...pyDictKeys(installer, '_NODE_PACKS'),
+    ...pyDictKeys(installer, '_BUNDLED_NODE_PACKS'),
   ]
   return new Set([...literal, ...downloads])
 }
@@ -64,12 +74,12 @@ function backendActions() {
 function backendGroups() {
   const start = installer.indexOf('_INSTALL_GROUPS = {')
   assert.ok(start >= 0, '_INSTALL_GROUPS not found')
-  const block = installer.slice(start, installer.indexOf('\n}', start))
+  const block = installer.slice(start).split(/\r?\n\r?\n/)[0]
   const groups = {}
   for (const m of block.matchAll(/'([a-z0-9_]+)': \(([^)]*)\)/g)) {
     groups[m[1]] = [...m[2].matchAll(/'([a-z0-9_]+)'/g)].map((x) => x[1])
   }
-  assert.ok(Object.keys(groups).length >= 3, 'suspiciously few install groups')
+  assert.deepEqual(Object.keys(groups), ['krea'], 'core owns Krea; product groups belong to their manifest')
   return groups
 }
 
@@ -95,6 +105,12 @@ function inlineRunnerActions() {
       if (!/\.jsx?$/.test(f)) continue
       const src = fs.readFileSync(path.join(root, f), 'utf8')
       for (const m of src.matchAll(/action="([a-z0-9_]+)"/g)) actions.add(m[1])
+      if (/<InstallRunner\b[^>]*action=\{ACTION\}/.test(src)
+          || src.includes('postJson(`/api/setup/install/${ACTION}`, {}')) {
+        const action = src.match(/const ACTION = '([a-z0-9_]+)'/)
+        assert.ok(action, `${f}: unresolved install action`)
+        actions.add(action[1])
+      }
     }
   }
   return actions
@@ -150,3 +166,30 @@ test('every surfaced action carries a human label', () => {
       + 'its row would render as a bare identifier')
   }
 })
+
+for (const product of products) {
+  test(`${product.id} alone exposes each declared preparation action`, () => {
+    assert.equal(registerBundledDescriptor(product.descriptor), true)
+    setEnabled([product.id])
+    const rows = installCatalog(FULL_CAPS)
+    const reachable = new Set(rows.map(row => row.action))
+    const files = fs.readdirSync(path.join(BUNDLED, product.id, 'frontend'), { recursive: true })
+    const posted = new Set()
+    for (const file of files.filter(name => /\.jsx?$/.test(name))) {
+      const source = fs.readFileSync(path.join(BUNDLED, product.id, 'frontend', file), 'utf8')
+      for (const match of source.matchAll(/action="([a-z0-9_]+)"/g)) reachable.add(match[1])
+      // Some cards bind one named constant to InstallRunner instead of a literal.
+      if (/<InstallRunner\b[^>]*action=\{ACTION\}/.test(source)
+          || source.includes('postJson(`/api/setup/install/${ACTION}`, {}')) {
+        const action = source.match(/const ACTION = '([a-z0-9_]+)'/)
+        assert.ok(action, `${product.id}/${file}: unresolved install action`)
+        reachable.add(action[1])
+      }
+      for (const match of source.matchAll(/install-group\/([a-z0-9_]+)/g)) posted.add(match[1])
+    }
+    assert.deepEqual((product.manifest.owns?.install_actions || []).filter(action => !reachable.has(action)), [],
+      'Every action must be reachable from this product alone, without another product supplying its UI')
+    for (const group of posted) assert.ok(product.manifest.owns?.install_groups?.includes(group), group)
+    for (const row of rows) assert.ok(row.label && row.label !== row.action, `${product.id}: ${row.action} needs a human label`)
+  })
+}

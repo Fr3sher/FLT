@@ -30,11 +30,16 @@ test('the reveal keys on the arrival, and skips a re-render of the same visit', 
 })
 
 test('the guard is only written once the target actually resolved', () => {
-  const m = page.match(/if \(revealedRef\.current === arrival\) return undefined[^]{0,200}/)
-  assert.ok(m, 'guard not found')
-  assert.match(m[0],
-    /resolveFocusTarget\(focusId\)[^]{0,80}if \(!found\) return undefined[^]{0,40}revealedRef\.current = arrival/,
-    'the ref must be set AFTER resolveFocusTarget succeeds — before it, a late-rendering field loses its reveal')
+  const start = page.indexOf('if (revealedRef.current === arrival) return undefined')
+  const end = page.indexOf('}, [focusId, section, loading, config, location.key])', start)
+  assert.ok(start >= 0 && end > start, 'reveal effect not found')
+  const effect = page.slice(start, end)
+  assert.match(effect, /const reveal = \(found\) => \{\s*revealedRef\.current = arrival/)
+  assert.equal((effect.match(/revealedRef\.current = arrival/g) || []).length, 1)
+  assert.match(effect, /const found = resolveFocusTarget\(focusId\)\s*if \(found\) return reveal\(found\)/)
+  assert.match(effect, /const late = resolveFocusTarget\(focusId\)\s*if \(late\) \{\s*clearInterval\(waiter\)\s*cleanup = reveal\(late\)/)
+  assert.equal((effect.match(/reveal\((?:found|late)\)/g) || []).length, 2,
+    'both immediate and lazy targets arm the guard only after resolution')
 })
 
 test('a fresh navigation to the same URL still re-reveals (location.key in deps)', () => {

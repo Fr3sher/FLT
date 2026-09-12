@@ -65,7 +65,7 @@ test('the probe reaches the checkpoints manager — the panel it used to skip', 
      what keeps the click landing on a real control. */
   assert.match(probe, /\{ name: 'checkpoints', open: \['button:visible:has-text\("Checkpoints & LoRAs"\)',\s*\n\s*'button:visible:has-text\("☰ List"\)'\] \}/);
   // …and the controls the state exists to measure are still there to be found.
-  const panel = read('./TrainingPanel.jsx');
+  const panel = read('./TrainingPanel.jsx') + read('../../../../bundled/cloud_training/frontend/dataset/DatasetCloudTraining.jsx');
   assert.match(panel, /button:has-text|Checkpoints & LoRAs/);
   assert.match(panel, /☰ List/);
   // The links that were under the floor keep the remedy: min-height needs a

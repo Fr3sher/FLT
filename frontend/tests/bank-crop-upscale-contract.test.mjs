@@ -1,3 +1,4 @@
+import { installRestorationOwners } from './support/restorationOwners.mjs'
 /* ✂ Crop / ✨ Upscale & improve in the Bank — wiring contract.
  *
  * Asked for by nofaceman on Discord (backed by mr.arrow). The risk this file
@@ -30,6 +31,8 @@ import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
 
 // The entry under test may have moved to the archive since it shipped
 // (see whatsNew.js, rule "Keep the list tidy") — search the union.
+test.beforeEach(t => installRestorationOwners(t, { runtime: true }))
+
 const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
 import { getHelpTopic } from '../src/help/helpRegistry.js'
 import { BANK_PASSES, BANK_PASS_ORDER } from '../src/components/bank/bankPasses.js'
@@ -162,7 +165,7 @@ test('a bank that HAS edits opens itself, with both engines and the ↩ Revert',
   // Klein is always offered; SeedVR2 only once this install can run it — the
   // shared rule, read from utils/improveEngines.js rather than re-decided here.
   assert.match(html, /✨ Klein/)
-  assert.doesNotMatch(html, /SeedVR2/)
+  assert.match(html, /SeedVR2/) // Active but unprepared products remain visible with their reason.
   // The promise that is NOT the dataset's: no candidate to validate.
   assert.match(html, /replaces what this Bank shows/)
   assert.doesNotMatch(html, /candidate/)

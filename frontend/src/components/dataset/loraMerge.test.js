@@ -381,7 +381,7 @@ test('the base prop only overwrites the field when it names something', () => {
 });
 
 const panel = readFileSync(
-  fileURLToPath(new URL('./TrainingPanel.jsx', import.meta.url)), 'utf8');
+  fileURLToPath(new URL('../../../../bundled/model_tools/frontend/panels/TrainingMergeTool.jsx', import.meta.url)), 'utf8');
 
 test('the merge disclosure is controlled, so a remount cannot close it', () => {
   // `open` on a <details> is DOM state. The block sits inside CheckpointPortal,

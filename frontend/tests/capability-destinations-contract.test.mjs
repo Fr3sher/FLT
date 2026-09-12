@@ -6,6 +6,22 @@ import { deriveCapabilitySummary, capabilityDestination } from '../src/hooks/use
 import { getHelpTopic } from '../src/help/helpRegistry.js'
 import { isValidTarget } from '../src/whatsNew.js'
 import { SETTINGS_SECTIONS } from '../src/components/settings/registry.js'
+import { resetRegistry, setEnabled } from '../src/plugins/registry.js'
+import { registerBundledDescriptor } from './support/bundledDescriptors.mjs'
+import apiEngines from '../../bundled/api_engines/frontend/index.js'
+import camera from '../../bundled/camera_angles/frontend/index.js'
+import video from '../../bundled/video/frontend/index.js'
+import live from '../../bundled/live/frontend/index.js'
+import scrape from '../../bundled/scrape/frontend/index.js'
+import civitai from '../../bundled/civitai_publish/frontend/index.js'
+
+const products = [apiEngines, camera, video, live, scrape, civitai]
+test.beforeEach(() => {
+  resetRegistry()
+  for (const product of products) assert.equal(registerBundledDescriptor(product), true)
+  setEnabled(products.map(product => product.id))
+})
+test.afterEach(resetRegistry)
 
 /* The Settings ▸ Overview capability grid is a dashboard AND a set of doors: a
    row that says "✗ Person masks" has to be clickable straight to the control
@@ -27,12 +43,13 @@ const CAPS_FULL = {
   ollama: { reachable: true, vision_model_ready: true },
   comfyui: { dir_valid: true, reachable: true, video_studio_ready: true,
     video_studio_options: { vfi: { available: true } } },
-  dlss5nr: { ready: true }, video_encode: true,
+  live: { ready: true, encoder: true }, video_encode: true,
   face_scoring: true, masks: true, watermark_inpaint: true,
   training_visible: true, studio_visible: true,
   civitai: { ok: true },
 }
-const CAPS_COMFY_OFF = { comfyui: { dir_valid: true, reachable: false } }
+const CAPS_COMFY_OFF = { comfyui: { dir_valid: true, reachable: false },
+  live: { ready: false, encoder: true, missing: [] } }
 
 const RIGS = [
   ['nothing configured', CAPS_EMPTY],
@@ -43,25 +60,9 @@ const RIGS = [
 test('every capability row carries a destination, in every rig', () => {
   for (const [name, caps] of RIGS) {
     const rows = deriveCapabilitySummary(caps)
-    // 12 since Krea 2 Edit joined the list, 14 since the two video pieces did,
-    // 18 since bank scoring/SigLIP2/the watermark detector/scraping extras
-    // did, 19 since clip encoding did (probe_video reports decode/detect/encode
-    // apart because they fail apart — ffmpeg can be absent on a machine that
-    // decodes fine, and that machine cannot export a single clip)
-    // — each for the same reason, 20 since 📷 Camera angles did, 21 since
-    // 🎬 the Video Test Studio did (its four required weights are 39.5 GB: a
-    // machine without them must read 'not ready', not disappear from the count),
-    // and 22 since 📤 Civitai publishing did (a credential, counted like the
-    // engine keys — the maintainer asked for it on the Overview). Krea was
-    // ABSENT before, which let the final screen certify "11 of 11 ready" on a
-    // machine with no Krea at all; the video lane repeated the defect ("12 of
-    // 12 ready" on a machine that could not cut one file); these four repeated
-    // it again ("14 of 14 ready" on a machine missing four installable
-    // engines). An absent capability must be visible and counted, never
-    // dropped from the denominator. 25 since the Video lane's three doors —
-    // ✨ DLSS 5, ↗ Smooth, 🔴 Live — did: a green 🎬 row said nothing about a
-    // missing bridge, two absent node packs or no ffmpeg (asked 2026-09-03).
-    assert.equal(rows.length, 25, `${name}: expected 25 capabilities`)
+    // The fixed public fixture exposes 12 core capabilities and 15 product rows.
+    // Missing requirements stay counted; absent products are checked separately.
+    assert.equal(rows.length, 27, `${name}: expected core and active public product capabilities`)
     for (const row of rows) {
       const dest = capabilityDestination(row)
       assert.ok(dest, `${name}: "${row.label}" has no destination`)
@@ -71,6 +72,13 @@ test('every capability row carries a destination, in every rig', () => {
         `${name}: "${row.label}" has no human destination name`)
     }
   }
+})
+
+test('a core-only installation only advertises its own capabilities', () => {
+  setEnabled([])
+  const rows = deriveCapabilitySummary(CAPS_FULL)
+  assert.equal(rows.length, 12)
+  assert.ok(rows.every(row => !row.pluginId))
 })
 
 test('every destination topic exists in the LIVE help registry', () => {
@@ -119,8 +127,8 @@ test('a pending row is not a missing one: own destination, own wording', () => {
   // (Smooth's packs are read from /object_info). DLSS has a worker of its
   // own and never waits on ComfyUI, so it is not in this list.
   assert.deepEqual(pending.map((r) => r.label),
-    ['Klein (local)', '📷 Camera angles (local)', '🎬 Video Test Studio (beta)',
-      '↗ Smooth (frame interpolation)', '🔴 Live lane (beta)', '🖼️ Test Studio (images)'],
+    ['Klein (local)', '🖼️ Test Studio (images)', '📷 Camera angles (local)',
+      'Video Test Studio', 'Smooth (frame interpolation)', 'Live — local generation'],
     'ComfyUI down leaves Klein + Camera angles + the video rows + Test Studio pending')
   for (const row of pending) {
     assert.ok(row.note, `${row.label}: pending row must explain itself`)
