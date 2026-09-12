@@ -120,12 +120,9 @@ def _offer(job_id, lead="ComfyUI is rendering a clip of LDS's own."):
 def _automatic_work_reason():
     """The local Live channel: a second press must not drop its clip (found
     in review). Its sentence, said for this gesture."""
-    from . import live_studio
-    live = live_studio.current()
-    if (live is not None and live.state in ('starting', 'running', 'stopping')
-            and live.params.get('gpu', 'local') != 'rented'):
-        return 'Stop the local Live channel and let its current clips finish before freeing the memory.'
-    return None
+    from ..plugins.hooks import run_filter
+    reasons = run_filter('system.free_memory_blockers', [], strict=True)
+    return reasons[0] if reasons else None
 
 
 def _interrupt_and_wait(job, *, wait_seconds=INTERRUPT_WAIT_SECONDS):

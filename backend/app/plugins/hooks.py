@@ -64,6 +64,9 @@ HOOK_POINTS = ('caption.stamp', 'lineage.checkpoints', 'video_lineage.checkpoint
                # A ComfyUI restart asks what a plugin's lane is doing with the card:
                # `(reasons: list) -> list` of sentences; the first refuses with 409.
                'comfyui.restart_blockers',
+               # Releasing cached AI memory must leave an automatic local lane
+               # alone, including between its queued clips: `(reasons: list) -> list`.
+               'system.free_memory_blockers',
                # Disabling a plugin asks what would be left unattended at the next
                # restart: `(reasons: list, plugin_id: str) -> list` of sentences; the
                # first refuses with 409 (a cloud run still billing, a live rental).

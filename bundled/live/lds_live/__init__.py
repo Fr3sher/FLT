@@ -24,6 +24,16 @@ def _disable_blockers(reasons, plugin_id):
     return reasons
 
 
+def _free_memory_blockers(reasons):
+    from . import live_studio
+    live = live_studio.current()
+    if (live is not None and live.state in ('starting', 'running', 'stopping')
+            and live.params.get('gpu', 'local') != 'rented'):
+        return list(reasons) + [
+            'Stop the local Live channel and let its current clips finish before freeing the memory.']
+    return reasons
+
+
 def register(ctx):
     from . import setup
     from .routes import video_live
@@ -35,5 +45,6 @@ def register(ctx):
         'cancel_scope': 'owner', 'stop_label': 'the Live channel',
     })
     ctx.register_hook('comfyui.restart_blockers', _restart_blockers)
+    ctx.register_hook('system.free_memory_blockers', _free_memory_blockers)
     ctx.register_hook('plugin.disable_blockers', _disable_blockers)
     setup.register(ctx)

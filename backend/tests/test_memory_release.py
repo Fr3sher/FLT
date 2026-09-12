@@ -3,7 +3,11 @@
 Nothing here reaches a real ComfyUI, Ollama or psutil — the two levers and the
 two readings are replaced, so the suite proves the ORDER (guard, unload,
 release, re-read), the refusals and the arithmetic of the answer."""
+
 import pytest
+
+pytestmark = pytest.mark.plugins('live')
+
 
 from app.services import memory_release as mr
 from app.utils.comfyui import ComfyVramFreeVerdict
@@ -142,7 +146,7 @@ def own_render(levers, monkeypatch):
     the interrupt it is asked for empties ComfyUI's queue (unless told not to)."""
     from types import SimpleNamespace
     from app.job_queue import queue_manager
-    from app.services import live_studio
+    from lds_live import live_studio
     state = {'state': 'own', 'verdict': 'interrupted', 'lets_go': True, 'interrupts': 0, 'expected': [],
              'live': None}
     row = SimpleNamespace(job_id='job-own', status='sent_to_comfy', comfyui_prompt_id='prompt-own')
@@ -201,9 +205,10 @@ def test_a_render_that_ended_by_itself_lets_the_gesture_go_on(app, levers, own_r
     assert out['ok'] is True and out['interrupted'] is None and out['comfyui'] == 'freed'
 
 
-def test_the_local_live_channel_refuses_whatever_the_press(app, levers, own_render):
+@pytest.mark.parametrize('state', ['starting', 'running', 'stopping'])
+def test_the_local_live_channel_refuses_whatever_the_press(app, levers, own_render, state):
     from types import SimpleNamespace
-    own_render['live'] = SimpleNamespace(state='running', params={'gpu': 'local'})
+    own_render['live'] = SimpleNamespace(state=state, params={'gpu': 'local'})
     with app.app_context():
         for interrupt in (False, True):
             with pytest.raises(mr.MemoryReleaseBusy) as e:
@@ -211,6 +216,21 @@ def test_the_local_live_channel_refuses_whatever_the_press(app, levers, own_rend
             assert e.value.can_interrupt is False
             assert 'Stop the local Live channel' in str(e.value) and 'before freeing the memory' in str(e.value)
     assert own_render['interrupts'] == 0 and levers['calls'] == []
+
+
+@pytest.mark.plugins()
+def test_without_live_memory_release_never_loads_a_live_runtime(app, monkeypatch):
+    import builtins
+    original = builtins.__import__
+
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        assert 'live_studio' not in name and 'live_studio' not in fromlist
+        assert 'lds_live' not in name
+        return original(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, '__import__', guarded_import)
+    with app.app_context():
+        assert mr._automatic_work_reason() is None
 
 
 def test_an_own_render_whose_id_was_lost_is_refused_with_the_banner_not_as_foreign(app, levers, own_render):
