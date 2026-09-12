@@ -249,8 +249,11 @@ def parse_manifest(data: dict, directory: Path, *, where: str = MANIFEST_NAME,
         contract = validate_contract(data)
     except PackageContractError as exc:
         raise ManifestError(f'{where}: {exc}') from exc
-    if any('installation' in pack for pack in packs):
-        raise ManifestError(f'{where}: managed node installation requires the API 1.20 installer.')
+    from .node_packs import NodePackError, validate as validate_node_packs
+    try:
+        validate_node_packs(packs, plugin_id=plugin_id, owns=owns, permissions=permissions, contract=contract)
+    except NodePackError as exc:
+        raise ManifestError(f'{where}: {exc}') from exc
     if contract['schema_version'] >= 2:
         from packaging.version import InvalidVersion, Version
         try:

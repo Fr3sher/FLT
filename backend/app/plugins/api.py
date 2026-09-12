@@ -20,7 +20,7 @@ from ..extensions import db
 from .registry import OwnershipConflict, PluginRegistry
 
 LDS_PLUGIN_API_MAJOR = 1
-LDS_PLUGIN_API_MINOR = 19  # Managed custom-node preparation is added with API 1.20.
+LDS_PLUGIN_API_MINOR = 20  # Declared, pinned custom-node preparation in ComfyUI Python.
 
 
 PUBLIC_NAMES = (
@@ -32,6 +32,7 @@ PUBLIC_NAMES = (
     'register_engine', 'register_restore_engine', 'register_request_limit',
     'register_data_migration', 'register_health_check',
     'plugin_environment', 'use_plugin_env', 'use_plugin_worker',
+    'register_node_pack',
 )
 
 
@@ -185,6 +186,13 @@ class PluginContext:
             'models': list(models or []), 'run': run, 'python': python, 'verify': verify,
             **({'capability': key} if python == 'capability' else {}),
         })
+
+
+    def register_node_pack(self, action: str) -> None:
+        """Prepare exactly the pinned node_packs installation declared in the manifest (API 1.20)."""
+        self._must_own('install_actions', action)
+        from .node_packs import register
+        register(self, action)
 
 
     def register_model_download(self, key: str, *, url: str, dest, min_free_gb, min_bytes,

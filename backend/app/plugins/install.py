@@ -140,7 +140,7 @@ def _inspect_node_wheels(path, manifest, prefix, entries):
     """A package must actually carry every hashed wheel its node recipes declare."""
     if not any(pack.get('installation', {}).get('wheels') for pack in manifest.node_packs):
         return
-    from ..services.comfyui_node_install import MAX_ARCHIVE_BYTES
+    from .node_recipe import MAX_ARCHIVE_BYTES
     with zipfile.ZipFile(path) as archive:
         members = {rel: info for info, rel in _validated_entries(archive) if not info.is_dir()}
         for pack in manifest.node_packs:
