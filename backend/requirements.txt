@@ -17,3 +17,8 @@ Send2Trash>=1.8           # Bank "Delete rejected from disk" -> OS trash instead
 
 # Plugin manifest version and dependency constraints.
 packaging==26.0
+
+# Signed plugin catalog and isolated local metadata cache.
+tuf==7.0.1
+securesystemslib[crypto]==1.5.1
+filelock==3.32.5
