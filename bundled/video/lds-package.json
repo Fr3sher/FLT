@@ -1,0 +1,18 @@
+{
+  "python_scripts": [
+    "infer/_aesthetic_head.py", "infer/_harness.py", "infer/import_report.py", "infer/_caption_fields.py",
+    "infer/dlss5nr_infer.py", "infer/shot_detect_infer.py", "infer/video_aesthetic_infer.py",
+    "infer/video_ai_check_infer.py", "infer/video_caption_infer.py"
+  ],
+  "python_requirements": "requirements-workers.txt",
+  "python_dependencies": {
+    "PIL": "Pillow", "av": "av", "numpy": "numpy", "torch": "torch",
+    "transformers": "transformers", "sentencepiece": "sentencepiece", "transnetv2_pytorch": "transnetv2-pytorch"
+  },
+  "optional_host_dependencies": {
+    "av": {"distribution": "av", "requirements": "requirements-host.txt", "setup_action": "video_host"},
+    "numpy": {"distribution": "numpy", "requirements": "requirements-host.txt", "setup_action": "video_host"},
+    "cv2": {"distribution": "opencv-python-headless", "requirements": "requirements-host.txt", "setup_action": "video_host"},
+    "curl_cffi": {"distribution": "curl_cffi", "requirements": "requirements-host.txt", "setup_action": "video_host"}
+  }
+}
