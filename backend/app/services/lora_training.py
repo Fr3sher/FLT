@@ -9874,6 +9874,17 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                     if not (_allow_dead_predecessor and previous_is_dead):
                         raise ValueError('a training is already in progress')
                 if cloud_checkpoint is not None:
+                    # A harvested cloud file is not permission to replace a
+                    # local lane. Run the normal admission checks before any
+                    # archive/copy, while retaining the final launch checks.
+                    resolved = _lt_refuse_or_resolve(
+                        user_id, dataset_id, fam, var, base, False,
+                        allow_caption_mismatch, allow_uncaptioned,
+                        allow_caption_quality, allow_not_ready,
+                        launch_allow_unverified, training_mode,
+                        _PERSISTED, _PERSISTED, None)
+                    if (resolved[1] or '', resolved[2], resolved[3]) != (base or '', var, fam):
+                        raise ValueError('the cloud checkpoint no longer matches the resolved local training recipe')
                     from .cloud_local_continuation import seed_cloud_checkpoint
                     archived = seed_cloud_checkpoint(
                         user_id, dataset_id, fam, base, var, chosen)

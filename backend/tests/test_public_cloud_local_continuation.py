@@ -163,8 +163,12 @@ def test_harvested_weights_never_claim_a_full_optimizer_state(history, monkeypat
 
 
 def test_real_continue_dispatch_seeds_cloud_owner_then_calls_local_launch_only(history, monkeypatch):
-    for name in ('assert_interpreter_ready', 'assert_zimage_custom_recipe_confirmed', 'assert_trainable'):
+    for name in ('assert_interpreter_ready', 'assert_zimage_custom_recipe_confirmed', 'assert_trainable',
+                 '_assert_no_vision_pass_on_gpu', 'preflight_custom_paths'):
         monkeypatch.setattr(lt, name, lambda *a, **kw: None)
+    monkeypatch.setattr(lt, 'is_installed', lambda: True)
+    monkeypatch.setattr(lt, '_aitoolkit_supports_krea', lambda: True)
+    monkeypatch.setattr(lt, '_output_dir', lambda: history.lane.parent)
     monkeypatch.setattr(lt, 'list_checkpoints', lambda *a, **kw: pytest.fail('must not substitute local same-step file'))
     calls = []
     def launch(user, dataset_id, **kwargs):
