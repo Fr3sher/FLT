@@ -9593,12 +9593,20 @@ def _seed_continuation_from(user_id, dataset_id, base, family, variant,
     return dest
 
 
-def _expected_resume_record(chosen, expected_record_id, dataset_id, family, base, variant):
+def _expected_resume_record(chosen, expected_record_id, dataset_id, family, base, variant,
+                            *, user_id=None):
     """A selected history node must own the exact local checkpoint resumed."""
     if expected_record_id is None:
         return
     from . import checkpoint_registry
     record = checkpoint_registry.record_by_id(expected_record_id)
+    if record is not None and record.source == 'cloud' and user_id is not None:
+        from .cloud_local_continuation import resolve_cloud_checkpoint
+        verified = resolve_cloud_checkpoint(user_id, dataset_id, family, base, variant,
+                                            expected_record_id, chosen.get('step'))
+        if verified is not None and all(chosen.get(key) == verified[key]
+                for key in ('record_id', 'path', '_source_stamp')):
+            return
     if (chosen.get('record_id') != expected_record_id or record is None
             or record.dataset_id != dataset_id or record.source != 'local'
             or record.family != family or (record.base_model or '') != (base or '')
@@ -9669,8 +9677,13 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                      allow_caption_quality=allow_caption_quality,
                      allow_not_ready=allow_not_ready,
                      variant=var)
-    cks = list_checkpoints(user_id, dataset_id, base_model=base,
-                           family=fam, variant=var)
+    from .cloud_local_continuation import resolve_cloud_checkpoint
+    cloud_checkpoint = resolve_cloud_checkpoint(
+        user_id, dataset_id, fam, base, var, expected_record_id, from_step)
+    if cloud_checkpoint is not None and resume_mode != 'weights_only':
+        raise ValueError('Harvested cloud checkpoints support weights-only local continuation.')
+    cks = ([cloud_checkpoint] if cloud_checkpoint is not None else
+           list_checkpoints(user_id, dataset_id, base_model=base, family=fam, variant=var))
     if not cks:
         raise ValueError("no checkpoint to resume for this base - run a training first")
     latest = max(c['step'] for c in cks)
@@ -9693,7 +9706,8 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
         # Ties (a numbered save and the bare final at the same step): prefer the
         # numbered file — it carries a clean step and is never the run's live final.
         chosen = min(matches, key=lambda c: bool(c.get('final')))
-    _expected_resume_record(chosen, expected_record_id, dataset_id, fam, base, var)
+    _expected_resume_record(chosen, expected_record_id, dataset_id, fam, base, var,
+                            user_id=user_id)
     # Lineage: the record this continuation resumes FROM is the record that
     # PRODUCED the file being loaded (list_checkpoints stamps `record_id` on every
     # save), NOT merely the newest record of the lane. One lane holds several runs,
@@ -9859,8 +9873,13 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                         queue_manager._get_system_state('training_pid', None))
                     if not (_allow_dead_predecessor and previous_is_dead):
                         raise ValueError('a training is already in progress')
-                archived = _seed_continuation_from(
-                    user_id, dataset_id, base, fam, var, chosen['filename'])
+                if cloud_checkpoint is not None:
+                    from .cloud_local_continuation import seed_cloud_checkpoint
+                    archived = seed_cloud_checkpoint(
+                        user_id, dataset_id, fam, base, var, chosen)
+                else:
+                    archived = _seed_continuation_from(
+                        user_id, dataset_id, base, fam, var, chosen['filename'])
             res = launch_training(
                 user_id, dataset_id, **launch_kwargs)
     res['resumed_from'] = resume_step

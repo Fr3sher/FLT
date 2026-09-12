@@ -9,13 +9,13 @@
    closed). The board is the third host, so it needs those two answers and
    nothing else. They live here, alone, testable.
 
-   A local run can seed either trainer. A cloud run can be continued only by
-   its cloud run id: the local trainer cannot address its staging checkpoints.
+   Both run sources can seed either trainer. Local continuation always names
+   the saved record owner, including harvested cloud files in the run store.
 
      source   lane    endpoint                                         addressed by
      ------   -----   ----------------------------------------------   ------------
      cloud    cloud   POST /api/dataset/train/cloud/continue           run_id
-     cloud    local   unavailable
+     cloud    local   POST /api/dataset/<id>/train/continue            dataset + record_id + step
      local    local   POST /api/dataset/<id>/train/continue            dataset + lane + record_id
      local    cloud   POST /api/dataset/<id>/train/cloud/continue-local dataset + lane + record_id
 
@@ -23,7 +23,7 @@
 
 import { runsHubContinueLanes } from '@lds/plugin-sdk/canvas';
 import { contributions } from '@lds/plugin-sdk/canvas';
-import { CLOUD_LOCAL_UNAVAILABLE, explicitRunContinuation } from '@lds/plugin-sdk/canvas';
+import { explicitRunContinuation } from '@lds/plugin-sdk/canvas';
 
 /* The steps this NODE can be resumed from, ascending and distinct.
    `node.checkpoints` is the only resumable list a lineage payload carries
@@ -123,14 +123,16 @@ export function canvasContinueLanes(node, pill, opts = {}) {
         + 'continue from a save that is still here.' };
   }
 
-  if (node.source === 'cloud') {
-    lanes.local = { available: false, reason: CLOUD_LOCAL_UNAVAILABLE };
-  } else if (gone && lanes.local.available) {
+  if (gone && lanes.local.available) {
     lanes.local = { available: false,
       reason: 'This save is no longer on this machine'
         + (cloudRun
           ? ' — continue in the cloud instead: a fresh pod is seeded from this run’s own staging.'
           : ' — continue from a save that is still here.') };
+  } else if (lanes.local.available && !explicitRunContinuation(
+    { ...node, resume_steps: canvasContinueSteps(node) }, { lane: 'local', fromStep: pill?.step })) {
+    lanes.local = { available: false,
+      reason: 'This checkpoint’s run identity or saved file is unavailable. Refresh its checkpoints before continuing.' };
   }
   return lanes;
 }

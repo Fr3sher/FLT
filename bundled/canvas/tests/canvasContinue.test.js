@@ -2,12 +2,16 @@ import '../../../frontend/tests/plugin-sdk-host.mjs'
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { registerDescriptor, resetRegistry, setEnabled } from '../../../frontend/src/plugins/registry.js';
-let cloudLane;
-try { ({ cloudContinueLane: cloudLane } = await import('../../cloud_training/frontend/dataset/cloudTraining.js')); } catch (error) {
-  if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error;
-}
-if (cloudLane) registerDescriptor({ id: 'cloud_training', slots: { 'training.continue.lane': [cloudLane] } });
+import { setEnabled } from '../../../frontend/src/plugins/registry.js';
+import { installRuntimeHost } from '../../../frontend/tests/support/runtimeHost.mjs';
+import { registerBundledDescriptor } from '../../../frontend/tests/support/bundledDescriptors.mjs';
+import cloudDescriptor from '../../cloud_training/frontend/index.js';
+
+test.beforeEach(t => {
+  installRuntimeHost(t);
+  assert.equal(registerBundledDescriptor(cloudDescriptor), true);
+  setEnabled(['cloud_training']);
+});
 
 import {
   canvasContinueLanes, canvasContinueRefusal, canvasContinueRequest,
@@ -74,11 +78,10 @@ test('the LR hint reads the snapshot’s own spelling (`lr`), and invents nothin
 
 // --- the lanes --------------------------------------------------------------
 
-test('a finished cloud run offers its cloud lane and explains unsupported local continuation', () => {
+test('a finished cloud run offers BOTH lanes from the board', () => {
   const lanes = canvasContinueLanes(CLOUD, CLOUD.checkpoints[1], OPEN);
   assert.equal(lanes.cloud.available, true);
-  assert.equal(lanes.local.available, false);
-  assert.match(lanes.local.reason, /Local continuation of cloud checkpoints is not supported/);
+  assert.equal(lanes.local.available, true);
 });
 
 test('a LOCAL run offers both supported lanes', () => {
@@ -88,7 +91,7 @@ test('a LOCAL run offers both supported lanes', () => {
 });
 
 test('a closed lane keeps its slot and states the reason — never a hidden option', () => {
-  const noToolkit = canvasContinueLanes(LOCAL, null, { ...OPEN, aitoolkitValid: false });
+  const noToolkit = canvasContinueLanes(CLOUD, null, { ...OPEN, aitoolkitValid: false });
   assert.equal(noToolkit.local.available, false);
   assert.match(noToolkit.local.reason, /ai-toolkit/);
   assert.equal(noToolkit.cloud.available, true);
@@ -116,7 +119,8 @@ test('a save that is no longer on disk closes the lanes that need the FILE', () 
   // asymmetry is the honest answer, not a blanket refusal.
   const lanes = canvasContinueLanes(CLOUD, { step: 2500, present: false }, OPEN);
   assert.equal(lanes.local.available, false);
-  assert.match(lanes.local.reason, /Local continuation of cloud checkpoints is not supported/);
+  assert.match(lanes.local.reason, /no longer on this machine/);
+  assert.match(lanes.local.reason, /continue in the cloud/);
   assert.equal(lanes.cloud.available, true);
 });
 
@@ -137,7 +141,7 @@ test('a run with no checkpoint at all is refused up front, with the reason', () 
 
 // --- the routing ------------------------------------------------------------
 
-test('cloud lane on a CLOUD run relaunches that run by id', { skip: !cloudLane }, () => {
+test('cloud lane on a CLOUD run relaunches that run by id', () => {
   const req = canvasContinueRequest(CLOUD,
     { lane: 'cloud', extraSteps: 1000, fromStep: 2500 }, { steps: [1500, 2500, 3500] });
   assert.equal(req.url, '/api/dataset/train/cloud/continue');
@@ -146,7 +150,7 @@ test('cloud lane on a CLOUD run relaunches that run by id', { skip: !cloudLane }
   });
 });
 
-test('cloud lane on a LOCAL run seeds a pod from the local file (continue-local)', { skip: !cloudLane }, () => {
+test('cloud lane on a LOCAL run seeds a pod from the local file (continue-local)', () => {
   const req = canvasContinueRequest(LOCAL,
     { lane: 'cloud', extraSteps: 500, fromStep: 1000 },
     { steps: [1000, 2000], masked: false });
@@ -160,10 +164,12 @@ test('cloud lane on a LOCAL run seeds a pod from the local file (continue-local)
   assert.equal(req.body.masked, false);
 });
 
-test('local lane only resumes a local source through the dataset endpoint', () => {
+test('local lane resumes either source through the dataset endpoint with its owner', () => {
   const fromCloud = canvasContinueRequest(CLOUD,
     { lane: 'local', extraSteps: 1000, fromStep: 1500 }, { steps: [1500, 2500, 3500], masked: true });
-  assert.equal(fromCloud, null);
+  assert.equal(fromCloud.url, '/api/dataset/3/train/continue');
+  assert.equal(fromCloud.body.expected_record_id, 11);
+  assert.equal(fromCloud.body.from_step, 1500);
 
   const fromLocal = canvasContinueRequest(LOCAL,
     { lane: 'local', extraSteps: 1000, fromStep: null }, { steps: [1000, 2000] });
@@ -176,17 +182,17 @@ test('the CHOSEN checkpoint rides the request — never "whatever is newest"', (
   // sharing one lane's run dir, so an implicit "resume in place" would continue
   // a different run than the card that was clicked. The dialog nulls fromStep
   // for the newest save; the board re-materialises it.
-  const explicit = canvasContinueRequest(LOCAL,
+  const explicit = canvasContinueRequest(CLOUD,
     { lane: 'local', extraSteps: 1000, fromStep: 1500 }, { steps: [1500, 2500, 3500] });
   assert.equal(explicit.body.from_step, 1500, 'the clicked, earlier step must be sent');
 
-  const newest = canvasContinueRequest(LOCAL,
+  const newest = canvasContinueRequest(CLOUD,
     { lane: 'local', extraSteps: 1000, fromStep: null }, { steps: [1500, 2500, 3500] });
   assert.equal(newest.body.from_step, 3500,
     'the newest save of THIS run must be named, not left to the lane');
 });
 
-for (const lane of ['local', 'cloud']) test(`overrides ride only when the dialog produced some (${lane})`, { skip: lane === 'cloud' && !cloudLane }, () => {
+for (const lane of ['local', 'cloud']) test(`overrides ride only when the dialog produced some (${lane})`, () => {
   const bare = canvasContinueRequest(LOCAL, { lane, extraSteps: 1000 }, { steps: [3500] });
   assert.equal('overrides' in bare.body, false);
   const withOv = canvasContinueRequest(LOCAL,
@@ -275,6 +281,7 @@ test('disabling the cloud contribution keeps local continuation and closes cloud
   setEnabled([]);
   assert.equal(canvasContinueRequest(CLOUD, { lane: 'cloud', extraSteps: 100 }), null);
   assert.match(canvasContinueRequest(LOCAL, { lane: 'local', extraSteps: 100 }).url, /train\/continue$/);
-  resetRegistry();
-  if (cloudLane) registerDescriptor({ id: 'cloud_training', slots: { 'training.continue.lane': [cloudLane] } });
+  assert.equal(canvasContinueRequest(CLOUD, { lane: 'local', extraSteps: 100 }).body.expected_record_id, 11);
+  setEnabled(['cloud_training']);
+  assert.equal(canvasContinueRequest(CLOUD, { lane: 'cloud', extraSteps: 100 }).body.run_id, 7);
 });

@@ -22,8 +22,11 @@ export default function useRunsHubContinue({ data, poll, cloud = null }) {
   const [transportPlan, setTransportPlan] = useState(null)
   const local = localContinuationAvailability(target, { aitoolkitValid: caps?.aitoolkit?.valid, localActive: data?.local_active })
   const remote = target && typeof cloud?.submit === 'function' ? cloud?.availability?.(target, { data, caps }) : null
-  const lanes = target ? { local, ...(remote ? { cloud: remote } : {}) } : null
-  const canContinueRun = run => run?.source === 'local' || typeof cloud?.submit === 'function'
+  const lanes = target ? { local, cloud: remote || {
+    available: false, reason: 'Cloud training is disabled in this install.',
+  } } : null
+  const canContinueRun = run => run?.source === 'local'
+    || !!explicitRunContinuation(run, { lane: 'local' }) || typeof cloud?.submit === 'function'
 
   const open = (run, step = null) => {
     if (!run || busyRef.current || !canContinueRun(run)) return

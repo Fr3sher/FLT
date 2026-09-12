@@ -12,7 +12,7 @@
    In both lanes the pill must be a save that really exists — the graph never
    offers an action the backend would refuse. */
 
-import { CLOUD_LOCAL_UNAVAILABLE } from '../runs/localContinuation.js';
+import { continuationFromNode, explicitRunContinuation } from '../runs/localContinuation.js';
 
 // A cloud run that failed (e.g. 'pod did not become ready in time') can still
 // hold a valid harvested save, hence the download check on the non-'done' path.
@@ -84,7 +84,6 @@ const sameVariant = (a, b) => {
 
    `active` = { steps, trainType, variant, base, familyLabel, variantLabel }. */
 export function graphContinueRefusal(node, pill, active = {}) {
-  if (node?.source === 'cloud') return CLOUD_LOCAL_UNAVAILABLE;
   if (node?.source === 'local' && !(Number.isInteger(node.record_id) && node.record_id > 0)) {
     return 'This checkpoint’s run identity is unavailable. Refresh the run checkpoints before continuing.';
   }
@@ -98,6 +97,11 @@ export function graphContinueRefusal(node, pill, active = {}) {
     return `Step ${step} comes from a run trained with a different family, base or variant `
       + `than the checkpoints selected here (${here}) — switch the Checkpoints selection to `
       + 'that run’s family, base and variant to continue it.';
+  }
+  if (node?.source === 'cloud') {
+    return Number.isInteger(step) && step > 0
+      && explicitRunContinuation(continuationFromNode(node), { lane: 'local', fromStep: step })
+      ? null : 'This checkpoint’s run identity or saved file is unavailable. Refresh its checkpoints before continuing.';
   }
   if (step == null || steps.includes(step)) return null;
   const highest = steps.length ? Math.max(...steps) : null;
