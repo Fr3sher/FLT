@@ -91,13 +91,32 @@ class PluginContext:
 
     # --- routes --------------------------------------------------------------
     def register_blueprint(self, blueprint, *, url_prefix: str | None = None) -> None:
+        from flask import jsonify, request
+
         prefix = url_prefix or f'/api/plugins/{self.id}'
         # `/api` itself is allowed: a bundled plugin extracted from the core
         # keeps the URLs its screens already call (`/api/scrape/scan`).
         if not (prefix == '/api' or prefix.startswith('/api/')):
             raise ValueError(f'plugin {self.id}: a blueprint must live under /api/ (got {prefix!r}) — '
                              'that is where the access-token gate stands')
+        previous = set(self.app.view_functions)
         self.app.register_blueprint(blueprint, url_prefix=prefix)
+        endpoints = frozenset(set(self.app.view_functions) - previous)
+
+        def admit_plugin_request():
+            if request.endpoint not in endpoints:
+                return None
+            record = self._registry.records.get(self.id)
+            if (record is None or not record.enabled or record.state != 'loaded'
+                    or (cfg.get('plugins.enabled') or {}).get(self.id) is False):
+                return jsonify(ok=False, code='plugin_unavailable',
+                               error='This plugin is unavailable. Enable it in Plugins and restart LDS.'), 409
+            return None
+
+        # App hooks run before blueprint hooks. Keep this on this app only:
+        # imported Blueprint objects may be registered by another app fixture.
+        # The loader transaction restores hooks and routes together on failure.
+        self.app.before_request(admit_plugin_request)
 
     # --- config ----------------------------------------------------------------
     def register_config_defaults(self, mapping: dict) -> None:
