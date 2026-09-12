@@ -1,0 +1,70 @@
+"""Snapshots and owner-checked admission for the public Video and Live queue."""
+from dataclasses import dataclass
+import json
+
+from .lifecycle import is_available, state_change_lock
+
+
+@dataclass(frozen=True)
+class QueueRecord:
+    job_id: str
+    user_id: str
+    status: str
+    result_filename: str | None
+    started_at: object
+    completed_at: object
+
+
+def _owner(metadata):
+    if not isinstance(metadata, dict) or any(not isinstance(key, str) for key in metadata):
+        return None
+    flags = (metadata.get('is_video_test') is True, metadata.get('is_live') is True)
+    if sum(flags) != 1 or any(key.startswith('is_') and key not in {'is_video_test', 'is_live'}
+                              for key in metadata):
+        return None
+    owner, model = ('live', 'video_live') if flags[1] else ('video', 'video_lora_test')
+    return owner if metadata.get('model_name') == model else None
+
+
+def _row(job_id):
+    from app.models import ImageGenerationQueue
+    row = ImageGenerationQueue.query.filter_by(job_id=str(job_id)).populate_existing().first()
+    if row is None:
+        return None, None
+    try:
+        owner = _owner(json.loads(row.job_metadata or '{}'))
+    except (TypeError, ValueError):
+        owner = None
+    return (row, owner) if owner else (None, None)
+
+
+def job(job_id):
+    row, _ = _row(job_id)
+    return QueueRecord(**{key: getattr(row, key) for key in QueueRecord.__dataclass_fields__}) if row else None
+
+
+class VideoQueue:
+    def add_job(self, *, job_type, user_id, workflow_data, prompt, metadata, job_id=None, commit=True):
+        owner = _owner(metadata)
+        if job_type != 'image' or owner is None:
+            raise ValueError('Expected an owned Video or Live workflow.')
+        from app.job_queue import queue_manager
+        with state_change_lock:
+            if not is_available(owner):
+                raise ValueError(f'Enable {owner} before creating clips.')
+            return queue_manager.add_job(job_type=job_type, user_id=user_id, workflow_data=workflow_data,
+                                         prompt=prompt, metadata=metadata, job_id=job_id, commit=commit)
+
+    def cancel_job(self, job_id, user_id):
+        from app.job_queue import queue_manager
+        with state_change_lock:
+            row, owner = _row(job_id)
+            if row is None or row.user_id != str(user_id):
+                raise LookupError('Video job not found.')
+            if not is_available(owner):
+                raise ValueError(f'Enable {owner} before controlling its queue.')
+            return queue_manager.cancel_job(job_id, user_id)
+
+
+queue = VideoQueue()
+__all__ = ['QueueRecord', 'VideoQueue', 'job', 'queue']
