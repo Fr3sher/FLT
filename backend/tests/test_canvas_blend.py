@@ -16,7 +16,11 @@ What is pinned here is the CHAIN, end to end, and not just the flag:
   · the canvas index carries each dataset's trigger word, which is what lets the
     panel NAME what it is about to inject instead of doing it silently.
 """
+
 import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
 
 _ST = (b'\x08\x00\x00\x00\x00\x00\x00\x00{"__metadata__":{}}'
        .ljust(32, b'\x00'))

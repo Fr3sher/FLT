@@ -22,6 +22,11 @@ The tests below hold the four contracts of that cleanup:
 The deletions run with PRAGMA foreign_keys=OFF where a legacy-shaped database
 matters, mirroring test_canvas_positions: a missing flush order is fatal there
 and silent everywhere else."""
+
+import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
 import json
 
 
@@ -66,8 +71,8 @@ def _blob(app, sig, ext='.png', data=b'IMG'):
 def test_delete_clears_previews_canvas_and_unlinks_images(client, app):
     """The three tables that used to be left behind: preview links and the canvas
     position are deleted, the generated images survive with a NULL provenance."""
-    from app.models import (CheckpointPreview, CanvasNodePosition, LoraTestImage,
-                            TrainingRunRecord)
+    from app.models import CheckpointPreview, LoraTestImage, TrainingRunRecord
+    from lds_canvas.models import CanvasNodePosition
     from app.extensions import db
     with app.app_context():
         ds = _dataset()
@@ -98,7 +103,8 @@ def test_delete_clears_previews_canvas_and_unlinks_images(client, app):
 def test_delete_leaves_another_runs_rows_alone(client, app):
     """A neighbour run keeps its preview, its canvas position and its linked
     images — the cleanup is scoped to the deleted record, not the dataset."""
-    from app.models import CheckpointPreview, CanvasNodePosition, LoraTestImage
+    from app.models import CheckpointPreview, LoraTestImage
+    from lds_canvas.models import CanvasNodePosition
     from app.extensions import db
     with app.app_context():
         ds = _dataset()
@@ -192,7 +198,8 @@ def test_delete_survives_a_missing_archive_folder(client, app):
 
 def test_deletion_impact_counts_what_the_dialog_announces(client, app):
     """The preview endpoint reports each figure the confirmation prints."""
-    from app.models import CheckpointNote, CheckpointPreview, CanvasNodePosition, LoraTestImage
+    from app.models import CheckpointNote, CheckpointPreview, LoraTestImage
+    from lds_canvas.models import CanvasNodePosition
     from app.extensions import db
     with app.app_context():
         ds = _dataset()

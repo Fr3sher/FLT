@@ -11,9 +11,14 @@ extrait les images du JSON des posts. Ces tests couvrent SANS RÉSEAU :
 
 Le réseau (jeton + _api_get) est monkeypatché — aucun appel réel à Reddit.
 """
-from app.scrape.sources import reddit
-from app.scrape.sources.base import Match
-from app.scrape.validators import Platform, url_validator
+
+import pytest
+
+pytestmark = pytest.mark.plugins('scrape')
+
+from lds_scrape.sources import reddit
+from lds_scrape.sources.base import Match
+from lds_scrape.validators import Platform, url_validator
 
 
 # --- _endpoint_for : routage (pur) ------------------------------------------

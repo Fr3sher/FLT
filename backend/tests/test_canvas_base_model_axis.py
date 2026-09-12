@@ -20,6 +20,11 @@ the two properties a sweep gets wrong in silence:
     plausible, and the comparison they were fired for is a lie.
 """
 
+import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
+
 _ST = (b'\x08\x00\x00\x00\x00\x00\x00\x00{"__metadata__":{}}'.ljust(32, b'\x00'))
 
 

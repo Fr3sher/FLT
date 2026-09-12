@@ -2,9 +2,14 @@
 
 Tout est mocké — aucun appel réseau ni process gallery-dl."""
 
+import pytest
+
+pytestmark = pytest.mark.plugins('scrape')
+
+
 from app.scrape import netfetch
-from app.scrape.sources import gdl
-from app.scrape.sources.universal import UniversalSource
+from lds_scrape.sources import gdl
+from lds_scrape.sources.universal import UniversalSource
 
 
 class _Proc:
@@ -126,7 +131,7 @@ def test_enumerate_album_recursion_sentinel_carries_a_kind(monkeypatch):
 
 
 # --- Énumération générique -----------------------------------------------------
-from app.scrape.sources.base import Match   # noqa: E402  (groupé avec ses tests)
+from lds_scrape.sources.base import Match   # noqa: E402  (groupé avec ses tests)
 
 
 def _spy_enumerate(monkeypatch, items=None, err=None):

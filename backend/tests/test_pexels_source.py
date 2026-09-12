@@ -1,11 +1,15 @@
 """Source Pexels via l'API officielle — aucun appel réseau réel."""
-import requests
+
 import pytest
 
-from app.scrape.sources import pexels, registry
-from app.scrape.sources.base import Match
-from app.scrape.sources.pexels import PexelsSource
-from app.scrape.validators import Platform, URLType, url_validator
+pytestmark = pytest.mark.plugins('scrape')
+
+import requests
+
+from lds_scrape.sources import pexels, registry
+from lds_scrape.sources.base import Match
+from lds_scrape.sources.pexels import PexelsSource
+from lds_scrape.validators import Platform, URLType, url_validator
 from app.routes.scrape import MAX_SCAN_PAGE
 
 

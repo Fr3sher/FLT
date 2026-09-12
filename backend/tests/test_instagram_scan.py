@@ -4,13 +4,18 @@ un vrai échec (finding #3 — verdicts différents pour deux formes de "aucun
 média", cf. rapport).
 
 Tout est mocké (`_build_loader`, `instaloader.Profile`/`Post`) : aucun réseau."""
+
+import pytest
+
+pytestmark = pytest.mark.plugins('scrape')
+
 import time
 from types import SimpleNamespace
 
 import instaloader
 
-from app.scrape.sources import instagram
-from app.scrape.validators import URLType
+from lds_scrape.sources import instagram
+from lds_scrape.validators import URLType
 
 
 class _FakeEmptyProfile:

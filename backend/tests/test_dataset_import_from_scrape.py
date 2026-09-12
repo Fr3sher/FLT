@@ -8,18 +8,22 @@ route (concept-only, cap, compteurs skipped). Le download réseau est monkeypatc
 Porté de l'app source, adapté à notre extraction mono-utilisateur : LOCAL_USER,
 racine d'images via la fixture `app`, route sous app.routes.datasets.
 """
+
+import pytest
+
+pytestmark = pytest.mark.plugins('scrape')
+
 import io
 import json
 import os
 import zipfile
 from unittest.mock import patch
 
-import pytest
 from PIL import Image
 
 from app.models import FaceDatasetImage
-from app.scrape.sources.base import Match
-from app.scrape.sources.pexels import PexelsSource
+from lds_scrape.sources.base import Match
+from lds_scrape.sources.pexels import PexelsSource
 from app.services import face_dataset_service as svc
 from app.config import LOCAL_USER
 
@@ -133,7 +137,7 @@ def test_pexels_scan_import_payload_and_backup_preserve_provenance(app, monkeypa
                 'medium': 'https://images.pexels.com/photos/31415/medium.jpeg',
             },
         }
-        with patch('app.scrape.sources.pexels._request_json', return_value=(
+        with patch('lds_scrape.sources.pexels._request_json', return_value=(
                 {'photos': [api_photo], 'next_page': None}, None)):
             scanned, error = PexelsSource().scan(Match(
                 url='https://www.pexels.com/search/portrait/'))

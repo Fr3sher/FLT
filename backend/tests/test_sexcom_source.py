@@ -6,10 +6,15 @@ PornPics : l'image remontée EST celle qui matche le mot-clé, 1 requête par pa
 Pins/boards/users sont délégués à gallery-dl avec une fenêtre --range courte.
 
 Tout est mocké — aucun appel réseau ni process gallery-dl."""
-from app.scrape.sources import gdl, sexcom
-from app.scrape.sources.base import Match
-from app.scrape.sources.sexcom import SexcomSource, _search_params_for
-from app.scrape.validators import Platform, url_validator
+
+import pytest
+
+pytestmark = pytest.mark.plugins('scrape')
+
+from lds_scrape.sources import gdl, sexcom
+from lds_scrape.sources.base import Match
+from lds_scrape.sources.sexcom import SexcomSource, _search_params_for
+from lds_scrape.validators import Platform, url_validator
 
 
 # --- _search_params_for : routage d'URL (pur) ---------------------------------
@@ -98,7 +103,7 @@ def test_scan_pin_url_delegates_to_gdl_with_window(monkeypatch):
     assert err is None and len(items) == 1
     assert seen['image_range'] == '13-24'         # fenêtre de 12 par page
 
-# NB : sexcom.gdl est le MÊME module que app.scrape.sources.gdl — le monkeypatch
+# NB : sexcom.gdl est le MÊME module que lds_scrape.sources.gdl — le monkeypatch
 # ci-dessus suffit ; l'import en tête ne sert qu'à documenter la dépendance.
 _ = gdl
 
@@ -108,7 +113,7 @@ def test_detect_platform_and_registry_resolution():
     assert url_validator.detect_platform('https://www.sex.com/en/pics?search=x') == Platform.SEXCOM
     assert url_validator.detect_platform('https://sex.com/pin/1/') == Platform.SEXCOM
     assert url_validator.detect_platform('https://notsex.com/pics') != Platform.SEXCOM
-    from app.scrape.sources import registry
+    from lds_scrape.sources import registry
     match = registry.resolve('https://www.sex.com/en/pics?search=flexible')
     assert match is not None and match.source.name == 'sexcom'
     assert match.source.category == 'image' and match.source.paginated is True

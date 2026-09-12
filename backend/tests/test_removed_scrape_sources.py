@@ -9,10 +9,14 @@ nativement certains de ces sites en interne, donc le risque de contournement
 est réel si on les laissait passer en Platform.GENERIC).
 
 Tout est local/pur — aucun appel réseau ni process gallery-dl."""
+
 import pytest
 
-from app.scrape.sources import registry
-from app.scrape.validators import Platform, url_validator
+pytestmark = pytest.mark.plugins('scrape')
+
+
+from lds_scrape.sources import registry
+from lds_scrape.validators import Platform, url_validator
 
 
 _REMOVED_URLS = [

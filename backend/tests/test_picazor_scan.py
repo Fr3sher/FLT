@@ -2,9 +2,14 @@
 média, page HTML chargée sans incident) d'un vrai échec de parsing (finding #3).
 
 Tout est mocké (`_request_html`) : aucun appel réseau / curl_cffi."""
+
+import pytest
+
+pytestmark = pytest.mark.plugins('scrape')
+
 from types import SimpleNamespace
 
-from app.scrape.sources import picazor
+from lds_scrape.sources import picazor
 
 
 def test_an_empty_listing_is_a_result_not_an_error(monkeypatch):

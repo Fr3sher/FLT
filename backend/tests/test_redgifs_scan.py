@@ -3,12 +3,17 @@ pas un échec (finding #3 — la règle « empty est honoré partout » n'était
 que pour la famille gallery-dl ; RedGifs répondait 502 sur un profil vide).
 
 Tout est mocké (client RedGifs) : aucun appel réseau."""
+
+import pytest
+
+pytestmark = pytest.mark.plugins('scrape')
+
 from types import SimpleNamespace
 
 import requests
 
-from app.scrape.sources import redgifs
-from app.scrape.validators import URLType
+from lds_scrape.sources import redgifs
+from lds_scrape.validators import URLType
 
 
 def test_scan_returns_empty_not_error_for_a_profile_with_no_videos(monkeypatch):

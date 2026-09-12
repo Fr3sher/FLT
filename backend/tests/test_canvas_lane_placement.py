@@ -21,6 +21,11 @@ Three properties are held here:
     deletion tests run with PRAGMA foreign_keys=OFF — the old-database shape
     where a missing flush order is fatal.
 """
+
+import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
 from sqlalchemy import text
 
 
@@ -30,7 +35,7 @@ def _dataset(name='Ada', trigger='ada'):
 
 
 def _rows(dataset_id):
-    from app.models import CanvasLanePlacement
+    from lds_canvas.models import CanvasLanePlacement
     return CanvasLanePlacement.query.filter_by(dataset_id=dataset_id).count()
 
 
@@ -84,7 +89,7 @@ def test_a_reserved_height_is_clamped_into_a_usable_range(client, app):
     strip could never be dragged bigger again. The ceiling protects ✦ Fit: one
     lane reserving a hundred thousand units would collapse every other lane to
     a scale where nothing is readable."""
-    from app.services.cloud_training import CANVAS_LANE_MAX_H, CANVAS_LANE_MIN_H
+    from lds_canvas.canvas_state import CANVAS_LANE_MAX_H, CANVAS_LANE_MIN_H
     with app.app_context():
         ds_id = _dataset().id
     client.put(f'/api/dataset/{ds_id}/canvas/lane', json={'h': 1})
@@ -97,7 +102,7 @@ def test_a_position_is_railed_on_both_sides_of_zero(client, app):
     """Negative is LEGAL — a lane may be parked above and left of the board's
     origin, like a pinned picture. Only the safety rail is enforced, so one
     corrupt row cannot blow the board's box up."""
-    from app.services.cloud_training import CANVAS_LANE_REACH
+    from lds_canvas.canvas_state import CANVAS_LANE_REACH
     with app.app_context():
         ds_id = _dataset().id
     client.put(f'/api/dataset/{ds_id}/canvas/lane', json={'x': -10 ** 9, 'y': 10 ** 9})
@@ -167,7 +172,7 @@ def test_an_unknown_dataset_is_404_on_both_write_paths(client, app):
 
 def test_another_users_lane_is_not_on_my_board(client, app):
     from app.extensions import db
-    from app.models import CanvasLanePlacement
+    from lds_canvas.models import CanvasLanePlacement
     from app.services import face_dataset_service as svc
     with app.app_context():
         mine = _dataset('Mine', 'mine').id
@@ -208,7 +213,7 @@ def test_deleting_a_dataset_that_has_a_lane_placement_does_not_500(client, app):
     if the parent DELETE were emitted first the child would be left dangling and
     an enforcing database would raise."""
     from app.extensions import db
-    from app.models import CanvasLanePlacement
+    from lds_canvas.models import CanvasLanePlacement
     from app.services import face_dataset_service as svc
     with app.app_context():
         ds_id = _dataset().id
@@ -227,7 +232,7 @@ def test_deleting_a_dataset_that_has_a_lane_placement_does_not_500(client, app):
 
 def test_deleting_a_dataset_through_the_api_still_answers_200(client, app):
     from app.extensions import db
-    from app.models import CanvasLanePlacement
+    from lds_canvas.models import CanvasLanePlacement
     with app.app_context():
         ds_id = _dataset().id
         db.session.add(CanvasLanePlacement(dataset_id=ds_id, x=9, y=9, h=900))
@@ -242,8 +247,12 @@ def test_the_lane_model_declares_its_relationship_to_face_dataset():
     explicit cleanup in delete_dataset becomes the ONLY thing between a user and
     an HTTP 500 — one refactor away from the bug coming back."""
     from sqlalchemy import inspect
-    from app.models import CanvasLanePlacement, FaceDataset
-    rels = inspect(CanvasLanePlacement).relationships
+    from lds_canvas.models import CanvasLanePlacement
+    from app.models import FaceDataset
+    from app.models import CanvasLanePlacement as HostCanvasLanePlacement
+    # Host deletion owns flush ordering; the plugin maps that same table.
+    assert CanvasLanePlacement.__table__ is HostCanvasLanePlacement.__table__
+    rels = inspect(HostCanvasLanePlacement).relationships
     assert 'dataset' in rels, 'CanvasLanePlacement must declare relationship() to face_dataset'
     assert rels['dataset'].mapper.class_ is FaceDataset
 
@@ -254,10 +263,10 @@ def test_the_clamps_agree_with_the_browsers(client, app):
     silently rewrites is a lane that jumps on the next reload."""
     import re
     from pathlib import Path
-    from app.services.cloud_training import (
+    from lds_canvas.canvas_state import (
         CANVAS_LANE_MAX_H, CANVAS_LANE_MIN_H, CANVAS_LANE_REACH)
     src = (Path(__file__).resolve().parents[2]
-           / 'frontend' / 'src' / 'utils' / 'canvasLanePlacement.js').read_text(encoding='utf-8')
+           / 'bundled' / 'canvas' / 'frontend' / 'utils' / 'canvasLanePlacement.js').read_text(encoding='utf-8')
     found = dict(re.findall(r'export const (LANE_\w+) = (\d+);', src))
     assert float(found['LANE_MIN_H']) == CANVAS_LANE_MIN_H
     assert float(found['LANE_MAX_H']) == CANVAS_LANE_MAX_H

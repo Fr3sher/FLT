@@ -2,10 +2,14 @@
 
 La bibliothèque `ddgs` n'est JAMAIS appelée : les tests remplacent la seule
 indirection `_images`."""
+
 import pytest
 
-from app.scrape.sources import websearch
-from app.scrape.sources.websearch import WebSearchSource
+pytestmark = pytest.mark.plugins('scrape')
+
+
+from lds_scrape.sources import websearch
+from lds_scrape.sources.websearch import WebSearchSource
 
 
 _RESULT = {
@@ -167,7 +171,7 @@ def test_a_missing_dependency_says_how_to_install_it(monkeypatch):
     items, err = WebSearchSource().scan(m)
 
     assert items is None
-    assert 'requirements-scrape.txt' in err
+    assert 'web scraping dependencies' in err and 'Setup' in err
 
 
 # --- thumbnail fallback ---------------------------------------------------------
@@ -217,6 +221,6 @@ def test_a_thumbnail_with_credentials_or_a_bad_scheme_still_falls_back(monkeypat
 
 
 def test_the_source_is_registered_ahead_of_the_universal_fallback():
-    from app.scrape.sources import registry
+    from lds_scrape.sources import registry
     match = registry.resolve('https://duckduckgo.com/?q=portrait&iax=images')
     assert match is not None and match.source.name == 'websearch'
