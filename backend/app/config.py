@@ -1769,7 +1769,10 @@ def settings_secret_keys(plugin_id=None):
     if plugin_id:
         return tuple(k for k in owners.get(plugin_id, {}).get('secrets', ()) if k in SECRET_KEYS)
     owned = {key for spec in owners.values() for key in spec['secrets']}
-    return tuple(key for key in SECRET_KEYS if key not in owned)
+    # Core model downloads and the prompt browser use these even with zero
+    # products installed. Declared products share the same saved credential.
+    shared_core = {'HF_TOKEN', 'CIVITAI_API_KEY'}
+    return tuple(key for key in SECRET_KEYS if key not in owned or key in shared_core)
 
 
 # Historical public settings retain their on-disk spelling. This ownership

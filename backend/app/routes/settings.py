@@ -564,10 +564,15 @@ def watermark_python_select():
 def test_connection(target):
     from ..auth_policy import plugin_available
     owners = {'gemini': 'api_engines', 'openai': 'api_engines', 'openrouter': 'api_engines',
-              'vast': 'cloud_training', 'hf_cloud': 'cloud_training', 'civitai': 'civitai_publish'}
+              'vast': 'cloud_training', 'hf_cloud': 'cloud_training'}
     owner = owners.get(target)
     if owner and (not plugin_available(owner) or _settings_scope() != owner):
         return jsonify({'error': 'Open the active plugin settings to test this provider.'}), 409
+    if target == 'civitai':
+        scope = _settings_scope()
+        if ('CIVITAI_API_KEY' not in cfg.settings_secret_keys(scope)
+                or (scope and not plugin_available(scope))):
+            return jsonify({'error': 'This settings page cannot test the Civitai credential.'}), 409
     if target == 'hf_cloud':
         from lds_cloud_training import cloud_training
         return jsonify(_hf_cloud_secret_check(

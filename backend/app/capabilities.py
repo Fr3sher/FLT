@@ -224,11 +224,11 @@ def probe_civitai_test() -> dict:
     """The Test button's version of the above: the key is shown to Civitai
     (`/api/v1/me`) and the answer names the account. Network, on demand only
     — never part of the capabilities poll."""
-    from .services import civitai_publish
-    key = civitai_publish.api_key()
+    from .services import civitai_browser
+    key = civitai_browser.civitai_api_key()
     if not key:
         return {'ok': False, 'detail': 'key missing'}
-    who = civitai_publish.whoami(key)
+    who = civitai_browser.account_name(key)
     if who:
         return {'ok': True, 'detail': f'signed in as {who}'}
     return {'ok': False, 'detail': 'key set, but Civitai did not accept it (refused, '

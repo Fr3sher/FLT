@@ -85,6 +85,17 @@ def civitai_api_key():
     return cfg.secret('CIVITAI_API_KEY') or None
 
 
+def account_name(key):
+    """Read-only credential check, independent of publishing and on demand."""
+    if not key:
+        return None
+    try:
+        account = _http_get_json('https://civitai.com/api/v1/me', key)
+    except (RuntimeError, PermissionError):
+        return None
+    return (account.get('username') or None) if isinstance(account, dict) else None
+
+
 def _http_get_json(url, key=None):
     """GET → parsed JSON. The single network seam (tests monkeypatch it).
     Auth/network/HTTP failures raise RuntimeError with a user-facing sentence;
