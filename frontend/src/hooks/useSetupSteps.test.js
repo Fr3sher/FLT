@@ -2,15 +2,35 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   deriveSetupSteps, deriveCapabilitySummary, kleinMissingLabels, KLEIN_ASSET_LABELS,
-  comfyuiDirVerdict, COMFYUI_SKIP_LOST, COMFYUI_SKIP_KEPT,
-  OLLAMA_SKIP_LOST, OLLAMA_SKIP_KEPT, ollamaSkipKept, ollamaGateReason,
-  aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS, SETUP_STEP_IDS,
+  comfyuiDirVerdict, COMFYUI_SKIP_LOST, comfyuiSkipKept,
+  OLLAMA_SKIP_LOST, ollamaSkipKeptAll, ollamaSkipKept, ollamaGateReason,
+  aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS, SETUP_STEP_IDS, capabilityDestination,
 } from './useSetupSteps.js';
 // installAllPlan / installCatalog are imported further down, next to their own
 // sections; kreaInstallPlan has no other importer here.
 import { kreaInstallPlan } from './useSetupSteps.js';
 import { localEngineUnavailableReason } from '../utils/localEngineReason.js';
 import fs from 'node:fs';
+import { registerDescriptor, resetRegistry, setEnabled, contributions } from '../plugins/registry.js';
+import apiEngines from '../../../bundled/api_engines/frontend/index.js';
+import video from '../../../bundled/video/frontend/index.js';
+import live from '../../../bundled/live/frontend/index.js';
+import camera from '../../../bundled/camera_angles/frontend/index.js';
+import scrape from '../../../bundled/scrape/frontend/index.js';
+
+// Main-era product cases exercise the real, explicitly active public products.
+// The core-only case below verifies that absent products stay absent.
+const products = [apiEngines, video, live, camera, scrape];
+test.beforeEach(() => {
+  resetRegistry();
+  for (const product of products) {
+    const manifest = JSON.parse(fs.readFileSync(new URL(`../../../bundled/${product.id}/plugin.json`, import.meta.url), 'utf8'));
+    assert.equal(registerDescriptor(product, { guideOwnership: manifest.guide_ownership }), true, product.id);
+  }
+  setEnabled(products.map(product => product.id));
+});
+test.afterEach(() => resetRegistry());
+
 
 const comfyStep = (comfyui) => deriveSetupSteps({ comfyui }).find((s) => s.id === 'comfyui');
 // The same step, driven by a FULL capabilities payload — engines included. That is
@@ -352,14 +372,14 @@ test('the wizard renders the one-click adoption of the reported input folder', (
 });
 
 test('skip panel lists what turns off and what stays on', () => {
-  assert.ok(COMFYUI_SKIP_LOST.length >= 4 && COMFYUI_SKIP_KEPT.length >= 4);
+  assert.ok(COMFYUI_SKIP_LOST.length >= 4 && comfyuiSkipKept().length >= 4);
   const lost = COMFYUI_SKIP_LOST.join(' | ');
   assert.match(lost, /Klein/);
   assert.match(lost, /Test Studio/);
-  const kept = COMFYUI_SKIP_KEPT.join(' | ');
-  assert.match(kept, /Scraping/);
+  const kept = comfyuiSkipKept().join(' | ');
+  assert.match(kept, /Importing images/);
   assert.match(kept, /ai-toolkit/);
-  assert.match(kept, /Hugging Face/);
+  assert.doesNotMatch(kept, /Hugging Face|Scraping/);
 });
 
 test('kleinMissingLabels maps required assets to words in a stable order', () => {
@@ -387,7 +407,8 @@ const fullCaps = () => ({
   // bundled ffmpeg, so a "fully installed" snapshot has to assert both.
   video_decode: true, video_detect: true, video_encode: true,
   // The safe-zone pass's OCR half — its own action, its own probe.
-  video_text: true,
+  video_text: true, video_host_ready: true,
+  live: { encoder: true, ready: true, missing: [] },
   ollama: { reachable: true, vision_model_ready: true, vision_model: 'qwen3-vl:8b' },
   // reachable matters for the Krea node pack: an unreachable ComfyUI's node probe
   // fails open, so "nothing missing" from a stopped ComfyUI must not read as
@@ -453,21 +474,14 @@ test('installCatalog lists every app-installable component, present + available'
   // card, this menu is the per-piece repair path each of them also deserves.
   assert.deepEqual(
     installCatalog(fullCaps()).map((c) => c.action),
-    ['face_scoring', 'masks', 'watermark_inpaint', 'video', 'shot_detect',
-      'video_text', 'ollama_model',
-      'klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora',
-      'klein_enhancement_lora',
-      'krea_nodes', 'krea_model', 'krea_text_encoder', 'krea_vae',
-      'krea_identity_lora',
-      // 📷 Camera angles — four rows, not five: its VAE is the krea_vae row
-      // above (one file, one button).
-      'camera_model', 'camera_lora', 'camera_speed_lora', 'camera_text_encoder',
-      // 🎬 Video Test Studio — five weights and NO pack row. The lane's three
-      // optional node packs are linked from its card, never installed by the
-      // app: it downloads model files and does not add code to a ComfyUI.
-      'h3_base', 'h3_text_encoder', 'h3_video_vae', 'h3_audio_vae',
-      'h3_turbo_lora', 'h3_parasyte_lora', 'h3_dareties_lora',
-      'lanpaint_nodes'],
+    ['face_scoring', 'masks', 'watermark_inpaint', 'video_text', 'ollama_model',
+      'klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora', 'klein_enhancement_lora',
+      'krea_nodes', 'krea_model', 'krea_text_encoder', 'krea_vae', 'krea_identity_lora', 'lanpaint_nodes',
+      'video', 'video_host', 'shot_detect', 'h3_base', 'h3_text_encoder', 'h3_video_vae',
+      'h3_audio_vae', 'h3_turbo_lora', 'h3_parasyte_lora', 'h3_dareties_lora',
+      'live_encoder', 'live_h3_base', 'live_h3_text_encoder', 'live_h3_video_vae',
+      'live_h3_audio_vae', 'live_h3_turbo_lora',
+      'camera_model', 'camera_lora', 'camera_speed_lora', 'camera_text_encoder'],
   );
   // Everything installed in fullCaps -> every tile present, and available to REINSTALL.
   for (const c of Object.values(cat)) {
@@ -479,7 +493,7 @@ test('installCatalog lists every app-installable component, present + available'
 test('installCatalog stays fully available for reinstall when all is green', () => {
   // The menu must never collapse once installed — each item can always be repaired.
   const cat = installCatalog(fullCaps());
-  assert.ok(cat.length === 29 && cat.every((c) => c.available))   // 27 + the two arena accelerations;
+  assert.ok(cat.length === 36 && cat.every((c) => c.available))   // core plus explicitly active independent products; shared OCR appears once.
 });
 
 test('installCatalog marks missing ML extras not-present but still available', () => {
@@ -491,13 +505,13 @@ test('installCatalog marks missing ML extras not-present but still available', (
   }
 });
 
-test('installCatalog blocks fresh ML installs on an unsupported Python, with a hint', () => {
+test('old servers without managed Python explain how to enable automatic ML installation', () => {
   const cat = byAction(installCatalog({ ...fullCaps(),
     python: { ml_supported: false, ml_range: '3.10–3.12' },
     face_scoring: false, masks: false }));
   // Can't install into the app's out-of-range Python -> unavailable + an actionable hint.
   assert.equal(cat.face_scoring.available, false);
-  assert.match(cat.face_scoring.hint, /3\.10–3\.12/);
+  assert.match(cat.face_scoring.hint, /Update LDS.*compatible ML environment/);
   // watermark auto-provisions its own venv, so it stays available regardless.
   assert.equal(cat.watermark_inpaint.available, true);
 });
@@ -524,17 +538,17 @@ test('installCatalog gates the vision model on a reachable, named Ollama', () =>
 
 test('the Video lane\'s three doors are rows of their own: ready, waiting, or missing with a door', () => {
   const row = (caps, label) => deriveCapabilitySummary(caps).find((s) => s.label === label);
-  const DLSS = '✨ DLSS 5 neural rendering';
-  const SMOOTH = '↗ Smooth (frame interpolation)';
-  const LIVE = '🔴 Live lane (beta)';
+  const DLSS = 'DLSS 5 neural rendering';
+  const SMOOTH = 'Smooth (frame interpolation)';
+  const LIVE = 'Live — local generation';
   // Everything there.
   const on = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: true,
-    video_studio_options: { vfi: { available: true } } }, dlss5nr: { ready: true }, video_encode: true };
+    video_studio_options: { vfi: { available: true } } }, dlss5nr: { ready: true }, video_encode: true, live: { ready: true, encoder: true, missing: [] } };
   for (const l of [DLSS, SMOOTH, LIVE]) assert.equal(row(on, l).ok, true, l);
   // ComfyUI down with the weights on disk: Smooth and Live wait (their
   // verdict needs the process), DLSS does not — it has a worker of its own.
   const off = { comfyui: { dir_valid: true, reachable: false, video_studio_missing: [] },
-    dlss5nr: { ready: false }, video_encode: true };
+    dlss5nr: { ready: false }, video_encode: true, live: { ready: false, encoder: true, missing: [] } };
   assert.equal(row(off, SMOOTH).pending, true);
   assert.match(row(off, SMOOTH).note, /launch ComfyUI/);
   assert.equal(row(off, LIVE).pending, true);
@@ -554,16 +568,17 @@ test('the Video lane\'s three doors are rows of their own: ready, waiting, or mi
   assert.equal(row(unread, SMOOTH).ok, false);
   // Weights there, ffmpeg not: Live names the gap and its door is the video
   // extra on the quality step, not the weights it already has.
-  const noFfmpeg = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: true }, video_encode: false };
-  assert.equal(row(noFfmpeg, LIVE).ok, false);
-  assert.match(row(noFfmpeg, LIVE).note, /ffmpeg/);
-  assert.equal(row(noFfmpeg, LIVE).topic, 'setup-quality');
+  const noFfmpeg = { comfyui: { dir_valid: true, reachable: true }, live: { ready: true, encoder: false, missing: [] } };
+  assert.equal(row(noFfmpeg, 'Live — stream encoder').ok, false);
+  assert.match(row(noFfmpeg, 'Live — stream encoder').note, /ffmpeg/);
+  assert.equal(row(noFfmpeg, 'Live — stream encoder').topic, 'setup-live');
+  assert.equal(row(noFfmpeg, LIVE).ok, true, 'model readiness is independent of the encoder');
   // Weights missing: the door is the video install.
   const noWeights = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: false,
-    video_studio_missing: ['h3_unet'] }, video_encode: true };
+    video_studio_missing: ['h3_unet'] }, video_encode: true, live: { ready: false, missing: [{ action: 'live_h3_base' }] } };
   assert.equal(row(noWeights, LIVE).ok, false);
   assert.equal(row(noWeights, LIVE).pending, undefined);
-  assert.equal(row(noWeights, LIVE).topic, 'setup-video-studio');
+  assert.equal(row(noWeights, LIVE).topic, 'setup-live');
 });
 
 test('installCatalog gates Klein weights on a validated ComfyUI', () => {
@@ -793,14 +808,14 @@ test('the capability summary counts bank scoring, SigLIP2, the watermark detecto
 test('the capability summary counts clip encoding apart from decoding', () => {
   const rows = deriveCapabilitySummary({ video_decode: true, video_detect: true, video_encode: false });
   const labels = rows.map((r) => r.label);
-  const encode = rows.find((r) => /video/i.test(r.label) && /encod/i.test(r.label));
+  const encode = rows.find((r) => /clip encoding/i.test(r.label));
   assert.ok(encode, `no clip-encoding row in the summary: ${labels.join(', ')}`);
   // It reads its OWN key — a row copy-pasted from "reading files" would be green here.
   assert.equal(encode.ok, false);
   assert.equal(rows.find((r) => /read/i.test(r.label) && /video/i.test(r.label)).ok, true);
   assert.equal(encode.topic, 'setup-quality');
   const on = deriveCapabilitySummary({ video_decode: true, video_detect: true, video_encode: true });
-  assert.equal(on.find((r) => /video/i.test(r.label) && /encod/i.test(r.label)).ok, true);
+  assert.equal(on.find((r) => /clip encoding/i.test(r.label)).ok, true);
 });
 
 // The `video` install action installs BOTH halves, so its catalog row cannot be
@@ -842,6 +857,10 @@ test('every "What\'s unlocked" row maps to a wizard screen that exists', () => {
   const rows = deriveCapabilitySummary({});
   assert.ok(rows.length > 10, 'the summary is suspiciously short — has it stopped deriving?');
   for (const r of rows) {
+    if (r.plugin) {
+      assert.equal(capabilityDestination(r)?.href.split('?')[0], `/plugins/${r.plugin}/settings`, `${r.label} must lead to its owner`);
+      continue;
+    }
     assert.ok(map[r.label],
       `"${r.label}" has no CAPABILITY_STEP_ID entry — its row renders inert`);
     assert.ok(valid.has(map[r.label]),
@@ -890,9 +909,8 @@ test('each new capability row maps to the quality wizard step in SetupPage', () 
 // resolves /settings and /setup routes). Without this card the new row's
 // "manage in Setup wizard" promise would be a dead end.
 test('the quality step offers a Setup card for scraping extras', () => {
-  const cards = fs.readFileSync(new URL('../components/setup/mlInstallCards.js', import.meta.url), 'utf8');
-  assert.match(cards, /action:\s*'scrape_extras'/);
-  assert.match(cards, /cap:\s*'scrape_deps'/);
+  const cards = contributions('setup.step', 'setup').flatMap(item => item.mlCards || []);
+  assert.equal(cards.find(card => card.action === 'scrape_extras')?.cap, 'scrape_deps');
 });
 
 test('the install catalog offers the video extras for install and repair', () => {
@@ -914,7 +932,7 @@ test('the install catalog offers the video extras for install and repair', () =>
 // the two facts that fixes it: either lane makes the engine ready, and the key
 // lane's own state is read from the SECRETS payload (engines.chatgpt is the
 // backend's OR of the two and cannot answer "is a key also set").
-import { chatgptLanes, chatgptLaneSummary, CHATGPT_API_KEY_SECRET } from './useSetupSteps.js';
+import { chatgptLanes, chatgptLaneSummary, CHATGPT_API_KEY_SECRET } from '../../../bundled/api_engines/frontend/lib/chatgptLanes.js';
 
 test('a connected subscription makes ChatGPT ready with no API key', () => {
   const l = chatgptLanes(
@@ -963,8 +981,8 @@ test('a legacy payload without engines still reports a connected subscription re
 
 // The wizard must OFFER the subscription, not merely tolerate it: the whole
 // defect was a screen that only ever showed the key field.
-test('the Setup image step mounts the subscription connect flow', () => {
-  const page = fs.readFileSync(new URL('../pages/SetupPage.jsx', import.meta.url), 'utf8');
+test('the API plugin preparation mounts the subscription connect flow', () => {
+  const page = fs.readFileSync(new URL('../../../bundled/api_engines/frontend/panels/ChatgptSetupLane.jsx', import.meta.url), 'utf8');
   assert.match(page, /<ChatgptSubscriptionConnect/);
   assert.doesNotMatch(page, /help: 'Powers ChatGPT \(gpt-image-2\)\.'/,
     'the key field still claims to be what powers the engine');
@@ -987,7 +1005,7 @@ test('the subscription row shows an error only when a user action produced it', 
 // polling loop is how "connected" starts meaning different things per page.
 test('Settings and Setup share one subscription component', () => {
   const engines = fs.readFileSync(
-    new URL('../components/settings/EnginesSection.jsx', import.meta.url), 'utf8');
+    new URL('../../../bundled/api_engines/frontend/panels/ApiEnginesSettingsGroup.jsx', import.meta.url), 'utf8');
   assert.match(engines, /<ChatgptSubscriptionConnect/);
   assert.doesNotMatch(engines, /chatgpt-oauth\/start/,
     'EnginesSection re-implements the device-code login instead of sharing it');
@@ -1042,7 +1060,7 @@ test('the gate still holds on states the user can act on right here', () => {
 
 test('what continuing without Ollama costs is sourced, and captioning is not on that list', () => {
   const lost = OLLAMA_SKIP_LOST.join(' | ');
-  const kept = OLLAMA_SKIP_KEPT.join(' | ');
+  const kept = ollamaSkipKeptAll().join(' | ');
   // The Ollama-only passes — each one a real gate in the app.
   assert.match(lost, /framing/i);
   assert.match(lost, /head-crop/i);
@@ -1065,7 +1083,7 @@ test('nothing the wizard SAYS claims JoyCaption is SDXL-only', () => {
     ollamaGateReason({ status: 'available', reachable: false, installed: true }),
     ollamaGateReason({ status: 'partial', reachable: true, visionModelReady: false }),
     ollamaGateReason({ status: 'partial', reachable: true, visionModelReady: true }),
-    ...OLLAMA_SKIP_LOST, ...OLLAMA_SKIP_KEPT,
+    ...OLLAMA_SKIP_LOST, ...ollamaSkipKeptAll(),
   ].filter(Boolean).join(' | ');
   assert.ok(everySentence.length > 0);
   assert.doesNotMatch(everySentence, /only covers SDXL/i);
@@ -1074,14 +1092,14 @@ test('nothing the wizard SAYS claims JoyCaption is SDXL-only', () => {
 
 test('the KEPT column never ticks a captioner this machine does not have', () => {
   const withJoy = ollamaSkipKept(true);
-  assert.deepEqual(withJoy, OLLAMA_SKIP_KEPT);
+  assert.deepEqual(withJoy, ollamaSkipKeptAll());
   assert.match(withJoy.join(' | '), /JoyCaption/);
 
   const without = ollamaSkipKept(false);
   assert.doesNotMatch(without.join(' | '), /JoyCaption/,
     'promising JoyCaption captioning on an install that has none is the half-truth this avoids');
   // Everything true of ANY install stays — the column must not go empty.
-  assert.equal(without.length, OLLAMA_SKIP_KEPT.length - 1);
+  assert.equal(without.length, ollamaSkipKeptAll().length - 1);
   assert.match(without.join(' | '), /LoRA training/);
 });
 
@@ -1137,4 +1155,34 @@ test('an install that predates the provider setting still gets the Ollama pull',
     ollama: { reachable: true, vision_model_ready: false, vision_model: 'qwen3-vl:8b' },
   }).find((c) => c.action === 'ollama_model');
   assert.equal(row.available, true);
+});
+
+
+test('core-only setup never promises or prepares absent products', () => {
+  resetRegistry();
+  assert.ok(!deriveCapabilitySummary(fullCaps()).some(row => row.plugin));
+  assert.doesNotMatch(comfyuiSkipKept().join(' | '), /ChatGPT|Nano Banana|OpenRouter|Scraping/);
+  assert.doesNotMatch(ollamaSkipKeptAll().join(' | '), /Canvas|ChatGPT|Nano Banana|OpenRouter/);
+  const actions = installCatalog(fullCaps()).map(item => item.action);
+  assert.ok(!actions.some(action => /^(live_|camera_|h3_|shot_detect$|video$)/.test(action)));
+});
+
+test('managed Python enables ML installation even when LDS itself runs on 3.14', () => {
+  const caps = { python: { ml_supported: false, managed_ml: { available: true } } };
+  const rows = byAction(installCatalog(caps));
+  for (const action of ['face_scoring', 'masks']) assert.equal(rows[action].available, true);
+  assert.deepEqual(installAllPlan(caps), ['face_scoring', 'masks', 'watermark_inpaint']);
+});
+
+
+test('Live preparation reads its own facts with Video disabled', () => {
+  setEnabled(['live']);
+  const rows = deriveCapabilitySummary({ live: { ready: true, encoder: true, missing: [] }, video_encode: false });
+  assert.equal(rows.find(row => row.label === 'Live — local generation').ok, true);
+  assert.equal(rows.find(row => row.label === 'Live — stream encoder').ok, true);
+  assert.ok(!rows.some(row => row.plugin === 'video'));
+  const waiting = deriveCapabilitySummary({ comfyui: { dir_valid: true, reachable: false }, live: { ready: false, encoder: true, missing: [] } });
+  const local = waiting.find(row => row.label === 'Live — local generation');
+  assert.equal(local.pending, true);
+  assert.equal(capabilityDestination(local).href, '/settings/local-tools?focus=comfyui-api-url');
 });

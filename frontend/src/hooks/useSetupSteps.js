@@ -222,7 +222,7 @@ export const COMFYUI_SKIP_LOST = [
   'Local Klein generation, including the uncensored (NSFW) local lane',
   'Watermark cleaning with Klein (LaMa inpainting and crop still work)',
   'Test Studio (comparing checkpoints, every model family)',
-  'Training on your own ComfyUI base models (built-in and cloud bases still work)',
+  'Training on your own ComfyUI base models (built-in local bases still work)',
   'Picking LoRA presets from what is on disk (free-text entry still works)',
 ]
 // The API engines' line is added at call time, ONLY when the catalog holds an
@@ -271,7 +271,7 @@ export const OLLAMA_SKIP_LOST = [
 const OLLAMA_SKIP_KEPT_CORE = [
   'Captioning with JoyCaption — prose or booru tags, matched to what you train',
   'Importing images, dataset curation, export and the bank',
-  'Local generation, Test Studio comparisons and the Canvas (ComfyUI)',
+  'Local generation and Test Studio comparisons (ComfyUI)',
   'LoRA training with a configured local ai-toolkit',
 ]
 
@@ -677,7 +677,7 @@ function coreCapabilitySummary(caps) {
     { label: 'Captioning', what: 'Writes a caption for every picture — JoyCaption or your local LLM',
       ok: !!(cap.joycaption || (cap.local_llm !== undefined ? cap.local_llm : cap.ollama)),
       topic: 'setup-ollama' },
-    { label: 'Auto-framing & head-crop', what: 'The local vision model: framing, head crops — and ✨ motion prompts for video',
+    { label: 'Auto-framing & head-crop', what: 'The local vision model: framing and head crops',
       ok: !!(cap.local_llm_vision !== undefined
         ? cap.local_llm_vision
         : (o.reachable && o.vision_model_ready)),
@@ -696,7 +696,7 @@ function coreCapabilitySummary(caps) {
       topic: 'setup-quality' },
     { label: 'Watermark detector (optional)', what: 'Finds watermarks about ten times faster and marks where they sit', ok: !!c.watermark_detect,
       topic: 'setup-quality' },
-    { label: 'LoRA training', what: 'Trains LoRAs with ai-toolkit — your GPU or a Vast.ai machine', ok: !!c.training_visible, topic: 'setup-training' },
+    { label: 'LoRA training', what: 'Trains LoRAs with ai-toolkit on your own GPU', ok: !!c.training_visible, topic: 'setup-training' },
     { label: '🖼️ Test Studio (images)', what: 'Generates test images with a LoRA in your ComfyUI — the Test Studio page', ok: !!c.studio_visible,
       topic: 'setup-comfyui', waitingTopic: WAITING,
       ...(!c.studio_visible && comfyOff ? { pending: true, note: NOTE } : {}) },
@@ -728,7 +728,12 @@ function destinationName(route, topic) {
 export function capabilityDestination(entry, getTopic = getHelpTopic) {
   if (!entry) return null
   const id = (entry.pending && entry.waitingTopic) ? entry.waitingTopic : entry.topic
-  const t = id ? getTopic(id) : null
+  let t = id ? getTopic(id) : null
+  if (entry.plugin && !(entry.pending && entry.waitingTopic)) {
+    const route = `/plugins/${entry.plugin}/settings`
+    t = { ...t, pluginName: entry.pluginName || t?.pluginName,
+      app: { route, ...(t?.app?.route === route && t.app.focus ? { focus: t.app.focus } : {}) } }
+  }
   if (!t || !t.app || !t.app.route) return null
   const { route, focus } = t.app
   const href = focus ? `${route}${route.includes('?') ? '&' : '?'}focus=${focus}` : route
@@ -1040,7 +1045,7 @@ function coreInstallCatalog(caps) {
 export function deriveCapabilitySummary(caps) {
   const rows = coreCapabilitySummary(caps)
   for (const item of contributions('setup.step', 'setup')) {
-    if (typeof item.rows === 'function') rows.push(...(item.rows(caps) || []).map(row => ({ ...row, plugin: item.plugin })))
+    if (typeof item.rows === 'function') rows.push(...(item.rows(caps) || []).map(row => ({ ...row, plugin: item.plugin, pluginName: item.pluginName })))
   }
   return rows
 }
@@ -1051,5 +1056,7 @@ export function installCatalog(caps, { includePlugins = true } = {}) {
   for (const item of contributions('setup.step', 'setup')) {
     if (typeof item.catalog === 'function') items.push(...(item.catalog(caps) || []))
   }
-  return items
+  // Shared requirements (for example OCR) have one install action even when
+  // both the core and a product offer them. Preserve the first owner's row.
+  return items.filter((item, index) => items.findIndex(other => other.action === item.action) === index)
 }

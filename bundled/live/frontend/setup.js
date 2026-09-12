@@ -6,9 +6,12 @@ export const labels = {
 }
 export function setupRows(caps) {
   const live = caps?.live || {}
+  const waiting = !live.ready && caps?.comfyui?.dir_valid && !caps.comfyui.reachable
+    && Array.isArray(live.missing) && live.missing.length === 0
+    ? { pending: true, note: 'launch ComfyUI to enable', waitingTopic: 'comfyui.api_url' } : {}
   return [
-    { label: 'Live — stream encoder', what: 'Encodes browser and VLC playback', ok: live.encoder === true, topic: 'setup-live' },
-    { label: 'Live — local generation', what: 'H3 files and a reachable ComfyUI', ok: live.ready === true, topic: 'setup-live' },
+    { label: 'Live — stream encoder', what: 'Encodes browser and VLC playback', ok: live.encoder === true, topic: 'setup-live', ...(live.encoder === false ? { note: 'needs ffmpeg — prepare the Live stream encoder' } : {}) },
+    { label: 'Live — local generation', what: 'H3 files and a reachable ComfyUI', ok: live.ready === true, topic: 'setup-live', ...waiting },
   ]
 }
 export function catalog(caps) {

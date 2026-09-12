@@ -12,13 +12,17 @@ export function videoStudioInstallPlan(caps) {
 
 export function videoSetupRows(caps) {
   const c = caps || {}, cu = c.comfyui || {}
+  const weightsThere = !(Array.isArray(cu.video_studio_missing) && cu.video_studio_missing.length)
+  const waiting = cu.dir_valid && !cu.reachable && weightsThere
+    ? { pending: true, note: 'launch ComfyUI to enable', waitingTopic: 'comfyui.api_url' } : {}
+  const smoothReady = !!cu.video_studio_ready && cu.video_studio_options?.vfi?.available === true
   return [
-    { label: 'Video Test Studio', what: 'Local H3 image- and text-to-video', ok: !!cu.video_studio_ready, topic: 'setup-video-studio' },
+    { label: 'Video Test Studio', what: 'Local H3 image- and text-to-video', ok: !!cu.video_studio_ready, topic: 'setup-video-studio', ...(!cu.video_studio_ready ? waiting : {}) },
     { label: 'Video tools in LDS', ok: !!c.video_host_ready, topic: 'setup-quality' },
     { label: 'Video reading', ok: !!c.video_decode, topic: 'setup-quality' },
     { label: 'Shot detection', ok: !!c.video_detect, topic: 'setup-quality' },
     { label: 'Clip encoding', ok: !!c.video_encode, topic: 'setup-quality' },
-    { label: 'Smooth (frame interpolation)', ok: !!cu.video_studio_options?.vfi?.available, topic: 'setup-video-studio' },
+    { label: 'Smooth (frame interpolation)', ok: smoothReady, topic: 'setup-video-studio', ...(!smoothReady ? waiting : {}) },
     { label: 'DLSS 5 neural rendering', ok: !!c.dlss5nr?.ready, topic: 'setup-dlss5-install' },
   ]
 }
