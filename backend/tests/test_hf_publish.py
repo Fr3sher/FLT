@@ -74,7 +74,7 @@ class FakeApi:
 # --- folder build: metadata.jsonl, captions, README front-matter, redaction ---
 
 def test_metadata_jsonl_captions_have_trigger(app, tmp_path):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     with app.app_context():
         ds_id = _make_dataset(app, trigger='lola', captions=('a smile', 'a wave'))
         info = hf_publish.build_publish_dir(
@@ -95,7 +95,7 @@ def test_metadata_jsonl_captions_have_trigger(app, tmp_path):
 
 
 def test_readme_front_matter_nfaa_and_license(app, tmp_path):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     with app.app_context():
         ds_id = _make_dataset(app)
         hf_publish.build_publish_dir('local', ds_id, str(tmp_path),
@@ -110,7 +110,7 @@ def test_readme_front_matter_nfaa_and_license(app, tmp_path):
 
 
 def test_readme_no_nfaa_tag_when_off(app, tmp_path):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     from app.services import face_dataset_service as svc
     with app.app_context():
         ds_id = _make_dataset(app)
@@ -121,7 +121,7 @@ def test_readme_no_nfaa_tag_when_off(app, tmp_path):
 
 
 def test_readme_redacts_home_path(app, tmp_path):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     with app.app_context():
         # A home path smuggled into the dataset NAME must be redacted in the card.
         ds_id = _make_dataset(app, name=r'Lola C:\Users\Alice\stuff')
@@ -132,7 +132,7 @@ def test_readme_redacts_home_path(app, tmp_path):
 
 
 def test_caption_text_redacted(app, tmp_path):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     with app.app_context():
         ds_id = _make_dataset(app, trigger='lola',
                               captions=(r'a path C:\Users\Bob\x.png here',))
@@ -145,7 +145,7 @@ def test_caption_text_redacted(app, tmp_path):
 # --- include_ref gating -------------------------------------------------------
 
 def test_include_ref_off_excludes_anchor(app, tmp_path):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     with app.app_context():
         ds_id = _make_dataset(app, with_ref=True, captions=('a', 'b'))
         info = hf_publish.build_publish_dir('local', ds_id, str(tmp_path),
@@ -156,7 +156,7 @@ def test_include_ref_off_excludes_anchor(app, tmp_path):
 
 
 def test_include_ref_on_adds_anchor(app, tmp_path):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     with app.app_context():
         ds_id = _make_dataset(app, with_ref=True, captions=('a', 'b'))
         info = hf_publish.build_publish_dir('local', ds_id, str(tmp_path),
@@ -176,7 +176,7 @@ def test_publish_staging_png_bakes_orientation_and_strips_camera_metadata(app, t
     """
     from app.models import FaceDatasetImage
     from app.services import face_dataset_service as svc
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     from PIL.TiffImagePlugin import IFDRational
 
     with app.app_context():
@@ -215,7 +215,7 @@ def test_publish_staging_png_bakes_orientation_and_strips_camera_metadata(app, t
 # --- write-scope preflight ----------------------------------------------------
 
 def test_read_only_token_refused_before_upload(app):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     api = FakeApi(role='read')
     with app.app_context():
         ds_id = _make_dataset(app)
@@ -229,7 +229,7 @@ def test_read_only_token_refused_before_upload(app):
 
 
 def test_fine_grained_write_allowed(app):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     api = FakeApi(role='fineGrained',
                   fine={'scoped': [{'permissions': ['repo.content.read', 'repo.write']}]})
     with app.app_context():
@@ -241,7 +241,7 @@ def test_fine_grained_write_allowed(app):
 
 
 def test_fine_grained_read_only_refused(app):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     api = FakeApi(role='fineGrained',
                   fine={'global': [], 'scoped': [{'permissions': ['repo.content.read']}]})
     with app.app_context():
@@ -256,7 +256,7 @@ def test_fine_grained_read_only_refused(app):
 # --- repo-exists / success ----------------------------------------------------
 
 def test_repo_already_exists_clean_error(app):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     api = FakeApi(role='write', create_exc=FakeHTTPError(409))
     with app.app_context():
         ds_id = _make_dataset(app)
@@ -269,7 +269,7 @@ def test_repo_already_exists_clean_error(app):
 
 
 def test_publish_success_returns_url(app):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     api = FakeApi(role='write')
     with app.app_context():
         ds_id = _make_dataset(app, trigger='lola', captions=('a', 'b'))
@@ -287,7 +287,7 @@ def test_publish_success_returns_url(app):
 
 
 def test_invalid_license_rejected(app):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     with app.app_context():
         ds_id = _make_dataset(app)
         with pytest.raises(hf_publish.HfPublishError) as ei:
@@ -298,7 +298,7 @@ def test_invalid_license_rejected(app):
 
 
 def test_invalid_repo_id_rejected(app):
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     with app.app_context():
         ds_id = _make_dataset(app)
         with pytest.raises(hf_publish.HfPublishError) as ei:
@@ -310,6 +310,7 @@ def test_invalid_repo_id_rejected(app):
 
 # --- route guards -------------------------------------------------------------
 
+@pytest.mark.plugins('hf_publish')
 def test_route_consent_false_is_400(app, client, monkeypatch):
     monkeypatch.setenv('HF_TOKEN', 'hf_x')
     with app.app_context():
@@ -320,6 +321,7 @@ def test_route_consent_false_is_400(app, client, monkeypatch):
     assert 'consent' in r.get_json()['error']
 
 
+@pytest.mark.plugins('hf_publish')
 def test_route_missing_token_is_400(app, client):
     with app.app_context():
         ds_id = _make_dataset(app)
@@ -329,9 +331,10 @@ def test_route_missing_token_is_400(app, client):
     assert 'HF_TOKEN' in r.get_json()['error']
 
 
+@pytest.mark.plugins('hf_publish')
 def test_route_launches_job_on_valid_consent(app, client, monkeypatch):
     monkeypatch.setenv('HF_TOKEN', 'hf_x')
-    from app.services import hf_publish
+    from lds_hf_publish import publish as hf_publish
     seen = {}
     monkeypatch.setattr(hf_publish, 'start_publish',
                         lambda *a, **k: seen.update(args=a, kwargs=k) or {'state': 'running'})
@@ -346,6 +349,7 @@ def test_route_launches_job_on_valid_consent(app, client, monkeypatch):
     assert seen['kwargs']['include_ref'] is False and seen['kwargs']['private'] is True
 
 
+@pytest.mark.plugins('hf_publish')
 def test_capability_reflects_hf_token(app, monkeypatch):
     from app import capabilities
     with app.app_context():

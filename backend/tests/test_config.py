@@ -29,7 +29,8 @@ def _fresh(monkeypatch, tmp_path):
 def test_defaults_when_no_file(tmp_path, monkeypatch):
     config = _fresh(monkeypatch, tmp_path)
     assert config.get('server.port') == 5050
-    assert config.get('engines.default') == 'chatgpt'
+    assert config.load_config()['engines']['default'] == 'klein'
+    assert config.load_config()['engines']['enabled'] == ['klein', 'krea']
     assert config.is_configured() is False
 
 def test_save_and_reload_deep_merge(tmp_path, monkeypatch):

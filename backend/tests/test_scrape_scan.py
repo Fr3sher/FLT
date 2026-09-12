@@ -7,8 +7,9 @@ sources gdl-backed, pas juste UniversalSource.
 
 Tout est mocké au niveau de `registry.resolve` : aucun appel réseau ni
 process gallery-dl."""
-from app.scrape.sources import gdl, registry
-from app.scrape.sources.base import Match, Source, Capabilities, ResultList
+import pytest
+from lds_scrape.sources import gdl, registry
+from lds_scrape.sources.base import Match, Source, Capabilities, ResultList
 
 
 class _FakeSource(Source):
@@ -45,6 +46,7 @@ def _use_fake_source(monkeypatch, **kw):
     return src
 
 
+@pytest.mark.plugins('scrape')
 def test_scan_empty_kind_is_200_with_zero_items(client, monkeypatch):
     """kind='empty' : gallery-dl (ou équivalent) a tourné sans incident et n'a
     rien trouvé — un scan vide réussi. La route doit répondre 200/count=0,
@@ -63,6 +65,7 @@ def test_scan_empty_kind_is_200_with_zero_items(client, monkeypatch):
     assert body['scannable'] is True
 
 
+@pytest.mark.plugins('scrape')
 def test_scan_auth_kind_still_answers_502_with_its_message(client, monkeypatch):
     """Un vrai blocage (auth/429/DDoS-Guard) ne doit JAMAIS se déguiser en
     résultat vide : seul kind='empty' bascule vers 200, tout le reste garde le
@@ -79,6 +82,7 @@ def test_scan_auth_kind_still_answers_502_with_its_message(client, monkeypatch):
     assert 'auth' in body['error']
 
 
+@pytest.mark.plugins('scrape')
 def test_scan_toolerror_kind_still_answers_502(client, monkeypatch):
     """Même garantie pour 'toolerror' (pas seulement 'auth') : n'importe quel
     kind autre que 'empty' reste un échec HTTP explicite."""
@@ -91,6 +95,7 @@ def test_scan_toolerror_kind_still_answers_502(client, monkeypatch):
     assert r.status_code == 502
 
 
+@pytest.mark.plugins('scrape')
 def test_scan_surfaces_partial_when_the_time_budget_cut_the_listing_short(client, monkeypatch):
     """`enumerate()` peut renvoyer un `ResultList` (app/scrape/sources/base.py)
     avec `partial=True` (budget de temps épuisé en cours de récursion
@@ -115,6 +120,7 @@ def test_scan_surfaces_partial_when_the_time_budget_cut_the_listing_short(client
     assert body['count'] == 1
 
 
+@pytest.mark.plugins('scrape')
 def test_scan_partial_defaults_to_false_for_ordinary_sources(client, monkeypatch):
     """Une source non gdl-backed (liste ordinaire, pas de `ResultList`) ne doit
     jamais faire lever `partial` par accident — `getattr` doit retomber sur False
@@ -130,6 +136,7 @@ def test_scan_partial_defaults_to_false_for_ordinary_sources(client, monkeypatch
     assert r.get_json()['partial'] is False
 
 
+@pytest.mark.plugins('scrape')
 def test_scan_a_plain_string_error_without_kind_still_answers_502(client, monkeypatch):
     """Une erreur qui n'est PAS une GdlError (str nu, pas de `.kind`) doit
     rester un 502 — `getattr(err, 'kind', None)` renvoie None, jamais 'empty'

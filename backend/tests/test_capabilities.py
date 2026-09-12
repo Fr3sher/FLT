@@ -1,3 +1,4 @@
+from lds_api_engines import probes as api_probes
 from unittest.mock import patch
 import os
 import pathlib
@@ -31,13 +32,20 @@ def _no_real_subprocess(monkeypatch):
 
 # --- brief tests, verbatim ---------------------------------------------
 
-def test_probe_all_off_when_unconfigured(app):
+@pytest.mark.parametrize('api_installed', [
+    pytest.param(False, marks=pytest.mark.plugins()),
+    pytest.param(True, marks=pytest.mark.plugins('api_engines')),
+])
+def test_probe_all_off_when_unconfigured(app, api_installed):
     with app.app_context():
         from app import capabilities
         with patch('app.capabilities._http_ok', return_value=False):
             caps = capabilities.probe(force=True)
-    assert caps['engines'] == {'nanobanana': False, 'chatgpt': False,
-                               'openrouter': False, 'klein': False, 'krea': False}
+    expected = {'klein': False, 'krea': False}
+    if api_installed:
+        expected.update(nanobanana=False, chatgpt=False, openrouter=False)
+    assert caps['engines'] == expected
+    assert ('chatgpt_subscription' in caps) is api_installed
     assert caps['training_visible'] is False and caps['studio_visible'] is False
 
 def test_python_ml_status_reports_version_and_range(app):
@@ -68,6 +76,7 @@ def test_python_ml_status_boundaries(app, info, ok):
     assert st['version'] == f'{info[0]}.{info[1]}.{info[2]}'
 
 
+@pytest.mark.plugins('api_engines')
 def test_chatgpt_on_with_key(app, monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-x')
     with app.app_context():
@@ -265,22 +274,19 @@ def test_klein_invalid_too_small_is_advisory_and_does_not_gate(app, monkeypatch,
 def test_probe_gemini_missing_key(app, monkeypatch):
     monkeypatch.delenv('GEMINI_API_KEY', raising=False)
     with app.app_context():
-        from app import capabilities
-        result = capabilities.probe_gemini()
+        result = api_probes.probe_gemini()
     assert result == {'ok': False, 'detail': 'key missing'}
 
 def test_probe_gemini_with_key(app, monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY', 'g-x')
     with app.app_context():
-        from app import capabilities
-        result = capabilities.probe_gemini()
+        result = api_probes.probe_gemini()
     assert result == {'ok': True, 'detail': 'key set'}
 
 def test_probe_openai_missing_key(app, monkeypatch):
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     with app.app_context():
-        from app import capabilities
-        result = capabilities.probe_openai()
+        result = api_probes.probe_openai()
     assert result == {'ok': False, 'detail': 'key missing'}
 
 def test_probe_aitoolkit_invalid_when_unconfigured(app):
@@ -942,6 +948,7 @@ def test_probe_exposes_dir_valid(app, tmp_path):
 
 # --- probe() caching ------------------------------------------------------
 
+@pytest.mark.plugins('api_engines')
 def test_probe_caches_for_30s_without_force(app, monkeypatch):
     with app.app_context():
         from app import capabilities
@@ -954,6 +961,7 @@ def test_probe_caches_for_30s_without_force(app, monkeypatch):
     assert second == first
     assert second['engines']['chatgpt'] is False
 
+@pytest.mark.plugins('api_engines')
 def test_probe_force_bypasses_cache(app, monkeypatch):
     with app.app_context():
         from app import capabilities
@@ -1171,34 +1179,34 @@ def _sub(connected, email=None):
 
 def test_probe_openai_matrix(app, monkeypatch):
     from unittest.mock import patch
-    from app import capabilities
-    from app.services import chatgpt_oauth
+    from lds_api_engines import chatgpt_oauth
     # neither
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     with patch.object(chatgpt_oauth, 'status', return_value=_sub(False)):
-        r = capabilities.probe_openai()
+        r = api_probes.probe_openai()
         assert r['ok'] is False and r['detail'] == 'key missing'
     # key only
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-x')
     with patch.object(chatgpt_oauth, 'status', return_value=_sub(False)):
-        r = capabilities.probe_openai()
+        r = api_probes.probe_openai()
         assert r['ok'] is True and r['detail'] == 'key set'
     # subscription only
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     with patch.object(chatgpt_oauth, 'status', return_value=_sub(True, 'u@x.io')):
-        r = capabilities.probe_openai()
+        r = api_probes.probe_openai()
         assert r['ok'] is True and r['detail'] == 'subscription connected'
     # both
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-x')
     with patch.object(chatgpt_oauth, 'status', return_value=_sub(True, 'u@x.io')):
-        r = capabilities.probe_openai()
+        r = api_probes.probe_openai()
         assert r['ok'] is True and r['detail'] == 'key set + subscription connected'
 
 
+@pytest.mark.plugins('api_engines')
 def test_probe_exposes_chatgpt_subscription_block(app, monkeypatch):
     from unittest.mock import patch
     from app import capabilities
-    from app.services import chatgpt_oauth
+    from lds_api_engines import chatgpt_oauth
     with patch.object(chatgpt_oauth, 'status', return_value=_sub(True, 'u@x.io')):
         caps = capabilities.probe(force=True)
     sub = caps['chatgpt_subscription']

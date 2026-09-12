@@ -14,9 +14,9 @@ import time
 
 import pytest
 
-from app.scrape.sources import gdl, image_sites
-from app.scrape.sources.base import Match
-from app.scrape.sources.image_sites import PornpicsSource, _covers_scan, _full_size
+from lds_scrape.sources import gdl, image_sites
+from lds_scrape.sources.base import Match
+from lds_scrape.sources.image_sites import PornpicsSource, _covers_scan, _full_size
 
 
 def _mock_gdl_runs(monkeypatch):
@@ -275,6 +275,7 @@ def test_pornpics_covers_failure_falls_back_to_bounded_gdl(monkeypatch, _spies):
     assert _spies['enum']['per_album'] == 1         # repli borné : 1 image/album
 
 
+@pytest.mark.plugins('scrape')
 def test_scan_route_passes_include_albums_to_match(client, monkeypatch):
     seen = {}
 
