@@ -7,6 +7,7 @@ every reachability probe goes through it so tests can patch one symbol.
 """
 import copy
 import json
+import logging
 import os
 import re
 import shutil
@@ -2251,39 +2252,13 @@ def _comfyui_caps_section(comfy, base_dir, comfy_dir, comfy_launcher,
                           klein_unsupported_enums, klein_invalid,
                           krea_missing, krea_base_resolved,
                           krea_nodes_missing, krea_nodes_installed,
-                          krea_invalid, krea_pin_gaps, seedvr2_missing,
-                          seedvr2_nodes_missing, seedvr2_nodes_installed,
-                          seedvr2_invalid, seedvr2_ready,
-                          seedvr2_tiling_ready,
-                          seedvr2_tiling_nodes_missing, seedvr2_ceiling_mp):
+                          krea_invalid, krea_pin_gaps):
     """The probe payload's ComfyUI card — the largest section of the caps
     dict, moved verbatim: reachability with its honest hint, directory
     validity, launcher support, the model scan, and every per-engine gap
     list the Setup screen turns into a button."""
     from .services import lanpaint_helper as _lph
     from .services import krea_sampler_helper as _ksh
-    from .services import qwen_camera_helper as _qch
-    # 📷 Camera angles. Computed here rather than in a probe of its own for the
-    # same reason LanPaint is: the lane has no pins, no custom-node pack and no
-    # invalid-file class — it is four filenames on disk. `camera_missing` names
-    # setup_installer actions, so the Setup screen turns each one into the
-    # button that installs it; `camera_ready` is the single verdict every
-    # surface reads, so the picker and the Setup card cannot disagree about
-    # whether a view can be rendered.
-    camera_missing = _qch.camera_missing_assets()
-    # The Video Test Studio, on the same terms as the camera lane: a list of
-    # setup_installer action names the Setup screen turns into buttons, and ONE
-    # readiness verdict every surface reads.
-    #
-    # Two things are deliberately different here. The list carries dicts, not
-    # bare action names, because two of this lane's files have NO action — the
-    # latent upscaler has no verifiable source and the third-party base is
-    # opt-in — and a machine that is missing them must be told where to put them
-    # rather than shown a button that cannot exist. And readiness counts the
-    # REQUIRED weights only: the options degrade one checkbox each, never the
-    # lane.
-    from .services import video_test_studio as _vts
-    _vstudio_missing = _vts.missing_weights()
     return {
         'reachable': comfy['ok'],
         # WHY it isn't reachable, when it isn't: 'ok' | 'slow' | 'unreachable'
@@ -2337,20 +2312,12 @@ def _comfyui_caps_section(comfy, base_dir, comfy_dir, comfy_launcher,
         # reason theirs are kept apart from each other: "download the
         # weights" and "install the node pack in ComfyUI" are different
         # actions with different buttons.
-        'seedvr2_missing': seedvr2_missing,
-        'seedvr2_nodes_missing': seedvr2_nodes_missing,
-        'seedvr2_nodes_installed': seedvr2_nodes_installed,
-        'seedvr2_invalid': seedvr2_invalid,
         # The single verdict every SeedVR2 surface reads (Settings card,
         # Setup step, the improve engine picker) so none of them re-derives
         # readiness from a different subset of the four gaps above.
-        'seedvr2_ready': seedvr2_ready,
         # Optional tiled lane: ready / which TTP classes are absent / the
         # full-frame megapixel ceiling this GPU is good for (None = unknown
         # card, and then the UI says nothing rather than inventing a number).
-        'seedvr2_tiling_ready': seedvr2_tiling_ready,
-        'seedvr2_tiling_nodes_missing': seedvr2_tiling_nodes_missing,
-        'seedvr2_ceiling_mp': seedvr2_ceiling_mp,
         # LanPaint — the masked Repair lane's sampler (services/lanpaint_helper).
         # Same two-part shape as the other node packs, computed here rather
         # than in a probe of its own because it has no assets, pins or invalid
@@ -2376,26 +2343,17 @@ def _comfyui_caps_section(comfy, base_dir, comfy_dir, comfy_launcher,
         # One of them is `krea_vae` on purpose — the Qwen VAE ships with the
         # Krea 2 lane and this lane points at that button rather than declaring
         # a second download of the same file.
-        'camera_missing': camera_missing,
         # The speed LoRA missing does NOT make the lane un-ready: it renders at
         # 20 steps instead of 4. Only the four REQUIRED assets gate it.
-        'camera_ready': _qch.camera_ready(camera_missing),
-        'video_studio_missing': _vstudio_missing,
-        'video_studio_ready': _vts.studio_ready(_vstudio_missing),
         # Per-option node availability: {option: {available, action, nodes}}.
         # `available: null` means /object_info could not be read — the panel
         # keeps offering the option, because a probe that could not run is not
         # a verdict. Costs nothing extra: the class set is already fetched here
         # for the other engines.
-        'video_studio_options': (_vts.option_availability()
-                                 if comfy['ok'] else {}),
         # SageAttention is not an option and has no checkbox — it is a speed
         # patch the graph keeps when present and drops when absent. The pack is
         # published here so the install card can link it rather than leave a
         # user wondering why their clips are slower than the notes say.
-        'video_studio_sage': {**_vts.SAGE_PACK,
-                              'present': _vts.sage_available()
-                              if comfy['ok'] else None},
         # Klein assets PRESENT on disk but not real, loadable weights:
         # [{asset, filename, verdict, blocking, reason}]. Distinct from
         # klein_missing (the file exists, it just can't load) — drives the Setup
@@ -2439,8 +2397,7 @@ def _probe_comfy_models():
     # Keep the shared ComfyUI discovery caches on one worker: these dependent
     # reads must not launch concurrent /object_info scans against the server.
     comfy = probe_comfyui()
-    return (comfy, _scan_models(), _probe_klein(comfy), _probe_krea(comfy),
-            _probe_seedvr2(comfy))
+    return comfy, _scan_models(), _probe_klein(comfy), _probe_krea(comfy)
 
 
 def _probe_training_captioner():
@@ -2473,22 +2430,70 @@ def _probe_active_lmstudio(_llm_provider):
     return _lmstudio_url, _lmstudio_installed, lmstudio, lmstudio_model
 
 
+def _set_capability(caps, key, value):
+    node = caps
+    parts = key.split('.')
+    for part in parts[:-1]:
+        node = node.setdefault(part, {})
+    node[parts[-1]] = value
+
+
+def _plugin_capabilities(caps):
+    """Only registered, currently admitted owners may execute a probe."""
+    from .auth_policy import plugin_available
+    from .engines.registry import all_specs
+    from .plugins.registry import active
+    registry = active()
+    errors = {}
+    for key, (pid, callback) in (registry.probes.items() if registry else ()):
+        if not plugin_available(pid):
+            continue
+        try:
+            _set_capability(caps, key, callback())
+        except Exception:
+            logging.getLogger(__name__).warning('plugin %s capability %s failed', pid, key)
+            errors[key] = {'plugin': pid, 'error': 'Capability probe failed.'}
+    for spec in all_specs():
+        if spec.plugin and plugin_available(spec.plugin) and spec.probe:
+            try:
+                caps.setdefault('engines', {})[spec.id] = bool(spec.probe().get('ok'))
+            except Exception:
+                logging.getLogger(__name__).warning('plugin %s engine probe %s failed', spec.plugin, spec.id)
+                caps.setdefault('engines', {})[spec.id] = False
+                errors[f'engines.{spec.id}'] = {'plugin': spec.plugin, 'error': 'Engine probe failed.'}
+    if errors:
+        caps['plugin_probe_errors'] = errors
+    caps['training_visible'] = bool(caps.get('training_visible') or caps.get('cloud_training'))
+    return caps
+
+
+def _plugin_probe_signature():
+    from .auth_policy import plugin_available
+    from .plugins.registry import active
+    registry = active()
+    return (registry.boot_id, tuple((pid, plugin_available(pid)) for pid in registry.records)) if registry else None
+
+
+_cache_plugin_signature = None
+
+
 def probe(force=False) -> dict:
     """Share ordinary polls; an explicit refresh always re-reads configuration."""
-    global _cache, _cache_ts
+    global _cache, _cache_ts, _cache_plugin_signature
+    signature = _plugin_probe_signature()
     with _cache_lock:
-        if _cache is not None and not force and time.time() - _cache_ts < _CACHE_TTL:
+        if _cache is not None and signature == _cache_plugin_signature and not force and time.time() - _cache_ts < _CACHE_TTL:
             return copy.deepcopy(_cache)
     with _probe_lock:
         with _cache_lock:
             # Another request may have filled the cache while this one waited.
             # Force must still scan: Settings may have changed in the meantime.
-            if _cache is not None and not force and time.time() - _cache_ts < _CACHE_TTL:
+            if _cache is not None and signature == _cache_plugin_signature and not force and time.time() - _cache_ts < _CACHE_TTL:
                 return copy.deepcopy(_cache)
             generation = _cache_generation
         caps = None
         try:
-            caps = _probe_uncached()
+            caps = _plugin_capabilities(_probe_uncached())
         finally:
             with _cache_lock:
                 if generation != _cache_generation:
@@ -2499,6 +2504,7 @@ def probe(force=False) -> dict:
                     # A cold scan can exceed the TTL. Its lifetime starts when
                     # the answer becomes available, not before the first import.
                     _cache, _cache_ts = caps, time.time()
+                    _cache_plugin_signature = signature
         return copy.deepcopy(caps)
 
 
@@ -2513,38 +2519,27 @@ def _probe_uncached():
         'ollama': probe_ollama,
         'ollama_installed': probe_ollama_installed,
         'lmstudio': lambda: _probe_active_lmstudio(_llm_provider),
-        'gemini': probe_gemini,
-        'openai': probe_openai,
-        'openrouter': probe_openrouter,
         'face_scoring': probe_face_scoring,
         'bank_siglip2': probe_bank_siglip2,
         'watermark_inpaint': probe_watermark_inpaint,
         'watermark_detect': probe_watermark_detect,
-        'video': probe_video,
-        'dlss5nr': probe_dlss5nr,
         'video_text': probe_video_text,
-        'scrape_deps': probe_scrape_deps,
         'watermark_clean': _watermark_clean_options,
     })
-    comfy, models, klein, krea, seedvr2 = results['comfy_models']
+    comfy, models, klein, krea = results['comfy_models']
     aitoolkit, joycaption = results['training_captioner']
     ollama = results['ollama']
     ollama_installed = results['ollama_installed']
     _lmstudio_url, _lmstudio_installed, lmstudio, lmstudio_model = results['lmstudio']
-    gemini, openai_, openrouter_ = results['gemini'], results['openai'], results['openrouter']
     face_scoring, masks = results['face_scoring'], results['masks']
     bank_scoring, bank_siglip2 = results['bank_scoring'], results['bank_siglip2']
     watermark_inpaint, watermark_detect = results['watermark_inpaint'], results['watermark_detect']
-    video, dlss5nr, video_text = results['video'], results['dlss5nr'], results['video_text']
-    scrape_deps, _wm_clean = results['scrape_deps'], results['watermark_clean']
+    video_text = results['video_text']
+    _wm_clean = results['watermark_clean']
     (_keh, klein_missing, klein_invalid, klein_unsupported_enums,
      klein_ready) = klein
     (krea_missing, krea_nodes_missing, krea_nodes_installed, krea_invalid,
      krea_pin_gaps, krea_base_resolved, krea_ready) = krea
-    (seedvr2_missing, seedvr2_nodes_missing, seedvr2_nodes_installed,
-     seedvr2_invalid, seedvr2_ready, seedvr2_tiling_ready,
-     seedvr2_tiling_nodes_missing,
-     seedvr2_ceiling_mp) = seedvr2
     base_dir = cfg.get('comfyui.base_dir') or ''
     from .services import comfyui_control
     comfy_launcher = comfyui_control.launcher_status()
@@ -2572,8 +2567,6 @@ def _probe_uncached():
     _llm_ok = lmstudio['ok'] if _llm_provider == 'lmstudio' else ollama['ok']
     ollama_skipped = bool(cfg.get('ollama.setup_skipped')) and not _llm_ok
 
-    from .services import chatgpt_oauth
-    sub_status = chatgpt_oauth.status()
 
     from .services.face_dataset_service import MAX_FANOUT as _max_fanout
 
@@ -2585,27 +2578,15 @@ def _probe_uncached():
         # stays the authority, the UI just mirrors the number it is told.
         'max_fanout': _max_fanout,
         'engines': {
-            'nanobanana': gemini['ok'],
-            'chatgpt': openai_['ok'],
-            'openrouter': openrouter_['ok'],
             'klein': klein_ready,
             'krea': krea_ready,
-        },
-        'chatgpt_subscription': {
-            'connected': sub_status['connected'],
-            'email': sub_status['email'],
-            'plan': sub_status['plan'],
-            'codex_cli_detected': chatgpt_oauth.codex_auth_path().is_file(),
         },
         'comfyui': _comfyui_caps_section(
             comfy, base_dir, comfy_dir, comfy_launcher, comfy_skipped,
             models, _keh, klein_missing, klein_unsupported_enums,
             klein_invalid, krea_missing, krea_base_resolved,
             krea_nodes_missing, krea_nodes_installed, krea_invalid,
-            krea_pin_gaps, seedvr2_missing, seedvr2_nodes_missing,
-            seedvr2_nodes_installed, seedvr2_invalid, seedvr2_ready,
-            seedvr2_tiling_ready, seedvr2_tiling_nodes_missing,
-            seedvr2_ceiling_mp),
+            krea_pin_gaps),
         'ollama': {
             'reachable': ollama['ok'],
             # Installed = binary on disk, even when the server is stopped. The UI
@@ -2662,11 +2643,9 @@ def _probe_uncached():
             # an older clone the line would answer "No module named manager".
             'has_manager': bool(aitoolkit.get('has_manager')),
         },
-        'cloud_training': bool(cfg.secret('VAST_API_KEY')),
         # Publish-to-HF is gated purely on the HF_TOKEN secret being present (the
         # write-scope check is a live preflight at publish time, not here — probe()
         # must stay network-free). The ⋯ More menu entry keys off this.
-        'hf_publish': bool(cfg.secret('HF_TOKEN')),
         'captioners': {
             # Honest: the ai-toolkit venv must actually import the JoyCaption deps,
             # not merely have the script on disk (issue #6). `detail` carries the
@@ -2742,14 +2721,8 @@ def _probe_uncached():
         # from three different installs and fail apart. The front uses the parts to
         # say WHICH one to fix — never "video unavailable", which is how a user
         # reinstalls the wrong thing.
-        'video': video['ok'],
         # ✨ DLSS 5 neural rendering: the whole status dict (ready + the sentences
         # naming what is missing), read by the Setup card and both video verbs.
-        'dlss5nr': dlss5nr,
-        'video_detail': video['detail'],
-        'video_decode': video['decode'],
-        'video_detect': video['detect'],
-        'video_encode': video['encode'],
         # 🔳 The safe-zone pass's OCR half, published on its own because it is
         # the only capability in this app whose absence downgrades a pass instead
         # of blocking it: the bands are still measured. The workspace uses it to
@@ -2775,19 +2748,16 @@ def _probe_uncached():
         # point of the setting is that the rule stops being invisible.
         'dataset_import': _dataset_import_policy(),
         'python': python_ml_status(),
-        'scrape_deps': scrape_deps['ok'],
         # 📤 Civitai publishing — a credential, not an install: the Overview row
         # and the Setup summary count it like the engine keys, and its door is
         # the key field under Scraping & sources.
-        'civitai': probe_civitai(),
         # WHICH modules are absent, same convention as joycaption/video/siglip2
         # above. The install banner used to recite a hand-written list of three
         # package names; the probe watches seven, so a machine flagged because
         # `ddgs` or `yt_dlp` is missing read a warning that named neither and
         # could not explain why it was being asked to reinstall. The banner now
         # quotes this string's list instead of keeping its own copy.
-        'scrape_deps_detail': scrape_deps['detail'],
-        'training_visible': aitoolkit['ok'] or bool(cfg.secret('VAST_API_KEY')),
+        'training_visible': aitoolkit['ok'],
         'studio_visible': comfy['ok'],
     }
 

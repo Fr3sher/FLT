@@ -23,6 +23,7 @@ re-enabling it does not resurrect its engines as "new".
 from __future__ import annotations
 
 import threading
+from functools import wraps
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -139,16 +140,21 @@ def tracked() -> tuple[tuple[str, str], ...]:
 
 
 def generate_fn(engine_id: str):
-    spec = get(engine_id)
+    spec = require_available(engine_id)
     if spec is None or spec.generate is None:
         raise ValueError(f'unknown edit engine: {engine_id}')
-    return spec.generate()
+    generate = spec.generate()
+    @wraps(generate)
+    def admitted(*args, **kwargs):
+        require_available(engine_id)
+        return generate(*args, **kwargs)
+    return admitted
 
 
 def generate_kwargs(engine_id: str) -> dict:
     """Extra keyword arguments an engine pins for one run (ChatGPT pins its auth
     lane so a mid-batch token refresh can never reroute rows onto the paid key)."""
-    spec = get(engine_id)
+    spec = require_available(engine_id)
     if spec is None or spec.generate_kwargs is None:
         return {}
     return dict(spec.generate_kwargs() or {})
@@ -189,4 +195,17 @@ def probes() -> dict[str, Callable]:
 
 
 def public_catalog() -> list[dict]:
-    return [s.public() for s in all_specs()]
+    return [s.public() for s in available_specs()]
+
+
+def require_available(engine_id):
+    from ..auth_policy import plugin_available
+    spec = get(engine_id)
+    if spec is None or (spec.plugin and not plugin_available(spec.plugin)):
+        raise ValueError(f'Image engine {engine_id!r} is unavailable. Enable its plugin and restart LDS.')
+    return spec
+
+
+def available_specs():
+    from ..auth_policy import plugin_available
+    return tuple(s for s in all_specs() if s.plugin is None or plugin_available(s.plugin))

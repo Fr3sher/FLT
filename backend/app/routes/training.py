@@ -194,6 +194,8 @@ def dataset_train_continue(dataset_id):
     # réglages sûrs (le service refuse toute clé hors liste → 400).
     if d.get('from_step') is not None:
         kw['from_step'] = d.get('from_step')
+    if 'expected_record_id' in d:
+        kw['expected_record_id'] = d['expected_record_id']
     if d.get('overrides') is not None:
         kw['overrides'] = d.get('overrides')
     # Resume semantics are always explicit on the wire. Older clients safely
@@ -1776,7 +1778,6 @@ def dataset_train_checkpoints_cleanup(dataset_id):
     return jsonify({'ok': True, **res})
 
 
-@bp.post('/dataset/train/cloud/purge')
 def dataset_train_cloud_purge():
     """Trash the working files of finished cloud runs — the exported dataset
     copy, the sample images and the logs. Checkpoints are moved into the durable
@@ -1785,7 +1786,6 @@ def dataset_train_cloud_purge():
     return jsonify({'ok': True, **ct.purge_finished_runs()})
 
 
-@bp.get('/dataset/train/cloud/orphans')
 def dataset_train_cloud_orphans():
     """Run folders on disk that no run row claims — the tens of GB the cleanup
     used to answer 'already clean' about. Walks the disk, so it is its own
@@ -1795,7 +1795,6 @@ def dataset_train_cloud_orphans():
                     'total_bytes': sum(o['size_bytes'] for o in orphans)})
 
 
-@bp.post('/dataset/train/cloud/purge-orphans')
 def dataset_train_cloud_purge_orphans():
     """Trash the named orphan run folders (all of them when `names` is absent).
     Loose checkpoints inside them are rescued into the store first."""
@@ -1810,7 +1809,6 @@ def dataset_train_cloud_purge_orphans():
     return jsonify({'ok': True, **res})
 
 
-@bp.get('/dataset/train/cloud/staging-sizes')
 def dataset_train_cloud_staging_sizes():
     """How much disk each cloud run's staging dir still holds, so the Runs hub can
     show "8.2 GB on disk" on a card and name that weight in the per-run 🧹
@@ -1830,7 +1828,6 @@ def dataset_train_cloud_staging_sizes():
                     'total_bytes': sum(sizes.values())})
 
 
-@bp.post('/dataset/train/cloud/purge-run')
 def dataset_train_cloud_purge_run():
     """Trash the staging dir of ONE finished cloud run — targeted cleanup, so a
     45-run history no longer forces an all-or-nothing purge. Spares exactly what
@@ -1913,7 +1910,6 @@ def dataset_train_import(dataset_id):
     return jsonify(out)
 
 
-@bp.post('/dataset/<int:dataset_id>/train/cloud')
 def dataset_train_cloud(dataset_id):
     gate = _require_cloud()
     if gate:
@@ -1954,7 +1950,6 @@ def dataset_train_cloud(dataset_id):
     return jsonify({'ok': True, **res})
 
 
-@bp.get('/dataset/<int:dataset_id>/train/cloud/custom-base')
 def dataset_train_cloud_custom_base(dataset_id):
     """Readiness of a CUSTOM base for cloud training: is it already pushed to
     the private `lds-base-<hash>` repo on the user's Hugging Face account
@@ -1980,7 +1975,6 @@ def dataset_train_cloud_custom_base(dataset_id):
     return jsonify({'ok': True, **state})
 
 
-@bp.post('/dataset/<int:dataset_id>/train/cloud/custom-base/push')
 def dataset_train_cloud_custom_base_push(dataset_id):
     """One-time background upload of the custom base to a PRIVATE repo on the
     user's Hugging Face account (private is forced server-side — no toggle).
@@ -2044,7 +2038,6 @@ def _hf_storage_namespace():
 # already on this machine. No ai-toolkit and no cloud gate: it is a pure
 # file-in / file-out operation on the CPU (see fp8_quantize's module note).
 
-@bp.post('/tools/fp8-quantize/plan')
 def tools_fp8_quantize_plan():
     """What quantizing this file would produce, or WHY it is refused.
 
@@ -2056,7 +2049,6 @@ def tools_fp8_quantize_plan():
     return jsonify(fp8_quantize.describe(d.get('path')))
 
 
-@bp.post('/tools/fp8-quantize')
 def tools_fp8_quantize_start():
     from ..services import fp8_quantize
     d = request.get_json(silent=True) or {}
@@ -2069,7 +2061,6 @@ def tools_fp8_quantize_start():
     return jsonify({'ok': True, **info, 'status': fp8_quantize.status()})
 
 
-@bp.get('/tools/fp8-quantize/status')
 def tools_fp8_quantize_status():
     from ..services import fp8_quantize
     return jsonify({'ok': True, **(fp8_quantize.status() or {})})
@@ -2082,7 +2073,6 @@ def tools_fp8_quantize_status():
 # ComfyUI folder that loads it. NOT behind _require_cloud: nothing is rented, and
 # the person who most needs this has no vast key at all.
 
-@bp.post('/tools/fp8-deliver/plan')
 def tools_fp8_deliver_plan():
     """Where the file will land, what it will weigh, and whether the disk can
     take it — answered BEFORE the click. Always 200: a refusal is a disabled
@@ -2095,7 +2085,6 @@ def tools_fp8_deliver_plan():
         destination_dir=d.get('destination_dir')))
 
 
-@bp.post('/tools/fp8-deliver')
 def tools_fp8_deliver_start():
     from ..services import fp8_local_delivery
     d = request.get_json(silent=True) or {}
@@ -2111,13 +2100,11 @@ def tools_fp8_deliver_start():
     return jsonify({'ok': True, **info, 'status': fp8_local_delivery.status()})
 
 
-@bp.get('/tools/fp8-deliver/status')
 def tools_fp8_deliver_status():
     from ..services import fp8_local_delivery
     return jsonify({'ok': True, **(fp8_local_delivery.status() or {})})
 
 
-@bp.post('/tools/fp8-deliver/cancel')
 def tools_fp8_deliver_cancel():
     """Stop the job. The bytes already downloaded stay on disk, so starting
     again resumes rather than restarts."""
@@ -2132,7 +2119,6 @@ def tools_fp8_deliver_cancel():
 # That asymmetry is the whole point of this lane, so it lives in the routes too:
 # there is no endpoint here that could deploy a master, not even by mistake.
 
-@bp.post('/dataset/<int:dataset_id>/train/dense/send-plan')
 def dataset_dense_send_plan(dataset_id):
     """What "Send to ComfyUI" would do — link or copy, where, at what cost.
     Always 200: a refusal is a disabled button carrying its reason."""
@@ -2143,7 +2129,6 @@ def dataset_dense_send_plan(dataset_id):
     return jsonify(dense_artifacts.send_plan(dataset_id, d.get('run_id')))
 
 
-@bp.post('/dataset/<int:dataset_id>/train/dense/send')
 def dataset_dense_send(dataset_id):
     from ..services import dense_artifacts
     if not svc.get_dataset(LOCAL_USER, dataset_id):
@@ -2157,14 +2142,12 @@ def dataset_dense_send(dataset_id):
     return jsonify({'ok': True, **info, 'job': dense_artifacts.status()})
 
 
-@bp.get('/tools/dense-send/status')
 def tools_dense_send_status():
     """Global, like the fp8 job's: one send at a time, and it outlives the tab."""
     from ..services import dense_artifacts
     return jsonify({'ok': True, **(dense_artifacts.status() or {})})
 
 
-@bp.post('/dataset/<int:dataset_id>/train/dense/delete')
 def dataset_dense_delete(dataset_id):
     """Move ONE of a full model's files to the app trash — recoverable on
     purpose: these cost hours of GPU, and a mis-click must not be final."""
@@ -2180,7 +2163,6 @@ def dataset_dense_delete(dataset_id):
     return jsonify({'ok': True, **out})
 
 
-@bp.post('/cloud/quantize/plan')
 def cloud_quantize_plan():
     """Cost, duration cap and storage impact of quantizing a delivered artifact
     in the cloud — always answered BEFORE anything is rented."""
@@ -2197,7 +2179,6 @@ def cloud_quantize_plan():
         return _map_error(e)
 
 
-@bp.post('/cloud/quantize')
 def cloud_quantize_start():
     gate = _require_cloud()
     if gate:
@@ -2216,7 +2197,6 @@ def cloud_quantize_start():
     return jsonify({'ok': True, **planned, 'status': cloud_quantize.status()})
 
 
-@bp.get('/cloud/quantize/status')
 def cloud_quantize_status():
     """State of the cloud quantization, and a sweep for orphaned pods.
 
@@ -2231,7 +2211,6 @@ def cloud_quantize_status():
     return jsonify({'ok': True, 'reaped': reaped, **(cloud_quantize.status() or {})})
 
 
-@bp.get('/cloud/hf-storage')
 def cloud_hf_storage():
     """Measured private storage + the lds-base-* cache inventory.
 
@@ -2267,7 +2246,6 @@ def cloud_hf_storage():
                     'forecast': forecast, **inventory})
 
 
-@bp.delete('/cloud/hf-storage/base/<repo_name>')
 def cloud_hf_storage_delete_base(repo_name):
     """Delete ONE lds-base-* cache repo (the service validates the name)."""
     gate = _require_cloud()
@@ -2287,7 +2265,6 @@ def cloud_hf_storage_delete_base(repo_name):
     return jsonify(out)
 
 
-@bp.post('/cloud/hf-storage/base/delete-all')
 def cloud_hf_storage_delete_all_bases():
     """Delete every lds-base-* cache of the account. Partial failures reported."""
     gate = _require_cloud()
@@ -2331,7 +2308,6 @@ def dataset_train_retry():
     return jsonify({'ok': True, **res})
 
 
-@bp.post('/dataset/train/cloud/retry')
 def dataset_train_cloud_retry():
     """↻ Retry d'un run en erreur (page Cloud) : relance avec les paramètres
     exacts du run raté — pod frais, mêmes garde-fous que tout launch."""
@@ -2346,7 +2322,6 @@ def dataset_train_cloud_retry():
     return jsonify({'ok': True, **res})
 
 
-@bp.post('/dataset/train/cloud/continue')
 def dataset_train_cloud_continue():
     """▶ Continue d'un run cloud TERMINÉ (page Runs) : reprend depuis un checkpoint
     harvesté (from_step, défaut = dernier) et vise step_de_reprise + extra_steps —
@@ -2371,7 +2346,6 @@ def dataset_train_cloud_continue():
     return jsonify({'ok': True, **res})
 
 
-@bp.post('/dataset/train/cloud/resume-plan')
 def dataset_train_cloud_resume_plan():
     """The two roads a full model can take back to a pod, with their duration
     and their GPU cost — answered BEFORE anything is rented, like every other
@@ -2390,7 +2364,6 @@ def dataset_train_cloud_resume_plan():
         return _map_error(e)
 
 
-@bp.post('/dataset/train/cloud/recheck-delivery')
 def dataset_train_cloud_recheck_delivery():
     """Re-verify one dense run's Hugging Face delivery without renting a GPU."""
     body = request.get_json(silent=True) or {}
@@ -2445,7 +2418,6 @@ def dataset_train_cloud_hub_presence():
         for run_id, repo in repo_of.items() if repo in checked}})
 
 
-@bp.post('/dataset/train/cloud/fetch-local')
 def dataset_train_cloud_fetch_local():
     """Bring ONE kept dense run's files home (or stop doing it).
 
@@ -2464,7 +2436,6 @@ def dataset_train_cloud_fetch_local():
     return jsonify(result)
 
 
-@bp.post('/dataset/<int:dataset_id>/train/cloud/continue-local')
 def dataset_train_cloud_continue_local(dataset_id):
     """▶ Continue d'un checkpoint LOCAL dans le CLOUD (voie « Cloud » de la modale
     Continue, côté dataset) : le fichier du run local est semé sur un pod frais
@@ -2512,7 +2483,6 @@ def dataset_train_cloud_continue_local(dataset_id):
     return jsonify({'ok': True, **res})
 
 
-@bp.get('/dataset/<int:dataset_id>/train/cloud/offers')
 def dataset_train_cloud_offers(dataset_id):
     """Live GPU speed tiers for the launch dialog (price/h + approx time+cost).
     Read-only — rents nothing; the launch call rents the chosen class."""
@@ -2534,12 +2504,10 @@ def dataset_train_cloud_offers(dataset_id):
     return jsonify({'ok': True, **data})
 
 
-@bp.get('/dataset/train/cloud/status')
 def dataset_train_cloud_status():
     return jsonify(ct.cloud_status())
 
 
-@bp.get('/dataset/train/cloud/runs')
 def dataset_train_cloud_runs():
     """Active + recent cloud runs for the dedicated Cloud-runs hub page.
     Open like status (no gate): an unconfigured backend just returns empties."""
@@ -2786,7 +2754,6 @@ def _parse_run_id_arg():
         return None, False
 
 
-@bp.get('/dataset/<int:dataset_id>/train/cloud/progress')
 def dataset_train_cloud_progress(dataset_id):
     run_id, ok = _parse_run_id_arg()
     if not ok:
@@ -2802,7 +2769,6 @@ def dataset_train_cloud_progress(dataset_id):
         return _map_error(e)
 
 
-@bp.post('/dataset/train/cloud/stop')
 def dataset_train_cloud_stop():
     """Stop a cloud run and report what really happened.
 
@@ -2914,7 +2880,6 @@ def train_activity():
     return jsonify(ct.training_activity())
 
 
-@bp.get('/train/canvas/datasets')
 def train_canvas_datasets():
     """◉ LoRA Canvas index: which datasets have runs worth drawing, how many, and
     in which families. Cheap by design (no checkpoints, no disk) — the canvas
@@ -2923,7 +2888,6 @@ def train_canvas_datasets():
     return jsonify(ct.canvas_dataset_index(LOCAL_USER))
 
 
-@bp.post('/train/canvas/generate')
 def train_canvas_generate():
     """◉ Generate from the LoRA Canvas — the same Test-Studio engine, driven by
     the checkpoints ticked on the board instead of by a picker. Body:
@@ -3286,7 +3250,6 @@ def train_checkpoint_images_zip_plan(record_id, step):
     return jsonify({k: v for k, v in plan.items() if k != 'entries'})
 
 
-@bp.get('/train/canvas/positions')
 def train_canvas_positions():
     """◉ LoRA Canvas: every remembered card position, grouped by dataset id.
     One request for the whole board — the lanes need their overrides before the
@@ -3295,7 +3258,6 @@ def train_canvas_positions():
     return jsonify(ct.canvas_positions(LOCAL_USER))
 
 
-@bp.put('/dataset/<int:dataset_id>/canvas/positions')
 def dataset_canvas_positions_save(dataset_id):
     """Remember where cards sit in ONE lane. Body: {positions:[{record_id,x,y}]}.
     Upsert, so re-sending the same coordinates is a no-op — the canvas re-pins a
@@ -3308,7 +3270,6 @@ def dataset_canvas_positions_save(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.delete('/dataset/<int:dataset_id>/canvas/positions')
 def dataset_canvas_positions_clear(dataset_id):
     """✦ Tidy up one lane: forget every dragged position and fall back to the
     automatic tree."""
@@ -3318,7 +3279,6 @@ def dataset_canvas_positions_clear(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.get('/train/canvas/lanes')
 def train_canvas_lanes():
     """◉ LoRA Canvas: every arranged LANE — where it sits and how much room it
     keeps. Travels with the card positions above and for the same reason: the
@@ -3326,7 +3286,6 @@ def train_canvas_lanes():
     return jsonify(ct.canvas_lane_placements(LOCAL_USER))
 
 
-@bp.put('/dataset/<int:dataset_id>/canvas/lane')
 def dataset_canvas_lane_save(dataset_id):
     """Remember one lane's placement. Body: {x?, y?, h?}.
     A MERGE — the client sends only what its gesture changed, so moving a lane
@@ -3338,7 +3297,6 @@ def dataset_canvas_lane_save(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.delete('/dataset/<int:dataset_id>/canvas/lane')
 def dataset_canvas_lane_clear(dataset_id):
     """✦ Tidy up one lane: back to the automatic stack."""
     try:
@@ -3347,13 +3305,11 @@ def dataset_canvas_lane_clear(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.get('/train/canvas/external-loras')
 def canvas_external_loras_get():
     """🔌 The board's external LoRA plugin nodes, as persisted."""
     return jsonify({'loras': cfg.get('canvas.external_loras', []) or []})
 
 
-@bp.put('/train/canvas/external-loras')
 def canvas_external_loras_put():
     """Replace the board's external LoRA nodes. Sanitizes: dedupe by filename,
     reject path-traversal/absolute/drive-letter names (dropped, not erred —
@@ -3389,7 +3345,6 @@ def canvas_external_loras_put():
     return jsonify({'ok': True, 'loras': cleaned})
 
 
-@bp.get('/train/canvas/images')
 def train_canvas_images():
     """🖼 Every image pinned on the ◉ LoRA Canvas, grouped by dataset id, with
     the image row alongside its geometry — one request for the whole board, like
@@ -3398,7 +3353,6 @@ def train_canvas_images():
     return jsonify(ct.canvas_image_nodes(LOCAL_USER))
 
 
-@bp.put('/dataset/<int:dataset_id>/canvas/images')
 def dataset_canvas_images_save(dataset_id):
     """Remember pinned images of ONE lane.
     Body: {nodes:[{image_id,x,y,w,h,visible}]}.
@@ -3414,7 +3368,6 @@ def dataset_canvas_images_save(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.delete('/dataset/<int:dataset_id>/canvas/images')
 def dataset_canvas_images_clear(dataset_id):
     """Forget every pinned image of one lane, geometry included. Deliberately
     NOT what ✦ Tidy up calls — see clear_canvas_image_nodes."""
@@ -3424,13 +3377,11 @@ def dataset_canvas_images_clear(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.get('/train/canvas/layouts')
 def train_canvas_layouts():
     """💾 The named board arrangements this install has kept."""
     return jsonify(ct.canvas_layout_presets(LOCAL_USER))
 
 
-@bp.post('/train/canvas/layouts')
 def train_canvas_layouts_save():
     """Keep the board's current arrangement under a name.
     Body: {name, positions:{ds:[{record_id,x,y}]}, images:{ds:[{image_id,...}]},
@@ -3448,7 +3399,6 @@ def train_canvas_layouts_save():
         return jsonify({'error': str(e)}), 400
 
 
-@bp.post('/train/canvas/layouts/<int:preset_id>/apply')
 def train_canvas_layouts_apply(preset_id):
     """Put a remembered arrangement back. Everything travels through the live
     writers, so anything that no longer exists is simply not restored."""
@@ -3458,7 +3408,6 @@ def train_canvas_layouts_apply(preset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.delete('/train/canvas/layouts/<int:preset_id>')
 def train_canvas_layouts_delete(preset_id):
     try:
         return jsonify(ct.delete_canvas_layout_preset(LOCAL_USER, preset_id))

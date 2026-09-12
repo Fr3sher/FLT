@@ -143,8 +143,8 @@ DEFAULTS = {
     # and LEGACY_KNOWN_ENGINES below). `known` is not a setting — it is the ledger
     # of which engines the app offered the last time the user picked, written by
     # save_config; [] means "no ledger yet".
-    'engines': {'default': 'chatgpt',
-                'enabled': ['nanobanana', 'chatgpt', 'openrouter', 'klein', 'krea'],
+    'engines': {'default': 'klein',
+                'enabled': ['klein', 'krea'],
                 'known': [],
                 # chatgpt_auth: 'auto' = subscription when connected, else API key.
                 'chatgpt_auth': 'auto',            # auto|api|subscription
@@ -1245,7 +1245,8 @@ def _clean_engines(seq):
 def _engine_catalog(*groups):
     """Every engine this build knows about, in DEFAULTS order, plus any extra
     (older or hand-written) names the caller passes — nothing is ever dropped."""
-    out = list(DEFAULTS['engines']['enabled'])
+    from .engines.registry import ids
+    out = list(ids() or DEFAULTS['engines']['enabled'])
     for group in groups:
         for e in _clean_engines(group):
             if e not in out:
@@ -1271,6 +1272,7 @@ def _merge_new_engines(conf: dict, user: dict) -> dict:
     saved = ((user or {}).get('engines') or {})
     saved = saved.get('enabled') if isinstance(saved, dict) else None
     if not isinstance(saved, list):
+        eng['enabled'] = _engine_catalog()
         return conf
     enabled = _clean_engines(eng.get('enabled'))
     if not enabled:
@@ -1281,7 +1283,7 @@ def _merge_new_engines(conf: dict, user: dict) -> dict:
     known = ((user or {}).get('engines') or {}).get('known')
     known = _clean_engines(known) if isinstance(known, list) else []
     known = known or list(LEGACY_KNOWN_ENGINES)
-    eng['enabled'] = enabled + [e for e in DEFAULTS['engines']['enabled']
+    eng['enabled'] = enabled + [e for e in _engine_catalog()
                                 if e not in known and e not in enabled]
     eng['known'] = _engine_catalog(known, eng['enabled'])
     return conf
@@ -1402,6 +1404,12 @@ def get(dotted: str, default=None):
         if not isinstance(node, dict) or part not in node:
             return default
         node = node[part]
+    if dotted in ('engines.enabled', 'engines.default'):
+        from .engines.registry import available_specs
+        available = tuple(spec.id for spec in available_specs())
+        if dotted == 'engines.enabled':
+            return [engine for engine in (node or []) if engine in available]
+        return node if node in available else (available[0] if available else None)
     return node
 
 def is_configured() -> bool:
@@ -1711,3 +1719,90 @@ def register_plugin_defaults(plugin_id: str, mapping: dict) -> None:
     section[plugin_id] = _deep_merge(section.get(plugin_id, {}), mapping)
     with _lock:
         _cache = None
+
+
+def settings_ownership():
+    """Combine historical ownership with discovered package declarations."""
+    from .plugins.registry import active
+    owners = copy.deepcopy(_PRODUCT_SETTINGS)
+    registry = active()
+    for pid, record in (registry.records.items() if registry else ()):
+        manifest = record.manifest
+        historical = owners.get(pid, {'sections': [], 'keys': {}, 'secrets': []})
+        owners[pid] = {
+            'sections': sorted(set(historical['sections']) | set(manifest.owned('config_sections'))),
+            'keys': _deep_merge(historical['keys'], manifest.owns.get('config_keys_in_shared_sections', {})),
+            'secrets': sorted(set(historical['secrets']) |
+                              {p[8:] for p in manifest.permissions if p.startswith('secrets:')}),
+        }
+    return owners
+
+
+def settings_view(value, plugin_id=None):
+    """Filter a settings payload without moving or deleting persisted keys."""
+    owners = settings_ownership()
+    sections = {section for spec in owners.values() for section in spec['sections']}
+    keys = {(section, key) for spec in owners.values() for section, names in spec['keys'].items()
+            for key in names}
+    own = owners.get(plugin_id, {}) if plugin_id else {}
+    result = {}
+    for section, node in value.items():
+        if section == 'plugins':
+            if plugin_id and isinstance(node, dict) and plugin_id in node:
+                result[section] = {plugin_id: copy.deepcopy(node[plugin_id])}
+            continue  # Enablement is changed only through /api/plugins.
+        if plugin_id:
+            if section in own.get('sections', ()):
+                result[section] = copy.deepcopy(node)
+            elif section in own.get('keys', {}) and isinstance(node, dict):
+                result[section] = {key: copy.deepcopy(item) for key, item in node.items()
+                                   if key in own['keys'][section]}
+        elif section not in sections:
+            result[section] = ({key: copy.deepcopy(item) for key, item in node.items()
+                                if (section, key) not in keys}
+                               if isinstance(node, dict) else copy.deepcopy(node))
+    return result
+
+
+def settings_secret_keys(plugin_id=None):
+    owners = settings_ownership()
+    if plugin_id:
+        return tuple(k for k in owners.get(plugin_id, {}).get('secrets', ()) if k in SECRET_KEYS)
+    owned = {key for spec in owners.values() for key in spec['secrets']}
+    return tuple(key for key in SECRET_KEYS if key not in owned)
+
+
+# Historical public settings retain their on-disk spelling. This ownership
+# ledger also hides them when their package is absent from a Store install.
+_PRODUCT_SETTINGS = {'api_engines': {'sections': [],
+                 'keys': {'engines': ['chatgpt_auth',
+                                      'chatgpt_subscription_model',
+                                      'openrouter_model',
+                                      'nanobanana_model',
+                                      'chatgpt_image_model']},
+                 'secrets': ['GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY']},
+ 'camera_angles': {'sections': ['camera'], 'keys': {}, 'secrets': []},
+ 'canvas': {'sections': ['canvas'], 'keys': {}, 'secrets': []},
+ 'civitai_publish': {'sections': ['civitai'], 'keys': {}, 'secrets': ['CIVITAI_API_KEY']},
+ 'cloud_training': {'sections': ['cloud'],
+                    'keys': {'paths': ['cloud_runs_dir']},
+                    'secrets': ['VAST_API_KEY', 'HF_CLOUD_TOKEN', 'HF_TOKEN']},
+ 'hf_publish': {'sections': [], 'keys': {}, 'secrets': ['HF_TOKEN']},
+ 'image_upscale': {'sections': [],
+                   'keys': {'klein': ['improve_consistency_strength',
+                                      'improve_character_lora_strength',
+                                      'improve_steps',
+                                      'improve_base_lora_strength',
+                                      'improve_megapixels',
+                                      'improve_lora_preset'],
+                            'identity_prompts': ['klein_improve', 'klein_improve_enabled'],
+                            'improve': ['colour_match', 'sharpen', 'grain', 'grain_saturation']},
+                   'secrets': []},
+ 'live': {'sections': [], 'keys': {}, 'secrets': []},
+ 'model_tools': {'sections': ['quantize'], 'keys': {}, 'secrets': []},
+ 'resource_monitor': {'sections': [], 'keys': {}, 'secrets': []},
+ 'scrape': {'sections': [],
+            'keys': {'klein': ['small_image_prompt']},
+            'secrets': ['CIVITAI_API_KEY', 'PEXELS_API_KEY', 'REDDIT_CLIENT_ID']},
+ 'seedvr2': {'sections': ['seedvr2'], 'keys': {}, 'secrets': []},
+ 'video': {'sections': ['video_caption', 'video_bank', 'video', 'shot_detect'], 'keys': {}, 'secrets': ['VAST_API_KEY']}}

@@ -1816,7 +1816,6 @@ def _camera_missing_response(e):
                     'camera_required': list(qch.CAMERA_REQUIRED)}), 409
 
 
-@bp.post('/canvas/image/<int:image_id>/camera')
 def canvas_image_camera_angles(image_id):
     """📷 Re-shoot ONE library picture from other CAMERA positions.
 
@@ -1851,7 +1850,6 @@ def canvas_image_camera_angles(image_id):
     return jsonify({'ok': True, **result})
 
 
-@bp.post('/dataset/image/<int:image_id>/camera')
 def dataset_image_camera_angles(image_id):
     """📷 Re-shoot ONE dataset image from other camera positions.
 
@@ -1902,7 +1900,6 @@ def dataset_image_render_status(image_id):
     return jsonify({'ok': True, **out})
 
 
-@bp.get('/camera/catalog')
 def camera_catalog():
     """The camera vocabulary the picker draws, plus whether the lane can run.
 
@@ -2213,7 +2210,6 @@ def dataset_backup_import():
 # Publish to Hugging Face (export a dataset repo to the Hub — export only)
 # ---------------------------------------------------------------------------
 
-@bp.get('/dataset/<int:dataset_id>/publish-hf/whoami')
 def dataset_publish_hf_whoami(dataset_id):
     """Prefill helper for the Publish modal: the token owner's username and the
     suggested `<username>/<slug>` repo id. Best-effort — a missing/invalid token
@@ -2228,7 +2224,6 @@ def dataset_publish_hf_whoami(dataset_id):
                     'licenses': list(hf_publish.LICENSE_CHOICES)})
 
 
-@bp.post('/dataset/<int:dataset_id>/publish-hf')
 def dataset_publish_hf(dataset_id):
     """Kick off the background upload of this dataset to the HF Hub. Server-side
     guards: HF_TOKEN must exist, `consent` MUST be true (not merely a UI checkbox),
@@ -2259,7 +2254,6 @@ def dataset_publish_hf(dataset_id):
     return jsonify({'ok': True, **out})
 
 
-@bp.get('/dataset/<int:dataset_id>/publish-hf/status')
 def dataset_publish_hf_status(dataset_id):
     """Poll: {state: idle|running|done|error, repo_url, error, error_code, count}."""
     from ..services import hf_publish

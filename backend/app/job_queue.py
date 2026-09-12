@@ -15,6 +15,7 @@ import json
 import logging
 import threading
 import time
+from functools import wraps
 import uuid
 from typing import NamedTuple
 
@@ -86,6 +87,50 @@ class _ComfySubmitUnknown(RuntimeError):
 # race between a vision window claim and a ComfyUI /prompt submission; the
 # persisted flags and queue rows remain the recovery record after a restart.
 GPU_ARBITER_LOCK = threading.RLock()
+
+# Separate from GPU arbitration: a terminal row can still be copying and
+# linking its result. Restart reserves this lock after the GPU lock and checks
+# the count; execution holds it only to change the count, never across I/O.
+QUEUE_EXECUTION_LOCK = threading.RLock()
+_queue_executions = 0
+
+
+def queue_execution_busy() -> bool:
+    with QUEUE_EXECUTION_LOCK:
+        return _queue_executions > 0
+
+
+def _reserve_execution(fn):
+    @wraps(fn)
+    def reserved(*args, **kwargs):
+        global _queue_executions
+        with QUEUE_EXECUTION_LOCK:
+            _queue_executions += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            with QUEUE_EXECUTION_LOCK:
+                _queue_executions -= 1
+    return reserved
+
+
+def _job_owner_available(job):
+    from .auth_policy import plugin_available
+    from .plugins.registry import active
+    try:
+        metadata = json.loads(job.job_metadata or '{}')
+    except (TypeError, ValueError):
+        return True  # Existing workflow validation owns malformed core jobs.
+    if not isinstance(metadata, dict):
+        return False
+    owners = {'is_live': 'live', 'is_video_test': 'video', 'is_bank_improve': 'image_upscale'}
+    registry = active()
+    if registry:
+        owners.update({kind: pid for kind, (pid, _fn) in registry.job_handlers.items()})
+    if any(metadata.get(kind) and not plugin_available(pid) for kind, pid in owners.items()):
+        return False
+    owner = {'seedvr2_upscale': 'seedvr2', 'qwen_camera_dataset': 'camera_angles'}.get(metadata.get('model_name'))
+    return owner is None or plugin_available(owner)
 
 
 def require_comfyui_enqueue_ready() -> None:
@@ -581,6 +626,7 @@ def _drop_staged_inputs(md) -> None:
         logger.exception('job_queue: staged input cleanup failed')
 
 
+@_reserve_execution
 def _dispatch_completion(job, filename, failed):
     """Route a finished job to whichever service created it, per its metadata.
     A callback crash must never take down the worker thread."""
@@ -592,6 +638,24 @@ def _dispatch_completion(job, filename, failed):
         md = json.loads(job.job_metadata or '{}')
     except (TypeError, ValueError):
         md = {}
+    from .plugins.registry import active
+    registry = active()
+    handlers = registry.job_handlers if registry is not None else {}
+    for kind, (plugin_id, callback) in handlers.items():
+        if not md.get(kind):
+            continue
+        from .auth_policy import plugin_available
+        if not plugin_available(plugin_id):
+            return  # Preserve the result for the owner's next recovery pass.
+        try:
+            reason = job.error_message if job.error_message != 'generation failed' else None
+            callback(job.job_id, filename, failed=failed, reason=reason, metadata=md)
+            _drop_staged_inputs(md)
+        except Exception:
+            logger.exception('job_queue: plugin %s completion failed for %s', plugin_id, job.job_id)
+        return
+    if md.get('is_live') or md.get('is_video_test'):
+        return  # These historical kinds have no core owner any more.
     _drop_staged_inputs(md)
     try:
         if md.get('is_lora_test'):
@@ -612,23 +676,6 @@ def _dispatch_completion(job, filename, failed):
             reason = job.error_message if job.error_message != 'generation failed' else None
             face_dataset_service.link_completed_reference_edit(
                 job.job_id, filename, failed=failed, reason=reason)
-        elif md.get('is_live'):
-            # 🔴 A live channel clip. Ephemeral by design — no row anywhere —
-            # so it cannot ride the Studio's branch below, which looks one up.
-            # Its result goes into the channel's stream (live_studio).
-            from .services import live_studio
-            reason = job.error_message if job.error_message != 'generation failed' else None
-            live_studio.link_completed_live_clip(job.job_id, filename, failed=failed, reason=reason,
-                                                 session_id=md.get('live_session'))
-        elif md.get('is_video_test'):
-            # A Video Test Studio clip. Its own branch rather than a model_name
-            # match: the mp4 arrives under the history's `images` key like any
-            # image does, so nothing upstream distinguishes it — only the
-            # metadata this lane wrote can.
-            from .services import video_test_studio
-            reason = job.error_message if job.error_message != 'generation failed' else None
-            video_test_studio.link_completed_clip(job.job_id, filename,
-                                                  failed=failed, reason=reason)
         elif md.get('is_bank_improve'):
             # A Bank ✨ Upscale & improve. It rides the very same enqueue helpers
             # as the dataset lane, so it necessarily carries their model_name —
@@ -651,8 +698,8 @@ def _dispatch_completion(job, filename, failed):
         # The link callback crashed before flipping its row out of 'pending' -
         # without this it strands the row looking like it's still generating.
         try:
-            from .models import FaceDatasetImage, LoraTestImage, VideoTestClip
-            for model in (FaceDatasetImage, LoraTestImage, VideoTestClip):
+            from .models import FaceDatasetImage, LoraTestImage
+            for model in (FaceDatasetImage, LoraTestImage):
                 row = model.query.filter_by(job_id=job.job_id).first()
                 if row is not None:
                     row.status = 'failed'
@@ -1157,11 +1204,11 @@ class JobQueueManager:
                                 FaceDatasetImage.filename.is_(None),
                                 FaceDatasetImage.job_id.isnot(None))
                         .all())
-            if not stranded:
-                return
+            from .plugins.hooks import run_filter
+            job_ids = run_filter('job_queue.unlinked_results', [row.job_id for row in stranded], strict=True)
             repaired = 0
-            for row in stranded:
-                job = ImageGenerationQueue.query.filter_by(job_id=row.job_id).first()
+            for job_id in dict.fromkeys(job_ids):
+                job = ImageGenerationQueue.query.filter_by(job_id=job_id).first()
                 if job is None or job.status not in ('completed', 'failed'):
                     continue          # never finished, or still owed a real dispatch
                 try:
@@ -1203,6 +1250,8 @@ class JobQueueManager:
                 except (TypeError, ValueError):
                     continue
                 keep.update(md.get('staged_inputs') or ())
+            from .plugins.hooks import run_filter
+            keep = run_filter('job_queue.keep_inputs', keep, strict=True)
             comfy_fs.prune_staged_inputs(cfg.comfyui_dir('input'), keep=keep)
         except Exception:
             logger.exception('job_queue: staged input prune failed')
@@ -1260,6 +1309,7 @@ class JobQueueManager:
         """The same answer as a NOUN PHRASE, for a caller writing "waiting for {x}"."""
         return HOLD_LABELS.get(self.gpu_hold())
 
+    @_reserve_execution
     def process_one(self) -> bool:
         """Run one queued image while closing the local ComfyUI/vision race."""
         job = None
@@ -1280,9 +1330,10 @@ class JobQueueManager:
                     ).first() is not None):
                 return False
 
-            job = (ImageGenerationQueue.query.filter_by(status='pending')
-                   .order_by(ImageGenerationQueue.priority.desc(),
-                             ImageGenerationQueue.created_at.asc()).first())
+            candidates = (ImageGenerationQueue.query.filter_by(status='pending')
+                          .order_by(ImageGenerationQueue.priority.desc(),
+                                    ImageGenerationQueue.created_at.asc()))
+            job = next((candidate for candidate in candidates if _job_owner_available(candidate)), None)
             if job is None:
                 return False
             if not _claim(job.job_id):

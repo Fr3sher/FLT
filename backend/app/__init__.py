@@ -157,6 +157,13 @@ class ArchiveAwareRequest(Request):
     def max_content_length(self):
         if self._forced_max_content_length is not None:
             return self._forced_max_content_length
+        if current_app:
+            registry = current_app.extensions.get('lds_plugins')
+            limit = registry.request_limits.get(self.endpoint) if registry else None
+            if limit:
+                from .auth_policy import plugin_available
+                if plugin_available(limit[0]):
+                    return limit[1]
         if self.endpoint in _DATASET_ARCHIVE_UPLOAD_ENDPOINTS and current_app:
             archive_max = int(
                 current_app.config['DATASET_ARCHIVE_MAX_UPLOAD_BYTES'])
@@ -784,13 +791,21 @@ def create_app(config_object=None):
     # registration order, so an extension's hook can never answer a request the
     # token gate would have refused. Extensions are trusted local code either
     # way — this only keeps a public bind's front door in front.
-    from .extension_loader import load_extensions
-    load_extensions(app, csrf)
+    from .plugins.restart import install_gate
+    install_gate(app)
 
     # Registered last of the write-path guards, so a caller still has to clear CSRF
     # and the access token before we tell them anything about their own body.
     from .routes._common import reject_unparsable_json_body
     app.before_request(reject_unparsable_json_body)
+
+    # The schema and host request guards exist before a plugin registers any
+    # callback. One loader owns both modern packages and the legacy adapter.
+    from .plugins.loader import load_plugins
+    with app.app_context():
+        from .engines.builtin import register_builtin
+        register_builtin()
+        load_plugins(app, csrf)
 
     @app.get('/api/health')
     def health():
@@ -852,11 +867,5 @@ def _start_workers(app):
     except ImportError:
         pass  # phase(<3): training service not lifted yet
 
-    import threading
-    from .services import cloud_training
-    threading.Thread(target=cloud_training.boot_recover, args=(app,),
-                     daemon=True, name='cloud-boot-recover').start()
-    # Started separately from boot_recover on purpose: the watchdog that
-    # enforces the runtime cap, the stop deadline and the freeze detection must
-    # not share a fate with the recovery it supervises.
-    cloud_training.start_supervisor(app)
+    from .plugins.loader import run_boot_hooks
+    run_boot_hooks(app)

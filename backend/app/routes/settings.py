@@ -23,6 +23,19 @@ def _paste_safe(line):
 bp = Blueprint('settings', __name__, url_prefix='/api')
 
 
+def _settings_scope():
+    return request.args.get('plugin') or None
+
+
+@bp.before_request
+def _validate_settings_scope():
+    scope = _settings_scope()
+    if scope and request.path.startswith('/api/settings'):
+        registry = current_app.extensions.get('lds_plugins')
+        if registry is None or scope not in registry.records:
+            return jsonify({'error': 'Plugin settings are unavailable: package is not installed.'}), 404
+
+
 _TEST_TARGETS = {
     'gemini': capabilities.probe_gemini,
     'openai': capabilities.probe_openai,
@@ -47,7 +60,7 @@ _TEST_TARGETS = {
 
 
 def _secret_presence() -> dict:
-    return {name: bool(cfg.secret(name)) for name in cfg.SECRET_KEYS}
+    return {name: bool(cfg.secret(name)) for name in cfg.settings_secret_keys(_settings_scope())}
 
 
 def _hf_cloud_secret_check(status: dict) -> dict:
@@ -141,7 +154,7 @@ def _settings_payload() -> dict:
     from ..services.face_variations import (identity_prompt_defaults,
                                             identity_prompt_defaults_by_subject)
     return {
-        'config': cfg.load_config(), 'secrets': _secret_presence(),
+        'config': cfg.settings_view(cfg.load_config(), _settings_scope()), 'secrets': _secret_presence(),
         # The shipped default of every config key, for the SCALAR settings what
         # identity_prompt_defaults is for the prompts: `config` above is already
         # merged, so a number in it is indistinguishable from the default and the
@@ -150,7 +163,7 @@ def _settings_payload() -> dict:
         # the frontend never carries its own copy of a default that could go
         # stale. No secret lives here — secrets are in .env, and `secrets` above
         # only reports presence.
-        'config_defaults': cfg.defaults(),
+        'config_defaults': cfg.settings_view(cfg.defaults(), _settings_scope()),
         'identity_prompt_defaults': identity_prompt_defaults(),
         'identity_prompt_defaults_by_subject': identity_prompt_defaults_by_subject(),
         # What THIS running process is actually bound to — run.py stamps these
@@ -184,6 +197,12 @@ def _settings_payload() -> dict:
 @bp.get('/settings')
 def get_settings():
     return jsonify(_settings_payload())
+
+
+@bp.get('/engines')
+def get_engines():
+    from ..engines.registry import public_catalog
+    return jsonify({'engines': public_catalog()})
 
 
 @bp.post('/settings/prompt-preview')
@@ -231,6 +250,10 @@ def put_settings():
         return jsonify({'error': "'secrets' must be an object"}), 400
     config_partial = body.get('config') or {}
     secrets_partial = body.get('secrets') or {}
+    scope = _settings_scope()
+    if (cfg.settings_view(config_partial, scope) != config_partial
+            or set(secrets_partial) - set(cfg.settings_secret_keys(scope))):
+        return jsonify({'error': 'These settings belong to another owner. Open its plugin settings.'}), 400
     # Validate through config's persistence boundary before saving config.json
     # too, so a rejected combined request changes neither file.  This covers all
     # control/format/Unicode line separators and a pre-existing poisoned .env,
@@ -294,8 +317,9 @@ def put_settings():
             node.pop('python')
     hf_cloud_check = None
     hf_cloud_candidate = secrets_partial.get('HF_CLOUD_TOKEN')
-    if hf_cloud_candidate:
-        from ..services import cloud_training
+    from ..auth_policy import plugin_available
+    if hf_cloud_candidate and plugin_available('cloud_training'):
+        from lds_cloud_training import cloud_training
         hf_cloud_check = _hf_cloud_secret_check(
             cloud_training.full_transformer_token_status(hf_cloud_candidate))
         if not hf_cloud_check['ok']:
@@ -327,6 +351,8 @@ def delete_secret(name):
     key can never be wiped by just emptying its (write-only) field."""
     if name not in cfg.SECRET_KEYS:
         return jsonify({'error': 'unknown secret'}), 400
+    if name not in cfg.settings_secret_keys(_settings_scope()):
+        return jsonify({'error': 'This secret belongs to another settings owner.'}), 400
     cfg.delete_secrets([name])
     return jsonify(_settings_payload())
 
@@ -387,7 +413,6 @@ def comfy_model_files():
     return jsonify({'files': files, 'folder': folder})
 
 
-@bp.get('/seedvr2/models')
 def seedvr2_models_list():
     """The SeedVR2 DiT builds actually PRESENT in this install's SEEDVR2 folder(s),
     plus the catalog of builds the app can talk about.
@@ -537,10 +562,21 @@ def watermark_python_select():
 
 @bp.post('/settings/test/<target>')
 def test_connection(target):
+    from ..auth_policy import plugin_available
+    owners = {'gemini': 'api_engines', 'openai': 'api_engines', 'openrouter': 'api_engines',
+              'vast': 'cloud_training', 'hf_cloud': 'cloud_training', 'civitai': 'civitai_publish'}
+    owner = owners.get(target)
+    if owner and (not plugin_available(owner) or _settings_scope() != owner):
+        return jsonify({'error': 'Open the active plugin settings to test this provider.'}), 409
     if target == 'hf_cloud':
-        from ..services import cloud_training
+        from lds_cloud_training import cloud_training
         return jsonify(_hf_cloud_secret_check(
             cloud_training.full_transformer_token_preflight()))
+    if target in ('gemini', 'openai', 'openrouter'):
+        from ..engines.registry import all_specs
+        spec = next((s for s in all_specs() if s.key_test_target == target), None)
+        return (jsonify(spec.probe()) if spec and spec.probe
+                else (jsonify({'error': 'Provider probe is unavailable.'}), 409))
     probe_fn = _TEST_TARGETS.get(target)
     if probe_fn is None:
         return jsonify({'error': f"unknown test target '{target}'"}), 404
@@ -1164,27 +1200,23 @@ def diagnostic():
 # Device-code login for the ChatGPT engine's subscription lane. One upstream
 # check per poll call — the SPA polls every few seconds, no server thread.
 
-@bp.post('/settings/chatgpt-oauth/start')
 def chatgpt_oauth_start():
     from ..services import chatgpt_oauth
     out = chatgpt_oauth.login_start()
     return jsonify(out), (200 if out.get('ok') else 502)
 
 
-@bp.get('/settings/chatgpt-oauth/poll')
 def chatgpt_oauth_poll():
     from ..services import chatgpt_oauth
     return jsonify(chatgpt_oauth.login_poll())
 
 
-@bp.post('/settings/chatgpt-oauth/import-codex')
 def chatgpt_oauth_import_codex():
     from ..services import chatgpt_oauth
     out = chatgpt_oauth.import_codex_cli()
     return jsonify(out), (200 if out.get('ok') else 404)
 
 
-@bp.post('/settings/chatgpt-oauth/logout')
 def chatgpt_oauth_logout():
     from ..services import chatgpt_oauth
     chatgpt_oauth.logout()

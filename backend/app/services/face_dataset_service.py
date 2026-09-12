@@ -4528,9 +4528,8 @@ def _edit_engine_call(engine, refs, prompt):
         raise ValueError(f'unknown edit engine: {engine}')
     generate = _api_generate_fn(engine)
     gen_kwargs = {'aspect_ratio': '1:1'}
-    if engine == 'chatgpt':
-        from .chatgpt_image import _use_subscription
-        gen_kwargs['force_lane'] = 'subscription' if _use_subscription() else 'api'
+    from ..engines.registry import generate_kwargs
+    gen_kwargs.update(generate_kwargs(engine))
     return generate(refs, prompt, **gen_kwargs)
 
 
@@ -12039,9 +12038,8 @@ def _rgn_run_api(app, img, ds, user_id, image_id, prompt, aspect,
         token = dataset_activity.begin(
             img.dataset_id, 'generate', total=1, engine=engine)
         gen_kwargs = {'aspect_ratio': aspect}
-        if engine == 'chatgpt':
-            from .chatgpt_image import _use_subscription
-            gen_kwargs['force_lane'] = 'subscription' if _use_subscription() else 'api'
+        from ..engines.registry import generate_kwargs
+        gen_kwargs.update(generate_kwargs(engine))
         try:
             out = api_generate(
                 ref_bytes,
@@ -12202,7 +12200,8 @@ API_ENGINE_LABELS = {'nanobanana': 'Nano Banana Pro', 'chatgpt': 'ChatGPT',
 def engine_labels():
     """Every engine id -> its human label, both lanes. Merged rather than kept as a
     third dict: the two halves are already the source of truth for their side."""
-    return dict(LOCAL_ENGINE_LABELS, **API_ENGINE_LABELS)
+    from ..engines.registry import available_specs
+    return {spec.id: spec.label for spec in available_specs()}
 
 
 def editable_engines():
@@ -12215,7 +12214,8 @@ def editable_engines():
     provider call and they have no blocking call to make; they now ride the same
     ComfyUI queue as every other local render, so the exclusion had outlived its
     reason — and it was the reason the app's only FREE edit lane was invisible."""
-    return tuple(LOCAL_ENGINES) + tuple(API_ENGINES)
+    from ..engines.registry import available_specs
+    return tuple(spec.id for spec in available_specs())
 
 
 def edit_engine_choice_message():
@@ -12250,13 +12250,11 @@ _LOST_MSG = ('chatgpt: subscription connection lost — remaining rows stopped; 
 
 
 def _api_generate_fn(engine):
-    if engine == 'chatgpt':
-        from .chatgpt_image import generate_variation
-    elif engine == 'openrouter':
-        from .openrouter import generate_variation
-    else:
-        from .nanobanana import generate_variation
-    return generate_variation
+    from ..engines.registry import generate_fn, require_available
+    spec = require_available(engine)
+    if not spec.is_api:
+        raise ValueError(f'not an API image engine: {engine}')
+    return generate_fn(engine)
 
 
 def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id=None):
@@ -12284,8 +12282,8 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
     # (via SubscriptionUnavailable below) closes that hole.
     force_lane = None
     if engine == 'chatgpt':
-        from .chatgpt_image import _use_subscription
-        force_lane = 'subscription' if _use_subscription() else 'api'
+        from ..engines.registry import generate_kwargs
+        force_lane = generate_kwargs(engine).get('force_lane')
     # Set the moment ANY row hits the plan quota (or the pinned subscription
     # lane loses its token) — every later row would fail too, so the rest of
     # the batch fails fast instead of burning one call each.
@@ -12435,6 +12433,8 @@ def generate_variations_nanobanana(app, user_id, dataset_id, variations, multipl
     rows (job_id stays None - that is the marker for API-generated rows), then
     fill them from a background thread. The existing polling/banner/cancel UI
     works unchanged (pending + no file = in flight). Returns the created ids."""
+    from ..engines.registry import require_available
+    require_available(engine)
     _guard_not_bank_export(dataset_id)
     if engine not in API_ENGINES:
         raise ValueError(f'unknown API engine: {engine}')

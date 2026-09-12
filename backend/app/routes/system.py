@@ -270,7 +270,6 @@ def comfyui_recovery_resolve():
         'if it persists, check the server log.')}), 409
 
 
-@bp.get('/stats')
 def machine_stats():
     """📊 CPU / RAM / GPU / VRAM of the machine RUNNING the server.
 

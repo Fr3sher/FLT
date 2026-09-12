@@ -9593,6 +9593,19 @@ def _seed_continuation_from(user_id, dataset_id, base, family, variant,
     return dest
 
 
+def _expected_resume_record(chosen, expected_record_id, dataset_id, family, base, variant):
+    """A selected history node must own the exact local checkpoint resumed."""
+    if expected_record_id is None:
+        return
+    from . import checkpoint_registry
+    record = checkpoint_registry.record_by_id(expected_record_id)
+    if (chosen.get('record_id') != expected_record_id or record is None
+            or record.dataset_id != dataset_id or record.source != 'local'
+            or record.family != family or (record.base_model or '') != (base or '')
+            or (record.variant or '') != (variant or '')):
+        raise ValueError('The selected checkpoint no longer belongs to this run. Refresh its checkpoints before continuing.')
+
+
 def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                       base_model=_PERSISTED, variant=None, train_type=None,
                       masked=None, allow_unverified_weights=False,
@@ -9600,7 +9613,7 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                       allow_caption_quality=False, from_step=None, overrides=None,
                       resume_mode='weights_only', state_bundle_id=None,
                       allow_not_ready=False, _allow_dead_predecessor=False,
-                      training_mode='lora') -> dict:
+                      training_mode='lora', expected_record_id=None) -> dict:
     """Reprend l'entraînement d'une base et vise ``step_de_reprise + extra_steps``.
     ai-toolkit auto-resume depuis le training_folder ; il faut donc qu'au moins un
     checkpoint existe POUR CETTE BASE.
@@ -9619,6 +9632,8 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     # Validate the caller-controlled restore contract before interpreter probes,
     # dataset reads, archives or settings writes.
     resume_mode = _validate_resume_contract(resume_mode, state_bundle_id)
+    if expected_record_id is not None and (type(expected_record_id) is not int or expected_record_id <= 0):
+        raise ValueError('expected_record_id must be a positive integer')
     # Queue advancement calls this while the previous run's flag is still set
     # (so ComfyUI never grabs the GPU between jobs).  Only a *live* PID blocks;
     # a dead predecessor is precisely the normal queued-continue transition.
@@ -9678,6 +9693,7 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
         # Ties (a numbered save and the bare final at the same step): prefer the
         # numbered file — it carries a clean step and is never the run's live final.
         chosen = min(matches, key=lambda c: bool(c.get('final')))
+    _expected_resume_record(chosen, expected_record_id, dataset_id, fam, base, var)
     # Lineage: the record this continuation resumes FROM is the record that
     # PRODUCED the file being loaded (list_checkpoints stamps `record_id` on every
     # save), NOT merely the newest record of the lane. One lane holds several runs,
