@@ -16,7 +16,7 @@ def no_dense_provider_io(monkeypatch):
 def queue_capture(app, monkeypatch):
     from app import capabilities
     from app.job_queue import queue_manager
-    from app.services import video_test_studio as vts
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr(capabilities, 'probe_comfyui',
                         lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     monkeypatch.setattr(vts, 'preflight', lambda wf: None)
@@ -92,6 +92,7 @@ def test_last_frame_is_published_only_after_successful_extraction(app, tmp_path,
     assert sorted(p.name for p in clip_dir.iterdir()) == sorted([source.name, dest.name])
 
 
+@pytest.mark.plugins('video')
 @pytest.mark.parametrize('aspect', ['portrait', 'landscape', 'square'])
 def test_t2v_history_replays_its_original_canvas(client, queue_capture, aspect):
     body = {'mode': 't2v', 'prompt': 'A person turns.', 'aspect': aspect, 'seed': 42}
@@ -110,6 +111,7 @@ def test_t2v_history_replays_its_original_canvas(client, queue_capture, aspect):
     assert (replay['width'], replay['height']) == original_size
 
 
+@pytest.mark.plugins('video')
 @pytest.mark.parametrize('mode,aspect,expected', [
     ('t2v', ' PORTRAIT ', 'portrait'), ('t2v', 'unknown', 'auto'),
     ('i2v', 'landscape', 'auto'),
@@ -122,13 +124,14 @@ def test_recorded_aspect_matches_the_canvas_choice(client, queue_capture, mode, 
     assert clip.get('aspect') == expected
 
 
+@pytest.mark.plugins('video')
 @pytest.mark.parametrize('operation', ['vfi', 'neural-render'])
 @pytest.mark.parametrize('accel', ['parasyte', 'dareties'])
 def test_derived_clips_keep_existing_acceleration_and_canvas(
         app, client, monkeypatch, queue_capture, operation, accel):
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import neural_render as nr, video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import neural_render as nr, video_test_studio as vts
     response = client.post('/api/video-studio/generate', json={
         'mode': 't2v', 'prompt': 'A person turns.', 'aspect': 'portrait', 'accel': accel})
     assert response.status_code == 200, response.get_json()
@@ -161,6 +164,7 @@ def test_derived_clips_keep_existing_acceleration_and_canvas(
             thread.join(timeout=5)
 
 
+@pytest.mark.plugins('video')
 def test_legacy_aspect_migration_defaults_to_auto_and_can_repeat(app, client):
     from sqlalchemy import text
     from app import _apply_additive_migrations

@@ -7,7 +7,9 @@ absolute paths included, and this file is built to be handed to other people.
 """
 import pytest
 
-from app.services import neural_render as nr
+from lds_video import neural_render as nr
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def argv(**kw):
@@ -102,8 +104,8 @@ def test_the_font_list_is_only_files_that_exist(monkeypatch):
 def test_the_studio_route_refuses_a_clip_that_is_not_a_render(app, client, tmp_path,
                                                               monkeypatch):
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     with app.app_context():
         plain = VideoTestClip(status='done', filename='plain.mp4', mode='i2v')
@@ -169,7 +171,7 @@ def test_busy_and_too_large_are_their_own_answers(client, monkeypatch):
     """429 with a Retry-After, and 413 — not a flat 400 that reads as "your
     request was wrong" for two conditions that are neither."""
     monkeypatch.setattr(nr, 'original_clip_path', lambda *a, **k: 'orig.mp4')
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     monkeypatch.setattr(svc, 'dataset_clip_media_path', lambda *a, **k: 'render.mp4')
 
     def busy(*a, **k):

@@ -558,6 +558,7 @@ def test_an_already_improved_image_leaves_the_pool(client, app, tmp_path):
     assert sum(payload['pass_scopes']['improve']['todo'].values()) == 1
 
 
+@pytest.mark.plugins('image_upscale')
 def test_improve_refuses_an_empty_pool_before_it_starts_anything(client, app, tmp_path,
                                                                  monkeypatch):
     """One refusal per PASS, not one per image — which is the whole reason the
@@ -587,6 +588,7 @@ def test_improve_refuses_an_empty_pool_before_it_starts_anything(client, app, tm
     assert 'Revert' in r.get_json()['error']
 
 
+@pytest.mark.plugins('image_upscale')
 def test_improve_refuses_a_busy_gpu_with_503_and_starts_no_job(client, app, tmp_path,
                                                                monkeypatch):
     from app.services import face_dataset_service as fds

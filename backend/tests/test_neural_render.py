@@ -7,6 +7,7 @@ probe and its sentences, the pinned install, the in-place pass with its
 write-once backup, and the restore that undoes it.
 """
 import hashlib
+from pathlib import Path
 import io
 import json
 import re
@@ -14,7 +15,9 @@ import zipfile
 
 import pytest
 
-from app.services import neural_render as nr
+from lds_video import neural_render as nr
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # ── dials ───────────────────────────────────────────────────────────────────
@@ -44,7 +47,7 @@ def test_temporal_width_floor_is_the_measured_one_in_both_halves():
     irrelevant. The parent gates and the child re-checks — one number, pinned
     here in both files so they cannot drift."""
     assert nr.TEMPORAL_MIN_WIDTH == 704
-    src = (nr.cfg.BACKEND_DIR / 'infer' / 'dlss5nr_infer.py').read_text(encoding='utf-8')
+    src = (Path(nr.__file__).resolve().parents[1] / 'infer' / 'dlss5nr_infer.py').read_text(encoding='utf-8')
     m = re.search(r'^TEMPORAL_MIN_WIDTH = (\d+)', src, re.M)
     assert m and int(m.group(1)) == nr.TEMPORAL_MIN_WIDTH
     js = (nr.cfg.BACKEND_DIR.parent / 'bundled' / 'video' / 'frontend' / 'videobank'
@@ -156,12 +159,19 @@ def test_install_unpacks_the_two_dlls_when_the_bytes_match(app, tmp_path, monkey
     assert any(nr.MODEL_FILE in line and 'does not download' in line for line in log)
 
 
-def test_the_install_action_is_wired_and_opt_in():
+def test_the_install_action_is_wired_and_opt_in(app, monkeypatch):
     from app import setup_installer
-    assert 'dlss5nr_bridge' in setup_installer.INSTALL_ACTIONS
-    assert setup_installer._WORKERS['dlss5nr_bridge'] is setup_installer._run_dlss5nr_bridge
-    assert setup_installer._action_needed('dlss5nr_bridge', {}) is False
-    assert nr.BRIDGE_RELEASE['url'] in setup_installer.manual_command('dlss5nr_bridge')
+    calls = []
+    monkeypatch.setattr(nr, 'install_bridge', lambda log: calls.append(log) or 0)
+    with app.app_context():
+        assert 'dlss5nr_bridge' not in setup_installer.INSTALL_ACTIONS
+        assert setup_installer.known_action('dlss5nr_bridge')
+        action = setup_installer.plugin_action_spec('dlss5nr_bridge')
+        assert action['plugin'] == 'video'
+        log = lambda line: None
+        assert action['run'](log) == 0 and calls == [log]
+        assert setup_installer._action_needed('dlss5nr_bridge', {}) is False
+        assert action['label'] in setup_installer.manual_command('dlss5nr_bridge')
 
 
 # ── the child's command line ────────────────────────────────────────────────
@@ -183,7 +193,7 @@ def test_worker_argv_carries_every_dial_and_the_mode(monkeypatch):
 def _dataset(app, tmp_path, names=('clip_0001.mp4', 'clip_0002.mp4')):
     from app.config import LOCAL_USER
     from app.extensions import db
-    from app.models import VideoDataset, VideoDatasetClip
+    from lds_video.models import VideoDataset, VideoDatasetClip
     out = tmp_path / 'ds'
     out.mkdir()
     with app.app_context():
@@ -356,7 +366,7 @@ def test_the_child_drains_ffmpeg_stderr_so_a_chatty_encoder_cannot_block():
     import subprocess
     import sys
     spec = importlib.util.spec_from_file_location(
-        'dlss5nr_infer', str(nr.cfg.BACKEND_DIR / 'infer' / 'dlss5nr_infer.py'))
+        'dlss5nr_infer', str(Path(nr.__file__).resolve().parents[1] / 'infer' / 'dlss5nr_infer.py'))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     code = ("import sys" + chr(10)
@@ -385,7 +395,7 @@ def test_the_childs_last_words_survive_os_exit():
     a child that emits, then fails through os._exit, is read whole."""
     import subprocess
     import sys
-    script = str(nr.cfg.BACKEND_DIR / 'infer' / 'dlss5nr_infer.py')
+    script = str(Path(nr.__file__).resolve().parents[1] / 'infer' / 'dlss5nr_infer.py')
     code = chr(10).join([
         'import importlib.util, sys',
         'spec = importlib.util.spec_from_file_location("w", sys.argv[1])',
@@ -477,7 +487,7 @@ def test_the_child_scales_up_for_the_model_and_back_for_the_file():
     the size the target profile gave them, whatever the working size."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        'dlss5nr_infer', str(nr.cfg.BACKEND_DIR / 'infer' / 'dlss5nr_infer.py'))
+        'dlss5nr_infer', str(Path(nr.__file__).resolve().parents[1] / 'infer' / 'dlss5nr_infer.py'))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.decode_filter(1024, 576, 1024, 576) == 'null'

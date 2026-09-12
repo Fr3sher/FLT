@@ -204,6 +204,7 @@ def test_psutil_missing_leaves_the_gpu_half_standing():
     assert data['gpu_percent'] == 12
 
 
+@pytest.mark.plugins('resource_monitor')
 def test_the_route_always_answers_200_even_when_nothing_can_be_measured(app, client):
     """A glance, never a gate: a machine that can answer nothing answers {}."""
     with patch.object(system_stats, '_psutil', return_value=None), \
@@ -213,6 +214,7 @@ def test_the_route_always_answers_200_even_when_nothing_can_be_measured(app, cli
     assert res.get_json() == {}
 
 
+@pytest.mark.plugins('resource_monitor')
 def test_the_route_serves_the_service_payload(app, client):
     with patch.object(subprocess, 'run', return_value=_Proc('55, 8192, 24564\n')):
         res = client.get('/api/system/stats')
