@@ -41,7 +41,12 @@ def _active_product():
 
 def delete_cloud_checkpoint(*args, **kwargs):
     with state_change_lock:
-        return _active_product().delete_cloud_checkpoint(*args, **kwargs)
+        _active_product()
+        # This moves an already downloaded, terminal run's file to local trash.
+        # Keep main's type/whitelist guards; the rental product has no duplicate
+        # implementation of this historical storage primitive.
+        from app.services.cloud_training import delete_cloud_checkpoint as delete_local
+        return delete_local(*args, **kwargs)
 
 
 def get_active_runs(*args, **kwargs):

@@ -11,6 +11,7 @@ from ..extensions import db
 import re
 import time
 from datetime import datetime
+from functools import wraps
 from threading import Lock
 
 from flask import Blueprint, current_app, request, jsonify
@@ -29,6 +30,18 @@ from ..utils.comfyui import get_zimage_models, get_checkpoint_models, get_krea_m
 from ._common import _map_error
 
 bp = Blueprint('training', __name__, url_prefix='/api')
+
+
+def _cloud_provider_required(fn):
+    @wraps(fn)
+    def admitted(*args, **kwargs):
+        from ..auth_policy import plugin_available
+        from ..plugins.lifecycle import state_change_lock
+        with state_change_lock:
+            if not plugin_available('cloud_training'):
+                return jsonify({'error': 'Cloud training is disabled or unavailable.'}), 409
+            return fn(*args, **kwargs)
+    return admitted
 
 
 class _CloseCallbackFile:
@@ -1732,24 +1745,35 @@ def dataset_train_run_checkpoint_delete(dataset_id):
     """Move ONE RUN checkpoint to the trash — run-dir file, or a cloud run's
     synced save when cloud_run_id is given (the deployed-LoRA delete above is
     a separate route). Nothing is destroyed until 'Empty trash' in Settings."""
+    body = request.get_json(silent=True) or {}
+    if body.get('cloud_run_id'):
+        @_cloud_provider_required
+        def delete_cloud():
+            from lds_sdk import cloud_training
+            run = cloud_training.get_run(LOCAL_USER, body['cloud_run_id'],
+                                         dataset_id=dataset_id, dataset_table='face_dataset')
+            if run is None:
+                return jsonify({'error': 'not found'}), 404
+            try:
+                removed = cloud_training.delete_cloud_checkpoint(
+                    dataset_id, run.id, body.get('filename', ''), dataset_table='face_dataset')
+            except Exception as exc:
+                return _map_error(exc)
+            return jsonify({'ok': True, 'removed': removed})
+        return delete_cloud()
     gate = _require_aitoolkit()
     if gate and not capabilities.probe().get('cloud_training'):
         return gate
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
-    body = request.get_json(silent=True) or {}
     try:
-        if body.get('cloud_run_id'):
-            removed = ct.delete_cloud_checkpoint(dataset_id, body['cloud_run_id'],
-                                                 body.get('filename', ''))
-        else:
-            kw = {} if 'base_model' not in body else {'base_model': body.get('base_model')}
-            if body.get('train_type'):
-                kw['family'] = body.get('train_type')
-            if body.get('variant'):
-                kw['variant'] = body.get('variant')
-            removed = lt.delete_checkpoint(LOCAL_USER, dataset_id,
-                                           body.get('filename', ''), **kw)
+        kw = {} if 'base_model' not in body else {'base_model': body.get('base_model')}
+        if body.get('train_type'):
+            kw['family'] = body.get('train_type')
+        if body.get('variant'):
+            kw['variant'] = body.get('variant')
+        removed = lt.delete_checkpoint(LOCAL_USER, dataset_id,
+                                       body.get('filename', ''), **kw)
     except Exception as e:
         return _map_error(e)
     return jsonify({'ok': True, 'removed': removed})
@@ -2377,6 +2401,7 @@ def dataset_train_cloud_recheck_delivery():
 
 
 @bp.post('/dataset/train/cloud/hub-presence')
+@_cloud_provider_required
 def dataset_train_cloud_hub_presence():
     """Are these runs' Hugging Face repositories still there — asked NOW.
 
@@ -2392,7 +2417,8 @@ def dataset_train_cloud_hub_presence():
     ``recheck-delivery`` above is the one operation allowed to restate it).
     """
     from ..models import CloudTrainingRun
-    from ..services import hub_presence
+    from lds_sdk.cloud_host.services import hub_presence, cloud_run_dataset
+    from lds_sdk.cloud_training import get_run
 
     body = request.get_json(silent=True) or {}
     wanted = body.get('run_ids')
@@ -2406,6 +2432,9 @@ def dataset_train_cloud_hub_presence():
             continue
     repo_of = {}
     for run in CloudTrainingRun.query.filter(CloudTrainingRun.id.in_(ids)).all():
+        if get_run(LOCAL_USER, run.id, dataset_id=run.dataset_id,
+                   dataset_table=cloud_run_dataset.table_of(run)) is None:
+            continue
         if not ct._is_full_transformer_run(run):
             continue
         repo = str(ct._run_param(run, 'hf_repo_id') or '').strip()

@@ -11138,12 +11138,15 @@ def resolve_improve_engine(requested=None):
     raising, because a stale tab must degrade to the historical behaviour rather
     than refuse a batch. Klein is the fallback because it is what every improve
     did before this setting existed."""
+    from ..plugins.restoration import provider
     for candidate in (requested, cfg.get('improve.engine')):
         name = str(candidate or '').strip().lower()
         if name in IMPROVE_ENGINES:
+            provider(name)
             return name
         if name:
             logger.warning('unknown improve engine %r — falling back to klein', candidate)
+    provider('klein')
     return 'klein'
 
 
@@ -11156,17 +11159,9 @@ def _improve_preflight(engine):
     already turn each into its own actionable 409 body, and collapsing them into
     one would lose the "install the node pack" vs "place the weights" distinction
     that makes those bodies useful."""
-    if engine == 'seedvr2':
-        from . import seedvr2_helper
-        seedvr2_helper.preflight()
-        return
-    from . import klein_edit_helper as keh
-    missing = keh.klein_missing_assets()
-    missing_nodes = keh.klein_missing_nodes()
-    if missing_nodes:
-        raise KleinNodesMissing(missing, missing_nodes)
-    if any(asset in missing for asset in keh.KLEIN_REQUIRED):
-        raise keh.KleinModelsMissing(missing)
+    from ..plugins.restoration import admission
+    with admission(engine) as spec:
+        spec['preflight']()
 
 
 def _enqueue_improve(engine, *, user_id, source, source_path, prompt, label,
@@ -11196,20 +11191,14 @@ def _enqueue_improve(engine, *, user_id, source, source_path, prompt, label,
             else _improve_extra_metadata(source, label, engine=engine))
     source_filename = (getattr(source, 'filename', None)
                        or os.path.basename(str(source_path or '')))
-    if engine == 'seedvr2':
-        from . import seedvr2_helper
-        return seedvr2_helper.enqueue_seedvr2_upscale(
-            user_id=str(user_id), source_filename=source_filename,
-            source_path=source_path, extra_metadata=meta)
-    from . import klein_edit_helper as keh
-    # `profile` lets a caller that RECORDS what ran (improve_canvas_image
-    # stores it on the candidate) hand over the very dict it stored — computed
-    # twice, the two could disagree the moment a setting is saved in between.
-    return keh.enqueue_klein_edit(
-        user_id=str(user_id), source_filename=source_filename,
-        source_path=source_path, edit_prompt=prompt,
-        **(profile if profile is not None else _improve_enqueue_profile(dataset)),
-        extra_metadata=meta)
+    from ..plugins.restoration import admission
+    with admission(engine) as spec:
+        kwargs = dict(user_id=str(user_id), source_filename=source_filename,
+                      source_path=source_path, extra_metadata=meta)
+        if spec.get('profile') is not None:
+            kwargs.update(prompt=prompt, profile=(profile if profile is not None
+                          else spec['profile'](dataset_klein_model(dataset))))
+        return spec['enqueue'](**kwargs)
 
 
 def image_render_status(user_id, image_id):
