@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -20,6 +21,8 @@ BACKEND_FILES = {'bootstrap_dependencies.py', 'port_utils.py', 'requirements.txt
 BACKEND_DIRS = {'app', 'comfy_nodes', 'infer', 'lds_sdk', 'workflows'}
 LOCAL_DIRS = {'extensions', '__pycache__', 'node_modules', 'tests', 'data',
               'bundled', 'venv', '.venv', '.pytest_cache'}
+ARCHIVE_SUFFIXES = ('.zip', '.whl', '.tar', '.gz', '.bz2', '.xz', '.tgz',
+                    '.tbz2', '.txz', '.7z', '.rar', '.pyz')
 REQUIRED = ROOT_FILES | {'backend/run.py', 'backend/requirements.txt',
                         'backend/app/version.py', 'backend/lds_sdk/__init__.py',
                         'frontend/dist/index.html', 'scripts/bootstrap_python.ps1'}
@@ -33,9 +36,9 @@ def runtime_member(name: str) -> bool:
         raise ValueError('Invalid Git member path')
     if name in ROOT_FILES or name == 'scripts/bootstrap_python.ps1':
         return True
-    if any(part in LOCAL_DIRS or part.startswith('.') for part in parts):
+    if any(part.casefold() in LOCAL_DIRS or part.startswith('.') for part in parts):
         return False
-    if name.lower().endswith(('.exe', '.pyc', '.pyo', '.ldsplugin', '.sqlite', '.sqlite3', '.db')):
+    if name.lower().endswith(('.exe', '.pyc', '.pyo', '.ldsplugin', '.sqlite', '.sqlite3', '.db') + ARCHIVE_SUFFIXES):
         return False
     if len(parts) >= 3 and parts[:2] == ('frontend', 'dist'):
         return True
@@ -54,12 +57,13 @@ def build(repo: Path, output_dir: Path, *, ref: str = 'HEAD',
     if destination.exists():
         raise ValueError('Archive already exists; choose a new output name')
     git = ['git', '--no-replace-objects', '-C', str(repo)]
+    git_env = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
     commit = subprocess.check_output([*git, 'rev-parse', '--verify', '--end-of-options',
-                                      ref + '^{commit}'], text=True).strip()
+                                      ref + '^{commit}'], text=True, env=git_env).strip()
     if not re.fullmatch(r'[0-9a-f]{40,64}', commit):
         raise ValueError('Expected a complete Git commit')
     entries = []
-    tree = subprocess.check_output([*git, 'ls-tree', '-rz', '--full-tree', commit])
+    tree = subprocess.check_output([*git, 'ls-tree', '-rz', '--full-tree', commit], env=git_env)
     for raw in filter(None, tree.split(b'\0')):
         metadata, encoded_path = raw.split(b'\t', 1)
         path = encoded_path.decode('utf-8')
@@ -73,7 +77,7 @@ def build(repo: Path, output_dir: Path, *, ref: str = 'HEAD',
     # cannot alter what goes into the release.
     result = subprocess.run([*git, 'cat-file', '--batch'],
                             input=b''.join(oid + b'\n' for _, oid in entries),
-                            stdout=subprocess.PIPE, check=True)
+                            stdout=subprocess.PIPE, check=True, env=git_env)
     members, offset = {}, 0
     for path, oid in entries:
         header_end = result.stdout.index(b'\n', offset)

@@ -76,3 +76,36 @@ def test_a_tracked_runtime_symlink_cannot_read_an_external_target(repository, tm
     with pytest.raises(ValueError, match='regular files'):
         bundle.build(repository, tmp_path / 'out')
     assert not (tmp_path / 'out').exists()
+
+
+def test_inherited_git_context_cannot_select_another_repository(repository, tmp_path, monkeypatch):
+    expected = git(repository, 'rev-parse', 'HEAD').decode().strip()
+    other = tmp_path / 'other'
+    git(tmp_path, 'clone', '-q', '--no-local', str(repository), str(other))
+    git(other, 'config', 'user.name', 'lora-dataset-studio')
+    git(other, 'config', 'user.email', 'noreply@lora-dataset-studio.dev')
+    (other / 'backend/app/version.py').write_text("APP_VERSION = 'private-tree'\n", encoding='utf-8')
+    git(other, 'add', '--', 'backend/app/version.py')
+    git(other, 'commit', '-q', '-m', 'Synthetic other tree')
+    monkeypatch.setenv('GIT_DIR', str(other / '.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(other))
+    result = bundle.build(repository, tmp_path / 'out')
+    assert result['commit'] == expected
+    with zipfile.ZipFile(result['archive']) as archive:
+        assert b'private-tree' not in archive.read('LoRA-Dataset-Studio-windows/backend/app/version.py')
+
+
+@pytest.mark.parametrize('path', [
+    'backend/app/BUNDLED/private/secret.py',
+    'backend/app/Extensions/private/secret.py',
+    'backend/app/transition-pack.zip',
+])
+def test_nested_products_and_archives_are_excluded_regardless_of_case(repository, tmp_path, path):
+    file = repository / path
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text('private sentinel', encoding='utf-8')
+    git(repository, 'add', '--', path)
+    git(repository, 'commit', '-q', '-m', 'Synthetic excluded member')
+    result = bundle.build(repository, tmp_path / 'out')
+    with zipfile.ZipFile(result['archive']) as archive:
+        assert not any(b'private sentinel' in archive.read(name) for name in archive.namelist())
