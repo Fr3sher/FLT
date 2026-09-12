@@ -9,6 +9,7 @@ contain the built browser interface and the plugin's own Python package.
 - [Build, validate and package](packaging-guide.md)
 - [JSON Schema for editors](plugin.schema.json)
 - [API 1.20: declared ComfyUI node preparation](../../sdk/python/API-1.20.md)
+- [API 1.21: protect active work during memory release](../../sdk/python/API-1.21.md)
 - [Independent frontend SDK](../../sdk/frontend/README.md)
 
 Plugin Python imports its own package, standard-library modules and documented
