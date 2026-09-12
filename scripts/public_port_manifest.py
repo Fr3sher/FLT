@@ -16,7 +16,14 @@ import struct
 import zipfile
 import zlib
 from dataclasses import dataclass
+from email.parser import Parser
+from email.policy import default as email_policy
 from pathlib import Path
+
+if __package__:
+    from .private_plugin_policy import private_plugin_path_reason
+else:
+    from private_plugin_policy import private_plugin_path_reason
 
 OID = re.compile(r'(?:[0-9a-f]{40}|[0-9a-f]{64})\Z')
 SHA256 = re.compile(r'[0-9a-f]{64}\Z')
@@ -27,7 +34,9 @@ PUBLIC_PRODUCTS = frozenset({
 })
 ARCHIVE_SUFFIXES = ('.ldsplugin', '.zip', '.whl', '.tar', '.gz', '.bz2', '.xz',
                     '.tgz', '.tbz2', '.txz', '.7z', '.rar', '.pyz')
-WHEEL_NAME = re.compile(r'[A-Za-z0-9_]+-[A-Za-z0-9_.+]+(?:-[0-9][A-Za-z0-9_]*)?-py3-none-any\.whl\Z')
+WHEEL_NAME = re.compile(r'(?P<distribution>[A-Za-z0-9_]+)-(?P<version>[A-Za-z0-9_.+]+)'
+                        r'(?:-[0-9][A-Za-z0-9_]*)?-py3-none-any\.whl\Z')
+WHEEL_NATIVE_SUFFIXES = ('.exe', '.dll', '.pyd', '.dylib', '.so', '.pyc', '.pyo', '.bat', '.cmd', '.ps1', '.pth')
 WHEEL_MAX_BYTES = 8 * 1024 * 1024
 WHEEL_MAX_EXPANDED = 32 * 1024 * 1024
 WHEEL_MAX_MEMBER = 4 * 1024 * 1024
@@ -88,6 +97,12 @@ def wheel_member_path(value):
                 and not part.endswith('.') and not WINDOWS_RESERVED.match(part))
     require(not value.casefold().endswith(ARCHIVE_SUFFIXES),
             'Nested archives cannot receive generated-resource exceptions.')
+    require(private_plugin_path_reason(value) is None,
+            'Private product paths cannot be embedded in a generated wheel.')
+    require(not value.casefold().endswith(WHEEL_NATIVE_SUFFIXES)
+            and not re.search(r'\.so(?:\.[0-9]+)+\Z', value.casefold())
+            and not value.split('/')[0].casefold().endswith('.data'),
+            'Native binaries and installation hooks are outside the pure-Python resource exception.')
     return value
 
 
@@ -130,7 +145,43 @@ def wheel_descriptor(entry):
             'A wheel file cannot also be a directory or its case alias.')
 
 
-def verify_wheel(content, resource):
+def verify_wheel_metadata(members, filename):
+    """Identify the narrow pure-Python wheel format, without installing it."""
+    name = WHEEL_NAME.fullmatch(filename)
+    require(name is not None)
+    distribution, version = name.group('distribution', 'version')
+    directory = distribution + '-' + version + '.dist-info'
+    metadata_path, wheel_path = directory + '/METADATA', directory + '/WHEEL'
+    require({metadata_path, wheel_path, directory + '/RECORD'} <= set(members),
+            'Generated wheel metadata is missing or inconsistent with its filename.')
+    require({path.split('/')[0] for path in members if path.split('/')[0].endswith('.dist-info')} == {directory},
+            'A generated wheel must describe exactly one distribution.')
+    parsed = []
+    for path in (metadata_path, wheel_path):
+        message = Parser(policy=email_policy).parsestr(members[path].decode('utf-8'))
+        require(not message.defects, 'Malformed generated wheel metadata.')
+        parsed.append(message)
+    metadata, wheel = parsed
+
+    def single(message, field):
+        values = message.get_all(field, [])
+        require(len(values) == 1, 'Missing or duplicate generated wheel metadata field.')
+        return str(values[0]).strip()
+
+    project = single(metadata, 'Name')
+    require(re.fullmatch(r'[0-9]+\.[0-9]+', single(metadata, 'Metadata-Version')))
+    require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', project))
+    require(re.sub(r'[-_.]+', '-', project).casefold() == re.sub(r'[-_.]+', '-', distribution).casefold()
+            and single(metadata, 'Version') == version,
+            'Generated wheel distribution metadata differs from its filename.')
+    require(single(wheel, 'Wheel-Version') == '1.0'
+            and single(wheel, 'Root-Is-Purelib').casefold() == 'true'
+            and single(wheel, 'Tag') == 'py3-none-any'
+            and not wheel.get_payload().strip(),
+            'Generated resource must declare a pure-Python wheel without an executable payload.')
+
+
+def verify_wheel(content, resource, filename):
     """Verify every Git-blob byte and every member, without imports or extraction.
 
     Only simple ZIP32 STORED/DEFLATED files are accepted. Reject ZIP metadata or
@@ -152,6 +203,7 @@ def verify_wheel(content, resource):
             require(len(infos) == count and {info.filename for info in infos} == set(expected),
                     'The generated wheel member inventory differs from its approval.')
             local_position, central_position = 0, start
+            metadata_members = {}
             for info in infos:
                 member = expected[info.filename]
                 name = info.filename.encode('ascii')
@@ -184,6 +236,7 @@ def verify_wheel(content, resource):
                 require(len(unpacked) == member['size'] and zlib.crc32(unpacked) == info.CRC
                         and hashlib.sha256(unpacked).hexdigest() == member['sha256'],
                         'A generated wheel member differs from its approved content.')
+                metadata_members[info.filename] = unpacked if info.filename.endswith(('/WHEEL', '/METADATA')) else b''
                 # ZIP comments/extras and unlisted local records are forbidden.
                 require(content[central_position:central_position + 4] == b'PK\x01\x02')
                 lengths = struct.unpack_from('<3H', content, central_position + 28)
@@ -193,6 +246,7 @@ def verify_wheel(content, resource):
                 local_position = payload_end
             require(local_position == start and central_position == len(content) - 22,
                     'Unreviewed data surrounds the generated wheel members.')
+            verify_wheel_metadata(metadata_members, filename)
     except (zipfile.BadZipFile, struct.error, zlib.error, UnicodeError, NotImplementedError) as exc:
         raise ManifestError('Unsupported or malformed generated wheel.') from exc
 
@@ -264,7 +318,7 @@ class ApprovedPort:
                     resource = provenance['resource']
                     # Bound the object before asking Git to materialize its bytes.
                     require(int(git(repo, 'cat-file', '-s', blob)) == resource['size'])
-                    verify_wheel(git(repo, 'cat-file', 'blob', blob), resource)
+                    verify_wheel(git(repo, 'cat-file', 'blob', blob), resource, name.rsplit('/', 1)[-1])
                 exceptions.add((commit, item['tree'], name, mode, 'blob', blob))
         return exceptions
 

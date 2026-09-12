@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -30,10 +31,14 @@ class HistoryError(ValueError):
 
 
 def git(repo: Path, *args: str) -> bytes:
+    # The explicit checkout is the inspection authority. Hook-inherited Git
+    # context must not redirect it or change which object/configuration is read.
+    environment = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
     try:
         result = subprocess.run(
             ['git', '--no-replace-objects', '-C', str(repo), *args],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=60,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise HistoryError('Git history inspection could not complete; publication refused.') from exc

@@ -37,11 +37,20 @@ UPSTREAM_SOURCE = {
 }
 
 
-def synthetic_wheel(entries=None, configure=None):
+def synthetic_wheel(entries=None, configure=None, metadata=True):
     """Tiny inert ZIP fixtures; no packaging toolchain or wheel installation."""
     output = io.BytesIO()
+    entries = list(entries or [('fixture/__init__.py', b'VALUE = 1\n')])
+    if metadata:
+        information = {
+            'fixture-1.0.dist-info/WHEEL': b'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
+            'fixture-1.0.dist-info/METADATA': b'Metadata-Version: 2.1\nName: fixture\nVersion: 1.0\n',
+            'fixture-1.0.dist-info/RECORD': b'',
+        }
+        present = {name for name, _ in entries}
+        entries += [(name, data) for name, data in information.items() if name not in present]
     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as wheel:
-        for name, data in entries or [('fixture/__init__.py', b'VALUE = 1\n')]:
+        for name, data in entries:
             info = zipfile.ZipInfo(name)
             # ZipInfo normalizes Windows backslashes; retain hostile raw names
             # in adversarial fixtures so the validator, not the builder, rejects them.
@@ -179,6 +188,25 @@ class PublicHistoryTests(unittest.TestCase):
         with patch.object(policy.subprocess, 'run', side_effect=OSError('unavailable')):
             self.assertEqual(policy.main(['--repo', str(self.repo), '--tip', self.baseline,
                                           '--public-base', self.baseline]), 1)
+
+    def test_inherited_git_context_cannot_redirect_the_explicit_repository(self):
+        other = Path(self.temp.name) / 'other'
+        self.git('init', '-q', str(other))
+        with patch.dict(os.environ, {'GIT_DIR': str(other / '.git'), 'GIT_WORK_TREE': str(other)}):
+            actual = Path(policy.git(self.repo, 'rev-parse', '--show-toplevel').decode().strip())
+            self.assertEqual(actual.resolve(), self.repo.resolve())
+
+    def test_inherited_git_context_cannot_disguise_a_manifest_inside_the_checkout(self):
+        self.port_fixture()
+        other = Path(self.temp.name) / 'other'
+        self.git('init', '-q', str(other))
+        # Share only synthetic immutable objects; a different worktree inventory
+        # must not make a candidate-controlled policy look externally installed.
+        (other / '.git/objects/info/alternates').write_bytes(
+            ((self.repo / '.git/objects').as_posix() + '\n').encode())
+        options = self.pin(path=self.repo / 'candidate-policy.json')
+        with patch.dict(os.environ, {'GIT_DIR': str(other / '.git'), 'GIT_WORK_TREE': str(other)}):
+            self.refused(**options)
 
     def test_shallow_history_is_refused(self):
         (self.repo / '.git/shallow').write_text(self.baseline + '\n', encoding='ascii')
@@ -410,7 +438,31 @@ class PublicHistoryTests(unittest.TestCase):
         entry = {'path': WHEEL_PATH, 'mode': '100644',
                  'provenance': {'kind': 'generated', 'resource': resource}}
         port_policy.wheel_descriptor(entry)
-        port_policy.verify_wheel(content, resource)
+        port_policy.verify_wheel(content, resource, WHEEL_PATH.rsplit('/', 1)[-1])
+
+    def test_generated_resource_rejects_an_arbitrary_zip_and_private_product_contents(self):
+        self.wheel_fixture(synthetic_wheel([('payload.py', b'INERT_FIXTURE = True\n')], metadata=False))
+        self.refused()
+        for name in ('bundled/manga/plugin.json', 'payload.exe', 'library.PYD', 'library.so.1',
+                     'startup.pth', 'fixture-1.0.data/scripts/start.py'):
+            content = synthetic_wheel([(name, b'INERT_PRIVATE_PRODUCT_FIXTURE\n')])
+            with self.subTest(member=name), self.assertRaises(port_policy.ManifestError):
+                self.verify_resource(content, resource_for(content))
+
+    def test_generated_wheel_metadata_must_match_its_pure_python_identity(self):
+        wheel = b'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n'
+        metadata = b'Metadata-Version: 2.1\nName: fixture\nVersion: 1.0\n'
+        for path, content in (
+                ('WHEEL', wheel.replace(b'true', b'false')),
+                ('WHEEL', wheel.replace(b'py3-none-any', b'cp314-cp314-win_amd64')),
+                ('WHEEL', wheel + b'Tag: py3-none-any\n'),
+                ('WHEEL', wheel + b'\nUNREVIEWED_EXECUTABLE_PAYLOAD'),
+                ('METADATA', metadata.replace(b'Name: fixture', b'Name: another')),
+                ('METADATA', metadata.replace(b'Version: 1.0', b'Version: 9.0')),
+                ('METADATA', metadata + b'Name: fixture\n')):
+            archive = synthetic_wheel([('fixture-1.0.dist-info/' + path, content)])
+            with self.subTest(field=path, content=content), self.assertRaises(port_policy.ManifestError):
+                self.verify_resource(archive, resource_for(archive))
 
     def test_generated_wheel_rejects_unsafe_paths_duplicates_and_non_regular_members(self):
         names = ['../private.py', '/private.py', 'a\\private.py', 'a//private.py',
