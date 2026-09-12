@@ -17,6 +17,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Copy, Radio, Square } from 'lucide-react';
+import hlsWorkerUrl from 'hls.js/dist/hls.worker.js?url&no-inline';
 import { apiFetch, postJson, useToast, HelpBadge } from '@lds/plugin-sdk';
 import { H3LoraPicker } from '@lds/plugin-sdk/ui';
 import { shortLoraName, clipSeconds, studioFrameChoices } from '@lds/plugin-sdk/h3';
@@ -101,7 +102,8 @@ export default function LiveStudio() {
       }
       if (cancelled) return;
       if (Hls.isSupported()) {
-        const hls = new Hls({ liveSyncDurationCount: 2, liveDurationInfinity: true });
+        const hls = new Hls({ liveSyncDurationCount: 2, liveDurationInfinity: true,
+          workerPath: hlsWorkerUrl });
         hlsRef.current = hls;
         hls.on(Hls.Events.ERROR, (_event, data) => {
           if (data?.fatal) setPlayerError(`The player stopped: ${data.details || data.type}. Reload the tab or open the address in VLC.`);

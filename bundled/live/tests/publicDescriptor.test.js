@@ -17,7 +17,8 @@ test('Live owns its screen and preparation without requiring another plugin', ()
   assert.match(lane, /<H3LoraPicker apiBase="\/api\/video-studio\/live" lockKey="live.lock.loraStrength"/)
   assert.match(lane, /const optionsUrl = \(\) => '\/api\/video-studio\/live\/render-options'/)
   for (const match of lane.matchAll(/from ['"]([^'"]+)['"]/g)) {
-    assert.ok(['react', 'lucide-react', '@lds/plugin-sdk', '@lds/plugin-sdk/ui', '@lds/plugin-sdk/h3', './liveStudioApi.js'].includes(match[1]), match[1])
+    assert.ok(['react', 'lucide-react', 'hls.js/dist/hls.worker.js?url&no-inline',
+      '@lds/plugin-sdk', '@lds/plugin-sdk/ui', '@lds/plugin-sdk/h3', './liveStudioApi.js'].includes(match[1]), match[1])
   }
 })
 
