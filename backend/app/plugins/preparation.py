@@ -13,7 +13,6 @@ from .lifecycle import state_change_lock
 MAX_ACTIONS = 64
 
 
-
 class PreparationError(ValueError):
     def __init__(self, message, status=400):
         super().__init__(message)
@@ -39,7 +38,6 @@ def _allowed(record, registry, action):
     if action == environment.action_id(record.id):
         return environment.action_spec(action, registry) is not None
     return False
-
 
 
 def start(plugin_id, payload, *, registry, root):
@@ -69,6 +67,10 @@ def start(plugin_id, payload, *, registry, root):
             if not active:
                 try:
                     installer.check_start_preconditions(action)
+                    spec = registry.install_actions.get(action) or {}
+                    preflight = spec.get('node_preflight')
+                    if callable(preflight):
+                        preflight()
                 except (installer.Precondition, ValueError) as exc:
                     raise PreparationError(str(exc)) from exc
         statuses = {}

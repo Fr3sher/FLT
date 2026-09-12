@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import sys
+import threading
 import zipfile
 
 from flask import Flask
@@ -116,4 +117,80 @@ def test_tampered_download_cannot_reach_staging(acquisition):
     with pytest.raises(StoreError, match='verification'):
         service.prepare(None, 'camera_angles', None, plan['plan_id'])
     assert storage.pending(root / 'installed') == ({}, [])
+    assert 'lds_store_sample' not in sys.modules
+
+
+def test_store_http_serializes_a_disable_during_verified_download(acquisition, monkeypatch):
+    """A concurrent OFF request is applied after staging and remains OFF at boot."""
+    public, keys, _config, root = acquisition
+    publish_package(public, keys)
+    from app.plugins import routes as plugin_routes
+    from app.plugins.store import routes as store_routes
+    from app.plugins.lifecycle import state_change_lock
+
+    app = Flask(__name__)
+    app.config.update(TESTING=True, SECRET_KEY='test-only')
+    app.register_blueprint(plugin_routes.bp)
+    plan = app.test_client().post('/api/plugins/store/plan', json={'id': 'camera_angles'})
+    assert plan.status_code == 200, plan.json
+    downloaded, resume, attempted = threading.Event(), threading.Event(), threading.Event()
+    observations, responses, errors = {}, {}, []
+
+    class ObservedLock:
+        def __enter__(self):
+            if threading.current_thread().name == 'sample-store-disable':
+                held = state_change_lock.acquire(blocking=False)
+                observations['contended'] = not held
+                attempted.set()
+                if not held:
+                    state_change_lock.acquire()
+            else:
+                state_change_lock.acquire()
+
+        def __exit__(self, *args):
+            state_change_lock.release()
+
+    observed = ObservedLock()
+    monkeypatch.setattr(plugin_routes, 'state_change_lock', observed)
+    monkeypatch.setattr(store_routes, 'state_change_lock', observed)
+    target = service.StoreSession.target
+
+    def pause_after_verified_target(session, *args, **kwargs):
+        value = target(session, *args, **kwargs)
+        downloaded.set()
+        assert resume.wait(10), 'The synthetic download was never released'
+        return value
+
+    monkeypatch.setattr(service.StoreSession, 'target', pause_after_verified_target)
+
+    def request(name, path, body=None):
+        try:
+            responses[name] = app.test_client().post(path, json=body)
+        except BaseException as exc:
+            errors.append(exc)
+
+    install = threading.Thread(target=request, name='sample-store-install',
+        args=('install', '/api/plugins/store/install', {
+            'id': 'camera_angles', 'plan_id': plan.json['plan_id']}))
+    disable = threading.Thread(target=request, name='sample-store-disable',
+        args=('disable', '/api/plugins/camera_angles/disable'))
+    install.start()
+    try:
+        assert downloaded.wait(10), errors
+        disable.start()
+        assert attempted.wait(5)
+        assert observations['contended'] is True
+        assert 'disable' not in responses
+        assert storage.pending(root / 'installed') == ({}, [])
+    finally:
+        resume.set()
+        install.join(10)
+        if disable.ident is not None:
+            disable.join(10)
+    assert not install.is_alive() and not disable.is_alive()
+    assert errors == []
+    assert {name: response.status_code for name, response in responses.items()} == {
+        'install': 200, 'disable': 200}
+    pending, problems = storage.pending(root / 'installed')
+    assert not problems and pending['camera_angles']['desired_enabled'] is False
     assert 'lds_store_sample' not in sys.modules

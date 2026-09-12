@@ -165,7 +165,7 @@ def test_config_updates_stay_under_namespaced_owner(host):
     assert cfg.get('plugins.enabled') == {}
 
 
-def test_managed_environment_is_explicitly_unavailable_before_installer_hookup(host):
+def test_managed_environment_stays_unprepared_until_explicit_installation(host):
     app, csrf, root = host
     directory = write(host, requirements='requirements.txt')
     (directory / 'requirements.txt').write_text('sample==1.0')
@@ -173,10 +173,11 @@ def test_managed_environment_is_explicitly_unavailable_before_installer_hookup(h
     record = loaded.records['sample.feature']
     context = PluginContext(app, loaded, record.manifest, root / 'data/plugin-data/sample.feature')
     state = context.plugin_environment()
-    assert state['ready'] is False and state['can_install'] is False
-    assert 'installer integration' in state['reason']
-    with pytest.raises(environment.EnvironmentError, match='installer integration'):
-        environment.install('plugin_environment:sample.feature', record)
+    assert state['ready'] is False and state['can_install'] is True
+    assert state['reason']
+    from app import setup_installer
+    assert environment.installer() is setup_installer
+    assert setup_installer.known_action('plugin_environment:sample.feature')
     assert not environment.environment_dir(record).exists()
 
 

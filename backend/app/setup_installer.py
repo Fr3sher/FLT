@@ -1234,6 +1234,8 @@ def install_all_plan(caps) -> list:
     # if a future migration leaves a formerly core action in the global ordering.
     return [a for a in _INSTALL_ALL_ORDER
             if a in INSTALL_ACTIONS and a not in _PLUGIN_MANAGED_ACTIONS
+            and plugin_action_spec(a) is None
+            and not (model_download_spec(a) or {}).get('plugin')
             and known_action(a) and _action_needed(a, caps)]
 
 
@@ -1345,22 +1347,12 @@ def install_group_plan(group, caps=None) -> list:
 def start_group(group, caps=None) -> dict:
     """Prepare a named function, checking node dependencies before its models.
 
-    Dependency resolution is read-only and outside the admission locks. Workers
-    still revalidate their plans, and plugin groups then use the same atomic
-    ownership/precondition gate as an explicit preparation batch.
+    Plugin groups use the same ownership and preflight gate as an explicit
+    preparation batch. Workers revalidate their plans before installation.
     """
     plan = install_group_plan(group, caps)
     if not plan:
         return {'plan': [], 'statuses': {}}
-    for action in plan:
-        spec = plugin_action_spec(action) or {}
-        preflight = spec.get('node_preflight')
-        if callable(preflight):
-            from .services.comfyui_node_install import NodeInstallError
-            try:
-                preflight()
-            except NodeInstallError as exc:
-                raise Precondition(str(exc)) from exc
     registry = _plugin_registry()
     plugin_group = registry.install_groups.get(group) if registry else None
     if plugin_group:
@@ -1368,6 +1360,14 @@ def start_group(group, caps=None) -> dict:
         from .plugins.loader import external_dir
         return preparation.start(plugin_group['plugin'], {'actions': plan},
                                  registry=registry, root=external_dir())
+    for action in plan:
+        spec = plugin_action_spec(action) or {}
+        preflight = spec.get('node_preflight')
+        if callable(preflight):
+            try:
+                preflight()
+            except ValueError as exc:
+                raise Precondition(str(exc)) from exc
     statuses = {}
     for action in plan:
         try:

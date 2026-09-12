@@ -9,6 +9,16 @@ from ..services import comfyui_control
 bp = Blueprint('setup', __name__, url_prefix='/api/setup')
 
 
+def _plugin_action_admin_gate(action):
+    """The historical Setup URL must preserve a plugin action's admin boundary."""
+    spec = setup_installer.plugin_action_spec(action)
+    download = setup_installer.model_download_spec(action)
+    if spec is not None or (download is not None and download.get('plugin')):
+        from ..plugins.admin import require_admin
+        return require_admin()
+    return None
+
+
 @bp.get('/autodetect')
 def setup_autodetect():
     """Discover already-installed tools (Ollama/ComfyUI/ai-toolkit) so the wizard
@@ -112,30 +122,41 @@ def setup_resolve_comfyui_folders():
     return jsonify(payload)
 
 
+@bp.get('/actions')
+def plugin_actions():
+    """The Setup actions the enabled plugins added, with their labels — the
+    core's own labels are the frontend's table; a plugin's come from here."""
+    return jsonify({'actions': setup_installer.plugin_actions_catalog()})
+
+
 @bp.post('/install/<action>')
 def start_install(action):
-    if action not in setup_installer.INSTALL_ACTIONS:
+    if not setup_installer.known_action(action):
         return jsonify({'error': f'unknown action: {action}'}), 404
+    if (denied := _plugin_action_admin_gate(action)) is not None:
+        return denied
     try:
         state = setup_installer.start(action)
     except setup_installer.AlreadyRunning:
         return jsonify({'error': 'install already running'}), 409
-    except setup_installer.Precondition as e:
+    except (setup_installer.Precondition, ValueError) as e:
         return jsonify({'error': str(e)}), 400
     return jsonify(state)
 
 
 @bp.get('/install/<action>/status')
 def install_status(action):
-    if action not in setup_installer.INSTALL_ACTIONS:
+    if not setup_installer.known_action(action):
         return jsonify({'error': f'unknown action: {action}'}), 404
     return jsonify(setup_installer.status(action))
 
 
 @bp.post('/install/<action>/cancel')
 def cancel_install(action):
-    if action not in setup_installer.INSTALL_ACTIONS:
+    if not setup_installer.known_action(action):
         return jsonify({'error': f'unknown action: {action}'}), 404
+    if (denied := _plugin_action_admin_gate(action)) is not None:
+        return denied
     try:
         state = setup_installer.cancel(action)
     except setup_installer.Precondition as exc:
@@ -158,6 +179,10 @@ def start_install_all():
     """One click that queues every install in the plan above. Reuses the per-action
     serialization (pip FIFO) and preconditions, so it's a safe fan-out — nothing new to
     race. Returns the plan + each action's status for the global progress bar."""
+    # A selected plugin batch must not silently become the core's global plan.
+    # Existing global clients send either an empty object or no body.
+    if request.get_data() and request.get_json(silent=True) != {}:
+        return jsonify(error='Use the plugin’s preparation action to install selected components.'), 400
     caps = capabilities.probe()
     return jsonify(setup_installer.start_all(caps))
 
@@ -167,7 +192,7 @@ def install_group_plan(group):
     """What the one-click install for a NAMED group (today: the Krea 2 Edit
     engine — node pack + four weights) would queue right now. Read-only, so the
     button can show its own count and stay honest about what is already there."""
-    if group not in setup_installer._INSTALL_GROUPS:
+    if group not in setup_installer.install_groups():
         return jsonify({'error': f'unknown group: {group}'}), 404
     # force=True: this plan is read right after the ComfyUI folder is saved, and a
     # 30 s-stale probe would answer "nothing to install" for a machine that has
@@ -181,9 +206,23 @@ def start_install_group(group):
     """Install a whole engine in one click without dragging it into the
     unattended 'Install everything' plan — a second local engine is ~20 GB, so it
     downloads when it is ASKED for, not by default."""
-    if group not in setup_installer._INSTALL_GROUPS:
+    if group not in setup_installer.install_groups():
         return jsonify({'error': f'unknown group: {group}'}), 404
-    return jsonify(setup_installer.start_group(group, capabilities.probe(force=True)))
+    registry = setup_installer._plugin_registry()
+    if registry and group in registry.install_groups:
+        from ..plugins.admin import require_admin
+        if (denied := require_admin()) is not None:
+            return denied
+    for action in setup_installer.install_groups()[group]:
+        if (denied := _plugin_action_admin_gate(action)) is not None:
+            return denied
+    from ..plugins.preparation import PreparationError
+    try:
+        return jsonify(setup_installer.start_group(group, capabilities.probe(force=True)))
+    except PreparationError as exc:
+        return jsonify(error=str(exc)), exc.status
+    except (setup_installer.Precondition, ValueError) as exc:
+        return jsonify(error=str(exc)), 400
 
 
 @bp.get('/install-all/status')
