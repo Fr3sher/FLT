@@ -218,6 +218,29 @@ def test_the_local_live_channel_refuses_whatever_the_press(app, levers, own_rend
     assert own_render['interrupts'] == 0 and levers['calls'] == []
 
 
+@pytest.mark.parametrize('state', ['starting', 'running', 'stopping'])
+def test_live_protects_the_gap_between_clips(app, levers, own_render, monkeypatch, state):
+    from types import SimpleNamespace
+    own_render['live'] = SimpleNamespace(state=state, params={'gpu': 'local'})
+    monkeypatch.setattr(mr, 'comfyui_queue_busy', lambda: False)
+    with app.app_context():
+        with pytest.raises(mr.MemoryReleaseBusy) as error:
+            mr.free_memory(interrupt=True, settle_seconds=0)
+    assert error.value.can_interrupt is False
+    assert own_render['interrupts'] == 0 and levers['calls'] == []
+
+
+def test_failed_plugin_activity_check_never_unloads_memory(client, levers, monkeypatch):
+    def failed_check():
+        raise RuntimeError('plugin activity is unavailable')
+    monkeypatch.setattr(mr, '_automatic_work_reason', failed_check)
+    response = client.post('/api/system/free-memory', json={'interrupt': True})
+    assert response.status_code == 409
+    assert response.json['can_interrupt'] is False
+    assert 'Nothing was unloaded' in response.json['error']
+    assert levers['calls'] == []
+
+
 @pytest.mark.plugins()
 def test_without_live_memory_release_never_loads_a_live_runtime(app, monkeypatch):
     import builtins

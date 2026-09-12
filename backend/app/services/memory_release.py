@@ -187,6 +187,13 @@ def free_memory(*, interrupt=False, job_id=None, interrupt_wait_seconds=INTERRUP
     from . import system_stats
     from ..job_queue import GPU_ARBITER_LOCK
     from ..utils.comfyui import ComfyVramFreeVerdict, free_comfyui_vram
+    try:
+        automatic = _automatic_work_reason()
+    except Exception as exc:
+        raise MemoryReleaseBusy('LDS could not verify plugin activity. Nothing was unloaded; '
+                                'check the active plugins before trying again.') from exc
+    if automatic:
+        raise MemoryReleaseBusy(automatic)
     reason, kind = _busy()
     interrupted = None
     held = False
@@ -195,9 +202,6 @@ def free_memory(*, interrupt=False, job_id=None, interrupt_wait_seconds=INTERRUP
         if state == 'unmapped':
             raise MemoryReleaseBusy(_UNMAPPED)
         if state == 'own':
-            automatic = _automatic_work_reason()
-            if automatic:
-                raise MemoryReleaseBusy(automatic)
             if not interrupt or (job_id and str(job_id) != str(job.job_id)):
                 raise _offer(job.job_id, "Another clip of LDS's own is rendering now."
                              if job_id else "ComfyUI is rendering a clip of LDS's own.")
