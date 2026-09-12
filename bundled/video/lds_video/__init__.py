@@ -27,6 +27,8 @@ def register(ctx):
 
     ctx.register_install_action('video', label='Prepare video decoding and analysis',
                                 python='capability', requirements=ctx.dir / 'requirements-host.txt')
+    ctx.register_install_action('shot_detect', label='Install shot-boundary detection',
+                                python='capability', packages=('transnetv2-pytorch', 'av'))
     ctx.register_install_action('video_host', label='Prepare Video tools in LDS',
                                 python='app', requirements=ctx.dir / 'requirements-host.txt',
                                 verify=probes.video_host_ready)

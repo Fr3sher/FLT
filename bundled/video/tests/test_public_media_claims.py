@@ -176,3 +176,27 @@ def test_live_readiness_is_independent_of_video_plugin(host, monkeypatch):
     assert loaded.records['video'].state == 'disabled'
     assert result['ready'] and result['encoder'] and result['missing'] == []
     assert result['options'] == {'turbo': {'available': True}}
+
+
+def test_shot_detection_install_is_owned_by_loaded_video_after_core_transfer(host, monkeypatch):
+    from app import config, setup_installer as installer
+    # This source-only product fix is also qualified on the pre-transfer host.
+    # The integrated host owns the separate managed-capability allowlist and
+    # dispatch to its dedicated environment worker; it is never a Flask pip job.
+    if not hasattr(installer, '_MANAGED_CAPABILITY_ACTIONS'):
+        monkeypatch.setattr(installer, '_CAPABILITY_ML_ACTIONS', (*installer._CAPABILITY_ML_ACTIONS, 'shot_detect'))
+    else:
+        assert 'shot_detect' in installer._MANAGED_CAPABILITY_ACTIONS
+    monkeypatch.setattr(installer, 'INSTALL_ACTIONS', tuple(a for a in installer.INSTALL_ACTIONS if a != 'shot_detect'))
+    monkeypatch.setattr(installer, '_WORKERS', {a: fn for a, fn in installer._WORKERS.items() if a != 'shot_detect'})
+    loaded = activate(host, {'video'})
+    assert loaded.records['video'].state == 'loaded', loaded.records['video'].error
+    with host[0].app_context():
+        assert installer.known_action('shot_detect')
+        spec = installer.plugin_action_spec('shot_detect')
+        assert spec['plugin'] == 'video'
+        assert spec['python'] == 'capability' and spec['capability'] == 'shot_detect'
+        assert spec['packages'] == ['transnetv2-pytorch', 'av']
+        assert 'shot_detect' in manifest('video')['owns']['install_actions']
+        config.save_config({'plugins': {'enabled': {'video': False}}})
+        assert not installer.known_action('shot_detect')

@@ -18,6 +18,7 @@
     "install_actions": [
       "video",
       "video_host",
+      "shot_detect",
       "dlss5nr_bridge",
       "h3_base",
       "h3_text_encoder",
