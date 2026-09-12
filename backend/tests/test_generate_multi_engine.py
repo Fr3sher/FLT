@@ -18,6 +18,8 @@ from PIL import Image
 
 from app.services import face_dataset_service as svc
 
+pytestmark = pytest.mark.plugins('api_engines')
+
 
 def _png_bytes(color=(255, 0, 0)):
     buf = io.BytesIO(); Image.new('RGB', (64, 64), color).save(buf, 'PNG')

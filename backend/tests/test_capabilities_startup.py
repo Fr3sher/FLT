@@ -227,11 +227,11 @@ def test_waiting_reads_share_scan_but_force_reads_changed_settings(app, monkeypa
             release.set()
         before = first.result(timeout=3)
         after = second.result(timeout=3)
-    assert before == {'model': 'before', 'key_set': False}
-    assert after == ({'model': 'after', 'key_set': True} if force else before)
+    assert before == {'model': 'before', 'key_set': False, 'training_visible': False}
+    assert after == ({'model': 'after', 'key_set': True, 'training_visible': False} if force else before)
     assert len(calls) == (2 if force else 1)
     # A force issued later is also a fresh read, even with a valid cache.
-    assert in_app(app, force=True) == {'model': 'after', 'key_set': True}
+    assert in_app(app, force=True) == {'model': 'after', 'key_set': True, 'training_visible': False}
     assert len(calls) == (3 if force else 2)
 
 
@@ -306,6 +306,6 @@ def test_clear_discards_late_ffmpeg_cache_even_when_another_probe_fails(monkeypa
         with pytest.raises(ValueError, match='another probe failed'):
             caps.probe()
     else:
-        assert caps.probe() == {'video_encode': False}
+        assert caps.probe() == {'video_encode': False, 'training_visible': False}
     assert caps.ffmpeg_tools._ready_cache is None
     assert caps._cache is None

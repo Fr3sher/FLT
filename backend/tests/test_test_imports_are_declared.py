@@ -27,8 +27,11 @@ suite that runs a subset when an optional extra is absent is the intended design
 Only a MODULE-LEVEL import is a hard collection dependency.
 """
 import ast
+import json
+import os
 import re
 import sys
+import subprocess
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -70,17 +73,38 @@ def _declared() -> set:
 
 
 def _repo_local() -> set:
-    """Module names that resolve to a file or package IN this repo — sibling test
-    modules, helpers, and `scripts/` (which several suites append to sys.path)."""
+    """Tracked Python modules and explicit public plugin package roots only.
+
+    A temporary virtualenv or fixture folder is not evidence of a local package.
+    Product names come from their tracked manifest plus real package files, never
+    from an unrestricted lds_* prefix.
+    """
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
+    env['GIT_ALLOW_PROTOCOL'] = ''
+    result = subprocess.run(['git', '-C', str(_ROOT), 'ls-files', '-z', '--', 'backend', 'scripts', 'bundled'],
+                            capture_output=True, check=True, env=env)
+    tracked = {Path(name) for name in result.stdout.decode('utf-8').split('\0') if name}
     out = set()
-    for base in (_BACKEND, _ROOT / 'scripts'):
-        if not base.exists():
+    module_roots = {Path('backend'), Path('backend/tests'), Path('backend/infer'), Path('scripts')}
+    for path in tracked:
+        if path.suffix != '.py' or path.parts[0] not in ('backend', 'scripts'):
             continue
-        for path in base.rglob('*.py'):
+        if path.parent in module_roots:
             out.add(path.stem)
-        for path in base.rglob('*'):
-            if path.is_dir():
-                out.add(path.name)
+        if len(path.parts) > 2:
+            out.add(path.parts[1])
+        if path.parts[0] == 'scripts':
+            out.add('scripts')
+    for path in tracked:
+        if len(path.parts) != 3 or path.parts[0] != 'bundled' or path.name != 'plugin.json':
+            continue
+        manifest = json.loads((_ROOT / path).read_text(encoding='utf-8'))
+        package = manifest.get('python_package')
+        if not isinstance(package, str) or not package.isidentifier():
+            continue
+        package_root = path.parent / package
+        if any(candidate.suffix == '.py' and candidate.is_relative_to(package_root) for candidate in tracked):
+            out.add(package)
     return out
 
 
@@ -128,6 +152,8 @@ def test_the_guard_would_catch_the_three_packages_that_broke_a_release():
     else."""
     local = _repo_local()
     stdlib = set(sys.stdlib_module_names)
+    assert 'lds_api_engines' in local  # a tracked, manifested package
+    assert 'lds_unregistered_fixture' not in local  # no prefix exemption
     for name in ('safetensors', 'instaloader', 'pytest_flask'):
         assert name not in stdlib, f'{name} misread as stdlib'
         assert name not in local, f'{name} misread as a repo module'
