@@ -1,24 +1,10 @@
 """Setup installer: run whitelisted, self-contained installs in a background
 thread and expose their live state for polling. Actions:
 
-  ml_extras          -> pip install -r backend/requirements-ml.txt (the app's own venv):
-                        installs ALL the ML extras at once — kept for a first-time setup
-  face_scoring       -> pip install JUST the face-scoring packages (insightface + onnx-
-                        runtime, versions read from requirements-ml.txt) into the inter-
-                        preter probe_face_scoring resolves — install/repair ONE feature
-  masks              -> pip install JUST the person-mask package (rembg) into the inter-
-                        preter probe_masks resolves — install/repair ONE feature
-  watermark_inpaint  -> install the watermark-inpainting package (simple-lama-inpainting,
-                        version floor read from requirements-ml.txt) into a dedicated
-                        3.10-3.12 interpreter. When the user has configured one it is used;
-                        otherwise the action AUTO-PROVISIONS one — finds a base Python
-                        3.10-3.12, builds an isolated venv under the data dir, installs CPU
-                        torch + simple-lama into it, and records it as watermark.python. No
-                        manual venv, no setting to edit (the package needs Pillow<10 and can
-                        never share the app's Pillow-12 venv)
-  (face_scoring/masks/watermark_inpaint all follow the same shape: ML interpreter resolved
-   per capability, requirements-ml.txt pinned as a -c constraint, probe cache invalidated
-   on success so the capability flips without a restart.)
+  ml_extras          -> face scoring and masks in LDS's managed quality Python
+  face_scoring       -> verify and install the selected face-scoring packages
+  masks              -> verify and install the selected person-mask packages
+  watermark_inpaint  -> verify and install in LDS's isolated watermark Python
   ollama_model       -> stream Ollama's /api/pull for the configured vision model
   klein_model        -> download the Klein 9B (KV) fp8 diffusion model into
                         <ComfyUI>/models/unet/klein/ — a PUBLIC download (no token). The KV
@@ -34,10 +20,9 @@ thread and expose their live state for polling. Actions:
   krea_vae           -> qwen_image_vae into <ComfyUI>/models/vae/
   krea_identity_lora -> the Krea 2 Identity Edit LoRA (Civitai) into
                         <ComfyUI>/models/loras/krea/
-  krea_nodes         -> git clone (ZIP fallback) the comfyui-krea2edit custom-node pack
-                        into <ComfyUI>/custom_nodes/ — the ONLY action that installs code
-                        rather than weights, and the only one whose success still requires
-                        the user to restart ComfyUI (nodes register at startup only)
+  krea_nodes         -> prepare the pinned node pack in a supported ComfyUI portable;
+                        existing unmanaged folders are preserved. Restart and a loaded-node
+                        check are required before the engine can be considered ready.
 
 No shell, no client-supplied arguments: each action's command/URL/destination is fixed.
 
@@ -65,8 +50,8 @@ import requests
 
 from . import capabilities
 from . import config as cfg
-from .utils.redact import redact_user_paths
-from .services import infer_env
+from .utils.redact import redact_tokens, redact_user_paths
+from .services import infer_env, managed_python
 from .version import APP_VERSION
 
 logger = logging.getLogger(__name__)
@@ -653,6 +638,8 @@ def _append(action, line):
     if run is None:
         return
     log = run['log']
+    if plugin_action_spec(action) is not None:
+        line = redact_user_paths(redact_tokens(line))
     log.append(line.rstrip('\n'))
     if len(log) > _LOG_MAX:
         del log[:-_LOG_MAX]
@@ -745,7 +732,7 @@ def _ml_requirement_names(requirements=_ML_REQUIREMENTS) -> set:
 def _ml_requirement_specs(*, exclude=frozenset(), requirements=_ML_REQUIREMENTS) -> list:
     """Requirement lines from requirements-ml.txt in FILE ORDER, dropping any whose
     canonical name is in `exclude`. One source of truth for the ML versions — the
-    monolithic ml_extras install builds its Flask-safe package list from here."""
+    scoped installers build their constrained package lists from here."""
     out = []
     try:
         for raw in requirements.read_text(encoding='utf-8').splitlines():
@@ -856,15 +843,16 @@ def manual_command(action) -> str:
     the dev venv -- instead of whatever bare `pip` happens to be first on PATH
     (which is the whole point of the user's question: a plain `pip install` would
     land in the wrong environment and the extras would never be importable)."""
-    if action == 'ml_extras':
-        # Install EVERYTHING in requirements-ml.txt EXCEPT the Pillow-incompatible
-        # extra (that one needs its own env — see watermark_inpaint below), into this
-        # interpreter, with Pillow PINNED so pip can't downgrade the app's Pillow.
-        specs = ' '.join(f'"{s}"' for s in _ml_requirement_specs(exclude=_INCOMPATIBLE_CANON))
-        guard = ' '.join(f'"{g}"' for g in _flask_pillow_guard(sys.executable))
-        cmd = (f'{_quote(sys.executable)} -m pip install {specs} '
-               f'-c {_quote(str(_ML_REQUIREMENTS))}')
-        return f'{cmd} {guard}' if guard else cmd
+    if action in ('ml_extras', 'face_scoring', 'masks', 'video_text', 'watermark_inpaint'):
+        return '(Use Install in Setup: LDS creates and verifies the isolated Python first.)'
+    spec = plugin_action_spec(action)
+    if spec is not None:
+        if callable(spec.get('run')):
+            return f"(run from Setup: {spec.get('label') or action})"
+        try:
+            return ' '.join(_quote(part) for part in _plugin_action_command(spec))
+        except Precondition as e:
+            return f'({e})'
     if action in _PIP_REQUIREMENTS:        # scrape_extras: pure-python -r install
         return f'{_quote(sys.executable)} -m pip install -r {_quote(str(_PIP_REQUIREMENTS[action]))}'
     if action in _CAPABILITY_ML_ACTIONS:
@@ -951,13 +939,20 @@ def manual_command(action) -> str:
         from .services import neural_render
         return (f'curl -L -o bridge.zip "{neural_render.BRIDGE_RELEASE["url"]}"  '
                 f'&&  unzip bridge.zip -d "{neural_render.runtime_dir()}"')
-    if action in _MODEL_DOWNLOADS:
-        spec = _MODEL_DOWNLOADS[action]
+    spec = model_download_spec(action)
+    if spec is not None:
         try:
             dest = _download_dest_path(action)
+            root = _comfyui_root()
         except Precondition:
             dest = os.path.join('<ComfyUI>', 'models', *spec['dest'])
-        return f'curl -L -o "{dest}" "{spec["url"]}"'
+            root = '<ComfyUI>'
+        # A stage download names every file it lands, the branch first: the
+        # manual equivalent of one button is the whole directory, not one file.
+        lines = [f'curl -L -o "{dest}" "{spec["url"]}"']
+        for comp in spec.get('companions') or ():
+            lines.append(f'curl -L -o "{os.path.join(root, "models", *comp["dest"])}" "{comp["url"]}"')
+        return '  &&  '.join(lines)
     if action in _NODE_PACKS:
         spec = _NODE_PACKS[action]
         try:
@@ -996,34 +991,11 @@ def status(action) -> dict:
 
 
 def start(action) -> dict:
-    if action not in INSTALL_ACTIONS:
-        raise ValueError(f'unknown action: {action}')
-    global _pip_current
-    with _lock:
-        run = _runs.get(action)
-        if run and run['state'] in ('running', 'queued'):
-            raise AlreadyRunning(action)
-        if action == 'ollama_model':
-            _check_ollama_precondition()
-        if action in _MODEL_DOWNLOADS:
-            _check_download_precondition(action)
-        if action in _NODE_PACKS:
-            _node_pack_dest(action)      # raises Precondition without a valid ComfyUI
-        if action in _BUNDLED_NODE_PACKS:
-            _bundled_pack_dest(action)   # same precondition, shipped source
-        _runs[action] = _new_run()
-        if action in _PIP_ACTIONS and _pip_current is not None:
-            # A pip install already owns the worker -> queue this one (FIFO, click
-            # order) instead of racing it into the same environment. It starts on its
-            # own when the current install finishes (see _release_pip_slot).
-            _runs[action]['state'] = 'queued'
-            _runs[action]['waiting_for'] = _pip_current
-            _pip_queue.append(action)
-            return status(action)
-        if action in _PIP_ACTIONS:
-            _pip_current = action
-    threading.Thread(target=_execute, args=(action,), daemon=True).start()
-    return status(action)
+    # The same short admission lock protects plugin removal/disable/replace.
+    # Install work itself remains in the existing FIFO worker, outside it.
+    from .plugins.lifecycle import state_change_lock
+    with state_change_lock:
+        return _start_locked(action)
 
 
 def cancel(action) -> dict:
@@ -1100,7 +1072,7 @@ def _comfyui_root() -> str:
 def _download_dest_path(action) -> str:
     """Absolute destination for a model download, under the validated ComfyUI
     models root."""
-    spec = _MODEL_DOWNLOADS[action]
+    spec = model_download_spec(action)
     return os.path.join(_comfyui_root(), 'models', *spec['dest'])
 
 
@@ -1159,14 +1131,19 @@ def _bundled_pack_state(action) -> str:
 
 def _check_download_precondition(action):
     dest = _download_dest_path(action)
-    spec = _MODEL_DOWNLOADS[action]
+    spec = model_download_spec(action)
+    # Check the nearest existing ancestor even when nested model folders
+    # do not exist yet on a fresh installation.
+    probe = os.path.dirname(dest)
+    while probe and not os.path.isdir(probe) and os.path.dirname(probe) != probe:
+        probe = os.path.dirname(probe)
     try:
-        free_gb = shutil.disk_usage(os.path.dirname(os.path.dirname(dest))).free / 1e9
+        free_gb = shutil.disk_usage(probe).free / 1e9
         if free_gb < spec['min_free_gb']:
             raise Precondition(f'not enough disk space: {free_gb:.1f} GB free, '
                                f"~{spec['min_free_gb']} GB needed for this file")
     except OSError:
-        pass   # unknown -> never block on a stat failure
+        pass
 
 
 # --- "Install everything" orchestrator -----------------------------------------
@@ -1200,21 +1177,9 @@ def _broken_or_missing(missing, invalid) -> set:
 def _action_needed(action, caps) -> bool:
     """Is `action` both MISSING and satisfiable right now, from live capabilities?
     Pure (caps in, bool out) — the single rule install_all_plan is built from."""
-    if action == 'dlss5nr_bridge':
-        # Never part of "Install everything": a Windows-and-NVIDIA-only lane
-        # whose model the user must bring is an opt-in card, not a default.
-        return False
-    if action == 'scrape_extras':
-        # Pure-python wheels into THIS interpreter, so no ML-range gate: runnable on
-        # any Python the app itself starts on. scrape_deps is False as soon as ONE of
-        # the modules is absent, which is what makes a later-added package (instaloader)
-        # reachable from "Install everything" instead of only the per-tile Reinstall.
-        return not caps.get('scrape_deps')
     if action in ('face_scoring', 'masks'):
-        # These install into the app's OWN interpreter, so they need it inside the ML
-        # wheel range (3.10-3.12); on a newer Python they'd only source-build and fail,
-        # so "Install everything" skips them (the per-feature tile still explains why).
-        if not (caps.get('python') or {}).get('ml_supported', True):
+        runtime = (caps.get('python') or {}).get('managed_ml')
+        if runtime is not None and not runtime.get('available', False):
             return False
         return not caps.get(action)
     if action == 'watermark_inpaint':
@@ -1261,11 +1226,15 @@ def _action_needed(action, caps) -> bool:
 
 def install_all_plan(caps) -> list:
     """The ordered list of install actions 'Install everything' will queue for these
-    capabilities — every MISSING component whose preconditions are already met. Pure and
+    capabilities — every listed MISSING core component whose preconditions are met. Pure and
     deterministic (order = _INSTALL_ALL_ORDER) so it can be tested and drives the global
-    progress count. Empty => everything the app can install itself is already in place."""
+    progress count. Plugin components remain explicit in their own preparation pages."""
     caps = caps or {}
-    return [a for a in _INSTALL_ALL_ORDER if _action_needed(a, caps)]
+    # Plugin preparation stays explicit on its owner's page. Keep this boundary even
+    # if a future migration leaves a formerly core action in the global ordering.
+    return [a for a in _INSTALL_ALL_ORDER
+            if a in INSTALL_ACTIONS and a not in _PLUGIN_MANAGED_ACTIONS
+            and known_action(a) and _action_needed(a, caps)]
 
 
 def start_all(caps) -> dict:
@@ -1338,12 +1307,12 @@ def install_group_plan(group, caps=None) -> list:
     installed, in a fixed order. `caps` is the live capabilities payload (each
     group's gaps come from the comfyui.* keys named in _GROUP_CAPS_KEYS); with
     none it plans the whole group. Pure."""
-    members = _INSTALL_GROUPS.get(group)
+    members = install_groups().get(group)
     if not members:
         return []
     if caps is None:
         return list(members)
-    keys = _GROUP_CAPS_KEYS[group]
+    keys = group_caps_keys(group)
     c = (caps or {}).get('comfyui') or {}
     if not c.get('dir_valid'):
         return []                      # nowhere to install into — never guess a path
@@ -1360,7 +1329,7 @@ def install_group_plan(group, caps=None) -> list:
     #                             missing because it could not ask). Not on disk +
     #                             no answer = install it; a stopped ComfyUI must not
     #                             silently drop the pack from a one-click install.
-    #   no pack action        -> the group installs weights only (SeedVR2).
+    #   no pack action        -> the group installs weights only.
     if not keys['pack_action']:
         needs_pack = False
     elif c.get(keys['nodes_installed']):
@@ -1374,9 +1343,31 @@ def install_group_plan(group, caps=None) -> list:
 
 
 def start_group(group, caps=None) -> dict:
-    """Queue every action in install_group_plan. Same fan-out contract as
-    start_all (per-action preconditions, pip FIFO, parallel downloads)."""
+    """Prepare a named function, checking node dependencies before its models.
+
+    Dependency resolution is read-only and outside the admission locks. Workers
+    still revalidate their plans, and plugin groups then use the same atomic
+    ownership/precondition gate as an explicit preparation batch.
+    """
     plan = install_group_plan(group, caps)
+    if not plan:
+        return {'plan': [], 'statuses': {}}
+    for action in plan:
+        spec = plugin_action_spec(action) or {}
+        preflight = spec.get('node_preflight')
+        if callable(preflight):
+            from .services.comfyui_node_install import NodeInstallError
+            try:
+                preflight()
+            except NodeInstallError as exc:
+                raise Precondition(str(exc)) from exc
+    registry = _plugin_registry()
+    plugin_group = registry.install_groups.get(group) if registry else None
+    if plugin_group:
+        from .plugins import preparation
+        from .plugins.loader import external_dir
+        return preparation.start(plugin_group['plugin'], {'actions': plan},
+                                 registry=registry, root=external_dir())
     statuses = {}
     for action in plan:
         try:
@@ -1393,14 +1384,14 @@ def start_group(group, caps=None) -> dict:
 def status_many(actions) -> dict:
     """Per-action status for a set of actions (the live 'Install everything' plan), so the
     UI polls ONE endpoint instead of one request per action. Unknown names are dropped."""
-    return {a: status(a) for a in actions if a in INSTALL_ACTIONS}
+    return {a: status(a) for a in actions if known_action(a)}
 
 
 def _execute(action):
     try:
-        rc = _WORKERS[action](action)
+        rc = _worker_for(action)(action)
         _finish_run(action, rc, 'success' if rc == 0 else 'error')
-        if action in _IMPORT_CACHE_ACTIONS and rc == 0:
+        if (action in _IMPORT_CACHE_ACTIONS or plugin_action_spec(action) is not None) and rc == 0:
             try:
                 capabilities.clear_import_cache()
             except Exception:
@@ -1417,7 +1408,7 @@ def _execute(action):
                 capabilities.clear_import_cache()
             except Exception:
                 logger.debug('probe-cache clear failed after ollama_model', exc_info=True)
-        if (action in _MODEL_DOWNLOADS or action in _ALL_NODE_PACKS) and rc == 0:
+        if (model_download_spec(action) is not None or action in _ALL_NODE_PACKS) and rc == 0:
             # The training-base/model listers cache their scans 5 min and
             # /object_info is cached per API address — a freshly downloaded model
             # (or an installed node pack, once ComfyUI has been restarted) must
@@ -1459,22 +1450,29 @@ def _execute(action):
     finally:
         # Always hand the pip worker to the next queued install, even on failure — a
         # crashed install must not wedge the queue behind it.
-        if action in _PIP_ACTIONS:
+        if _is_pip_action(action):
             _release_pip_slot(action)
 
 
-def _run_pip(action, cmd) -> int:
+def _run_pip(action, cmd, *, env=None) -> int:
     """Run a pip command, streaming its output to the ring log, with a bounded retry
     on a TRANSIENT file-lock error (an antivirus/indexer holding a just-written file —
     Errno 13 / WinError 5|32|2). pip is idempotent, so a rerun finishes the interrupted
     step. A genuine build/resolution failure doesn't match _RETRYABLE_PIP_ERR and is
     returned immediately. Concurrency is already prevented by the pip queue; this is the
-    single-process defence (the Bitdefender-style lock users without a queue still hit)."""
+    single-process defence (the Bitdefender-style lock users without a queue still hit).
+    Plugin environments pass their sanitized env through every retry; callers
+    without one retain the historical process environment."""
+    if env is None and action in ('ml_extras', 'face_scoring', 'masks', 'video_text',
+                                  'watermark_inpaint', 'bank_scoring',
+                                  'bank_siglip2', 'watermark_detect', 'shot_detect'):
+        env = managed_python.subprocess_env()
     rc = -1
     for attempt in range(1, _PIP_RETRIES + 1):
         buf = []
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1)
+                                text=True, bufsize=1, env=env,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         for line in proc.stdout:
             _append(action, line)
             buf.append(line)
@@ -1494,59 +1492,11 @@ def _run_pip(action, cmd) -> int:
 
 
 def _run_ml_extras(action) -> int:
-    """pip-install worker for the two bundle actions (name kept for callers/tests):
-      scrape_extras -> `pip install -r requirements-scrape.txt` (pure python) into THIS venv
-      ml_extras     -> the Flask-SAFE ML extras only (face-scoring + masks packages),
-                       into THIS venv, with Pillow PINNED so no dependency can
-                       downgrade it. The Pillow-incompatible extra (simple-lama-
-                       inpainting, which hard-requires pillow<10) is NEVER installed
-                       here — it goes to a dedicated ML interpreter (see
-                       _run_watermark_inpaint), so a full Setup can't corrupt the
-                       Flask venv's Pillow. That corruption is the "environment that
-                       survives updates" bug this split closes at the source.
-    """
+    """Legacy shared-quality button; heavy engines remain explicit selections."""
     if action != 'ml_extras':
-        # scrape_extras: pure-python, safe to install straight into this interpreter.
         return _run_pip(action, [sys.executable, '-m', 'pip', 'install', '-r',
-                                 str(_PIP_REQUIREMENTS.get(action, _ML_REQUIREMENTS))])
-
-    # ml_extras (insightface/numpy<2/onnx) has no wheels outside Python 3.10–3.12;
-    # on a newer interpreter pip source-builds and fails with a cryptic numpy
-    # conflict. Lead the log with a plain-English explanation + the fix so the
-    # traceback that follows is already contextualized.
-    ps = capabilities.python_ml_status()
-    if not ps['ml_supported']:
-        for line in (
-            '=' * 64,
-            f"NOTE: this app runs on Python {ps['version']}, but the ML extras",
-            f"need Python {ps['ml_range']} (insightface / numpy<2 / onnxruntime",
-            "publish no wheels for newer versions → pip will try to BUILD them",
-            "from source and the install will likely fail below.",
-            "",
-            "These extras are OPTIONAL — they only add face-resemblance scoring",
-            "and background masking. You can:",
-            "  1. Skip them (the app works without them), or",
-            "  2. Install them into a separate Python 3.11/3.12 venv and set",
-            "     face_scoring.python + masks.python to it in Settings.",
-            '=' * 64,
-        ):
-            _append(action, line)
-    # Flask-safe subset (everything except the Pillow-incompatible extra) + Pillow
-    # pinned so a transitive dep can never downgrade the app's Pillow.
-    specs = _ml_requirement_specs(exclude=_INCOMPATIBLE_CANON)
-    cmd = ([sys.executable, '-m', 'pip', 'install', *specs,
-            '-c', str(_ML_REQUIREMENTS)] + _flask_pillow_guard(sys.executable))
-    rc = _run_pip(action, cmd)
-    # The Pillow-incompatible extra is deliberately absent from the Flask venv: say
-    # so and how to add it safely, so "install everything" never silently half-does
-    # the job (and never breaks Pillow doing it). The 'Install inpainting' button now
-    # BUILDS a dedicated Python for it automatically — no manual venv to create.
-    for pkg in sorted(_FLASK_VENV_INCOMPATIBLE):
-        _append(action, f"note: {pkg} is NOT installed into the app's own Python "
-                        f"(it needs Pillow<10, which would break the app). Click the "
-                        f"'Install inpainting' button to enable it — it builds a "
-                        f"dedicated Python for you automatically.")
-    return rc
+                                 str(_PIP_REQUIREMENTS[action])])
+    return _install_quality_tools(action, ('face_scoring', 'masks'))
 
 
 # --- Auto-provisioned watermark venv -------------------------------------------
@@ -1612,11 +1562,13 @@ def _install_cpu_torch_pair(action, python, *, constraints=None) -> int:
 _MIN_PIP = (23, 1)
 
 
-def _pip_version(python):
+def _pip_version(python, *, isolated_env=None):
     """(major, minor) of `python`'s pip — read by RUNNING it — or None when it
     cannot be read (missing/fake interpreter, no pip module)."""
     try:
-        proc = subprocess.run([python, '-m', 'pip', '--version'],
+        cmd = ([python, '-I', '-m', 'pip', '--isolated', '--version'] if isolated_env is not None
+               else [python, '-m', 'pip', '--version'])
+        proc = subprocess.run(cmd, env=isolated_env,
                               capture_output=True, text=True, timeout=30,
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (OSError, subprocess.SubprocessError):
@@ -1635,19 +1587,25 @@ def _pip_version(python):
     return major, minor
 
 
-def _ensure_modern_pip(action, python) -> None:
+def _ensure_modern_pip(action, python, *, isolated_env=None) -> None:
     """Upgrade a MANAGED venv's pip once when it is too old for current wheels.
 
     Only ever called on the app's own venvs — never on a user-configured
     interpreter, whose environment is theirs. Non-fatal by design: an unreadable
     version or a failed upgrade logs and moves on, leaving the install to behave
-    exactly as it did before this guard existed."""
-    ver = _pip_version(python)
+    exactly as it did before this guard existed. Plugin environments pass
+    isolated_env to isolate both the version probe and the upgrade."""
+    ver = (_pip_version(python, isolated_env=isolated_env) if isolated_env is not None
+           else _pip_version(python))
     if ver is None or ver >= _MIN_PIP:
         return
     _append(action, f'pip {ver[0]}.{ver[1]} in this environment is too old for '
                     "today's packages — upgrading it once")
-    rc = _run_pip(action, [python, '-m', 'pip', 'install', '--upgrade', 'pip'])
+    if isolated_env is not None:
+        rc = _run_pip(action, [python, '-I', '-m', 'pip', '--isolated', 'install', '--upgrade', 'pip'],
+                      env=isolated_env)
+    else:
+        rc = _run_pip(action, [python, '-m', 'pip', 'install', '--upgrade', 'pip'])
     if rc != 0:
         _append(action, 'pip upgrade failed — continuing with the bundled pip '
                         '(the install may still hit the old-pip wheel refusal)')
@@ -1691,7 +1649,7 @@ def _python_minor(exe: str):
     or None when it can't be executed. Short timeout, no console window."""
     try:
         proc = subprocess.run(
-            [exe, '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'],
+            [exe, '-I', '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'],
             capture_output=True, text=True, timeout=15,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (OSError, subprocess.SubprocessError):
@@ -1762,60 +1720,23 @@ def _base_python_candidates() -> list:
 
 
 def _find_base_python(action) -> str:
-    """First candidate interpreter whose REAL (executed) version is 3.10-3.12, else ''.
-    Logs the chosen base so a report can see exactly what was used."""
+    """Reuse a compatible local base, otherwise provision our private Python."""
     for exe in _base_python_candidates():
         ver = _python_minor(exe)
         if ver is not None and _VENV_PY_MIN <= ver <= _VENV_PY_MAX:
             _append(action, f'found base Python {ver[0]}.{ver[1]}: {exe}')
             return exe
-    return ''
+    try:
+        return managed_python.ensure_python(lambda line: _append(action, line))
+    except Exception as exc:
+        _append(action, f'Could not prepare the managed Python: {exc}')
+        _append(action, 'Nothing was installed in the app Python. Check the connection '
+                        'and free disk space, then click Install again to retry.')
+        return ''
 
 
 def _ensure_watermark_env(action) -> str:
-    """Build (or reuse) the app-managed watermark venv and record it as watermark.python.
-    Returns the venv python on success, '' on failure (an actionable one-liner is logged).
-    Idempotent: an existing venv is reused; a missing one is (re)built."""
-    env_dir = _watermark_env_dir()
-    env_python = _venv_python(env_dir)
-    if not os.path.isfile(env_python):
-        base = _find_base_python(action)
-        if not base:
-            for line in (
-                'No Python 3.10-3.12 was found to build the inpainting environment '
-                '(simple-lama-inpainting needs Pillow<10, so it must live in its own '
-                'Python, never the app\'s).',
-                'Install Python 3.12, then click Install again:',
-                '  python.org/downloads  (tick "Add python.exe to PATH")',
-                '  or:  winget install Python.Python.3.12',
-            ):
-                _append(action, line)
-            return ''
-        _append(action, f'building the watermark environment at {env_dir}')
-        try:
-            env_dir.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            _append(action, f'could not create the data folder: {e}')
-            return ''
-        # venv creation is quick; stream it through the same retry helper so an AV lock
-        # on a freshly-written pyvenv file is retried rather than failing the whole build.
-        rc = _run_pip(action, [base, '-m', 'venv', str(env_dir)])
-        if rc != 0 or not os.path.isfile(env_python):
-            _append(action, 'could not create the environment — see the log above')
-            return ''
-        _append(action, 'environment ready')
-    else:
-        _append(action, f'reusing the watermark environment at {env_dir}')
-    # Record it so the probe + wrapper resolve here and a re-click repairs the SAME env.
-    # Only reached when nothing dedicated was configured, so this never overrides a
-    # user-set watermark.python.
-    try:
-        cfg.save_config({'watermark': {'python': env_python}})
-    except Exception as e:
-        _append(action, f'warning: could not save watermark.python ({e}); '
-                        'the environment still works for this run')
-    _ensure_modern_pip(action, env_python)
-    return env_python
+    return _ensure_managed_ml_env(action, _watermark_env_dir())
 
 
 # The pins requirements-ml.txt carries FOR THE APP that this environment must
@@ -1880,97 +1801,19 @@ def _pip_install_watermark(action, python, *, managed: bool) -> int:
 
 
 def _verify_watermark_import(action, python) -> bool:
-    """Actually IMPORT simple_lama_inpainting in the target interpreter once the pip
-    step reports success. Two jobs, one import:
-
-    1. HONESTY. pip 'Requirement already satisfied' proves the distribution is on disk,
-       NOT that it loads — the same gap that let JoyCaption read 'ready' then crash with
-       ModuleNotFoundError (issue #6). A torch/torchvision build mismatch pip can't see
-       fails only at import. If the import errors, the install is NOT usable, so we fail
-       it (the UI shows the reason + a repair click) instead of reporting success while
-       the capability stays a silent ✗.
-    2. WARMING. This is the app's heaviest probe import (~430 MB of native code, a single
-       291 MB torch_cpu.dll). On a fresh machine the first cold import — real-time AV
-       scanning brand-new DLLs — can exceed the capability probe's 60 s subprocess ceiling,
-       so the probe fired right after this install (onDone → /api/capabilities) would time
-       out and show '✗ Watermark inpainting' seconds after a fully successful install (the
-       probe would flip green only on a LATER, warm probe). Doing that first cold import
-       HERE, once, with a generous budget, leaves the OS/AV cache warm so the following
-       probe is fast → green with no restart, as the one-click flow promises.
-
-    Returns True = ready (import OK) or merely slow (a cold import past the budget is
-    'still warming', never a reason to fail a good install). False = a genuine import
-    error → the caller fails the install. Never raises."""
-    if not os.path.isfile(python):
-        return True   # no interpreter to check (should not happen post-install) — leave rc as-is
-    _append(action, 'verifying the install (first import — this also warms it, so the '
-                    'capability turns green without a restart)…')
-    try:
-        proc = subprocess.run(
-                              infer_env.worker_argv(
-                                  python, '-c', 'import simple_lama_inpainting'),
-                              capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
-                              env=infer_env.worker_env(python),
-                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    except subprocess.TimeoutExpired:
-        _append(action, 'still warming up (the first import is slow on a fresh machine) — '
-                        'the capability turns green on its own shortly; no restart needed')
-        return True   # slow, not broken — keep the install successful
-    except OSError as e:
-        _append(action, f'could not run the verification import ({e}) — skipping the check')
-        return True   # couldn't check — don't punish a pip install that succeeded
-    if proc.returncode == 0:
-        _append(action, 'import OK — watermark inpainting is ready')
-        return True
-    _append(action, 'installed, but simple_lama_inpainting does not import in this '
-                    'environment yet — the install is not usable:')
-    for line in (proc.stderr or '').strip().splitlines()[-4:]:
-        _append(action, f'  {line}')
-    return False
+    """A package install is ready only after the actual worker import succeeds."""
+    return _verify_capability_import('watermark_inpaint', python, log_action=action)
 
 
 def _run_watermark_inpaint(action) -> int:
-    """Install simple-lama-inpainting (LaMa) into a dedicated 3.10-3.12 interpreter —
-    NEVER the Flask venv (the package hard-requires Pillow<10, which would downgrade and
-    break the app's Pillow 12).
-
-    When the user has pointed watermark.python (or masks.python) at a real dedicated env,
-    install there. When NOTHING dedicated is configured, AUTO-PROVISION: build an isolated
-    venv under the app's data dir and record it as watermark.python. This is the one-click
-    replacement for the old refuse-with-instructions path — the user never creates a venv
-    or edits a setting. Idempotent: a re-click reuses/repairs the same venv (and rebuilds
-    it if it went missing); a user-set watermark.python is always respected."""
-    managed_python = _watermark_env_python()
-    configured = (cfg.get('watermark.python') or cfg.get('masks.python') or '').strip()
-    # Auto-provision when nothing dedicated is configured, OR when the ONLY thing
-    # configured is our own managed venv and it has gone missing (rebuild it).
-    rebuild_managed = (bool(configured) and _same_path(configured, managed_python)
-                       and not os.path.isfile(managed_python))
-    if not configured or rebuild_managed:
-        python = _ensure_watermark_env(action)
-        if not python:
-            return 1
-    else:
-        python = configured
-        if _is_flask_venv(python):
-            for line in (
-                "watermark.python points at the app's own Python, but simple-lama-",
-                "inpainting requires Pillow<10 and would break the app's Pillow 12.",
-                "Nothing was installed. Clear watermark.python (and masks.python) and",
-                "click Install again — the app will build a dedicated Python for you.",
-                f"(refused target — the app's own interpreter: {sys.executable})",
-            ):
-                _append(action, line)
-            return 1
-    rc = _pip_install_watermark(action, python, managed=_same_path(python, managed_python))
-    # A successful pip step is necessary but not sufficient: confirm the package actually
-    # imports in `python` (and warm that heavy import so the probe fired right after is
-    # green with no restart). A hard import error fails the install so it never reports
-    # success over a silent ✗ capability.
-    if rc == 0 and not _verify_watermark_import(action, python):
+    """Repair LDS's isolated LaMa environment, preserving borrowed selections."""
+    python = _ensure_watermark_env(action)
+    if not python:
         return 1
-    return rc
+    rc = _pip_install_watermark(action, python, managed=True)
+    if rc != 0 or not _verify_watermark_import(action, python):
+        return rc or 1
+    return 0 if _select_managed_python(action, 'watermark', python) else 1
 
 
 # --- Auto-provisioned bank-scoring venv ----------------------------------------
@@ -1986,49 +1829,9 @@ def _bank_scoring_env_python() -> str:
 
 
 def _ensure_bank_scoring_env(action, *, save_score_python=True) -> str:
-    """Build or reuse the app-managed Bank ML venv.
-
-    Score owns the historical environment directory, but other extras may reuse
-    it without changing the user's Score selection. ``save_score_python=False``
-    is therefore required by SigLIP2: a borrowed CUDA Score interpreter remains
-    selected while SigLIP2 is installed into LDS's managed environment.
-    """
-    env_dir = _bank_scoring_env_dir()
-    env_python = _venv_python(env_dir)
-    if not os.path.isfile(env_python):
-        base = _find_base_python(action)
-        if not base:
-            for line in (
-                'No Python 3.10-3.12 was found to build the bank-scoring environment '
-                '(the CLIP aesthetic/NSFW stack installs into its own Python, never '
-                "the app's).",
-                'Install Python 3.12, then click Install again:',
-                '  python.org/downloads  (tick "Add python.exe to PATH")',
-                '  or:  winget install Python.Python.3.12',
-            ):
-                _append(action, line)
-            return ''
-        _append(action, f'building the bank-scoring environment at {env_dir}')
-        try:
-            env_dir.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            _append(action, f'could not create the data folder: {e}')
-            return ''
-        rc = _run_pip(action, [base, '-m', 'venv', str(env_dir)])
-        if rc != 0 or not os.path.isfile(env_python):
-            _append(action, 'could not create the environment — see the log above')
-            return ''
-        _append(action, 'environment ready')
-    else:
-        _append(action, f'reusing the bank-scoring environment at {env_dir}')
-    if save_score_python:
-        try:
-            cfg.save_config({'bank_scoring': {'python': env_python}})
-        except Exception as e:
-            _append(action, f'warning: could not save bank_scoring.python ({e}); '
-                            'the environment still works for this run')
-    _ensure_modern_pip(action, env_python)
-    return env_python
+    # Keep the keyword for product callers. Selection is saved by the installing
+    # action only AFTER its imports pass, never while creating an empty venv.
+    return _ensure_managed_ml_env(action, _bank_scoring_env_dir())
 
 
 def _run_bank_scoring(action) -> int:
@@ -2064,51 +1867,14 @@ def _run_bank_scoring(action) -> int:
     rc = _run_pip(action, [python, '-m', 'pip', 'install', *specs])
     if rc == 0 and not _verify_bank_scoring_import(action, python):
         return 1
+    if rc == 0 and not _select_managed_python(action, 'bank_scoring', python):
+        return 1
     return rc
 
 
 def _verify_bank_scoring_import(action, python) -> bool:
-    """Run the bank-scoring PROBE's own import in the target env once pip reports
-    done — HONESTY (a torch/torchvision mismatch fails only at import) and WARMING
-    (a heavy cold import that would time out the 60 s capability probe fired right
-    after). A timeout is 'still warming', never a failure. Mirrors
-    _verify_watermark_import.
-
-    The expression is `capabilities.CAPABILITY_IMPORTS['bank_scoring']`, literally
-    the one the probe runs, for the reason `_verify_capability_import` gives at
-    length: a gate that checks a SHORTER list than the probe reports "ready" and
-    is then contradicted by a ✗ with no reason anywhere. That is not theoretical
-    here — this list was the headline three while the probe grew numpy and PIL
-    under it. Kept separate from that generic gate only because it reports a different
-    sentence; both now run the worker's own isolated argv (`services.infer_env`).
-    """
-    expr = capabilities.CAPABILITY_IMPORTS.get('bank_scoring')
-    if not expr or not os.path.isfile(python):
-        return True
-    _append(action, 'verifying the install (running the same import the capability '
-                    'check runs — this also warms it, so it turns green without a '
-                    'restart)…')
-    try:
-        proc = subprocess.run(infer_env.worker_argv(python, '-c', expr),
-                              capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
-                              env=infer_env.worker_env(python),
-                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    except subprocess.TimeoutExpired:
-        _append(action, 'still warming up (the first import is slow on a fresh machine) — '
-                        'the capability turns green on its own shortly; no restart needed')
-        return True
-    except OSError as e:
-        _append(action, f'could not run the verification import ({e}) — skipping the check')
-        return True
-    if proc.returncode == 0:
-        _append(action, 'import OK — bank scoring is ready')
-        return True
-    _append(action, 'installed, but the bank-scoring stack does not import in this '
-                    'environment yet — the install is not usable:')
-    for line in (proc.stderr or '').strip().splitlines()[-4:]:
-        _append(action, f'  {line}')
-    return False
+    """A package install is ready only after the actual worker import succeeds."""
+    return _verify_capability_import('bank_scoring', python, log_action=action)
 
 
 def _bank_semantic_install_python() -> str:
@@ -2188,36 +1954,15 @@ def _run_bank_siglip2(action) -> int:
     if not assets.weights_present(root):
         _append(action, 'download returned success but at least one pinned model file is missing')
         return 1
-    if borrowed:
-        # The user's pick already answered "where does the index run", and it was
-        # verified before it was stored. Overwriting it here would silently drag
-        # the pass back onto the CPU right after a repair.
-        _append(action, f'the index keeps running in the interpreter you chose '
-                        f'({configured}) — change it from the Bank\'s Semantic '
-                        'engine panel')
-    else:
-        try:
-            cfg.save_config({'bank_semantic': {'python': managed_python}})
-        except Exception as e:
-            _append(action, f'SigLIP2 packages and weights are ready, but '
-                            f'bank_semantic.python could not be saved ({e}); the install '
-                            'is reported as failed so Setup never claims a runtime it '
-                            'cannot select after restart')
-            return 1
+    if not _select_managed_python(action, 'bank_semantic', managed_python):
+        return 1
     _append(action, 'SigLIP2 ready — each Bank can now choose it without deleting CLIP')
     return 0
 
 
 def _watermark_detect_python() -> str:
-    """The interpreter the detector extra installs into.
-
-    Deliberately the bank-scoring venv unless the user pointed elsewhere: it
-    already holds torch and transformers, which is the ENTIRE dependency list of
-    this extra, and building a second environment would ask for another ~2.5 GB
-    to hold a byte-identical copy. When bank scoring was never installed, that
-    same managed venv is built here — which is why this returns the path either
-    way and _run_watermark_detect provisions it."""
-    return (cfg.get('watermark_detect.python') or '').strip() or _bank_scoring_env_python()
+    """The install/repair target, independent of the selected runtime."""
+    return _bank_scoring_env_python()
 
 
 def _run_watermark_detect(action) -> int:
@@ -2232,18 +1977,9 @@ def _run_watermark_detect(action) -> int:
     managed_python = _bank_scoring_env_python()
     configured = (cfg.get('watermark_detect.python') or '').strip()
     if configured and not _same_path(configured, managed_python):
-        # A BORROWED environment (the ⚡ picker's promise: checked, never changed).
-        for line in (
-            'watermark_detect.python points at an environment this app did not create,',
-            'so nothing was installed into it — borrowed environments are checked,',
-            'never changed. To add the detector packages there yourself, run:',
-            f'  "{configured}" -m pip install torch transformers',
-            'Or clear watermark_detect.python and click Install again — the app then',
-            'uses its own scoring environment, which already has both packages.',
-        ):
-            _append(action, line)
-        return 1
-    python = configured or _ensure_bank_scoring_env(action)
+        _append(action, 'The selected external detector runtime is read-only; '
+                        'installing into the managed Bank environment.')
+    python = _ensure_bank_scoring_env(action, save_score_python=False)
     if not python:
         return 1
     if _is_flask_venv(python):
@@ -2264,42 +2000,15 @@ def _run_watermark_detect(action) -> int:
         return rc
     if not _verify_watermark_detect_import(action, python):
         return 1
-    try:
-        cfg.save_config({'watermark_detect': {'python': python}})
-    except Exception as e:      # noqa: BLE001
-        _append(action, f'warning: could not save watermark_detect.python ({e}); '
-                        'the environment still works for this run')
-    return _download_watermark_detect_models(action, python)
+    rc = _download_watermark_detect_models(action, python)
+    if rc != 0:
+        return rc
+    return 0 if _select_managed_python(action, 'watermark_detect', python) else 1
 
 
 def _verify_watermark_detect_import(action, python) -> bool:
-    """Same honesty-and-warming gate as the other heavy extras: import in the
-    TARGET environment once pip says done. A timeout is 'still warming'."""
-    if not os.path.isfile(python):
-        return True
-    _append(action, 'verifying the install (first import — this also warms it)…')
-    try:
-        proc = subprocess.run(
-                              infer_env.worker_argv(
-                                  python, '-c', 'import torch, transformers'),
-                              capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
-                              env=infer_env.worker_env(python),
-                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    except subprocess.TimeoutExpired:
-        _append(action, 'still warming up — the capability turns green on its own '
-                        'shortly; no restart needed')
-        return True
-    except OSError as e:
-        _append(action, f'could not run the verification import ({e}) — skipping the check')
-        return True
-    if proc.returncode == 0:
-        return True
-    _append(action, 'installed, but torch/transformers do not import in this '
-                    'environment yet — the install is not usable:')
-    for line in (proc.stderr or '').strip().splitlines()[-4:]:
-        _append(action, f'  {line}')
-    return False
+    """The detector must import successfully before Setup can publish it ready."""
+    return _verify_capability_import('watermark_detect', python, log_action=action)
 
 
 def _download_watermark_detect_models(action, python) -> int:
@@ -2343,27 +2052,12 @@ def _download_watermark_detect_models(action, python) -> int:
 
 
 def _run_ml_capability(action) -> int:
-    """Install JUST the packages ONE ML capability needs (face_scoring | masks)
-    into the interpreter that capability's probe resolves — so a user can install
-    or REPAIR a single feature without the monolithic `-r requirements-ml.txt`.
-    Versions come solely from requirements-ml.txt (via _requirement_spec) and that
-    file rides along as a `-c` constraint, so pulling insightface/rembg deps can
-    never bump numpy past the <2 ABI ceiling and break the other ML capabilities.
-    Same shape as _run_watermark_inpaint (resolved ML python, -c constraint)."""
+    """Quality tools install in managed Python; in-process extras keep their owner."""
+    if action in ('face_scoring', 'masks', 'video_text'):
+        return _install_quality_tools(action, (action,))
     python = _capability_python(action)
     specs = _drop_provided_onnxruntime(
         action, python, [_requirement_spec(p) for p in _CAPABILITY_PACKAGES[action]])
-    # face_scoring pulls insightface, which only has wheels for Python 3.10–3.12.
-    # When targeting THIS interpreter (no dedicated env) and it's out of range,
-    # lead with the plain-English reason so the pip source-build failure below is
-    # already contextualised — same courtesy the monolithic ml_extras worker gives.
-    if action == 'face_scoring' and python == sys.executable:
-        ps = capabilities.python_ml_status()
-        if not ps['ml_supported']:
-            _append(action, f"NOTE: Python {ps['version']} is outside the ML wheel "
-                            f"range {ps['ml_range']} — insightface has no wheel here, "
-                            "so pip will try to build it and likely fail. Install into a "
-                            "separate 3.11/3.12 env and set face_scoring.python instead.")
     _append(action, f'target interpreter: {python}')
     _append(action, f"installing {', '.join(specs)}  (constraints: requirements-ml.txt)")
     # When this capability targets the Flask venv (no dedicated python), pin Pillow
@@ -2429,7 +2123,7 @@ def _drop_provided_onnxruntime(action, python, specs) -> list:
     return keep
 
 
-def _verify_capability_import(action, python) -> bool:
+def _verify_capability_import(action, python, *, log_action=None) -> bool:
     """Re-run the capability's OWN probe import once pip reports done, and say what
     happened in the install log.
 
@@ -2453,12 +2147,14 @@ def _verify_capability_import(action, python) -> bool:
     probe fires seconds later and its first cold import can be slow enough to time
     out and read ✗ on a perfectly good install.
 
-    True = ready, or merely slow (a cold import past the budget is 'still warming',
-    never a reason to fail a good install), or unverifiable. False = a genuine
-    import error → the caller fails the install. Never raises."""
+    Only a completed, successful import is ready. Missing interpreters, timeouts
+    and launch failures leave the action retryable and cannot publish a selection."""
     expr = capabilities.CAPABILITY_IMPORTS.get(action)
+    capability = action
+    action = log_action or action
     if not expr or not os.path.isfile(python):
-        return True
+        _append(action, 'The verification interpreter or import is missing; retry Install.')
+        return False
     _append(action, 'verifying the install (running the same import the capability '
                     'check runs — this also warms it, so it turns green without a restart)…')
     try:
@@ -2470,13 +2166,13 @@ def _verify_capability_import(action, python) -> bool:
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         _append(action, 'still warming up (the first import is slow on a fresh machine) — '
-                        'the capability turns green on its own shortly; no restart needed')
-        return True
+                        'verification did not finish; click Install again to retry')
+        return False
     except Exception as e:
-        _append(action, f'could not run the verification import ({e}) — skipping the check')
-        return True   # couldn't check -> don't punish a pip install that succeeded
+        _append(action, f'could not run the verification import ({e}) — retry Install')
+        return False
     if proc.returncode == 0:
-        extra = _CAPABILITY_EXTRA_CHECKS.get(action)
+        extra = _CAPABILITY_EXTRA_CHECKS.get(capability)
         if extra is None:
             _append(action, f'import OK — {_CAPABILITY_LABEL.get(action, action)} is ready')
             return True
@@ -2496,7 +2192,7 @@ def _verify_capability_import(action, python) -> bool:
         # flow threw away: WHICH module is missing. Lead with it — the stderr
         # tail below is the proof, this is the answer.
         _append(action, f"  missing module: {missing.group(1)} — it is not installed in "
-                        f"{python}. Install it there, then click Install again.")
+                        f"{python}. Click Install again to retry the managed install.")
     for line in stderr.strip().splitlines()[-4:]:
         _append(action, f'  {line}')
     return False
@@ -2596,15 +2292,14 @@ def _download_present_in_extra(action) -> bool:
     though: the download lands in the base dest as always, and the broken copy is
     named in the log so it can be removed by hand (deleting inside a tree the app
     does not own is a bigger promise than this function should make)."""
-    spec = _MODEL_DOWNLOADS[action]
+    spec = model_download_spec(action)
     dest_parts = spec['dest']                 # e.g. ('unet','klein','flux-2-...safetensors')
     comfy_type = dest_parts[0]                # 'unet'|'loras'|'text_encoders'|'vae'
     subdirs = dest_parts[1:-1]                # e.g. ('klein',) for the UNET, () otherwise
     names = (dest_parts[-1], *(spec.get('legacy_names') or ()))
     try:
-        from .services import comfy_model_paths
         found = [os.path.join(root, *subdirs, name)
-                 for root in comfy_model_paths.extra_roots(comfy_type)
+                 for root in (spec['extra_roots']() if spec.get('extra_roots') else _extra_roots_for(comfy_type))
                  for name in names
                  if os.path.isfile(os.path.join(root, *subdirs, name))]
     except Exception:
@@ -2635,7 +2330,7 @@ def _variant_already_present(action, condemned=None):
     never overwrite, so it is collected into `condemned` and deleted by the caller
     once the fresh copy has actually landed. Deleting it up front turned a failed
     download into "the user now has nothing at all"."""
-    spec = _MODEL_DOWNLOADS[action]
+    spec = model_download_spec(action)
     alts = spec.get('legacy_names') or ()
     if not alts:
         return None
@@ -2706,6 +2401,27 @@ def _verify_downloaded_model(action, dest, spec, provider='hf') -> bool:
     already overwrote the previous copy would leave the user with strictly less
     than they started with, which is the one outcome this whole path exists to
     avoid."""
+    if spec.get('sha256'):
+        import hashlib
+        try:
+            expected_size = spec.get('expected_bytes')
+            if expected_size and os.path.getsize(dest) != expected_size:
+                raise ValueError('download size does not match the published file')
+            digest = hashlib.sha256()
+            _append(action, 'verifying the downloaded file SHA256')
+            with open(dest, 'rb') as downloaded:
+                for chunk in iter(lambda: downloaded.read(8 * 1024 * 1024), b''):
+                    digest.update(chunk)
+            if digest.hexdigest() != spec['sha256']:
+                raise ValueError('SHA256 does not match the published file')
+        except (OSError, ValueError) as exc:
+            _append(action, f'download verification failed: {exc}; retry the download')
+            # This is the temporary download, before replacement of any existing file.
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+            return False
     try:
         from .services import model_integrity
         res = model_integrity.validate_model_file(dest, min_bytes=spec.get('min_bytes'))
@@ -2820,118 +2536,17 @@ def _drop_condemned(action, paths, keep=None):
 
 
 def _run_model_download(action) -> int:
-    """Stream one model asset (Klein or Krea) into the validated ComfyUI tree.
-    Writes to a .part file then renames (a killed download never leaves a half
-    file the model scanners would pick up), then verifies the result is real
-    weights. Progress lines land in the ring log (~every 512 MB). An
-    access-denied host (401/403) -> actionable recovery steps for THAT provider,
-    rc 1."""
-    spec = _MODEL_DOWNLOADS[action]
-    dest = _download_dest_path(action)
-    # Files judged unusable, deleted ONLY once a replacement exists (see below).
-    condemned = []
-    if os.path.isfile(dest):
-        # "Already present" used to end the story here, on ANY existing file. That
-        # made the one remedy the app suggests for a corrupted weight — download it
-        # again — a no-op that reported success: the file stayed broken, every
-        # screen kept certifying it, and there was no way out of the loop from
-        # inside the app (zigzag4794, Discord: a truncated 9.5 GB Klein UNET).
-        # So the same validator the readiness probe uses gets asked first, and a
-        # BLOCKING verdict (an HTML licence page, a truncated/garbage file) makes
-        # this a replacement instead of a skip. The advisory `too_small` never
-        # condemns anything — a small-but-loadable file is the user's, not ours.
-        reason = _unloadable_reason(action, dest, spec)
-        if not reason:
-            _append(action, f'already present: {dest}')
-            return 0
-        _append(action, f'the file already here cannot be loaded: {reason}')
-        # It is NOT deleted now. `dest` is written by os.replace(part, dest) at the
-        # end of a successful download, which overwrites it atomically, so there is
-        # nothing to clear beforehand — and clearing it beforehand is exactly how a
-        # 401, an expired token or a dead host turned "you have a broken file" into
-        # "you have no file". It only goes if a good copy takes its place.
-        _append(action, 'it stays where it is until a fresh copy has actually downloaded')
-        condemned.append(dest)
-    variant = _variant_already_present(action, condemned)
-    if variant:
-        # A loadable copy is proven present, so the condemned files can go now:
-        # nothing here depends on a download that may never happen.
-        _drop_condemned(action, condemned)
-        _append(action, f'already present ({variant}) — an earlier build is '
-                        'installed and still resolves; skipping download')
+    """Fetch the primary asset and its declared companions, preserving any valid files already present."""
+    rc = _run_primary_download(action)
+    if rc != 0:
+        return rc
+    complete = model_download_spec(action).get('complete')
+    if complete and complete():
+        # The whole stage is already where the node will read it — under an
+        # extra root, say: nothing to add to this install's tree.
+        _append(action, 'the stage is already complete where ComfyUI reads it — nothing else to fetch')
         return 0
-    if _download_present_in_extra(action):
-        _drop_condemned(action, condemned)
-        _append(action, 'already available via a configured extra_model_paths.yaml root - skipping download')
-        return 0
-    if _krea_asset_already_installed(action):
-        _drop_condemned(action, condemned)
-        _append(action, 'already installed — the engine already resolves this asset from a '
-                        'file you have; skipping download')
-        return 0
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    headers, provider = _download_auth(spec)
-    _append(action, f"downloading {spec['url']}")
-    _append(action, f'-> {dest}')
-    part = dest + '.part'
-    try:
-        with requests.get(spec['url'], stream=True, timeout=(10, 120),
-                          headers=headers, allow_redirects=True) as resp:
-            if resp.status_code in (401, 403):
-                if spec.get('gated') or spec.get('license_url'):
-                    # Normally public; a 401/403 here means the host is denying
-                    # access anyway (re-gated, region-restricted, or a stale token
-                    # was sent) -> the fix is: get an account/licence + a valid key.
-                    host, key_url, key_name, verb = _AUTH_RECOVERY.get(
-                        provider, _AUTH_RECOVERY['hf'])
-                    _append(action, f'HTTP {resp.status_code} - {host} denied access to this file.')
-                    _append(action, f"1. Open {spec['license_url']} and {verb} continue")
-                    _append(action, f'2. Create an API key at {key_url}')
-                    _append(action, f'3. Paste it as {key_name} in Settings -> API keys, then retry')
-                    _append(action, '   (or download the file manually into the folder above)')
-                else:
-                    _append(action, f'HTTP {resp.status_code}')
-                return 1
-            if resp.status_code >= 400:
-                _append(action, f'HTTP {resp.status_code}')
-                return 1
-            total = int(resp.headers.get('content-length') or 0)
-            done = 0
-            next_mark = 0
-            _set_progress(action, 0, total)   # show the bar from the first byte
-            with open(part, 'wb') as fh:
-                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
-                    if not chunk:
-                        continue
-                    fh.write(chunk)
-                    done += len(chunk)
-                    _set_progress(action, done, total)   # live % for the UI bar (every chunk)
-                    if done >= next_mark:                 # coarse milestone in the text log
-                        pct = f' ({done * 100 // total}%)' if total else ''
-                        _append(action, f'{done / 1e9:.2f} / {total / 1e9:.2f} GB{pct}')
-                        next_mark = done + 512 * 1024 * 1024
-        if total and done < total:
-            _append(action, f'incomplete download ({done}/{total} bytes) - retry')
-            os.remove(part)
-            return 1
-        # Verify BEFORE the rename: a 200-with-a-login-page must not have already
-        # taken the place of whatever was there.
-        if not _verify_downloaded_model(action, part, spec, provider):
-            return 1
-        os.replace(part, dest)
-        # The replacement is on disk and verified: NOW the old copies may go. `dest`
-        # itself was already overwritten atomically above, so it is spared here —
-        # removing it would delete the file we just downloaded.
-        _drop_condemned(action, condemned, keep=dest)
-        _append(action, f'done -> {dest}')
-        return 0
-    except requests.RequestException as e:
-        _append(action, f'network error: {e}')
-        try:
-            os.remove(part)
-        except OSError:
-            pass
-        return 1
+    return _run_companion_downloads(action)
 
 
 # --- Custom-node pack install --------------------------------------------------
@@ -3126,7 +2741,25 @@ def _run_node_pack(action) -> int:
         _append(action, "the pack has to go inside YOUR ComfyUI's custom_nodes folder, and "
                         "the app doesn't know where that is yet — nothing was installed.")
         return 1
-    if _node_pack_already_there(action, dest):
+    # The recognized portable uses the pinned, verified recipe. Other layouts
+    # retain their existing acquisition path until they have a runtime adapter.
+    # Never fall back to an unverified clone after a managed preparation fails.
+    from .services import comfyui_control, comfyui_node_install, comfyui_node_recipes
+    recipe = comfyui_node_recipes.CORE_RECIPES.get(action)
+    managed = (recipe is not None and comfyui_control._validated_portable_layout() is not None)
+    existing = _node_pack_already_there(action, dest)
+    if managed and (not existing or os.path.lexists(os.path.join(dest, comfyui_node_install.RECEIPT))):
+        try:
+            plan = comfyui_node_install.plan(recipe, owner='lds.core')
+            comfyui_node_install.prepare(recipe, owner='lds.core', plan_id=plan['plan_id'],
+                                         log=lambda line: _append(action, str(line)))
+        except comfyui_node_install.NodeInstallError as exc:
+            _append(action, str(exc))
+            return 1
+        _append(action, 'Prepared the verified Krea node pack. RESTART ComfyUI when it is idle; '
+                        'LDS will check the loaded nodes before marking the engine ready.')
+        return 0
+    if existing:
         _append(action, f'already installed: {dest}')
         _append(action, 'left untouched (an existing folder may be a version you chose). '
                         'If ComfyUI still reports the nodes as missing, restart ComfyUI.')
@@ -3312,7 +2945,7 @@ def _run_shot_detect(action) -> int:
         ):
             _append(action, line)
         return 1
-    python = configured or _ensure_bank_scoring_env(action)
+    python = _ensure_bank_scoring_env(action, save_score_python=False)
     if not python:
         return 1
     if _is_flask_venv(python):
@@ -3400,3 +3033,646 @@ _WORKERS = {**{a: _run_ml_extras for a in _PIP_REQUIREMENTS},   # ml_extras + sc
 # repro: scrape_extras was added to INSTALL_ACTIONS but not here).
 assert set(INSTALL_ACTIONS) == set(_WORKERS), \
     f'INSTALL_ACTIONS/_WORKERS mismatch: {set(INSTALL_ACTIONS) ^ set(_WORKERS)}'
+
+
+# Generic plugin preparation state, independent of installed products.
+_PLUGIN_MANAGED_ACTIONS = frozenset(('scrape_extras', 'video', 'shot_detect'))
+_COMPANION_LOCKS = {}
+
+
+def _plugin_registry():
+    from .plugins.registry import active
+    return active()
+
+
+def model_download_spec(action):
+    """Return the core or registered plugin asset specification, without downloading it."""
+    spec = _MODEL_DOWNLOADS.get(action)
+    if spec is not None:
+        return spec
+    registry = _plugin_registry()
+    return registry.model_downloads.get(action) if registry else None
+
+
+def _managed_action_enabled(action) -> bool:
+    if action not in _PLUGIN_MANAGED_ACTIONS:
+        return True
+    registry = _plugin_registry()
+    if registry is None:
+        return True  # Pure installer utilities before an app loads its plugins.
+    owner = registry.owner_of('install_actions', action)
+    record = registry.records.get(owner)
+    return bool(record and record.enabled and record.state == 'loaded'
+                and (cfg.get('plugins.enabled') or {}).get(owner) is not False)
+
+
+def known_action(action) -> bool:
+    """Whitelist check for the routes: the core's actions or a plugin's."""
+    if action in INSTALL_ACTIONS:
+        return _managed_action_enabled(action)
+    registry = _plugin_registry()
+    spec = plugin_action_spec(action)
+    model = registry.model_downloads.get(action) if registry else None
+    return bool(registry and ((model is not None and _plugin_action_enabled(model))
+                              or (spec is not None and (spec.get('environment') or _plugin_action_enabled(spec)))))
+
+
+def plugin_action_spec(action):
+    """What a plugin registered through ``ctx.register_install_action`` —
+    ``{'plugin', 'label', 'packages', 'requirements', 'models', 'run', 'python', 'verify'}``
+    — or None for a core action or a model download."""
+    registry = _plugin_registry()
+    from .plugins.environment import action_spec
+    return (action_spec(action, registry) or registry.install_actions.get(action)) if registry else None
+
+
+def _plugin_action_enabled(spec) -> bool:
+    """Offers obey the same owner-state gate as execution; retain specs for busy tracking."""
+    registry = _plugin_registry()
+    record = registry.records.get(spec['plugin']) if registry else None
+    if record is None:
+        return False
+    from .plugins.environment import EnvironmentError, check_enabled
+    try:
+        check_enabled(record, loaded=not spec.get('environment'))
+    except EnvironmentError:
+        return False
+    return True
+
+
+def plugin_actions_catalog() -> dict:
+    """Every Setup action a plugin added, with the label the screen shows —
+    the core's labels live in the frontend's own table; a plugin's arrive
+    through this (GET /api/setup/actions)."""
+    registry = _plugin_registry()
+    if registry is None:
+        return {}
+    out = {}
+    for key, spec in registry.install_actions.items():
+        if not _plugin_action_enabled(spec):
+            continue
+        kind = 'node_pack' if spec.get('node_pack') else 'run' if callable(spec.get('run')) else 'pip'
+        out[key] = {'label': spec.get('label') or key, 'plugin': spec['plugin'], 'kind': kind,
+                    'python': 'comfyui' if spec.get('node_pack') else spec.get('python') or 'plugin'}
+    for key, spec in registry.model_downloads.items():
+        if not _plugin_action_enabled(spec):
+            continue
+        out.setdefault(key, {'label': spec.get('label') or key, 'plugin': spec['plugin'],
+                             'kind': 'download', 'python': None})
+    from .plugins.environment import action_id, action_spec
+    for record in registry.records.values():
+        key = action_id(record.id)
+        spec = action_spec(key, registry)
+        if spec:
+            out[key] = {'label': spec['label'], 'plugin': record.id, 'kind': 'pip', 'python': 'plugin'}
+    return out
+
+
+def _plugin_action_is_pip(spec) -> bool:
+    return bool(spec) and not callable(spec.get('run')) and bool(
+        spec.get('environment') or spec.get('packages') or spec.get('requirements'))
+
+
+def _is_pip_action(action) -> bool:
+    """The pip FIFO's membership: the core's pip actions and a plugin's pip
+    action alike — two installs must never race one environment."""
+    return action in _PIP_ACTIONS or _plugin_action_is_pip(plugin_action_spec(action))
+
+
+def _plugin_action_python(spec) -> str:
+    """The interpreter a plugin's pip action installs into: the app's own
+    (``python='app'`` — pure-Python wheels the app imports in-process, the
+    scrape stack's case) or the plugin's own environment, which Setup ▸ Plugins
+    builds under the plugin's data folder. ``python='capability'`` resolves the
+    owned host capability's configured interpreter, including its app fallback.
+    This read-only diagnostic refuses
+    a missing environment; starting the action provisions it in the FIFO."""
+    if spec.get('python') == 'capability':
+        return _capability_python(spec['capability'])
+    if (spec.get('python') or 'plugin') == 'app':
+        return sys.executable
+    registry = _plugin_registry()
+    record = registry.records.get(spec['plugin']) if registry else None
+    if record is None:
+        raise Precondition(f"plugin {spec['plugin']!r} is not loaded")
+    from .plugins.environment import EnvironmentError, interpreter
+    try:
+        return interpreter(record)
+    except EnvironmentError as exc:
+        raise Precondition(str(exc)) from exc
+
+
+def _plugin_action_command(spec) -> list:
+    cmd = [_plugin_action_python(spec), '-m', 'pip', 'install', *spec.get('packages', ())]
+    if spec.get('requirements'):
+        cmd += ['-r', str(spec['requirements'])]
+    if spec.get('python') == 'capability':
+        if not _ML_REQUIREMENTS.is_file():
+            raise Precondition('The LDS ML constraints are missing. Repair LDS before installing extras.')
+        cmd += ['-c', str(_ML_REQUIREMENTS), *_flask_pillow_guard(cmd[0])]
+    if spec.get('python') == 'app' or (spec.get('python') == 'capability' and _is_flask_venv(cmd[0])):
+        if not _APP_REQUIREMENTS.is_file():
+            raise Precondition('The LDS dependency constraints are missing. Repair LDS before installing extras.')
+        cmd += ['-c', str(_APP_REQUIREMENTS)]
+    return cmd
+
+
+def _run_plugin_action(action) -> int:
+    """The worker of a plugin's install action: its own ``run(log=...)`` (an
+    int returncode, None read as success), or the pip install its spec
+    describes, streamed to the same ring log as the core's."""
+    spec = plugin_action_spec(action)
+    if spec is None:
+        raise KeyError(action)
+    registry = _plugin_registry()
+    record = registry.records.get(spec['plugin']) if registry else None
+    from .plugins import environment
+    if record is None:
+        raise Precondition('This plugin is no longer installed. Restart LDS and try again.')
+    environment.check_enabled(record, loaded=not spec.get('environment'))
+    run = spec.get('run')
+    if callable(run):
+        rc = run(log=lambda line: _append(action, str(line)))
+        rc = int(rc or 0)
+        return _verify_plugin_action(action, spec, rc)
+    if not _plugin_action_is_pip(spec):
+        _append(action, 'nothing to install: the action names no packages, requirements or run()')
+        return 1
+    if spec.get('python', 'plugin') == 'plugin':
+        rc = environment.install(action, record, extra_packages=spec.get('packages', ()),
+                                 extra_requirements=spec.get('requirements'))
+    else:
+        command = _plugin_action_command(spec)
+        _append(action, f'target interpreter: {command[0]}')
+        rc = _run_pip(action, command)
+        if rc == 0 and spec.get('python') == 'capability':
+            if not _verify_capability_import(spec['capability'], command[0]):
+                return 1
+    return _verify_plugin_action(action, spec, rc)
+
+
+def _verify_plugin_action(action, spec, rc):
+    verify = spec.get('verify')
+    if rc == 0 and callable(verify):
+        importlib.invalidate_caches()
+        if not verify():
+            _append(action, f"Post-install check failed — {spec.get('label') or action} is not ready. "
+                            'Repair this component and try again.')
+            return 1
+    return rc
+
+
+def install_groups() -> dict:
+    """group -> member actions: the core's groups, then the plugins'."""
+    out = dict(_INSTALL_GROUPS)
+    registry = _plugin_registry()
+    if registry:
+        for key, spec in registry.install_groups.items():
+            out.setdefault(key, spec['members'])
+    return out
+
+
+def group_caps_keys(group) -> dict:
+    """The capability keys a group's plan reads its gaps from, every key
+    present (None = the group has no such lane)."""
+    keys = _GROUP_CAPS_KEYS.get(group)
+    if keys is None:
+        registry = _plugin_registry()
+        spec = registry.install_groups.get(group) if registry else None
+        keys = spec['caps_keys'] if spec else {}
+    return {'missing': None, 'invalid': None, 'pack_action': None,
+            'nodes_missing': None, 'nodes_installed': None, **keys}
+
+
+def _worker_for(action):
+    # Product recipes override the retained legacy recipe only while loaded.
+    if plugin_action_spec(action) is not None:
+        return _run_plugin_action
+    worker = _WORKERS.get(action)
+    if worker is None and model_download_spec(action) is not None:
+        worker = _run_model_download
+    if worker is None and plugin_action_spec(action) is not None:
+        worker = _run_plugin_action
+    if worker is None:
+        raise KeyError(action)
+    return worker
+
+
+def _start_locked(action) -> dict:
+    if not known_action(action):
+        raise ValueError(f'unknown action: {action}')
+    global _pip_current
+    with _lock:
+        run = _runs.get(action)
+        if run and run['state'] in ('running', 'queued'):
+            raise AlreadyRunning(action)
+        check_start_preconditions(action)
+        _runs[action] = _new_run()
+        if _is_pip_action(action) and _pip_current is not None:
+            # A pip install already owns the worker -> queue this one (FIFO, click
+            # order) instead of racing it into the same environment. It starts on its
+            # own when the current install finishes (see _release_pip_slot).
+            _runs[action]['state'] = 'queued'
+            _runs[action]['waiting_for'] = _pip_current
+            _pip_queue.append(action)
+            return status(action)
+        if _is_pip_action(action):
+            _pip_current = action
+    threading.Thread(target=_execute, args=(action,), daemon=True).start()
+    return status(action)
+
+
+def check_start_preconditions(action):
+    """Check an admitted action without creating a run, for selected batches too.
+
+    start() repeats these checks immediately before creating its reservation.
+    A batch checks every member first, so an invalid later member cannot start
+    an unrelated partial preparation.
+    """
+    if not known_action(action):
+        raise ValueError(f'unknown action: {action}')
+    if action == 'ollama_model':
+        _check_ollama_precondition()
+    if model_download_spec(action) is not None:
+        _check_download_precondition(action)
+    if action in _NODE_PACKS:
+        _node_pack_dest(action)
+    if action in _BUNDLED_NODE_PACKS:
+        _bundled_pack_dest(action)
+    spec = plugin_action_spec(action)
+    if spec is not None:
+        from .plugins import environment
+        record = _plugin_registry().records.get(spec['plugin'])
+        try:
+            environment.check_enabled(record, loaded=not spec.get('environment'))
+            if environment.running(record.id):
+                raise environment.EnvironmentError('Wait for this plugin’s running script to finish before installing its environment.')
+            if _plugin_action_is_pip(spec) and spec.get('python', 'plugin') == 'plugin':
+                environment._owned_dir(record)
+                environment.requirements(record)
+                environment._specs(spec.get('packages', ()))
+                if spec.get('requirements'):
+                    environment.requirements(record, spec['requirements'])
+        except environment.EnvironmentError as exc:
+            raise Precondition(str(exc)) from exc
+        if spec.get('node_pack'):
+            from .services import comfyui_node_install
+            try:
+                comfyui_node_install._target()
+            except comfyui_node_install.NodeInstallError as exc:
+                raise Precondition(str(exc)) from exc
+
+
+def plugin_install_busy(plugin_id) -> bool:
+    """An admitted install keeps its source and environment until it finishes."""
+    with _lock:
+        return any(run['state'] in ('running', 'queued')
+                   and ((plugin_action_spec(action) or {}).get('plugin') == plugin_id
+                        or (model_download_spec(action) or {}).get('plugin') == plugin_id
+                        or plugin_id in run.get('preparation_plugins', ()))
+                   for action, run in _runs.items())
+
+
+def _quality_env_dir():
+    return cfg.data_dir() / 'envs' / 'quality'
+
+
+def _managed_env_valid(python):
+    """Verify the running Python actually belongs to this isolated venv."""
+    try:
+        result = subprocess.run(
+            [python, '-I', '-c', 'import sys,json,pip; '
+             'print(json.dumps([list(sys.version_info[:2]),sys.prefix,sys.base_prefix]))'],
+            capture_output=True, text=True, timeout=20,
+            env=managed_python.subprocess_env(),
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        version, prefix, base = json.loads(result.stdout)
+        expected = os.path.dirname(os.path.dirname(python))
+        return (result.returncode == 0 and _VENV_PY_MIN <= tuple(version) <= _VENV_PY_MAX
+                and os.path.normcase(os.path.abspath(prefix)) == os.path.normcase(expected)
+                and os.path.normcase(prefix) != os.path.normcase(base))
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        return False
+
+
+def _ensure_managed_ml_env(action, env_dir) -> str:
+    """Create/reuse only a validated LDS-owned venv; repair broken ones safely."""
+    import uuid
+    env_dir = env_dir.absolute()
+    python = _venv_python(env_dir)
+    try:
+        managed_python.assert_owned_directory(env_dir, cfg.data_dir())
+        if _is_flask_venv(python):
+            raise ValueError('Refusing to install ML tools into the app Python.')
+        if os.path.isfile(python) and _managed_env_valid(python):
+            _append(action, f'reusing the managed {env_dir.name} environment')
+            _ensure_modern_pip(action, python)
+            return python
+        base = _find_base_python(action)
+        if not base:
+            return ''
+        backup = env_dir.with_name(env_dir.name + '.previous-' + uuid.uuid4().hex)
+        env_dir.parent.mkdir(parents=True, exist_ok=True)
+        if env_dir.exists():
+            env_dir.rename(backup)
+            _append(action, 'The previous broken environment was kept for recovery.')
+        try:
+            _append(action, f'building the managed {env_dir.name} environment')
+            rc = _run_pip(action, [base, '-m', 'venv', str(env_dir)])
+            if rc != 0 or not os.path.isfile(python) or not _managed_env_valid(python):
+                raise ValueError('The managed environment failed its Python version check.')
+        except Exception:
+            if env_dir.exists():
+                managed_python.assert_owned_directory(env_dir, cfg.data_dir())
+                shutil.rmtree(env_dir)
+            if backup.exists():
+                backup.rename(env_dir)
+            raise
+        _ensure_modern_pip(action, python)
+        return python
+    except Exception as exc:
+        _append(action, f'Could not prepare the quality environment: {exc}')
+        _append(action, 'Click Install again to retry; the app and external Python '
+                        'environments were left unchanged.')
+        return ''
+
+
+def _select_managed_python(action, key, python) -> bool:
+    """Publish a ready runtime, preserving an explicit external selection."""
+    configured = (cfg.get(f'{key}.python') or '').strip()
+    if configured and not _same_path(configured, python) and not _is_flask_venv(configured):
+        _append(action, f'Keeping the selected borrowed {key} interpreter unchanged: '
+                        f'{configured}. The managed environment is ready for selection '
+                        'in Settings.')
+        feature = {'watermark': 'watermark_inpaint', 'bank_semantic': 'bank_siglip2'}.get(key, key)
+        if not _verify_capability_import(feature, configured, log_action=action):
+            _append(action, 'The managed install is ready, but the selected external '
+                            'runtime still cannot run this tool. That external runtime '
+                            'was not modified. Select the managed interpreter in '
+                            'Settings to use the installed tool.')
+            return False
+        return True
+    try:
+        cfg.save_config({key: {'python': python}})
+        return True
+    except Exception as exc:
+        _append(action, f'Could not select the installed {key} environment: {exc}. '
+                        'Click Install again to retry.')
+        return False
+
+
+def _install_quality_tools(action, features) -> int:
+    python = _ensure_managed_ml_env(action, _quality_env_dir())
+    if not python:
+        return 1
+    names = tuple(dict.fromkeys(name for feature in features
+                               for name in _CAPABILITY_PACKAGES[feature]))
+    specs = _drop_provided_onnxruntime(action, python, [_requirement_spec(n) for n in names])
+    _append(action, f'target interpreter: {python}')
+    _append(action, 'Installing CPU quality packages from prebuilt wheels; '
+                    'no local compiler or changes to the app Python.')
+    rc = _run_pip(action, [python, '-m', 'pip', 'install', '--only-binary=:all:',
+                           *specs, '-c', str(_ML_REQUIREMENTS)])
+    if rc != 0:
+        return rc
+    for feature in features:
+        if not _verify_capability_import(feature, python, log_action=action):
+            return 1
+    for feature in features:
+        if not _select_managed_python(action, feature, python):
+            return 1
+    return 0
+
+
+def _extra_roots_for(comfy_type):
+    """Generic configured extra model roots; product-derived roots are callbacks."""
+    from .services import comfy_model_paths
+    return comfy_model_paths.extra_roots(comfy_type)
+
+
+def _log_denied(action, status, license_url, provider):
+    """The recovery steps for a 401/403, the same four lines whichever file of
+    an action the host refused — a companion can be gated while its main file
+    was not (the INT8 row's adapters live on another repository)."""
+    host, key_url, key_name, verb = _AUTH_RECOVERY.get(provider, _AUTH_RECOVERY['hf'])
+    _append(action, f'HTTP {status} - {host} denied access to this file.')
+    if license_url:
+        _append(action, f'1. Open {license_url} and {verb} continue')
+    _append(action, f'2. Create an API key at {key_url}')
+    _append(action, f'3. Paste it as {key_name} in Settings -> API keys, then retry')
+    _append(action, '   (or download the file manually into the folder above)')
+
+
+def _companion_dest_path(comp) -> str:
+    return os.path.join(_comfyui_root(), 'models', *comp['dest'])
+
+
+def _companion_unusable_reason(comp, path):
+    """Why the companion at `path` cannot be kept, or None. A JSON file is
+    kept when it parses; a weight when the shared validator does not condemn
+    it — an HTML page named adapter_model.safetensors is the failure mode."""
+    if comp.get('kind') == 'json':
+        try:
+            with open(path, encoding='utf-8') as fh:
+                json.load(fh)
+            return None
+        except (OSError, ValueError) as exc:
+            return f'not a readable JSON file ({exc})'
+    return _unloadable_reason('companion', path, comp)
+
+
+def _companion_lock(companions):
+    with _lock:
+        key = tuple(sorted(tuple(item['dest']) for item in companions))
+        return _COMPANION_LOCKS.setdefault(key, threading.Lock())
+
+
+def _run_companion_downloads(action) -> int:
+    """Fetch every companion of `action` that is absent or unusable, each to a
+    .part then renamed, verified by its own kind. Progress restarts per file;
+    the log names each. rc 1 on the first failure — a stage is whole or it is
+    not, and the branch that already landed stays."""
+    spec = model_download_spec(action)
+    companions = spec.get('companions') or ()
+    if not companions:
+        return 0
+    with _companion_lock(companions):
+        return _fetch_companions(action, spec, companions)
+
+
+def _fetch_companions(action, spec, companions) -> int:
+    headers, provider = _download_auth(spec)
+    for comp in companions:
+        dest = _companion_dest_path(comp)
+        part = dest + '.part'
+        try:
+            if os.path.isfile(dest):
+                reason = _companion_unusable_reason(comp, dest)
+                if not reason:
+                    _append(action, f'already present: {dest}')
+                    continue
+                _append(action, f'the companion already here cannot be used: {reason} — replacing it')
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            _append(action, f"downloading {comp['url']}")
+            _append(action, f'-> {dest}')
+            with requests.get(comp['url'], stream=True, timeout=(10, 120),
+                              headers=headers, allow_redirects=True) as resp:
+                if resp.status_code in (401, 403):
+                    _log_denied(action, resp.status_code,
+                                comp.get('license_url') or spec.get('license_url'), provider)
+                    return 1
+                if resp.status_code >= 400:
+                    _append(action, f'HTTP {resp.status_code} on {os.path.basename(dest)}')
+                    return 1
+                total = int(resp.headers.get('content-length') or 0)
+                done = 0
+                _set_progress(action, 0, total)
+                with open(part, 'wb') as fh:
+                    for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
+                        if not chunk:
+                            continue
+                        fh.write(chunk)
+                        done += len(chunk)
+                        _set_progress(action, done, total)
+            if total and done < total:
+                _append(action, f'incomplete download ({done}/{total} bytes) - retry')
+                os.remove(part)
+                return 1
+            if comp.get('kind') == 'json':
+                reason = _companion_unusable_reason(comp, part)
+                if reason:
+                    _append(action, f'download verification failed: {reason}; retry the download')
+                    os.remove(part)
+                    return 1
+            elif not _verify_downloaded_model(action, part, comp, provider):
+                return 1
+            os.replace(part, dest)
+            _append(action, f'done -> {dest}')
+        except requests.RequestException as e:
+            _append(action, f'network error: {e}')
+            _discard_part(part)
+            return 1
+        except OSError as e:
+            # A filesystem refusal (a file held open, a full disk, a folder
+            # that vanished) ends the run with a readable line, not a
+            # traceback in the button.
+            _append(action, f'could not write {os.path.basename(dest)}: {e} — retry the download')
+            _discard_part(part)
+            return 1
+    return 0
+
+
+def _discard_part(part):
+    try:
+        os.remove(part)
+    except OSError:
+        pass
+
+
+def _run_primary_download(action) -> int:
+    """Stream one model asset (Klein or Krea) into the validated ComfyUI tree.
+    Writes to a .part file then renames (a killed download never leaves a half
+    file the model scanners would pick up), then verifies the result is real
+    weights. Progress lines land in the ring log (~every 512 MB). An
+    access-denied host (401/403) -> actionable recovery steps for THAT provider,
+    rc 1."""
+    spec = model_download_spec(action)
+    dest = _download_dest_path(action)
+    # Files judged unusable, deleted ONLY once a replacement exists (see below).
+    condemned = []
+    if os.path.isfile(dest):
+        # "Already present" used to end the story here, on ANY existing file. That
+        # made the one remedy the app suggests for a corrupted weight — download it
+        # again — a no-op that reported success: the file stayed broken, every
+        # screen kept certifying it, and there was no way out of the loop from
+        # inside the app (zigzag4794, Discord: a truncated 9.5 GB Klein UNET).
+        # So the same validator the readiness probe uses gets asked first, and a
+        # BLOCKING verdict (an HTML licence page, a truncated/garbage file) makes
+        # this a replacement instead of a skip. The advisory `too_small` never
+        # condemns anything — a small-but-loadable file is the user's, not ours.
+        reason = _unloadable_reason(action, dest, spec)
+        if not reason:
+            _append(action, f'already present: {dest}')
+            return 0
+        _append(action, f'the file already here cannot be loaded: {reason}')
+        # It is NOT deleted now. `dest` is written by os.replace(part, dest) at the
+        # end of a successful download, which overwrites it atomically, so there is
+        # nothing to clear beforehand — and clearing it beforehand is exactly how a
+        # 401, an expired token or a dead host turned "you have a broken file" into
+        # "you have no file". It only goes if a good copy takes its place.
+        _append(action, 'it stays where it is until a fresh copy has actually downloaded')
+        condemned.append(dest)
+    variant = _variant_already_present(action, condemned)
+    if variant:
+        # A loadable copy is proven present, so the condemned files can go now:
+        # nothing here depends on a download that may never happen.
+        _drop_condemned(action, condemned)
+        _append(action, f'already present ({variant}) — an earlier build is '
+                        'installed and still resolves; skipping download')
+        return 0
+    if _download_present_in_extra(action):
+        _drop_condemned(action, condemned)
+        _append(action, 'already available via a configured extra_model_paths.yaml root - skipping download')
+        return 0
+    if _krea_asset_already_installed(action):
+        _drop_condemned(action, condemned)
+        _append(action, 'already installed — the engine already resolves this asset from a '
+                        'file you have; skipping download')
+        return 0
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    headers, provider = _download_auth(spec)
+    _append(action, f"downloading {spec['url']}")
+    _append(action, f'-> {dest}')
+    part = dest + '.part'
+    try:
+        with requests.get(spec['url'], stream=True, timeout=(10, 120),
+                          headers=headers, allow_redirects=True) as resp:
+            if resp.status_code in (401, 403):
+                if spec.get('gated') or spec.get('license_url'):
+                    # Normally public; a 401/403 here means the host is denying
+                    # access anyway (re-gated, region-restricted, or a stale token
+                    # was sent) -> the fix is: get an account/licence + a valid key.
+                    _log_denied(action, resp.status_code, spec.get('license_url'), provider)
+                else:
+                    _append(action, f'HTTP {resp.status_code}')
+                return 1
+            if resp.status_code >= 400:
+                _append(action, f'HTTP {resp.status_code}')
+                return 1
+            total = int(resp.headers.get('content-length') or 0)
+            done = 0
+            next_mark = 0
+            _set_progress(action, 0, total)   # show the bar from the first byte
+            with open(part, 'wb') as fh:
+                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
+                    if not chunk:
+                        continue
+                    fh.write(chunk)
+                    done += len(chunk)
+                    _set_progress(action, done, total)   # live % for the UI bar (every chunk)
+                    if done >= next_mark:                 # coarse milestone in the text log
+                        pct = f' ({done * 100 // total}%)' if total else ''
+                        _append(action, f'{done / 1e9:.2f} / {total / 1e9:.2f} GB{pct}')
+                        next_mark = done + 512 * 1024 * 1024
+        if total and done < total:
+            _append(action, f'incomplete download ({done}/{total} bytes) - retry')
+            os.remove(part)
+            return 1
+        # Verify BEFORE the rename: a 200-with-a-login-page must not have already
+        # taken the place of whatever was there.
+        if not _verify_downloaded_model(action, part, spec, provider):
+            return 1
+        os.replace(part, dest)
+        # The replacement is on disk and verified: NOW the old copies may go. `dest`
+        # itself was already overwritten atomically above, so it is spared here —
+        # removing it would delete the file we just downloaded.
+        _drop_condemned(action, condemned, keep=dest)
+        _append(action, f'done -> {dest}')
+        return 0
+    except requests.RequestException as e:
+        _append(action, f'network error: {e}')
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        return 1
