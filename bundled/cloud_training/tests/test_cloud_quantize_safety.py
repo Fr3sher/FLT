@@ -72,7 +72,7 @@ def test_disable_keeps_cleanup_available_until_rental_release_is_proven(lane, mo
         db.session.commit()
     monkeypatch.setattr(lane.vast_client, 'list_instances',
                         lambda **_kw: pytest.fail('Disable must not contact a provider'))
-    reasons = _disable_blockers('cloud_training', ['existing'])
+    reasons = _disable_blockers(['existing'], 'cloud_training')
     assert reasons[0] == 'existing'
     if state == 'empty':
         assert reasons == ['existing']

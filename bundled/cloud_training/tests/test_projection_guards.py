@@ -69,13 +69,13 @@ def test_disable_blocker_never_probes_or_terminates_a_provider(app, monkeypatch)
     monkeypatch.setattr(ct.vast_client, 'list_instances', lambda: pytest.fail('disable must not probe cloud'))
     monkeypatch.setattr(ct.vast_client, 'destroy_instance', lambda *args: pytest.fail('disable must not delete cloud'))
     with app.app_context():
-        assert _disable_blockers('unrelated', ['existing']) == ['existing']
-        assert _disable_blockers('cloud_training', []) == []
+        assert _disable_blockers(['existing'], 'unrelated') == ['existing']
+        assert _disable_blockers([], 'cloud_training') == []
         run = ct.CloudTrainingRun(dataset_id=1, status='error_pod_kept',
                                   train_params=json.dumps({'training_mode': 'full_transformer'}))
         ct.db.session.add(run)
         ct.db.session.commit()
-        assert 'kept cloud training pod' in _disable_blockers('cloud_training', [])[0]
+        assert 'kept cloud training pod' in _disable_blockers([], 'cloud_training')[0]
 
 
 def test_offline_tripwire_blocks_real_socket_connections():

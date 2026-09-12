@@ -3,7 +3,7 @@
 __version__ = '1.0.0'
 
 
-def _disable_blockers(plugin_id, reasons):
+def _disable_blockers(reasons, plugin_id):
     if plugin_id != 'cloud_training':
         return reasons
     from . import cloud_quantize, cloud_training, fp8_local_delivery
