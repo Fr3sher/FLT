@@ -22,13 +22,13 @@ import { WHATS_NEW_ARCHIVE } from '../../../frontend/src/whatsNewArchive.js'
 // (see whatsNew.js, rule "Keep the list tidy") — search the union.
 const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
 
-const read = (rel) => readSource(`src/${rel}`)
-const BLEND = read('components/canvas/CanvasBlendPanel.jsx')
-const PANEL = read('components/canvas/CanvasGenerationPanel.jsx')
-const HOOK = read('hooks/useCanvasStudio.js')
-const UTIL = read('utils/canvasGeneration.js')
-const SETUP = read('components/dataset/studio/RunSetupPanel.jsx')
-const ROW = read('components/dataset/studio/BlendWeightRow.jsx')
+const read = readSource
+const BLEND = read('../bundled/canvas/frontend/components/canvas/CanvasBlendPanel.jsx')
+const PANEL = read('../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx')
+const HOOK = read('../bundled/canvas/frontend/hooks/useCanvasStudio.js')
+const UTIL = read('../bundled/canvas/frontend/utils/canvasGeneration.js')
+const SETUP = read('src/components/dataset/studio/RunSetupPanel.jsx')
+const ROW = read('src/components/dataset/studio/BlendWeightRow.jsx')
 
 test('the board imports the Test Studio stack module instead of copying it', () => {
   // A second clamp, a second "one family" rule or a second key shape is a second

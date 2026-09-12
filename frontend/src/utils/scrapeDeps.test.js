@@ -57,6 +57,15 @@ test('the backend publishes the detail the banner reads', () => {
   // the banner silently falls back to naming nothing.
   const caps = fs.readFileSync(
     new URL('../../../backend/app/capabilities.py', import.meta.url), 'utf8');
-  assert.match(caps, /'scrape_deps_detail':\s*scrape_deps\['detail'\]/);
-  assert.match(caps, /'scrape_deps':\s*scrape_deps\['ok'\]/);
+  const probes = fs.readFileSync(
+    new URL('../../../bundled/scrape/lds_scrape/probes.py', import.meta.url), 'utf8');
+  const registration = fs.readFileSync(
+    new URL('../../../bundled/scrape/lds_scrape/__init__.py', import.meta.url), 'utf8');
+  assert.match(probes, /'scrape_deps_detail':\s*lambda: dependencies\(\)\['detail'\]/);
+  assert.match(probes, /'scrape_deps':\s*lambda: dependencies\(\)\['ok'\]/);
+  assert.match(registration, /from \.probes import PROBES/);
+  assert.match(registration, /for key, fn in PROBES\.items\(\):\s*ctx\.register_probe\(key, fn\)/);
+  assert.match(caps, /if not plugin_available\(pid\):\s*continue/);
+  assert.match(caps, /_set_capability\(caps, key, callback\(\)\)/);
+  assert.match(caps, /caps = _plugin_capabilities\(_probe_uncached\(\)\)/);
 });

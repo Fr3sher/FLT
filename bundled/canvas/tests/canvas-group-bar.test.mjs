@@ -26,7 +26,7 @@ import { layoutBoxes, layoutImageNodes, occupiedBox } from '../frontend/utils/ca
 import { groupBarHeight, groupBarMaxHeight, isNodeControlTarget, nodePointerIntent }
   from '../frontend/utils/canvasNodeChrome.js'
 
-const read = (rel) => readSource(`src/${rel}`)
+const read = (rel) => readSource(`../bundled/canvas/frontend/${rel}`)
 const CANVAS = read('components/canvas/LineageCanvas.jsx')
 const BAR = read('components/canvas/CanvasGroupBar.jsx')
 const GROUP = read('components/canvas/CanvasImageGroup.jsx')
