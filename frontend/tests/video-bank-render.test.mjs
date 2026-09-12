@@ -33,6 +33,9 @@ import { readSource } from './support/readSource.mjs'
 import assert from 'node:assert/strict'
 
 import { createElement, render, renderToStaticMarkup } from './support/mountJsx.mjs'
+import { installRuntimeHost } from './support/runtimeHost.mjs'
+
+test.beforeEach(installRuntimeHost)
 
 /* ⚠️ Dynamic, and it has to be: the hooks that teach Node to read .jsx are
    installed while mountJsx.mjs is EVALUATED, and a static import of a .jsx file
