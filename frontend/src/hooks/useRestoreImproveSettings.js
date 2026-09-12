@@ -1,8 +1,7 @@
 import { improvementAvailable } from '../utils/improveEngines.js';
 import { useCallback } from 'react';
-import { apiFetch, putJson } from '../api/fetchClient';
 import { useToast } from '../components/common/Toast';
-import { publishSettings as publishKleinImproveSettings } from '../components/dataset/KleinImproveNote';
+import { publishSettings as publishKleinImproveSettings, readImproveSettings, saveImproveSettings } from '../components/dataset/KleinImproveNote';
 import {
   restoreImproveMessage, restoreImprovePatch,
 } from '../utils/improveSettingsRestore';
@@ -24,13 +23,13 @@ export function useRestoreImproveSettings() {
   const restore = useCallback(async (img) => {
     if (!improvementAvailable('klein')) { toast.warning('Enable Klein Improve before reusing its settings.'); return; }
     try {
-      const payload = await apiFetch('/api/settings');
+      const payload = await readImproveSettings();
       const { patch, report } = restoreImprovePatch({
         img,
         shipped: payload?.identity_prompt_defaults?.klein_improve || '',
         presets: payload?.config?.klein?.generation_lora_presets || [],
       });
-      publishKleinImproveSettings(await putJson('/api/settings', patch));
+      await publishKleinImproveSettings(await saveImproveSettings(patch));
       toast.success(restoreImproveMessage(report));
     } catch (e) {
       toast.error(e?.message || 'Could not apply these improve settings');

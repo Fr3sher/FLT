@@ -36,7 +36,8 @@
    Settings keeps its link: the other identity prompts, the per-subject picker
    and the four strength knobs are not here, and never will be. */
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { apiFetch, putJson } from '@lds/plugin-sdk';
+import { readImproveSettings, saveImproveSettings } from '../lib/settings.js';
+export { readImproveSettings, saveImproveSettings } from '../lib/settings.js';
 import { SettingsLink } from '@lds/plugin-sdk/ui';
 import { PromptOverrideField } from '@lds/plugin-sdk/ui';
 import { KleinModelSetting } from '@lds/plugin-sdk/ui';
@@ -92,7 +93,7 @@ function loadSettings() {
       at: now,
       // Resolve to null on failure: the caller renders the honest "unknown"
       // wording instead of a toast about a hint nobody asked for.
-      promise: apiFetch('/api/settings', { background: true }).catch(() => null),
+      promise: readImproveSettings().catch(() => null),
       value: null,
     };
     cache = entry;
@@ -181,7 +182,7 @@ export default function KleinImproveNote({
     if (alive.current) { setSaving(true); setError(null); }
     // PUT returns the WHOLE settings payload, so what every note ends up
     // showing is what the server stored, not what this one hoped it sent.
-    const req = putJson('/api/settings', improveSettingsPatch(patch));
+    const req = saveImproveSettings(improveSettingsPatch(patch));
     // Chained, never replaced: two saves in flight must BOTH be waited on, and
     // a rejected one must not poison the chain for the next run.
     inFlight = Promise.allSettled([inFlight, req]).then(() => {});

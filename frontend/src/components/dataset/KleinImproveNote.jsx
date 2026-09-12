@@ -11,6 +11,12 @@ function invoke(name, ...args) {
 }
 export function flushImproveSettings() { return invoke('flushImproveSettings') }
 export function whenImproveSettingsSettled() { return invoke('whenImproveSettingsSettled') }
+export function readImproveSettings() {
+  return editor() ? invoke('readImproveSettings') : Promise.reject(new Error('Enable Klein Improve before reading its settings.'))
+}
+export function saveImproveSettings(body) {
+  return editor() ? invoke('saveImproveSettings', body) : Promise.reject(new Error('Enable Klein Improve before saving its settings.'))
+}
 export function publishSettings(payload) { return invoke('publishSettings', payload) }
 export default function KleinImproveNote(props) {
   const item = editor()
