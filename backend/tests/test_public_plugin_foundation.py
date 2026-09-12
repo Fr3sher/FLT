@@ -209,13 +209,13 @@ def test_invalid_managed_nodes_rejected_without_importing_worker(host):
     with pytest.raises(ManifestError, match='node_packs'):
         parse_manifest(value, Path('/fixture'))
     assert 'app.services.comfyui_node_install' not in set(sys.modules) - before
-    assert LDS_PLUGIN_API_MINOR == 20
+    assert LDS_PLUGIN_API_MINOR >= 20
     assert callable(PluginContext.register_node_pack)
 
 
 def test_v2_package_api_floor_is_checked_before_import(host):
     value = manifest(schema_version=2, publisher={'id': 'sample', 'name': 'Sample'},
-                     compatibility={'lds': '>=1', 'api': '>=1.21', 'python': '>=3.10',
+                     compatibility={'lds': '>=1', 'api': f'>=1.{LDS_PLUGIN_API_MINOR + 1}', 'python': '>=3.10',
                                     'os': ['windows', 'linux', 'darwin'], 'arch': ['x86_64', 'arm64']})
     parsed = parse_manifest(value, Path('/fixture'))
     assert any(item['field'] == 'compatibility.api' for item in host_issues(parsed))

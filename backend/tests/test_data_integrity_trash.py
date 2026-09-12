@@ -230,6 +230,7 @@ def test_studio_prompt_delete_restores_file_and_rows_when_commit_fails(
         assert not os.path.exists(calls[0][2])
 
 
+@pytest.mark.plugins('api_engines')
 def test_regenerate_preflight_failure_keeps_current_file_out_of_trash(
         app, monkeypatch):
     from app.extensions import db
