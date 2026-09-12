@@ -8,8 +8,13 @@ to a manifest discovered in the candidate checkout.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
+import stat
+import struct
+import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +27,12 @@ PUBLIC_PRODUCTS = frozenset({
 })
 ARCHIVE_SUFFIXES = ('.ldsplugin', '.zip', '.whl', '.tar', '.gz', '.bz2', '.xz',
                     '.tgz', '.tbz2', '.txz', '.7z', '.rar', '.pyz')
+WHEEL_NAME = re.compile(r'[A-Za-z0-9_]+-[A-Za-z0-9_.+]+(?:-[0-9][A-Za-z0-9_]*)?-py3-none-any\.whl\Z')
+WHEEL_MAX_BYTES = 8 * 1024 * 1024
+WHEEL_MAX_EXPANDED = 32 * 1024 * 1024
+WHEEL_MAX_MEMBER = 4 * 1024 * 1024
+WHEEL_MAX_MEMBERS = 512
+WINDOWS_RESERVED = re.compile(r'(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|\Z)', re.I)
 
 
 class ManifestError(ValueError):
@@ -66,6 +77,124 @@ def git_path(value):
                 for char in value))
     require('\x7f' not in value and ':' not in value)
     return value
+
+
+def wheel_member_path(value):
+    """Use portable, unambiguous file names; this policy never extracts a wheel."""
+    git_path(value)
+    require(len(value) <= 240)
+    for part in value.split('/'):
+        require(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.+\-]{0,79}', part)
+                and not part.endswith('.') and not WINDOWS_RESERVED.match(part))
+    require(not value.casefold().endswith(ARCHIVE_SUFFIXES),
+            'Nested archives cannot receive generated-resource exceptions.')
+    return value
+
+
+def wheel_descriptor(entry):
+    """The only archive exception: an explicit generated, pure-Python wheel."""
+    parts = entry['path'].split('/')
+    require(len(parts) == 5 and parts[2:4] == ['resources', 'wheels']
+            and WHEEL_NAME.fullmatch(parts[4]) and entry['mode'] == '100644',
+            'Generated wheel exceptions require an exact resources/wheels path.')
+    provenance = entry['provenance']
+    require(provenance['kind'] == 'generated')
+    resource = provenance['resource']
+    fields(resource, ('type', 'sha256', 'size', 'members', 'external_source'))
+    require(resource['type'] == 'wheel')
+    # This is an immutable upstream reference for the human review, not a claim
+    # that its bytes were present in main or downloaded/verified by this guard.
+    source = resource['external_source']
+    fields(source, ('type', 'url', 'sha256'))
+    require(source['type'] == 'pypi_sdist' and type(source['url']) is str
+            and re.fullmatch(r'https://files\.pythonhosted\.org/packages/'
+                             r'[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{60}/'
+                             r'[A-Za-z0-9_][A-Za-z0-9_.+\-]*\.tar\.gz', source['url']))
+    digest(source['sha256'])
+    digest(resource['sha256'])
+    require(type(resource['size']) is int and 22 <= resource['size'] <= WHEEL_MAX_BYTES)
+    members = resource['members']
+    require(type(members) is list and 0 < len(members) <= WHEEL_MAX_MEMBERS)
+    seen, expanded = set(), 0
+    for member in members:
+        fields(member, ('path', 'size', 'sha256'))
+        name = wheel_member_path(member['path'])
+        require(name.casefold() not in seen, 'Duplicate generated-resource member.')
+        seen.add(name.casefold())
+        require(type(member['size']) is int and 0 <= member['size'] <= WHEEL_MAX_MEMBER)
+        expanded += member['size']
+        digest(member['sha256'])
+    require(expanded <= WHEEL_MAX_EXPANDED)
+    require(all('/'.join(name.split('/')[:index]) not in seen
+                for name in seen for index in range(1, len(name.split('/')))),
+            'A wheel file cannot also be a directory or its case alias.')
+
+
+def verify_wheel(content, resource):
+    """Verify every Git-blob byte and every member, without imports or extraction.
+
+    Only simple ZIP32 STORED/DEFLATED files are accepted. Reject ZIP metadata or
+    unused compressed bytes that could hide material outside the reviewed files.
+    """
+    require(len(content) == resource['size']
+            and hashlib.sha256(content).hexdigest() == resource['sha256'],
+            'The generated wheel differs from its approved bytes.')
+    try:
+        end = struct.unpack('<4s4H2IH', content[-22:])
+        signature, disk, directory_disk, disk_count, count, directory_size, start, comment = end
+        require(signature == b'PK\x05\x06' and disk == directory_disk == comment == 0
+                and disk_count == count == len(resource['members'])
+                and start + directory_size == len(content) - 22)
+        with zipfile.ZipFile(io.BytesIO(content)) as wheel:
+            require(not wheel.comment and wheel.start_dir == start)
+            infos = wheel.infolist()
+            expected = {member['path']: member for member in resource['members']}
+            require(len(infos) == count and {info.filename for info in infos} == set(expected),
+                    'The generated wheel member inventory differs from its approval.')
+            local_position, central_position = 0, start
+            for info in infos:
+                member = expected[info.filename]
+                name = info.filename.encode('ascii')
+                require(info.orig_filename == info.filename and not info.is_dir()
+                        and not info.extra and not info.comment
+                        and info.flag_bits in (0, 0x800)
+                        and info.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+                        and info.extract_version in (10, 20) and info.create_system in (0, 3)
+                        and info.volume == 0 and info.internal_attr in (0, 1))
+                mode = info.external_attr >> 16
+                require(stat.S_IFMT(mode) in (0, stat.S_IFREG) and not mode & 0o7000
+                        and not (info.external_attr & 0xffff) & ~0x20,
+                        'Generated wheel members must be regular files, without reparse attributes.')
+                require(info.file_size == member['size'] and info.header_offset == local_position)
+                header = struct.unpack_from('<4s5H3I2H', content, local_position)
+                require(header[0] == b'PK\x03\x04' and header[1] == info.extract_version
+                        and header[2] == info.flag_bits and header[3] == info.compress_type
+                        and header[6:9] == (info.CRC, info.compress_size, info.file_size)
+                        and header[9:] == (len(name), 0))
+                payload_start = local_position + 30 + len(name)
+                payload_end = payload_start + info.compress_size
+                require(content[local_position + 30:payload_start] == name and payload_end <= start)
+                packed = content[payload_start:payload_end]
+                if info.compress_type == zipfile.ZIP_DEFLATED:
+                    stream = zlib.decompressobj(-zlib.MAX_WBITS)
+                    unpacked = stream.decompress(packed, member['size'] + 1)
+                    require(stream.eof and not stream.unused_data and not stream.unconsumed_tail)
+                else:
+                    unpacked = packed
+                require(len(unpacked) == member['size'] and zlib.crc32(unpacked) == info.CRC
+                        and hashlib.sha256(unpacked).hexdigest() == member['sha256'],
+                        'A generated wheel member differs from its approved content.')
+                # ZIP comments/extras and unlisted local records are forbidden.
+                require(content[central_position:central_position + 4] == b'PK\x01\x02')
+                lengths = struct.unpack_from('<3H', content, central_position + 28)
+                require(lengths == (len(name), 0, 0)
+                        and content[central_position + 46:central_position + 46 + len(name)] == name)
+                central_position += 46 + len(name)
+                local_position = payload_end
+            require(local_position == start and central_position == len(content) - 22,
+                    'Unreviewed data surrounds the generated wheel members.')
+    except (zipfile.BadZipFile, struct.error, zlib.error, UnicodeError, NotImplementedError) as exc:
+        raise ManifestError('Unsupported or malformed generated wheel.') from exc
 
 
 def outside_checkout(repo, path, git):
@@ -131,6 +260,11 @@ class ApprovedPort:
                     source = provenance['sources'][0]
                     require((mode, blob) == (source['mode'], source['blob']),
                             'An unchanged public port differs from its public source.')
+                if 'resource' in provenance:
+                    resource = provenance['resource']
+                    # Bound the object before asking Git to materialize its bytes.
+                    require(int(git(repo, 'cat-file', '-s', blob)) == resource['size'])
+                    verify_wheel(git(repo, 'cat-file', 'blob', blob), resource)
                 exceptions.add((commit, item['tree'], name, mode, 'blob', blob))
         return exceptions
 
@@ -174,8 +308,6 @@ def load_manifest(repo, path, expected_sha256, review_sha256, git):
             parts = name.split('/')
             require(len(parts) >= 3 and parts[0] == 'bundled' and parts[1] in products)
             require(all(part.casefold() != 'bundled' for part in parts[2:]))
-            require(not parts[-1].casefold().endswith(ARCHIVE_SUFFIXES),
-                    'Distribution archives cannot receive source-port exceptions.')
             require(name not in seen_paths, 'Duplicate approved path in a commit.')
             seen_paths.add(name)
             seen_products.add(parts[1])
@@ -183,11 +315,25 @@ def load_manifest(repo, path, expected_sha256, review_sha256, git):
                     'Only regular source files can receive public-port exceptions.')
             oid(entry['blob'])
             provenance = entry['provenance']
-            fields(provenance, ('kind', 'sources', 'evidence_sha256'))
-            require(provenance['kind'] in ('unchanged', 'reviewed_port', 'generated'))
+            require(type(provenance) is dict)
+            if 'resource' in provenance:
+                fields(provenance, ('kind', 'sources', 'evidence_sha256', 'resource'))
+                wheel_descriptor(entry)
+            else:
+                fields(provenance, ('kind', 'sources', 'evidence_sha256'))
+                require(not parts[-1].casefold().endswith(ARCHIVE_SUFFIXES),
+                        'Distribution archives cannot receive source-port exceptions.')
+            require(provenance['kind'] in ('unchanged', 'reviewed_port', 'generated',
+                                           'reviewed_infrastructure'))
             digest(provenance['evidence_sha256'])
             sources = provenance['sources']
-            require(type(sources) is list and sources)
+            require(type(sources) is list)
+            if provenance['kind'] == 'reviewed_infrastructure' or 'resource' in provenance:
+                # Explicitly reviewed new infrastructure / externally sourced
+                # generated assets must not fabricate a source blob from main.
+                require(not sources)
+            else:
+                require(sources)
             require(provenance['kind'] != 'unchanged' or len(sources) == 1)
             seen_sources = set()
             for source in sources:

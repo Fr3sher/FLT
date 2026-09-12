@@ -5,12 +5,15 @@ from __future__ import annotations
 import importlib.util
 import copy
 import hashlib
+import io
 import json
 import os
 import subprocess
+import struct
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +24,43 @@ policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
 import install_public_push_guard as installer
 import private_plugin_pre_push as hook_runner
+import public_port_manifest as port_policy
+
+
+WHEEL_PATH = 'bundled/seedvr2/resources/wheels/fixture-1.0-py3-none-any.whl'
+UPSTREAM_SOURCE = {
+    'type': 'pypi_sdist',
+    'url': ('https://files.pythonhosted.org/packages/3e/38/'
+            '7859ff46355f76f8d19459005ca000b6e7012f2f1ca597746cbcd1fbfe5e/'
+            'antlr4-python3-runtime-4.9.3.tar.gz'),
+    'sha256': 'f224469b4168294902bb1efa80a8bf7855f24c99aef99cbefc1bcd3cce77881b',
+}
+
+
+def synthetic_wheel(entries=None, configure=None):
+    """Tiny inert ZIP fixtures; no packaging toolchain or wheel installation."""
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as wheel:
+        for name, data in entries or [('fixture/__init__.py', b'VALUE = 1\n')]:
+            info = zipfile.ZipInfo(name)
+            # ZipInfo normalizes Windows backslashes; retain hostile raw names
+            # in adversarial fixtures so the validator, not the builder, rejects them.
+            info.filename = name
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o100644 << 16
+            if configure:
+                configure(info)
+            wheel.writestr(info, data)
+    return output.getvalue()
+
+
+def resource_for(content):
+    with zipfile.ZipFile(io.BytesIO(content)) as wheel:
+        members = [{'path': info.filename, 'size': info.file_size,
+                    'sha256': hashlib.sha256(wheel.read(info)).hexdigest()}
+                   for info in wheel.infolist()]
+    return {'type': 'wheel', 'size': len(content), 'sha256': hashlib.sha256(content).hexdigest(),
+            'members': members, 'external_source': copy.deepcopy(UPSTREAM_SOURCE)}
 
 
 class PublicHistoryTests(unittest.TestCase):
@@ -280,6 +320,206 @@ class PublicHistoryTests(unittest.TestCase):
         except policy.HistoryError:
             return
         self.assertFalse(result['allowed'])
+
+    def wheel_fixture(self, content=None, path=WHEEL_PATH):
+        self.port_fixture()
+        content = synthetic_wheel() if content is None else content
+        destination = self.repo / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+        self.tip = self.commit('synthetic generated wheel approval')
+        self.manifest = self.manifest_for(self.tip)
+        self.wheel_entry = next(entry for entry in self.manifest['commits'][0]['exceptions']
+                                if entry['path'] == path)
+        self.wheel_entry['provenance'].update(kind='generated', sources=[], resource=resource_for(content))
+
+    def test_generated_wheel_exact_git_blob_is_approved_without_fabricated_main_source(self):
+        self.wheel_fixture()
+        self.assertTrue(self.approved()['allowed'])
+        self.assertFalse(self.inspect(private_source=self.private_source)['allowed'])
+        # The guard must inspect the pinned object, never mutable checkout bytes.
+        (self.repo / WHEEL_PATH).write_bytes(b'uncommitted replacement, not approved')
+        self.assertTrue(self.approved()['allowed'])
+        self.wheel_entry['provenance']['resource']['sha256'] = hashlib.sha256(
+            (self.repo / WHEEL_PATH).read_bytes()).hexdigest()
+        self.refused()
+
+    def test_generated_wheel_real_antlr_blob_passes_only_with_synthetic_explicit_approval(self):
+        path = ('bundled/seedvr2/resources/wheels/'
+                'antlr4_python3_runtime-4.9.3+lds.1-py3-none-any.whl')
+        # Read the actual tracked blob, without executing or modifying the asset.
+        content = policy.git(SCRIPTS.parent, 'cat-file', 'blob', 'HEAD:' + path)
+        self.assertEqual(hashlib.sha256(content).hexdigest(),
+                         '4e909ac01d54970b10622e90c2645dad8b186d4d79b5864fa60bb155379173ef')
+        self.wheel_fixture(content, path)
+        resource = self.wheel_entry['provenance']['resource']
+        self.assertEqual((resource['size'], len(resource['members'])), (144376, 61))
+        self.assertTrue(self.approved()['allowed'])
+        self.wheel_entry['provenance'].pop('resource')
+        self.refused()
+
+    def test_generated_wheel_scope_schema_and_exhaustive_inventory_fail_closed(self):
+        self.wheel_fixture()
+        wheel_index = self.manifest['commits'][0]['exceptions'].index(self.wheel_entry)
+        mutations = [
+            lambda e: e['provenance'].pop('resource'),
+            lambda e: e['provenance'].update(kind='reviewed_port'),
+            lambda e: e['provenance'].update(kind='unchanged'),
+            lambda e: e['provenance'].update(kind='reviewed_infrastructure'),
+            lambda e: e['provenance'].update(sources=[{'path': 'core.py', 'mode': '100644',
+                                                      'blob': self.git('rev-parse', self.origin + ':core.py')}]),
+            lambda e: e.update(mode='100755'),
+            lambda e: e['provenance'].update(evidence_sha256='unreviewed'),
+            lambda e: e['provenance']['resource'].update(type='zip'),
+            lambda e: e['provenance']['resource'].update(unknown=True),
+            lambda e: e['provenance']['resource'].update(sha256='0' * 64),
+            lambda e: e['provenance']['resource'].update(size=True),
+            lambda e: e['provenance']['resource'].update(size=22),
+            lambda e: e['provenance']['resource'].update(members=[]),
+            lambda e: e['provenance']['resource']['members'][0].update(sha256='0' * 64),
+            lambda e: e['provenance']['resource']['members'][0].update(size=0),
+            lambda e: e['provenance']['resource']['members'].append(
+                copy.deepcopy(e['provenance']['resource']['members'][0])),
+            lambda e: e['provenance']['resource']['members'].append(
+                {'path': 'unlisted.py', 'size': 0, 'sha256': hashlib.sha256(b'').hexdigest()}),
+            lambda e: e['provenance']['resource'].pop('external_source'),
+            lambda e: e['provenance']['resource']['external_source'].update(sha256='unverified'),
+        ]
+        paths = ['bundled/manga/resources/wheels/fixture-1.0-py3-none-any.whl',
+                 'bundled/seedvr2/resources/fixture-1.0-py3-none-any.whl',
+                 'bundled/seedvr2/resources/wheels/nested/fixture-1.0-py3-none-any.whl',
+                 'bundled/seedvr2/resources/wheels/fixture-1.0-cp312-win_amd64.whl',
+                 'bundled/seedvr2/resources/wheels/fixture.ldsplugin',
+                 'bundled/seedvr2/resources/wheels/transition-pack.zip',
+                 'bundled/seedvr2/resources/wheels/fixture.tar.gz']
+        mutations += [lambda e, path=path: e.update(path=path) for path in paths]
+        urls = ['https://pypi.org/project/antlr4-python3-runtime/4.9.3/',
+                'https://files.pythonhosted.org/packages/latest/source.tar.gz',
+                UPSTREAM_SOURCE['url'] + '?replacement=1',
+                UPSTREAM_SOURCE['url'].replace('https://', 'http://'),
+                UPSTREAM_SOURCE['url'].replace('https://', 'https://user@')]
+        mutations += [lambda e, url=url: e['provenance']['resource']['external_source'].update(url=url)
+                      for url in urls]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                candidate = copy.deepcopy(self.manifest)
+                mutate(candidate['commits'][0]['exceptions'][wheel_index])
+                self.refused(candidate)
+
+    def verify_resource(self, content, resource):
+        entry = {'path': WHEEL_PATH, 'mode': '100644',
+                 'provenance': {'kind': 'generated', 'resource': resource}}
+        port_policy.wheel_descriptor(entry)
+        port_policy.verify_wheel(content, resource)
+
+    def test_generated_wheel_rejects_unsafe_paths_duplicates_and_non_regular_members(self):
+        names = ['../private.py', '/private.py', 'a\\private.py', 'a//private.py',
+                 'a/CON.py', 'a/trailing.', 'a/stream:ads', 'a/private.zip', 'a/private.ldsplugin',
+                 'a/other.whl', 'a/transition-pack.zip', 'a/\u00e9.py', 'a/' + 'x' * 81]
+        for name in names:
+            with self.subTest(path=name):
+                content = synthetic_wheel([(name, b'inert')])
+                with self.assertRaises(port_policy.ManifestError):
+                    self.verify_resource(content, resource_for(content))
+        for entries in [[('a/file.py', b'one'), ('a/FILE.py', b'two')],
+                        [('a/child.py', b'one'), ('A', b'file replacing directory')]]:
+            content = synthetic_wheel(entries)
+            with self.assertRaises(port_policy.ManifestError):
+                self.verify_resource(content, resource_for(content))
+        for attribute in [(0o120777 << 16), (0o040755 << 16), (0o104644 << 16),
+                          (0o100644 << 16) | 0x400, (0o100644 << 16) | 0x10]:
+            with self.subTest(attribute=attribute):
+                content = synthetic_wheel(configure=lambda info: setattr(info, 'external_attr', attribute))
+                with self.assertRaises(port_policy.ManifestError):
+                    self.verify_resource(content, resource_for(content))
+
+    def test_generated_wheel_rejects_hidden_zip_metadata_and_payload(self):
+        original = synthetic_wheel()
+        expected = resource_for(original)
+        variants = [b'prefix' + original, original + b'trailing payload', b'invalid zip']
+        for field, value in [('extra', b'\xfe\xca\x00\x00'), ('comment', b'unreviewed'),
+                             ('compress_type', zipfile.ZIP_BZIP2)]:
+            variants.append(synthetic_wheel(configure=lambda info, f=field, v=value: setattr(info, f, v)))
+        # EOCD archive comment, encryption/data-descriptor flags, local name mismatch.
+        commented = bytearray(original)
+        struct.pack_into('<H', commented, len(commented) - 2, 3)
+        variants.append(bytes(commented) + b'abc')
+        with zipfile.ZipFile(io.BytesIO(original)) as wheel:
+            central = wheel.start_dir
+        for flag in (1, 8, 0x4000):
+            altered = bytearray(original)
+            struct.pack_into('<H', altered, 6, flag)
+            struct.pack_into('<H', altered, central + 8, flag)
+            variants.append(bytes(altered))
+        altered = bytearray(original)
+        altered[30] = ord('x')
+        variants.append(bytes(altered))
+        # A second, unlisted stream inside a member's compressed byte range.
+        altered = bytearray(original[:central] + b'hidden' + original[central:])
+        packed_size = struct.unpack_from('<I', altered, 18)[0] + 6
+        struct.pack_into('<I', altered, 18, packed_size)
+        struct.pack_into('<I', altered, central + 6 + 20, packed_size)
+        struct.pack_into('<I', altered, len(altered) - 6, central + 6)
+        variants.append(bytes(altered))
+        for index, content in enumerate(variants):
+            with self.subTest(variant=index):
+                descriptor = copy.deepcopy(expected)
+                descriptor.update(size=len(content), sha256=hashlib.sha256(content).hexdigest())
+                with self.assertRaises(port_policy.ManifestError):
+                    self.verify_resource(content, descriptor)
+
+    def test_generated_wheel_enforces_object_and_decompression_budgets(self):
+        content = synthetic_wheel()
+        resource = resource_for(content)
+        for limit, value in [('WHEEL_MAX_BYTES', len(content) - 1), ('WHEEL_MAX_MEMBERS', 0),
+                             ('WHEEL_MAX_MEMBER', 1), ('WHEEL_MAX_EXPANDED', 1)]:
+            with self.subTest(limit=limit), patch.object(port_policy, limit, value):
+                with self.assertRaises(port_policy.ManifestError):
+                    self.verify_resource(content, resource)
+        # The actual stream expands beyond its lying ZIP headers and inventory.
+        content = bytearray(synthetic_wheel([('fixture/__init__.py', b'x' * 100000)]))
+        with zipfile.ZipFile(io.BytesIO(content)) as wheel:
+            central = wheel.start_dir
+        struct.pack_into('<I', content, 22, 1)
+        struct.pack_into('<I', content, central + 24, 1)
+        resource.update(size=len(content), sha256=hashlib.sha256(content).hexdigest())
+        resource['members'][0].update(size=1, sha256=hashlib.sha256(b'x').hexdigest())
+        with self.assertRaises(port_policy.ManifestError):
+            self.verify_resource(bytes(content), resource)
+        self.wheel_fixture()
+        actual_git = policy.git
+        oversized_blob = self.wheel_entry['blob']
+
+        def guarded_git(repo, *args):
+            if args == ('cat-file', '-s', oversized_blob):
+                return str(port_policy.WHEEL_MAX_BYTES + 1).encode()
+            if args == ('cat-file', 'blob', oversized_blob):
+                self.fail('The guard materialized a blob before its size was approved')
+            return actual_git(repo, *args)
+
+        with patch.object(policy, 'git', side_effect=guarded_git):
+            self.refused()
+
+    def test_reviewed_infrastructure_requires_explicit_proof_without_fabricated_sources(self):
+        self.port_fixture()
+        self.manifest['commits'][0]['exceptions'][0]['provenance'].update(
+            kind='reviewed_infrastructure', sources=[])
+        self.assertTrue(self.approved()['allowed'])
+        self.assertFalse(self.inspect(private_source=self.private_source)['allowed'])
+        original = copy.deepcopy(self.manifest)
+        for mutate in [lambda p: p.pop('evidence_sha256'), lambda p: p.update(evidence_sha256='unreviewed'),
+                       lambda p: p.update(sources=[{'path': 'core.py', 'mode': '100644',
+                                                   'blob': self.git('rev-parse', self.origin + ':core.py')}]),
+                       lambda p: p.update(kind='reviewed_port'), lambda p: p.update(kind='generated')]:
+            candidate = copy.deepcopy(original)
+            mutate(candidate['commits'][0]['exceptions'][0]['provenance'])
+            self.refused(candidate)
+        # Even that category cannot approve an archive or a later tree implicitly.
+        candidate = copy.deepcopy(original)
+        candidate['commits'][0]['exceptions'][0]['path'] = 'bundled/video/hidden.zip'
+        self.refused(candidate)
+        self.write('bundled/video/extra.py', 'UNREVIEWED_NEW_INFRASTRUCTURE = True\n')
+        self.refused(tip=self.commit('unapproved later infrastructure'))
 
     def test_exact_reviewed_port_and_unchanged_public_move_are_allowed(self):
         self.port_fixture(unchanged=True)
