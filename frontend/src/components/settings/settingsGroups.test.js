@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import seedvr2 from '../../../../bundled/seedvr2/frontend/index.js';
 
 import {
   ENGINES_GROUPS, SECTION_GROUPS, groupDomId, readOpenGroups, storeGroupToggle,
@@ -18,7 +19,10 @@ function fakeStorage({ throwing = false } = {}) {
 
 test('the Image engines groups carry stable ids — they live in localStorage and DOM anchors', () => {
   assert.deepEqual(ENGINES_GROUPS.map((g) => g.id),
-    ['engines-keys', 'klein', 'krea', 'lora-presets', 'seedvr2', 'prompts']);
+    ['engines-keys', 'klein', 'krea', 'lora-presets', 'prompts']);
+  // The persisted SeedVR2 group keeps its identity on its own plugin page.
+  assert.equal(seedvr2.slots['settings.group'][0].id, 'seedvr2');
+  assert.equal(typeof seedvr2.slots['settings.group'][0].panel, 'function');
   for (const g of ENGINES_GROUPS) {
     assert.ok(g.title && g.blurb && g.icon, `${g.id} is missing display fields`);
   }
@@ -36,7 +40,7 @@ test('every grouped section carries stable ids and complete display fields', () 
   for (const [sectionId, groups] of Object.entries(SECTION_GROUPS)) {
     const ids = groups.map((g) => g.id);
     assert.equal(new Set(ids).size, ids.length, `${sectionId} repeats a group id`);
-    assert.ok(groups.length >= 3, `${sectionId} has too few groups to earn a summary`);
+    assert.ok(groups.length >= 2, `${sectionId} must retain its separate core groups`);
     for (const g of groups) {
       assert.ok(g.title && g.blurb && g.icon, `${sectionId}/${g.id} missing display fields`);
     }

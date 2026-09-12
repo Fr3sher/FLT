@@ -18,12 +18,12 @@ export function videoSetupRows(caps) {
   const smoothReady = !!cu.video_studio_ready && cu.video_studio_options?.vfi?.available === true
   return [
     { label: 'Video Test Studio', what: 'Local H3 image- and text-to-video', ok: !!cu.video_studio_ready, topic: 'setup-video-studio', ...(!cu.video_studio_ready ? waiting : {}) },
-    { label: 'Video tools in LDS', ok: !!c.video_host_ready, topic: 'setup-quality' },
-    { label: 'Video reading', ok: !!c.video_decode, topic: 'setup-quality' },
-    { label: 'Shot detection', ok: !!c.video_detect, topic: 'setup-quality' },
-    { label: 'Clip encoding', ok: !!c.video_encode, topic: 'setup-quality' },
-    { label: 'Smooth (frame interpolation)', ok: smoothReady, topic: 'setup-video-studio', ...(!smoothReady ? waiting : {}) },
-    { label: 'DLSS 5 neural rendering', ok: !!c.dlss5nr?.ready, topic: 'setup-dlss5-install' },
+    { label: 'Video tools in LDS', what: 'Read and analyze video clips inside LDS.', ok: !!c.video_host_ready, topic: 'setup-quality' },
+    { label: 'Video reading', what: 'Decode imported videos for previews and frame selection.', ok: !!c.video_decode, topic: 'setup-quality' },
+    { label: 'Shot detection', what: 'Split longer videos into shots for dataset review.', ok: !!c.video_detect, topic: 'setup-quality' },
+    { label: 'Clip encoding', what: 'Export selected video segments as training clips.', ok: !!c.video_encode, topic: 'setup-quality' },
+    { label: 'Smooth (frame interpolation)', what: 'Add intermediate frames to make generated motion smoother.', ok: smoothReady, topic: 'setup-video-studio', ...(!smoothReady ? waiting : {}) },
+    { label: 'DLSS 5 neural rendering', what: 'Re-render a finished clip with the installed DLSS model.', ok: !!c.dlss5nr?.ready, topic: 'setup-dlss5-install' },
   ]
 }
 export function videoInstallCatalog(caps) {

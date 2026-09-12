@@ -6,9 +6,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
+const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const link = read('./SettingsLink.jsx');
 const registry = read('../settings/registry.js');
+const pluginIds = new Set(['image_upscale', 'scrape', 'cloud_training']);
 
 test('every section a link points at really exists in the settings registry', () => {
   const known = new Set([...registry.matchAll(/id: '([a-z0-9-]+)'/g)].map((m) => m[1]));
@@ -16,14 +17,21 @@ test('every section a link points at really exists in the settings registry', ()
   const files = [
     // The lightbox's own improve links moved into KleinImproveNote, which the
     // lightbox AND the grid's bulk toolbar both render — one note, two surfaces.
-    '../dataset/KleinImproveNote.jsx', '../dataset/CaptionToolsBar.jsx',
+    '../../../../bundled/image_upscale/frontend/panels/KleinImproveNote.jsx', '../dataset/CaptionToolsBar.jsx',
     '../dataset/TrainingPanel.jsx', "../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx",
   ];
   let found = 0;
   for (const f of files) {
-    for (const m of read(f).matchAll(/<SettingsLink section="([a-z0-9-]+)"/g)) {
+    for (const m of read(f).matchAll(/<SettingsLink\b[^>]+>/g)) {
       found += 1;
-      assert.ok(known.has(m[1]), `${f} links to unknown settings section "${m[1]}"`);
+      const plugin = m[0].match(/pluginId="([a-z0-9_]+)"/);
+      const section = m[0].match(/section="([a-z0-9-]+)"/);
+      assert.ok(plugin || section, `${f}: settings link has no owner`);
+      if (plugin) {
+        assert.ok(pluginIds.has(plugin[1]), `${f}: unexpected product owner`);
+        const manifest = JSON.parse(read(`../../../../bundled/${plugin[1]}/plugin.json`));
+        assert.equal(manifest.id, plugin[1]);
+      } else assert.ok(known.has(section[1]), `${f}: unknown core settings section`);
     }
   }
   assert.ok(found >= 4, `expected links in every surveyed surface, found ${found}`);
@@ -58,13 +66,13 @@ test('the note offers BOTH improve levers — the words and the amount', () => {
   // "Adjust improve strength" was the only pointer for a long time, and it aims
   // at the knobs. The reported complaint (anime turned realistic, Qeeyana on
   // Reddit) is caused by the INSTRUCTION, which had no pointer at all.
-  const note = read('../dataset/KleinImproveNote.jsx');
+  const note = read('../../../../bundled/image_upscale/frontend/panels/KleinImproveNote.jsx');
   assert.match(note, /focus="identity-prompt-klein-improve"/);
   assert.match(note, /focus="klein-improve-strength"/);
 });
 
-test('the cloud banner lands on the section holding the key, not the landing page', () => {
-  const page = read('../../pages/CloudRunsPage.jsx');
-  assert.match(page, /navigate\('\/settings\/training'\)/);
+test('the cloud banner lands on its own plugin settings', () => {
+  const page = read('../../../../bundled/cloud_training/frontend/CloudRunsHub.jsx');
+  assert.match(page, /navigate\('\/plugins\/cloud_training\/settings'\)/);
   assert.doesNotMatch(page, /navigate\('\/settings'\)/);
 });

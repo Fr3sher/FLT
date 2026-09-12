@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import glob
 import hashlib
+import io
 import json
 import logging
 import os
@@ -647,7 +648,7 @@ def install_bridge(log=None, fetch=None) -> int:
         return 1
     root = runtime_dir(create=True)
     try:
-        with zipfile.ZipFile(__import__('io').BytesIO(data)) as zf:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
             names = set(zf.namelist())
             for member, rel_path in rel['members'].items():
                 if member not in names:

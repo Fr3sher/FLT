@@ -22,7 +22,7 @@ export default {
     'settings.group': [{
       id: 'web-scraping', section: 'scraping', title: 'Web scraping',
       blurb: 'Source credentials and automatic rescue of small scraped images.',
-      keywords: ['reddit', 'client id', 'pexels', 'pexels api', 'quota', 'rate limit', '429',
+      keywords: ['reddit', 'client id', 'pexels', 'pexels api', 'api key', 'quota', 'rate limit', '429',
         'scrape', 'scraper', 'klein', 'small image', 'rescue', 'upscale'],
       panel: () => import('./panels/ScrapeSettingsGroup.jsx'),
     }],

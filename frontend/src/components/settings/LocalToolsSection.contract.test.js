@@ -2,20 +2,25 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const source = readFileSync(
-  new URL('./LocalToolsSection.jsx', import.meta.url), 'utf8')
+const core = readFileSync(
+  new URL('./LocalToolsSection.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const source = core + readFileSync(new URL('../../../../bundled/cloud_training/frontend/settings/CloudTrainingGroup.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const pluginPage = readFileSync(new URL('../../pages/PluginSettingsPage.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const primitives = readFileSync(
-  new URL('./primitives.jsx', import.meta.url), 'utf8')
+  new URL('./primitives.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const settingsPage = readFileSync(
-  new URL('../../pages/SettingsPage.jsx', import.meta.url), 'utf8')
+  new URL('../../pages/SettingsPage.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 // The cloud dialog's token notices moved to CloudLaunchDialog.jsx (panel
 // decomposition slice 1); the contract spans both sources.
 const trainingPanel = readFileSync(
-  new URL('../dataset/TrainingPanel.jsx', import.meta.url), 'utf8')
+  new URL('../dataset/TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
   + readFileSync(
-    new URL("../../../../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx", import.meta.url), 'utf8')
+    new URL("../../../../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + readFileSync(new URL('../../../../bundled/cloud_training/frontend/dataset/DatasetCloudTraining.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 function handleSaveSource() {
+  assert.match(pluginPage, /<SettingsPage key=\{pluginId\} plugin=\{result.plugin\} groups=\{groups\}/)
+  assert.match(settingsPage, /const settingsUrl = settingsApiUrl\(plugin\?\.id\)/)
   const start = settingsPage.indexOf('  const handleSave = async () => {')
   const end = settingsPage.indexOf('\n  // Dirty =', start)
   assert.ok(
@@ -94,7 +99,7 @@ test('saving a pending HF cloud token consumes the PUT validation inline', () =>
 
   assert.match(handleSave, /Object\.prototype\.hasOwnProperty\.call\(secrets, 'HF_CLOUD_TOKEN'\)/)
   assert.equal(
-    (handleSave.match(/putJson\('\/api\/settings'/g) || []).length,
+    (handleSave.match(/putJson\(settingsUrl/g) || []).length,
     1,
     'Save performs one settings PUT and no validation request of its own',
   )
@@ -149,5 +154,5 @@ test('focus=HF_CLOUD_TOKEN lands on the secret input id', () => {
   assert.match(primitives, /htmlFor=\{f\.key\}/)
   assert.match(primitives, /type="password"/)
   assert.match(primitives, /\{f\.testTarget && <TestResult result=\{testResults\[f\.testTarget\]\} \/>\}/)
-  assert.match(primitives, /onResult\(await postJson\(\`\/api\/settings\/test\/\$\{target\}\`, \{\}\)\)/)
+  assert.match(primitives, /onResult\(await postJson\(settingsApiUrl\(pluginId, `\/api\/settings\/test\/\$\{encodeURIComponent\(target\)\}`\), \{\}\)\)/)
 })
