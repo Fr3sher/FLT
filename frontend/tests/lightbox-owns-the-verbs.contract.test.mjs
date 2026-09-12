@@ -21,7 +21,7 @@ const VIEWER = 'src/components/shared/GeneratedImageLightbox.jsx';
 // a new host appears — the point is that a NEW host gets every verb for free.
 const HOSTS = [
   'src/pages/GalleryPage.jsx',
-  'src/components/canvas/LineageCanvas.jsx',
+  '../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx',
   'src/components/shared/CheckpointGalleryPanel.jsx',
   'src/components/dataset/PreviewLightbox.jsx',
   // The Test Studio (normal view AND run comparison) — it replaced its own
@@ -34,7 +34,7 @@ const HOSTS = [
 const viewer = read(VIEWER);
 
 test('the host list above is the real host list', () => {
-  const dirs = ['src/pages', 'src/components'];
+  const dirs = ['src/pages', 'src/components', '../bundled/canvas/frontend'];
   const found = [];
   const walk = (dir) => {
     for (const e of fs.readdirSync(path.join(process.cwd(), dir), { withFileTypes: true })) {

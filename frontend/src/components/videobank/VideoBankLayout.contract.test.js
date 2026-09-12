@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-const read = (name) => readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')
+const read = (name) => readFileSync(new URL(`../../../../bundled/video/frontend/videobank/${name}`, import.meta.url), 'utf8')
 const workspace = read('VideoBankWorkspace.jsx')
 const rail = read('VideoFilterRail.jsx')
 const passes = read('VideoPassesPanel.jsx')
@@ -24,7 +24,7 @@ test('the video lane decides its layout with bankLayout.js, never a copy of it',
   // One decision module for both lanes: when the rail is a column, what the
   // preference key is, what the ⚙ button says. A videobank-local fork of any
   // of these is the drift this contract exists to refuse.
-  assert.match(workspace, /from '\.\.\/bank\/bankLayout\.js'/)
+  assert.match(workspace, /from '@lds\/plugin-sdk\/bank'/)
   assert.match(workspace, /loadRailOpen|railIsColumn/)
   assert.doesNotMatch(workspace, /RAIL_SIDE_BY_SIDE|const railIsColumn =/)
 })
@@ -39,9 +39,9 @@ test('the shell is the image lane’s: rail beside the grid, drawer below', () =
 })
 
 test('the shared atoms dress every surface — no hand-rolled twins', () => {
-  assert.match(workspace, /from '\.\.\/bank\/BankAtoms\.jsx'/)
-  assert.match(rail, /\{ Chip, FilterGroup, GroupLabel \} from '\.\.\/bank\/BankAtoms\.jsx'/)
-  assert.match(passes, /\{ GroupLabel, PassButton \} from '\.\.\/bank\/BankAtoms\.jsx'/)
+  assert.match(workspace, /\{ Stat \} from '@lds\/plugin-sdk\/ui'/)
+  assert.match(rail, /\{ Chip, FilterGroup, GroupLabel \} from '@lds\/plugin-sdk\/ui'/)
+  assert.match(passes, /\{ GroupLabel, PassButton \} from '@lds\/plugin-sdk\/ui'/)
   // The drawer is a sheet of glass over the grid, not an opaque card — the
   // exact pin the image rail carries, for the exact same reason.
   assert.match(rail, /bg-surface-overlay/)

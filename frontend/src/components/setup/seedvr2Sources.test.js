@@ -18,8 +18,8 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
-const setup = read('./SeedVr2InstallCard.jsx')
-const settings = read('../settings/EnginesSection.jsx')
+const setup = read('../../../../bundled/seedvr2/frontend/panels/SeedVr2InstallCard.jsx')
+const settings = read('../../../../bundled/seedvr2/frontend/panels/SeedVr2Settings.jsx')
 
 const PACK = 'https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler'
 const WEIGHTS = 'https://huggingface.co/numz/SeedVR2_comfyUI'

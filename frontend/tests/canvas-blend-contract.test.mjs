@@ -20,24 +20,24 @@ import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
 // (see whatsNew.js, rule "Keep the list tidy") — search the union.
 const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
 
-const read = (rel) => readSource(`src/${rel}`)
-const BLEND = read('components/canvas/CanvasBlendPanel.jsx')
-const PANEL = read('components/canvas/CanvasGenerationPanel.jsx')
-const HOOK = read('hooks/useCanvasStudio.js')
-const UTIL = read('utils/canvasGeneration.js')
-const SETUP = read('components/dataset/studio/RunSetupPanel.jsx')
-const ROW = read('components/dataset/studio/BlendWeightRow.jsx')
+const read = readSource
+const BLEND = read('../bundled/canvas/frontend/components/canvas/CanvasBlendPanel.jsx')
+const PANEL = read('../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx')
+const HOOK = read('../bundled/canvas/frontend/hooks/useCanvasStudio.js')
+const UTIL = read('../bundled/canvas/frontend/utils/canvasGeneration.js')
+const SETUP = read('src/components/dataset/studio/RunSetupPanel.jsx')
+const ROW = read('src/components/dataset/studio/BlendWeightRow.jsx')
 
 test('the board imports the Test Studio stack module instead of copying it', () => {
   // A second clamp, a second "one family" rule or a second key shape is a second
   // chance for the two screens to disagree about what a blend is.
-  assert.match(UTIL, /from '\.\.\/components\/dataset\/studio\/loraStack\.js'/)
+  assert.match(UTIL, /from '@lds\/plugin-sdk\/canvas'/)
   assert.match(UTIL, /combineBlocker/)
   assert.match(UTIL, /stackWeight/)
   // Le curseur ET les cases d'un LoRA sont UN composant partagé par les deux
   // surfaces (BlendWeightRow) : deux copies du même contrôle, ce serait deux
   // occasions de diverger sur « aucune case cochée = le curseur gouverne ».
-  assert.match(BLEND, /import BlendWeightRow from '\.\.\/dataset\/studio\/BlendWeightRow'/)
+  assert.match(BLEND, /import \{ BlendWeightRow \} from '@lds\/plugin-sdk\/canvas'/)
   assert.match(ROW, /from '\.\/loraStack'/)
   assert.match(ROW, /BLEND_WEIGHT_CHIPS/)
   assert.doesNotMatch(ROW, /const BLEND_WEIGHT_CHIPS\s*=/)

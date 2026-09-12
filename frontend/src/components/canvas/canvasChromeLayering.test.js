@@ -20,7 +20,7 @@ import {
   zoomLabelScale, zoomLabelText,
 } from "../../../../bundled/canvas/frontend/utils/canvasZoomLegibility.js";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = dirname(fileURLToPath(new URL('../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx', import.meta.url)));
 const read = (f) => readFileSync(join(HERE, f), 'utf8');
 
 /* ------------------------------------------------------- stacking contract */

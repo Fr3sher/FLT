@@ -281,7 +281,7 @@ test('sizes read in the unit that matches the file, and never render "0 GB"', ()
 // --- the panel's own source: two invariants worth pinning --------------------
 
 const panel = readFileSync(
-  fileURLToPath(new URL('./DenseModelsPanel.jsx', import.meta.url)), 'utf8');
+  fileURLToPath(new URL('../../../../bundled/cloud_training/frontend/dataset/DenseModelsPanel.jsx', import.meta.url)), 'utf8');
 
 test('no control in the panel can send the MASTER to ComfyUI', () => {
   // Every place that triggers a send sits behind `row.kind === 'fp8'`. A future

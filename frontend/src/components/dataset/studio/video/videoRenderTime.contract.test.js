@@ -16,7 +16,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(join(here, 'VideoClipHistory.jsx'), 'utf8')
+const src = readFileSync(join(here, '../../../../../../bundled/video/frontend/studio/video/VideoClipHistory.jsx'), 'utf8')
   .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
   .replace(/\/\/[^\n]*/g, '');
 
@@ -28,7 +28,7 @@ function metaLine() {
 }
 
 test('the clip card prints the render time through renderTimeLabel, on the meta line', () => {
-  assert.match(src, /import \{[^}]*\brenderTimeLabel\b[^}]*\} from '\.\/videoStudioApi'/);
+  assert.match(src, /import \{[^}]*\brenderTimeLabel\b[^}]*\} from '\.\/videoStudioApi\.js'/);
   const line = metaLine();
   assert.match(line, /renderTimeLabel\(clip\.render_seconds\)/, 'the label comes from the shared helper');
   // The separator is the only thing between "0.5 MP" and the time: pinned.

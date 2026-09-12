@@ -106,7 +106,7 @@ test('a corrupt or truncated extra_loras degrades to "no provenance", never a th
 const src = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
 
 test('the provenance layer is under everything and never takes a click', () => {
-  const canvas = src('components/canvas/LineageCanvas.jsx');
+  const canvas = src('../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx');
   const layer = canvas.indexOf('data-testid="canvas-provenance-layer"');
   const lanes = canvas.indexOf('{world.lanes.map((lane) => (');
   assert.ok(layer > 0, 'the layer must exist');
@@ -127,7 +127,7 @@ test('a provenance edge is violet, and stays violet whatever the hover does', ()
 });
 
 test('the badge is rendered from the note, and only when there IS one', () => {
-  const node = src('components/canvas/CanvasImageNode.jsx');
+  const node = src('../../bundled/canvas/frontend/components/canvas/CanvasImageNode.jsx');
   assert.match(node, /blendNote && \(/);
   assert.match(node, /data-testid="canvas-blend-note"/);
   // It must never eat a click either — it sits over the picture it describes.

@@ -21,11 +21,11 @@ const codeOnly = (text) => text
   .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/^\s*\/\/.*$/gm, '')
-const manager = codeOnly(readSource('src/components/videobank/VideoCheckpointManager.jsx'))
-const block = codeOnly(readSource('src/components/videobank/VideoTrainingBlock.jsx'))
-const workspace = codeOnly(readSource('src/components/videobank/VideoDatasetWorkspace.jsx'))
-const model = readSource('src/components/videobank/videoCheckpoints.js')
-const clips = readSource('src/components/videobank/videoDatasetClips.js')
+const manager = codeOnly(readSource('../bundled/video/frontend/videobank/VideoCheckpointManager.jsx'))
+const block = codeOnly(readSource('../bundled/video/frontend/videobank/VideoTrainingBlock.jsx'))
+const workspace = codeOnly(readSource('../bundled/video/frontend/videobank/VideoDatasetWorkspace.jsx'))
+const model = readSource('../bundled/video/frontend/videobank/videoCheckpoints.js')
+const clips = readSource('../bundled/video/frontend/videobank/videoDatasetClips.js')
 
 test('the training block renders no checkpoint file any more — the section is the one list', () => {
   assert.ok(!/videoDatasetCheckpointUrl|videoDatasetLocalCheckpointUrl/.test(block),
@@ -76,7 +76,7 @@ test('the rail\'s Checkpoints and Studio sections land on anchors the workspace 
 })
 
 test('the ◉ Graph is a second view of the SAME saves: same handlers, same model, no image route', async () => {
-  const graph = codeOnly(readSource('src/components/videobank/VideoLineageGraph.jsx'))
+  const graph = codeOnly(readSource('../bundled/video/frontend/videobank/VideoLineageGraph.jsx'))
   // The manager hands the graph the very functions the list rows call.
   assert.match(manager, /<VideoLineageGraph datasetId=\{ds\.id\} tree=\{tree\} busy=\{busy\}/)
   assert.match(manager, /onDeploy=\{deploy\} onUndeploy=\{undeploy\} onDelete=\{remove\}\s+onContinue=\{continueFrom\}/)
@@ -87,10 +87,10 @@ test('the ◉ Graph is a second view of the SAME saves: same handlers, same mode
   // two tables share one id space, and `/api/dataset/<id>/…` with a video id is
   // somebody else's dataset. (The id-less cloud status route is shared on purpose.)
   const { readdirSync } = await import('node:fs')
-  const dir = new URL('../src/components/videobank/', import.meta.url)
+  const dir = new URL('../../bundled/video/frontend/videobank/', import.meta.url)
   for (const f of readdirSync(dir)) {
     if (!/\.jsx?$/.test(f) || /\.test\./.test(f)) continue
-    const src = codeOnly(readSource(`src/components/videobank/${f}`))
+    const src = codeOnly(readSource(`../bundled/video/frontend/videobank/${f}`))
     assert.ok(!/\/api\/dataset\/(\$\{|\d)/.test(src), `${f} addresses an image dataset BY ID`)
   }
 })
