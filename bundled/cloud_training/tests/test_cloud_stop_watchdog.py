@@ -37,8 +37,12 @@ def _mkrun(ct, **kw):
 
 def _stub_destroy(ct, monkeypatch, ok=True):
     destroyed = []
+    monkeypatch.setenv('VAST_API_KEY', 'fictitious-watchdog-account')
+    monkeypatch.setattr(ct.vast_client, 'get_instance', lambda iid, **_k: {
+        'instance_id': str(iid), 'label': ct.CloudTrainingRun.query.filter_by(
+            vast_instance_id=str(iid)).one().vast_label})
 
-    def fake(iid):
+    def fake(iid, **_credentials):
         destroyed.append(str(iid))
         if isinstance(ok, Exception):
             raise ok

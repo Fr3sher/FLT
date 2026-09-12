@@ -14,12 +14,8 @@ def test_training_labels_require_the_whole_ascii_name(app, label):
     assert ct._is_training_label('lds-123')
 
 
-def test_public_orphan_sweep_has_no_installation_ownership_boundary(app, monkeypatch):
-    """KNOWN BLOCKER: main can delete another installation's correctly shaped pod.
-
-    This pins the unsafe inherited behavior for the subsequent safety patch.
-    It is not a claim that cloud activation is safe, nor a live provider call.
-    """
+def test_public_orphan_sweep_preserves_unrecorded_pods(app, monkeypatch):
+    """A training-shaped label alone grants no right to delete the pod."""
     from lds_cloud_training import cloud_training as ct
     monkeypatch.setenv('VAST_API_KEY', 'fixture-account-key')
     destroyed = []
@@ -32,8 +28,8 @@ def test_public_orphan_sweep_has_no_installation_ownership_boundary(app, monkeyp
     monkeypatch.setattr(ct.vast_client, 'destroy_instance', lambda instance_id: destroyed.append(instance_id) or True)
     with app.app_context():
         assert ct.CloudTrainingRun.query.count() == 0
-    assert ct.reconcile_orphans(app) == 1
-    assert destroyed == ['other-installation-pod']
+    assert ct.reconcile_orphans(app) == 0
+    assert destroyed == []
 
 
 def test_key_changes_apply_to_the_next_request_and_errors_are_scrubbed(app, monkeypatch):
@@ -50,7 +46,7 @@ def test_key_changes_apply_to_the_next_request_and_errors_are_scrubbed(app, monk
         calls.append(kwargs['headers']['Authorization'])
         return Reply()
 
-    monkeypatch.setattr(vc.requests, 'request', request)
+    monkeypatch.setattr(vc.requests.Session, 'request', lambda _s, *a, **k: request(*a, **k))
     monkeypatch.setenv('VAST_API_KEY', 'fixture-a')
     vc.list_instances()
     monkeypatch.setenv('VAST_API_KEY', 'fixture-b')

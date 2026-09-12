@@ -57,6 +57,7 @@ from lds_sdk.cloud_host.services import lora_training as lt
 from lds_sdk.cloud_host.services import cloud_run_dataset as crd
 
 from lds_cloud_training import vast_client
+from lds_sdk.lifecycle import is_available, state_change_lock
 
 from lds_sdk.cloud_host.services import video_run_lineage
 
@@ -996,6 +997,8 @@ def _assert_launch_guardrails(dataset_id, fam, dataset_table=crd.FACE,
     fleet-wide limit and the budget below are deliberately NOT scoped: they are
     about the account's pods and its money, which one lane cannot claim.
     """
+    _require_cloud_admission()
+    _assert_no_uncertain_rental()
     actives = get_active_runs()
     limit = max(1, int((cfg.get('cloud.max_concurrent_runs') or 1)))
     # Uniqueness is per (dataset, table, family): a zimage run and a krea run may
@@ -2701,7 +2704,9 @@ def _auto_retry_child(parent_id):
 
 def _maybe_auto_retry(run, error):
     """Rent at most one fresh pod after a transient failure of an existing pod."""
-    if (run.status != 'error' or not run.vast_instance_id
+    if (not is_available('cloud_training') or _pending_rental(run)
+            or (_rental_identity(run) and not _rental_identity(run)['released'])
+            or run.status != 'error' or not run.vast_instance_id
             or not _is_retryable_pod_failure(error)):
         return None
 
@@ -3395,7 +3400,8 @@ def rent_with_fresh_offers(*, search, create, pick=None, on_offer=None,
         try:
             return create(offer), offer
         except vast_client.VastError as e:
-            if attempt >= attempts or not _is_transient_create_error(e):
+            if (isinstance(e, vast_client.VastCreateUncertain)
+                    or attempt >= attempts or not _is_transient_create_error(e)):
                 raise
             last_error = e
             logger.warning('create_instance attempt %s/%s failed (%s) — retrying '
@@ -3414,7 +3420,159 @@ def _pod_image_for(run, c):
         return c.get('video_image') or c.get('image')
     return c.get('image')
 
+_RENTAL_IDENTITY = '_lds_rental_context'
+_rental_credentials = {}  # Fingerprint -> immutable credential; never serialized.
+_rental_locks = {}  # Serialize duplicate workers for the same durable run.
+
+
+def _require_cloud_admission():
+    if not is_available('cloud_training'):
+        raise RuntimeError('Cloud training is disabled or unavailable; new rentals are blocked')
+
+
+def _rental_identity(run):
+    params = json.loads(run.train_params or '{}')
+    value = params.get(_RENTAL_IDENTITY)
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or value.get('version') != 2
+            or value.get('run_id') != run.id or value.get('label') != run.vast_label
+            or not _is_training_label(value.get('label'))
+            or not re.fullmatch(r'[a-f0-9]{64}', str(value.get('fingerprint', '')))
+            or any(type(value.get(k)) is not bool for k in ('unique', 'pending', 'released'))
+            or type(value.get('delete_pending', False)) is not bool):
+        raise vast_client.VastError('Rental identity is invalid; preserve the pod for manual recovery')
+    return value
+
+
+def _save_rental_identity(run, value, **fields):
+    params = json.loads(run.train_params or '{}')
+    params[_RENTAL_IDENTITY] = value
+    _set(run, train_params=json.dumps(params), **fields)
+
+
+def _unique_local_rental(run):
+    """Duplicate local claims cannot authorize provider operations."""
+    for other in CloudTrainingRun.query.all():
+        if other.id == run.id:
+            continue
+        if (run.vast_instance_id and str(other.vast_instance_id) == str(run.vast_instance_id)
+                or run.vast_label and other.vast_label == run.vast_label):
+            return False
+    return True
+
+
+def _credential_for_identity(identity):
+    fingerprint = identity['fingerprint']
+    credential = _rental_credentials.get(fingerprint)
+    if credential is None:
+        credential = vast_client.capture_credentials()
+    if credential.fingerprint != fingerprint:
+        raise vast_client.VastError(
+            'Rental belongs to a different credential; restore its original VAST_API_KEY')
+    return credential
+
+
+def _bind_observed_legacy(run, credential, instance):
+    """Migrate only an unambiguous recorded id AND exact label observed together."""
+    if (not _unique_local_rental(run) or not run.vast_instance_id
+            or not _is_training_label(run.vast_label) or not instance
+            or str(instance.get('instance_id')) != str(run.vast_instance_id)
+            or instance.get('label') != run.vast_label):
+        raise vast_client.VastError('Rental ownership is unconfirmed; preserve the pod')
+    identity = dict(version=2, run_id=run.id, label=run.vast_label,
+                    fingerprint=credential.fingerprint, unique=False, pending=False, released=False)
+    _save_rental_identity(run, identity)
+    _rental_credentials[credential.fingerprint] = credential
+    return identity
+
+
+def _run_credentials(run):
+    identity = _rental_identity(run)
+    if identity:
+        if not _unique_local_rental(run):
+            raise vast_client.VastError('Multiple local rental claims; preserve the pod')
+        return _credential_for_identity(identity)
+    credential = vast_client.capture_credentials()
+    if run.vast_instance_id:
+        _bind_observed_legacy(run, credential, vast_client.get_instance(
+            run.vast_instance_id, credential=credential))
+    return credential
+
+
+def _pending_rental(run):
+    identity = _rental_identity(run)
+    return bool(identity and identity['pending'] and not identity['released'])
+
+
+def _assert_no_uncertain_rental():
+    # A terminal row with a lost CREATE answer may still cost money. Neither
+    # a parallel-run confirmation nor a different dataset can waive that risk.
+    for run in CloudTrainingRun.query.all():
+        if _pending_rental(run):
+            raise RuntimeError(f'Run #{run.id} has an unresolved rental; reconcile it before renting another GPU')
+
+
+def _assert_rental_history_deletable(run):
+    identity = _rental_identity(run)
+    if ((identity and not identity['released'] and (identity['pending'] or run.vast_instance_id))
+            or (not identity and run.vast_instance_id)):
+        raise RuntimeError('Rental cleanup is not confirmed; preserve this run until its pod is released')
+
+
+def _destroy_run_instance(run):
+    """All training deletion paths share account and identity validation."""
+    identity = _rental_identity(run)
+    if identity and identity['released']:
+        return True  # Durable DELETE acknowledgement, not a new absence claim.
+    if not run.vast_instance_id:
+        return not _pending_rental(run)
+    credential = _run_credentials(run)
+    identity = _rental_identity(run)
+    instance = vast_client.get_instance(run.vast_instance_id, credential=credential)
+    if instance is None and not identity.get('delete_pending'):
+        return False
+    if instance is not None and (str(instance.get('instance_id')) != str(run.vast_instance_id)
+                                 or instance.get('label') != run.vast_label):
+        return False
+    # Persist before DELETE so a lost reply/commit is recoverable. Retrying the
+    # same known id on the same account is idempotent; a CREATE with no id does
+    # not get this authority from an empty listing.
+    _save_rental_identity(run, dict(identity, delete_pending=True))
+    gone = vast_client.destroy_instance(run.vast_instance_id, credential=credential)
+    if gone:
+        identity = dict(_rental_identity(run), pending=False, released=True, delete_pending=False,
+                        released_at=naive_utcnow().isoformat())
+        _save_rental_identity(run, identity)
+    return gone
+
+
 def _provision(run):
+    lock = _rental_locks.setdefault(int(run.id), threading.RLock())
+    with lock:
+        _assert_run_open(run)  # Refresh after waiting for another provisioner.
+        return _provision_once(run)
+
+
+def _provision_once(run):
+    _require_cloud_admission()
+    credential = _run_credentials(run)
+    identity = _rental_identity(run)
+    if identity and (identity['pending'] or run.vast_instance_id):
+        raise vast_client.VastCreateUncertain('Previous rental must be reconciled before another CREATE')
+    if identity is None:
+        # Persist BEFORE CREATE. Database row ids collide across installations;
+        # a random ASCII label identifies this particular interrupted intent.
+        label = f'lds-{(1 << 128) + pysecrets.randbits(128)}'
+        identity = dict(version=2, run_id=run.id, label=label,
+                        fingerprint=credential.fingerprint, unique=True, pending=False, released=False)
+        _save_rental_identity(run, identity, vast_label=label)
+    _rental_credentials[credential.fingerprint] = credential
+    with vast_client.using_credentials(credential):
+        return _provision_with_credentials(run)
+
+
+def _provision_with_credentials(run):
     """Search offers and create the instance, honoring the launch-time GPU
     choice when the picked class is still available.
     LEAK-SAFE: any failure after create_instance destroys the instance."""
@@ -3477,6 +3635,25 @@ def _provision(run):
             _set(run, train_params=json.dumps(params))
 
     def _create(offer):
+        with state_change_lock:
+            _require_cloud_admission()
+            _assert_run_open(run)
+            if _pending_rental(run) or run.vast_instance_id:
+                raise vast_client.VastCreateUncertain('A rental already exists or is pending for this run')
+            return _create_admitted(offer)
+
+    def _create_admitted(offer):
+        identity = dict(_rental_identity(run), pending=True, released=False)
+        _save_rental_identity(run, identity, price_per_hour=offer.get('dph_total'))
+        try:
+            return _send_create(offer)
+        except vast_client.VastCreateUncertain:
+            raise
+        except vast_client.VastError:
+            _save_rental_identity(run, dict(identity, pending=False), price_per_hour=None)
+            raise
+
+    def _send_create(offer):
         nonlocal token
         if template_hash:
             # Preferred path (smoke-validated 2026-07-12): the official
@@ -3511,6 +3688,7 @@ def _provision(run):
             f'<= ${c.get("max_price_per_hour", 0.80)}/h) — raise the price cap in Settings'))
     try:
         _register_instance(run, instance_id, offer, token)
+        _save_rental_identity(run, dict(_rental_identity(run), pending=False))
     except Exception:
         # the pod exists but we failed to remember it -> kill it NOW, and make
         # the outcome observable (destroy_instance returns False on failure)
@@ -3518,6 +3696,9 @@ def _provision(run):
             if not vast_client.destroy_instance(instance_id):
                 logger.warning('leak-safe destroy of %s FAILED — instance may still '
                                'be running; boot reconciliation will retry', instance_id)
+            else:
+                _save_rental_identity(run, dict(_rental_identity(run), pending=False, released=True,
+                                                released_at=naive_utcnow().isoformat()))
         except Exception:
             logger.exception('leak-safe destroy of %s raised', instance_id)
         raise
@@ -3744,7 +3925,7 @@ def _force_stop(run, detail, error=None) -> dict:
     iid = run.vast_instance_id
     _stop_event_for(run.id).set()   # a still-living monitor stands down too
     _clear_progress_watch(run.id)   # every path below closes the run
-    if not iid:
+    if not iid and not _pending_rental(run):
         _set(run, status='stopped', phase_detail=detail,
              error=error, finished_at=naive_utcnow())
         return {'ok': True, 'run_id': run.id, 'mode': 'forced',
@@ -3752,7 +3933,7 @@ def _force_stop(run, detail, error=None) -> dict:
     gone = False
     failure = ''
     try:
-        gone = bool(vast_client.destroy_instance(iid))
+        gone = bool(_destroy_run_instance(run))
         if not gone:
             failure = 'the vast.ai API refused the termination'
     except Exception as e:
@@ -4027,118 +4208,89 @@ def start_supervisor(app):
     _supervisor_thread.start()
     return _supervisor_thread
 
-def reconcile_orphans(app) -> int:
-    """Boot-time safety net: destroy orphaned 'lds-<run id>' training instances.
-    Never raises (boot must not be blocked): the
-    whole body — app_context included — sits under a blanket except, so an
-    unexpected failure outside the vast_client calls (db not ready, config
-    error...) is logged and returns the count destroyed so far.
+def _reconciled_cleanup(run):
+    if (run.status == 'error_pod_kept' and _is_full_transformer_run(run)
+            and _run_param(run, 'artifact_status') == 'available'):
+        _mark_verified_full_transformer_cleanup_complete(
+            run, cleanup_detail='vast.ai pod termination confirmed by reconciliation',
+            phase_detail='Dense checkpoint available — pod cleanup confirmed')
+    elif run.status == 'error_pod_kept':
+        _set(run, error=(run.error or '') + ' — pod reaped after the recovery window')
 
-    error_pod_kept policy: a run in that status deliberately kept its pod
-    alive (checkpoint download failed at run completion) so the user can
-    recover the checkpoint manually. That pod must NOT be destroyed like a
-    plain orphan -- it is spared while `run.finished_at` is within
-    cloud.max_runtime_minutes of now, and only reaped past that window. A dense
-    artifact already verified becomes ``done`` when that reap confirms cleanup;
-    unverified/manual-recovery rows remain terminal and are annotated."""
+
+def reconcile_orphans(app, *, resume=True) -> int:
+    """Reconcile only locally recorded rentals or unique precommitted intents.
+
+    A training-shaped label alone proves no ownership. Ambiguous ids, labels,
+    credentials, or listings preserve the pod. Pending CREATE with no observed
+    pod stays unresolved: absence on an eventually consistent list cannot
+    authorize a second paid CREATE.
+    """
     destroyed = 0
     try:
         with app.app_context():
-            if not cfg.secret('VAST_API_KEY'):
-                return 0
-            try:
-                instances = vast_client.list_instances()
-            except Exception as e:
-                logger.warning('reconcile: cannot list vast instances: %s', e)
-                return 0
-            # Absence is useful cleanup evidence only when the account listing
-            # itself is complete and structurally inspectable.  Never turn a
-            # partial/malformed response into a false "pod is gone" result.
-            if (not isinstance(instances, list)
-                    or any(not isinstance(inst, dict)
-                           or inst.get('instance_id') in (None, '')
-                           for inst in instances)):
-                logger.warning(
-                    'reconcile: vast instance listing is not safely inspectable')
-                return 0
-            live_instance_ids = {
-                str(inst['instance_id']) for inst in instances}
-            keep = {str(r.vast_instance_id) for r in get_active_runs() if r.vast_instance_id}
-            c = cfg.get('cloud') or {}
-            max_seconds = int(c.get('max_runtime_minutes') or 480) * 60
+            runs = CloudTrainingRun.query.all()
+            listings = {}
             now = naive_utcnow()
-            kept_by_instance = {
-                str(r.vast_instance_id): r
-                for r in CloudTrainingRun.query.filter_by(status='error_pod_kept').all()
-                if r.vast_instance_id}
-
-            # A DELETE may have succeeded while its response or the following
-            # DB commit failed.  A successful full account listing that no
-            # longer contains the owned instance is authoritative confirmation
-            # that billing cleanup is complete.  This is intentionally limited
-            # to already-verified dense artifacts whose only pending concern is
-            # cleanup; unverified/manual-recovery runs keep their old policy.
-            for iid, kept_run in kept_by_instance.items():
-                if iid in live_instance_ids:
-                    continue
-                if (_is_full_transformer_run(kept_run)
-                        and _run_param(kept_run, 'artifact_status') == 'available'
-                        and _run_param(
-                            kept_run, 'artifact_cleanup_status') != 'complete'):
-                    _mark_verified_full_transformer_cleanup_complete(
-                        kept_run,
-                        cleanup_detail=(
-                            'vast.ai account listing confirmed the pod is absent'),
-                        phase_detail=(
-                            'Dense checkpoint available — pod absence confirmed'))
-            for inst in instances:
-                label = inst.get('label') or ''
-                # Quantization and other lanes own their own labels. Only the
-                # exact shape this training service stamps belongs to its sweep.
-                if not _is_training_label(label):
-                    continue
-                iid = str(inst['instance_id'])
-                if iid in keep:
-                    continue
-                kept_run = kept_by_instance.get(iid)
-                if kept_run is not None:
-                    # No finished_at (shouldn't happen -- every writer stamps it) means
-                    # the recovery window can't be established: fail toward the leak-safety
-                    # invariant (reap) rather than sparing an unbounded pod.
-                    if kept_run.finished_at and \
-                            (now - kept_run.finished_at).total_seconds() <= max_seconds:
-                        continue    # still within the manual-recovery window -> spare
-                    try:
-                        if vast_client.destroy_instance(inst['instance_id']):
-                            destroyed += 1
-                            logger.warning('reconcile: reaped expired error_pod_kept '
-                                           'pod %s (%s)', inst['instance_id'], label)
-                            if (_is_full_transformer_run(kept_run)
-                                    and _run_param(
-                                        kept_run, 'artifact_status') == 'available'):
-                                _mark_verified_full_transformer_cleanup_complete(
-                                    kept_run,
-                                    cleanup_detail=(
-                                        'vast.ai pod termination confirmed by '
-                                        'expired-run reconciliation'),
-                                    phase_detail=(
-                                        'Dense checkpoint available — expired '
-                                        'pod cleanup confirmed'))
-                            else:
-                                _set(kept_run, error=(kept_run.error or '') +
-                                     ' — pod reaped after the recovery window')
-                    except Exception as e:
-                        logger.warning('reconcile: destroy %s failed: %s',
-                                       inst['instance_id'], e)
-                    continue
+            max_seconds = int((cfg.get('cloud') or {}).get('max_runtime_minutes') or 480) * 60
+            for run in runs:
                 try:
-                    if vast_client.destroy_instance(inst['instance_id']):
+                    identity = _rental_identity(run)
+                    if identity and identity['released']:
+                        continue
+                    if (not run.vast_instance_id and not (identity and identity['pending'])
+                            or not _unique_local_rental(run) or not _is_training_label(run.vast_label)):
+                        continue
+                    credential = (_credential_for_identity(identity) if identity
+                                  else vast_client.capture_credentials())
+                    fingerprint = credential.fingerprint
+                    if fingerprint not in listings:
+                        instances = vast_client.list_instances(credential=credential)
+                        if (not isinstance(instances, list)
+                                or any(not isinstance(i, dict) or i.get('instance_id') in (None, '')
+                                       for i in instances)):
+                            raise vast_client.VastError('Incomplete instance listing')
+                        listings[fingerprint] = instances
+                    instances = listings[fingerprint]
+                    by_label = [i for i in instances if i.get('label') == run.vast_label]
+                    if (not by_label and identity and identity.get('delete_pending')
+                            and run.vast_instance_id
+                            and not any(str(i['instance_id']) == str(run.vast_instance_id) for i in instances)):
+                        if _destroy_run_instance(run):
+                            destroyed += 1
+                            _reconciled_cleanup(run)
+                        continue
+                    if len(by_label) != 1:
+                        continue
+                    instance = by_label[0]
+                    iid = str(instance['instance_id'])
+                    if sum(str(i['instance_id']) == iid for i in instances) != 1:
+                        continue
+                    if run.vast_instance_id:
+                        if iid != str(run.vast_instance_id):
+                            continue
+                    elif not (identity and identity['unique'] and identity['pending']):
+                        continue
+                    else:
+                        if any(str(r.vast_instance_id) == iid for r in runs if r.id != run.id):
+                            continue
+                        _save_rental_identity(run, dict(identity, pending=False), vast_instance_id=iid)
+                        if resume and run.status in ACTIVE_STATES:
+                            _start_monitor_for_app(app, run.id)
+                    if identity is None:
+                        _bind_observed_legacy(run, credential, instance)
+                    _rental_credentials[fingerprint] = credential
+                    if run.status in ACTIVE_STATES:
+                        continue
+                    if (run.status == 'error_pod_kept' and run.finished_at
+                            and (now - run.finished_at).total_seconds() <= max_seconds):
+                        continue
+                    if _destroy_run_instance(run):
                         destroyed += 1
-                        logger.warning('reconcile: destroyed orphan pod %s (%s)',
-                                       inst['instance_id'], label)
-                except Exception as e:
-                    logger.warning('reconcile: destroy %s failed: %s',
-                                   inst['instance_id'], e)
+                        _reconciled_cleanup(run)
+                except Exception as error:
+                    logger.warning('reconcile: run %s preserved (%s)', run.id,
+                                   vast_client._scrub(error))
     except Exception:
         logger.exception('reconcile failed')
     return destroyed
@@ -4155,6 +4307,9 @@ def _is_training_label(label) -> bool:
 
 def _start_monitor_for_app(app, run_id):
     """Like _start_monitor but usable outside a request context (boot)."""
+    existing = _monitor_threads.get(int(run_id))
+    if existing is not None and existing.is_alive():
+        return
     t = threading.Thread(
         target=_monitor, args=(app, run_id), daemon=True, name=f'cloud-train-{run_id}')
     _monitor_threads[int(run_id)] = t
@@ -4174,7 +4329,7 @@ def boot_recover(app):
     it to 'error' so its slot is freed. Iterates every active run (not just
     one) so a restart with several concurrent runs resumes all of them."""
     try:
-        reconcile_orphans(app)
+        reconcile_orphans(app, resume=False)
         with app.app_context():
             if not cfg.secret('VAST_API_KEY'):
                 return
@@ -4183,9 +4338,11 @@ def boot_recover(app):
                     logger.info('resuming cloud run %s (pod %s kept training)',
                                 run.id, run.vast_instance_id)
                     _start_monitor_for_app(app, run.id)
-                else:
+                elif not _pending_rental(run):
                     _set(run, status='error', finished_at=naive_utcnow(),
                          error='app restarted before the pod was created')
+                else:
+                    _set(run, phase_detail='Waiting to reconcile an interrupted rental; no second pod will be rented')
             _recover_pending_auto_retries()
     except Exception:
         logger.exception('cloud boot recovery failed')
@@ -4343,10 +4500,10 @@ def _cloudify_job_config(job_config: dict, job_name: str,
 def _finish(run, status, detail='', error=None, destroy=True):
     # A paid retry must never overlap the failed pod. Return whether there is
     # confirmed to be no old pod left; callers that do not retry ignore it.
-    pod_gone = not bool(run.vast_instance_id)
+    pod_gone = not bool(run.vast_instance_id) and not _pending_rental(run)
     if destroy and run.vast_instance_id:
         try:
-            pod_gone = bool(vast_client.destroy_instance(run.vast_instance_id))
+            pod_gone = bool(_destroy_run_instance(run))
             if not pod_gone:
                 logger.error('terminate %s returned false', run.vast_instance_id)
         except Exception as e:
@@ -4429,7 +4586,7 @@ def _ensure_remote_settings_without_secret(run, remote) -> dict:
 
 def _redacted_error_text(error) -> str:
     """Persist an actionable error without ever echoing an HF credential."""
-    value = str(error or '')
+    value = vast_client._scrub(error)
     for key in ('HF_CLOUD_TOKEN', 'HF_TOKEN'):
         token = cfg.secret(key)
         if token:
@@ -4480,9 +4637,9 @@ def _destroy_dense_pod(run) -> bool:
     """
     instance_id = run.vast_instance_id
     if not instance_id:
-        return True
+        return not _pending_rental(run)
     try:
-        pod_gone = bool(vast_client.destroy_instance(instance_id))
+        pod_gone = bool(_destroy_run_instance(run))
         if not pod_gone:
             logger.warning(
                 'run %s: verified dense delivery, but pod termination was '
@@ -4807,10 +4964,11 @@ def _dense_fetch_worker(app, run_id):
         # back — the same rule recheck_full_transformer_delivery follows.
         finished = run.finished_at
         try:
-            _deliver_dense_locally(
-                run, _make_remote(run),
-                should_cancel=_stop_event_for(run.id).is_set,
-                require_open=False)
+            with vast_client.using_credentials(_run_credentials(run)):
+                _deliver_dense_locally(
+                    run, _make_remote(run),
+                    should_cancel=_stop_event_for(run.id).is_set,
+                    require_open=False)
         except Exception as e:
             logger.warning('run %s: local dense fetch failed (%s)', run_id, e)
             try:
@@ -5449,6 +5607,22 @@ def _poll_job_until_terminal(run, remote, job_id, stop_event, c,
         _sleep(POLL_SECONDS)
 
 def _monitor(app, run_id):
+    # Pin before the lifecycle starts, including indirect execute_command calls.
+    with app.app_context():
+        run = db.session.get(CloudTrainingRun, run_id)
+        if run is None:
+            return
+        try:
+            credential = _run_credentials(run)
+        except vast_client.VastError as error:
+            _set(run, phase_detail=str(error))
+            _monitor_threads.pop(int(run_id), None)
+            return
+        with vast_client.using_credentials(credential):
+            return _monitor_with_credentials(app, run_id)
+
+
+def _monitor_with_credentials(app, run_id):
     """Full run lifecycle in a daemon thread.
 
     Destructive exits remain mandatory for ordinary LoRA runs, explicit user
@@ -5602,7 +5776,7 @@ def _monitor(app, run_id):
                            'standing down', run_id, closed)
             if run.vast_instance_id and run.status != 'error_pod_kept':
                 try:
-                    vast_client.destroy_instance(run.vast_instance_id)
+                    _destroy_run_instance(run)
                 except Exception:
                     logger.exception('stand-down destroy of %s raised',
                                      run.vast_instance_id)
@@ -6238,6 +6412,10 @@ def month_spend_usd() -> float:
         if not r.price_per_hour or not r.created_at:
             continue
         end = r.finished_at or now
+        identity = _rental_identity(r)
+        if identity:
+            end = (datetime.fromisoformat(identity['released_at'])
+                   if identity.get('released_at') else now)
         total += r.price_per_hour * max(0.0, (end - r.created_at).total_seconds() / 3600.0)
     return total
 

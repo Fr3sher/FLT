@@ -8,7 +8,7 @@ def test_boot_recover_resumes_active_run(app, monkeypatch):
     from app.extensions import db
     from app.models import CloudTrainingRun
     resumed = []
-    monkeypatch.setattr(ct, 'reconcile_orphans', lambda a: 0)
+    monkeypatch.setattr(ct, 'reconcile_orphans', lambda a, **_k: 0)
     monkeypatch.setattr(ct, '_start_monitor_for_app',
                         lambda app_, run_id: resumed.append(run_id))
     with app.app_context():
@@ -29,7 +29,7 @@ def test_boot_recover_resumes_multiple_active_runs(app, monkeypatch):
     from app.extensions import db
     from app.models import CloudTrainingRun
     resumed = []
-    monkeypatch.setattr(ct, 'reconcile_orphans', lambda a: 0)
+    monkeypatch.setattr(ct, 'reconcile_orphans', lambda a, **_k: 0)
     monkeypatch.setattr(ct, '_start_monitor_for_app',
                         lambda app_, run_id: resumed.append(run_id))
     with app.app_context():
@@ -50,7 +50,7 @@ def test_boot_recover_fails_instanceless_active_run(app, monkeypatch):
     from lds_cloud_training import cloud_training as ct
     from app.extensions import db
     from app.models import CloudTrainingRun
-    monkeypatch.setattr(ct, 'reconcile_orphans', lambda a: 0)
+    monkeypatch.setattr(ct, 'reconcile_orphans', lambda a, **_k: 0)
     with app.app_context():
         run = CloudTrainingRun(dataset_id=1, status='preparing',
                                vast_label='lds-1', job_name='j')

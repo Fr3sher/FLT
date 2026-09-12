@@ -238,34 +238,24 @@ def test_frozen_generation_bounded_wait_does_not_block_on_a_held_lock(ct, app, s
     """The primary scenario for this feature: a sibling run HOLDS the ingest
     lock for its whole export. A waiting launch must not hang in an
     uninterruptible acquire past its own deadline — it must poll the lock
-    with a bounded timeout and still get retry budget. Held from a SEPARATE
-    thread: the lock is an RLock, so acquiring it again from this test's own
-    thread would silently succeed and prove nothing."""
-    import threading as _threading
+    with a bounded timeout and still get retry budget. A fake held lock keeps
+    this check deterministic without starting a real thread."""
     from app.services import dataset_activity
 
     monkeypatch.setattr(ct, '_wait_sleep', lambda s: None)
-    lock = ct.fds._dataset_ingest_lock('local', seeded_dataset)
-    held = _threading.Event()
-    release = _threading.Event()
+    timeouts = []
 
-    def hold_lock():
-        with lock:
-            held.set()
-            release.wait(10.0)
+    class HeldLock:
+        def acquire(self, *, timeout):
+            timeouts.append(timeout)
+            return False
 
-    holder = _threading.Thread(target=hold_lock, daemon=True)
-    holder.start()
-    held.wait(5.0)
-    try:
-        with app.app_context():
-            with pytest.raises(dataset_activity.DatasetActivityBusy):
-                ct._with_frozen_dataset_generation(
-                    'local', seeded_dataset, 'test', lambda: 'ran',
-                    wait_seconds=3)
-    finally:
-        release.set()
-        holder.join(timeout=5.0)
+    monkeypatch.setattr(ct.fds, '_dataset_ingest_lock', lambda *_a: HeldLock())
+    with app.app_context():
+        with pytest.raises(dataset_activity.DatasetActivityBusy):
+            ct._with_frozen_dataset_generation(
+                'local', seeded_dataset, 'test', lambda: 'ran', wait_seconds=0.01)
+    assert timeouts and all(0 <= timeout <= 1 for timeout in timeouts)
 
 
 def test_frozen_generation_aborts_when_should_abort_fires(ct, app, seeded_dataset, monkeypatch):

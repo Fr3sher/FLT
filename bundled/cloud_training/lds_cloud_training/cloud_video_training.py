@@ -444,6 +444,7 @@ def delete_cloud_video_run(user_id, run_id) -> dict:
     if run.status in ct.ACTIVE_STATES:
         raise RuntimeError('that run is still on a pod — stop it before '
                            'deleting it')
+    ct._assert_rental_history_deletable(run)
     files = ct.run_checkpoint_files(run)
     total_bytes = 0
     for path in files.values():

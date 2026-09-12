@@ -17,8 +17,6 @@ import io
 import logging
 import mimetypes
 import os
-from lds_video.models import db
-
 from flask import Blueprint, jsonify, request, send_file
 
 from lds_sdk.video_host.config import LOCAL_USER
@@ -417,13 +415,9 @@ def _video_run(dataset_id, run_id):
     The ownership test is the PAIR (id, table), never the id alone: a face run
     carrying the same integer is a different training on someone else's data,
     and these three routes serve its weights and relaunch it."""
-    from lds_sdk.video_host.models import CloudTrainingRun
+    from lds_sdk import cloud_training
     from lds_sdk.video_host import cloud_run_dataset as crd
-    try:
-        run = db.session.get(CloudTrainingRun, int(run_id))
-    except (TypeError, ValueError):
-        return None
-    return run if run and crd.owns(run, dataset_id, crd.VIDEO) else None
+    return cloud_training.get_run(LOCAL_USER, run_id, dataset_id=dataset_id, dataset_table=crd.VIDEO)
 
 
 @bp.get('/video-dataset/<int:dataset_id>/train/cloud/checkpoints')

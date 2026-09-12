@@ -1,7 +1,12 @@
-"""Thin vast.ai REST client (no SDK dependency). All vast-specific HTTP lives
-here so an API change touches one file. The API key is read from the secret
-store on every call — never cached, so a key pasted in Settings applies
-immediately."""
+"""Thin vast.ai REST client. Rentals can pin immutable credentials per lifecycle.
+
+Unscoped calls read Settings; a running rental keeps its original account.
+Only the fingerprint may be persisted, never the captured API key.
+"""
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+import hashlib
 import logging
 import re
 
@@ -51,6 +56,42 @@ class VastError(RuntimeError):
     pass
 
 
+class VastCreateUncertain(VastError):
+    """CREATE may have succeeded. Reconcile its durable intent before retrying."""
+
+
+@dataclass(frozen=True)
+class Credentials:
+    api_key: str = field(repr=False)
+
+    @property
+    def fingerprint(self):
+        return hashlib.sha256(('lds-vast-credential-v1\0' + self.api_key).encode()).hexdigest()
+
+
+_credential_scope = ContextVar('lds_vast_credential', default=None)
+
+
+def capture_credentials():
+    credential = _credential_scope.get()
+    if credential is not None:
+        return credential
+    key = cfg.secret('VAST_API_KEY')
+    if not key:
+        raise VastError('VAST_API_KEY is not configured')
+    return Credentials(key)
+
+
+@contextmanager
+def using_credentials(credential):
+    """Thread/task-local scope, including indirect pod helper calls."""
+    token = _credential_scope.set(credential)
+    try:
+        yield credential
+    finally:
+        _credential_scope.reset(token)
+
+
 class VastCommandUnsupported(VastError):
     """vast refused the COMMAND ITSELF, not the work it described.
 
@@ -68,12 +109,15 @@ class VastCommandUnsupported(VastError):
     would take the lane down for the life of the restriction."""
 
 
-def _scrub(text: str) -> str:
+def _scrub(text: str, credential=None) -> str:
     """Same text minus every secret shape we know how to send."""
     out = str(text or '')
     key = cfg.secret('VAST_API_KEY')
     if key:
         out = out.replace(key, _REDACTED)
+    captured = credential or _credential_scope.get()
+    if captured is not None and captured.api_key:
+        out = out.replace(captured.api_key, _REDACTED)
     out = _SECRET_PAIR_RE.sub(r'\1' + _REDACTED + r'\2', out)
     for pattern in _SECRET_VALUE_RES:
         out = pattern.sub(_REDACTED, out)
@@ -94,7 +138,7 @@ def _detail(r) -> str:
         return ''
     if not text:
         return ''
-    text = _scrub(text)
+    text = _scrub(text, getattr(r, '_lds_credential', None))
     return text[:_ERROR_BODY_CHARS] + '…' if len(text) > _ERROR_BODY_CHARS else text
 
 
@@ -102,23 +146,26 @@ def _failed(r, what: str) -> VastError:
     return VastError(f'{what} failed: HTTP {r.status_code} {_detail(r)}'.rstrip())
 
 
-def _request(method, path, *, base=API_BASE, **kwargs):
-    key = cfg.secret('VAST_API_KEY')
-    if not key:
-        raise VastError('VAST_API_KEY is not configured')
-    headers = {'Authorization': f'Bearer {key}', 'Accept': 'application/json'}
+def _request(method, path, *, base=API_BASE, credential=None, **kwargs):
+    credential = credential or capture_credentials()
+    headers = {'Authorization': f'Bearer {credential.api_key}', 'Accept': 'application/json'}
     try:
-        return requests.request(method, f'{base}{path}', headers=headers,
-                                timeout=_TIMEOUT, **kwargs)
+        # Ignore .netrc and proxy environment, and never forward a key on redirect.
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.request(method, f'{base}{path}', headers=headers,
+                                       timeout=_TIMEOUT, allow_redirects=False, **kwargs)
+        response._lds_credential = credential
+        return response
     except requests.RequestException as e:
-        raise VastError(f'vast.ai request failed: {e}') from e
+        raise VastError(f'vast.ai request failed: {_scrub(e, credential)}') from None
 
 
 def search_offers(min_vram_gb: int, max_dph: float, limit: int = 20,
                   min_inet_down_mbps: int = 0, min_reliability: float = 0.95,
                   min_disk_bw_mbps: int = 0, verified_only: bool = True,
                   secure_cloud_only: bool = False, min_disk_gb: int = 0,
-                  min_compute_cap: int = 0) -> list:
+                  min_compute_cap: int = 0, *, credential=None) -> list:
     """Offers matching the configured trust tier and resource constraints.
 
     Vast calls its normal host trust flag ``verified`` and exposes Secure
@@ -165,7 +212,7 @@ def search_offers(min_vram_gb: int, max_dph: float, limit: int = 20,
         body['disk_space'] = {'gte': int(min_disk_gb)}
     if min_compute_cap:
         body['compute_cap'] = {'gte': int(min_compute_cap)}
-    r = _request('POST', '/bundles/', json=body)
+    r = _request('POST', '/bundles/', json=body, credential=credential)
     if r.status_code != 200:
         raise _failed(r, 'offer search')
     offers = (r.json() or {}).get('offers') or []
@@ -207,7 +254,7 @@ def search_offers(min_vram_gb: int, max_dph: float, limit: int = 20,
 
 def create_instance(offer_id, disk_gb: int, label: str, template_hash: str | None = None,
                     image: str | None = None, env: dict | None = None,
-                    onstart: str | None = None) -> str:
+                    onstart: str | None = None, *, credential=None) -> str:
     """Rent the offer. Preferred path: template_hash — the instance inherits the
     official template's env/ports/entrypoint (the raw-image path never published
     the UI port; smoke-tested 2026-07-12). image/env/onstart remain as a
@@ -246,19 +293,28 @@ def create_instance(offer_id, disk_gb: int, label: str, template_hash: str | Non
                 'runtype': 'args', 'env': dict(env or {})}
         if onstart:
             body['onstart'] = onstart
-    r = _request('PUT', f'/asks/{offer_id}/', json=body)
+    try:
+        r = _request('PUT', f'/asks/{offer_id}/', json=body, credential=credential)
+    except VastError as e:
+        raise VastCreateUncertain(str(e)) from None
+    if r.status_code >= 500 or 300 <= r.status_code < 400:
+        raise VastCreateUncertain(str(_failed(r, 'create_instance')))
     if r.status_code != 200:
         raise _failed(r, 'create_instance')
     try:
         data = r.json() or {}
-    except ValueError:
+    except (ValueError, TypeError):
         data = {}
-    if not data.get('success'):
-        raise _failed(r, 'create_instance')
+    if not isinstance(data, dict) or data.get('success') is not True:
+        raise VastCreateUncertain(str(_failed(r, 'create_instance')))
+    if (isinstance(data.get('new_contract'), bool)
+            or not re.fullmatch(r'[0-9]{1,20}', str(data.get('new_contract')))
+            or int(data['new_contract']) <= 0):
+        raise VastCreateUncertain('CREATE succeeded without an instance id; reconcile the rental intent')
     return str(data.get('new_contract'))
 
 
-def execute_command(instance_id, command: str) -> str:
+def execute_command(instance_id, command: str, *, credential=None) -> str:
     """Run ONE shell command inside a running instance; return its result URL.
 
     vast's ``PUT /instances/command/{id}/`` is asynchronous by design: it queues
@@ -277,7 +333,7 @@ def execute_command(instance_id, command: str) -> str:
     if not str(command or '').strip():
         raise VastError('execute_command needs a command')
     r = _request('PUT', f'/instances/command/{instance_id}/',
-                 json={'command': command})
+                 json={'command': command}, credential=credential)
     try:
         data = r.json() or {}
     except ValueError:
@@ -337,44 +393,149 @@ def _normalize(i: dict) -> dict:
     }
 
 
-def list_instances() -> list:
-    r = _request('GET', '/instances/', base=API_BASE_V1)
+def _instance_response(r, operation):
+    try:
+        data = r.json()
+    except (ValueError, TypeError):
+        raise VastError(f'{operation} returned invalid JSON') from None
+    if (not isinstance(data, dict) or 'instances' not in data
+            or (data.get('error') is not None and data['error'] != '')
+            or ('success' in data and data['success'] is not True)):
+        raise VastError(f'{operation} returned an unverifiable instance response')
+    return data
+
+def _instance_records(rows, operation):
+    if not isinstance(rows, list):
+        raise VastError(f'{operation} returned an unverifiable fleet')
+    records, seen = [], set()
+    for instance in rows:
+        if (not isinstance(instance, dict)
+                or isinstance(instance.get('id'), bool)
+                or not isinstance(instance.get('id'), (str, int))
+                or not str(instance['id']).isascii()
+                or not str(instance['id']).isdigit()
+                or len(str(instance['id'])) > 20
+                or not int(instance['id'])
+                or not isinstance(instance.get('label'), (str, type(None)))):
+            raise VastError(f'{operation} returned an invalid instance')
+        iid = str(int(instance['id']))
+        if iid in seen:
+            raise VastError(f'{operation} returned ambiguous instance IDs')
+        seen.add(iid)
+        records.append({**_normalize(instance), 'instance_id': iid})
+    return records
+
+def _instance_headers_complete(r, count):
+    for key, value in (getattr(r, 'headers', None) or {}).items():
+        key = key.lower()
+        if key in ('link', 'content-range', 'x-next-page', 'x-next-cursor',
+                   'x-total-pages', 'x-page', 'x-per-page'):
+            return False
+        if key == 'x-total-count' and (not str(value).isascii() or not str(value).isdigit()
+                                       or len(str(value)) > 20 or int(value) != count):
+            return False
+    return True
+
+def _fleet_observation(r, operation, data=None):
+    """A valid page proves presence; only a complete fleet can prove absence."""
+    data = _instance_response(r, operation) if data is None else data
+    rows = _instance_records(data['instances'], operation)
+    current = {'success', 'instances', 'instances_found', 'total_instances',
+               'label_counts', 'next_token'}
+    legacy = {'instances', 'total', 'success', 'error', 'next', 'next_page', 'has_more'}
+    if set(data) & (current - legacy):
+        if (set(data) != current
+                or type(data['instances_found']) is not int
+                or data['instances_found'] != len(rows)
+                or type(data['total_instances']) is not int
+                or data['total_instances'] < len(rows)
+                or (data['next_token'] is not None
+                    and (not isinstance(data['next_token'], str) or not data['next_token']))):
+            raise VastError(f'{operation} returned an unverifiable fleet envelope')
+        labels = {}
+        for row in rows:
+            label = row['label'] or ''
+            labels[label] = labels.get(label, 0) + 1
+        counts = data['label_counts']
+        if (not isinstance(counts, dict)
+                or any(type(count) is not int or count < 0 for count in counts.values())
+                or counts != labels):
+            raise VastError(f'{operation} returned invalid fleet label counts')
+        complete = data['total_instances'] == len(rows) and data['next_token'] is None
+    else:
+        total = data.get('total', len(rows))
+        if (set(data) - legacy or type(total) is not int or total < len(rows)
+                or ('has_more' in data and type(data['has_more']) is not bool)
+                or (data.get('next') is not None
+                    and (not isinstance(data['next'], str) or not data['next']))
+                or (data.get('next_page') is not None
+                    and (type(data['next_page']) is not int or data['next_page'] < 0))):
+            raise VastError(f'{operation} returned an unverifiable fleet envelope')
+        complete = total == len(rows) and not any(data.get(key) for key in ('next', 'next_page', 'has_more'))
+    return rows, complete and _instance_headers_complete(r, len(rows))
+
+
+def list_instances(*, credential=None) -> list:
+    r = _request('GET', '/instances/', base=API_BASE_V1, credential=credential)
     if r.status_code != 200:
         raise _failed(r, 'list_instances')
-    return [_normalize(i) for i in (r.json() or {}).get('instances') or []]
+    rows, complete = _fleet_observation(r, 'list_instances')
+    if not complete:
+        raise VastError('list_instances returned an incomplete fleet')
+    return rows
 
 
-def get_instance(instance_id):
+def get_instance(instance_id, *, credential=None):
     """Single-instance lookup (v0 show endpoint; body is {'instances': {...}}).
-    Falls back to the list scan if the shape ever changes."""
-    r = _request('GET', f'/instances/{instance_id}/')
+    An explicit null or complete fleet can establish absence; errors cannot."""
+    credential = credential or capture_credentials()
+    r = _request('GET', f'/instances/{instance_id}/',
+                 credential=credential)
     if r.status_code == 200:
-        one = (r.json() or {}).get('instances')
-        if isinstance(one, dict) and one.get('id') is not None:
-            return _normalize(one)
-        if isinstance(one, list):
-            for i in one:
-                if str(i.get('id')) == str(instance_id):
-                    return _normalize(i)
-            return None
-        if one is None:
-            return None            # instance gone (vast answers 200 + null)
-    for inst in list_instances():
+        data = _instance_response(r, 'get_instance')
+        one = data['instances']
+        if one is None or isinstance(one, dict):
+            if set(data) - {'instances', 'success', 'error'}:
+                raise VastError('get_instance returned an unverifiable singleton envelope')
+            if one is None:
+                if not _instance_headers_complete(r, 0):
+                    raise VastError('get_instance returned an incomplete absence response')
+                return None        # Qualified v0 absence: HTTP 200 + explicit null.
+            record = _instance_records([one], 'get_instance')[0]
+            if record['instance_id'] != str(instance_id):
+                raise VastError('get_instance returned a different instance')
+            return record
+        rows, complete = _fleet_observation(r, 'get_instance', data)
+    else:
+        r = _request('GET', '/instances/', base=API_BASE_V1, credential=credential)
+        if r.status_code != 200:
+            raise _failed(r, 'get_instance')
+        rows, complete = _fleet_observation(r, 'get_instance')
+    for inst in rows:
         if inst['instance_id'] == str(instance_id):
             return inst
+    if not complete:
+        raise VastError('get_instance cannot establish absence from an incomplete fleet')
     return None
 
 
-def destroy_instance(instance_id) -> bool:
+def destroy_instance(instance_id, *, credential=None) -> bool:
     """Idempotent: a 404 means the instance is already gone — success.
     Network failure -> False (callers log and retry via reconciliation)."""
     try:
-        r = _request('DELETE', f'/instances/{instance_id}/')
+        r = _request('DELETE', f'/instances/{instance_id}/', credential=credential)
     except VastError as e:
         logger.warning('destroy_instance %s: %s', instance_id, e)
         return False
-    if r.status_code in (200, 404):
+    if r.status_code == 404:
         return True
+    if r.status_code == 200:
+        try:
+            data = r.json()
+        except (ValueError, TypeError):
+            return False
+        return (isinstance(data, dict) and data.get('success') is not False
+                and data.get('error') in (None, ''))
     logger.warning('destroy_instance %s: HTTP %s %s', instance_id,
                    r.status_code, _detail(r))
     return False

@@ -28,7 +28,6 @@ clips' removal does (`video_bank_service.remove_dataset_clips`) — never
 import json
 import os
 
-from lds_video.models import db
 from lds_sdk.video_host.models import CloudTrainingRun
 from lds_video.models import VideoDataset
 from lds_sdk.video_host import cloud_run_dataset as crd
@@ -63,7 +62,7 @@ def _cloud_run(ds, run_id):
     """One cloud run OF THIS VIDEO DATASET, active or not, or LookupError.
     Ownership is the (id, table) pair — the face lane shares the id space."""
     try:
-        run = db.session.get(CloudTrainingRun, int(run_id))
+        run = ct.get_run(ds.user_id, run_id, dataset_id=ds.id, dataset_table=crd.VIDEO)
     except (TypeError, ValueError):
         run = None
     if run is None or not crd.owns(run, ds.id, crd.VIDEO):

@@ -24,8 +24,21 @@ from app.plugins import registry
 from app.plugins.loader import load_plugins
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = ('api_engines', 'camera_angles', 'canvas', 'civitai_publish', 'hf_publish', 'image_upscale', 'live',
+PRODUCTS = ('api_engines', 'camera_angles', 'canvas', 'civitai_publish', 'cloud_training', 'hf_publish', 'image_upscale', 'live',
             'model_tools', 'resource_monitor', 'scrape', 'seedvr2', 'video')
+
+
+@pytest.fixture(autouse=True)
+def no_external_runtime(monkeypatch):
+    def blocked(*args, **kwargs):
+        pytest.fail('SDK integration tests may not start threads/processes or connect sockets')
+    monkeypatch.setattr('socket.socket.connect', blocked)
+    monkeypatch.setattr('socket.socket.connect_ex', blocked)
+    monkeypatch.setattr('socket.create_connection', blocked)
+    monkeypatch.setattr('threading.Thread.start', blocked)
+    monkeypatch.setattr('subprocess.run', blocked)
+    monkeypatch.setattr('subprocess.Popen', blocked)
+    monkeypatch.setattr('requests.sessions.Session.request', blocked)
 
 
 @pytest.fixture
