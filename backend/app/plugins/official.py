@@ -12,8 +12,6 @@ import hashlib
 import json
 from pathlib import Path
 
-from .. import config as cfg
-
 OFFICIAL_IDS = frozenset({
     'api_engines', 'camera_angles', 'civitai_publish', 'cloud_training',
     'hf_publish', 'model_tools', 'scrape', 'video', 'canvas',
@@ -43,6 +41,7 @@ def valid_provenance(provenance, plugin_id, directory):
 
 
 def receipt_path(plugin_id):
+    from .. import config as cfg
     from .storage import managed_path
     if not is_official_id(plugin_id):
         raise ValueError('This is not an LDS product identifier.')
@@ -74,6 +73,7 @@ def forget_install(plugin_id):
 
 
 def retired_path(plugin_id):
+    from .. import config as cfg
     from .storage import managed_path
     if not is_official_id(plugin_id):
         raise ValueError('This is not an LDS product identifier.')
