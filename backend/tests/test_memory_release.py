@@ -233,6 +233,19 @@ def test_without_live_memory_release_never_loads_a_live_runtime(app, monkeypatch
         assert mr._automatic_work_reason() is None
 
 
+@pytest.mark.plugins()
+def test_live_installation_requires_the_memory_guard_api(monkeypatch):
+    from pathlib import Path
+    from app.plugins import compatibility
+    from app.plugins.manifest import load_manifest
+
+    manifest = load_manifest(Path(__file__).resolve().parents[2] / 'bundled' / 'live')
+    assert compatibility.host_issues(manifest) == []
+    monkeypatch.setattr(compatibility, 'LDS_PLUGIN_API_MINOR', 20)
+    issues = compatibility.host_issues(manifest)
+    assert len(issues) == 1 and issues[0]['field'] == 'compatibility.api'
+
+
 def test_an_own_render_whose_id_was_lost_is_refused_with_the_banner_not_as_foreign(app, levers, own_render):
     own_render['state'] = 'unmapped'
     with app.app_context():

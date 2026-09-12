@@ -20,7 +20,7 @@ from ..extensions import db
 from .registry import OwnershipConflict, PluginRegistry
 
 LDS_PLUGIN_API_MAJOR = 1
-LDS_PLUGIN_API_MINOR = 20  # Declared, pinned custom-node preparation in ComfyUI Python.
+LDS_PLUGIN_API_MINOR = 21  # Automatic product lanes can block local memory release.
 
 
 PUBLIC_NAMES = (
