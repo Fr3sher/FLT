@@ -88,13 +88,16 @@ export function summarize(result, engine = 'clip') {
       + unsearchableNote(result, actualEngine)
   }
   const r = result.score_range || {}
-  const spread = spreadLabel(r, result.pool_median)
+  const spread = result.reranking ? '' : spreadLabel(r, result.pool_median)
   const parts = [
     `${shown} closest of ${result.pool} for “${result.query}”, best first.`,
     // Raw cosines, shown as what they are and never as a percentage: on this
     // model even a perfect match tops out around 0.2, so "22%" would read as a
     // failure. The SPREAD is the part that is actually actionable.
-    `Similarity ${fmt(r.top)} down to ${fmt(r.bottom)}${spread ? ` — ${spread}` : ''}.`,
+    result.reranking
+      ? `Qwen refined the first ${result.reranking.count} ${semanticEngineLabel(actualEngine)} candidates.`
+        + (shown > result.reranking.count ? ` The remaining order comes from ${semanticEngineLabel(actualEngine)}.` : '')
+      : `Similarity ${fmt(r.top)} down to ${fmt(r.bottom)}${spread ? ` — ${spread}` : ''}.`,
     'Search brings the likeliest images to the front; it does not select them. '
       + 'Every image scores something against every phrase.',
   ]
@@ -130,13 +133,14 @@ export function unsearchableNote(result, engine = 'clip') {
  * never an unexplained freeze. Mirrors the measured cost: ~8.5 s to load CLIP,
  * ~20 ms per phrase afterwards.
  */
-export function readinessHint(status, engine = 'clip') {
+export function readinessHint(status, engine = 'clip', rerank = false) {
   if (!status) return ''
   const label = status.model_label || semanticEngineLabel(status.engine || engine)
   if (!status.available) {
     return status.reason || 'Text search is unavailable on this install.'
   }
   if (status.weights_warning) return status.weights_warning
+  if (rerank) return `${label} finds the candidates first. Qwen loads and refines them on every search, including repeated phrases.`
   if (status.warm) return `${label} search model is loaded — results are instant.`
   return `First search loads the ${label} search model (about 10 seconds, on the CPU). `
     + 'After that, searches are instant.'

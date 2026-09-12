@@ -47,6 +47,7 @@ export function useCurationLanes({
   // keeps the ranking legible once the grid has switched to it.
   const [textQuery, setTextQuery] = useState('')
   const [textN, setTextN] = useState(60)
+  const [textRerank, setTextRerank] = useState(false)
   // 🔤 what to push DOWN the ranking. Not a filter — see bankTextSearch.js.
   const [textExclude, setTextExclude] = useState('')
   const [textExcludeW, setTextExcludeW] = useState(PUSH_DOWN_DEFAULT_STRENGTH)
@@ -228,7 +229,7 @@ export function useCurationLanes({
     try {
       const d = await postJson(`/api/bank/${bankId}/search-text`,
         { query: q, n: textN, push_down: textExclude.trim() || null,
-          push_down_weight: textExcludeW, ...filterParams(filter) })
+          push_down_weight: textExcludeW, rerank: textRerank, ...filterParams(filter) })
       if (semanticEngineRef.current !== requestEngine
           || !semanticPayloadMatches(d, requestEngine, requestModelKey)) return
       setTextResult(d)
@@ -256,7 +257,7 @@ export function useCurationLanes({
     setDiverseTypicality, diverseBusy, balanceN, setBalanceN, balanceAxis,
     setBalanceAxis, balanceBusy, balanceResult, setBalanceResult, similarN,
     setSimilarN, similarBusy, similarLast, similarAddN, setSimilarAddN,
-    addMoreSimilar, textQuery, setTextQuery, textN, setTextN,
+    addMoreSimilar, textQuery, setTextQuery, textN, setTextN, textRerank, setTextRerank,
     textExclude, setTextExclude, textExcludeW, setTextExcludeW, textStatus,
     setTextStatus, textPending, textResult, setTextResult, pickDiverse,
     pickBalanced, findSimilar, openTextSearch, releaseTextEncoder,

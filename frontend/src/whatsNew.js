@@ -83,6 +83,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-12-qwen-search-refinement',
+    date: '2026-09-12',
+    title: 'Give leading Bank search results a closer look',
+    blurb: 'Optional Qwen refinement reorders the first 20 text-search candidates while keeping your CLIP or SigLIP2 index. Install it in Setup, enable it in Find by text, and its memory is released after each search.',
+    to: '/bank',
+  },
+  {
     id: '2026-09-03-video-studio-render-time',
     date: '2026-09-03',
     title: 'Every clip in the Video Test Studio says how long it took to render',

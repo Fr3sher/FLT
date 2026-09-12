@@ -5929,7 +5929,7 @@ def _push_down_weight(value):
 
 
 def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
-                   push_down_weight=None, filters=None):
+                   push_down_weight=None, filters=None, rerank=False):
     """Rank the (filtered) pool by CLIP similarity to a written QUERY — "brunette
     outdoors, wide shot" instead of a reference picture.
 
@@ -6016,6 +6016,11 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
         # costume of an answer — so it is refused rather than served.
         raise ValueError('a search query is required — an excluded term alone '
                          'cannot rank anything')
+    if type(rerank) is not bool:
+        raise ValueError('rerank must be true or false')
+    if rerank and excl:
+        raise ValueError('Qwen refinement cannot be combined with Push down or -terms yet; '
+                         'clear them or turn refinement off.')
     weight = _push_down_weight(push_down_weight if push_down_weight is not None
                                else PUSH_DOWN_WEIGHT_DEFAULT)
     engine = _selected_semantic_engine(bank)
@@ -6069,11 +6074,43 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
         scores = sims - weight * excl_sims
     order = np.argsort(-scores, kind='stable')   # desc; stable ⇒ id tie-break
     keep = [int(k) for k in order[:n]]
+    reranking = None
+    if rerank:
+        from . import bank_reranker_models, bank_search_reranker
+        candidate_positions = [int(k) for k in order[:bank_reranker_models.TOP_N]]
+        candidate_ids = [ids[k] for k in candidate_positions]
+        rows = {r.id: r for r in BankImage.query.filter(
+            BankImage.bank_id == bank_id, BankImage.id.in_(candidate_ids)).all()}
+        images = []
+        for image_id in candidate_ids:
+            path = analysis_image_path(bank, rows[image_id]) if image_id in rows else None
+            if not path:
+                raise ValueError('A candidate is unavailable; refresh the Bank and search again.')
+            digest = hashlib.sha256(_read_safe_bank_source_bytes(path)).hexdigest()
+            images.append({'id': image_id, 'path': path, 'sha256': digest})
+        _release_db_before_inference()
+        ranked, reranking = bank_search_reranker.rerank(text, images)
+        db.session.expire_all()
+        for item in images:
+            row = db.session.get(BankImage, item['id'])
+            if (row is None or row.bank_id != bank_id
+                    or analysis_image_path(bank, row) != item['path']):
+                raise ValueError('A candidate was edited; run the search again.')
+        positions = {ids[k]: k for k in candidate_positions}
+        keep = ([positions[image_id] for image_id in ranked]
+                + [int(k) for k in order[bank_reranker_models.TOP_N:]])[:n]
     # The RANKING score is what ordered the list, so it is what the list reports:
     # showing the raw positive cosine here would make the order look arbitrary
     # (a lower-cosine image legitimately outranks a higher one once its excluded
     # match is paid for). Both halves are kept alongside so nothing is hidden.
     results = [{'id': ids[k], 'score': round(float(scores[k]), 4)} for k in keep]
+    if reranking is not None:
+        for result in results:
+            if result['id'] in reranking['scores']:
+                result['rerank_score'] = reranking['scores'][result['id']]
+        # Preserve cosine units for every existing consumer. The independent
+        # rerank score, never a percentage, explains the refined prefix only.
+        base['reranking'] = {k: v for k, v in reranking.items() if k != 'scores'}
     if excl_sims is not None:
         for r, k in zip(results, keep):
             r['match'] = round(float(sims[k]), 4)

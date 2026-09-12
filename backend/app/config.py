@@ -497,6 +497,9 @@ DEFAULTS = {
         'python': '', 'models_root': '', 'device': 'auto',
         'siglip2_semantic_dup_threshold': 0.97,
     },
+    # Optional search-only refinement. Setup provisions CPU packages; CUDA is
+    # explicitly selected by the owner and uses the existing GPU window.
+    'bank_reranker': {'python': '', 'models_root': '', 'device': 'cpu'},
     # fp8 quantization runs `fp8_export.py` in a SUBPROCESS, because it needs
     # torch + safetensors and this app deliberately installs without them
     # (gigabytes). Empty -> the same interpreter ✨ Score uses, then ai-toolkit's,

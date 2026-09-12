@@ -1285,6 +1285,32 @@ The SigLIP 2 index is resumable and stoppable like Score: completed entries are
 written atomically, and a later launch pays only for missing, failed or changed
 images. **Reindex SigLIP 2** rebuilds that cache only; it never touches Score.
 
+## Refine leading search results with Qwen
+
+In **Setup → Quality tools**, install **Qwen search refinement**. This downloads
+the pinned Qwen3-VL-Reranker-2B checkpoint (about 4.3 GB) and a CPU runtime. Then
+open **Bank → Curate → Find by text** and enable **Refine the first 20 with Qwen**.
+
+Your selected CLIP or SigLIP2 index retrieves candidates within the current
+filter. Qwen examines the first 20 images with your query and reorders that
+prefix; the rest keep their original order. Asking for fewer than 20 results
+still lets Qwen compare up to 20 candidates. No images are kept, rejected,
+recaptioned, or rescored. This refines a ranking; it does not guarantee relevance.
+
+The model loads on demand and exits after each refinement, including a failure
+or timeout. The CPU default needs several GB of additional RAM and may be slow.
+An owner-configured CUDA interpreter uses the app's GPU reservation and refuses
+while training or ComfyUI work holds it. See `bank_reranker` in Settings reference
+for advanced runtime configuration. Setup never installs into a borrowed runtime.
+
+Clear **Push down** and inline `-terms` before enabling refinement: their
+encoder-specific subtraction has not been calibrated for Qwen. An unavailable
+runtime or failed refinement is reported explicitly; turn refinement off to use
+the original search. Search never downloads models in the background.
+
+This option belongs to Image Bank's existing semantic text search. Dataset's
+**Find text** is an OCR pass, a different operation, and is unchanged.
+
 ## Find bank images by describing them
 
 Under **Curate**, **🔤 Find by text…** ranks images by how close they are to a

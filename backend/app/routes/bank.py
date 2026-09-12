@@ -1523,11 +1523,14 @@ def bank_search_text(bank_id):
     a different thing, and the UI says so differently: one is "do this first",
     the other is "this install cannot do this at all"."""
     from ..services.clip_text_encoder import TextEncodeError
+    from ..services.bank_search_reranker import RerankError
     data = request.get_json(silent=True)
     if data is None:
         data = {}
     if not isinstance(data, dict):
         return jsonify({'error': 'request body must be an object'}), 400
+    if type(data.get('rerank', False)) is not bool:
+        return jsonify({'error': 'rerank must be true or false'}), 400
     try:
         n = int(data.get('n') or 60)
     except (TypeError, ValueError):
@@ -1536,7 +1539,10 @@ def bank_search_text(bank_id):
         out = banks.search_by_text(LOCAL_USER, bank_id, data.get('query'), n=n,
                                    push_down=data.get('push_down'),
                                    push_down_weight=data.get('push_down_weight'),
-                                   filters=_curation_filters(data))
+                                   filters=_curation_filters(data),
+                                   rerank=data.get('rerank', False))
+    except RerankError as e:
+        return jsonify({'error': str(e), 'reason': 'reranker_unavailable'}), 503
     except TextEncodeError as e:
         return jsonify({'error': str(e), 'reason': 'encoder_unavailable'}), 503
     except ValueError as e:
@@ -1547,13 +1553,13 @@ def bank_search_text(bank_id):
 @bp.get('/bank/text-search/status')
 def bank_text_search_status():
     """Read warm/cache state for exactly one semantic text space."""
-    from ..services import clip_text_encoder
+    from ..services import clip_text_encoder, bank_search_reranker
     engine = request.args.get('engine') or 'clip'
     try:
         status = clip_text_encoder.status(engine=engine)
     except (ValueError, clip_text_encoder.TextEncodeError) as e:
         return jsonify({'error': str(e)}), 400
-    return jsonify({'ok': True, **status})
+    return jsonify({'ok': True, **status, 'reranker': bank_search_reranker.status()})
 
 
 @bp.post('/bank/text-search/release')

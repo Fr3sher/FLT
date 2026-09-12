@@ -1099,7 +1099,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     textExclude, setTextExclude, textExcludeW, setTextExcludeW, textStatus,
     setTextStatus, textPending, textResult, setTextResult, pickDiverse,
     pickBalanced, findSimilar, openTextSearch, releaseTextEncoder,
-    runTextSearch,
+    runTextSearch, textRerank, setTextRerank,
   } = useCurationLanes({
     bankId, filter, filterParams, selected, toast, showCuratedSelection,
     semanticState, semanticEngineRef, textStatusRequestRef,
@@ -2195,17 +2195,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               <>
                 <div className="fixed inset-0 z-40"
                   onClick={() => { setCurateOpen(null); releaseTextEncoder() }} aria-hidden />
-                {/* Below sm this is a BOTTOM SHEET, not a dropdown. Anchored to its
-                    trigger it is a w-80 panel hanging off a button that sits
-                    mid-row: measured on a 400 px viewport it reached x=517 and made
-                    the whole page scroll sideways. Pinning only the horizontal
-                    gutters was not enough either — a fixed box with `top: auto`
-                    resolves to its static position and lands off-screen once the
-                    page is scrolled. So the vertical anchor is explicit, and the
-                    sheet scrolls internally when the copy is long. From sm up it
-                    behaves exactly like its two sibling popovers. */}
+                {/* Keep this longer search sheet inside the viewport. Anchoring
+                    it to the toolbar overflowed at laptop widths; a centered
+                    sheet above sm and a bottom sheet on phones both scroll when
+                    the available height is short. */}
                 <div data-probe-chrome="curate-text" data-probe-panel="curate-text" data-probe-layer
-                  className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:max-h-none sm:w-80 sm:overflow-visible">
+                  className="fixed inset-x-4 bottom-4 z-50 max-h-[75vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-96">
                   <p className="text-xs text-content-muted">
                     Ranks the <strong>current filter</strong> by how close each image is to your
                     words. It refines what the grid is showing — it does not search the whole bank.
@@ -2268,16 +2263,27 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   </label>
                   {/* The cost, BEFORE the click — a cold CLIP load is ~10 s and an
                       unexplained wait is exactly how this reads as a hang. */}
+                  <label className="flex min-h-10 items-center gap-2 text-sm text-content lg:min-h-0">
+                    <input type="checkbox" checked={textRerank}
+                      disabled={textPending || (!textRerank && !textStatus?.reranker?.available)}
+                      onChange={(e) => setTextRerank(e.target.checked)} />
+                    Refine the first 20 with Qwen
+                  </label>
                   <p className="text-xs text-content-subtle">
-                    {readinessHint(textStatus, semanticState.engine)}
+                    {textStatus?.reranker?.available
+                      ? 'Adds a model load and a closer look at the leading results, then releases memory. Clear Push down and -terms before using refinement.'
+                      : (textStatus?.reranker?.reason || 'Checking Qwen refinement availability…')}
+                  </p>
+                  <p className="text-xs text-content-subtle">
+                    {readinessHint(textStatus, semanticState.engine, textRerank)}
                   </p>
                   <p className="text-xs text-amber-300/80">
                     {limitsSentence(semanticState.engine)}
                   </p>
                   <button type="button" onClick={runTextSearch}
                     disabled={textPending || !textQuery.trim()}
-                    className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-50">
-                    {textPending ? pendingLabel(textStatus) : `Rank the closest ${textN}`}
+                    className="min-h-10 w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 disabled:opacity-50 lg:min-h-0">
+                    {textPending ? (textRerank ? 'Searching and refining with Qwen…' : pendingLabel(textStatus)) : `Rank the closest ${textN}`}
                   </button>
                 </div>
               </>
@@ -2321,7 +2327,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               )}
               {textResult.cached === false && (
                 <p className="text-content-subtle">
-                  This phrase is now cached — searching it again is instant, even after a restart.
+                  {textResult.reranking
+                    ? 'The search phrase is cached. Qwen refinement still runs again on each search.'
+                    : 'This phrase is now cached — searching it again is instant, even after a restart.'}
                 </p>
               )}
               <p className="text-amber-300/80">{limitsSentence(semanticState.engine)}</p>

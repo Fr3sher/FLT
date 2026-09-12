@@ -423,7 +423,7 @@ _ALL_NODE_PACKS = tuple(_NODE_PACKS) + tuple(_BUNDLED_NODE_PACKS)
 
 INSTALL_ACTIONS = ('ml_extras', 'scrape_extras', 'ollama_model',
                    'face_scoring', 'masks', 'watermark_inpaint',
-                   'bank_scoring', 'bank_siglip2',
+                   'bank_scoring', 'bank_siglip2', 'bank_reranker',
                    'watermark_detect',
                    'video', 'shot_detect', 'video_text',
                    # ✨ DLSS 5 neural rendering bridge (two MIT DLLs, pinned release —
@@ -498,6 +498,8 @@ _FLASK_VENV_INCOMPATIBLE = frozenset({_WATERMARK_PKG})
 #   watermark_inpaint  simple-lama-inpainting (has its own dedicated worker below;
 #                 listed here only so the anti-orphan test sees its package covered).
 _CAPABILITY_PACKAGES = {
+    'bank_reranker': ('transformers', 'qwen-vl-utils', 'pillow',
+                      'huggingface_hub', 'safetensors'),
     'face_scoring': ('insightface', 'onnxruntime', 'numpy', 'opencv-python-headless'),
     'masks': ('rembg', 'onnxruntime', 'numpy', 'opencv-python-headless'),
     'watermark_inpaint': (_WATERMARK_PKG,),
@@ -562,7 +564,7 @@ _CAPABILITY_ML_ACTIONS = ('face_scoring', 'masks', 'video', 'video_text')
 # 600 s TTL (ml_extras/scrape_extras via -r, the scoped per-capability installs).
 _IMPORT_CACHE_ACTIONS = (frozenset(_PIP_REQUIREMENTS)
                          | set(_CAPABILITY_ML_ACTIONS)
-                         | {'watermark_inpaint', 'bank_scoring', 'bank_siglip2',
+                         | {'watermark_inpaint', 'bank_scoring', 'bank_siglip2', 'bank_reranker',
                             'watermark_detect', 'shot_detect'})
 
 # Actions that invoke pip and therefore MUST NOT run concurrently: two pip processes
@@ -579,7 +581,7 @@ _PIP_ACTIONS = (frozenset(_PIP_REQUIREMENTS)
                 # (that sharing is the whole point — it saves a second 2.5 GB
                 # torch), so it must share the pip queue too or the two race on
                 # one environment's dist-info.
-                | {'watermark_inpaint', 'bank_scoring', 'bank_siglip2',
+                | {'watermark_inpaint', 'bank_scoring', 'bank_siglip2', 'bank_reranker',
                    'watermark_detect', 'shot_detect'})
 
 # Transient file-lock errors an install can hit even without concurrency: an antivirus
@@ -892,6 +894,23 @@ def manual_command(action) -> str:
         return (f'{_quote(python)} -m pip install torch torchvision --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install '
                 f'"{_requirement_spec("transnetv2-pytorch")}" "{_requirement_spec("av")}"')
+    if action == 'bank_reranker':
+        import base64
+        from .services import bank_reranker_models as assets
+        python = _bank_scoring_env_python()
+        specs = ' '.join(f'"{_requirement_spec(p)}"'
+                         for p in _CAPABILITY_PACKAGES[action])
+        # Encode data, not shell syntax: a configured cache path must never
+        # become part of the Python program inside this diagnostic command.
+        payload = base64.b64encode(json.dumps([
+            assets.MODEL_ID, assets.REVISION, str(assets.models_root()),
+            list(assets.FILES)]).encode()).decode()
+        code = ("import base64,json; from huggingface_hub import hf_hub_download as d; "
+                f"repo,rev,root,files=json.loads(base64.b64decode('{payload}')); "
+                "[d(repo_id=repo,revision=rev,cache_dir=root,filename=f) for f in files]")
+        return (f'{_quote(python)} -m pip install torch torchvision --index-url {_TORCH_CPU_INDEX}  '
+                f'&& {_quote(python)} -m pip install {specs} -c {_quote(str(_ML_REQUIREMENTS))}  '
+                f'&& {_quote(python)} -c "{code}"')
     if action == 'bank_siglip2':
         # ALWAYS the LDS-managed environment — exactly what the Install button
         # does, and deliberately blind to ``bank_semantic.python``. That key is
@@ -2191,6 +2210,70 @@ def _run_bank_siglip2(action) -> int:
     return 0
 
 
+def _run_bank_reranker(action) -> int:
+    """Provision the managed CPU runtime; never mutate a borrowed interpreter."""
+    from .services import bank_reranker_models as assets
+    managed = _bank_scoring_env_python()
+    configured = str(cfg.get('bank_reranker.python') or '').strip()
+    borrowed = bool(configured) and not _same_path(configured, managed)
+    python = _ensure_bank_scoring_env(action, save_score_python=False)
+    if not python or not _same_path(python, managed):
+        _append(action, 'Could not provision the managed Qwen runtime.')
+        return 1
+    rc = _install_cpu_torch_pair(action, python)
+    if rc:
+        return rc
+    rc = _run_pip(action, [python, '-m', 'pip', 'install',
+                          *[_requirement_spec(p) for p in _CAPABILITY_PACKAGES[action]],
+                          '-c', str(_ML_REQUIREMENTS)])
+    if rc:
+        return rc
+    # Unlike a polling probe, installation must finish verification before it
+    # announces success. A timeout is a failed verification, not a green badge.
+    try:
+        probe = subprocess.run(
+            infer_env.worker_argv(python, '-c', capabilities.CAPABILITY_IMPORTS[action]),
+            capture_output=True, timeout=120, env=infer_env.worker_env(python),
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except (OSError, subprocess.TimeoutExpired):
+        _append(action, 'Qwen runtime verification did not finish; installation is incomplete.')
+        return 1
+    if probe.returncode:
+        _append(action, 'Qwen dependencies do not import; installation is incomplete.')
+        return 1
+    root = assets.models_root()
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        _append(action, 'Cannot create the Qwen model folder.')
+        return 1
+    _append(action, f'Downloading {assets.MODEL_ID}, about {assets.DOWNLOAD_MB} MB (Apache-2.0).')
+    code = ('import json, sys\nfrom huggingface_hub import hf_hub_download\n'
+            'repo, rev, root, files = json.loads(sys.argv[1])\n'
+            'for name in files:\n'
+            '    hf_hub_download(repo_id=repo, revision=rev, cache_dir=root, filename=name)\n')
+    rc = _run_pip(action, [python, '-c', code, json.dumps([
+        assets.MODEL_ID, assets.REVISION, str(root), list(assets.FILES)])])
+    if rc or not assets.weights_present(root):
+        _append(action, 'Qwen download is incomplete; click Install again to resume.')
+        return rc or 1
+    if not borrowed:
+        try:
+            cfg.save_config({'bank_reranker': {'python': managed}})
+        except Exception:
+            _append(action, 'Qwen runtime could not be saved; installation is incomplete.')
+            return 1
+    else:
+        _append(action, 'The selected external Qwen interpreter was left unchanged.')
+    capabilities.clear_import_cache()
+    verdict = capabilities.probe_bank_reranker()
+    if not verdict['ok']:
+        _append(action, verdict['detail'])
+        return 1
+    _append(action, 'Qwen search refinement is ready. Enable it in Bank → Find by text.')
+    return 0
+
+
 def _watermark_detect_python() -> str:
     """The interpreter the detector extra installs into.
 
@@ -2489,6 +2572,7 @@ _MISSING_MODULE_RE = re.compile(r"No module named ['\"]([\w.]+)['\"]")
 _CAPABILITY_LABEL = {'face_scoring': 'face scoring', 'masks': 'person masks',
                       'bank_scoring': 'bank scoring',
                       'bank_siglip2': 'SigLIP2 Bank semantics',
+                      'bank_reranker': 'Qwen search refinement',
                       'watermark_inpaint': 'watermark inpainting',
                       # `video` is TWO halves and the import proves only the
                       # first, so its label names that half and never the extra.
@@ -3373,6 +3457,7 @@ _WORKERS = {**{a: _run_ml_extras for a in _PIP_REQUIREMENTS},   # ml_extras + sc
             'watermark_inpaint': _run_watermark_inpaint,
             'bank_scoring': _run_bank_scoring,
             'bank_siglip2': _run_bank_siglip2,
+            'bank_reranker': _run_bank_reranker,
             'watermark_detect': _run_watermark_detect,
             'shot_detect': _run_shot_detect,
             **{a: _run_model_download for a in _MODEL_DOWNLOADS},

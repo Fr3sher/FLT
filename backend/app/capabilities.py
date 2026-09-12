@@ -872,6 +872,9 @@ CAPABILITY_IMPORTS = {
                      'from PIL import Image'),
     'bank_siglip2': ('import torch, transformers, numpy; from PIL import Image; '
                      'from transformers import Siglip2Model, AutoProcessor'),
+    'bank_reranker': ('import torch, torchvision; from PIL import Image, ImageOps; '
+                      'from qwen_vl_utils import process_vision_info; '
+                      'from transformers import Qwen3VLForConditionalGeneration, AutoProcessor'),
     'watermark_inpaint': 'import simple_lama_inpainting',
     # The detector extra runs backend/infer/watermark_detect_infer.py, which needs
     # torch (both models) and transformers (BOTH heads are transformers-native —
@@ -1106,6 +1109,26 @@ def probe_bank_siglip2() -> dict:
                    else 'weights are present but this transformers build cannot load SigLIP2'),
         'model': assets.MODEL_ID,
     }
+
+
+def probe_bank_reranker() -> dict:
+    """A status poll neither loads Qwen nor downloads its checkpoint."""
+    from .services import bank_reranker_models as assets
+    result = {'ok': False, 'model': assets.MODEL_ID}
+    if not assets.weights_present():
+        return {**result, 'detail': 'Install Qwen search refinement in Setup → Quality tools.'}
+    python = assets.inference_python()
+    code = CAPABILITY_IMPORTS['bank_reranker']
+    try:
+        device = assets.device()
+    except ValueError as exc:
+        return {**result, 'detail': str(exc)}
+    if device == 'cuda':
+        code += '; assert torch.cuda.is_available() and torch.cuda.is_bf16_supported()'
+    ok = _cached_import('bank_reranker_' + device, python, code)
+    return {**result, 'ok': ok, 'detail': (
+        'Qwen search refinement is ready (' + device + ').' if ok else
+        'Qwen runtime is unavailable; repair it in Setup or select a compatible interpreter.')}
 
 
 def probe_watermark_inpaint() -> dict:
@@ -2262,6 +2285,7 @@ def probe(force=False) -> dict:
     masks = probe_masks()
     bank_scoring = probe_bank_scoring()
     bank_siglip2 = probe_bank_siglip2()
+    bank_reranker = probe_bank_reranker()
     watermark_inpaint = probe_watermark_inpaint()
     watermark_detect = probe_watermark_detect()
     video = probe_video()
@@ -2426,6 +2450,8 @@ def probe(force=False) -> dict:
         'bank_siglip2': bank_siglip2['ok'],
         'bank_siglip2_detail': bank_siglip2['detail'],
         'bank_siglip2_model': bank_siglip2['model'],
+        'bank_reranker': bank_reranker['ok'],
+        'bank_reranker_detail': bank_reranker['detail'],
         # Lets the front adapt the watermark Clean tooltip: when False, Clean is
         # crop-only (LaMa-routed watermarks are skipped with an install hint).
         'watermark_inpaint': watermark_inpaint['ok'],

@@ -540,7 +540,7 @@ def test_status_reports_unavailability_without_raising(client, app, monkeypatch)
 
 
 def test_status_endpoint_forwards_the_requested_engine(client, monkeypatch):
-    from app.services import clip_text_encoder
+    from app.services import clip_text_encoder, bank_search_reranker
     seen = []
 
     def fake_status(engine='clip'):
@@ -548,9 +548,11 @@ def test_status_endpoint_forwards_the_requested_engine(client, monkeypatch):
         return {'available': True, 'engine': engine, 'warm': False}
 
     monkeypatch.setattr(clip_text_encoder, 'status', fake_status)
+    monkeypatch.setattr(bank_search_reranker, 'status', lambda: {'available': False})
     body = client.get('/api/bank/text-search/status?engine=siglip2').get_json()
     assert body == {
         'ok': True, 'available': True, 'engine': 'siglip2', 'warm': False,
+        'reranker': {'available': False},
     }
     assert seen == ['siglip2']
 

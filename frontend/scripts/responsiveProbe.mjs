@@ -169,6 +169,7 @@ const PAGES = {
       { name: 'rail', open: ['[aria-controls="bank-filter-rail"]'] },
       { name: 'passes', open: ['[aria-controls="bank-passes-panel"]'] },
       { name: 'auto-reject', open: ['button:has-text("Auto-reject")'] },
+      { name: 'text-search', open: ['button:has-text("Find by text")'] },
       { name: 'review', open: ['[aria-label^="Review from"]'] },
       /* ≈ Duplicates REPLACES the grid with the resolution panel, and ⤢ Compare
          opens the full-screen picker over it. Two variants each, because the

@@ -32,6 +32,9 @@ transnetv2-pytorch>=1.0.5,<2
 # With the floor, that same click is the repair. Installs into the bank-scoring
 # venv, not the Flask one (see _BANK_SCORING_PKGS in app/setup_installer.py).
 transformers>=4.57,<6
+qwen-vl-utils==0.0.14
+huggingface-hub>=0.34,<2
+safetensors>=0.4,<1
 
 # Pillow backs the burned-in-text reader's unicode-path fallback (cv2.imread
 # cannot open non-ASCII paths on Windows). The app's own requirements pin it
