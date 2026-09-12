@@ -1,9 +1,7 @@
 """Named adapters to existing public host services; implementations remain in main."""
 
-_EXPORTS = {'_map_error': ('app.routes._common', '_map_error'),
- '_studio_missing_response': ('app.routes._common', '_studio_missing_response'),
- 'require_comfyui': ('app.routes._common', '_require_comfyui'),
- 'require_no_stalled_comfyui': ('app.routes._common', '_require_no_stalled_comfyui')}
+_EXPORTS = {'run_infer_script': ('app.services.infer_stream', 'run_infer_script'),
+ 'stderr_tail': ('app.services.infer_stream', 'stderr_tail')}
 __all__ = list(_EXPORTS)
 
 

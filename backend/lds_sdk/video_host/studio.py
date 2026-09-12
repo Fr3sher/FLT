@@ -1,6 +1,9 @@
-"""Named adapters to the existing public host; no plugin implementation is imported."""
+"""Named adapters to existing public host services; implementations remain in main."""
 
-_EXPORTS = {'comfy_output_dir': ('app.services.lora_test_studio', '_comfy_output_dir'), 'is_unsafe_external_lora_name': ('app.services.lora_test_studio', '_is_unsafe_external_lora_name'), 'unsafe_lora_name': ('app.services.lora_test_studio', '_is_unsafe_external_lora_name')}
+_EXPORTS = {'StudioAssetsMissing': ('app.services.lora_test_studio', 'StudioAssetsMissing'),
+ 'comfy_output_dir': ('app.services.lora_test_studio', '_comfy_output_dir'),
+ 'is_unsafe_external_lora_name': ('app.services.lora_test_studio', '_is_unsafe_external_lora_name'),
+ 'unsafe_lora_name': ('app.services.lora_test_studio', '_is_unsafe_external_lora_name')}
 __all__ = list(_EXPORTS)
 
 

@@ -1,9 +1,6 @@
 """Named adapters to existing public host services; implementations remain in main."""
 
-_EXPORTS = {'_map_error': ('app.routes._common', '_map_error'),
- '_studio_missing_response': ('app.routes._common', '_studio_missing_response'),
- 'require_comfyui': ('app.routes._common', '_require_comfyui'),
- 'require_no_stalled_comfyui': ('app.routes._common', '_require_no_stalled_comfyui')}
+_EXPORTS = {'ensure_vision_safe_jpeg': ('app.services.vision_image', 'ensure_vision_safe_jpeg')}
 __all__ = list(_EXPORTS)
 
 

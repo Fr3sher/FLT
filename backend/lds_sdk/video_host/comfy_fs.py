@@ -1,6 +1,8 @@
-"""Named adapters to the existing public host; no plugin implementation is imported."""
+"""Named adapters to existing public host services; implementations remain in main."""
 
-_EXPORTS = {'claim_output_file': ('app.utils.comfy_fs', 'claim_output_file')}
+_EXPORTS = {'claim_output_file': ('app.utils.comfy_fs', 'claim_output_file'),
+ 'ensure_input_usable': ('app.utils.comfy_fs', 'ensure_input_usable'),
+ 'stage_input_image': ('app.utils.comfy_fs', 'stage_input_image')}
 __all__ = list(_EXPORTS)
 
 

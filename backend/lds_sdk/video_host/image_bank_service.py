@@ -1,9 +1,8 @@
 """Named adapters to existing public host services; implementations remain in main."""
 
-_EXPORTS = {'_map_error': ('app.routes._common', '_map_error'),
- '_studio_missing_response': ('app.routes._common', '_studio_missing_response'),
- 'require_comfyui': ('app.routes._common', '_require_comfyui'),
- 'require_no_stalled_comfyui': ('app.routes._common', '_require_no_stalled_comfyui')}
+_EXPORTS = {'_push_down_weight': ('app.services.image_bank_service', '_push_down_weight'),
+ 'get_bank': ('app.services.image_bank_service', 'get_bank'),
+ 'resolved_image_path': ('app.services.image_bank_service', 'resolved_image_path')}
 __all__ = list(_EXPORTS)
 
 

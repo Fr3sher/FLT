@@ -1,9 +1,6 @@
 """Named adapters to existing public host services; implementations remain in main."""
 
-_EXPORTS = {'_map_error': ('app.routes._common', '_map_error'),
- '_studio_missing_response': ('app.routes._common', '_studio_missing_response'),
- 'require_comfyui': ('app.routes._common', '_require_comfyui'),
- 'require_no_stalled_comfyui': ('app.routes._common', '_require_no_stalled_comfyui')}
+_EXPORTS = {'GPU_ARBITER_LOCK': ('app.job_queue', 'GPU_ARBITER_LOCK')}
 __all__ = list(_EXPORTS)
 
 

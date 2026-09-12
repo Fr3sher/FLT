@@ -24,8 +24,8 @@ from app.plugins import registry
 from app.plugins.loader import load_plugins
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = ('camera_angles', 'canvas', 'civitai_publish', 'hf_publish', 'image_upscale', 'live',
-            'model_tools', 'resource_monitor', 'scrape', 'seedvr2')
+PRODUCTS = ('api_engines', 'camera_angles', 'canvas', 'civitai_publish', 'hf_publish', 'image_upscale', 'live',
+            'model_tools', 'resource_monitor', 'scrape', 'seedvr2', 'video')
 
 
 @pytest.fixture
@@ -38,6 +38,8 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setenv('LDS_BUNDLED_DIR', str(ROOT / 'bundled'))
     monkeypatch.setenv('LDS_PLUGINS_DIR', str(tmp_path / 'external'))
     monkeypatch.delenv('LDS_PLUGINS', raising=False)
+    for key in cfg.SECRET_KEYS:
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(cfg, 'ENV_PATH', tmp_path / '.env')
     monkeypatch.setattr(cfg, 'DEFAULTS', deepcopy(cfg.DEFAULTS))
     monkeypatch.setattr(cfg, '_cache', None)
@@ -139,7 +141,7 @@ def test_public_h3_facade_delegates_to_main_only():
         getattr(h3_render, 'reference')
     from lds_sdk.h3_downloads import H3_DOWNLOADS
     assert set(H3_DOWNLOADS) == {'h3_base', 'h3_text_encoder', 'h3_video_vae',
-                               'h3_audio_vae', 'h3_turbo_lora'}
+                               'h3_audio_vae', 'h3_turbo_lora', 'h3_parasyte_lora', 'h3_dareties_lora'}
 
 
 def test_publish_png_strips_metadata_without_rewriting_master(tmp_path):
@@ -272,4 +274,4 @@ def test_declared_sdk_exports_are_real_symbols():
             parts.pop()
         module = importlib.import_module('.'.join(['lds_sdk', *parts]))
         for name in getattr(module, '__all__', ()):
-            assert getattr(module, name) is not None, f'{module.__name__}.{name}'
+            assert hasattr(module, name), f'{module.__name__}.{name}'

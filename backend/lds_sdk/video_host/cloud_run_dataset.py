@@ -1,9 +1,10 @@
 """Named adapters to existing public host services; implementations remain in main."""
 
-_EXPORTS = {'_map_error': ('app.routes._common', '_map_error'),
- '_studio_missing_response': ('app.routes._common', '_studio_missing_response'),
- 'require_comfyui': ('app.routes._common', '_require_comfyui'),
- 'require_no_stalled_comfyui': ('app.routes._common', '_require_no_stalled_comfyui')}
+_EXPORTS = {'VIDEO': ('app.services.cloud_run_dataset', 'VIDEO'),
+ 'dataset_row': ('app.services.cloud_run_dataset', 'dataset_row'),
+ 'is_video': ('app.services.cloud_run_dataset', 'is_video'),
+ 'owns': ('app.services.cloud_run_dataset', 'owns'),
+ 'table_of': ('app.services.cloud_run_dataset', 'table_of')}
 __all__ = list(_EXPORTS)
 
 

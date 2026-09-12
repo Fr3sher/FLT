@@ -6,6 +6,11 @@ def worker_env(python=None, base=None, **extra):
     return infer_env.worker_env(python, base=base, **extra)
 
 
+def worker_argv(python, *args):
+    from app.services import infer_env
+    return infer_env.worker_argv(python, *args)
+
+
 def isolated_worker_argv(python, *args):
     """API 1.15: ignore ambient Python paths, user site and cwd for any interpreter.
 
@@ -28,4 +33,4 @@ def isolated_worker_env(python=None, base=None, **extra):
     return env
 
 
-__all__ = ['isolated_worker_argv', 'isolated_worker_env']
+__all__ = ['isolated_worker_argv', 'isolated_worker_env', 'worker_argv', 'worker_env']

@@ -44,6 +44,38 @@ def job(job_id):
 
 
 class VideoQueue:
+    _read = frozenset({'training_dataset_id', 'training_dataset_table', 'training_error',
+                       'training_in_progress', 'training_pid', 'vision_in_progress'})
+    _write = frozenset({'training_error', 'training_in_progress', 'training_dataset_id',
+                        'training_dataset_table', 'training_target_step', 'training_run_token',
+                        'training_train_type'})
+
+    def get_state(self, key, default=None):
+        if key not in self._read:
+            raise ValueError('Unsupported Video admission state.')
+        from app.job_queue import queue_manager
+        return queue_manager._get_system_state(key, default)
+
+    def set_state(self, key, value, *, ttl_seconds=None):
+        if key not in self._write:
+            raise ValueError('Unsupported Video admission state.')
+        if key == 'training_dataset_table' and value != 'video_dataset':
+            raise ValueError('Video training must belong to video_dataset.')
+        if key == 'training_train_type' and value != 'video':
+            raise ValueError('Video training must use the video training type.')
+        from app.job_queue import queue_manager
+        with state_change_lock:
+            if not is_available('video'):
+                raise ValueError('Enable video before changing its admission state.')
+            return queue_manager._set_system_state(key, value, ttl_seconds=ttl_seconds)
+
+    _get_system_state = get_state
+    _set_system_state = set_state
+
+    def has_comfyui_work(self):
+        from app.job_queue import queue_manager
+        return queue_manager.has_comfyui_work()
+
     def add_job(self, *, job_type, user_id, workflow_data, prompt, metadata, job_id=None, commit=True):
         owner = _owner(metadata)
         if job_type != 'image' or owner is None:

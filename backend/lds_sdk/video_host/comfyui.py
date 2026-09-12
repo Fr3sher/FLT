@@ -1,4 +1,4 @@
-"""Named adapters to the existing public host; no plugin implementation is imported."""
+"""Named adapters to existing public host services; implementations remain in main."""
 
 _EXPORTS = {'fetch_output_image_bytes': ('app.utils.comfyui', 'fetch_output_image_bytes')}
 __all__ = list(_EXPORTS)
