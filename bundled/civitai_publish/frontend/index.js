@@ -32,13 +32,13 @@ export default {
     ],
     'checkpoint.action': [
       // The run graph and optional Canvas share one checkpoint row and dialog.
-      { id: 'civitai', panels: {
+      { id: 'civitai', surfaces: ['graph', 'canvas'], panels: {
         graph: () => import('./panels/CheckpointCivitaiRow.jsx'),
         canvas: () => import('./panels/CheckpointCivitaiRow.jsx'),
       } },
     ],
     'checkpoint.layer': [
-      { id: 'civitai', panel: () => import('./panels/CheckpointCivitaiLayer.jsx') },
+      { id: 'civitai', surfaces: ['graph', 'canvas'], panel: () => import('./panels/CheckpointCivitaiLayer.jsx') },
     ],
     'settings.group': [
       { id: 'civitai-publishing', section: 'scraping',
@@ -67,6 +67,10 @@ export default {
   ]).map(guideHelp),
   whatsNew: MIGRATED_NEWS,
   paritySkip: [
+    { slot: 'checkpoint.action', surface: 'video',
+      reason: 'This product publishes image-training checkpoints; video checkpoints have a different publication contract.' },
+    { slot: 'checkpoint.layer', surface: 'video',
+      reason: 'The publishing dialog belongs to the image checkpoint action on graph and Canvas.' },
     { slot: 'lightbox.action', surface: 'dataset',
       reason: 'A post carries the generation data of a LIBRARY row (prompt, seed, sampler, the LoRA '
         + 'weight) under the model page of the checkpoint that made it; a dataset image has no '
