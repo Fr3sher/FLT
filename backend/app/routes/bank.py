@@ -753,16 +753,14 @@ def bank_improve(bank_id):
         return _busy(e)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
-    except RuntimeError as e:
-        return jsonify({'error': str(e)}), 503
     except Exception as e:
-        # The engine preflight misses (Klein nodes/models, SeedVR2 models) keep
-        # their own structured 409 — that body is what carries the itemized list
-        # and starts the download, so flattening it here would cost the user the
-        # one thing that makes the refusal actionable.
+        # Provider unavailability is also a RuntimeError. Give restoration
+        # refusals their structured response before the generic busy-GPU 503.
         engine_error = _improve_engine_error(e)
         if engine_error:
             return engine_error
+        if isinstance(e, RuntimeError):
+            return jsonify({'error': str(e)}), 503
         raise
     return jsonify({'ok': True}), 202
 

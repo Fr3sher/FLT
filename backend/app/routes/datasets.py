@@ -748,9 +748,11 @@ def _autostart_seedvr2_downloads(missing):
 
 
 def _improve_engine_error(e):
-    """The (body, 409) for an improve preflight miss, whichever engine raised it,
-    or None when `e` is not one of those. Every improve route answers the same
-    three exception types, so the mapping lives once."""
+    """Share restoration provider and legacy preflight errors across improve routes."""
+    from ..plugins.restoration import error_response
+    result = error_response(e)
+    if result is not None:
+        return result
     from ..services.klein_edit_helper import KleinModelsMissing
     from ..services.seedvr2_helper import SeedVR2ModelsMissing
     if isinstance(e, svc.KleinNodesMissing):
