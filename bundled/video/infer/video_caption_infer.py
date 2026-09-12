@@ -85,20 +85,16 @@ MODEL_ID = 'Qwen/Qwen3-VL-4B-Instruct'
 
 
 def _load_caption_fields():
-    """The parent's caption_fields module, imported BY PATH.
+    """The packaged caption_fields helper, imported from this worker's folder.
 
     Stdlib-only by contract (see its docstring), so it loads in an interpreter
     that has none of the app. It is what lets the token count below be taken on
     the PROSE the trainer reads, never on the labelled tail the model appends
     (C12-C). None when it cannot load — the count then covers the whole text
     and is a little high, which errs on the safe side of a budget."""
-    import importlib.util
-    path = os.path.join(_HERE, '_caption_fields.py')
     try:
-        spec = importlib.util.spec_from_file_location('lds_caption_fields', path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
+        import _caption_fields
+        return _caption_fields
     except Exception as e:  # noqa: BLE001 — a missing helper costs precision, never the pass
         _log(f'[caption] caption_fields unavailable, counting whole captions: '
              f'{type(e).__name__}: {e}')

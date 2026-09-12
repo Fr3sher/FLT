@@ -19,4 +19,30 @@ def model_download_spec(action):
     operation = getattr(host, 'model_download_spec', None)
     return operation(action) if operation else host._MODEL_DOWNLOADS[action]
 
-__all__ = ['AlreadyRunning', 'resolve_install_folder', 'known_action', 'start', 'model_download_spec']
+
+def missing_modules(names):
+    """API 1.20: inspect top-level Python module presence without importing it.
+
+    This is a presence hint, not proof that native libraries can load. Dotted
+    names are rejected because find_spec may import their parent package.
+    """
+    import importlib.util
+    import re
+    if not isinstance(names, (tuple, list)) or len(names) > 64:
+        raise ValueError('Expected up to 64 top-level Python module names.')
+    if any(not isinstance(name, str) or not re.fullmatch(r'[A-Za-z_]\w*', name, re.ASCII)
+           for name in names):
+        raise ValueError('Expected top-level Python module names, not paths or submodules.')
+    missing = []
+    for name in names:
+        try:
+            found = importlib.util.find_spec(name) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            missing.append(name)
+    return missing
+
+
+__all__ = ['AlreadyRunning', 'resolve_install_folder', 'known_action', 'start', 'model_download_spec',
+           'missing_modules']
