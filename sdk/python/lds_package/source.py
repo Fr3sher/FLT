@@ -14,7 +14,8 @@ from packaging.utils import canonicalize_name
 from .common import PackageError, literals
 
 HOST_IMPORTS = {'flask': 'Flask', 'requests': 'requests', 'PIL': 'Pillow',
-                'sqlalchemy': 'SQLAlchemy', 'packaging': 'packaging', 'huggingface_hub': 'huggingface-hub'}
+                'sqlalchemy': 'SQLAlchemy', 'packaging': 'packaging', 'huggingface_hub': 'huggingface-hub',
+                'filelock': 'filelock'}
 
 
 def requirements(text: str, where: str):
@@ -50,10 +51,15 @@ class HostSource:
                 parts.pop()
             module = '.'.join(['lds_sdk', *parts])
             exports = literals(path).get('__all__')
-            if isinstance(exports, list) and all(isinstance(v, str) and not v.startswith('_') for v in exports):
+            if isinstance(exports, list) and all(isinstance(v, str) and v.isidentifier() for v in exports):
                 self.sdk[module] = set(exports)
         if 'lds_sdk' not in self.sdk:
             raise PackageError('--lds-source must provide the public Python SDK')
+        for module in tuple(self.sdk):
+            parent = module.rpartition('.')[0]
+            while parent:
+                self.sdk.setdefault(parent, set())
+                parent = parent.rpartition('.')[0]
         self.sdk_version = literals(self.root / 'backend/lds_sdk/__init__.py').get('VERSION')
         if self.sdk_version is None:
             # The public SDK derives VERSION from these host constants. Read

@@ -102,6 +102,15 @@ def literals(path: Path):
     for node in tree.body:
         if isinstance(node, ast.Assign):
             value = node.value
+            if (any(isinstance(target, ast.Name) and target.id == '__all__' for target in node.targets)
+                    and isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                    and value.func.id == 'list' and len(value.args) == 1 and not value.keywords
+                    and isinstance(value.args[0], ast.Name)
+                    and isinstance(values.get(value.args[0].id), dict)):
+                # Public lazy adapters name their exports with list(_EXPORTS).
+                # Only a previously read literal mapping is accepted; no calls run.
+                values['__all__'] = list(values[value.args[0].id])
+                continue
             if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == 'frozenset':
                 value = value.args[0]
             try:

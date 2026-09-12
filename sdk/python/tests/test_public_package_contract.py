@@ -73,3 +73,45 @@ def test_authoring_stays_out_and_the_declared_wheel_stays_exact(source, host):
     assert 'authoring' in result.excluded
     assert not any(path.startswith('authoring/') for path in result.files)
     assert result.files[name] == data
+
+
+@pytest.mark.parametrize('exports', [
+    "__all__ = ['visible', '_compat']",
+    "_EXPORTS = {'visible': ('app.public', 'visible'), '_compat': ('app.public', '_compat')}\n"
+    "__all__ = list(_EXPORTS)",
+])
+def test_explicit_sdk_exports_are_static_and_keep_undeclared_names_private(source, host, exports):
+    (host / 'backend/lds_sdk/adapter.py').write_text(
+        exports + "\nraise AssertionError('SDK code must never run')\n", encoding='utf-8')
+    entry = source / 'example_camera/__init__.py'
+    entry.write_text('from lds_sdk.adapter import visible, _compat\n', encoding='utf-8')
+    assert validate(source, lds_source=host).manifest['id'] == 'example.camera'
+    entry.write_text('from lds_sdk.adapter import hidden\n', encoding='utf-8')
+    with pytest.raises(PackageError, match='non-public SDK'):
+        validate(source, lds_source=host)
+
+
+def test_filelock_requires_an_unconditional_host_requirement(source, host):
+    (source / 'example_camera/__init__.py').write_text('from filelock import FileLock\n', encoding='utf-8')
+    with pytest.raises(PackageError, match='not guaranteed'):
+        validate(source, lds_source=host)
+    path = host / 'backend/requirements.txt'
+    original = path.read_text(encoding='utf-8')
+    path.write_text(original + 'filelock==3.32.5\n', encoding='utf-8')
+    assert validate(source, lds_source=host).dependencies['host_dependencies'] == {'filelock': '==3.32.5'}
+    path.write_text(original + 'filelock==3.32.5; sys_platform == "win32"\n', encoding='utf-8')
+    with pytest.raises(PackageError, match='not guaranteed'):
+        validate(source, lds_source=host)
+
+
+def test_public_sdk_submodules_allow_namespace_imports_without_granting_hidden_names(source, host):
+    namespace = host / 'backend/lds_sdk/adapters'
+    namespace.mkdir()
+    (namespace / '__init__.py').write_text('"""Public namespace."""\n', encoding='utf-8')
+    (namespace / 'camera.py').write_text("__all__ = ['probe']\n", encoding='utf-8')
+    entry = source / 'example_camera/__init__.py'
+    entry.write_text('from lds_sdk.adapters import camera\ncamera.probe()\n', encoding='utf-8')
+    assert validate(source, lds_source=host).manifest['id'] == 'example.camera'
+    entry.write_text('from lds_sdk.adapters import hidden\n', encoding='utf-8')
+    with pytest.raises(PackageError, match='non-public SDK'):
+        validate(source, lds_source=host)

@@ -23,6 +23,11 @@ executing the SDK. `--js-tools DIRECTORY` or `LDS_PLUGIN_JS_TOOLS` can select an
 existing trusted directory containing `node_modules/acorn`; the default is
 `sdk/python`. Missing parser tooling is an error, not a skipped check.
 
+Public Python exports come from a literal `__all__` list or the lazy-adapter
+form `__all__ = list(_EXPORTS)` with a literal mapping. An explicitly exported
+compatibility name can begin with an underscore; undeclared names and private
+attributes remain refused. The adapter never executes an export expression.
+
 ## Stage, build, validate, pack
 
 Create a new staging directory outside the source. Copy the manifest, licence,
