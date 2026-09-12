@@ -93,7 +93,9 @@ def civitai_link_create():
     key = cp.api_key()
     if not key:
         return _fail(_NO_KEY)
-    d = request.get_json(silent=True) or {}
+    d = request.get_json(silent=True)
+    if not isinstance(d, dict):
+        return jsonify({'ok': False, 'error': 'Expected a JSON object.', 'error_code': 'invalid'}), 400
     try:
         record_id, step = int(d.get('record_id')), int(d.get('step'))
     except (TypeError, ValueError):
@@ -138,7 +140,9 @@ def civitai_publish_model(record_id, step):
     key = cp.api_key()
     if not key:
         return _fail(_NO_KEY)
-    form = request.get_json(silent=True) or {}
+    form = request.get_json(silent=True)
+    if not isinstance(form, dict):
+        return jsonify({'ok': False, 'error': 'Expected a JSON object.', 'error_code': 'invalid'}), 400
     filename = form.get('filename') or None
     hint = form.get('checkpoint') or None
     try:
@@ -170,7 +174,9 @@ def civitai_publish_images():
     key = cp.api_key()
     if not key:
         return _fail(_NO_KEY)
-    d = request.get_json(silent=True) or {}
+    d = request.get_json(silent=True)
+    if not isinstance(d, dict):
+        return jsonify({'ok': False, 'error': 'Expected a JSON object.', 'error_code': 'invalid'}), 400
     ids = d.get('image_ids')
     if not isinstance(ids, list) or not ids:
         return jsonify({'ok': False, 'error': 'image_ids must be a non-empty list'}), 400
