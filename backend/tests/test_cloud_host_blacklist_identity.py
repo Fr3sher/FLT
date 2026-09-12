@@ -18,6 +18,9 @@ import pytest
 # Reused rather than re-created: the launch suite already owns the fixture that
 # seeds a trainable dataset.
 from tests.test_cloud_training_launch import seeded_dataset  # noqa: F401
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 # Stand-ins for the two hosts of the incident. The real ids and address are
 # deliberately NOT here: a public repo is no place for a third party's machine
@@ -30,7 +33,7 @@ SHARED_IP = '203.0.113.38'
 
 @pytest.fixture()
 def ct(app, monkeypatch):
-    from app.services import cloud_training
+    from lds_cloud_training import cloud_training
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     return cloud_training
 
@@ -159,7 +162,7 @@ def test_provision_stamps_every_identity_the_offer_carried(ct, app, seeded_datas
 def test_search_offers_forwards_the_host_identity_fields(monkeypatch):
     """vast_client used to drop host_id and public_ipaddr during the remap, so
     no later layer could ever see them."""
-    from app.services import vast_client
+    from lds_cloud_training import vast_client
 
     class _Resp:
         status_code = 200
@@ -178,7 +181,7 @@ def test_search_offers_forwards_the_host_identity_fields(monkeypatch):
 
 
 def test_an_offer_missing_the_new_fields_degrades_to_none(monkeypatch):
-    from app.services import vast_client
+    from lds_cloud_training import vast_client
 
     class _Resp:
         status_code = 200

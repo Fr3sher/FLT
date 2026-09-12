@@ -4,6 +4,19 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
+
+# Provider identity records are independent of the local database rows.
+_POD_IDS = {
+    'available': '91001', 'pending': '91002', 'stray': '91003',
+    'integrity': '91004', 'late': '91005', 'cleanup-retry': '91006',
+    'expired': '91007', 'already-absent': '91008', 'unknown-presence': '91009',
+    'timeout': '91010', 'already-live': '91011',
+}
+_PROVIDER_PODS = {iid: {'instance_id': iid, 'label': 'lds-' + iid}
+                  for iid in _POD_IDS.values()}
 
 
 class _FakeHfApi:
@@ -106,7 +119,7 @@ class _FakeHfApi:
 
 
 @pytest.fixture()
-def ct(app, monkeypatch):
+def ct(app, monkeypatch, tmp_path):
     monkeypatch.setenv('VAST_API_KEY', 'vast-test')
     monkeypatch.setenv('HF_TOKEN', 'hf-general-must-not-reach-dense')
     monkeypatch.setenv('HF_CLOUD_TOKEN', 'hf-cloud-secret-x')
@@ -119,13 +132,16 @@ def ct(app, monkeypatch):
     monkeypatch.setattr(storage_locations, 'free_space',
                         lambda path: {'free_bytes': 4 * 1000 ** 4,
                                       'total_bytes': 8 * 1000 ** 4})
-    from app.services import cloud_training
+    from lds_cloud_training import cloud_training
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     monkeypatch.setattr(cloud_training, '_reconcile_before_launch', lambda *a, **k: None)
     monkeypatch.setattr(cloud_training.lt, 'assert_trainable', lambda *a, **k: None)
     monkeypatch.setattr(cloud_training.lt, 'default_steps', lambda *a, **k: 800)
     monkeypatch.setattr(cloud_training, '_assert_official_base_reachable',
                         lambda *a, **k: None)
+    monkeypatch.setattr(cloud_training, '_make_hf_api', lambda token: _FakeHfApi(tmp_path))
+    monkeypatch.setattr(cloud_training.vast_client, 'get_instance',
+                        lambda iid, **_kw: _PROVIDER_PODS.get(str(iid)))
     return cloud_training
 
 
@@ -247,7 +263,7 @@ class _FullAccountHfApi(_FakeHfApi):
 
 def _hub_only(monkeypatch):
     """Force the historical Hugging-Face-only delivery for one test."""
-    from app import config as cfg
+    from lds_sdk.cloud_host import config as cfg
     cloud = dict(cfg.get('cloud') or {})
     dense = dict(cloud.get('full_transformer') or {})
     dense['delivery'] = 'hub'
@@ -409,17 +425,19 @@ def test_full_profile_is_applied_to_offers_and_provisioning(
         lambda **kwargs: searches.append(kwargs) or offers)
     monkeypatch.setattr(
         ct.vast_client, 'create_instance',
-        lambda offer_id, **kwargs: creates.append((offer_id, kwargs)) or 'pod-1')
+        lambda offer_id, **kwargs: creates.append((offer_id, kwargs)) or '9001')
     monkeypatch.setattr(ct, '_register_instance', lambda *a, **k: None)
 
     with app.app_context():
         tiers = ct.gpu_tiers(
             'local', dataset_id, train_type='krea', variant='base', steps=500,
             training_mode='full_transformer')
-        run = SimpleNamespace(
+        run = ct.CloudTrainingRun(
+            dataset_id=dataset_id, status='preparing', job_name='Krea_profile',
             train_params=json.dumps({'training_mode': 'full_transformer',
-                                     'train_type': 'krea'}),
-            vast_label='lds-dense')
+                                     'train_type': 'krea'}))
+        ct.db.session.add(run)
+        ct.db.session.commit()
         ct._provision(run)
 
     assert tiers['training_mode'] == 'full_transformer'
@@ -597,13 +615,14 @@ def test_dense_completion_is_fail_closed_and_keeps_unverified_pods(
     destroyed = []
     monkeypatch.setattr(
         ct.vast_client, 'destroy_instance',
-        lambda instance_id: destroyed.append(instance_id) or True)
+        lambda instance_id, **_kw: destroyed.append(instance_id) or True)
     monkeypatch.setattr(ct, '_sleep', lambda *_: None)
 
     def make_run(suffix):
         run = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='training', run_name=suffix,
-            job_name=f'Krea_{suffix}', vast_instance_id=f'pod-{suffix}',
+            job_name=f'Krea_{suffix}', vast_instance_id=_POD_IDS[suffix],
+            vast_label='lds-' + _POD_IDS[suffix],
             train_params=json.dumps({
                 'training_mode': 'full_transformer',
                 'artifact_kind': 'full_transformer',
@@ -621,7 +640,7 @@ def test_dense_completion_is_fail_closed_and_keeps_unverified_pods(
             available, _api=_FakeHfApi(
                 tmp_path, ['Krea_available_final.safetensors']))
         assert available.status == 'done'
-        assert destroyed == ['pod-available']
+        assert destroyed == ['91001']
 
         pending = make_run('pending')
         pending_api = _FakeHfApi(
@@ -630,7 +649,7 @@ def test_dense_completion_is_fail_closed_and_keeps_unverified_pods(
         assert pending.status == 'error_pod_kept'
         assert ct._run_param(pending, 'artifact_status') == 'verification_pending'
         assert len(pending_api.list_calls) == 3
-        assert destroyed == ['pod-available']
+        assert destroyed == ['91001']
 
         stray = make_run('stray')
         ct._complete_full_transformer_delivery(
@@ -638,7 +657,7 @@ def test_dense_completion_is_fail_closed_and_keeps_unverified_pods(
                 tmp_path, ['model/not-this-job.safetensors']))
         assert stray.status == 'error_pod_kept'
         assert ct._run_param(stray, 'artifact_status') == 'missing'
-        assert destroyed == ['pod-available']
+        assert destroyed == ['91001']
 
 
 @pytest.mark.parametrize('size', [0, 1024 * 1024])
@@ -647,7 +666,7 @@ def test_empty_or_truncated_dense_weight_never_releases_pod(
     destroyed = []
     monkeypatch.setattr(
         ct.vast_client, 'destroy_instance',
-        lambda instance_id: destroyed.append(instance_id) or True)
+        lambda instance_id, **_kw: destroyed.append(instance_id) or True)
     filename = 'model/Krea_integrity_final.safetensors'
     api = _FakeHfApi(
         tmp_path, [filename], file_sizes={filename: size})
@@ -655,7 +674,7 @@ def test_empty_or_truncated_dense_weight_never_releases_pod(
     with app.app_context():
         run = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='training', run_name='integrity',
-            job_name='Krea_integrity', vast_instance_id='pod-integrity',
+            job_name='Krea_integrity', vast_instance_id='91004', vast_label='lds-91004',
             train_params=json.dumps({
                 'training_mode': 'full_transformer',
                 'artifact_status': 'pending',
@@ -677,14 +696,14 @@ def test_late_hf_propagation_is_reconciled_and_releases_pod(
     destroyed = []
     monkeypatch.setattr(
         ct.vast_client, 'destroy_instance',
-        lambda instance_id: destroyed.append(instance_id) or True)
+        lambda instance_id, **_kw: destroyed.append(instance_id) or True)
     api = _FakeHfApi(tmp_path)
 
     with app.app_context():
         run = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='error_pod_kept',
             run_name='late', job_name='Krea_late',
-            vast_instance_id='pod-late', finished_at=ct.naive_utcnow(),
+            vast_instance_id='91005', vast_label='lds-91005', finished_at=ct.naive_utcnow(),
             train_params=json.dumps({
                 'training_mode': 'full_transformer',
                 'artifact_status': 'verification_pending',
@@ -710,7 +729,7 @@ def test_late_hf_propagation_is_reconciled_and_releases_pod(
         assert run.status == 'done'
         assert ct._run_param(run, 'artifact_status') == 'available'
         assert ct._run_param(run, 'hf_artifact_proof')['size_bytes'] >= 8 * 1024 ** 3
-        assert destroyed == ['pod-late']
+        assert destroyed == ['91005']
 
 
 def test_verified_delivery_stays_visible_and_retries_cleanup_until_confirmed(
@@ -719,7 +738,7 @@ def test_verified_delivery_stays_visible_and_retries_cleanup_until_confirmed(
     outcomes = iter([False, RuntimeError('vast-secret-diagnostic'), True])
     destroyed = []
 
-    def destroy(instance_id):
+    def destroy(instance_id, **_kw):
         destroyed.append(instance_id)
         outcome = next(outcomes)
         if isinstance(outcome, Exception):
@@ -736,7 +755,7 @@ def test_verified_delivery_stays_visible_and_retries_cleanup_until_confirmed(
         run = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='error_pod_kept',
             run_name='cleanup-retry', job_name='Krea_cleanup_retry',
-            vast_instance_id='pod-cleanup-retry',
+            vast_instance_id='91006', vast_label='lds-91006',
             finished_at=ct.naive_utcnow(),
             train_params=json.dumps({
                 'training_mode': 'full_transformer',
@@ -788,7 +807,7 @@ def test_verified_delivery_stays_visible_and_retries_cleanup_until_confirmed(
         assert run.error is None
         assert ct._run_param(run, 'artifact_status') == 'available'
         assert ct._run_param(run, 'artifact_cleanup_status') == 'complete'
-        assert destroyed == ['pod-cleanup-retry'] * 3
+        assert destroyed == ['91006'] * 3
 
 
 def test_supervisor_periodically_reaps_expired_verified_cleanup_and_retries(
@@ -803,16 +822,16 @@ def test_supervisor_periodically_reaps_expired_verified_cleanup_and_retries(
         ct, 'reconcile_full_transformer_deliveries', lambda: [])
     monkeypatch.setattr(
         ct.vast_client, 'list_instances',
-        lambda: [{'instance_id': 'pod-expired', 'label': f'lds-{run_id}'}])
+        lambda **_kw: [dict(_PROVIDER_PODS['91007'])])
     monkeypatch.setattr(
         ct.vast_client, 'destroy_instance',
-        lambda instance_id: destroyed.append(instance_id) or next(outcomes))
+        lambda instance_id, **_kw: destroyed.append(instance_id) or next(outcomes))
 
     with app.app_context():
         run = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='error_pod_kept',
             run_name='expired', job_name='Krea_expired',
-            vast_instance_id='pod-expired', finished_at=ct.naive_utcnow(),
+            vast_instance_id='91007', vast_label='lds-91007', finished_at=ct.naive_utcnow(),
             train_params=json.dumps({
                 'training_mode': 'full_transformer',
                 'artifact_kind': 'full_transformer',
@@ -837,7 +856,7 @@ def test_supervisor_periodically_reaps_expired_verified_cleanup_and_retries(
     # First expired pass cannot confirm destruction, so the row stays
     # retryable and the already-verified model remains visible.
     ct._supervisor_tick(app, reap_orphans=True)
-    assert destroyed == ['pod-expired']
+    assert destroyed == ['91007']
     with app.app_context():
         run = ct.db.session.get(ct.CloudTrainingRun, run_id)
         assert run.status == 'error_pod_kept'
@@ -846,7 +865,7 @@ def test_supervisor_periodically_reaps_expired_verified_cleanup_and_retries(
 
     # A later tick retries, confirms cleanup, and only then publishes done.
     ct._supervisor_tick(app, reap_orphans=True)
-    assert destroyed == ['pod-expired', 'pod-expired']
+    assert destroyed == ['91007', '91007']
     with app.app_context():
         run = ct.db.session.get(ct.CloudTrainingRun, run_id)
         assert run.status == 'done'
@@ -855,19 +874,20 @@ def test_supervisor_periodically_reaps_expired_verified_cleanup_and_retries(
         assert ct._run_param(run, 'artifact_cleanup_status') == 'complete'
 
 
-def test_reconcile_marks_legacy_verified_cleanup_done_when_listing_proves_absence(
-        ct, app, dataset_id, monkeypatch):
-    monkeypatch.setattr(ct.vast_client, 'list_instances', lambda: [])
+@pytest.mark.parametrize('prior_delete', [False, True])
+def test_reconcile_requires_prior_delete_before_retrying_an_absent_verified_pod(
+        ct, app, dataset_id, monkeypatch, prior_delete):
+    destroyed = []
+    monkeypatch.setattr(ct.vast_client, 'list_instances', lambda **_kw: [])
     monkeypatch.setattr(
         ct.vast_client, 'destroy_instance',
-        lambda *_: (_ for _ in ()).throw(
-            AssertionError('an absent pod must not be destroyed again')))
+        lambda iid, **_kw: destroyed.append(iid) or True)
 
     with app.app_context():
         run = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='error_pod_kept',
             run_name='already-absent', job_name='Krea_already_absent',
-            vast_instance_id='pod-already-absent',
+            vast_instance_id='91008', vast_label='lds-91008',
             finished_at=ct.naive_utcnow(),
             train_params=json.dumps({
                 'training_mode': 'full_transformer',
@@ -879,15 +899,28 @@ def test_reconcile_marks_legacy_verified_cleanup_done_when_listing_proves_absenc
         ct.db.session.add(run)
         ct.db.session.commit()
         run_id = run.id
+        if prior_delete:
+            # Reconstruct the durable pre-DELETE boundary of a previous process.
+            ct._bind_observed_legacy(
+                run, ct.vast_client.capture_credentials(), _PROVIDER_PODS['91008'])
+            ct._save_rental_identity(
+                run, dict(ct._rental_identity(run), delete_pending=True))
 
-    assert ct.reconcile_orphans(app) == 0
+    monkeypatch.setattr(ct.vast_client, 'get_instance', lambda *_a, **_kw: None)
+    assert ct.reconcile_orphans(app) == int(prior_delete)
+    assert destroyed == (['91008'] if prior_delete else [])
     with app.app_context():
         run = ct.db.session.get(ct.CloudTrainingRun, run_id)
+        if not prior_delete:
+            assert run.status == 'error_pod_kept'
+            assert ct._run_param(run, 'artifact_status') == 'available'
+            assert ct._run_param(run, 'artifact_cleanup_status') != 'complete'
+            return
         assert run.status == 'done'
         assert run.error is None
         assert ct._run_param(run, 'artifact_status') == 'available'
         assert ct._run_param(run, 'artifact_cleanup_status') == 'complete'
-        assert 'listing confirmed' in ct._run_param(
+        assert 'termination confirmed by reconciliation' in ct._run_param(
             run, 'artifact_cleanup_detail')
 
 
@@ -895,13 +928,13 @@ def test_reconcile_listing_failure_never_claims_verified_cleanup_complete(
         ct, app, dataset_id, monkeypatch):
     monkeypatch.setattr(
         ct.vast_client, 'list_instances',
-        lambda: (_ for _ in ()).throw(RuntimeError('listing unavailable')))
+        lambda **_kw: (_ for _ in ()).throw(RuntimeError('listing unavailable')))
 
     with app.app_context():
         run = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='error_pod_kept',
             run_name='unknown-presence', job_name='Krea_unknown_presence',
-            vast_instance_id='pod-unknown-presence',
+            vast_instance_id='91009', vast_label='lds-91009',
             finished_at=ct.naive_utcnow(),
             train_params=json.dumps({
                 'training_mode': 'full_transformer',
@@ -1136,21 +1169,22 @@ def test_dense_start_timeout_after_remote_side_effect_keeps_pod(
     monkeypatch.setattr(ct, '_make_remote', lambda run: remote)
     monkeypatch.setattr(
         ct.vast_client, 'get_instance',
-        lambda instance_id: {'actual_status': 'running'})
+        lambda instance_id, **_kw: {**_PROVIDER_PODS[str(instance_id)],
+                                      'actual_status': 'running'})
     monkeypatch.setattr(
         ct.vast_client, 'derive_base_url',
         lambda instance, port: 'https://dense-pod.invalid')
     monkeypatch.setattr(
         ct.vast_client, 'destroy_instance',
-        lambda instance_id: destroyed.append(instance_id) or True)
+        lambda instance_id, **_kw: destroyed.append(instance_id) or True)
     monkeypatch.setattr(ct.lt, 'build_job_config', lambda *a, **k: {})
     monkeypatch.setattr(ct, '_cloudify_job_config', lambda config, *a, **k: config)
 
     with app.app_context():
         run = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='preparing', run_name='timeout',
-            job_name='Krea_timeout', vast_label='lds-timeout',
-            vast_instance_id='pod-timeout', staging_dir=str(staging),
+            job_name='Krea_timeout',
+            vast_instance_id='91010', vast_label='lds-91010', staging_dir=str(staging),
             train_params=json.dumps({
                 'training_mode': 'full_transformer',
                 'train_type': 'krea', 'variant': 'base', 'steps': 500,
@@ -1168,7 +1202,7 @@ def test_dense_start_timeout_after_remote_side_effect_keeps_pod(
         assert stopped == ['remote-job']
         assert destroyed == []
         assert run.status == 'error_pod_kept'
-        assert run.vast_instance_id == 'pod-timeout'
+        assert run.vast_instance_id == '91010'
         assert 'timed out after remote side effect' in run.error
 
 
@@ -1193,13 +1227,14 @@ def test_already_live_job_db_failure_is_classified_post_start_and_keeps_pod(
     monkeypatch.setattr(ct, '_make_remote', lambda run: Remote())
     monkeypatch.setattr(
         ct.vast_client, 'get_instance',
-        lambda instance_id: {'actual_status': 'running'})
+        lambda instance_id, **_kw: {**_PROVIDER_PODS[str(instance_id)],
+                                      'actual_status': 'running'})
     monkeypatch.setattr(
         ct.vast_client, 'derive_base_url',
         lambda instance, port: 'https://dense-live.invalid')
     monkeypatch.setattr(
         ct.vast_client, 'destroy_instance',
-        lambda instance_id: destroyed.append(instance_id) or True)
+        lambda instance_id, **_kw: destroyed.append(instance_id) or True)
     original_set = ct._set
     failed = {'value': False}
 
@@ -1214,7 +1249,7 @@ def test_already_live_job_db_failure_is_classified_post_start_and_keeps_pod(
     with app.app_context():
         run = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='uploading', run_name='already-live',
-            job_name='Krea_already_live', vast_instance_id='pod-already-live',
+            job_name='Krea_already_live', vast_instance_id='91011', vast_label='lds-91011',
             remote_job_id='remote-already-live', staging_dir=str(staging),
             train_params=json.dumps({
                 'training_mode': 'full_transformer',
@@ -1250,7 +1285,7 @@ def test_supervisor_freeze_keeps_started_dense_pod(
     monkeypatch.setattr(ct, '_silent_seconds', lambda *a, **k: 2)
     monkeypatch.setattr(
         ct.vast_client, 'destroy_instance',
-        lambda instance_id: destroyed.append(instance_id) or True)
+        lambda instance_id, **_kw: destroyed.append(instance_id) or True)
 
     with app.app_context():
         run = ct.CloudTrainingRun(
@@ -1278,9 +1313,11 @@ def test_supervisor_freeze_keeps_started_dense_pod(
 
 def test_cloud_token_presence_is_exposed_but_value_never_is(
         client, monkeypatch):
-    from app.services import cloud_training
+    from app import capabilities
+    from lds_cloud_training import cloud_training
 
     secret = 'hf_cloud_SUPERSECRET_NEVER_SERIALIZE'
+    monkeypatch.setattr(capabilities, 'comfyui_runtime', lambda: {})
     monkeypatch.delenv('HF_CLOUD_TOKEN', raising=False)
     monkeypatch.setattr(
         cloud_training,
@@ -1292,11 +1329,11 @@ def test_cloud_token_presence_is_exposed_but_value_never_is(
         },
     )
     saved = client.put(
-        '/api/settings', json={'secrets': {'HF_CLOUD_TOKEN': secret}})
+        '/api/settings?plugin=cloud_training', json={'secrets': {'HF_CLOUD_TOKEN': secret}})
     assert saved.status_code == 200
     assert saved.get_json()['secrets']['HF_CLOUD_TOKEN'] is True
-    settings = client.get('/api/settings')
-    diagnostic = client.get('/api/diagnostic')
+    settings = client.get('/api/settings?plugin=cloud_training')
+    diagnostic = client.get('/api/diagnostic?plugin=cloud_training')
     assert settings.get_json()['secrets']['HF_CLOUD_TOKEN'] is True
     assert diagnostic.get_json()['secrets_present']['HF_CLOUD_TOKEN'] is True
     assert secret not in saved.get_data(as_text=True)
@@ -1396,7 +1433,7 @@ def test_dense_custom_base_rides_the_private_repo_to_the_pod(
     """The custom-base transport was already wired and mode-agnostic; what the
     dense lane could never obtain was the base_repo_id stamp. It can now."""
     from app.services import face_dataset_service as fds
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
 
     api = _FakeHfApi(tmp_path)
     monkeypatch.setattr(ct, '_make_hf_api', lambda token: api)

@@ -15,6 +15,9 @@ from app.extensions import db
 from app.utils.timestamps import naive_utcnow
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 # Verbatim tail of a real pod log (run 121, 2026-07-28): the download had been
 # frozen at 1.95G for 20 minutes while the card said 'fetching transformer
@@ -35,7 +38,11 @@ STEP_TAIL = ('lora_t:  50%|█████     | 1750/3500 '
 
 @pytest.fixture()
 def ct(app, monkeypatch):
-    from app.services import cloud_training
+    monkeypatch.setenv('VAST_API_KEY', 'k-test')
+    from lds_cloud_training import cloud_training
+    monkeypatch.setattr(cloud_training.vast_client, 'get_instance',
+                        lambda iid, **_kw: {'instance_id': '90001', 'label': 'lds-1'}
+                        if str(iid) == '90001' else None)
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     yield cloud_training
 
@@ -241,7 +248,7 @@ def test_the_freeze_watchdog_now_fires_across_a_restart(ct, app, tmp_path, monke
     even though updated_at was refreshed a second ago by a re-adoption."""
     destroyed = []
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(str(iid)) or True)
+                        lambda iid, **_kw: destroyed.append(str(iid)) or True)
     with app.app_context():
         run = _mkrun(ct, tmp_path, log=RUN121_TAIL,
                      updated_at=naive_utcnow() - timedelta(minutes=90))
