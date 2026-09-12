@@ -1,17 +1,13 @@
-// Optional backend-declared UI extensions. Every normal install gets an empty
-// manifest and this whole file is a no-op. Extensions may never break the app:
-// any failure here is swallowed after a console warning.
+// Deprecated one-cycle alias for callers of the old manifest. App boot uses
+// loadPlugins only; this adapter shares its script cache and never mounts twice.
+import { mountModuleScript } from '../plugins/moduleScripts.js'
 
 export function mountExtensionScripts(list, doc = document) {
   const mounted = []
   for (const ext of list || []) {
     if (!ext || !ext.frontend_entry) continue
-    const el = doc.createElement('script')
-    el.type = 'module'
-    el.src = ext.frontend_entry
-    el.dataset.extension = ext.name
-    doc.head.appendChild(el)
-    mounted.push(ext.name)
+    const { created } = mountModuleScript(ext.frontend_entry, doc, { extension: ext.name })
+    if (created) mounted.push(ext.name)
   }
   return mounted
 }

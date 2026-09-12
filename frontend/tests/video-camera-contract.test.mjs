@@ -15,10 +15,10 @@ import { dirname, join } from 'node:path'
 import {
   CAMERA_LABELS, CAMERA_OURS, CAMERA_HINTS, CAMERA_FACET_NOTE,
   cameraChips, filterByCamera, cameraBadge,
-} from '../src/components/videobank/videoCameraMotion.js'
-import { FLAG_LABELS, thresholdFields } from '../src/components/videobank/videoMetricsFilter.js'
-import { PASS_LABELS, PASS_RUNNING_LABELS, passLabel } from '../src/components/videobank/videoBankStatus.js'
-import { passBlockedBy } from '../src/components/videobank/videoCapability.js'
+} from "../../bundled/video/frontend/videobank/videoCameraMotion.js"
+import { FLAG_LABELS, thresholdFields } from "../../bundled/video/frontend/videobank/videoMetricsFilter.js"
+import { PASS_LABELS, PASS_RUNNING_LABELS, passLabel } from "../../bundled/video/frontend/videobank/videoBankStatus.js"
+import { passBlockedBy } from "../../bundled/video/frontend/lib/videoCapability.js"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const python = readFileSync(

@@ -13,10 +13,12 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Flag as FlagIcon } from 'lucide-react';
 import RepairDialog from '../shared/RepairDialog';
-import CameraAnglePicker from '../shared/CameraAnglePicker';
 import ImproveModal from '../shared/ImproveModal';
+import PluginSlot from '../../plugins/PluginSlot.jsx';
+import { contributionKey, createLayerTracker } from '../../plugins/layerTracker.js';
 import { generationMetaRows } from '../../utils/generationMetaFacts';
 import { lightboxImproveButtons } from '../../utils/improveEngines';
+import ImprovePreparationLinks from '../common/ImprovePreparationLinks';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import {
   decideActionPlacement, rememberImageRatio, readImageRatio,
@@ -169,11 +171,6 @@ export default function DatasetLightbox({
   onMirror,
   onRotate,
   onImprove,
-  /* 📷 Re-shoot this image from other camera positions. Optional like the rest,
-     and the CALLER decides eligibility (datasetCameraRefusal) — same pattern as
-     onImprove, so a picture that cannot take it simply shows no button. Results
-     land as pending candidates of this dataset, not as edits of this file. */
-  onCameraAngles,
   // Opens the watermark mask editor on THIS image, flagged or not. Optional like
   // the rest: a caller that does not pass it simply shows no button.
   onMarkWatermark,
@@ -243,7 +240,7 @@ export default function DatasetLightbox({
      slot the guarantee is structural: a foreign stamp yields a fresh state, so
      moving image closes the comparison with no reset effect to get right. */
   const {
-    full, compareMode, improving, actionsOpen, repairOpen, cameraOpen, improveOpen, deciding,
+    pluginLayer, full, compareMode, improving, actionsOpen, repairOpen, improveOpen, deciding,
   } = lightboxImageState(storedState, imageId);
   /* Which image is on screen when a setter actually RUNS — a ref, because the
      `finally` of an improve resolves long after the render that created its
@@ -257,6 +254,22 @@ export default function DatasetLightbox({
   const patchImageState = useCallback((patch) => {
     setStoredState((prev) => stampedPatch(prev, patch, imageId, currentIdRef.current));
   }, [imageId]);
+  // The plugin verbs' layers (lightbox.action), tracked PER contribution
+  // (plugins/layerTracker.js): one verb's "closed" must not erase another's
+  // open picker. The truth of "any layer open" lands on the image's own flag
+  // (`pluginLayer`), which the keydown handler reads like every other layer's.
+  const patchRef = useRef(patchImageState);
+  patchRef.current = patchImageState;
+  const pluginLayersRef = useRef(null);
+  if (!pluginLayersRef.current) {
+    pluginLayersRef.current = createLayerTracker((any) => patchRef.current({ pluginLayer: any }));
+  }
+  // The flag travels with the IMAGE (a fresh image opens with none), the
+  // tracker with the component: moving to another picture forgets the layers
+  // the previous one held, so the two never disagree (a refutation finding,
+  // 2026-09-05 — the plugin closes its picker on the same change; this does
+  // not rely on it).
+  useEffect(() => { pluginLayersRef.current.reset(); }, [imageId]);
   const nav = lightboxNeighbours(images, imageId);
   const canNavigate = !!onNavigate && nav.available;
   /* ── Reviewing, not just looking ──────────────────────────────────────────
@@ -396,13 +409,11 @@ export default function DatasetLightbox({
          zone. Escape-only was not enough: watermark review already returns on
          every key for the same reason, and the Bank does it for crop/mask. */
       if (repairOpen) return;
-      // 📷 The picker is a layer like ✦ Repair: while it is open, every key
-      // belongs to it — a stray R must not reject the picture behind the dial.
-      // Escape peels IT first, before the panel and before the lightbox.
-      if (cameraOpen) {
-        if (reviewKeyAction(e) === 'close') patchImageState({ cameraOpen: false });
-        return;
-      }
+      /* A verb a plugin contributes may open a layer of its own (a picker, a
+         dialog): while it is open every key belongs to it, exactly like ✦
+         Repair's — the plugin says so through the slot's onLayer, and the
+         flag travels with the image like every other layer's. */
+      if (pluginLayer) return;
       // ✨ Same rule for the improve modal: its own keys stay its own (the
       // modal stops them at its root); a stray key must not verdict the
       // image, and Escape peels the modal first.
@@ -435,8 +446,8 @@ export default function DatasetLightbox({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onNavigate, onStatus, decide, prev, nextImage, panelOpen, closePanel,
-    repairOpen, cameraOpen, improveOpen, patchImageState]);
+  }, [onClose, onNavigate, onStatus, decide, prev, nextImage, pluginLayer, panelOpen, closePanel,
+    repairOpen, improveOpen, patchImageState]);
   useEffect(() => { closeRef.current?.focus(); }, []);
   /* No "close the comparison when the image changes" effect on purpose: the id
      stamp above already guarantees it, for BOTH comparison modes, without a
@@ -838,20 +849,15 @@ export default function DatasetLightbox({
             </button>
           </Fragment>
         ))}
-        {/* 📷 With the improve group because it answers the same question from
-            the other side: ✨ makes THIS picture better, 📷 makes MORE pictures
-            of this scene. The results are new pending candidates, so the button
-            must not read as an edit of the file on screen — the title says
-            where they land. */}
-        {onCameraAngles && (
-          <button type="button" data-testid="dataset-camera-angles"
-            onClick={(e) => { e.stopPropagation(); patchImageState({ cameraOpen: true }); }}
+        {improveButtons.length > 0 && <ImprovePreparationLinks caps={caps} />}
+        {/* Verbs the plugins contribute to this lightbox (lightbox.action on
+            the dataset surface): a plugin renders its own button and any layer
+            it opens, and reports that layer through onLayer. */}
+        <span className="contents" data-testid="dataset-plugin-actions">
+          <PluginSlot slot="lightbox.action" surface="dataset" img={img} datasetId={datasetId}
             disabled={actionsLocked}
-            title="Re-shoot this scene from other camera positions — the views arrive as new pending candidates of this dataset, with the angle already in the caption"
-            className="min-h-10 lg:min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-indigo-400/50 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-100 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
-            <span aria-hidden>📷</span> Camera angles
-          </button>
-        )}
+            itemProps={(item) => ({ onLayer: pluginLayersRef.current.onLayerFor(contributionKey(item)) })} />
+        </span>
         {/* ⚙ What THIS generated image was made with — engine, base model,
             chained LoRAs, steps, seed… the stamp its generating lane wrote at
             enqueue (generation_meta). Folded by default: it is looked up, not
@@ -891,17 +897,6 @@ export default function DatasetLightbox({
         onClose={() => patchImageState({ repairOpen: false })}
         onSubmit={({ boxes, mask, prompt }) => onRepair(img.id, prompt, boxes, mask)}
         onUndo={onUndoRepair ? () => onUndoRepair(img.id) : null} />
-      {/* 📷 Above the lightbox (its z-index outranks this dialog's), so the
-          picture stays visible behind the dial while positions are chosen —
-          picking an angle of something you cannot see is guesswork. */}
-      {cameraOpen && onCameraAngles && (
-        <CameraAnglePicker
-          onClose={() => patchImageState({ cameraOpen: false })}
-          onShoot={async (poses) => {
-            const ok = await onCameraAngles(img.id, poses);
-            if (ok) patchImageState({ cameraOpen: false });
-          }} />
-      )}
       {/* ✨ The improve modal — the SAME shared dialog the unified viewer
           mounts, on this table's own routes. Settings on demand, result in
           place, and the candidate lands in this dataset's grid (which

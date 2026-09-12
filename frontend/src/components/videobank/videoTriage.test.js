@@ -5,7 +5,7 @@ import {
   TRIAGE_STATUSES, toggleSelection, selectRange, triagePayload, triageAllPayload,
   triageAllConfirmation, STATUS_FILTERS, statusFilterCount, emptyGridMessage,
   hasMore,
-} from './videoTriage.js'
+} from "../../../../bundled/video/frontend/videobank/videoTriage.js"
 
 // ---- THE footgun -------------------------------------------------------------
 

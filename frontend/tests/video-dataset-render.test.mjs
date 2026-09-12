@@ -35,11 +35,11 @@ import { createElement, render, renderToStaticMarkup } from './support/mountJsx.
 
 const { MemoryRouter } = await import('react-router')
 const { default: VideoDatasetGrid } =
-  await import('../src/components/videobank/VideoDatasetGrid.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoDatasetGrid.jsx")
 const { default: VideoDatasetLightbox } =
-  await import('../src/components/videobank/VideoDatasetLightbox.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoDatasetLightbox.jsx")
 const { default: VideoDatasetWorkspace } =
-  await import('../src/components/videobank/VideoDatasetWorkspace.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoDatasetWorkspace.jsx")
 const { ToastProvider } = await import('../src/components/common/Toast.jsx')
 
 const countTag = (html, tag) => (html.match(new RegExp(`<${tag}[\\s>]`, 'g')) || []).length
@@ -239,7 +239,7 @@ const railOf = (html) => railsOf(html).join('\n<!-- rail boundary -->\n')
 
 test('the rail really lists every visible section, and the anchors it points at exist', async () => {
   const { VIDEO_DATASET_SECTIONS } = await import(
-    '../src/components/videobank/videoDatasetSections.js')
+    "../../bundled/video/frontend/videobank/videoDatasetSections.js")
   const html = renderWorkspace({ ds: { ...DS, requires_references: true } })
   for (const [which, rail] of railsOf(html).entries()) {
     for (const section of VIDEO_DATASET_SECTIONS) {

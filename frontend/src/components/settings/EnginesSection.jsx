@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react'
-import { INPUT_CLASS, Card, SecretField } from './primitives'
+import { CORE_ENGINE_CATALOG, engineSettingsOptions } from '../../engines/catalog.js'
+import { useState } from 'react'
+import { INPUT_CLASS, Card } from './primitives'
 import { SettingsGroup, SettingsGroupsToc, useSettingsGroupProps } from './SettingsGroupsView'
 import { ENGINES_GROUPS } from './settingsGroups'
 import KleinLoraCombobox, { useKleinGenerationLoras } from './KleinLoraCombobox'
 import ModelFilePicker, { useModelFiles } from './ModelFilePicker'
-import ChatgptSubscriptionConnect from '../common/ChatgptSubscriptionConnect'
 import PromptOverrideField from '../common/PromptOverrideField'
 import PromptPreview from './PromptPreview'
 import ResetToDefault from './ResetToDefault'
 import { defaultValueAt } from './settingDefaults.js'
+import { resetEngineSelection } from './settingDefaults.js'
 import { kreaStrengthRange, KREA_LORA_STRENGTH_DEFAULT } from '../../utils/kreaGenerationLoras'
 import { isFixedLoraDuplicate, fixedLoraDuplicateWarning } from '../../utils/loraDuplicateGuard'
 import { kreaBaseNote, KREA_BASE_NOTE_CLASS } from '../../utils/kreaBaseNote'
@@ -29,26 +30,11 @@ import {
   GLOBAL_PROMPT_PART_FIELDS, SUBJECT_PROMPT_PART_FIELDS, FRAMING_PROMPT_PART_FIELDS,
 } from '../common/promptOverride.js'
 import { SUBJECT_TYPE_LABELS } from '../dataset/subjectTypes.js'
-import { laneForTarget } from '../setup/seedvr2Tiling.js'
 
-const ENGINE_SECRETS = [
-  { key: 'GEMINI_API_KEY', label: 'Gemini API key', testTarget: 'gemini', help: 'Powers the Nano Banana engine.' },
-  { key: 'OPENAI_API_KEY', label: 'OpenAI API key', testTarget: 'openai',
-    help: 'Powers the ChatGPT engine (gpt-image-2 by default). Optional if you connect a ChatGPT subscription below.' },
-  { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API key', testTarget: 'openrouter',
-    help: 'Powers the OpenRouter engine: one account and one balance in front of the same '
-      + 'upstream image models, including the ones the two engines above call directly. '
-      + 'Test only checks that a key is saved — OpenRouter bills per request, so nothing '
-      + 'is sent until you generate.' },
-]
-
-const ENGINE_OPTIONS = [
-  { id: 'nanobanana', label: 'Nano Banana (Gemini)' },
-  { id: 'chatgpt', label: 'ChatGPT (OpenAI)' },
-  { id: 'openrouter', label: 'OpenRouter' },
-  { id: 'klein', label: 'Klein (ComfyUI, local)' },
-  { id: 'krea', label: 'Krea 2 Edit (ComfyUI, local)' },
-]
+// The API engines' keys, models and lanes are their plugin's: it contributes a
+// settings group of its own (the `settings.group` slot, rendered after the
+// core's group below). The dropdown rows come from the catalog, API engines
+// first as always listed — read inside the component, at render time.
 
 /* Optional generation-LoRA PRESETS, originally for the local Klein engine
    (Idea by @waltm — Discord feature request) and now shared with the local
@@ -398,7 +384,7 @@ function KleinGenerationCard({ config, setField, configDefaults }) {
         <p className="mt-1 text-[0.6875rem] text-content-subtle">
           {shipped} = the shipped value. More steps = slower, usually cleaner; 1–{KLEIN_GENERATION_STEPS_MAX}.
           Applies to variations, regenerations and the small-image rescue — not to
-          “Upscale &amp; improve”, which has its own Steps below.
+          the optional Improve &amp; upscale plug-in, which owns its own Steps.
         </p>
         <ResetToDefault label="Generation steps" section="klein" field="generation_steps"
           config={config} configDefaults={configDefaults} setField={setField} />
@@ -423,7 +409,7 @@ function KleinGenerationCard({ config, setField, configDefaults }) {
           0.8, and until now nothing turned it down on an edit — it pulled results
           away from the instruction you typed. Raise it to add its detail on purpose.
           Applies to reference edits, variations, regenerations and the small-image
-          rescue — “Upscale &amp; improve” keeps its own Enhancement LoRA below.
+          rescue. The optional Improve &amp; upscale plug-in has a separate enhancement strength.
         </p>
         <ResetToDefault label="Enhancement LoRA on edits"
           section="klein" field="edit_base_lora_strength"
@@ -447,21 +433,6 @@ function KleinGenerationCard({ config, setField, configDefaults }) {
    token across every ComfyUI model root, so an install that looks nothing like
    the developer's works untouched — they exist for the person whose files are
    named something else. */
-
-// Mirror seedvr2_helper's clamps. The SERVER stays the authority (it re-clamps
-// every value), these only stop the input offering a number that would be
-// silently corrected.
-const SEEDVR2_RESOLUTION_MIN = 256
-const SEEDVR2_RESOLUTION_MAX = 4096
-const SEEDVR2_MAX_RESOLUTION_MAX = 8192
-const SEEDVR2_BLOCKS_MAX = 36
-// seedvr2_helper.TILE_PX_MIN / TILE_PX_MAX, and the factor the 'auto' crossover
-// is derived from (TILE_ABOVE_FACTOR) — shown, never enforced here.
-const SEEDVR2_TILE_MIN = 512
-const SEEDVR2_TILE_MAX = 2048
-const SEEDVR2_TILE_ABOVE_FACTOR = 1.5
-// seedvr2_helper.COLOR_CORRECTIONS — the node's own enum, in its own order.
-const SEEDVR2_COLOR_MODES = ['lab', 'wavelet', 'wavelet_adaptive', 'hsv', 'adain', 'none']
 
 function KreaCard({ config, setField, configDefaults, caps }) {
   const krea = config.krea || {}
@@ -765,493 +736,6 @@ function KreaHiresCard({ config, setField, configDefaults }) {
   )
 }
 
-/* SeedVR2 — the FIDELITY upscaler (issue #32, requested by SurpassHR).
-
-   It is not a generation engine and deliberately does not appear in the enabled-
-   engines list above: nothing in the variation catalog can be produced by it. It
-   is the OTHER way to run Upscale & improve — the one that resolves detail
-   without reinterpreting it — so its settings live next to the engines that feed
-   the same pass, not in a section of their own. */
-function SeedVr2Card({ config, setField, configDefaults, caps }) {
-  const svr = config.seedvr2 || {}
-  const improve = config.improve || {}
-  const reset = { config, configDefaults, setField }
-  const dflt = (key) => defaultValueAt(configDefaults, 'seedvr2', key)
-  const comfy = (caps && caps.comfyui) || {}
-  const ready = comfy.seedvr2_ready === true
-  const [models, setModels] = useState(null)
-  // Which builds are ON DISK — asked once per readiness change, never polled:
-  // it is a directory listing, and the card is not a monitor.
-  useEffect(() => {
-    let live = true
-    fetch('/api/seedvr2/models')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (live) setModels(d) })
-      .catch(() => { if (live) setModels(null) })
-    return () => { live = false }
-  }, [ready])
-  const installed = (models && models.installed) || []
-  const catalog = (models && models.catalog) || []
-  // Every file in the SEEDVR2 folder, split on whether its NAME looks like a
-  // VAE. The unlikely ones are still offered, in their own group and labelled:
-  // the pin exists for the install whose VAE is named something the automatic
-  // path cannot recognise, and hiding those files would leave that install with
-  // a picker it cannot use.
-  const vaeChoices = (models && models.vae_choices) || []
-  const vaeLikely = vaeChoices.filter((v) => v.likely_vae)
-  const vaeOther = vaeChoices.filter((v) => !v.likely_vae)
-  const tilePx = Number(svr.tile_px ?? dflt('tile_px')) || SEEDVR2_TILE_MIN
-  // What 'auto' will actually use as its crossover: the explicit threshold, or
-  // the tile side x1.5 — the same arithmetic the server does.
-  const tileAbove = Number(svr.tile_threshold ?? dflt('tile_threshold')) > 0
-    ? Number(svr.tile_threshold ?? dflt('tile_threshold'))
-    : Math.round(tilePx * SEEDVR2_TILE_ABOVE_FACTOR)
-  // ...and what that means for the target actually configured. The crossover is
-  // strict AND derived (1.5x the tile), so it lands exactly on round numbers
-  // people type — a target sitting on it ran whole with nothing said anywhere.
-  const laneLine = laneForTarget(svr.tiling ?? dflt('tiling'),
-    Number(svr.resolution ?? dflt('resolution')), tileAbove)
-  return (
-    <Card
-      id="seedvr2-engine"
-      title="SeedVR2 upscaling (local)"
-      help="The fidelity half of Upscale & improve. Klein re-renders detail from a prompt — sharper, but skin and colour can shift; SeedVR2 resolves detail at a higher resolution and leaves the original look alone. Pick it per batch from the bulk actions in the dataset workspace, or make it the default for the single-image pass below. It needs the ComfyUI-SeedVR2_VideoUpscaler node pack in ComfyUI plus two model files — Setup ▸ ComfyUI downloads the models and says what is missing."
-    >
-      <p className={ready ? 'text-[0.6875rem] text-emerald-300' : 'text-[0.6875rem] text-amber-300'}>
-        {ready
-          ? 'Ready — SeedVR2 appears in the workspace bulk actions.'
-          : 'Not ready yet. Setup ▸ ComfyUI lists what is missing and can download the weights; the node pack itself is installed from ComfyUI (search “SeedVR2” in ComfyUI-Manager), then restart ComfyUI.'}
-      </p>
-
-      <p className="mt-1 text-[0.6875rem] text-content-subtle">
-        <a href="https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler" target="_blank"
-          rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">Node pack →</a>
-        {' · '}
-        <a href="https://huggingface.co/numz/SeedVR2_comfyUI" target="_blank"
-          rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">Model weights →</a>
-        {' · '}
-        <a href="https://github.com/ByteDance-Seed/SeedVR" target="_blank"
-          rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">SeedVR2 by ByteDance-Seed →</a>
-        {' — all Apache-2.0.'}
-      </p>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="improve-engine" className="block text-xs font-medium text-content">
-          Default engine for Upscale &amp; improve
-        </label>
-        <select
-          id="improve-engine"
-          value={improve.engine ?? defaultValueAt(configDefaults, 'improve', 'engine')}
-          onChange={(e) => setField('improve', 'engine', e.target.value)}
-          className={INPUT_CLASS}
-        >
-          <option value="klein">Klein — re-renders detail (can shift skin and colour)</option>
-          <option value="seedvr2">SeedVR2 — resolves detail, keeps the original look</option>
-        </select>
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          Used by the button on a single tile and by ↻ Re-improve. Bulk runs always
-          state their engine on the button you press, so this never decides a batch
-          behind your back.
-        </p>
-        <ResetToDefault label="Default improve engine" section="improve" field="engine"
-          config={config} configDefaults={configDefaults} setField={setField} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="seedvr2-model" className="block text-xs font-medium text-content">
-          Model build (optional)
-        </label>
-        <select
-          id="seedvr2-model"
-          value={svr.model ?? ''}
-          onChange={(e) => setField('seedvr2', 'model', e.target.value)}
-          className={INPUT_CLASS}
-        >
-          <option value="">auto — the 3B FP8 build, or whatever is installed</option>
-          {installed.map((name) => <option key={name} value={name}>{name}</option>)}
-        </select>
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          Only builds already in your ComfyUI&rsquo;s <code>models/SEEDVR2</code> folder are
-          listed: the pack&rsquo;s loader downloads an unknown name on first use, and a
-          dropdown must not start a multi-gigabyte download. To use another build, put the
-          file in that folder — it then appears here.
-        </p>
-        {catalog.length > 0 && (
-          <ul className="mt-1 space-y-0.5 text-[0.6875rem] text-content-subtle">
-            {catalog.map((v) => (
-              <li key={v.file}>
-                {v.installed ? '✓' : '·'} <b>{v.label}</b> — {v.size_gb} GB, ~{v.vram_gb} GB
-                {' '}VRAM{v.recommended ? ' (recommended)' : ''}
-              </li>
-            ))}
-          </ul>
-        )}
-        <ResetToDefault label="Model build" section="seedvr2" field="model" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="seedvr2-vae" className="block text-xs font-medium text-content">
-          VAE build (optional)
-        </label>
-        <select
-          id="seedvr2-vae"
-          value={svr.vae ?? ''}
-          onChange={(e) => setField('seedvr2', 'vae', e.target.value)}
-          className={INPUT_CLASS}
-        >
-          <option value="">auto — ema_vae_fp16, or the first VAE in the folder</option>
-          {vaeLikely.map((v) => <option key={v.file} value={v.file}>{v.file}</option>)}
-          {vaeOther.length > 0 && (
-            <optgroup label="Other files in models/SEEDVR2 (not named like a VAE)">
-              {vaeOther.map((v) => <option key={v.file} value={v.file}>{v.file}</option>)}
-            </optgroup>
-          )}
-        </select>
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          Leave it on auto unless your VAE file is named something with no
-          &ldquo;vae&rdquo; in it — that is the only case the automatic search misses, and
-          the reason the second group above is offered at all. Picking a DiT build here
-          fails inside the loader node, so choose from that group only if you know the
-          file is a VAE.
-        </p>
-        <ResetToDefault label="VAE build" section="seedvr2" field="vae" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="seedvr2-tiling" className="block text-xs font-medium text-content">
-          High-resolution tiling
-        </label>
-        <select
-          id="seedvr2-tiling"
-          value={svr.tiling ?? dflt('tiling')}
-          onChange={(e) => setField('seedvr2', 'tiling', e.target.value)}
-          className={INPUT_CLASS}
-        >
-          <option value="auto">Tile when it helps (recommended)</option>
-          <option value="always">Always tile large frames</option>
-          <option value="never">Never tile</option>
-        </select>
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          Needs the <code>Comfyui_TTP_Toolset</code> node pack; without it this has no
-          effect. Tiling is not only about memory: a tile is upscaled at the size the
-          model works well at, so a large frame keeps far more fine detail than one
-          processed whole — contributed and measured by SurpassHR (GitHub&nbsp;#32).
-          On <b>Tile when it helps</b> nothing is tiled at or below {tileAbove} px on the
-          short edge: the model is already in its comfortable range there and a grid would
-          only add seams. <b>Always</b> tiles any frame bigger than one tile; pick{' '}
-          <b>never</b> if you ever see a seam.
-        </p>
-        {laneLine && (
-          <p className="mt-1 text-[0.6875rem] text-sky-300">{laneLine}</p>
-        )}
-        <ResetToDefault label="High-resolution tiling" section="seedvr2" field="tiling" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="seedvr2-tile-px" className="block text-xs font-medium text-content">
-          Tile size (px)
-        </label>
-        <input
-          id="seedvr2-tile-px"
-          type="number"
-          min={SEEDVR2_TILE_MIN}
-          max={SEEDVR2_TILE_MAX}
-          step={64}
-          value={svr.tile_px ?? dflt('tile_px')}
-          onChange={(e) => setField('seedvr2', 'tile_px',
-            e.target.value === '' ? dflt('tile_px') : Number(e.target.value))}
-          className={INPUT_CLASS}
-        />
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          The memory dial of this engine: a run holds one tile at a time, so
-          <b> lower it if upscales run out of VRAM</b> (768 or 512 on an 8 GB card) and
-          raise it on a big card for fewer seams and more context per tile.
-          {' '}{dflt('tile_px')} px is the contributed default. It also sizes the model&rsquo;s
-          own tiled encode/decode, so it helps even <i>without</i> the tiling node
-          pack — this is the one setting worth touching before giving up on a large upscale.
-        </p>
-        <ResetToDefault label="Tile size" section="seedvr2" field="tile_px" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="seedvr2-tile-threshold" className="block text-xs font-medium text-content">
-          Start tiling above (px on the short edge, 0 = automatic)
-        </label>
-        <input
-          id="seedvr2-tile-threshold"
-          type="number"
-          min={0}
-          max={SEEDVR2_MAX_RESOLUTION_MAX}
-          step={64}
-          value={svr.tile_threshold ?? dflt('tile_threshold')}
-          onChange={(e) => setField('seedvr2', 'tile_threshold',
-            e.target.value === '' ? dflt('tile_threshold') : Number(e.target.value))}
-          className={INPUT_CLASS}
-        />
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          Where <b>Tile when it helps</b> switches over. <b>0</b> (default) follows the tile
-          size — {SEEDVR2_TILE_ABOVE_FACTOR}&times; it, so {tilePx} px tiles start tiling
-          above {Math.round(tilePx * SEEDVR2_TILE_ABOVE_FACTOR)} px. Set a number to place
-          the crossover yourself: lower it to tile sooner (safer on a small card), raise it
-          to keep more targets in one fast pass. It has no effect on <b>always</b> or
-          <b> never</b>.
-        </p>
-        <ResetToDefault label="Start tiling above" section="seedvr2" field="tile_threshold" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="seedvr2-resolution" className="block text-xs font-medium text-content">
-          Target resolution (short edge, px)
-        </label>
-        <input
-          id="seedvr2-resolution"
-          type="number"
-          min={SEEDVR2_RESOLUTION_MIN}
-          max={SEEDVR2_RESOLUTION_MAX}
-          step={2}
-          value={svr.resolution ?? dflt('resolution')}
-          onChange={(e) => setField('seedvr2', 'resolution',
-            e.target.value === '' ? dflt('resolution') : Number(e.target.value))}
-          className={INPUT_CLASS}
-        />
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          The SHORT edge is scaled to this and the aspect ratio is kept, so 1080 on a 3:2
-          photo gives 1620&times;1080. LoRA training buckets rarely go above 1024&ndash;1280,
-          so higher mostly costs VRAM and time.
-        </p>
-        <ResetToDefault label="Target resolution" section="seedvr2" field="resolution" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="seedvr2-max-resolution" className="block text-xs font-medium text-content">
-          Maximum long edge (px, 0 = no limit)
-        </label>
-        <input
-          id="seedvr2-max-resolution"
-          type="number"
-          min={0}
-          max={SEEDVR2_MAX_RESOLUTION_MAX}
-          step={2}
-          value={svr.max_resolution ?? dflt('max_resolution')}
-          onChange={(e) => setField('seedvr2', 'max_resolution',
-            e.target.value === '' ? dflt('max_resolution') : Number(e.target.value))}
-          className={INPUT_CLASS}
-        />
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          The safety valve on a wide crop: at a 1080 short edge a 4:1 panorama becomes
-          4320 px across, which is where a run runs out of VRAM.
-        </p>
-        <ResetToDefault label="Maximum long edge" section="seedvr2" field="max_resolution" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="seedvr2-color" className="block text-xs font-medium text-content">
-          Colour correction
-        </label>
-        <select
-          id="seedvr2-color"
-          value={svr.color_correction ?? dflt('color_correction')}
-          onChange={(e) => setField('seedvr2', 'color_correction', e.target.value)}
-          className={INPUT_CLASS}
-        >
-          {SEEDVR2_COLOR_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          How the result is graded back onto the source&rsquo;s colours. <b>lab</b> is the
-          model&rsquo;s own default and the most conservative; <b>wavelet</b> holds broad tone
-          better on heavily degraded sources; <b>none</b> shows the raw output. Colour
-          fidelity is the reason this engine exists, so it is worth trying both ways on one
-          image before a big batch.
-        </p>
-        <ResetToDefault label="Colour correction" section="seedvr2" field="color_correction" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="seedvr2-swap" className="block text-xs font-medium text-content">
-          Blocks offloaded to system RAM
-        </label>
-        <input
-          id="seedvr2-swap"
-          type="number"
-          min={0}
-          max={SEEDVR2_BLOCKS_MAX}
-          step={1}
-          value={svr.blocks_to_swap ?? dflt('blocks_to_swap')}
-          onChange={(e) => setField('seedvr2', 'blocks_to_swap',
-            e.target.value === '' ? dflt('blocks_to_swap') : Number(e.target.value))}
-          className={INPUT_CLASS}
-        />
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          0 = none, and fastest. Raise it to fit a bigger build on a smaller card: it trades
-          speed for VRAM headroom and does not change the result.
-        </p>
-        <ResetToDefault label="Blocks offloaded" section="seedvr2" field="blocks_to_swap" {...reset} />
-      </div>
-
-      <p className="mt-3 text-[0.6875rem] text-content-subtle">
-        <b>No batch size here, on purpose.</b> SeedVR2&rsquo;s batch size is a <i>video</i> window
-        whose frames share attention to stay coherent — feeding it unrelated photos would let
-        them bleed into each other. Dataset images are upscaled one per job; the throughput
-        comes from the normal generation queue.
-      </p>
-    </Card>
-  )
-}
-
-/* The finishing pass — three pixel operations the APP runs on the ✨ improve
-   result, after ComfyUI is done with it.
-
-   Its own card rather than fields on the two engine cards above, because it is
-   one thing that happens once, to whichever engine ran. The reference workflow
-   these come from does them with three third-party node packs; doing them here
-   keeps the installer's rule intact (models, never node packs) and makes them
-   deterministic — no GPU, no model, no graph. */
-const IMPROVE_SHARPEN_MAX = 1.5
-const IMPROVE_GRAIN_MAX = 0.05
-// The values the reference workflow uses, shown as the "known-good" landing spot
-// rather than shipped as defaults — this ships off.
-const IMPROVE_REFERENCE = { colour_match: 0.8, sharpen: 0.55, grain: 0.01 }
-
-function ImproveFinishCard({ config, setField, configDefaults }) {
-  const improve = config.improve || {}
-  const reset = { config, configDefaults, setField }
-  const dflt = (key) => defaultValueAt(configDefaults, 'improve', key)
-  const num = (key) => Number(improve[key] ?? dflt(key)) || 0
-  const colour = num('colour_match')
-  const sharpen = num('sharpen')
-  const grain = num('grain')
-  const grainSat = num('grain_saturation')
-  const engine = improve.engine ?? dflt('engine')
-  const anyOn = colour > 0 || sharpen > 0 || grain > 0
-  return (
-    <Card
-      id="improve-finish"
-      title="Finishing pass (after Upscale &amp; improve)"
-      help="Three small operations applied to the finished image by the app, not by ComfyUI: put the source's colours back, sharpen the finest detail, and add a little film grain. They are what separate a render that looks processed from one that looks photographed. Nothing to install — no model, no GPU, no node pack. All three ship off; the image you get today is byte-for-byte the one ComfyUI wrote."
-    >
-      {!anyOn && (
-        <p className="rounded border border-border-subtle bg-surface-subtle px-2 py-1.5 text-[0.6875rem] text-content-subtle">
-          Every stage is off — the finished image is left exactly as ComfyUI wrote it.
-          The reference workflow this was ported from runs colour match{' '}
-          {IMPROVE_REFERENCE.colour_match}, sharpen {IMPROVE_REFERENCE.sharpen}, grain{' '}
-          {IMPROVE_REFERENCE.grain}.
-        </p>
-      )}
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="improve-colour-match" className="block text-xs font-medium text-content">
-          Put the source&rsquo;s colours back ({colour === 0 ? 'off' : colour})
-        </label>
-        <input
-          id="improve-colour-match"
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={colour}
-          onChange={(e) => setField('improve', 'colour_match', Number(e.target.value))}
-          className="mt-1 w-full accent-violet-500"
-        />
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          {engine === 'seedvr2' ? (
-            <>
-              Applies to the passes <b>Klein</b> ran — the engine is decided per pass
-              (the single-tile button starts on this default, the bulk buttons name
-              theirs), and a SeedVR2 pass skips this automatically: it already grades
-              its result back onto the source inside the node (Colour correction,
-              above), and doing it twice would be two corrections estimated from the
-              same statistics, fighting each other. {IMPROVE_REFERENCE.colour_match}{' '}
-              is the reference value; 1 forbids a Klein pass any colour change at all.
-            </>
-          ) : (
-            <>
-              A Klein improve keeps the content and loses the grade: skin warms or cools and
-              a dataset ends up holding two colour worlds depending on which images went
-              through. This measures the colours of the image as it was <b>before</b> the
-              pass and puts them back. {IMPROVE_REFERENCE.colour_match} is the reference
-              value; 1 forbids the pass any colour change at all.
-            </>
-          )}
-        </p>
-        <ResetToDefault label="Put the source's colours back" section="improve"
-          field="colour_match" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="improve-sharpen" className="block text-xs font-medium text-content">
-          Sharpen ({sharpen === 0 ? 'off' : sharpen})
-        </label>
-        <input
-          id="improve-sharpen"
-          type="range"
-          min={0}
-          max={IMPROVE_SHARPEN_MAX}
-          step={0.05}
-          value={sharpen}
-          onChange={(e) => setField('improve', 'sharpen', Number(e.target.value))}
-          className="mt-1 w-full accent-violet-500"
-        />
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          Local contrast at a 1&nbsp;px radius — the finest octave, the one diffusion leaves
-          empty — not a global sharpness slider. {IMPROVE_REFERENCE.sharpen} is the reference
-          value; past about 1 the halo starts reading as an outline.
-        </p>
-        <ResetToDefault label="Sharpen" section="improve" field="sharpen" {...reset} />
-      </div>
-
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="improve-grain" className="block text-xs font-medium text-content">
-          Film grain ({grain === 0 ? 'off' : grain})
-        </label>
-        <input
-          id="improve-grain"
-          type="range"
-          min={0}
-          max={IMPROVE_GRAIN_MAX}
-          step={0.002}
-          value={grain}
-          onChange={(e) => setField('improve', 'grain', Number(e.target.value))}
-          className="mt-1 w-full accent-violet-500"
-        />
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          Diffusion output is smooth in a way photographs are not — the model resolves
-          structure confidently and leaves the finest octave nearly empty. A very small
-          amount of noise refills it and the eye reads the result as a photograph.
-          The scale is deliberately tiny: {IMPROVE_REFERENCE.grain} is about ±2.5 levels of
-          an 8-bit image, seen as texture and never as noise.
-        </p>
-        <ResetToDefault label="Film grain" section="improve" field="grain" {...reset} />
-      </div>
-
-      {/* Not greyed on `grain === 0`: this dial also serves the Studio's PER-RUN
-          grain (the cell carries its own amount, the colour mix follows this
-          setting), so it has to stay editable while the improve pass's grain is
-          off. */}
-      <div className="mt-3 sm:max-w-md">
-        <label htmlFor="improve-grain-sat" className="block text-xs font-medium text-content">
-          How coloured that grain is ({grainSat})
-        </label>
-        <input
-          id="improve-grain-sat"
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={grainSat}
-          onChange={(e) => setField('improve', 'grain_saturation', Number(e.target.value))}
-          className="mt-1 w-full accent-violet-500"
-        />
-        <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          0 puts identical noise on the three channels, which is what film does and what
-          reads as grain. 1 makes each channel independent, which reads as sensor noise.
-        </p>
-        <ResetToDefault label="How coloured that grain is" section="improve"
-          field="grain_saturation" {...reset} />
-      </div>
-    </Card>
-  )
-}
-
 /* Krea's own always-on LoRA presets. Same shape as the Klein card — the two lanes
    are deliberate copies — with two differences that matter: the strength ceiling
    opens to 20 for utility LoRAs (the bypass ones do nothing below ~10), and the
@@ -1322,27 +806,11 @@ function KreaLorasCard({ config, setField }) {
 // were a hand-kept copy of config.DEFAULTS['klein'], and one of them (0 for the
 // consistency strength) had ALREADY drifted from the backend's 1.0. Both the
 // displayed value and "Reset to default" now read the server's `config_defaults`.
-const IMPROVE_KNOBS = [
-  { key: 'improve_megapixels', label: 'Output size (MP)',
-    min: 0.5, max: 8, step: 0.5,
-    hint: 'The result’s resolution.' },
-  { key: 'improve_base_lora_strength', label: 'Enhancement LoRA',
-    min: 0, max: 2, step: 0.05,
-    hint: '0 = off (the shipped behaviour). Try 0.5–0.8. Needs klein/realistic.safetensors.' },
-  // Drives klein.consistency_strength, which enqueue_klein_edit clamps to 1.5 — the
-  // UI must not offer a value the engine pulls back. It anchors COMPOSITION, not
-  // identity: it was mislabelled "Character LoRA" when these knobs first shipped.
-  { key: 'improve_consistency_strength', label: 'Consistency LoRA',
-    min: 0, max: 1.5, step: 0.05,
-    hint: 'Holds the composition and background. High values resist the edit.' },
-  { key: 'improve_steps', label: 'Steps',
-    min: 1, max: 50, step: 1, hint: 'More steps = slower, usually cleaner.' },
-]
+
 
 function IdentityPromptsCard({ config, setField, promptDefaults, promptDefaultsBySubject,
-                               setIdentityPrompts, configDefaults }) {
+                               setIdentityPrompts }) {
   const ip = config.identity_prompts || {}
-  const kleinDefault = (key) => defaultValueAt(configDefaults, 'klein', key)
   // Subject type being edited. This screen has NO dataset context, so without an
   // explicit picker it edited "the" identity prompt — which is exactly how an
   // animal-tuned lock ended up on human generations (ashish.sinha, Discord).
@@ -1351,7 +819,6 @@ function IdentityPromptsCard({ config, setField, promptDefaults, promptDefaultsB
   const defaults = (promptDefaultsBySubject || {})[subject] || promptDefaults || {}
   const set = (key, v) => setField('identity_prompts', key, v)
   const setPrompt = (key, v) => setIdentityPrompts((prev) => writeIdentityPrompt(prev, subject, key, v))
-  const improveEnabled = ip.klein_improve_enabled !== false
   return (
     <Card
       id="identity-prompts"
@@ -1482,235 +949,16 @@ function IdentityPromptsCard({ config, setField, promptDefaults, promptDefaultsB
 
       <PromptPreview subject={subject} identityPrompts={ip} />
 
-      <div className="border-t border-border pt-4">
-        {/* The second sentence is the honest half. The default asks for
-            PHOTOGRAPHIC detail, and the app does not vary it by subject type, so
-            on a drawn dataset it works against the anime lock every other prompt
-            here enforces. The default is deliberately left as-is — people have
-            calibrated their results on it — but saying nothing turned that into
-            "the tool ruins my anime" (Qeeyana, Reddit). */}
-        <p className="mb-2 text-xs text-content-subtle">
-          The prompt below is <strong>not</strong> per subject type — it asks for texture and
-          detail, which means the same thing for a person, a dog or a car.{' '}
-          <span className="text-amber-300">
-            It does <strong>not</strong> mean the same thing for a drawing: the built-in text asks for
-            photographic detail, so on an Anime dataset it pushes skin and fabric towards realism.
-            Rewrite it below, or untick the box above to upscale with no prompt at all.
-          </span>
-        </p>
-        <label htmlFor="identity-prompt-klein-improve-enabled" className="flex items-center gap-2 text-sm font-medium text-content">
-          <input
-            id="identity-prompt-klein-improve-enabled"
-            type="checkbox"
-            checked={improveEnabled}
-            onChange={(e) => set('klein_improve_enabled', e.target.checked)}
-            className="h-4 w-4 rounded border-border-strong"
-          />
-          Apply an improvement prompt on “Klein upscale &amp; improve”
-        </label>
-        <PromptOverrideField
-          id="identity-prompt-klein-improve"
-          label="Klein upscale & improve prompt"
-          desc="The fixed instruction the manual “Klein upscale & improve” action sends to add texture and detail. Turn the checkbox above off to upscale with no prompt at all (pure enhancement)."
-          rows={3}
-          value={ip.klein_improve}
-          defaultText={defaults.klein_improve}
-          onChange={(v) => set('klein_improve', v)}
-          disabled={!improveEnabled}
-          className="mt-2"
-        />
-        {!improveEnabled && (
-          <p className="mt-1 text-xs text-content-subtle">Disabled — no prompt is applied.</p>
-        )}
-        <p className="mt-3 text-xs text-content-subtle">
-          Separate from the scraper rescue prompt for small images — see Settings ▸ Scraping ▸ “Klein rescue — small scraped images”.
-        </p>
-      </div>
 
-      {/* The instruction above was already editable, but the knobs deciding how
-          much the pass actually changes were hardcoded — including both LoRA
-          strengths at 0, which meant the workflow's own realistic LoRA never
-          applied. Defaults here are those historical values. */}
-      {/* id spelled out literally: it is the deep-link target of the lightbox's
-          "Adjust improve strength →" link, and the contract tests find targets by
-          scanning this file for id="…". The BLOCK is the target, not one knob:
-          "strength" here is the four values together, and ringing the group is
-          the honest answer to what that label promises. */}
-      <div id="klein-improve-strength" className="scroll-mt-24 border-t border-border pt-4">
-        <h4 className="text-sm font-medium text-content">Upscale &amp; improve — strength</h4>
-        <p className="mt-1 mb-2 text-xs text-content-muted">
-          Output resolution, and how much the pass is allowed to change the image. All four
-          start at the values the action used before they were exposed, so leaving them alone
-          keeps today’s result.
-        </p>
-        <p className="mb-2 text-xs text-content-muted">
-          The <strong>enhancement LoRA</strong> needs its weights file
-          (<code>klein/realistic.safetensors</code>): without it that node is skipped and the
-          strength changes nothing. Setup downloads it with the other Klein assets — if the
-          slider seems to do nothing, run <strong>Install everything</strong> there first.
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {IMPROVE_KNOBS.map((k) => (
-            <div key={k.key}>
-              <label htmlFor={`klein-${k.key}`} className="block text-xs font-medium text-content">
-                {k.label}
-              </label>
-              <input
-                id={`klein-${k.key}`}
-                type="number"
-                min={k.min}
-                max={k.max}
-                step={k.step}
-                value={config.klein?.[k.key] ?? kleinDefault(k.key)}
-                onChange={(e) => setField('klein', k.key,
-                  e.target.value === '' ? kleinDefault(k.key) : Number(e.target.value))}
-                className={INPUT_CLASS}
-              />
-              <p className="mt-1 text-[0.6875rem] text-content-subtle">
-                {k.hint} Default {String(kleinDefault(k.key))}.
-              </p>
-              <ResetToDefault label={k.label} section="klein" field={k.key}
-                config={config} configDefaults={configDefaults} setField={setField} />
-            </div>
-          ))}
-        </div>
-      </div>
     </Card>
   )
 }
 
-/* One model field per API engine (feature request — the OpenRouter
-   engine shipped with a free-text model while Nano Banana and ChatGPT were
-   frozen to whatever the release hardcoded, overridable only by an environment
-   variable nobody could see from the app).
-
-   Free text on all three, deliberately: providers ship image models far faster
-   than this app ships releases, so a dropdown baked into a build would be stale
-   the day it landed and would lock people out of a model that works.
-
-   Blank = the historical default, so a field appearing changes nobody's result.
-   The resolution order is documented next to each backend engine:
-   setting > environment variable > built-in default — a NANOBANANA_MODEL /
-   CHATGPT_IMAGE_MODEL exported before these fields existed is still honoured and
-   is only overridden when someone actually types a slug here.
-
-   One card rather than three: the three fields answer the same question, and on
-   a phone three cards of one input each is a lot of scrolling for very little. */
-/* One field. `id` is spelled out literally at each call site on purpose: the
-   help-registry contract test scans these files for `id="…"` to prove every
-   help topic's focus anchor exists, and a template-built id would be invisible
-   to it (and to anyone grepping for the anchor). */
-function ModelField({ id, configKey, label, placeholder, config, setField, configDefaults, children }) {
-  return (
-    <div>
-      <label htmlFor={id} className="block text-sm font-medium text-content">{label}</label>
-      <input
-        id={id}
-        type="text"
-        spellCheck="false"
-        autoComplete="off"
-        autoCapitalize="off"
-        value={config.engines[configKey] ?? ''}
-        onChange={(e) => setField('engines', configKey, e.target.value)}
-        placeholder={placeholder}
-        className={INPUT_CLASS}
-      />
-      <p className="mt-1 text-xs text-content-muted">{children}</p>
-      {/* Two of these three default to BLANK — "let the engine pick", which also
-          keeps a pre-existing NANOBANANA_MODEL / CHATGPT_IMAGE_MODEL environment
-          variable in charge. Reset writes the shipped default back, so on those
-          two it empties the field instead of typing a slug in: it hands the
-          implicit state back rather than pinning today's model forever. */}
-      <ResetToDefault label={label} section="engines" field={configKey}
-        config={config} configDefaults={configDefaults} setField={setField} />
-    </div>
-  )
-}
-
-function ImageModelsCard({ config, setField, configDefaults }) {
-  const shared = { config, setField, configDefaults }
-  return (
-    <Card
-      id="engine-image-models"
-      title="Image models"
-      help="Which model each API engine asks for. Free text on purpose: providers publish new image models far faster than this app publishes releases, and a fixed menu would be out of date the day it shipped. Leave a field blank to keep the model the engine has always used — an empty field changes nothing about your results. All three must accept REFERENCE IMAGES: the dataset generator always sends your reference photos with the prompt, so a text-to-image-only model cannot work here; when a provider refuses one, the failed tile names the model and the provider's own reason instead of blaming your prompt, and the run stops rather than paying for the same refusal once per image."
-    >
-      <ModelField {...shared} id="engines-nanobanana_model" configKey="nanobanana_model"
-        label="Nano Banana (Gemini) model" placeholder="gemini-3-pro-image">
-        Blank = <code className="break-all">gemini-3-pro-image</code>, the model this engine has
-        always used. Any Gemini <strong>image</strong> model that accepts image input works —
-        browse them at{' '}
-        <a href="https://ai.google.dev/gemini-api/docs/models" target="_blank" rel="noreferrer"
-          className="text-primary underline">ai.google.dev</a>.
-      </ModelField>
-
-      <ModelField {...shared} id="engines-chatgpt_image_model" configKey="chatgpt_image_model"
-        label="ChatGPT (OpenAI) image model" placeholder="gpt-image-2">
-        Blank = <code className="break-all">gpt-image-2</code>, the model this engine has always
-        used — and the only current one usable <strong>without OpenAI organization
-        verification</strong>. Newer models (<code className="break-all">gpt-image-1.5</code>,{' '}
-        <code className="break-all">chatgpt-image-latest</code>) answer 403 until your OpenAI
-        organization is verified: if that happens your key is fine, the model is the problem.
-        Applies to the API-key lane — the ChatGPT <em>subscription</em> lane renders on whatever
-        image model your plan serves and ignores this field.
-      </ModelField>
-
-      <ModelField {...shared} id="engines-openrouter_model" configKey="openrouter_model"
-        label="OpenRouter model slug" placeholder="google/gemini-3-pro-image">
-        Blank = <code className="break-all">google/gemini-3-pro-image</code> — the same weights the
-        Nano Banana engine calls, so switching engine changes who bills you, not the picture.
-        Browse the list at{' '}
-        <a href="https://openrouter.ai/models?output_modalities=image" target="_blank" rel="noreferrer"
-          className="text-primary underline">openrouter.ai/models</a>.
-      </ModelField>
-      <p className="border-t border-border pt-3 text-xs text-content-subtle">
-        A model must accept your reference photos. One that only takes text will either be
-        refused — the tile then says which model and why — or quietly ignore the references and
-        return a picture of someone else, which no app can detect for you. If generated faces stop
-        looking like your subject after a model change, change it back.
-      </p>
-    </Card>
-  )
-}
-
-const CHATGPT_AUTH_OPTIONS = [
-  { id: 'auto', label: 'Auto — subscription when connected, otherwise API key' },
-  { id: 'api', label: 'API key only' },
-  { id: 'subscription', label: 'Subscription only' },
-]
-
-/* ChatGPT subscription (Codex OAuth) — EXPERIMENTAL lane. The device-code login
-   itself is ChatgptSubscriptionConnect (components/common): the Setup wizard's
-   image step offers the same connection, and two copies of an OAuth polling loop
-   would be two chances for them to drift. This card adds what only Settings has:
-   the auth-mode preference. */
-function ChatgptSubscriptionCard({ caps, config, setField, refreshCaps, toast, configDefaults }) {
-  return (
-    <Card
-      title="ChatGPT subscription (experimental)"
-      help="Run the ChatGPT engine on your ChatGPT Plus/Pro image quota instead of a pay-per-use API key. Undocumented lane — it may stop working if OpenAI closes it. Limits vs API mode: up to 5 reference images (instead of 16), your plan's daily image cap applies, SFW only."
-    >
-      <ChatgptSubscriptionConnect caps={caps} refreshCaps={refreshCaps} toast={toast} />
-
-      <div>
-        <label htmlFor="chatgpt-auth-mode" className="block text-sm font-medium text-content">ChatGPT engine auth</label>
-        <select
-          id="chatgpt-auth-mode"
-          value={config.engines.chatgpt_auth || 'auto'}
-          onChange={(e) => setField('engines', 'chatgpt_auth', e.target.value)}
-          className={INPUT_CLASS}
-        >
-          {CHATGPT_AUTH_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-        </select>
-        <p className="mt-1 text-xs text-content-muted">
-          When the subscription quota runs out mid-batch, remaining rows fail with a clear message — the app never silently switches to your paid API key.
-        </p>
-        <ResetToDefault label="ChatGPT engine auth" section="engines" field="chatgpt_auth"
-          config={config} configDefaults={configDefaults} setField={setField} />
-      </div>
-    </Card>
-  )
-}
+/* The API engines' cards — their keys, their models, their subscription
+   lane — moved to their plugin, which contributes them as a settings group of
+   its own (the `settings.group` slot). What stays here is the core's: which
+   engines are on and which one opens preselected, reading the catalog the
+   plugins fill. */
 
 /* The section is organised as a clickable SUMMARY plus collapsible groups —
    eleven flat cards had grown into a wall where API keys sat next to Klein
@@ -1722,24 +970,18 @@ function ChatgptSubscriptionCard({ caps, config, setField, refreshCaps, toast, c
    and deep-links keep working untouched: each group is
    a native <details>, which the ?focus= reveal already knows how to open. */
 export default function EnginesSection(props) {
-  const { config, setField, toggleEngine, caps, refreshCaps, toast, configDefaults } = props
-  const [group1, group2, group3, group4, group5, group6] = ENGINES_GROUPS
+  const { config, setField, toggleEngine, caps, configDefaults } = props
+  const [group1, group2, group3, group4, group6] = ENGINES_GROUPS
   const groupProps = useSettingsGroupProps('engines')
+  // The global default selects a run engine; each plugin owns its enabled toggles.
+  const engineOptions = engineSettingsOptions()
+  const coreEngineIds = new Set(CORE_ENGINE_CATALOG.map(engine => engine.id))
   return (
     <div className="space-y-4">
       <SettingsGroupsToc sectionId="engines" groups={ENGINES_GROUPS} />
 
       <SettingsGroup {...groupProps(group1)}>
-      <Card title="API keys" help="Keys are write-only — fields stay blank even when a key is already saved.">
-        {ENGINE_SECRETS.map((f) => <SecretField key={f.key} field={f} {...props} />)}
-      </Card>
-
-      <ImageModelsCard config={config} setField={setField} configDefaults={configDefaults} />
-
-      <ChatgptSubscriptionCard caps={caps} config={config} setField={setField} refreshCaps={refreshCaps}
-        toast={toast} configDefaults={configDefaults} />
-
-      <Card title="Engines" help="Which engines appear in the generate panel, and which one is preselected.">
+      <Card title="Engines" help="Which engines appear in the generate panel, and which one is preselected. An engine a plugin brings is listed while that plugin is on.">
         <div>
           <label htmlFor="engine-default" className="block text-sm font-medium text-content">Default engine</label>
           <select
@@ -1748,16 +990,16 @@ export default function EnginesSection(props) {
             onChange={(e) => setField('engines', 'default', e.target.value)}
             className={INPUT_CLASS}
           >
-            {ENGINE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            {engineOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
           </select>
           <ResetToDefault label="Default engine" section="engines" field="default"
             config={config} configDefaults={configDefaults} setField={setField} />
         </div>
 
         <fieldset id="engines-enabled" className="scroll-mt-24">
-          <legend className="mb-1 block text-sm font-medium text-content">Enabled engines</legend>
+          <legend className="mb-1 block text-sm font-medium text-content">Enabled local engines</legend>
           <div className="flex flex-col gap-2">
-            {ENGINE_OPTIONS.map((o) => (
+            {engineOptions.filter(o => coreEngineIds.has(o.id)).map((o) => (
               <label key={o.id} htmlFor={`engine-enabled-${o.id}`} className="flex items-center gap-2 text-sm text-content">
                 <input
                   id={`engine-enabled-${o.id}`}
@@ -1774,8 +1016,8 @@ export default function EnginesSection(props) {
               knowing which five shipped enabled — and the catalog grows with
               releases, so that knowledge goes stale. Order is not compared: a
               re-ticked selection is the same selection. */}
-          <ResetToDefault label="Enabled engines" section="engines" field="enabled"
-            config={config} configDefaults={configDefaults} setField={setField} />
+          <button type="button" className="min-h-10 text-xs text-primary underline"
+            onClick={() => setField('engines', 'enabled', resetEngineSelection(config.engines.enabled, configDefaults.engines?.enabled, [...coreEngineIds]))}>Reset local engines</button>
         </fieldset>
       </Card>
       </SettingsGroup>
@@ -1802,14 +1044,6 @@ export default function EnginesSection(props) {
       <KreaLorasCard config={config} setField={setField} />
       </SettingsGroup>
 
-      <SettingsGroup {...groupProps(group5)}>
-      <SeedVr2Card config={config} setField={setField} configDefaults={configDefaults}
-        caps={caps} />
-
-      {/* After the two engine cards, because it is what happens to their OUTPUT —
-          one pass, whichever engine ran. */}
-      <ImproveFinishCard config={config} setField={setField} configDefaults={configDefaults} />
-      </SettingsGroup>
 
       <SettingsGroup {...groupProps(group6)}>
       <IdentityPromptsCard config={config} setField={setField} promptDefaults={props.promptDefaults}

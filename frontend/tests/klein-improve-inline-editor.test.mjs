@@ -23,7 +23,7 @@ import { readSource } from './support/readSource.mjs'
 const { default: KleinImproveNote, _resetKleinImproveNoteCache, _seedKleinImproveNoteCache } =
   await import('../src/components/dataset/KleinImproveNote.jsx')
 const { IMPROVE_SCOPE_NOTE, IMPROVE_OFF_NOTE } =
-  await import('../src/components/dataset/kleinImproveEditor.js')
+  await import("../../bundled/image_upscale/frontend/lib/kleinImproveEditor.js")
 
 const SHIPPED = 'add detailed texture, add sharp details, add candid shot, add soft focus effect'
 

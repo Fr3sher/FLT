@@ -43,3 +43,12 @@ export function localContinuationRequest(run, payload) {
   request.body.expected_record_id = selected.expectedRecordId
   return request
 }
+
+// Map a lineage checkpoint to the same run-addressed continuation contract.
+export function continuationFromNode(node, rows = []) {
+  if (!node || !['local', 'cloud'].includes(node.source)) return null
+  const row = rows.find(candidate => candidate.source === node.source
+    && (node.source === 'cloud' ? candidate.run_id === node.run_id : candidate.record_id === node.record_id))
+  const checkpoints = Array.isArray(node.checkpoints) ? node.checkpoints : []
+  return { ...node, ...row, resume_steps: checkpoints.map(checkpoint => checkpoint.step), resume_checkpoints: checkpoints }
+}

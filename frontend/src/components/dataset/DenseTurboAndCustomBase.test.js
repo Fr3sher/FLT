@@ -22,7 +22,7 @@ import {
 // files; this flow spans all three, so the contract reads them as one text.
 const panel = readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8')
   + readFileSync(new URL('./FullTransformerRecipe.jsx', import.meta.url), 'utf8')
-  + readFileSync(new URL('./CloudLaunchDialog.jsx', import.meta.url), 'utf8');
+  + readFileSync(new URL("../../../../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx", import.meta.url), 'utf8');
 
 const picker = panel.slice(
   panel.indexOf('DENSE_BASE_PICKER_START'),

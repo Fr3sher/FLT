@@ -102,14 +102,7 @@ export const PAGE_TOPICS = [
      'narrow window', 'phone', 'mobile', 'small screen', 'sort', 'tile size',
      'thresholds', 'search', 'exclude', 'subfolder', 'bank', 'triage'],
     '/bank', 'using-the-app', 'the-image-bank-triage-a-big-folder'),
-  action('bank-scrape', 'Scrape the web into a bank',
-    ['scrape', 'scraper', 'scrape into bank', 'scrape to bank', 'web', 'gallery',
-     'gallery url', 'reddit', 'pexels', 'pornpics', 'civitai images', 'download',
-     'download images', 'from the web', 'fill a bank', 'new bank from the web',
-     'no folder', 'without a folder', 'add more images', 'resume scrape',
-     'second scrape', 'append', 'grow a bank', 'destination', 'unfiltered',
-     'no filter', 'keeps small images', 'small images kept', 'raw'],
-    '/bank', 'using-the-app', 'the-image-bank-triage-a-big-folder'),
+
   action('bank-find-by-text', 'Find bank images by describing them',
     ['find by text', 'text search', 'search by text', 'describe', 'description',
      'search images', 'semantic search', 'clip search', 'natural language',
@@ -393,53 +386,17 @@ export const PAGE_TOPICS = [
   setting('krea_hires.steps', 'engines', 'krea-hires-steps', 'Second-pass steps',
     ['hires steps', 'second pass steps', 'steps', 'inherit', 'same as the first',
      'krea steps second pass']),
-  setting('improve.colour_match', 'engines', 'improve-colour-match', "Put the source's colours back",
-    ['colour match', 'color match', 'colour shift', 'color shift', 'skin warms', 'skin cools',
-     'grade', 'mkl', 'two colour worlds', 'klein colours', 'finishing', 'finish']),
-  setting('improve.sharpen', 'engines', 'improve-sharpen', 'Sharpen (finishing pass)',
-    ['sharpen', 'unsharp', 'sharpness', 'soft', 'blurry', 'halo', 'finest detail',
-     'finishing', 'finish', 'after improve']),
-  setting('improve.grain', 'engines', 'improve-grain', 'Film grain (finishing pass)',
-    ['grain', 'film grain', 'noise', 'plastic', 'smooth', 'waxy', 'photographic',
-     'looks like a render', 'finishing', 'finish']),
-  setting('improve.grain_saturation', 'engines', 'improve-grain-sat', 'How coloured the grain is',
-    ['grain saturation', 'coloured grain', 'colored grain', 'luminance grain', 'sensor noise',
-     'chroma noise', 'grain colour']),
-  setting('seedvr2.tiling', 'engines', 'seedvr2-tiling', 'High-resolution tiling',
-    ['tiling', 'tile', 'tiles', 'seedvr2 tiling', 'TTP', 'Comfyui_TTP_Toolset',
-     'high resolution', '4k', 'detail', 'artifacts', 'seam', 'seams', 'vram',
-     'out of memory', 'oom', 'always', 'never', 'auto']),
-  setting('seedvr2.tile_px', 'engines', 'seedvr2-tile-px', 'SeedVR2 tile size',
-    ['tile size', 'tile px', 'tile', 'seedvr2 vram', 'out of memory', 'oom', 'cuda',
-     '8gb', '8 gb', 'small card', 'smaller card', 'upscale fails', 'upscale crashes',
-     'seam', 'seams', '512', '768', '1024', 'encode_tile_size', 'decode tile']),
-  setting('seedvr2.tile_threshold', 'engines', 'seedvr2-tile-threshold',
-    'SeedVR2 tiling threshold',
-    ['tiling threshold', 'start tiling above', 'crossover', 'when does it tile',
-     'tile sooner', 'seedvr2 auto tiling', '1536', 'short edge']),
-  setting('seedvr2.vae', 'engines', 'seedvr2-vae', 'SeedVR2 VAE build',
-    ['seedvr2 vae', 'vae', 'ema_vae_fp16', 'vae not found', 'pin the vae',
-     'renamed vae', 'models/SEEDVR2', 'model location', 'dit', 'weights folder']),
-  setupStep('setup-seedvr2-install', 'install', 'Install the SeedVR2 upscaler',
-    ['seedvr2', 'seed vr2', 'seedvr', 'upscale', 'upscaler', 'upscaling', 'super resolution',
-     'super-resolution', 'restore', 'restoration', 'sharpen', 'fidelity', 'keeps colours',
-     'colour shift', 'color shift', 'changes the image', 'node pack',
-     'ComfyUI-SeedVR2_VideoUpscaler', 'comfyui-manager', 'dit', 'vae', 'models/SEEDVR2',
-     '3b', '7b', 'fp8', 'blocks to swap', 'target resolution', 'install seedvr2']),
-  setupStep('setup-video-studio', 'install', 'Install 🎬 Video Test Studio',
-    ['video studio', 'video test studio', 'install video', 'video weights',
-     'minimax', 'h3', 'minimax h3', 'video model missing', '39 gb', '40 gb',
-     'i2v', 'image to video', 'text to video', 'video lora', 'test a video lora',
-     'turbo lora', '4 step', 'sparse attention', 'latent upscale', 'node pack',
-     'restart comfyui', 'models/diffusion_models', 'models/text_encoders',
-     'latent_upscale_models', '10eros', 'video tab greyed out',
-     'video options disabled', 'cannot render a clip']),
-  setupStep('setup-camera-install', 'install', 'Install 📷 Camera angles',
-    ['camera angles', 'camera', 'angles', 'multi-angle', 'multiple angles', 're-shoot',
-     'reshoot', 'other side', 'back view', 'viewpoint', 'qwen image edit', 'qwen 2511',
-     'sks', 'camera lora', 'lightning', 'speed lora', 'install camera',
-     'camera weights', 'camera model missing', '20 gb', 'gallery camera button',
-     'models/diffusion_models/qwen', 'models/loras/qwen']),
+
+
+
+
+
+
+
+
+
+
+
   setupStep('setup-ollama', 'ollama', 'Set up Ollama & pull the vision model',
     ['ollama', 'vision model', 'pull model', 'captioning', 'caption', 'auto-framing',
      'framing', 'head-crop', 'head crop', 'qwen', 'install ollama']),
@@ -551,12 +508,7 @@ export const PAGE_TOPICS = [
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
   // 📤 One dialog, two doors (the checkpoint popover on the ◉ Canvas / run
   // graph, and the shared image viewer everywhere it opens): one topic.
-  action('civitai-publish', '📤 Publish a LoRA and its images to Civitai',
-    ['civitai', 'civitai.red', 'publish', 'publish lora', 'upload lora', 'upload checkpoint',
-     'model page', 'draft', 'post image', 'post to civitai', 'share image', 'share lora',
-     'link checkpoint', 'mark the page', 'trigger words', 'base model', 'generation data',
-     'prompt', 'seed', 'metadata', 'api key', 'not linked', 'wizard', 'nsfw'],
-    '/gallery', 'using-the-app', 'publish-a-lora-and-its-images-to-civitai'),
+
   // 🎬 Les scènes vivent dans le même rail que le lot d'historique, monté par le
   // Studio de test ET par « Generate from the board » : un seul sujet pour les deux.
   // Les DEUX sources (banque et dataset) partagent ce sujet : c'est le même

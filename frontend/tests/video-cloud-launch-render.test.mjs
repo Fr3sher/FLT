@@ -18,7 +18,7 @@ const { MemoryRouter } = await import('react-router')
 const { default: VideoCloudLaunchDialog } =
   await import('../src/components/videobank/VideoCloudLaunchDialog.jsx')
 const { default: CloudTierEstimate } =
-  await import('../src/components/shared/CloudTierEstimate.jsx')
+  await import("../../bundled/cloud_training/frontend/shared/CloudTierEstimate.jsx")
 
 const DS = { id: 9, target_label: 'Wan 2.2 T2V A14B', frames: 81, clips: 6 }
 const render = (Component, props) => renderToStaticMarkup(

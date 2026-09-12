@@ -156,44 +156,29 @@ The training failure panel now recognises this case and says so.
 
 ## The Setup wizard
 
-On first launch you land in **Setup**. It scans your machine automatically and
-walks through five steps — each one unlocks a set of features:
+On first launch, **Open LDS** opens the dataset workspace. You can create a
+dataset, import your images, edit captions and export it without installing a
+plugin or downloading a model. Completing this step saves the setup state so
+later visits return to the application.
 
-1. **Image generation** — add a Gemini or OpenAI API key (or point at a local
-   Klein model) so the app can generate dataset images.
-2. **ComfyUI** — unlocks local (Klein) generation and the Test Studio.
-3. **Ollama** — the local vision model behind auto-captioning, framing
-   auto-classify and head-crop.
-4. **Quality tools** — face-similarity scoring, person masks, watermark
-   inpainting and bank scoring (a one-click `pip install`).
-5. **ai-toolkit** — the training engine.
+Choose an optional goal when you need more: captioning prepares the shared
+vision tools; local generation prepares ComfyUI and its selected models;
+**Plugins** opens the Store and your installed plugins. Nothing is downloaded
+by choosing a goal or visiting a plugin page.
 
-Each optional helper says what it unlocks and what still works without it, and
-installs on its own — or all at once, which is usually what you want on a fresh
-machine.
+Each plugin keeps its own settings and preparation under **My plugins**. Select
+the components you want, then prepare that selection. The server checks the
+whole plan before starting and displays progress and any failures. A completed
+download means the component is prepared; **Re-check** verifies availability.
+New custom nodes may need a ComfyUI restart before they appear.
 
-<p align="center">
-  <img src="../screenshots/setup/install-everything.png" alt="Setup step 4 listing each ML helper with its own Install button and an Install all option" width="760">
-</p>
+Shared tools remain available from **Setup**. Their installers use managed
+environments and show the prerequisites for each component. Optional tools do
+not prevent you from opening the dataset workspace.
 
-Nothing is mandatory: **Skip setup** is always available, and every step can be
-revisited later from **Settings**, where each tool has a Test button that tells
-you immediately whether the app can see it.
-
-**Setup is a first run, not a toll gate.** Once the app has seen your install
-working — configured, with at least one image engine answering — it stops
-sending you to the wizard. Coming back later (a new tab, a new browser, another
-machine on your network, or a restarted server) drops you straight into the app,
-and the same checks the wizard runs happen in the background while you work. A
-short line in the corner says so and then fades.
-
-You are only interrupted when something that *used to* work has stopped —
-an API key that no longer answers, an ML helper that no longer imports. The
-warning names what broke and links to Setup. It does **not** fire because
-ComfyUI or Ollama simply isn't running (you start those on demand), and it does
-not fire because something was never installed in the first place. If you
-removed a component deliberately, **That was on purpose** stops the app
-mentioning it again.
+If something that worked stops working, the setup notice names it and links to
+the relevant check. A tool that was never installed is not a regression, and a
+stopped ComfyUI or Ollama can be started only when you need it.
 
 ## Around the app
 

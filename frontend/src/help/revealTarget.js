@@ -48,3 +48,10 @@ export function resolveFocusTarget(focusId, doc) {
   const gate = gates && gates.length ? gates[gates.length - 1] : null;
   return gate ? { el: gate, gated: true } : null;
 }
+
+/** A `?focus=` target inside a plugin's group renders only once its lazy chunk
+ *  has landed — after the page's own fields. The reveal keeps looking this
+ *  often, for at most this long, before giving up (a refutation finding,
+ *  2026-09-05: `?focus=storage-fp8-quantize` opened nothing). */
+export const FOCUS_RETRY_MS = 250
+export const FOCUS_RETRY_WINDOW_MS = 6000

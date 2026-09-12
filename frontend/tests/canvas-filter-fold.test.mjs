@@ -25,10 +25,10 @@ import test from 'node:test'
 
 import {
   CANVAS_FILTER_OPEN_KEY, readCanvasFilterOpen, writeCanvasFilterOpen,
-} from '../src/utils/canvasFamilyFilter.js'
+} from "../../bundled/canvas/frontend/utils/canvasFamilyFilter.js"
 
 const SOURCE = readFileSync(
-  new URL('../src/components/canvas/CanvasDatasetFilter.jsx', import.meta.url), 'utf8')
+  new URL("../../bundled/canvas/frontend/components/canvas/CanvasDatasetFilter.jsx", import.meta.url), 'utf8')
 
 /** Un localStorage de test, injectable comme le reste des helpers du canvas. */
 const store = (initial = {}) => {

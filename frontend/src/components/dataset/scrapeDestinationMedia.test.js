@@ -12,7 +12,7 @@ import {
   setAsideNotice,
   sourceModesForDestination,
   splitScanItemsForDestination,
-} from './scrapeDestinationMedia.js';
+} from "../../../../bundled/scrape/frontend/lib/scrapeDestinationMedia.js";
 
 const image = (url = 'https://cdn.test/a.jpg') => ({ url, type: 'image' });
 const video = (url = 'https://cdn.test/a.mp4', extra = {}) =>
@@ -126,7 +126,7 @@ test('a tile always has a label, even when the source titled nothing', () => {
 // No JSX harness in this repo, so the wiring is pinned on the source, the same
 // convention as ConceptSourcesPanel.pagination.test.js.
 const panel = readFileSync(
-  new URL('./ConceptSourcesPanel.jsx', import.meta.url), 'utf8');
+  new URL("../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx", import.meta.url), 'utf8');
 
 test('the panel no longer throws video items away at scan time', () => {
   assert.doesNotMatch(panel, /filter\(\(it\) => it\.type === 'image'\)/);

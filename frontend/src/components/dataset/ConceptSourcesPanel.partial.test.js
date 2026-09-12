@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 // is pinned on the wiring code itself (state set from the backend field, reset
 // on `resetScan`) rather than on phrasing.
 const source = readFileSync(
-  new URL('./ConceptSourcesPanel.jsx', import.meta.url), 'utf8');
+  new URL("../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx", import.meta.url), 'utf8');
 
 test('the truncation flag is read from the scan response, not invented client-side', () => {
   assert.match(source, /setPartial\(!!body\.partial\);/);

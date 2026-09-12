@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { missingScrapeDeps, scrapeDepsBanner } from './scrapeDeps.js';
+import { missingScrapeDeps, scrapeDepsBanner } from "../../../bundled/scrape/frontend/lib/scrapeDeps.js";
 
 test('the banner quotes exactly what the probe reported missing', () => {
   const msg = scrapeDepsBanner('missing: curl_cffi, ddgs, yt_dlp');
@@ -43,7 +43,7 @@ test('with no detail the banner names NO package rather than a stale list', () =
 
 test('the panel renders the parsed list instead of a hard-coded one', () => {
   const panel = fs.readFileSync(
-    new URL('../components/dataset/ConceptSourcesPanel.jsx', import.meta.url), 'utf8');
+    new URL("../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx", import.meta.url), 'utf8');
   const banner = panel.match(/caps\.scrape_deps === false[\s\S]{0,900}?<\/p>/);
   assert.ok(banner, 'the scrape-deps banner is no longer recognisable in the panel');
   assert.match(banner[0], /scrapeDepsBanner\(caps\.scrape_deps_detail\)/,

@@ -20,9 +20,9 @@ test('Pexels API credential terms find Scraping & sources', () => {
 test('Pexels key and attribution markup stay wired without nested controls', () => {
   const settingsSource = readFileSync(new URL('./ScrapingSection.jsx', import.meta.url), 'utf8');
   const panelSource = readFileSync(
-    new URL('../dataset/ConceptSourcesPanel.jsx', import.meta.url), 'utf8');
+    new URL("../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx", import.meta.url), 'utf8');
   const scraperSourceSearchSource = readFileSync(
-    new URL('../dataset/scraperSourceSearch.js', import.meta.url), 'utf8');
+    new URL("../../../../bundled/scrape/frontend/lib/scraperSourceSearch.js", import.meta.url), 'utf8');
   const attributionSource = readFileSync(
     new URL('../dataset/PexelsAttribution.jsx', import.meta.url), 'utf8');
   const readmeSource = readFileSync(new URL('../../../../README.md', import.meta.url), 'utf8');

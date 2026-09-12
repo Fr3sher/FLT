@@ -21,7 +21,7 @@ const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const dialog = read('./ContinueDialog.jsx');
 const panel = read('./TrainingPanel.jsx');
 const hub = read('../../pages/CloudRunsPage.jsx');
-const canvas = read('../canvas/LineageCanvas.jsx');
+const canvas = read("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx");
 
 /* Comments are stripped before any ordering check: the comment explaining why a
    dialog no longer closes first is exactly where the old call gets written down

@@ -10,10 +10,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createElement, renderToStaticMarkup } from './support/mountJsx.mjs'
 
-const { VideoCheckpointList } = await import('../src/components/videobank/VideoCheckpointManager.jsx')
+const { VideoCheckpointList } = await import("../../bundled/video/frontend/videobank/VideoCheckpointManager.jsx")
 const {
   ACTIVE_CLOUD_REASON, CONTINUE_LOCAL_REASON, EMPTY_NOTE, HAND_PLACED_REASON, NO_LORAS_ROOT_REASON,
-} = await import('../src/components/videobank/videoCheckpoints.js')
+} = await import("../../bundled/video/frontend/videobank/videoCheckpoints.js")
 
 const file = (filename, extra = {}) => ({ filename, size: 314572800, deployed_as: null, undeployable: false, ...extra })
 const PAYLOAD = {

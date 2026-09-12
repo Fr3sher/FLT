@@ -7,7 +7,7 @@ import {
   canvasContinueRow, canvasContinueSettings, canvasContinueSteps,
 } from './canvasContinue.js';
 
-const canvas = fs.readFileSync(new URL('../components/canvas/LineageCanvas.jsx', import.meta.url), 'utf8');
+const canvas = fs.readFileSync(new URL("../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
 
 // A cloud lineage node as `_lineage_node` serialises it (cloud branch: run_id +
 // status), with three harvested saves.

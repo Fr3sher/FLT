@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 
 import {
   FLAG_LABELS, thresholdFields, flagChips,
-} from '../src/components/videobank/videoMetricsFilter.js'
+} from "../../bundled/video/frontend/videobank/videoMetricsFilter.js"
 
 // 🔗 The coherence cut in the panel, held to what the backend actually honours
 // and to what the calibration actually found. The hints in this table are the

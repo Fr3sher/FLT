@@ -4,8 +4,8 @@ import {
   I2V_FIRST_FRAME_HINT, MIN_CLIP_S, boundsAtPlayhead, boundsChanged,
   draftSummary, firstShotBounds, frameStep, isLegalSpan, newShotBounds, nudgedBounds,
   playheadToSourceTime, retouchToast, splitAvailability,
-} from './videoClipEdit.js';
-import { clipFragmentSrc } from './videoClipFragment.js';
+} from "../../../../bundled/video/frontend/videobank/videoClipEdit.js";
+import { clipFragmentSrc } from "../../../../bundled/video/frontend/videobank/videoClipFragment.js";
 
 const SHOT = { start_s: 41.25, end_s: 50, source_id: 12 };
 

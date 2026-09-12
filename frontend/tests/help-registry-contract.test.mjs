@@ -10,7 +10,7 @@ import {
 import { markdownHeadingId } from '../src/utils/headingId.js'
 import { SETTINGS_SECTIONS } from '../src/components/settings/registry.js'
 import { WORKSPACE_SECTIONS } from '../src/components/dataset/workspaceSections.js'
-import { VIDEO_DATASET_SECTIONS } from '../src/components/videobank/videoDatasetSections.js'
+import { VIDEO_DATASET_SECTIONS } from "../../bundled/video/frontend/videobank/videoDatasetSections.js"
 import { SETUP_DEEP_LINK_STEPS } from '../src/hooks/useSetupSteps.js'
 import { getWorkspacePanel } from '../src/components/dataset/workspaceNavigation.js'
 import { buildGuideTextIndex, matchGuideAnchors } from '../src/help/guideTextIndex.js'

@@ -1,5 +1,5 @@
 /** ✦ Edit the reference photo with a prompt (+ optional extra reference images),
- * via any engine the install can run — the list is DERIVED from EDIT_ENGINES and
+ * via any engine the install can run — the list is DERIVED from editEngines() and
  * from `engineOptions`, never spelled out here.
  *
  * The edit runs as a SERVER background job — slow (1-3 min), and on an API engine
@@ -23,23 +23,27 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import KleinModelSetting from '../shared/KleinModelSetting';
 import {
-  EDIT_ENGINES, LOCAL_ENGINES, batchLiveNote, editPhase,
+  editEngines, localEngineIds, apiEngineIds, batchLiveNote, editPhase,
   editEngineOptions, editCostNote, editKeepNote, editRefNote,
   acceptsExtraEditRefs, acceptsExtraEditRefsForBatch, editBatchBlockedReason,
   referenceEditCandidates,
-  ENGINE_LABELS, maxEditRefsForBatch,
+  engineLabel, maxEditRefsForBatch,
 } from './referenceEdit';
 
 export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
-                                             defaultEngine = 'chatgpt', liveActivity = null,
+                                             defaultEngine = null, liveActivity = null,
                                              referenceEdit = null, datasetExtraCount = 0,
                                              comfyuiConfigured = false, engineAvailable = null,
                                              engineReason = null,
                                              onEdit, onRetry = null, canRetry = false,
                                              onKeep, onDiscard, onClose }) {
   const [prompt, setPrompt] = useState('');
-  const initialEngine = EDIT_ENGINES.includes(defaultEngine) ? defaultEngine : 'chatgpt';
-  const [engines, setEngines] = useState([initialEngine]);
+  // The caller's pick when it can edit, else the first API engine, else the
+  // first engine there is — the catalog's order, never a name spelled here.
+  const editable = editEngines();
+  const initialEngine = editable.includes(defaultEngine) ? defaultEngine
+    : (apiEngineIds()[0] || editable[0] || null);
+  const [engines, setEngines] = useState(initialEngine ? [initialEngine] : []);
   const [editRefs, setEditRefs] = useState([]);            // transient File[]
   const [starting, setStarting] = useState(false);         // bridges POST -> server 'running'
   const [busyAction, setBusyAction] = useState(null);      // engine id | discard
@@ -104,7 +108,7 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
   const selectedBlocked = options.filter(
     (option) => engines.includes(option.engine) && option.blocked);
   const liveNote = batchLiveNote(liveActivity);
-  const selectedLocalEngines = engines.filter((engine) => LOCAL_ENGINES.includes(engine));
+  const selectedLocalEngines = engines.filter((engine) => localEngineIds().includes(engine));
   const localRefNotes = selectedLocalEngines
     .map((engine) => editRefNote(engine, { datasetExtraCount }))
     .filter(Boolean);
@@ -185,7 +189,7 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
             <p className="text-content text-sm">Editing the reference with the selected engines…</p>
             <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-2" aria-live="polite">
               {candidates.length ? candidates.map((candidate) => {
-                const label = ENGINE_LABELS[candidate.engine] || candidate.engine;
+                const label = engineLabel(candidate.engine);
                 return (
                   <div key={candidate.engine}
                     className="rounded-lg bg-surface-raised border border-border px-3 py-2">
@@ -224,7 +228,7 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
                   className="w-full rounded-lg bg-black object-contain max-h-[45vh]" />
               </figure>
               {readyCandidates.map((candidate) => {
-                const label = ENGINE_LABELS[candidate.engine] || candidate.engine;
+                const label = engineLabel(candidate.engine);
                 const afterUrl = `/api/dataset/${datasetId}/img/${encodeURIComponent(candidate.candidate_filename)}`;
                 return (
                   <figure key={candidate.engine}
@@ -249,7 +253,7 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
             {failedCandidates.length > 0 && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" aria-label="Failed edit engines">
                 {failedCandidates.map((candidate) => {
-                  const label = ENGINE_LABELS[candidate.engine] || candidate.engine;
+                  const label = engineLabel(candidate.engine);
                   return (
                     <div key={candidate.engine}
                       className="rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-2">
@@ -384,7 +388,7 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
             {phase === 'failed' && (failedCandidates.length > 0 || referenceEdit?.error) && (
               <div className="flex flex-col gap-2 text-[0.6875rem] bg-red-500/10 border border-red-500/30 rounded-lg px-2.5 py-1.5">
                 {failedCandidates.length > 0 ? failedCandidates.map((candidate) => {
-                  const label = ENGINE_LABELS[candidate.engine] || candidate.engine;
+                  const label = engineLabel(candidate.engine);
                   return (
                     <div key={candidate.engine}>
                       <p className="text-content font-semibold">{label} — Failed</p>

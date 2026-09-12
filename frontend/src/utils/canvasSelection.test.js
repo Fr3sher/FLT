@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   CANVAS_SELECTION_KEY,
   readSelection, resolveSelection, selectionSummary, toggleSelection, writeSelection,
-} from './canvasSelection.js';
+} from "../../../bundled/canvas/frontend/utils/canvasSelection.js";
 
 const memoryStore = () => {
   const data = {};

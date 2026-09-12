@@ -4,7 +4,7 @@ import {
   IMG_MAX, IMG_MIN, IMG_REACH, clampImageBox, defaultImageSpot, imageNodeEdges,
   imageNodeExtent, nudgeImageNode, openGeometry, slideBelow, spotBesideCard,
   pinWriteShortfall, toImageNodeMap, visibleImageNodes,
-} from './canvasImageNodes.js';
+} from "../../../bundled/canvas/frontend/utils/canvasImageNodes.js";
 
 /* 🖼 Images pinned on the ◉ LoRA Canvas.
 

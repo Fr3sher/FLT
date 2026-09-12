@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { beforeEach } from 'node:test';
-import { ARM_MS, ARM_SETTLE_MS, armFrom, armedUntil, consume, disarm, isArmed, resetArmingForTests } from './maintenanceArming.js';
+import { ARM_MS, ARM_SETTLE_MS, armFrom, armedUntil, consume, disarm, isArmed, resetArmingForTests } from "../../../../bundled/resource_monitor/frontend/components/maintenanceArming.js";
 
 beforeEach(() => resetArmingForTests());
 const T0 = 1_000_000;

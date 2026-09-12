@@ -19,10 +19,14 @@
 
 /** The Image engines groups, in display order. `id` is stored in localStorage
  *  and used in DOM anchors — never rename one without an alias. */
-import { BarChart3, Bot, Box, Cloud, Drama, Dumbbell, Eraser, ImageDown, KeyRound, Map, Package, PenLine, Puzzle, SlidersHorizontal, SlidersVertical, Trash2, ZoomIn } from 'lucide-react';
+import { BarChart3, Bot, Box, Cloud, Drama, Dumbbell, Eraser, ImageDown, KeyRound, Map, Package, PenLine, Puzzle, SlidersHorizontal, SlidersVertical, Trash2 } from 'lucide-react';
+import { contributions } from '../../plugins/registry.js';
 export const ENGINES_GROUPS = [
-  { id: 'engines-keys', title: 'Engines & API keys', icon: KeyRound,
-    blurb: 'Which engines are on, which one opens preselected, their API keys and models.' },
+  // The id stays 'engines-keys' (persisted as this group's open state and in
+  // the deep links); the label follows the fact that the API keys moved to
+  // their engines' plugin, whose own settings page hosts its groups.
+  { id: 'engines-keys', title: 'Engines', icon: KeyRound,
+    blurb: 'Which engines are on, and which one opens preselected.' },
   { id: 'klein', title: 'Klein (local)', icon: SlidersHorizontal,
     blurb: 'Model file pins and generation quality for the local Klein engine.' },
   // The id stays 'krea' — it is persisted in localStorage as this group's
@@ -36,10 +40,8 @@ export const ENGINES_GROUPS = [
   // Id unchanged (localStorage + deep links); the label follows the card that
   // joined it — the finishing pass belongs to the improve OUTPUT, not to either
   // engine, so it has nowhere better to live.
-  { id: 'seedvr2', title: 'Upscale & improve — SeedVR2 and finishing', icon: ZoomIn,
-    blurb: 'The restoration upscaler, and the colour/sharpen/grain pass applied to the result.' },
-  { id: 'prompts', title: 'Prompts & improve tuning (advanced)', icon: PenLine,
-    blurb: 'Identity prompts per subject type, the improve instruction and its strength knobs.' },
+  { id: 'prompts', title: 'Identity prompts (advanced)', icon: PenLine,
+    blurb: 'Identity prompts and local generation instructions per subject type.' },
 ]
 
 /** 🖥️ Local tools — three tools, three long cards; the group is the tool. */
@@ -71,8 +73,6 @@ export const CAPTIONING_GROUPS = [
 export const TRAINING_GROUPS = [
   { id: 'defaults', title: 'Defaults', icon: SlidersHorizontal,
     blurb: 'The model family new runs start on.' },
-  { id: 'cloud', title: 'Cloud training (vast.ai)', icon: Cloud,
-    blurb: 'The API key that unlocks cloud runs, and every guardrail on spend and stalls.' },
   { id: 'masking', title: 'Concept face masking', icon: Drama,
     blurb: 'Masking faces out of concept training.' },
 ]
@@ -82,11 +82,11 @@ export const STORAGE_GROUPS = [
   { id: 'overview', title: 'What lives where', icon: Map,
     blurb: 'Every folder the app writes to, with sizes on demand.' },
   { id: 'locations', title: 'Movable folders', icon: Package,
-    blurb: 'The three relocatable roots — dataset images, cloud staging, checkpoints.' },
+    blurb: 'The dataset image store and the checkpoint folder.' },
   { id: 'housekeeping', title: 'Cleanup & trash', icon: Trash2,
-    blurb: 'Cloud-run housekeeping, the trash, and the run image archive.' },
+    blurb: 'The trash and the run image archive.' },
   { id: 'models', title: 'Model files', icon: Box,
-    blurb: 'fp8 quantization and the Hugging Face cache.' },
+    blurb: 'The Hugging Face cache.' },
 ]
 
 /** Which sections carry groups at all. Scraping, Server, Maintenance and the
@@ -98,6 +98,35 @@ export const SECTION_GROUPS = {
   captioning: CAPTIONING_GROUPS,
   training: TRAINING_GROUPS,
   storage: STORAGE_GROUPS,
+}
+
+/** The section's groups with the enabled plugins' contributions merged in: a
+ *  `settings.group` item `{ id, section, after?, title, blurb, icon, panel }`
+ *  lands right after the core group it names (`after`), or at the end. Pure:
+ *  the contributions are passed in, so node --test holds the placement. */
+export function mergePluginGroups(coreGroups, pluginGroups) {
+  const out = [...coreGroups]
+  for (const item of pluginGroups) {
+    if (!item || typeof item.id !== 'string' || out.some((x) => x.id === item.id)) continue
+    // A plugin names no icon component of its own (its descriptor cannot import
+    // lucide-react — node resolves a bare package from the importing file's
+    // folder, and bundled/ has no node_modules): the core's puzzle piece is
+    // the default, and a plugin may still pass one it got from a core module.
+    const icon = typeof item.icon === 'string' ? ({ cloud: Cloud }[item.icon] || Puzzle) : (item.icon || Puzzle)
+    const g = { ...item, icon }
+    const at = g.after ? out.findIndex((x) => x.id === g.after) : -1
+    // Every group after a plugin group with the same anchor keeps registration order.
+    let insertAt = at < 0 ? out.length : at + 1
+    while (insertAt < out.length && out[insertAt].plugin && out[insertAt].after === g.after) insertAt += 1
+    out.splice(insertAt, 0, g)
+  }
+  return out
+}
+
+/** Legacy composition helper. General Settings no longer mounts product groups. */
+export function withPluginGroups(sectionId, coreGroups) {
+  const mine = contributions('settings.group', 'settings').filter((g) => g.section === sectionId && !g.placement)
+  return mergePluginGroups(coreGroups, mine)
 }
 
 /** The DOM id a group's <details> carries — the TOC and tests address it. */

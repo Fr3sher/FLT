@@ -46,38 +46,6 @@ const HF_SECRET = {
   ),
 }
 
-const HF_CLOUD_SECRET = {
-  key: 'HF_CLOUD_TOKEN', label: 'Dedicated Hugging Face cloud token', testTarget: 'hf_cloud',
-  help: (
-    <>
-      Required only for full-model Krea 2 cloud training. Recommended: create a separate fine-grained token with zero global permissions and grant{' '}
-      <strong className="font-semibold text-content">repo.content.read exactly on krea/Krea-2-Raw</strong>
-      {', then '}
-      <strong className="font-semibold text-content">repo.content.read + repo.write on one dedicated HF user/org namespace that contains only LDS deliveries</strong>
-      {'. A per-run repository does not exist yet when the token is created, so scope write access to that single dedicated namespace. A global write token is also accepted, but LDS will warn because it can modify every repository this account can write to.'}
-    </>
-  ),
-  guide: (
-    <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1">
-      <a
-        href="https://huggingface.co/settings/tokens/new?tokenType=fineGrained"
-        target="_blank"
-        rel="noreferrer"
-        className="inline-block max-w-full text-xs font-medium text-sky-300 underline underline-offset-2 hover:text-sky-200"
-      >
-        Create a fine-grained token on Hugging Face ↗
-      </a>
-      <a
-        href="https://huggingface.co/settings/tokens/new?tokenType=write"
-        target="_blank"
-        rel="noreferrer"
-        className="inline-block max-w-full text-xs font-medium text-sky-300 underline underline-offset-2 hover:text-sky-200"
-      >
-        Create a global write token on Hugging Face ↗
-      </a>
-    </div>
-  ),
-}
 
 /* Ollama's three live states, from capabilities (installed + reachable):
      not installed   → install hint (the app can't start what isn't there)
@@ -436,9 +404,6 @@ export default function LocalToolsSection(props) {
             config={config} configDefaults={configDefaults} setField={setField} />
         </div>
         <SecretField field={HF_SECRET} {...props} />
-        <div className="rounded-lg border border-sky-400/25 bg-sky-400/5 p-3">
-          <SecretField field={HF_CLOUD_SECRET} {...props} />
-        </div>
       </Card>
 
       </SettingsGroup>

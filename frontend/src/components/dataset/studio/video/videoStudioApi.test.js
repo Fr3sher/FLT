@@ -7,7 +7,7 @@ import {
   smoothTargets,
   buildGeneratePayload, clipSeconds, clipSummary, isRunning, launchAdviceLines, renderTimeLabel,
   SPARSE_CHOICES, studioFrameChoices,
-}  from './videoStudioApi.js';
+}  from "../../../../../../bundled/video/frontend/studio/video/videoStudioApi.js";
 
 test('an option left off is absent from the payload, never false', () => {
   const body = buildGeneratePayload({ mode: 'i2v', prompt: ' she turns ', image: 'a.png' });

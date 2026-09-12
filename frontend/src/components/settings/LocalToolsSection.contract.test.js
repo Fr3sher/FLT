@@ -13,7 +13,7 @@ const settingsPage = readFileSync(
 const trainingPanel = readFileSync(
   new URL('../dataset/TrainingPanel.jsx', import.meta.url), 'utf8')
   + readFileSync(
-    new URL('../dataset/CloudLaunchDialog.jsx', import.meta.url), 'utf8')
+    new URL("../../../../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx", import.meta.url), 'utf8')
 
 function handleSaveSource() {
   const start = settingsPage.indexOf('  const handleSave = async () => {')

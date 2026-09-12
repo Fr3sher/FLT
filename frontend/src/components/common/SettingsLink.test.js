@@ -17,7 +17,7 @@ test('every section a link points at really exists in the settings registry', ()
     // The lightbox's own improve links moved into KleinImproveNote, which the
     // lightbox AND the grid's bulk toolbar both render — one note, two surfaces.
     '../dataset/KleinImproveNote.jsx', '../dataset/CaptionToolsBar.jsx',
-    '../dataset/TrainingPanel.jsx', '../dataset/ConceptSourcesPanel.jsx',
+    '../dataset/TrainingPanel.jsx', "../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx",
   ];
   let found = 0;
   for (const f of files) {

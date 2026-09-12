@@ -30,7 +30,7 @@ export const SETUP_OK_VISIBLE_MS = 4000
  *                everything works" there would be a lie about work not done */
 export function setupHealthPhase({ state, checking, result }) {
   if (!state) return 'waiting'
-  if (!state.verified) return 'first-run'
+  if (!state.verified && !state.completed) return 'first-run'
   if (result && result.skipped) return 'skipped'
   if (checking || !result) return 'checking'
   return (result.regressions || []).length ? 'regressed' : 'ok'
@@ -52,7 +52,7 @@ export function needsDockerDeploymentChoice(readiness) {
  *  nominal path — an install already verified — returns before this and keeps
  *  costing exactly one round-trip. */
 export function shouldProbeDockerChoice({ state, caps }) {
-  if (!state || state.verified) return false
+  if (!state || state.verified || state.completed) return false
   return !!(caps && caps.configured)
 }
 
@@ -69,13 +69,16 @@ export function shouldProbeDockerChoice({ state, caps }) {
  *  therefore beats `configured`; the once-per-session flag still applies, so
  *  this cannot become a loop. */
 export function shouldRedirectToSetup({
-  loading, caps, capsKnown = true, state, alreadyRedirected, pendingDockerChoice,
+  loading, caps, capsKnown = true, state, alreadyRedirected, pendingDockerChoice, pathname,
 }) {
+  // An explicitly opened workspace must survive refresh, even if a busy
+  // engine or an unavailable setup record looks like a first launch.
+  if (pathname === '/studio' || pathname?.startsWith('/dataset/studio/')) return false
   if (loading || !state) return false          // never redirect on a guess
   // Capabilities that could not be read look exactly like an unconfigured
   // machine (EMPTY_CAPS). "I could not ask" is not a verdict.
   if (capsKnown === false) return false
-  if (state.verified) return false
+  if (state.verified || state.completed) return false
   if (caps && caps.configured && !pendingDockerChoice) return false
   return !alreadyRedirected
 }

@@ -2,7 +2,7 @@
    ORDER MATTERS inside and across sections: helpRegistry.js concatenates
    the six section arrays in a fixed order, and for a given (chapter,
    anchor) the FIRST topic owns the "Open this screen →" button. */
-import { action, setting } from '../topicBuilders.js';
+import { setting } from '../topicBuilders.js';
 
 export const SETTINGS_FIELD_TOPICS = [
   // ---- Settings: per-field topics (kind 'setting') -----------------------
@@ -13,8 +13,7 @@ export const SETTINGS_FIELD_TOPICS = [
   setting('engines.enabled', 'engines', 'engines-enabled', 'Enabled engines',
     ['enabled engines', 'engine', 'engines', 'show', 'hide', 'generate panel', 'nanobanana', 'chatgpt', 'klein',
      'openrouter']),
-  setting('engines.chatgpt_auth', 'engines', 'chatgpt-auth-mode', 'ChatGPT engine auth',
-    ['chatgpt', 'auth', 'subscription', 'api key', 'codex', 'oauth', 'openai']),
+
   setting('klein.unet', 'engines', 'klein-model-unet', 'Klein diffusion model (UNET) file',
     ['klein', 'unet', 'diffusion model', 'model file', 'path', 'override', 'pin', 'custom model',
      'unreadable', 'corrupt', 'says missing',
@@ -129,17 +128,11 @@ export const SETTINGS_FIELD_TOPICS = [
   // the cause, because the shipped instruction — "add detailed texture, add
   // sharp details, add candid shot, add soft focus effect" — is a photographic
   // recipe applied to every dataset. Searching her own sentence must land here.
-  setting('identity_prompts.klein_improve', 'engines', 'identity-prompt-klein-improve', 'Klein improve prompt & toggle',
-    ['klein', 'improve', 'upscale', 'enhance', 'prompt', 'texture', 'detail', 'toggle', 'disable',
-     'anime', 'drawn', 'illustration', 'cartoon', 'too realistic', 'realistic', 'photoreal',
-     'textures', 'skin detail', 'skin', 'improve prompt', 'turn off improve', 'quality inpaint',
-     'inpaint', 'ruins my images', 'harms the image', 'style changed', 'no prompt']),
+
   // The four knobs behind the lightbox's "Adjust improve strength →". They were
   // exposed as settings but never registered, so Help search could not reach them
   // and the link had nothing to aim at.
-  setting('klein.improve_strength', 'engines', 'klein-improve-strength', 'Upscale & improve — strength',
-    ['improve', 'upscale', 'strength', 'megapixels', 'resolution', 'steps',
-     'enhancement lora', 'consistency', 'klein', 'how much', 'change']),
+
   // The five parts the local-edit prompt is ALSO built from. They used to be
   // hardcoded, so nobody could search for them; these are the words a user reaches
   // for when a generated shot is wrong ("why is everyone wearing jeans", "it added
@@ -157,34 +150,19 @@ export const SETTINGS_FIELD_TOPICS = [
   setting('prompt-preview', 'engines', 'prompt-preview', 'See the prompt an engine actually receives',
     ['prompt', 'preview', 'composed', 'what is sent', 'debug', 'full prompt', 'inspect',
      'klein', 'krea', 'nano banana', 'chatgpt', 'openrouter', 'characters']),
-  setting('GEMINI_API_KEY', 'engines', 'GEMINI_API_KEY', 'Gemini API key',
-    ['gemini', 'api key', 'nano banana', 'nanobanana', 'google', 'key']),
-  setting('OPENAI_API_KEY', 'engines', 'OPENAI_API_KEY', 'OpenAI API key',
-    ['openai', 'api key', 'chatgpt', 'gpt-image', 'gpt', 'key']),
-  setting('OPENROUTER_API_KEY', 'engines', 'OPENROUTER_API_KEY', 'OpenRouter API key',
-    ['openrouter', 'open router', 'api key', 'key', 'credits', 'one key', 'no subscription',
-     'gemini', 'gpt-image', 'seedream', 'flux']),
-  setting('engines.openrouter_model', 'engines', 'engines-openrouter_model', 'OpenRouter model',
-    ['openrouter', 'model', 'slug', 'model slug', 'gemini-3-pro-image', 'gpt-image-2', 'seedream',
-     'flux', 'reference images', 'image model']),
-  setting('engines.nanobanana_model', 'engines', 'engines-nanobanana_model', 'Nano Banana (Gemini) model',
-    ['nano banana', 'nanobanana', 'gemini', 'model', 'image model', 'gemini-3-pro-image',
-     'change model', 'choose model', 'reference images', 'NANOBANANA_MODEL']),
-  setting('engines.chatgpt_image_model', 'engines', 'engines-chatgpt_image_model', 'ChatGPT (OpenAI) image model',
-    ['chatgpt', 'openai', 'gpt-image', 'gpt-image-2', 'gpt-image-1.5', 'model', 'image model',
-     'change model', 'choose model', '403', 'organization verification', 'verified',
-     'reference images', 'CHATGPT_IMAGE_MODEL']),
+
+
+
+
+
+
   // scraping
-  setting('REDDIT_CLIENT_ID', 'scraping', 'REDDIT_CLIENT_ID', 'Reddit client ID',
-    ['reddit', 'client id', 'scrape', '429', 'rate limit', 'quota', 'key']),
+
   setting('CIVITAI_API_KEY', 'scraping', 'CIVITAI_API_KEY', 'Civitai API key',
     ['civitai', 'api key', 'nsfw', 'adult', 'scrape', 'key', 'publish', 'post', 'prompt browser']),
-  setting('civitai.link_host', 'scraping', 'civitai-link-host', 'Civitai site for links',
-    ['civitai', 'civitai.red', 'domain', 'mirror', 'links', 'publish', 'open on', 'draft 404']),
-  setting('PEXELS_API_KEY', 'scraping', 'PEXELS_API_KEY', 'Pexels API key',
-    ['pexels', 'api key', 'scrape', 'stock', 'key']),
-  setting('klein.small_image_prompt', 'scraping', 'klein-small-image-prompt', 'Klein rescue — small scraped images',
-    ['klein', 'small image', 'rescue', 'upscale', 'improve', 'prompt', 'scrape']),
+
+
+
   // local-tools
   setting('comfyui.api_url', 'local-tools', 'comfyui-api-url', 'ComfyUI API URL',
     ['comfyui', 'api', 'url', 'klein', 'studio', 'local']),
@@ -311,71 +289,34 @@ export const SETTINGS_FIELD_TOPICS = [
   // training
   setting('training.default_family', 'training', 'training-default-family', 'Default training family',
     ['training', 'family', 'default', 'zimage', 'sdxl', 'krea', 'flux']),
-  setting('VAST_API_KEY', 'training', 'VAST_API_KEY', 'vast.ai API key',
-    ['vast', 'api key', 'cloud', 'gpu', 'rent', 'budget', 'key']),
-  setting('cloud.max_concurrent_runs', 'training', 'cloud-max-concurrent-runs', 'Max simultaneous cloud runs',
-    ['cloud', 'concurrent', 'runs', 'vast', 'gpu', 'limit']),
-  setting('cloud.max_price_per_hour', 'training', 'cloud-max-price-per-hour', 'Max price per hour',
-    ['cloud', 'price', 'hour', 'budget', 'vast', 'cost', 'ceiling']),
-  setting('cloud.monthly_budget_usd', 'training', 'cloud-monthly-budget', 'Monthly budget',
-    ['cloud', 'budget', 'monthly', 'vast', 'cost', 'limit', 'spend']),
-  setting('cloud.stall_timeout_minutes', 'training', 'cloud-stall-timeout', 'Stall timeout',
-    ['cloud', 'stall', 'timeout', 'watchdog', 'vast', 'stuck']),
-  setting('cloud.first_step_timeout_minutes', 'training', 'cloud-first-step-timeout', 'First-step timeout',
-    ['cloud', 'first step', 'first-step', 'watchdog', 'base model', 'download', 'vast', 'stuck', 'timeout']),
-  setting('cloud.first_step_download_budget_minutes', 'training', 'cloud-first-step-download-budget',
-    'Base-model download ceiling',
-    ['cloud', 'download', 'base model', 'ceiling', 'budget', 'slow', 'watchdog', 'vast', 'cost']),
-  setting('cloud.max_runtime_minutes', 'training', 'cloud-max-runtime', 'Max runtime',
-    ['cloud', 'runtime', 'cap', 'max', 'hours', 'budget', 'vast', 'cost', 'hard stop']),
-  setting('cloud.freeze_watchdog_minutes', 'training', 'cloud-freeze-watchdog', 'Freeze watchdog',
-    ['cloud', 'freeze', 'watchdog', 'frozen', 'stuck', 'billing', 'supervisor', 'vast', 'cost']),
-  setting('cloud.upload_stall_minutes', 'training', 'cloud-upload-stall', 'Dataset upload stall',
-    ['cloud', 'upload', 'dataset', 'stall', 'stalled', 'stuck', 'watchdog', 'billing',
-      'supervisor', 'vast', 'cost', 'slow', 'transfer']),
-  setting('cloud.unreachable_grace_minutes', 'training', 'cloud-unreachable-grace', 'Unreachable grace',
-    ['cloud', 'unreachable', 'grace', 'timeout', 'network', 'vast', 'blackout', 'reconnect']),
-  setting('cloud.min_reliability', 'training', 'cloud-min-reliability', 'Min host reliability',
-    ['cloud', 'reliability', 'host', 'vast', 'offer', 'cheap']),
-  setting('cloud.verified_only', 'training', 'cloud-verified-only', 'Verified hosts only',
-    ['cloud', 'verified', 'host', 'vast', 'offer', 'filter']),
-  setting('cloud.secure_cloud_only', 'training', 'cloud-secure-cloud-only', 'Secure Cloud only',
-    ['cloud', 'secure', 'community', 'vast', 'offer', 'filter']),
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   // The Hugging Face allowance is a DISK question, so its card moved to
   // Settings › Storage with the rest of them. Ids stay put: they are stored in
   // the "seen" maps of existing installs.
-  setting('cloud.full_transformer.delivery', 'storage',
-    'cloud-full-model-delivery', 'Full-model delivery (this computer / Hugging Face)',
-    ['full model', 'dense', 'krea', 'delivery', 'download', 'local', 'disk',
-      'hugging face', 'huggingface', 'backup', 'quota', '403', 'storage limit',
-      'resume', 'continue', '26 gb', 'checkpoint', 'where'],
-    { trigger: 'full-model-delivery-local',
-      text: 'New: a finished full model is downloaded to this computer first and verified before the pod is released — the Hugging Face copy is a backup taken afterwards, so a full quota can no longer end a training. It is also what keeps a run resumable.' }),
-  action('cloud.dense_fetch_local', 'Fetch a full model to this computer',
-    ['fetch', 'download', 'full model', 'dense', 'pod', 'kept', 'recover',
-      'retry', 'transfer', 'resume', 'cancel', '26 gb'],
-    '/cloud', 'dataset-guide', '10-full-model-recipe-what-you-can-change'),
-  setting('cloud.full_transformer.private_storage_limit_gb', 'storage',
-    'cloud-private-storage-limit', 'Private storage allowance',
-    ['hugging face', 'huggingface', 'storage', 'quota', 'private', 'limit', 'allowance',
-      'full model', 'dense', 'krea', '403', 'forbidden', 'push', 'checkpoint']),
-  action('cloud.hf_storage', 'Hugging Face storage & custom-base caches',
-    ['hugging face', 'huggingface', 'storage', 'quota', 'full', 'lds-base', 'cache',
-      'delete', 'free space', 'disk', 'custom base', 'dense', 'full model'],
-    '/settings/storage', 'settings-reference', 'storage'),
+
+
+
+
   // The fp8 tool's SECOND door, and the findable one. Its first
   // (training.fp8_quantize_local, below) sits inside a dense dataset's recipe
   // card — which the person this helps most, someone who downloaded a 26 GB
   // full model from Hugging Face and has no dataset, never opens. Same
   // component, same refusals; only the address differs, so it gets its own
   // topic rather than stealing the other one's.
-  { id: 'storage.fp8_quantize', kind: 'action',
-    title: 'Quantize a model to fp8 (no dataset or training run needed)',
-    keywords: ['quantize', 'quantise', 'fp8', 'shrink', 'smaller', 'convert', 'comfyui',
-      'comfy', 'safetensors', 'hugging face', 'downloaded', 'disk', 'space', 'storage',
-      '26 gb', '10 gb', 'checkpoint', 'full model', 'load diffusion model', 'cpu'],
-    guide: { chapter: 'settings-reference', anchor: 'storage' },
-    app: { route: '/settings/storage', focus: 'storage-fp8-quantize' } },
+
   // The unlocked half of the full-model (dense) recipe. Per-dataset Advanced
   // controls, not global Settings — they point at the dataset guide's
   // full-model section. Grouped as one topic on purpose: they are one card, and
@@ -393,86 +334,22 @@ export const SETTINGS_FIELD_TOPICS = [
       'sample_steps', 'sample_guidance', 'preview quality', 'test images'],
     guide: { chapter: 'dataset-guide', anchor: '11-preview-quality-steps-and-cfg' },
     app: { route: '/datasets?section=training' } },
-  { id: 'training.full_model_recipe', kind: 'setting',
-    title: 'Full-model recipe (prompts, LR, resolution, checkpoints)',
-    keywords: ['full model', 'full-model', 'dense', 'krea', 'raw', 'recipe', 'locked',
-      'learning rate', 'lr', 'resolution', '768', '1024', 'checkpoint every', 'keep',
-      'preview prompts', 'sample prompts', 'adafactor', 'batch', 'bf16',
-      'gradient checkpointing', '80 gb',
-      // Why Raw is still the recommendation even though Turbo is now allowed —
-      // searched as "should I train dense on turbo", not just "what can I edit
-      // here". The guide section spells out what is actually known and what is
-      // merely carried over from neighbouring models.
-      'turbo', 'distilled', 'speed distilled', 'speed-distilled', 'distillation',
-      'de-distillation', 'de-distilled', 'assistant lora', 'untested', 'warning'],
-    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
-    app: { route: '/datasets?section=training' },
-    tip: { trigger: 'full-model-recipe-unlocked',
-      text: 'New: the full-model recipe now lets you edit the preview prompts, learning rate, resolution and checkpoint cadence — the rest stays locked because it is what makes a 12B model fit on one 80 GB card.' } },
+
   // Its own topic rather than more keywords above: the question here is not
   // "what may I change?" but "what am I actually fine-tuning?", and it now has
   // three answers instead of one. It is also where the two refusals that
   // REMAIN have to be explained, or a greyed control reads as a bug.
-  { id: 'training.full_model_base', kind: 'setting',
-    title: 'Base to fine-tune (Raw, Turbo, or your own checkpoint)',
-    keywords: ['full model', 'full-model', 'dense', 'krea', 'raw', 'turbo',
-      'base', 'base model', 'custom base', 'custom weights', 'own checkpoint',
-      'safetensors', 'fp8', 'scaled fp8', 'quantized base', 'int8',
-      'cannot be loaded', 'few-step', 'distilled', 'variant'],
-    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
-    app: { route: '/datasets?section=training' },
-    tip: { trigger: 'full-model-base-picker',
-      text: 'New: full-model training is no longer limited to the official Krea 2 Raw base — pick Turbo (with a warning: nobody has measured a full-model run on a distilled base) or a Krea 2 checkpoint from your own disk. A ComfyUI scaled-fp8 export still cannot be trained: the loader refuses it, and the app says so when you pick it.' } },
+
   // The three quality levers get their OWN topic rather than more keywords on
   // the one above, because the question behind them is different: not "what may
   // I change here?" but "what should I change, and what does it cost me?". The
   // cost half is the reason — images-per-step is the only dense setting billed
   // by the hour — and the absences (EMA, min-SNR) need somewhere to be
   // explained, or they read as things we forgot rather than things that break.
-  { id: 'training.full_model_quality', kind: 'setting',
-    title: 'Images per step, LR schedule and noise schedule (full-model)',
-    keywords: ['images per step', 'gradient accumulation', 'grad accum', 'effective batch',
-      'batch size', 'warmup', 'warm up', 'lr schedule', 'learning rate schedule',
-      'cosine', 'constant', 'noise schedule', 'timestep', 'timestep type', 'sigmoid',
-      'weighted', 'linear', 'shift', 'ema', 'min snr', 'min_snr_gamma', 'snr',
-      'full model', 'dense', 'krea', 'slower', 'cost', 'longer', 'bill'],
-    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
-    app: { route: '/datasets?section=training' },
-    // Deliberately no one-time `tip`: the two dense topics above already declare
-    // tips that nothing in src ever requests, so a third would be dead config
-    // AND would move the tip count this file's contract test pins. What's-new
-    // already announces this; the topic exists to be FOUND when searching help.
-  },
-  { id: 'training.full_model_fp8_export', kind: 'setting',
-    title: 'fp8 export for ComfyUI (and the bf16 master)',
-    keywords: ['fp8', 'quantized', 'quantised', 'export', 'comfyui', 'comfy', '10 gb',
-      'bf16', 'master', 'full model', 'dense', 'krea', 'scaled fp8', 'safetensors',
-      'inference', 'download', 'storage'],
-    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
-    app: { route: '/datasets?section=training' },
-    tip: { trigger: 'full-model-fp8-export',
-      text: 'New: a finished full-model run also delivers a ~10 GB fp8 file that ComfyUI loads directly — the 26 GB master is kept next to it unless you turn that off.' } },
-  { id: 'training.fp8_quantize_local', kind: 'action',
-    title: 'Quantize a model to fp8 (the manual path field)',
-    keywords: ['quantize', 'quantise', 'fp8', 'convert', 'shrink', 'comfyui', 'comfy',
-      'local', 'path', 'safetensors', '26 gb', '10 gb', 'checkpoint', 'full model', 'cpu',
-      'ai-toolkit quantize', 'memory'],
-    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
-    app: { route: '/datasets?section=training' },
-    tip: { trigger: 'fp8-quantize-local',
-      text: 'New: the fp8 tool no longer needs a path for the model your run delivered — it aims at it by itself. The path field is still there for a file nothing in the app points at, and it pre-fills with your custom training base.' } },
-  { id: 'training.fp8_deliver', kind: 'action',
-    title: 'Quantize to fp8 in one click (and where the file lands)',
-    keywords: ['quantize', 'quantise', 'fp8', 'one click', 'button', 'download',
-      'hugging face', 'hf', 'repository', 'master', 'bf16', 'comfyui', 'comfy',
-      'diffusion_models', 'checkpoints folder', 'full model', 'dense', 'krea',
-      'disk space', 'not enough disk space', 'another folder', 'junction',
-      'resume', 'cancel', 'stop', 'keep master', 'delete master',
-      'torch', 'safetensors', 'no module named', 'quantize.python', 'interpreter'],
-    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
-    app: { route: '/datasets?section=training' },
-    tip: { trigger: 'fp8-deliver-one-click',
-      text: 'New: “✨ Quantize to fp8” on a delivered full model does the whole thing — it fetches the master from your private Hugging Face repo, converts it, and leaves the fp8 file in ComfyUI’s own models folder. It tells you which checkpoint it takes and where the file lands before it starts, refuses if the disk is too small, and can be stopped and resumed.' } },
+
+
+
+
   // Two questions behind one word. The refusal topic keeps its id (in-app help
   // badges and bookmarked links resolve against it), but the title and keywords
   // now cover BOTH answers: a packed export is refused, a plain fp8 cast is
@@ -665,9 +542,7 @@ export const SETTINGS_FIELD_TOPICS = [
   // storage
   setting('paths.dataset_images_root', 'storage', 'dataset-images-root', 'Dataset images root',
     ['data', 'storage', 'path', 'dataset', 'images', 'root', 'location', 'disk']),
-  setting('paths.cloud_runs_dir', 'storage', 'cloud-runs-dir', 'Cloud run staging folder',
-    ['cloud runs', 'staging', 'run folder', 'disk', 'space', 'move', 'another drive',
-      'dataset copy', 'samples', 'logs', 'tens of gb', 'disk full']),
+
   setting('paths.checkpoints_dir', 'storage', 'checkpoints-dir', 'Checkpoint store folder',
     ['checkpoint', 'store', 'safetensors', 'where are my checkpoints', 'lost checkpoint',
       'deleted checkpoint', 'move', 'another drive', 'durable', 'disk']),

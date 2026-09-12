@@ -23,7 +23,7 @@ const SURFACES = {
   '../dataset/KleinImproveNote.jsx': true,      // ✨ Upscale & improve (shipped first)
   '../dataset/VariationCatalog.jsx': true,      // Klein generation
   '../dataset/ReferenceEditModal.jsx': true,    // local reference edit
-  '../dataset/ConceptSourcesPanel.jsx': true,   // rescue of small scraped images
+  "../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx": true,   // rescue of small scraped images
   '../dataset/DatasetWorkspace.jsx': true,      // 🧽 Clean, bulk
   '../dataset/WatermarkReviewLightbox.jsx': true,  // 🧽 Clean, one image
   '../bank/BankWatermarkPanel.jsx': false,      // bank inpaint — naming only

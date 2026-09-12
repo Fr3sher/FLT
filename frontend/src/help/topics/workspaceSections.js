@@ -24,12 +24,7 @@ export const WORKSPACE_SECTION_TOPICS = [
       'chatgpt', 'llm', 'own shots', 'catalog file', 'imported', 'template'],
     guide: { chapter: 'using-the-app', anchor: 'your-own-shot-catalog-json-import' },
     app: { route: '/datasets?section=add' } },
-  { id: 'workspace-scrape', kind: 'section', title: 'Scrape',
-    keywords: ['scrape', 'scan', 'gallery', 'url', 'source', 'import', 'concept'],
-    guide: { chapter: 'using-the-app', anchor: 'concept-datasets-an-object-or-action-not-a-person' },
-    app: { route: '/datasets?section=scrape&panel=scan' },
-    tip: { trigger: 'add-images-visit',
-      text: 'Scraping now lives in its own Scrape section of the sidebar.' } },
+
   { id: 'workspace-curation', kind: 'section', title: 'Curation',
     keywords: ['curation', 'quality', 'face', 'watermark', 'clean', 'cleanup', 'rescue'],
     guide: { chapter: 'using-the-app', anchor: 'the-character-walkthrough-reference-photo-trained-lora' },
@@ -65,23 +60,12 @@ export const WORKSPACE_SECTION_TOPICS = [
   // own verbs (quantize / send the fp8 twin / trash). It therefore needs its own
   // topic: searching "26 GB", "master" or "send to ComfyUI" must not land on the
   // LoRA deploy instructions, which say the opposite of what a full model needs.
-  { id: 'workspace-dense-models', kind: 'section', title: 'Full models',
-    keywords: ['full model', 'dense', 'full transformer', 'master', 'fp8', 'twin',
-      'quantize', 'send to comfyui', '26 gb', 'diffusion_models', 'raw', 'undistilled',
-      'hugging face', 'checkpoint store'],
-    guide: { chapter: 'using-the-app', anchor: 'using-a-full-model-you-trained' },
-    app: { route: '/datasets?section=checkpoints' } },
+
   // Its own topic, not a line under "Full models": a merge is how most published
   // checkpoints are actually made, and someone searching "turbo", "bake",
   // "finetune" or "publish a checkpoint" is asking for THIS, not for the
   // quantize button or the LoRA deploy instructions.
-  { id: 'workspace-lora-merge', kind: 'action', title: 'Merge a LoRA into a base',
-    keywords: ['merge', 'merge lora', 'bake', 'bake in', 'fold', 'full model from lora',
-      'checkpoint from lora', 'finetune', 'turbo', 'transplant', 're-distillation',
-      'distill', 'publish a checkpoint', 'civitai', 'base plus lora', 'stack loras',
-      'merged model', 'speed back', 'few-step'],
-    guide: { chapter: 'using-the-app', anchor: 'merge-a-lora-into-a-base-checkpoint' },
-    app: { route: '/datasets?section=checkpoints' } },
+
   { id: 'workspace-studio', kind: 'section', title: 'Studio',
     keywords: ['studio', 'test', 'lora', 'checkpoint', 'winning settings'],
     guide: { chapter: 'dataset-guide', anchor: '6-after-training-pick-the-right-checkpoint' },

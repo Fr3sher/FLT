@@ -1,3 +1,5 @@
+import { contributions } from '../../plugins/registry.js'
+
 /** The optional ML helpers Setup offers as one-click installs — as DATA.
  *
  * Extracted from SetupPage.jsx for one reason: the capability strips around the
@@ -7,7 +9,7 @@
  * pointed users at a page with no button (found by the first real user, the
  * day the wave landed). JSX does not execute under the bare `node --test`
  * suite, so the promise is only testable if the list lives in a plain module;
- * mlInstallCards.test.js pins every strip hint to a card here.
+ * Core and plugin tests pin each strip hint to its enabled install card.
  *
  * `action` is the backend install action (setup_installer.INSTALL_ACTIONS),
  * `cap` the /api/capabilities key that turns the card's badge green — or an
@@ -29,23 +31,12 @@ export const ML_INSTALL_CARDS = [
   { action: 'watermark_detect', cap: 'watermark_detect', icon: '🚩',
     title: 'Watermark detector (faster 🚩 Find)',
     body: "Makes the Bank's 🚩 Find watermarks pass roughly ten times faster and lets it run without Ollama: a small classifier scores each image (~0.14 s instead of ~1.7 s asking the vision model in words), and a second model marks where the logo sits so ✂ Crop and 🧽 Inpaint have something to work on. Adds ~0.9 GB of weights into the scoring Python it shares with ✨ Score. Without it nothing breaks — the vision model keeps doing the same job, slower." },
-  { action: 'video', cap: ['video_decode', 'video_encode'], icon: '🎬',
-    title: 'Video decoding (the 🎬 Video bank reads your files)',
-    body: 'Lets the Video bank open your files at all: read their length, size and frame rate, grab thumbnails, measure quality and cut the clips you promote. Two small packages (PyAV + a bundled ffmpeg) into the app\'s own Python — no torch, no GPU. Without it a video bank can list files and nothing more, and every pass names this install as the missing piece.' },
-  { action: 'shot_detect', cap: 'video_detect', icon: '🎞️',
-    title: 'Shot detection (triage shots, not whole rushes)',
-    body: 'Cuts each video at its shot boundaries (TransNetV2) so a two-hour file becomes hundreds of individually reviewable shots. Installs torch (CPU is fine — the network reads 48×27 frames) and one small package into the scoring Python it shares with ✨ Score. Without it you can still watch and triage whole files; you just cannot split them.' },
+
+
   { action: 'video_text', cap: 'video_text', icon: '🔳',
     title: 'Burned-in text (🔤 Find text + the 🔳 Safe zone pass)',
-    body: 'One OCR engine, two jobs. On Banks and Datasets it powers 🔤 Find text: speech bubbles, subtitles, captions and sound effects become zones 🧽 Repaint can erase. On the Video bank it lets the 🔳 Safe zone pass find subtitles, chyrons and text watermarks and work out how much of each frame a crop would leave you. One small Apache-2.0 package (RapidOCR) into the app\'s own Python — CPU only, no torch, no GPU, and its ~16 MB of weights ride inside the wheel so it works with no internet. Without it the Safe zone pass still measures letterbox bands ("bands only"), and 🔤 Find text stays greyed with this card as the fix.' },
-  // This card is the fix for the exact gap the others already closed: the
-  // Concept Sources panel (Datasets ▸ Sources) offers the same install action
-  // through its own amber banner, but Setup — the screen a new user actually
-  // opens first — had no button for it at all, so the "install the scraper
-  // extras" advice from that banner led back to a page with nothing to click.
-  { action: 'scrape_extras', cap: 'scrape_deps', icon: '🔎',
-    title: 'Scraping extras (gallery links & keyless web image search)',
-    body: 'Installs curl_cffi, gallery-dl, cloudscraper, ddgs and yt-dlp — what gallery-URL scraping, the keyless web image search and the video sources use to enumerate and fetch media. Pexels enumeration works without it (its official API); fetching the actual images still needs curl_cffi. Without it, scraping is limited to sources with no anti-bot layer.' },
+    body: 'One OCR engine, two jobs. On Banks and Datasets it powers 🔤 Find text: speech bubbles, subtitles, captions and sound effects become zones 🧽 Repaint can erase. With the Video product installed, it also lets the 🔳 Safe zone pass find subtitles, chyrons and text watermarks and work out how much of each frame a crop would leave you. One small Apache-2.0 package (RapidOCR) into a compatible Python environment prepared by LDS — CPU only, no torch, no GPU, and its ~16 MB of weights ride inside the wheel so it works with no internet. Without it the Safe zone pass still measures letterbox bands ("bands only"), and 🔤 Find text stays greyed with this card as the fix.' },
+
 ]
 
 /** The capability keys a card's install is responsible for, always as a list. */
@@ -66,4 +57,15 @@ export function cardCaps(card) {
 export function cardInstalled(card, caps) {
   const c = caps || {}
   return cardCaps(card).every((k) => !!c[k])
+}
+
+/** Plugin preparation can read all active offers; the LDS wizard requests core only. */
+export function mlInstallCards({ includePlugins = true } = {}) {
+  const cards = ML_INSTALL_CARDS.slice()
+  if (!includePlugins) return cards
+  for (const item of contributions('setup.step').flatMap((step) => step.mlCards || [])) {
+    const before = cards.findIndex((card) => card.action === item.before)
+    cards.splice(before < 0 ? cards.length : before, 0, item)
+  }
+  return cards
 }

@@ -64,7 +64,7 @@ test('▶ Continue from here owes the licence question and the confirmations loo
 })
 
 test('the rail\'s Checkpoints and Studio sections land on anchors the workspace renders', async () => {
-  const { VIDEO_DATASET_SECTIONS } = await import('../src/components/videobank/videoDatasetSections.js')
+  const { VIDEO_DATASET_SECTIONS } = await import("../../bundled/video/frontend/videobank/videoDatasetSections.js")
   const ids = VIDEO_DATASET_SECTIONS.map((s) => s.id)
   assert.deepEqual(ids.slice(-2), ['checkpoints', 'studio'], 'the two sections close the rail, like the image one')
   for (const id of ['checkpoints', 'studio']) {

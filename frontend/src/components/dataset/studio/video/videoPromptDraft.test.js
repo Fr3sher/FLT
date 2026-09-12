@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { PROMPT_STORAGE, readPromptDraft, writePromptDraft } from './videoPromptDraft.js';
+import { PROMPT_STORAGE, readPromptDraft, writePromptDraft } from "../../../../../../bundled/video/frontend/studio/video/videoPromptDraft.js";
 
 const memory = () => {
   const map = new Map();
@@ -50,7 +50,7 @@ test('a browser without storage, or one that throws, neither crashes nor blocks 
 });
 
 test('the studio reads the draft once at mount and writes the field on every change', () => {
-  const src = readFileSync(new URL('./VideoTestStudio.jsx', import.meta.url), 'utf8');
+  const src = readFileSync(new URL("../../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx", import.meta.url), 'utf8');
   assert.match(src, /import \{ readPromptDraft, writePromptDraft \} from '\.\/videoPromptDraft'/);
   // The lazy initializer: React calls it with no argument, so it reads
   // globalThis.localStorage.

@@ -13,10 +13,10 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
-import { buildGeneratePayload, clipSeconds } from './videoStudioApi.js'
+import { buildGeneratePayload, clipSeconds } from "../../../../../../bundled/video/frontend/studio/video/videoStudioApi.js"
 
 const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
-const PANEL = read('./VideoTestStudio.jsx')
+const PANEL = read("../../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx")
 
 /** Every `postJson(<url>(), {…})` call in the panel — ALL of them, in source
  * order. A list, not a map keyed by helper: a second call to the same helper

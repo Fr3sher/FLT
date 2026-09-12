@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(here, p), 'utf8');
-const studio = read('./VideoTestStudio.jsx');
-const history = read('./VideoClipHistory.jsx');
+const studio = read("../../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx");
+const history = read("../../../../../../bundled/video/frontend/studio/video/VideoClipHistory.jsx");
 
 test('every finished clip offers ⏭ Continue, and a continuation names its parent on the card', () => {
   assert.match(history, /clip\.status === 'done' && onContinue && \(/);

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { VIDEO_PASS_TOPICS } from './videoPassTopics.js'
-import { PASS_LABELS } from './videoBankStatus.js'
+import { VIDEO_PASS_TOPICS } from "../../../../bundled/video/frontend/videobank/videoPassTopics.js"
+import { PASS_LABELS } from "../../../../bundled/video/frontend/videobank/videoBankStatus.js"
 import { getHelpTopic } from '../../help/helpRegistry.js'
 import { markdownHeadingId } from '../../utils/headingId.js'
 

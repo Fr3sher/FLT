@@ -11,7 +11,7 @@ import fs from 'node:fs'
 import test from 'node:test'
 
 const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
-const STUDIO = read('./VideoTestStudio.jsx')
+const STUDIO = read("../../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx")
 
 test('the strip is the state, and `source` is its first frame — what the ✨ helpers read', () => {
   assert.match(STUDIO, /const \[sources, setSources\] = useState\(\[\]\);/)

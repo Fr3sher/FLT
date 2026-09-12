@@ -1,16 +1,23 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { apiFetch, putJson, del } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { useCapabilities } from '../context/CapabilitiesContext'
 import { SETTINGS_SECTIONS, sectionStatus, matchesQuery } from '../components/settings/registry'
 import { SectionHeader } from '../components/settings/primitives'
 import { shouldScrollToSection, focusNeedsRescroll } from './settingsDeepLink'
+import { registeredDescriptors, plugins } from '../plugins/registry.js'
+import { legacyPluginSettingsTarget, reconcileSettings, settingsPatch, settingsApiUrl } from './pluginSettings.js'
+import PluginSettingsGroups from './pluginSettingsGroups.jsx'
+import { SettingsScopeContext } from '../components/settings/settingsScope.js'
 import { HelpBadge } from '../help/HelpMode'
-import { searchHelpTopics, helpTopics } from '../help/helpRegistry'
-import { openCollapsedAncestors, resolveFocusTarget } from '../help/revealTarget'
+import { searchHelpTopics, allHelpTopics } from '../help/helpRegistry'
+import {
+  FOCUS_RETRY_MS, FOCUS_RETRY_WINDOW_MS, openCollapsedAncestors, resolveFocusTarget,
+} from '../help/revealTarget'
 import { buildGuideTextIndex, matchGuideAnchors } from '../help/guideTextIndex'
 import settingsReferenceRaw from '../../../docs/guide/settings-reference.md?raw'
+import { guideChapters } from '../plugins/registry.js'
 import OverviewSection from '../components/settings/OverviewSection'
 import EnginesSection from '../components/settings/EnginesSection'
 import ScrapingSection from '../components/settings/ScrapingSection'
@@ -51,7 +58,8 @@ function StatusLed({ status }) {
   )
 }
 
-export default function SettingsPage() {
+export default function SettingsPage({ plugin = null, groups = [] }) {
+  const settingsUrl = settingsApiUrl(plugin?.id)
   const toast = useToast()
   const { caps, refresh } = useCapabilities()
   const { section } = useParams()
@@ -80,11 +88,13 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [missingFocus, setMissingFocus] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await apiFetch('/api/settings')
+      const data = await apiFetch(settingsUrl)
       setConfig(data.config)
       setSavedConfig(data.config)
       setRuntime(data.runtime || { host: null, port: null })
@@ -92,12 +102,14 @@ export default function SettingsPage() {
       setPromptDefaultsBySubject(data.identity_prompt_defaults_by_subject || {})
       setConfigDefaults(data.config_defaults || {})
       setSecretsPresence(data.secrets)
+      setLoadError('')
     } catch (e) {
+      setLoadError(e.message || 'Could not load settings.')
       toast.error(`Failed to load settings: ${e.message}`)
     } finally {
       setLoading(false)
     }
-  }, [toast])
+  }, [toast, settingsUrl])
 
   useEffect(() => { load() }, [load])
 
@@ -118,7 +130,7 @@ export default function SettingsPage() {
 
   const toggleEngine = (id) => {
     setConfig((prev) => {
-      const enabled = prev.engines.enabled || []
+      const enabled = prev.engines?.enabled || []
       const next = enabled.includes(id) ? enabled.filter((e) => e !== id) : [...enabled, id]
       return { ...prev, engines: { ...prev.engines, enabled: next } }
     })
@@ -130,7 +142,7 @@ export default function SettingsPage() {
   const handleDeleteSecret = async (key, label) => {
     if (!window.confirm(`Remove the saved ${label}? Any engine that uses it stops working until you add a new key.`)) return
     try {
-      const data = await del(`/api/settings/secret/${key}`)
+      const data = await del(settingsApiUrl(plugin?.id, `/api/settings/secret/${encodeURIComponent(key)}`))
       setSecretsPresence(data.secrets)
       setSecretInputs((prev) => { const next = { ...prev }; delete next[key]; return next })
       await refresh(true)
@@ -147,9 +159,12 @@ export default function SettingsPage() {
   const saveSecretIfPending = async (key) => {
     const pending = (secretInputs[key] || '').trim()
     if (!pending) return
-    const data = await putJson('/api/settings', { secrets: { [key]: pending } })
+    const data = await putJson(settingsUrl, { secrets: { [key]: pending } })
     setSecretsPresence(data.secrets)
-    setSecretInputs((prev) => { const next = { ...prev }; delete next[key]; return next })
+    setSecretInputs((prev) => {
+      if ((prev[key] || '').trim() !== pending) return prev
+      const next = { ...prev }; delete next[key]; return next
+    })
     await refresh(true)
   }
 
@@ -168,9 +183,10 @@ export default function SettingsPage() {
   // Throws on failure so the Test button reports it (same contract as SecretField).
   const saveConfigSection = async (section) => {
     const current = config?.[section]
-    if (!current || JSON.stringify(current) === JSON.stringify(savedConfig?.[section])) return
-    const data = await putJson('/api/settings', { config: { [section]: current } })
-    setConfig((prev) => ({ ...prev, [section]: data.config[section] }))
+    const patch = settingsPatch({ [section]: current }, savedConfig)
+    if (!current || !Object.keys(patch).length) return
+    const data = await putJson(settingsUrl, { config: patch })
+    setConfig((prev) => reconcileSettings(prev, savedConfig, data.config, patch, config))
     setSavedConfig(data.config)
     setRuntime(data.runtime || { host: null, port: null })
   }
@@ -183,9 +199,9 @@ export default function SettingsPage() {
   // a React state update, invisible to the callback that triggered it (which is
   // exactly how the first version of this silently saved nothing).
   const saveConfigPatch = async (section, patch) => {
-    const merged = { ...(config?.[section] || {}), ...patch }
-    const data = await putJson('/api/settings', { config: { [section]: merged } })
-    setConfig((prev) => ({ ...prev, [section]: data.config[section] }))
+    const submitted = { [section]: patch }
+    const data = await putJson(settingsUrl, { config: submitted })
+    setConfig((prev) => reconcileSettings(prev, savedConfig, data.config, submitted, config))
     setSavedConfig(data.config)
   }
 
@@ -203,16 +219,18 @@ export default function SettingsPage() {
           .filter(([, v]) => v)
       )
       submittedCloudToken = Object.prototype.hasOwnProperty.call(secrets, 'HF_CLOUD_TOKEN')
-      const data = await putJson('/api/settings', { config, secrets })
+      const patch = settingsPatch(config, savedConfig)
+      const data = await putJson(settingsUrl, { config: patch, secrets })
       const cloudTokenCheck = submittedCloudToken
         ? data?.secret_checks?.HF_CLOUD_TOKEN
         : null
       if (cloudTokenCheck) recordTestResult('hf_cloud', cloudTokenCheck)
-      setConfig(data.config)
+      setConfig((prev) => reconcileSettings(prev, savedConfig, data.config, patch, config))
       setSavedConfig(data.config)
       setRuntime(data.runtime || { host: null, port: null })
       setSecretsPresence(data.secrets)
-      setSecretInputs({})
+      setSecretInputs((prev) => Object.fromEntries(Object.entries(prev)
+        .filter(([key, value]) => (value || '').trim() !== secrets[key])))
       // force=true: /api/capabilities caches probes for 30s server-side, so a
       // plain refresh() could leave onboarding/studio_visible stale right
       // after the config that determines them just changed.
@@ -270,6 +288,10 @@ export default function SettingsPage() {
   const [searchParams] = useSearchParams()
   const focusId = searchParams.get('focus')
   const location = useLocation()
+  const pluginTarget = !plugin && legacyPluginSettingsTarget(section, focusId, registeredDescriptors(), plugins().map(item => item.id))
+  useEffect(() => {
+    if (pluginTarget) navigate(`${pluginTarget}${location.search}`, { replace: true })
+  }, [pluginTarget, location.search, navigate])
   // Which arrival the reveal below has already served — see the effect.
   const revealedRef = useRef(null)
 
@@ -307,52 +329,74 @@ export default function SettingsPage() {
        its one reveal when `config` lands. */
     const arrival = `${location.key}|${section}|${focusId}`
     if (revealedRef.current === arrival) return undefined
-    const found = resolveFocusTarget(focusId)
-    if (!found) return undefined
-    revealedRef.current = arrival
-    openCollapsedAncestors(found.el)
-    found.el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    const ring = ['ring-2', 'ring-indigo-400/70', 'ring-offset-2', 'ring-offset-app', 'rounded-md']
-    found.el.classList.add(...ring)
-    /* Panels above the target keep rendering after the first scroll (the composed
-       prompt preview fetches its text), which pushes the field back out of view —
-       measured 116 px below the fold at 400 px wide, with the ring already gone.
-       So keep checking while the highlight is lit, and re-scroll only when the
-       field is genuinely not visible. See focusNeedsRescroll. */
-    const settle = setInterval(() => {
-      const r = found.el.getBoundingClientRect()
-      if (!focusNeedsRescroll({ top: r.top, height: r.height, viewportHeight: window.innerHeight })) {
-        // Landed once — stop watching. Correcting after that would drag back a
-        // reader who has since scrolled somewhere else on purpose.
-        clearInterval(settle)
-        return
-      }
+    const reveal = (found) => {
+      revealedRef.current = arrival
+      openCollapsedAncestors(found.el)
       found.el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }, 500)
-    const t = setTimeout(() => {
-      clearInterval(settle)
-      found.el.classList.remove(...ring)
-    }, 4000)
-    return () => { clearInterval(settle); clearTimeout(t) }
+      const ring = ['ring-2', 'ring-indigo-400/70', 'ring-offset-2', 'ring-offset-app', 'rounded-md']
+      found.el.classList.add(...ring)
+      /* Panels above the target keep rendering after the first scroll (the composed
+         prompt preview fetches its text), which pushes the field back out of view —
+         measured 116 px below the fold at 400 px wide, with the ring already gone.
+         So keep checking while the highlight is lit, and re-scroll only when the
+         field is genuinely not visible. See focusNeedsRescroll. */
+      const settle = setInterval(() => {
+        const r = found.el.getBoundingClientRect()
+        if (!focusNeedsRescroll({ top: r.top, height: r.height, viewportHeight: window.innerHeight })) {
+          // Landed once — stop watching. Correcting after that would drag back a
+          // reader who has since scrolled somewhere else on purpose.
+          clearInterval(settle)
+          return
+        }
+        found.el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 500)
+      const t = setTimeout(() => {
+        clearInterval(settle)
+        found.el.classList.remove(...ring)
+      }, 4000)
+      return () => { clearInterval(settle); clearTimeout(t) }
+    }
+    const found = resolveFocusTarget(focusId)
+    if (found) return reveal(found)
+    /* A target inside a plugin's group renders only once its lazy chunk has
+       landed — after `config`, which is what re-runs this effect for the core's
+       own late fields. Nothing re-runs it for a chunk, so keep looking for a
+       bounded while instead of giving up (a refutation finding, 2026-09-05:
+       ?focus=storage-fp8-quantize scrolled nowhere and lit nothing). The
+       once-per-arrival guard is still armed only when the target resolves. */
+    let cleanup = null
+    let waited = 0
+    const waiter = setInterval(() => {
+      waited += FOCUS_RETRY_MS
+      const late = resolveFocusTarget(focusId)
+      if (late) {
+        clearInterval(waiter)
+        cleanup = reveal(late)
+      } else if (waited >= FOCUS_RETRY_WINDOW_MS) {
+        clearInterval(waiter)
+        setMissingFocus(`${location.key}|${focusId}`)
+      }
+    }, FOCUS_RETRY_MS)
+    return () => { clearInterval(waiter); if (cleanup) cleanup() }
   }, [focusId, section, loading, config, location.key])
 
   // Enriched search index: besides the section rail, individual settings are
   // matched by their tutorial TEXT (docs/guide/settings-reference.md, indexed by
   // H2) so e.g. "crop" surfaces the watermark auto-crop setting via its docs.
-  const guideIndex = useMemo(() => buildGuideTextIndex(settingsReferenceRaw), [])
+  const guideIndex = useMemo(() => buildGuideTextIndex(guideChapters([{ id: 'settings-reference', source: settingsReferenceRaw }])[0].source), [])
   const settingResults = useMemo(() => {
     const q = query.trim()
     if (!q) return []
     const seen = new Set()
     const out = []
     const consider = (t) => {
-      if ((t.kind === 'setting' || t.kind === 'action') && !seen.has(t.id)) {
+      if (!t.plugin && (t.kind === 'setting' || t.kind === 'action') && !seen.has(t.id)) {
         seen.add(t.id); out.push(t)
       }
     }
     for (const t of searchHelpTopics(q)) consider(t)          // label / keyword / id
     const anchors = matchGuideAnchors(guideIndex, q)          // tutorial text
-    for (const t of helpTopics) {
+    for (const t of allHelpTopics()) {
       if (t.guide.chapter === 'settings-reference' && anchors.has(t.guide.anchor)) consider(t)
     }
     return out
@@ -366,7 +410,10 @@ export default function SettingsPage() {
     setSecretInputs({})
   }
 
-  if (loading || !config) {
+  if (loadError) {
+    return <div role="alert" className="space-y-3"><p>{loadError}</p><button type="button" onClick={load}>Retry loading settings</button></div>
+  }
+  if (loading || !config || pluginTarget) {
     return <p className="text-content-muted">Loading settings…</p>
   }
 
@@ -453,7 +500,17 @@ export default function SettingsPage() {
   }
 
   return (
-    <div>
+    <SettingsScopeContext value={plugin?.id || null}><div>
+      {missingFocus === `${location.key}|${focusId}` && <p role="status" className="mb-4 rounded-lg border border-border p-3 text-sm">
+        This setting is not available on this page. If it belongs to a plugin, open its settings from{' '}
+        <Link to="/plugins?tab=installed" className="text-primary underline">My plugins</Link>.
+      </p>}
+      {plugin ? <div ref={panelRef} className="space-y-6" data-plugin-settings={plugin.id}>
+        <Link to="/plugins?tab=installed" className="inline-flex min-h-10 items-center text-sm text-primary hover:underline">← My plugins</Link>
+        <SectionHeader eyebrow="Plugin settings" title={plugin.name || plugin.id}
+          description="Changes are saved with this plugin. Your existing values are kept across updates and reinstallation." />
+        <PluginSettingsGroups pluginId={plugin.id} groups={groups} {...sectionProps} />
+      </div> : <>
       <div className="lg:grid lg:grid-cols-[230px_minmax(0,1fr)] lg:items-start lg:gap-8">
         <aside>
           {/* Mobile: horizontal chip rail. `relative` makes the scroller the
@@ -515,6 +572,7 @@ export default function SettingsPage() {
           <ActiveSection {...sectionProps} />
         </div>
       </div>
+      </>}
 
       {/* Floating save bar — only exists while there is something to save, so
           the page never shows a dead "Save" button. */}
@@ -533,6 +591,6 @@ export default function SettingsPage() {
           </button>
         </div>
       )}
-    </div>
+    </div></SettingsScopeContext>
   )
 }

@@ -10,7 +10,7 @@ const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), '
 // would drift the first time either surface was tweaked).
 const nodes = fs.readFileSync(new URL('./lineageNodes.jsx', import.meta.url), 'utf8');
 const edges = fs.readFileSync(new URL('./lineageEdges.jsx', import.meta.url), 'utf8');
-const canvas = fs.readFileSync(new URL('../canvas/LineageCanvas.jsx', import.meta.url), 'utf8');
+const canvas = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
 // …and so are the ACTIONS. The popover (⬇ download, ▶ continue, 📦 deploy,
 // ⏏ undeploy, 🗑 delete, ⓘ details) was ~90 lines inlined in the graph, which is
 // why the canvas had none at all; it now lives in one component on one pure
@@ -42,7 +42,7 @@ test('the canvas GENERATES through the Test Studio, it does not grow a second on
   // now is the shape of the opening: the canvas mounts the Studio's panel and the
   // Studio's hooks. A canvas that re-declared a prompt field, a seed control or a
   // launch call would be the drift this whole design exists to prevent.
-  const panel = fs.readFileSync(new URL('../canvas/CanvasGenerationPanel.jsx', import.meta.url), 'utf8');
+  const panel = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx", import.meta.url), 'utf8');
   assert.match(panel, /import RunSetupPanel from '\.\.\/dataset\/studio\/RunSetupPanel'/);
   assert.match(panel, /useStudioForm/);
   assert.match(panel, /useCanvasStudio/);
@@ -54,7 +54,7 @@ test('the canvas GENERATES through the Test Studio, it does not grow a second on
 });
 
 test('the canvas launch goes through ONE call site, so no setting can be dropped', () => {
-  const hook = fs.readFileSync(new URL('../../hooks/useCanvasStudio.js', import.meta.url), 'utf8');
+  const hook = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/hooks/useCanvasStudio.js", import.meta.url), 'utf8');
   const setup = fs.readFileSync(new URL('./studio/RunSetupPanel.jsx', import.meta.url), 'utf8');
   // RunSetupPanel owns genSettings in local state and passes it to studio.launch.
   // The canvas therefore swaps studio.launch — NOT the onLaunch handler, which
@@ -68,7 +68,7 @@ test('the canvas launch goes through ONE call site, so no setting can be dropped
 });
 
 test('the canvas refuses mixed families and deploys before generating — in the pure layer', () => {
-  const rules = fs.readFileSync(new URL('../../utils/canvasGeneration.js', import.meta.url), 'utf8');
+  const rules = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/utils/canvasGeneration.js", import.meta.url), 'utf8');
   // Both decisions are arithmetic a test can check without a browser (behaviour
   // covered in canvasGeneration.test.js); the component must USE them.
   assert.match(canvas, /from '\.\.\/\.\.\/utils\/canvasGeneration'/);
@@ -99,7 +99,7 @@ test('the canvas disambiguates the touch gesture with a long press', () => {
 });
 
 test('✦ Tidy up exists and is wired to the page, not to a local reset', () => {
-  const page = fs.readFileSync(new URL('../../pages/CanvasPage.jsx', import.meta.url), 'utf8');
+  const page = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/pages/CanvasPage.jsx", import.meta.url), 'utf8');
   assert.match(canvas, /Tidy up/);
   // Through `handleTidyUp` since the frame stopped resizing itself: the button
   // arms a re-fit and then delegates, unchanged, to the page's handler. What is
@@ -403,9 +403,9 @@ test('📤 Civitai is a row of the shared popover, and BOTH hosts open the same 
 test('a generation launched from the board is the BOARD’s state, recoverable', () => {
   // Reported from real use: closing the settings panel (or leaving the page) lost
   // the run in flight, because the run id lived in the panel's own hook.
-  const runHook = fs.readFileSync(new URL('../../hooks/useCanvasRun.js', import.meta.url), 'utf8');
-  const studio = fs.readFileSync(new URL('../../hooks/useCanvasStudio.js', import.meta.url), 'utf8');
-  const tracker = fs.readFileSync(new URL('../canvas/CanvasRunTracker.jsx', import.meta.url), 'utf8');
+  const runHook = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/hooks/useCanvasRun.js", import.meta.url), 'utf8');
+  const studio = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/hooks/useCanvasStudio.js", import.meta.url), 'utf8');
+  const tracker = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasRunTracker.jsx", import.meta.url), 'utf8');
   // The panel no longer owns the run: it receives the board's tracker.
   assert.doesNotMatch(studio, /useStudioRun\(/);
   assert.match(studio, /const runId = tracker\?\.runId \?\? null;/);
@@ -423,8 +423,8 @@ test('a finished generation SAYS where the images went, and the board re-reads i
   // The other half of the same report: the images landed in the checkpoint's
   // gallery and nothing said so — and the board did not even refresh, so the
   // × N badge only appeared after a full reload.
-  const rules = fs.readFileSync(new URL('../../utils/canvasRunResults.js', import.meta.url), 'utf8');
-  const tracker = fs.readFileSync(new URL('../canvas/CanvasRunTracker.jsx', import.meta.url), 'utf8');
+  const rules = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/utils/canvasRunResults.js", import.meta.url), 'utf8');
+  const tracker = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasRunTracker.jsx", import.meta.url), 'utf8');
   assert.match(rules, /export function readyImageCount\(/);
   assert.match(rules, /export function canvasRunDatasetIds\(/);
   // Each finished run names its checkpoints, and each one opens its gallery.
@@ -469,10 +469,10 @@ test('the canvas warns before deleting a ★ pinned checkpoint, with ITS lane pi
   const svc = fs.readFileSync(new URL('../../../../backend/app/services/cloud_training.py', import.meta.url), 'utf8');
   assert.match(svc, /'best_settings_loras': studio\.best_settings_lora_filenames\(ds\)/);
   // …the page puts it on the lane…
-  const page = fs.readFileSync(new URL('../../pages/CanvasPage.jsx', import.meta.url), 'utf8');
+  const page = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/pages/CanvasPage.jsx", import.meta.url), 'utf8');
   assert.match(page, /bestSettingsLoras: row\?\.best_settings_loras \|\| \[\]/);
   // …and the board hands the hook the pin of the lane whose popover is OPEN,
   // never another dataset's.
-  const canvasSrc = fs.readFileSync(new URL('../canvas/LineageCanvas.jsx', import.meta.url), 'utf8');
+  const canvasSrc = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
   assert.match(canvasSrc, /bestSettingsLora: openCk\?\.lane\?\.bestSettingsLoras \|\| null/);
 });

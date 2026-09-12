@@ -494,6 +494,7 @@ const renderRunCard = (run, i) => {
               loading={lineageData[run.record_id]?.loading}
               error={lineageData[run.record_id]?.error}
               onSelect={jumpToRun}
+              continueSource={run.source}
               onContinueCheckpoint={canContinueRun?.(run) ? continueFromCheckpoint : undefined}
               refetchTree={async () => {
                 const r = await fetch(`/api/dataset/train/runs/${run.record_id}/lineage`, { credentials: 'include' });

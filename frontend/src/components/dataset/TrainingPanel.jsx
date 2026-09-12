@@ -1,24 +1,20 @@
-import VastLink from '../common/VastLink';
 // react-frontend/src/components/dataset/TrainingPanel.jsx
 import { useEffect, useRef, useState } from 'react';
-import { Dna, Drama, Eraser, FolderOpen, GraduationCap, Microscope, Package, Rocket, Save, SlidersHorizontal, Trash2, Trophy } from 'lucide-react';
+import { Drama, Eraser, FolderOpen, GraduationCap, Microscope, Package, Rocket, Save, SlidersHorizontal, Trash2, Trophy } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router';
 import { apiFetch, fetchWithCsrfRetry, getCsrfToken } from '../../api/fetchClient';
 import { useCapabilities } from '../../context/CapabilitiesContext';
-import { postJson } from '../../hooks/useDataset';
 import { animeFamilyNote } from './animeFamilyNote.js';
 import { dualCaptionsSupport } from './dualCaptions.js';
-import { loadMergeOpen, saveMergeOpen } from './loraMerge.js';
 import { maskedCarryOverAction, clearLegacyMasked } from './maskedMigration.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
-import DenseModelsPanel from './DenseModelsPanel';
-import LoraMergeTool from './LoraMergeTool';
+import PluginSlot from '../../plugins/PluginSlot.jsx';
+import { contributions } from '../../plugins/registry.js';
 import {
   checkpointSelectionMatchesTraining,
   checkpointVariantLabel,
   checkpointVariantOptions,
-  cloudTrainingLaunchPayload,
   defaultCheckpointBase,
   defaultCheckpointVariant,
   loraFolderLabel,
@@ -27,7 +23,7 @@ import {
   trainFamilyLabel,
 } from '../../utils/checkpointBrowser';
 import { stepsRecipeRefreshDelay } from '../../utils/stepsRecipeRefresh';
-import { confirmableRetryFlag, postWithConfirmations } from '../../utils/trainingRefusals';
+import { confirmableRetryFlag } from '../../utils/trainingRefusals';
 import {
   deployedFilenamesOf,
   orphanImportedCheckpoints,
@@ -60,16 +56,16 @@ import { UseDatasetCaptionsButton } from './UseDatasetCaptionsButton';
 import TrainingProgress from './TrainingProgress';
 import PreflightModal from './PreflightModal';
 import { laneOfPayload, preflightUrl } from './preflightLane.js';
+import { continuationFromNode, explicitRunContinuation } from '../runs/localContinuation.js';
 import {
   baseOptionSuffix, baseSelectionNote, basesForFamily,
-  cloudUnsupportedFamilyReason, isCustomWeightsBase, looksAbsoluteBase,
+  CUSTOM_BASE_SENTINEL, DEFAULT_CUSTOM_FAMILIES, isCustomWeightsBase, looksAbsoluteBase,
 } from './trainingFamilyScope.js';
 import { failureView } from './trainingFailure';
 import {
   MEMORY_KEYS, MEMORY_LABELS, memoryAdviceText, memoryIsOverridden, memoryPatchFor,
   memoryRiskLine, memoryStateLabel,
 } from './memorySavingAdvice';
-import { stopOutcomeMessage } from '../../utils/runSilence';
 import SettingsLink from '../common/SettingsLink';
 import { DatasetVersionChip, RunIdChip } from './RunIdentityBadges';
 import {
@@ -78,24 +74,11 @@ import {
 import {
   TRAINING_MODE_FULL_TRANSFORMER,
   TRAINING_MODE_LORA,
-  denseQuantizeTarget,
-  denseTurboWarning,
   fullTransformerBaseLabel,
   fullTransformerUnavailableReason,
-  hfCloudTokenReadiness,
   isFullTransformerEligible,
-  isFullTransformerRun,
   normalizeTrainingMode,
 } from '../../utils/trainingMode.js';
-import CloudLaunchDialog from './CloudLaunchDialog';
-import CloudStopDialog from '../shared/CloudStopDialog';
-import {
-  CUSTOM_BASE_SENTINEL, DEFAULT_CUSTOM_FAMILIES, DenseBasePicker,
-  FullTransformerAdvancedRecipe, FullTransformerArtifactNotice,
-} from './FullTransformerRecipe';
-// Compat re-export: tests and callers keep importing these from the panel.
-export { DenseBasePicker, FullTransformerAdvancedRecipe } from './FullTransformerRecipe';
-
 // Plancher dur / recommandé par famille — miroir de TRAIN_MIN_IMAGES côté serveur
 // (le preflight reste l'autorité ; ceci ne sert qu'à désactiver le bouton tôt).
 const TRAIN_MIN = { zimage: [12, 20], sdxl: [20, 30], krea: [15, 20], flux: [15, 20], flux2klein: [15, 20], anima: [15, 20] };
@@ -225,18 +208,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const setCkView = (v) => {
     setCheckpointsView(v);
     try { localStorage.setItem('lds.checkpointsView', v); } catch { /* ignore */ }
-  };
-  // The merge disclosure is CONTROLLED, and persisted. `open` on a <details> is
-  // DOM state, and the block lives inside CheckpointPortal below — every swap
-  // between the portal host and the inline place unmounts it, which closed the
-  // tool on top of emptying it. Held here, above the portal, it also survives
-  // the remount itself and not only a reload.
-  const [mergeOpen, setMergeOpen] = useState(loadMergeOpen);
-  const toggleMerge = (event) => {
-    event.preventDefault();
-    const next = !mergeOpen;
-    setMergeOpen(next);
-    saveMergeOpen(next);
   };
   const [checkpoints, setCheckpoints] = useState([]);
   const [ckLoaded, setCkLoaded] = useState(false);
@@ -380,7 +351,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
 
   // Charge les bases + la base/variante du dataset au montage.
   useEffect(() => {
-    if (!caps.training_visible) return undefined;
+    if (!ds.currentId) return undefined;
     let alive = true;
     ds.trainBaseInfo?.().then((info) => {
       if (alive && info) {
@@ -974,7 +945,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // WHICH pairs duplicate, editable/rejectable in place) and await the user's
   // Start-anyway / Cancel. Unreachable preflight never blocks.
   const [preflightReport, setPreflightReport] = useState(null);
-  const [hfCloudTokenIssue, setHfCloudTokenIssue] = useState(null);
   const preflightResolver = useRef(null);
   const resolvePreflight = (ok) => {
     setPreflightReport(null);
@@ -990,7 +960,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // passes its own so the reason lands inside the still-open dialog, next to the
   // choices the user would otherwise have had to retype.
   const preflightOk = async ({
-    lane, trainType: tt, variant: va, baseModel: bm, onRefused,
+    lane, trainType: tt, variant: va, baseModel: bm, onRefused, validateReport,
   } = {}) => {
     try {
       const r = await fetch(
@@ -1008,18 +978,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         }),
         { credentials: 'include' });
       const d = await r.json().catch(() => ({}));
-      const tokenReadiness = hfCloudTokenReadiness(d);
-      const checksDenseCloudToken = lane === 'cloud'
-        && normalizeTrainingMode(trainingMode) === TRAINING_MODE_FULL_TRANSFORMER;
-      if (checksDenseCloudToken && tokenReadiness.blocked) {
-        const detail = tokenReadiness.detail
-          || 'HF_CLOUD_TOKEN is missing, invalid, or does not have the required permissions.';
-        setHfCloudTokenIssue(detail);
-        if (onRefused) onRefused(detail);
-        return false;
-      } else if (checksDenseCloudToken && tokenReadiness.signaled) {
-        setHfCloudTokenIssue(null);
-      }
+      if (validateReport && !validateReport(d)) return false;
       if (!r.ok) return true;
       if (d.blockers?.length) {
         // A blocker set that is entirely bypassable quality guard-rails
@@ -1062,6 +1021,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // The checkpoint the dialog opens ON, when it was opened from a ◉ Graph pill
   // (null = the plain Continue button → the dialog's historical "latest" default).
   const [continueInitialStep, setContinueInitialStep] = useState(null);
+  const [continueSource, setContinueSource] = useState(null);
   // The LAST refusal, rendered INSIDE the dialog (utils/continueOutcome.js), and
   // the in-flight flag that keeps it from being dismissed mid-request.
   const [continueError, setContinueError] = useState(null);
@@ -1072,12 +1032,23 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     // it cost the user the whole form on every refusal — including the preflight
     // one, which is precisely the case where the answer is "fix this, then retry
     // with the same choices".
-    if (!payload) { setContinueOpen(false); setContinueInitialStep(null); setContinueError(null); return; }
+    if (!payload) { setContinueOpen(false); setContinueInitialStep(null); setContinueSource(null); setContinueError(null); return; }
+    if (continueSource) {
+      payload = continueSource.dataset_id === ds.currentId
+        ? explicitRunContinuation(continueSource, payload) : null;
+      if (!payload) {
+        setContinueError('This run has no listed checkpoint for this dataset. Refresh its checkpoints and try again.');
+        return;
+      }
+    }
+    const continueBase = continueSource?.base_model ?? checkpointBase;
+    const continueType = continueSource?.train_type || checkpointTrainType;
+    const continueVariant = continueSource?.variant || checkpointVariant;
     // ONE dialog, two lanes: the chosen checkpoint either resumes on this machine
     // or is seeded onto a fresh cloud pod. Same payload, same guarded+confirmable
     // request helper — only the hook call differs.
     const lane = laneOfPayload(payload);
-    const inCloud = lane === 'cloud';
+    const pluginLane = pluginLanes.find((l) => l.id === lane && typeof l.resume === 'function');
     setContinueSubmitting(true);
     setContinueError(null);
     try {
@@ -1089,18 +1060,25 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       // not only in a toast that outlives the choices it was about.
       // Cancelling the warning report says nothing further (it IS the answer);
       // a hard blocker is a message the dialog shows.
-      if (!(await preflightOk({ lane, trainType: checkpointTrainType,
-        variant: checkpointVariant, baseModel: checkpointBase,
+      if (!(await preflightOk({ lane, trainType: continueType,
+        variant: continueVariant, baseModel: continueBase,
         onRefused: setContinueError }))) return;
       const { response, declined } = await runConfirmableTrainingRequest(
-        (continueOpts) => (inCloud ? ds.continueTrainingInCloud : ds.continueTraining)(
-          payload.extraSteps, checkpointBase, checkpointVariant, checkpointTrainType,
-          { ...continueOpts, fromStep: payload.fromStep, overrides: payload.overrides,
+        (continueOpts) => {
+          const opts = { ...continueOpts, fromStep: payload.fromStep, overrides: payload.overrides,
+            expectedRecordId: payload.expectedRecordId,
             resumeMode: payload.resumeMode, stateBundleId: payload.stateBundleId,
-            // The hook toasts refusals for its other callers; here the dialog
-            // shows them, and two copies of one sentence a centimetre apart read
-            // as a bug. Its SUCCESS toast is kept — the dialog is gone by then.
-            quiet: true }),
+            // This dialog renders refusals; the hook keeps its success toast.
+            quiet: true };
+          // A plugin's lane resumes through its own contribution (the cloud lane, wave 10c).
+          if (pluginLane) {
+            return pluginLane.resume(payload, { ds, base: continueBase, variant: continueVariant,
+              trainType: continueType, opts, toast });
+          }
+          if (lane !== 'local') return { ok: false, error: 'This training plugin is disabled.' };
+          return ds.continueTraining(
+            payload.extraSteps, continueBase, continueVariant, continueType, opts);
+        },
         // maskedOpt, pas masked : tant que les reglages du dataset ne sont pas
         // charges, le panneau n'envoie RIEN et le serveur lit la valeur stockee.
         // Envoyer un defaut ici ecraserait un masquage desactive, sur un run paye.
@@ -1113,6 +1091,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       if (!outcome.close) { setContinueError(outcome.error); return; }
       setContinueOpen(false);
       setContinueInitialStep(null);
+      setContinueSource(null);
       setContinueError(null);
     } finally {
       setContinueSubmitting(false);
@@ -1325,7 +1304,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // and reload it when the browse filter/dataset changes — so the graph is ready
   // without a manual click. The list view keeps its own loadCheckpoints effect.
   useEffect(() => {
-    if (!caps.training_visible || !ds.currentId || !baseInfo) return;
+    if (!ds.currentId || !baseInfo) return;
     if (checkpointsView !== 'graph' || !checkpointManagerOpen) return;
     loadDatasetGraph();
   }, [checkpointsView, checkpointManagerOpen, checkpointBase, checkpointTrainType, // eslint-disable-line react-hooks/exhaustive-deps
@@ -1335,7 +1314,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // attend baseInfo pour charger directement la BONNE base persistée (pas de flash
   // « Officiel » avant que la base du dataset soit appliquée).
   useEffect(() => {
-    if (!caps.training_visible || !ds.currentId || !baseInfo) return;
+    if (!ds.currentId || !baseInfo) return;
     setCkLoaded(false);
     loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant);
   }, [checkpointBase, checkpointTrainType, checkpointVariant, ds.currentId, baseInfo, caps.training_visible]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1472,7 +1451,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // before the GPU is rented rather than in the run log afterwards.
   const denseBaseSummary = fullTransformerBaseLabel({
     baseModel: base, baseLabel, variant });
-  const denseTurboNotice = denseTurboWarning({ baseModel: base, variant });
   const effectiveTargetSteps = stepsN ?? stepsInfo?.steps ?? null;
   const zimageTurboLongRun = trainType === 'zimage'
     && isLongZImageTurboRun({ variant, steps: effectiveTargetSteps });
@@ -1510,6 +1488,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       familyLabel: checkpointTypeLabel, variantLabel: checkpointVariantDisplay,
     });
     if (refusal) { toast.warning(refusal); return; }
+    setContinueSource(continuationFromNode(node));
     setContinueInitialStep(step);
     setContinueError(null);
     setContinueOpen(true);
@@ -1521,67 +1500,19 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     setCheckpointVariant(defaultCheckpointVariant(nextType));
   };
 
-  // Panel gated off (ai-toolkit not configured): the workspace's checkpoint
-  // count must not keep a stale value from a previous dataset/session.
+  // Result counts belong to the selected dataset, independently of whether a
+  // trainer is configured. Reset only when there is no dataset to browse.
   useEffect(() => {
-    if (!caps.training_visible) onCheckpointsChange?.(0);
-  }, [caps.training_visible]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!ds.currentId) onCheckpointsChange?.(0);
+  }, [ds.currentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cloud run status (global — several cloud runs may be active at once,
-  // across different datasets, up to cloudStatus.limit). Polled independently
-  // of the local `status` poll above, and only while a vast.ai key is
-  // actually configured.
-  const [cloudStatus, setCloudStatus] = useState({
-    configured: false, limit: 1, actives: [], active: null, total_price_per_hour: 0, last: null,
-  });
-  useEffect(() => {
-    if (!caps.cloud_training) return undefined;
-    let alive = true;
-    let t;
-    const tick = async () => {
-      try {
-        const r = await fetch('/api/dataset/train/cloud/status', { credentials: 'include' });
-        if (r.ok && alive) setCloudStatus(await r.json());
-      } catch { /* transient */ }
-      if (alive) t = setTimeout(tick, 5000);
-    };
-    t = setTimeout(tick, 0);
-    return () => { alive = false; clearTimeout(t); };
-  }, [caps.cloud_training]);
-  // Compat: older servers (or a stale poll) may still answer with only the
-  // single `active` field — fall back to a 1-element list built from it.
-  const actives = cloudStatus.actives || (cloudStatus.active ? [cloudStatus.active] : []);
-  // Per-(dataset, family) as before — but PLURAL now: two same-family runs may
-  // train this dataset at once (settings A/B). A run without train_type (older
-  // server payload) matches any family, preserving the previous behavior.
-  const cloudActivesHere = actives.filter((a) => a.dataset_id === ds.currentId
-    && (!a.train_type || a.train_type === trainType));
-  // Which of them the card + progress + checkpoint link follow. View state
-  // only (never server state): defaults to the newest, snaps back when the
-  // selected run leaves the active list.
-  const [selectedCloudRunId, setSelectedCloudRunId] = useState(null);
-  const [cloudStopTarget, setCloudStopTarget] = useState(null);
-  const cloudActiveHere = cloudActivesHere.find((a) => a.run_id === selectedCloudRunId)
-    || cloudActivesHere[cloudActivesHere.length - 1] || null;
-  // Same dialog the Runs hub uses: stopping from THIS panel used to skip the
-  // "Do not rent this machine again" tick, which is the option you want when
-  // a pod is stuck on boot and you are watching it here rather than on Runs.
-  const doStopCloud = async (run, { banHost = false } = {}) => {
-    if (!run) return;
-    setCloudStopTarget(null);
-    const d = await postJson('/api/dataset/train/cloud/stop',
-      banHost ? { run_id: run.run_id, ban_host: true } : { run_id: run.run_id });
-    // Never leave a stop unanswered: a pod that could not be terminated keeps
-    // billing, and the message names the instance.
-    const m = stopOutcomeMessage(d);
-    if (m.level === 'error') toast.error(m.text, 20000);
-    else toast.info(m.text, m.level === 'warn' ? 12000 : undefined);
-  };
-  const cloudLastHere = cloudStatus.last
-    && cloudStatus.last.dataset_id === ds.currentId
-    && (!cloudStatus.last.train_type || cloudStatus.last.train_type === trainType)
-    ? cloudStatus.last
-    : null;
+  const [cloudRunView, setCloudRunView] = useState({});
+  const [cloudProgressHost, setCloudProgressHost] = useState(null);
+  const [cloudNoticeHost, setCloudNoticeHost] = useState(null);
+  const [cloudBudgetHost, setCloudBudgetHost] = useState(null);
+  const cloudViewMatches = cloudRunView.datasetId === ds.currentId && cloudRunView.trainType === trainType;
+  const cloudActiveHere = cloudViewMatches ? cloudRunView.active : null;
+  const cloudLastHere = cloudViewMatches ? cloudRunView.last : null;
 
   // A finished run writes its checkpoints to disk, but nothing re-read the list:
   // both polls only refreshed their own status, so a LoRA that had just finished
@@ -1624,33 +1555,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // « Continue anyway » relaxes the image-floor gate (a bypassable quality blocker
   // the user acknowledged); a physical impossibility never yields a truthy ack.
   const belowFloor = keptCount < trainMinFloor && !allowNotReady;
-  const cloudTooFewImages = belowFloor;
-  const cloudLimitReached = actives.length >= (cloudStatus.limit || 1);
-  // Familles que la voie cloud ne sert pas — miroir des refus AVANT réservation
-  // côté serveur. Anima y manquait : au-dessus du plancher d'images le bouton
-  // s'activait et n'était refusé qu'après le clic.
-  const cloudFamilyBlock = cloudUnsupportedFamilyReason(trainType);
-  const cloudDisabledReason =
-    !caps.cloud_training
-      ? 'Cloud training needs a vast.ai API key — add it in Settings'
-    : fullMode && !fullTransformerEligible
-      ? (fullTransformerReason || 'Full-model training is a Krea 2 recipe')
-    : cloudFamilyBlock
-      ? cloudFamilyBlock
-    : (vaePath || tePath)
-      ? 'Custom VAE/text-encoder overrides are local-only — clear them in Advanced options to train in the cloud'
-    : customWeightsEmpty
-      ? 'Enter the path to your custom weights .safetensors first'
-    : baseNotTrainable
-      ? 'This checkpoint cannot be loaded for training — pick the bf16/fp16 version of it'
-    : baseBlocksTrain
-      ? 'Convert the custom base first — the cloud lane pushes the converted copy to your Hugging Face account'
-    : cloudTooFewImages
-      ? `Only ${keptCount} image(s) kept — the cloud minimum for ${sliderOn ? 'a slider' : typeLabel} is ${trainMinFloor}`
-    : cloudLimitReached
-      ? `Cloud run limit reached (${actives.length}/${cloudStatus.limit || 1}) — stop one or raise the limit in Settings`
-    : null;
-
   // Informational pointer for anime datasets (see animeFamilyNote.js). Reads the
   // subject type straight off the dataset payload and Anima's real availability off
   // base-info — no local rule, no forced selection, no launch blocked.
@@ -1666,7 +1570,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // own reason when it can't be used, so the dialog never shows a dead option.
   // The cloud reason reuses cloudDisabledReason — the app's single source of truth
   // for "why the cloud lane is closed" (family, custom weights, limits, budget).
-  const continueLanes = {
+  const coreContinueLanes = {
     local: fullMode
       ? { available: false,
           reason: 'Full-model training is cloud-only. Switch back to LoRA to continue this local checkpoint.' }
@@ -1677,15 +1581,22 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         ? { available: false,
             reason: 'A training is already running on this machine — continue in the cloud, or wait for it to finish.' }
         : { available: true },
-    cloud: fullMode
-      ? { available: false,
-          reason: 'Continuing a full model is not available in this MVP. Switch back to LoRA to continue a LoRA.' }
-      : !caps.cloud_training
-      ? { available: false,
-          reason: 'Cloud training needs a vast.ai API key — add it in Settings.' }
-      : cloudDisabledReason
-        ? { available: false, reason: cloudDisabledReason }
-        : { available: true },
+    cloud: { available: false, reason: 'Cloud training plugin is disabled.' },
+  };
+  // A plugin's lane (`training.continue.lane` — the cloud lane's home once it is
+  // a plugin): `{ id, label, availability(ctx) -> { available, reason }, resume }`.
+  // Listed after the core's; a plugin bringing the id of a core lane takes it over.
+  const cloudForm = { caps, fullMode, fullTransformerEligible, fullTransformerReason,
+    trainType, variant, base, trainingMode, maskedOpt, stepsN, allowNotReady, keptCount,
+    vaePath, tePath, customWeightsEmpty, baseNotTrainable, baseBlocksTrain,
+    belowFloor, sliderOn, typeLabel, trainMinFloor, denseBaseSummary };
+  const laneCtx = { caps, fullMode, status, form: cloudForm, cloudRunView, ds };
+  const pluginLanes = contributions('training.continue.lane', 'dataset');
+  const cloudEnabled = pluginLanes.some((lane) => lane.id === 'cloud');
+  const continueLanes = {
+    ...coreContinueLanes,
+    ...Object.fromEntries(pluginLanes.map((l) => [l.id,
+      { label: l.label, ...(l.availability ? l.availability(laneCtx) : { available: true }) }])),
   };
   // The lane the dialog OPENS on = the lane the source checkpoint was trained in
   // (a cloud epoch mirrored into the run folder defaults to Cloud). Unknown step
@@ -1693,71 +1604,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const laneOfStep = (step) => {
     const c = (step != null && checkpoints.find((k) => k.step === step))
       || checkpoints[checkpoints.length - 1];
-    return c?.source === 'cloud' ? 'cloud' : 'local';
+    return c?.source === 'cloud' && cloudEnabled ? 'cloud' : 'local';
   };
-
-  // Launch-time GPU speed picker: the ☁️ button opens a dialog that lists live
-  // vast.ai offers by speed (price/h + approx time + cost); the chosen class is
-  // forwarded as gpu_name. launchCloud carries the POST + the MISMATCH_CAPTION
-  // retry that used to live inline in the button handler.
-  const [cloudDialog, setCloudDialog] = useState(false);
-  const launchCloud = async (gpuName) => {
-    // A cloud launch spends real money, so it gets the SAME sanity gate as a local
-    // one — minus the rows about this machine's GPU, which no rented pod will use.
-    if (!(await preflightOk({ lane: 'cloud' }))) return false;
-    let body = {
-      ...cloudTrainingLaunchPayload({
-        baseModel: base, variant, trainType, trainingMode,
-        masked: maskedOpt, steps: stepsN, gpuName,
-      }),
-      ...(allowNotReady ? { allow_not_ready: true } : {}),
-    };
-    // postWithConfirmations, NOT a hand-rolled loop on `d.ok === false`.
-    //
-    // That loop could never run. Every confirmable refusal leaves the service as a
-    // RuntimeError, which the route maps to HTTP 409 with `{error: "..."}` -- a
-    // body carrying no `ok` key at all -- and postJson THROWS on any non-2xx
-    // rather than returning it. So the await raised, everything below it was dead
-    // code, and the user got the raw refusal text as an error toast with no way to
-    // answer the question it was asking. Reported on the parallel-run one: "I
-    // still cannot run two trainings on the same dataset", on an install whose
-    // backend supported it perfectly.
-    //
-    // This helper is what the Runs hub and the canvas already use for these same
-    // refusals: it catches, asks, and retries carrying the flag -- and refuses to
-    // ask twice for a flag it already sent, so a refusal that survives its own
-    // confirmation ends instead of looping.
-    let d;
-    try {
-      d = await postWithConfirmations(
-        (b) => postJson(`/api/dataset/${ds.currentId}/train/cloud`, b),
-        body, 'Train anyway (force)');
-    } catch (e) {
-      toastTrainError({ ...(e?.body || {}), error: e?.message }, 'Cloud training failed');
-      return false;
-    }
-    // The dialog closes on success and the panel's own launch view only appears
-    // on the next 5 s poll — a silent close read as "nothing happened". Name the
-    // run that now exists and where its launch steps are visible.
-    if (d) {
-      toast.info(d.run_id != null
-        ? `Cloud run #${d.run_id} created — follow its launch on the Runs page.`
-        : 'Cloud run created — follow its launch on the Runs page.');
-    }
-    return !!d;
-  };
-
-  if (!caps.training_visible) {
-    return (
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-surface p-3 text-content-muted text-sm">
-        <GraduationCap aria-hidden="true" className="h-4 w-4 shrink-0" />
-        Training needs ai-toolkit (local GPU) or a <VastLink className="underline" /> API key (cloud) — set either in Settings.
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-3">
+      {caps.training_visible ? <>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-content font-semibold text-sm">
           <GraduationCap aria-hidden="true" className="h-4 w-4" /> {fullMode ? 'Full-model training' : 'LoRA Training'} ({typeLabel})
@@ -1780,15 +1632,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           : <span aria-live="polite" className="ml-auto text-content-subtle text-[0.6875rem]">{keptCount} image(s) kept</span>}
       </div>
 
-      {/* A cloud run left its pod alive for manual recovery (any dataset) — it
-          keeps billing until reaped, so this must stay visible regardless of
-          which dataset's panel happens to be open. No action button: the
-          recovery is manual (outside the app) and expiry-reaping is automatic. */}
-      {cloudStatus.last?.status === 'error_pod_kept' && (
-        <p className="m-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-amber-300 text-[0.6875rem]">
-          ⚠ A previous cloud run kept its pod for manual recovery — it is still billing until reaped. {cloudStatus.last.error}
-        </p>
-      )}
+      <div className="contents" ref={setCloudProgressHost} />
 
       {/* Local training CRASHED (ai-toolkit run.py exited non-zero): the watcher
           captured the reason into training_error. Without surfacing it, a run that
@@ -1905,103 +1749,14 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           variant={status.current?.variant || variant} />
       )}
 
-      {/* Cloud run progress + stop (this dataset only) — separate from the local
-          poll above; runs entirely on the vast.ai pod. */}
-      {cloudActivesHere.length > 1 && (() => {
-        // Two runs whose frozen dataset generations differ are NOT a settings
-        // A/B any more — mark the odd ones out against the newest run.
-        const newestFp = cloudActivesHere[cloudActivesHere.length - 1]?.dataset_fingerprint;
-        return (
-          <div className="flex items-center gap-1 flex-wrap" role="tablist"
-            aria-label="Active cloud runs on this dataset">
-            {cloudActivesHere.map((a) => {
-              const selected = a.run_id === cloudActiveHere?.run_id;
-              const diverges = Boolean(a.dataset_fingerprint && newestFp
-                && a.dataset_fingerprint !== newestFp);
-              return (
-                <button key={a.run_id} type="button" role="tab" aria-selected={selected}
-                  onClick={() => setSelectedCloudRunId(a.run_id)}
-                  title={diverges
-                    ? 'This run trains a different dataset generation than its sibling — the runs are not comparing settings on the same data.'
-                    : `Cloud run #${a.run_id} — ${a.status}`}
-                  className={`rounded-full border px-2 py-0.5 text-[0.6875rem] tabular-nums ${
-                    selected
-                      ? 'border-sky-400/60 bg-sky-500/15 text-sky-200'
-                      : 'border-border bg-surface text-content-muted hover:text-content'}`}>
-                  ☁ #{a.run_id} · {a.status}{diverges ? ' ⚠' : ''}
-                </button>
-              );
-            })}
-          </div>
-        );
-      })()}
-      {cloudActiveHere && (
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2 text-[0.6875rem] text-sky-200 flex-wrap">
-            <span aria-hidden>☁️</span>
-            <span className="font-semibold">Cloud run — {cloudActiveHere.status}</span>
-            {cloudActivesHere.length > 1 && (() => {
-              const fps = new Set(cloudActivesHere.map((a) => a.dataset_fingerprint).filter(Boolean));
-              return fps.size > 1 ? (
-                <span className="text-amber-300">⚠ different dataset generation</span>
-              ) : null;
-            })()}
-            {cloudActiveHere.gpu && <span>{cloudActiveHere.gpu}</span>}
-            {cloudActiveHere.price_per_hour != null && (
-              <span className="tabular-nums">${cloudActiveHere.price_per_hour}/h · ~${cloudActiveHere.cost_estimate} so far</span>
-            )}
-            {/* Full progress bar, loss curve and samples live on the Runs hub. */}
-            <Link to="/cloud" title="Open the Runs page — full progress, loss curve and samples"
-              className="ml-auto min-h-10 lg:min-h-0 inline-flex items-center px-1 py-0.5 text-sky-300 hover:text-sky-200 font-medium underline decoration-sky-300/40">
-              View in Runs ↗
-            </Link>
-            <button type="button" className="px-2 py-0.5 rounded bg-red-600/80 text-white text-[0.6875rem] font-semibold"
-              onClick={() => setCloudStopTarget(cloudActiveHere)}>
-              Stop cloud run
-            </button>
-          </div>
-          <TrainingProgress datasetId={ds.currentId}
-            base={cloudActiveHere.base_model ?? ''}
-            trainType={cloudActiveHere.train_type || trainType}
-            variant={cloudActiveHere.variant || variant} cloud
-            runId={cloudActiveHere.run_id} />
-          {normalizeTrainingMode(cloudActiveHere.training_mode) === TRAINING_MODE_FULL_TRANSFORMER && (
-            <FullTransformerArtifactNotice run={cloudActiveHere} />
-          )}
-        </div>
-      )}
-      {/* Download link only when the LAST run matches the selected family
-          (a legacy payload without train_type matches any family). Keeping it
-          keyed on cloudStatus.last stays simple — per-family history is
-          served by ?train_type= on the checkpoint route itself. */}
-      {caps.cloud_training && !fullMode && !cloudActiveHere && cloudLastHere
-        && normalizeTrainingMode(cloudLastHere.training_mode) === TRAINING_MODE_LORA
-        && cloudLastHere.checkpoint_ready && cloudLastHere.status === 'done' && (
-        <a href={`/api/dataset/${ds.currentId}/train/cloud/checkpoint?train_type=${encodeURIComponent(trainType)}`}
-          className="text-sky-300 text-[0.6875rem] underline w-fit">
-          ⬇ Download the cloud-trained LoRA (.safetensors)
-        </a>
-      )}
-      {!cloudActiveHere && cloudLastHere
-        && normalizeTrainingMode(cloudLastHere.training_mode) === TRAINING_MODE_FULL_TRANSFORMER && (
-        <FullTransformerArtifactNotice run={cloudLastHere} />
-      )}
-
       {/* --- Chemin essentiel : choisir le type de LoRA et lancer. Le reste
            (base/variante, masked, plafond de steps, programmation) vit dans
            « Advanced options » ci-dessous — replié par défaut, tout y reste
            accessible en un clic. --- */}
       <div className="flex items-center gap-2 flex-wrap rounded-lg border border-border bg-surface px-3 py-2">
         <span className="text-content-muted text-[0.625rem] uppercase">Model family</span>
-        {/* Which family is preselected, and the cloud GPU guard-rails (budget,
-            price ceiling, stall timeout), are settings — say so where the choice
-            is actually being made.
-            No `focus` on purpose: this label names TWO things that live in two
-            different cards (training-default-family, and the cloud limits card
-            above it). Focusing either would ring the wrong half for half the
-            readers, which is worse than landing on the section that holds both. */}
-        <SettingsLink section="training" className="order-last ml-auto">
-          Defaults &amp; cloud limits
+        <SettingsLink section="training" focus="training-default-family" className="order-last ml-auto">
+          Training defaults
         </SettingsLink>
         <select value={trainType} onChange={(e) => onTypeChange(e.target.value)}
           disabled={trainTypeBusy || presetBusy || trainingModeBusy}
@@ -2015,45 +1770,16 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           <option value="flux2klein">FLUX.2 Klein (~20 img)</option>
           <option value="anima">Anima (~20 img)</option>
         </select>
-        <div role="radiogroup" aria-label="Training mode"
-          aria-describedby={[
-            !fullTransformerEligible ? 'full-transformer-disabled-reason' : '',
-            trainingModeError ? 'training-mode-save-error' : '',
-          ].filter(Boolean).join(' ') || undefined}
-          className="inline-flex max-w-full rounded-lg border border-border bg-app/50 p-0.5">
-          <button type="button" role="radio" aria-checked={!fullMode}
-            ref={(node) => { trainingModeRadioRefs.current[TRAINING_MODE_LORA] = node; }}
-            tabIndex={!fullMode || !fullTransformerEligible ? 0 : -1}
-            disabled={trainingModeBusy}
-            aria-describedby={trainingModeError ? 'training-mode-save-error' : undefined}
-            onKeyDown={onTrainingModeKeyDown}
-            onClick={() => onTrainingModeChange(TRAINING_MODE_LORA)}
-            className={`px-2.5 py-1 rounded-md text-[0.75rem] font-semibold transition-colors disabled:opacity-50 ${
-              !fullMode ? 'bg-indigo-500/25 text-indigo-100' : 'text-content-muted hover:text-content'}`}>
-            LoRA
-          </button>
-          <button type="button" role="radio" aria-checked={fullMode}
-            ref={(node) => { trainingModeRadioRefs.current[TRAINING_MODE_FULL_TRANSFORMER] = node; }}
-            tabIndex={fullMode && fullTransformerEligible ? 0 : -1}
-            disabled={trainingModeBusy || !fullTransformerEligible}
-            aria-describedby={[
-              !fullTransformerEligible ? 'full-transformer-disabled-reason' : '',
-              trainingModeError ? 'training-mode-save-error' : '',
-            ].filter(Boolean).join(' ') || undefined}
-            onKeyDown={onTrainingModeKeyDown}
-            onClick={() => onTrainingModeChange(TRAINING_MODE_FULL_TRANSFORMER)}
-            title={fullTransformerReason || `Experimental · ${denseBaseSummary} · cloud-only`}
-            className={`px-2.5 py-1 rounded-md text-[0.75rem] font-semibold transition-colors disabled:opacity-40 ${
-              fullMode ? 'bg-sky-500/25 text-sky-100' : 'text-content-muted hover:text-content'}`}>
-            Full model
-          </button>
-        </div>
-        {!fullTransformerEligible && (
-          <span id="full-transformer-disabled-reason"
-            className="basis-full text-amber-300 text-[0.6875rem] leading-relaxed">
-            Full model unavailable: {fullTransformerReason}
-          </span>
-        )}
+        <PluginSlot slot="training.dense" surface="dataset" placement="mode"
+          fullMode={fullMode} fullTransformerEligible={fullTransformerEligible}
+          fullTransformerReason={fullTransformerReason} trainingModeError={trainingModeError}
+          trainingModeBusy={trainingModeBusy} trainingModeRadioRefs={trainingModeRadioRefs}
+          onTrainingModeKeyDown={onTrainingModeKeyDown} onTrainingModeChange={onTrainingModeChange}
+          denseBaseSummary={denseBaseSummary} />
+        {!cloudEnabled && fullMode && <button type="button" onClick={() => onTrainingModeChange(TRAINING_MODE_LORA)}
+          disabled={trainingModeBusy} className="px-3 py-1.5 rounded-lg border border-border text-sm">
+          Switch to LoRA training
+        </button>}
         {trainingModeError && (
           <span id="training-mode-save-error" role="alert"
             className="basis-full text-rose-300 text-[0.6875rem] leading-relaxed">
@@ -2083,6 +1809,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             // explicit and checkpoint-specific.
             if (mode === 'continue') {
               setContinueInitialStep(null); // null deliberately selects the latest save
+              setContinueSource(null);
               setContinueOpen(true);
               return;
             }
@@ -2107,19 +1834,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           <Rocket aria-hidden="true" className="h-4 w-4" /> Train the LoRA
         </button>}
         {!fullMode && <HelpBadge topic="action-training-launch" />}
-        {(caps.cloud_training || fullMode) && (
-          <button type="button"
-            disabled={!!cloudDisabledReason}
-            title={cloudDisabledReason
-              || 'Rents a vast.ai GPU for this run (~$1-2), auto-terminated'}
-            onClick={() => {
-              setHfCloudTokenIssue(null);
-              setCloudDialog(true);
-            }}
-            className="px-3 py-1.5 rounded-lg border border-sky-500/50 bg-sky-500/10 text-sky-200 text-sm font-semibold disabled:opacity-40">
-            <span aria-hidden>☁️</span> {fullMode ? 'Start full-model training' : 'Train in cloud'}
-          </button>
-        )}
+        <PluginSlot slot="training.launch" surface="dataset"
+          ds={ds} form={cloudForm} preflightOk={preflightOk} toastTrainError={toastTrainError}
+          progressHost={cloudProgressHost} noticeHost={cloudNoticeHost} budgetHost={cloudBudgetHost}
+          onStateChange={setCloudRunView} />
         {/* ⏹ Stop = the DESTRUCTIVE action, named after what it does. Its old
             label named only the SIDE EFFECT (the GPU going back to ComfyUI) and
             read like housekeeping — users lost hours-long runs to one click, and
@@ -2166,37 +1884,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         </span>
       </div>
 
-      {fullMode && (
-        <div role="status" className="rounded-lg border border-sky-400/45 bg-sky-500/10 px-3 py-2 text-[0.75rem] leading-relaxed">
-          <div className="font-semibold text-sky-100">Experimental · advanced cloud mode · not recommended by default</div>
-          <p className="m-0 mt-1 text-sky-200/90">
-            Krea officially recommends training a LoRA on Raw, then applying it to Turbo.
-            Full-model training requires a much larger, more diverse dataset, an 80 GB GPU,
-            and at least 200 GB of disk.
-          </p>
-          <p className="m-0 mt-1 text-amber-100/95">
-            The ~26 GB model is uploaded using a dedicated <code>HF_CLOUD_TOKEN</code>. A tightly scoped
-            fine-grained token is recommended: read access only to the Krea 2 base this run uses
-            ({denseBaseSummary}) and write access to a single dedicated Hugging Face namespace
-            containing only LDS deliveries. A global write token is also
-            accepted with a warning. Configure it in{' '}
-            <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">Settings ▸ Local tools</SettingsLink>.
-            {' '}Stopping the run or hitting the runtime cap may lose the latest full-model checkpoint if it has not been uploaded.
-          </p>
-        </div>
-      )}
-
-      {/* Turbo in dense mode: allowed, and UNMEASURED. Said here — above the
-          launch buttons, before a GPU is rented — and phrased as what is
-          unknown. It promises no result and predicts no failure, and it never
-          blocks: the product decision is warn and let through. */}
-      {fullMode && denseTurboNotice && (
-        <div role="status" id="dense-turbo-warning"
-          className="rounded-lg border border-amber-400/45 bg-amber-500/[0.09] px-3 py-2 text-[0.75rem] leading-relaxed">
-          <div className="font-semibold text-amber-100">⚠ {denseTurboNotice.title}</div>
-          <p className="m-0 mt-1 text-amber-100/90">{denseTurboNotice.body}</p>
-        </div>
-      )}
+      <div className="contents" ref={setCloudNoticeHost} />
 
       {/* A custom base picked on ANOTHER family was still attached to this
           dataset (one shared column). The run ignores it — say so, once, rather
@@ -2327,20 +2015,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         </p>
       )}
 
-      {/* A disabled ☁ Train-in-cloud button always states WHY, right under the
-          button row — the tooltip alone was invisible until hovered, so a greyed
-          SDXL cloud button read as an unexplained limit (owner-reported). */}
-      {(caps.cloud_training || fullMode) && cloudDisabledReason && (
-        <p className="m-0 text-sky-300/90 text-[0.6875rem]">
-          ☁ Cloud training unavailable — {cloudDisabledReason}
-        </p>
-      )}
-
-      {actives.length > 0 && (
-        <p className="m-0 text-content-subtle text-[0.625rem]">
-          ☁ {actives.length}/{cloudStatus.limit || 1} cloud runs — ${cloudStatus.total_price_per_hour || 0}/h total
-        </p>
-      )}
+      <div className="contents" ref={setCloudBudgetHost} />
 
       {/* Pointeur visible quand le bouton Train est bloqué par un réglage qui
           vit dans la section repliée — sinon la cause resterait cachée. */}
@@ -2381,33 +2056,32 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           {/* FULL_TRANSFORMER_ADVANCED_BRANCH_START — no LoRA control may escape
               the false branch below: the backend ignores all of them in dense. */}
           {fullMode ? (<>
-            {/* DENSE_BASE_PICKER_START — the control the owner could not find.
-                Its markup lives in the DenseBasePicker component above so a
-                test can execute it; what has to stay HERE is the fact that the
-                full-model arm renders it at all. */}
-            <DenseBasePicker
-              variant={variant} setVariant={setVariant}
-              base={base} setBase={setBase}
-              customBase={customBase} setCustomBase={setCustomBase}
-              currentBases={currentBases} customSupported={customSupported}
-              baseNote={baseNote} baseSummary={denseBaseSummary}
-              busy={trainingModeBusy} />
-            {/* DENSE_BASE_PICKER_END */}
-            <FullTransformerAdvancedRecipe
+            <PluginSlot slot="training.dense" surface="dataset" placement="recipe"
+              variant={variant}
+              setVariant={setVariant}
+              base={base}
+              setBase={setBase}
+              customBase={customBase}
+              setCustomBase={setCustomBase}
+              currentBases={currentBases}
+              customSupported={customSupported}
+              baseNote={baseNote}
+              denseBaseSummary={denseBaseSummary}
+              trainingModeBusy={trainingModeBusy}
               stepsOverride={stepsOverride}
               setStepsOverride={setStepsOverride}
-              adv={adv} saveAdv={saveAdv}
+              adv={adv}
+              saveAdv={saveAdv}
               samplePromptsText={samplePromptsText}
               setSamplePromptsText={setSamplePromptsText}
               saveSamplePrompts={saveSamplePrompts}
-              samplePromptsDefault={advSampleDefault}
-              maxSamplePrompts={advMaxPrompts}
+              advSampleDefault={advSampleDefault}
+              advMaxPrompts={advMaxPrompts}
               datasetImages={datasetImages}
               applySamplePrompts={applySamplePrompts}
-              quantizeTarget={denseQuantizeTarget(cloudLastHere || {})}
-              suggestedQuantizePath={looksAbsoluteBase(base) ? String(base).trim() : ''}
-              baseSummary={denseBaseSummary}
-              disabled={trainingModeBusy || cloudActiveHere} />
+              cloudLastHere={cloudLastHere}
+              cloudActiveHere={cloudActiveHere}
+            />
           </>) : (<>
           {/* LORA_ADVANCED_CONTROLS_START */}
           {/* --- Presets : réglages nommés, ré-applicables et partageables en JSON.
@@ -3461,11 +3135,19 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           </p>
         )}
 
+      </> : <div className="flex items-start gap-2 rounded-lg border border-border bg-surface p-3 text-content-muted text-sm">
+        <GraduationCap aria-hidden="true" className="h-4 w-4 shrink-0" />
+        <div className="min-w-0 space-y-2">
+          <p>To train on this computer, <a href="#/settings/local-tools?focus=aitoolkit-python" className="text-accent underline">set up ai-toolkit</a>.</p>
+          {cloudEnabled && <p>To train on a rented GPU, <a href="#/plugins/cloud_training/settings" className="text-accent underline">add your provider key in Cloud training settings</a>. Provider charges apply.</p>}
+        </div>
+      </div>}
+
       {/* --- Résultats : checkpoints du run + LoRA déjà importés dans ComfyUI.
            Repliés par défaut ; le résumé du summary donne les comptes sans ouvrir. */}
       <CheckpointPortal host={checkpointHost}>
-      <details id="ds-training-checkpoints" open={Boolean(checkpointHost) || checkpointsOpen}
-        className="rounded-lg border border-border bg-surface open:pb-2.5 scroll-mt-20">
+      <details id="ds-training-checkpoints" data-probe-content="checkpoints" open={Boolean(checkpointHost) || checkpointsOpen}
+        className="rounded-lg border border-border bg-surface open:pb-2.5 scroll-mt-20 [&_button]:min-h-10 lg:[&_button]:min-h-0 [&_summary]:min-h-10 lg:[&_summary]:min-h-0 [&_select]:min-h-10 lg:[&_select]:min-h-0 [&_input]:min-h-10 lg:[&_input]:min-h-0">
         <summary data-workspace-focus
           onClick={checkpointHost
             ? (event) => event.preventDefault()
@@ -3545,30 +3227,29 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               is the biggest thing it produced, and until now it appeared in this
               panel not at all — the only way to try it was to open ComfyUI by
               hand and find the file. Renders nothing when there is none. */}
-          <DenseModelsPanel datasetId={ds.currentId} models={denseModels}
+          <PluginSlot slot="training.dense" surface="dataset" placement="models" datasetId={ds.currentId} models={denseModels}
+            fallback={denseModels.length > 0 && (
+              <div aria-label="Saved full models" className="flex flex-col gap-2">
+                {denseModels.map((model) => (
+                  <div key={model.run_id} className="rounded-md border border-border p-2 text-[0.75rem]">
+                    <span className="font-semibold">Saved full model · run #{model.run_id}</span>
+                    {[model.fp8, model.master].filter(Boolean).map((file, index) => (
+                      <p key={file.filename || index} className="m-0 break-all">{file.path || file.filename}</p>
+                    ))}
+                    {model.hub?.repo_id && <p className="m-0 break-all text-content-muted">Delivery record: {model.hub.repo_id}</p>}
+                    <Link to="/cloud" className="underline">View run history</Link>
+                  </div>
+                ))}
+              </div>
+            )}
             onChanged={() => loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant)} />
-          {/* Merging needs no dense run of its own — the usual case is a LoRA
-              trained here folded into a base downloaded from anywhere — and
-              DenseModelsPanel renders NOTHING when this dataset has no full
-              model. So the tool also lives here, where it is always reachable,
-              collapsed because most visits to this panel are not about it.
-              (Inside a dense card it appears again with the base pre-filled.) */}
-          <details open={mergeOpen}
-            className="rounded-lg border border-border bg-surface-raised px-3 py-2">
-            <summary onClick={toggleMerge}
-              className="cursor-pointer text-content text-xs font-semibold">
-              <Dna aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Merge a LoRA into a base checkpoint
-            </summary>
-            <p className="m-0 mt-1 text-content-subtle text-[0.625rem] leading-relaxed">
-              Folds one or more LoRAs into a full-precision checkpoint and writes a new
-              full model — the step between “I trained a LoRA” and “I have a model to
-              publish”. Nothing is overwritten, and the result says in its own metadata
-              that it is a merge and not a training run.
-            </p>
-            <div className="mt-1.5">
-              <LoraMergeTool framed={false} family={checkpointTrainType} />
-            </div>
-          </details>
+          {/* The model tools' place in this panel — the `training.tool` slot,
+              surface `dataset`: the bundled `model_tools` plugin mounts its LoRA
+              merge disclosure here, always reachable even when the dataset has
+              no full model (DenseModelsPanel renders NOTHING then). Nothing is
+              drawn with the plugin off. The plugin gets the family the
+              checkpoint filter is on, so a merge's LoRA rows check against it. */}
+          <PluginSlot slot="training.tool" surface="dataset" family={checkpointTrainType} />
           <div className="flex items-center gap-2 flex-wrap">
             {/* () => … sinon React passe l'event en 1er arg → forBase = PointerEvent
                 → base_model=[object Object] → run inexistant → liste vide. */}
@@ -3706,7 +3387,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 <button type="button"
                   disabled={!checkpointMatchesTraining
                     || (status.in_progress && !continueLanes.cloud.available)}
-                  onClick={() => { setContinueInitialStep(null); setContinueError(null); setContinueOpen(true); }}
+                  onClick={() => { setContinueInitialStep(null); setContinueSource(null); setContinueError(null); setContinueOpen(true); }}
                   title={!checkpointMatchesTraining
                     ? 'To continue this run, select the same LoRA family, base and variant in Training first'
                     : status.in_progress
@@ -3815,6 +3496,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             </div>
           )}
 
+          {/* Files already saved on this computer remain core history, including their cloud provenance. */}
           {cloudGroups.length > 0 && (
             <div className="flex flex-col gap-2">
               <span className="text-content-muted text-[0.625rem] uppercase">
@@ -4003,16 +3685,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           onResolve={resolvePreflight} />
       ), document.body)}
 
-      {cloudDialog && (
-        <CloudLaunchDialog
-          datasetId={ds.currentId} trainType={trainType} variant={variant}
-          trainingMode={trainingMode}
-          base={base} steps={stepsN}
-          keptCount={keptCount} cloudStatus={cloudStatus}
-          preflightTokenIssue={hfCloudTokenIssue}
-          onClose={() => setCloudDialog(false)} onLaunch={launchCloud} />
-      )}
-
       {/* Resume ou Fresh : un run existe déjà pour ce (trigger, base). ai-toolkit
           reprendrait silencieusement son dernier checkpoint — on demande. */}
       {resumeAsk && (
@@ -4061,9 +3733,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       {continueOpen && createPortal((
         <ContinueDialog
           context={`${checkpointBaseLabel} · ${checkpointVariantDisplay}`}
-          where={laneOfStep(continueInitialStep)}
+          where={continueSource?.source || laneOfStep(continueInitialStep)}
           lanes={continueLanes}
-          checkpoints={checkpoints}
+          checkpoints={continueSource?.resume_checkpoints || checkpoints}
           bestStep={bestEpoch?.available ? bestEpoch.best_step : null}
           initialFromStep={continueInitialStep}
           settings={{ save_every: advSave, sample_every: advSampleEvery,
@@ -4097,15 +3769,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           onClose={() => setCkptDiffIds([])} />
       ), document.body)}
 
-      {/* Same dialog as the Runs hub, portaled for the same reason as Continue
-          above: a modal opened from Training must still be seen if the
-          workspace has switched section. */}
-      {createPortal((
-        <CloudStopDialog run={cloudStopTarget}
-          fullModel={!!cloudStopTarget && isFullTransformerRun(cloudStopTarget)}
-          onCancel={() => setCloudStopTarget(null)}
-          onConfirm={({ banHost }) => doStopCloud(cloudStopTarget, { banHost })} />
-      ), document.body)}
 
     </div>
   );

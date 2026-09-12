@@ -6,7 +6,7 @@
 import { useDataset } from '../hooks/useDataset';
 import DatasetListPanel from '../components/dataset/DatasetListPanel';
 import DatasetWorkspace from '../components/dataset/DatasetWorkspace';
-import VideoDatasetsPanel from '../components/videobank/VideoDatasetsPanel';
+import PluginSlot from '../plugins/PluginSlot.jsx';
 
 export default function DatasetPage() {
   const ds = useDataset();
@@ -35,7 +35,9 @@ export default function DatasetPage() {
               /video-dataset/<id>, exactly as opening an image dataset swaps this
               page for DatasetWorkspace. One library, two kinds of set, a
               workspace each. */}
-          <VideoDatasetsPanel />
+          {/* The other kinds of training set a plugin brings (the video lane's
+              list of video datasets): the `datasets.section` slot. */}
+          <PluginSlot slot="datasets.section" surface="datasets" />
         </div>
       )}
     </div>

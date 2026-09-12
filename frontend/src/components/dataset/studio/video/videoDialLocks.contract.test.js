@@ -15,8 +15,8 @@ import test from 'node:test'
 
 const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
 const PANELS = {
-  'VideoOptionsPanel.jsx': read('./VideoOptionsPanel.jsx'),
-  'VideoLoraPicker.jsx': read('./VideoLoraPicker.jsx'),
+  'VideoOptionsPanel.jsx': read("../../../../../../bundled/video/frontend/studio/video/VideoOptionsPanel.jsx"),
+  'VideoLoraPicker.jsx': read("../../../../../../bundled/video/frontend/studio/video/VideoLoraPicker.jsx"),
 }
 
 /** Every `<input type="range" … />` tag in a source, whole. */
@@ -55,7 +55,7 @@ test('the picker’s Preview size is the one dial that goes without a lock — o
   // thumb, and no clip reads it. So it stays bare, and this pins that the
   // exemption is exactly one range wide: a second dial in the picker, or a
   // render setting moved there, fails here.
-  const src = read('./VideoSourcePicker.jsx')
+  const src = read("../../../../../../bundled/video/frontend/studio/video/VideoSourcePicker.jsx")
   const found = ranges(src)
   assert.equal(found.length, 1, `the picker holds one range input, found ${found.length}`)
   assert.match(found[0], /aria-label="Preview size"/, `not the preview size:\n${found[0]}`)

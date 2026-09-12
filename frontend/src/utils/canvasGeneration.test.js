@@ -6,7 +6,7 @@ import {
   canvasStackWeight, canvasStackWithoutTrigger, canvasUndeployed,
   describeCanvasLaunch, isCanvasCheckpointSelected,
   pruneCanvasSelection, refreshCanvasSelection, toggleCanvasCheckpoint,
-} from './canvasGeneration.js';
+} from "../../../bundled/canvas/frontend/utils/canvasGeneration.js";
 
 const pick = (datasetId, recordId, step, extra = {}) => ({
   datasetId, recordId, step, family: 'krea', deployed: true,

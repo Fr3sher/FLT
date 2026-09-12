@@ -1,5 +1,8 @@
 /** @type {import('tailwindcss').Config} */
-import defaultTheme from 'tailwindcss/defaultTheme'
+// The explicit `.js`: node's own ESM resolver (the plugin contract test imports
+// this file to read `content`) refuses a bare subpath; Vite and Tailwind accept both.
+import defaultTheme from 'tailwindcss/defaultTheme.js'
+import { resolvePluginBuildMode } from './scripts/privatePluginBuild.mjs'
 
 // ── Safelight accent ramp ────────────────────────────────────────────────────
 // The app's single accent: the amber of a darkroom safelight. It REPLACES the
@@ -22,8 +25,7 @@ const safelight = {
   950: '#382004',
 }
 
-export default {
-  content: ['./index.html', './src/**/*.{js,jsx}'],
+const baseConfig = {
   darkMode: ['selector', '[data-theme="dark"]'],
   theme: {
     extend: {
@@ -63,3 +65,15 @@ export default {
   },
   plugins: [],
 }
+
+export function createTailwindConfig(distribution = resolvePluginBuildMode()) {
+  // Vite passes its resolved mode, including custom .env modes. A standalone
+  // Tailwind invocation also defaults to Store; bundled development is explicit.
+  return {
+    ...baseConfig,
+    content: ['./index.html', './src/**/*.{js,jsx}',
+      ...(distribution === 'bundled' ? ['../bundled/*/frontend/**/*.{js,jsx}'] : [])],
+  }
+}
+
+export default createTailwindConfig()

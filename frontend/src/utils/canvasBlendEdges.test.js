@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   blendEdgesFor, blendSourcesNote, pillWorldBox, stackMembersOf,
-} from './canvasBlendEdges.js';
+} from "../../../bundled/canvas/frontend/utils/canvasBlendEdges.js";
 
 /* 🧬 Generation provenance: a blended picture descends from N pills at once,
    routinely across lanes. What is pinned here is the arithmetic and — mostly —

@@ -17,7 +17,7 @@ const shell = read('./StudioShell.jsx');
 const actionBar = read('./StudioActionBar.jsx');
 const setup = read('./RunSetupPanel.jsx');
 const picker = read('./LoraPicker.jsx');
-const liveLane = read('./live/LiveStudio.jsx');
+const liveLane = read("../../../../../bundled/live/frontend/studio/live/LiveStudio.jsx");
 const probe = read('../../../../scripts/responsiveProbe.mjs');
 
 test('the Studio chrome and panels are marked for the responsive probe', () => {
@@ -53,7 +53,7 @@ test('the probe opens the VIDEO lane, and the tab whose grid lives deeper', () =
      360 px. The selectors are pinned on both sides — a renamed testid would
      otherwise put the lane back out of sight with the probe still green. */
   const lanes = read('../../../pages/StudioPage.jsx');
-  const picker = read('./video/VideoSourcePicker.jsx');
+  const picker = read("../../../../../bundled/video/frontend/studio/video/VideoSourcePicker.jsx");
   assert.match(lanes, /data-testid=\{`studio-lane-\$\{id\}`\}/);
   assert.match(picker, /data-testid=\{`video-source-\$\{id\}`\}/);
   assert.match(probe, /\{ name: 'video', open: \['\[data-testid="studio-lane-video"\]'\] \}/);
@@ -61,7 +61,7 @@ test('the probe opens the VIDEO lane, and the tab whose grid lives deeper', () =
   // and player are never measured at 360 px.
   assert.match(probe, /\{ name: 'live', open: \['\[data-testid="studio-lane-live"\]'\] \}/);
   assert.match(probe, /\{ name: 'video-smooth', open: \['\[data-testid="studio-lane-video"\]', 'button:has-text\("Smooth"\)'\] \}/);
-  assert.match(read('./video/SmoothDialog.jsx'), /data-probe-chrome="smooth-dialog" data-probe-layer/);
+  assert.match(read("../../../../../bundled/video/frontend/studio/video/SmoothDialog.jsx"), /data-probe-chrome="smooth-dialog" data-probe-layer/);
   // The lane's header is the chrome the probe budgets there, as the Video lane's is:
   // without one the probe measures nothing and says so, which is not a pass.
   assert.match(liveLane, /<header data-probe-chrome="live-studio-header"/);
@@ -71,12 +71,12 @@ test('the probe opens the VIDEO lane, and the tab whose grid lives deeper', () =
   // ⏭ Continue and the per-picture prompt segments: the probe clicks the
   // button by its text (twice, to stage two frames without a Gallery) and
   // the control is found by its testid — pinned on both sides, like ✨ Neural.
-  const cards = read('./video/VideoClipHistory.jsx');
+  const cards = read("../../../../../bundled/video/frontend/studio/video/VideoClipHistory.jsx");
   assert.match(cards, /<SkipForward aria-hidden="true" className="h-3\.5 w-3\.5" \/>Continue/);
   assert.match(probe, /\{ name: 'video-continue',/);
   assert.match(probe, /\{ name: 'video-batch-prompt',/);
   assert.match(probe, /'button:has-text\("Continue"\) >> nth=1'/);
-  assert.match(read('./video/VideoTestStudio.jsx'), /data-testid="video-prompt-mode"/);
+  assert.match(read("../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx"), /data-testid="video-prompt-mode"/);
 });
 
 test('the probe opens the 🌐 Civitai browser, whose action row grew a third button', () => {
@@ -109,8 +109,8 @@ test('the probe opens the ✨ neural render dialog, and the dialog outranks the 
      carries that title, the probe really clicks it, the dialog really wins the
      stacking contest against the bar, and it really caps its own height. Break
      any link and this fails instead of the phone. */
-  const history = read('./video/VideoClipHistory.jsx');
-  const dialog = read('../../videobank/NeuralRenderDialog.jsx');
+  const history = read("../../../../../bundled/video/frontend/studio/video/VideoClipHistory.jsx");
+  const dialog = read("../../../../../bundled/video/frontend/videobank/NeuralRenderDialog.jsx");
   assert.match(history, /title="Re-render this clip with DLSS 5 Neural Rendering/);
   assert.match(probe, /'button\[title\*="DLSS 5 Neural"\]'/);
 

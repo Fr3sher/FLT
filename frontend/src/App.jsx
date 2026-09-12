@@ -1,6 +1,7 @@
+import PluginSlot from './plugins/PluginSlot.jsx'
 import { Suspense, useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, Navigate, Outlet, NavLink, useLocation } from 'react-router'
-import { Archive, ArrowUp, Dumbbell, FlaskConical, FolderOpen, Images, Loader2, Menu, Network, Settings, X } from 'lucide-react'
+import { Archive, ArrowUp, Dumbbell, FlaskConical, FolderOpen, Images, Loader2, Menu, Settings, X } from 'lucide-react'
 import { apiFetch, postJson } from './api/fetchClient'
 import { JobsProvider } from './context/JobsContext'
 import { ToastProvider, useToast } from './components/common/Toast'
@@ -10,6 +11,7 @@ import ErrorBoundary from './components/common/ErrorBoundary'
 import { WhatsNewButton, WhatsNewModal } from './components/common/WhatsNew'
 import ConnectionBanner from './components/common/ConnectionBanner'
 import SetupHealthNotice from './components/setup/SetupHealthNotice'
+import SetupJourneyNotice from './components/setup/SetupJourneyNotice'
 import ComfyRecoveryBanner from './components/common/ComfyRecoveryBanner'
 import GenerationQueueDock from './components/common/GenerationQueueDock'
 import DockerUpdateInstructions from './components/common/DockerUpdateInstructions'
@@ -21,20 +23,29 @@ import { lazyPage } from './utils/lazyPage'
 // stale-chunk reload after an Update & restart (see utils/lazyPage.js).
 const DatasetPage = lazyPage(() => import('./pages/DatasetPage'))
 const BankPage = lazyPage(() => import('./pages/BankPage'))
-const VideoBankPage = lazyPage(() => import('./pages/VideoBankPage'))
-const VideoDatasetPage = lazyPage(() => import('./pages/VideoDatasetPage'))
 const StudioPage = lazyPage(() => import('./pages/StudioPage'))
 const SettingsPage = lazyPage(() => import('./pages/SettingsPage'))
 const SetupPage = lazyPage(() => import('./pages/SetupPage'))
 const GuidePage = lazyPage(() => import('./pages/GuidePage'))
 const CloudRunsPage = lazyPage(() => import('./pages/CloudRunsPage'))
-const CanvasPage = lazyPage(() => import('./pages/CanvasPage'))
 const GalleryPage = lazyPage(() => import('./pages/GalleryPage'))
-import { recommendedMet } from './hooks/useSetupSteps'
+const PluginsPage = lazyPage(() => import('./pages/PluginsPage'))
+const PluginSettingsPage = lazyPage(() => import('./pages/PluginSettingsPage'))
+import { navItems as pluginNavItems, routes as pluginRoutes } from './plugins/registry'
+import { lazyRoute } from './plugins/lazyRoute'
+import UnavailablePluginPage from './pages/UnavailablePluginPage.jsx'
+
+// A page a plugin contributes: `page` is its `() => import(...)`, wrapped in
+// the same lazyPage as the core's routes so it gets the stale-chunk reload —
+// through a cache keyed by the route, NOT a useMemo: a render that suspends
+// never commits, so a memo made in it is remade on the retry, with a fresh
+// import each time, and the page spins forever (plugins/lazyRoute.js).
+function PluginRoute({ routeKey, page }) {
+  const Page = lazyRoute(routeKey, page)
+  return <Page />
+}
 import { HelpModeProvider, useHelpMode, TipHost } from './help/HelpMode'
 import HeaderMenu from './components/common/HeaderMenu'
-import SystemStatsReadout from './components/shared/SystemStatsReadout'
-import { HEADER_MACHINE_LOAD_PREF_KEY } from './utils/systemStats'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { versionLabel } from './utils/versionLabel'
 import { useTrainingActivity } from './hooks/useTrainingActivity'
@@ -175,17 +186,14 @@ function NavBar() {
   // reflect the active-nav style when you're on one of their screens.
   const path = useLocation().pathname
   const helpMenuActive = path === '/guide' || path === '/help'
-  const settingsMenuActive = path === '/setup' || path.startsWith('/settings')
-  const setupNeedsAttention = !recommendedMet(caps)
+  const settingsMenuActive = path === '/setup' || path.startsWith('/settings') || path.startsWith('/plugins')
   // 📊 The machine-load readout is mounted ONCE and PLACED (useMediaQuery, the
   // board's own rule): in the desktop bar's utility cluster, or in the mobile
   // panel. Tailwind's `hidden` cannot serve here — a CSS-hidden mount still
   // POLLS, and this is the only thing in the header that would.
   const desktopNav = useMediaQuery('(min-width: 768px)')
   const machineLoad = (
-    <SystemStatsReadout prefKey={HEADER_MACHINE_LOAD_PREF_KEY}
-      defaultEnabled={false} testId="header-system-stats"
-      helpTopic="canvas-machine-load" />
+    <PluginSlot slot="resource_monitor.readout" surface="header" />
   )
 
   // The four workspaces, left-aligned on desktop AND reused (flat) in the
@@ -217,30 +225,9 @@ function NavBar() {
           </span>
         </NavLink>
       )}
-      {/* ◉ Canvas — the whole training history on one board. It lives next to
-          Runs because it answers the same question from the other end: Runs
-          lists what happened, the canvas shows how the runs descend from each
-          other, across every dataset at once. */}
-      {(caps.cloud_training || caps.training_visible) && (
-        <NavLink to="/canvas" className={navItemClass} onClick={() => setOpen(false)}>
-          <span className="inline-flex items-center gap-1"><Network aria-hidden="true" className="h-3.5 w-3.5" /> Canvas
-            {/* The Beta chip marks the newest surface, not the oldest: the Bank
-                has been in daily use for weeks, the canvas ships today.
-
-                It hides ONLY on the tight desktop bar (md→lg), where a fifth
-                workspace already overflows the row. It stays visible in the
-                mobile panel — a vertical list with room to spare — because that
-                is where this app is actually browsed, and a "beta" warning that
-                disappears on the reader's own screen warns nobody. */}
-            <span className="px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none md:hidden lg:inline">Beta</span>
-          </span>
-        </NavLink>
-      )}
-      {caps.studio_visible && (
-        <NavLink to="/studio" className={navItemClass} onClick={() => setOpen(false)}>
-          <span className="inline-flex items-center gap-1"><FlaskConical aria-hidden="true" className="h-3.5 w-3.5" /> Test Studio</span>
-        </NavLink>
-      )}
+      <NavLink to="/studio" className={navItemClass} onClick={() => setOpen(false)}>
+        <span className="inline-flex items-center gap-1"><FlaskConical aria-hidden="true" className="h-3.5 w-3.5" /> Test Studio</span>
+      </NavLink>
       {/* 🖼 Gallery — every generated image, one feed. Last: it is where the
           OUTPUT of the other workspaces accumulates, so it reads as the shelf
           at the end of the row. Visible whenever any surface that generates
@@ -260,14 +247,20 @@ function NavBar() {
   const mobileLinks = (
     <>
       {workspaceLinks}
+      {/* Nav entries an enabled plugin contributes ({ to, label, when(caps) }). */}
+      {pluginNavItems(caps).map((item) => (
+        <NavLink key={`${item.plugin}:${item.to}`} to={item.to} className={navItemClass} onClick={() => setOpen(false)}>
+          {item.label}
+        </NavLink>
+      ))}
       <NavLink to="/guide" className={navItemClass} onClick={() => setOpen(false)}>Guide</NavLink>
       <NavLink to="/setup" className={navItemClass} onClick={() => setOpen(false)}>
         <span className="inline-flex items-center gap-1">
           Setup
-          {setupNeedsAttention && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-primary" />}
         </span>
       </NavLink>
       <NavLink to="/settings" className={navItemClass} onClick={() => setOpen(false)}>Settings</NavLink>
+      <NavLink to="/plugins" className={navItemClass} onClick={() => setOpen(false)}>Plugins</NavLink>
       <NavLink to="/help" className={navItemClass} onClick={() => setOpen(false)}>Help</NavLink>
       <HelpModeToggle onToggle={() => setOpen(false)} />
     </>
@@ -287,6 +280,15 @@ function NavBar() {
         <nav className="hidden md:flex flex-1 min-w-0 flex-wrap items-center gap-x-1 gap-y-1.5" aria-label="Main navigation">
           <div className="app-header-workspaces flex min-w-0 shrink grow basis-auto flex-wrap items-center gap-1">
             {workspaceLinks}
+            {/* Nav entries an enabled plugin contributes — on the desktop bar as
+                on the phone panel below (measured missing here, 2026-09-04: a
+                plugin's page was reachable from a phone and from nowhere on a
+                desktop). */}
+            {pluginNavItems(caps).map((item) => (
+              <NavLink key={`${item.plugin}:${item.to}`} to={item.to} className={navItemClass}>
+                {item.label}
+              </NavLink>
+            ))}
           </div>
           <div className="app-header-tools ml-auto flex shrink-0 items-center gap-1">
             {desktopNav && machineLoad}
@@ -301,16 +303,16 @@ function NavBar() {
               )}
             </HeaderMenu>
             <HeaderMenu triggerLabel={<Settings aria-hidden="true" className="h-4 w-4" />}
-              triggerTitle="Setup & settings" active={settingsMenuActive} dot={setupNeedsAttention}>
+              triggerTitle="Setup & settings" active={settingsMenuActive}>
               {(close) => (
                 <>
                   <NavLink to="/setup" role="menuitem" className={menuItemClass} onClick={close}>
                     <span className="inline-flex items-center gap-1">
                       Setup
-                      {setupNeedsAttention && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-primary" />}
                     </span>
                   </NavLink>
                   <NavLink to="/settings" role="menuitem" className={menuItemClass} onClick={close}>Settings</NavLink>
+                  <NavLink to="/plugins" role="menuitem" className={menuItemClass} onClick={close}>Plugins</NavLink>
                 </>
               )}
             </HeaderMenu>
@@ -531,6 +533,7 @@ function Shell() {
             banners and the queue dock stay put — wrapping <Routes> instead
             made the whole chrome blink away on every first visit. */}
         <Suspense fallback={<PageLoading />}>
+          <SetupJourneyNotice />
           <Outlet />
         </Suspense>
       </main>
@@ -566,18 +569,8 @@ function AppInner() {
             <Route path="/" element={<Navigate to="/datasets" replace />} />
             <Route path="/datasets" element={<DatasetPage />} />
             <Route path="/bank" element={<BankPage />} />
-            {/* Its OWN route rather than a sixth nav item: the desktop bar
-                already overflows at 768 px with five workspaces, and these are
-                two kinds of material for one job — the lane switch lives on both
-                bank pages (components/videobank/BankLaneTabs). */}
-            <Route path="/video-bank" element={<VideoBankPage />} />
-            {/* One video training set, worked on. NOT a nav item either — it is
-                reached from the library, exactly like an image dataset's
-                workspace, and for the same reason: a dataset is something you
-                open, not a place you go. Having an ADDRESS is the point (a
-                reload, a link, a back button all worked on the image side and
-                on none of this one). */}
-            <Route path="/video-dataset/:id" element={<VideoDatasetPage />} />
+            {/* /video-bank and /video-dataset/:id are the video plugin's routes
+                (bundled/video/frontend/index.js) — rendered with the plugins' below. */}
             <Route path="/guide" element={<GuidePage />} />
             <Route path="/guide/getting-help" element={<Navigate to="/help" replace />} />
             <Route path="/guide/:section" element={<GuidePage />} />
@@ -585,11 +578,20 @@ function AppInner() {
             <Route path="/studio" element={<StudioPage />} />
             <Route path="/dataset/studio/:id" element={<StudioPage />} />
             <Route path="/cloud" element={<CloudRunsPage />} />
-            <Route path="/canvas" element={<CanvasPage />} />
             <Route path="/gallery" element={<GalleryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/:section" element={<SettingsPage />} />
             <Route path="/setup" element={<SetupPage />} />
+            <Route path="/plugins" element={<PluginsPage />} />
+            <Route path="/plugins/:pluginId/settings" element={<PluginSettingsPage />} />
+            {/* Pages an enabled plugin contributes: each one its own lazy chunk,
+                registered before React mounted (plugins/loadPlugins.js). */}
+            {pluginRoutes().map((r) => (
+              <Route key={`${r.plugin}:${r.path}`} path={r.path} element={<PluginRoute routeKey={`${r.plugin}:${r.path}`} page={r.page} />} />
+            ))}
+            {['/canvas', '/video-bank', '/video-dataset/:id'].filter(path => !pluginRoutes().some(route => route.path === path)).map(path => (
+              <Route key={path} path={path} element={<UnavailablePluginPage />} />
+            ))}
             <Route path="*" element={<Navigate to="/datasets" replace />} />
           </Route>
         </Routes>

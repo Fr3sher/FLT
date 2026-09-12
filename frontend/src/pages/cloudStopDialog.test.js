@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   banHostLabel, canBanHost, machineLabel, stopConsequence, stopTitle,
-} from './cloudStopDialog.js';
+} from "../../../bundled/cloud_training/frontend/shared/cloudStopDialog.js";
 
 test('the consequence is not the same sentence for the two run kinds', () => {
   // A full-model run can lose its latest checkpoint outright; a LoRA run cannot.

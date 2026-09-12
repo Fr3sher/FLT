@@ -1,3 +1,4 @@
+import { improvementAvailable } from '../../utils/improveEngines.js';
 /** One curation tile: image + keep/reject + source/framing badges + caption + crop. */
 import { improvementBadge } from './improveCandidates.js';
 import SelectionMark from '../shared/SelectionMark';
@@ -12,7 +13,7 @@ import CaptionEditorDialog from './CaptionEditorDialog';
 import { datasetLabSurface } from './captionLabSurface';
 import PromptEditPopover from './PromptEditPopover';
 import SourceAttribution from './SourceAttribution';
-import { ENGINE_ACCENTS, ENGINE_LABELS } from './engineSelection.js';
+import { engineAccent, engineLabel as labelOfEngine } from './engineSelection.js';
 import { canRegenerateGeneric, improveRerunAffordance, isImageImproveRow } from './improveRerun.js';
 import { rememberImageRatio } from './lightboxActionPlacement.js';
 import { datasetThumbUrl } from '../../utils/datasetThumbUrl.js';
@@ -144,7 +145,7 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
   // its OWN re-run below (same parent, current improve settings) instead.
   const isImageImproveCandidate = isImageImproveRow(img);
   const canRegenerate = canRegenerateGeneric(img, { isRescueDerived });
-  const rerunImprove = onReimprove ? improveRerunAffordance(img) : null;
+  const rerunImprove = onReimprove && improvementAvailable() ? improveRerunAffordance(img) : null;
   // Every refused write says WHICH pass holds it; idle, each keeps its own words.
   // There is no longer a single `refused`: a write is held by ONE of three gates
   // and must name that one, or it explains itself with a pass that is not the
@@ -206,7 +207,7 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
     && poseLabel(img.camera_pose))
     || DERIVATION_LABEL[img.derivation_kind]
     || (img.source === 'import' ? 'real' : 'generated');
-  const engineLabel = ENGINE_ACCENTS[img.engine] ? ENGINE_LABELS[img.engine] : null;
+  const engineLabel = img.engine ? labelOfEngine(img.engine) : null;
   const provenanceTitle = [originText, img.framing, engineLabel && `made with ${engineLabel}`]
     .filter(Boolean).join(' · ');
 
@@ -303,7 +304,7 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
             title={provenanceTitle} aria-label={provenanceTitle}>
             {originText}{img.framing ? ` · ${img.framing}` : ''}
             {engineLabel && (
-              <span className={`dataset-tile-badge__engine ml-1 px-1 rounded ${ENGINE_ACCENTS[img.engine].pill}`}>
+              <span className={`dataset-tile-badge__engine ml-1 px-1 rounded ${engineAccent(img.engine).pill}`}>
                 {engineLabel}
               </span>
             )}

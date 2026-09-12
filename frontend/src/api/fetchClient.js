@@ -168,14 +168,18 @@ export async function apiFetch(url, options = {}) {
    being typed, and without this a server that blinked would speak once per keystroke.
    It was silently dropped before (the signature took two arguments), so callers
    passing it were passing nothing. */
+function mutationHeaders(provided, json = true) {
+  const headers = new Headers(provided);
+  headers.delete('Content-Type');
+  headers.delete('X-CSRFToken');
+  return { ...Object.fromEntries(headers), ...(json ? { 'Content-Type': 'application/json' } : {}), 'X-CSRFToken': getCsrfToken() };
+}
+
 export function postJson(url, body, opts = {}) {
   return apiFetch(url, {
     ...opts,
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRFToken': getCsrfToken(),
-    },
+    headers: mutationHeaders(opts.headers),
     body: JSON.stringify(body),
   });
 }
@@ -184,10 +188,7 @@ export function putJson(url, body, opts = {}) {
   return apiFetch(url, {
     ...opts,
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRFToken': getCsrfToken(),
-    },
+    headers: mutationHeaders(opts.headers),
     body: JSON.stringify(body),
   });
 }
@@ -200,26 +201,25 @@ export function patchJson(url, body, opts = {}) {
   return apiFetch(url, {
     ...opts,
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRFToken': getCsrfToken(),
-    },
+    headers: mutationHeaders(opts.headers),
     body: JSON.stringify(body),
   });
 }
 
-export function del(url) {
+export function del(url, opts = {}) {
   return apiFetch(url, {
+    ...opts,
     method: 'DELETE',
-    headers: { 'X-CSRFToken': getCsrfToken() },
+    headers: mutationHeaders(opts.headers, false),
   });
 }
 
-export function postForm(url, formData) {
-  formData.append('csrf_token', getCsrfToken());
+export function postForm(url, formData, opts = {}) {
+  formData.set('csrf_token', getCsrfToken());
   return apiFetch(url, {
+    ...opts,
     method: 'POST',
-    headers: { 'X-CSRFToken': getCsrfToken() },
+    headers: mutationHeaders(opts.headers, false),
     body: formData,
   });
 }

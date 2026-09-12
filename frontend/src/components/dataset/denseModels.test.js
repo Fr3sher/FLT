@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   denseActions, denseFileRows, denseGuidanceLine, denseHubLine, denseModelTitle,
   denseStudioTarget, denseWhereChip, fmtBytes, STUDIO_NEEDS_A_LORA,
-} from './denseModels.js';
+} from "../../../../bundled/cloud_training/frontend/dataset/denseModels.js";
 
 const local = (over = {}) => ({
   run_id: 146, dataset_id: 3, train_type: 'krea', variant: 'Raw', steps: 3000,

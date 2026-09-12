@@ -21,7 +21,7 @@ import assert from 'node:assert/strict'
 import { readSource } from './support/readSource.mjs'
 import test from 'node:test'
 
-import { layoutBoxes, layoutImageNodes, occupiedBox } from '../src/utils/canvasImageGroups.js'
+import { layoutBoxes, layoutImageNodes, occupiedBox } from "../../bundled/canvas/frontend/utils/canvasImageGroups.js"
 import { groupBarHeight, groupBarMaxHeight, isNodeControlTarget, nodePointerIntent }
   from '../src/utils/canvasNodeChrome.js'
 

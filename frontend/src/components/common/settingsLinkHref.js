@@ -19,8 +19,8 @@
    No focus ⇒ byte-identical to what this produced before the parameter existed,
    because several links legitimately point at a whole section (see the
    documented list in tests/settings-link-target-contract.test.mjs). */
-export function settingsLinkHref(section, focus) {
-  const base = `#/settings/${section}`;
+export function settingsLinkHref(section, focus, pluginId) {
+  const base = pluginId ? `#/plugins/${encodeURIComponent(pluginId)}/settings` : `#/settings/${section}`;
   const target = typeof focus === 'string' ? focus.trim() : '';
   return target ? `${base}?focus=${encodeURIComponent(target)}` : base;
 }

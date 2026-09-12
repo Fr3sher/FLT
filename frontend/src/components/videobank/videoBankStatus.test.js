@@ -6,8 +6,8 @@ import {
   isBusy, finishedOutcome, announcement, nextStep, formatDuration,
   formatFileSize, sourceGeometry, sourceEncoding, sourceState, passProgress,
   resumeSafetyNote,
-} from './videoBankStatus.js'
-import { passBlockedBy } from './videoCapability.js'
+} from "../../../../bundled/video/frontend/videobank/videoBankStatus.js"
+import { passBlockedBy } from "../../../../bundled/video/frontend/lib/videoCapability.js"
 
 const COUNTS = {
   sources: 12, probed: 12, unreadable: 0, detected: 12, detect_errors: 0,

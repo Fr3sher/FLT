@@ -39,15 +39,15 @@ import { createElement, render, renderToStaticMarkup } from './support/mountJsx.
    would already have been loaded by then — the whole graph is linked before the
    first line of any module runs. */
 const { default: VideoClipGrid } =
-  await import('../src/components/videobank/VideoClipGrid.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoClipGrid.jsx")
 const { default: VideoClipLightbox } =
-  await import('../src/components/videobank/VideoClipLightbox.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoClipLightbox.jsx")
 const { default: VideoCapabilityStrip } =
-  await import('../src/components/videobank/VideoCapabilityStrip.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoCapabilityStrip.jsx")
 const { default: VideoSourceList } =
-  await import('../src/components/videobank/VideoSourceList.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoSourceList.jsx")
 const { default: VideoTargetPicker } =
-  await import('../src/components/videobank/VideoTargetPicker.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoTargetPicker.jsx")
 
 const { ToastProvider } = await import('../src/components/common/Toast.jsx')
 

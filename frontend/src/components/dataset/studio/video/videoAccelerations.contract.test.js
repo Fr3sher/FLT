@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(here, p), 'utf8');
-const panel = read('./VideoOptionsPanel.jsx');
-const studio = read('./VideoTestStudio.jsx');
+const panel = read("../../../../../../bundled/video/frontend/studio/video/VideoOptionsPanel.jsx");
+const studio = read("../../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx");
 const setup = read('../../../../hooks/useSetupSteps.js');
 
 test('the Turbo checkbox became a select over the arena podium, resolved by the server', () => {

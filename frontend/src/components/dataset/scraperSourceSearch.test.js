@@ -10,7 +10,7 @@ import {
   resolveScanTarget,
   savePexelsAuthorization,
   scrapeItemToImportPayload,
-} from './scraperSourceSearch.js';
+} from "../../../../bundled/scrape/frontend/lib/scraperSourceSearch.js";
 
 function memoryStorage() {
   const values = new Map();

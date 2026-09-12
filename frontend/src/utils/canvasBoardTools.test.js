@@ -8,14 +8,14 @@ import assert from 'node:assert/strict';
 import {
   boardExportBox, boardExportFilename, boardExportPlan, boardExportRefusal,
   boardExportScale, exportCardLines, EXPORT_MAX_PIXELS, EXPORT_MAX_SIDE, EXPORT_PADDING,
-} from './canvasExportPng.js';
+} from "../../../bundled/canvas/frontend/utils/canvasExportPng.js";
 import {
   canvasLayoutIsEmpty, canvasLayoutSnapshot, canvasPresetApplied,
   canvasPresetName, canvasPresetSummary, PRESET_NAME_MAX,
-} from './canvasLayoutPresets.js';
+} from "../../../bundled/canvas/frontend/utils/canvasLayoutPresets.js";
 import {
   canvasDeleteButtonState, canvasImageDeleteTarget,
-} from './canvasImageDelete.js';
+} from "../../../bundled/canvas/frontend/utils/canvasImageDelete.js";
 
 /* ---------------------------------------------------------------- 📷 export */
 

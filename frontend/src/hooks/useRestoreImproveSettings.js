@@ -1,3 +1,4 @@
+import { improvementAvailable } from '../utils/improveEngines.js';
 import { useCallback } from 'react';
 import { apiFetch, putJson } from '../api/fetchClient';
 import { useToast } from '../components/common/Toast';
@@ -20,7 +21,8 @@ import {
    immediately instead of after its cache TTL. */
 export function useRestoreImproveSettings() {
   const toast = useToast();
-  return useCallback(async (img) => {
+  const restore = useCallback(async (img) => {
+    if (!improvementAvailable('klein')) { toast.warning('Enable Klein Improve before reusing its settings.'); return; }
     try {
       const payload = await apiFetch('/api/settings');
       const { patch, report } = restoreImprovePatch({
@@ -34,4 +36,5 @@ export function useRestoreImproveSettings() {
       toast.error(e?.message || 'Could not apply these improve settings');
     }
   }, [toast]);
+  return improvementAvailable('klein') ? restore : undefined;
 }

@@ -16,7 +16,7 @@ import { createElement, renderToStaticMarkup } from './support/mountJsx.mjs'
 const { default: GeneratedImageLightbox } =
   await import('../src/components/shared/GeneratedImageLightbox.jsx')
 const { default: CivitaiPublishModal } =
-  await import('../src/components/shared/CivitaiPublishModal.jsx')
+  await import("../../bundled/civitai_publish/frontend/panels/CivitaiPublishModal.jsx")
 const { default: CheckpointActionsPopover } =
   await import('../src/components/dataset/CheckpointActionsPopover.jsx')
 const { CapabilitiesProvider } = await import('../src/context/CapabilitiesContext.jsx')
@@ -82,7 +82,7 @@ test('the mark pane looks the page up first and only then offers a version to li
   // Effects never run under renderToStaticMarkup, so the pane is proved in the
   // state it opens in: the address field and Look up, no version pick yet —
   // the pick only exists once a page has answered.
-  const { default: Modal } = await import('../src/components/shared/CivitaiPublishModal.jsx')
+  const { default: Modal } = await import("../../bundled/civitai_publish/frontend/panels/CivitaiPublishModal.jsx")
   const html = inApp(createElement(Modal, {
     context: {
       kind: 'checkpoint',

@@ -64,12 +64,7 @@ export const ACTION_TOPICS = [
      'aspect', 'square', 'resample', 'resolution', 'no resize', 'without dataset',
      'before promoting', 'edit image', 'C key'],
     '/bank', 'using-the-app', 'crop-and-upscale-inside-a-bank'),
-  action('action-bank-improve', 'Upscale & improve images inside a bank',
-    ['upscale', 'upscaling', 'improve', 'enhance', 'sharpen', 'super resolution',
-     'super-resolution', 'klein', 'seedvr2', 'seedvr', 'low resolution', 'small',
-     'blurry', 'soft', 'quality', 'gpu', 'comfyui', 'bank', 'batch', 'pass',
-     'before promoting', 'without dataset', 'stop'],
-    '/bank', 'using-the-app', 'crop-and-upscale-inside-a-bank'),
+
   action('action-bank-revert-edits', 'Undo a crop or an upscale made in a bank',
     ['revert', 'undo crop', 'undo upscale', 'undo improve', 'restore', 'original',
      'back to original', 'cancel edit', 'remove edit', 'edits', 'mistake',
@@ -139,17 +134,7 @@ export const ACTION_TOPICS = [
   // because the panel has a property the Settings card does not: it writes the
   // app-wide value from a per-dataset-looking screen, which is the one thing a
   // user must be told before they use it.
-  action('action-edit-improve-instruction', 'Edit the improve instruction without leaving the images',
-    ['improve', 'upscale', 'instruction', 'prompt', 'edit', 'edit here', 'inline', 'in place',
-     'window', 'modal', 'popup', 'settings window', 'generate button',
-     'change the prompt', 'turn off', 'disable', 'toggle', 'no prompt', 'upscale only',
-     'klein', 'anime', 'drawn', 'realistic', 'texture', 'skin', 'detail', 'lightbox',
-     'reset to default', 'built-in default', 'global', 'app-wide', 'every dataset',
-     'applies everywhere', 'same as settings',
-     // The same note now also picks the LoRA preset the pass chains
-     // (klein.improve_lora_preset) — one panel, all three improve knobs.
-     'lora preset', 'improve preset', 'chain lora', 'preset', 'extra loras'],
-    '/datasets?section=images', 'settings-reference', 'image-engines'),
+
   // ↩ On a ✨ result in the generated-image viewer (Gallery, checkpoint
   // galleries, Canvas): make future improves run the way THIS one did.
   action('action-use-improve-settings', 'Reuse the settings a ✨ result was made with',
@@ -164,26 +149,11 @@ export const ACTION_TOPICS = [
      it turn the person instead of moving the camera". Both vocabularies are in
      the keywords, including the shot-catalog words, so someone who tried
      "profile view" first lands here. */
-  action('action-camera-angles', 'Re-shoot a picture from another camera position',
-    ['camera', 'camera angle', 'angles', 'multi-angle', 'multiple angles', 'around',
-     'orbit', 'rotate camera', 'move camera', 'viewpoint', 'point of view',
-     'other side', 'back of', 'behind', 'from behind', 'back view', 'profile',
-     'side view', 'three-quarter', 'low angle', 'high angle', 'from below',
-     'from above', 'turntable', 'coverage', 'sks', 'qwen', 'why did it turn the person',
-     'background did not move', 'same scene different angle'],
-    '/gallery', 'using-the-app', 'the-gallery-every-image-you-generated',
-    { trigger: 'camera-angles-picker',
-      text: 'Pick axes, not pictures: the sides you tick times the heights times '
-        + 'the distances is the run — the count under the button is what it will cost.' }),
+
   /* 📷 The picker's Model row — a SETTING (app-wide camera.unet), so it owes a
      topic, and the words it is asked with ("can I run this on a finetune / an
      NSFW build") appear in none of the other camera topics. */
-  action('action-camera-model', 'Run camera angles on another Qwen-Image-Edit build',
-    ['camera model', 'qwen model', 'qwen build', 'qwen edit', '2511', 'swap model',
-     'another model', 'different model', 'change model', 'custom model', 'finetune',
-     'fine-tune', 'merge', 'aio', 'nsfw', 'uncensored', 'rapid', 'which model',
-     'model not found', 'camera.unet', 'model row', 'camera picker model'],
-    '/gallery', 'settings-reference', 'image-engines'),
+
   /* 📷 In a dataset the same verb answers a different question — "how do I get
      training coverage of the back of my character" — and adds the captioning
      angle, so it earns its own topic with the dataset vocabulary. */
@@ -197,19 +167,8 @@ export const ACTION_TOPICS = [
      'generation settings', 'provenance', 'metadata', 'stamp'],
     '/datasets?section=images', 'using-the-app',
     'the-character-walkthrough-reference-photo-trained-lora'),
-  action('action-dataset-camera-angles', 'Cover a dataset subject from more angles',
-    ['camera angles dataset', 'multi-angle dataset', 'coverage', 'training coverage',
-     'back of my character', 'more angles', 'angle caption', 'seen from behind',
-     'caption angle', 'pending candidates', 'camera view candidate',
-     'why is the caption pre-filled', 'bank camera', 'why not in the bank',
-     'promote then camera', 're-shoot dataset image'],
-    '/datasets?section=images', 'using-the-app',
-    'the-character-walkthrough-reference-photo-trained-lora'),
-  action('action-reimprove-tile', 'Re-run Upscale & improve after changing its settings',
-    ['improve', 'upscale', 'reimprove', 're-improve', 'rerun', 're-run', 'redo', 'again',
-     'regenerate', 'no regenerate button', 'missing button', 'klein improve', 'candidate',
-     'steps', 'megapixels', 'strength', 'try again', 'source image', 'parent'],
-    '/datasets?section=images', 'settings-reference', 'image-engines'),
+
+
   // ⟨ / ⟩ in the dataset lightbox. The buttons are visible, but the ← → keys,
   // the fact that the walk follows the FILTERS, and the deliberate absence of a
   // wrap-around are all invisible — which is what earns this its own topic.
@@ -278,16 +237,7 @@ export const ACTION_TOPICS = [
   // go" is the question this button actually raises on a screen where nothing
   // moves when you press it. ONE topic for both surfaces on purpose — it is the
   // same pass on the same row, and two topics would be two answers to drift.
-  action('action-canvas-improve', 'Upscale a picture from the board or its gallery',
-    ['canvas', 'board', 'improve', 'upscale', 'upscale & improve', 'enhance', 'klein',
-     'seedvr2', 'sharpen', 'detail', 'resolution', 'megapixels', 'lightbox',
-     'pinned image', 'generated image', 'where did it go', 'result', 'gallery',
-     'checkpoint gallery', 'improve from canvas', 'no improve button',
-     'improve an improvement', 'reference face', 'retry', 'failed upscale',
-     'improve from the gallery', 'upscale from the gallery', 'run gallery',
-     'gallery lightbox', 'improve a test image', 'improve a render',
-     'gallery did not update', 'upscale not showing'],
-    '/canvas', 'using-the-app', 'upscale-a-picture-straight-from-the-board'),
+
   action('action-grid-sort', 'Sort the dataset grid, or group it by shot type',
     ['sort', 'order', 'ordering', 'reorder', 'rank', 'ranking', 'best first',
      'worst first', 'face similarity', 'similarity', 'resemblance', 'looks like',
@@ -370,17 +320,9 @@ export const ACTION_TOPICS = [
   action('training-continue-anyway', 'Continue anyway (train a not-ready dataset)',
     ['continue', 'anyway', 'not ready', 'blocker', 'override', 'too few', 'overfit', 'readiness', 'force'],
     '/datasets?section=training&panel=launch', 'dataset-guide', '5-pre-flight-checklist'),
-  action('parallel-cloud-runs', 'Compare settings with two runs at once',
-    ['parallel runs', 'second run', 'two runs', 'same dataset twice', 'a/b',
-     'ab test', 'compare settings', 'settings comparison', 'launch anyway',
-     'second pod', 'run chip', 'different dataset generation'],
-    '/datasets', 'using-the-app', 'compare-settings-with-two-runs-at-once'),
-  action('action-scrape-scan', 'Scan a gallery URL',
-    ['scrape', 'scan', 'gallery', 'url', 'import', 'concept'],
-    '/datasets?section=scrape&panel=scan', 'using-the-app', 'concept-datasets-an-object-or-action-not-a-person'),
-  action('action-scrape-websearch', 'Search the web for images by keyword',
-    ['scrape', 'search', 'websearch', 'web images', 'keyword', 'duckduckgo', 'import', 'concept'],
-    '/datasets?section=scrape&panel=scan', 'using-the-app', 'concept-datasets-an-object-or-action-not-a-person'),
+
+
+
   action('action-import-from-bank', 'Import images from a bank',
     ['bank', 'import from bank', 'promote', 'triaged', 'kept images', 'add images',
      'copy from bank', 'reuse bank', 'nothing to promote', 'already imported'],

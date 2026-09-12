@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { ML_INSTALL_CARDS, cardCaps, cardInstalled } from './mlInstallCards.js'
-import { VIDEO_PIECES } from '../videobank/videoCapability.js'
+import { VIDEO_PIECES } from "../../../../bundled/video/frontend/lib/videoCapability.js"
 
 test('every install the video capability strip points at has a Setup card', () => {
   // A piece whose `fix` line says "from Setup" MUST carry `setupCap`, and a

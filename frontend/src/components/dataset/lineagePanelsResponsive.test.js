@@ -22,7 +22,7 @@ const gallery = fs.readFileSync(
   new URL('../shared/CheckpointGalleryPanel.jsx', import.meta.url), 'utf8');
 const diff = fs.readFileSync(new URL('./LineageDiffPanel.jsx', import.meta.url), 'utf8');
 const canvasPanel = fs.readFileSync(
-  new URL('../canvas/CanvasGenerationPanel.jsx', import.meta.url), 'utf8');
+  new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx", import.meta.url), 'utf8');
 
 for (const [name, src] of [['LineageDetailPanel', detail],
   ['CheckpointGalleryPanel', gallery]]) {
@@ -154,7 +154,7 @@ test('the checkpoint gallery lives in shared/, where both surfaces import it fro
   // It is opened by the canvas board AND by the in-card run graph; sitting in
   // components/canvas/ made the dataset panel import a "canvas" component.
   const canvas = fs.readFileSync(
-    new URL('../canvas/LineageCanvas.jsx', import.meta.url), 'utf8');
+    new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
   const graph = fs.readFileSync(new URL('./RunLineageGraph.jsx', import.meta.url), 'utf8');
   assert.match(canvas, /from '\.\.\/shared\/CheckpointGalleryPanel'/);
   assert.match(graph, /from '\.\.\/shared\/CheckpointGalleryPanel'/);

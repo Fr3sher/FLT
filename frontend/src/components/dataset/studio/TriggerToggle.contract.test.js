@@ -17,8 +17,8 @@ const comparison = readFileSync(new URL('./ComparisonStudio.jsx', import.meta.ur
 const viewer = readFileSync(new URL('./StudioResultViewer.jsx', import.meta.url), 'utf8');
 const pref = readFileSync(new URL('./triggerPref.js', import.meta.url), 'utf8');
 const canvasPanel = readFileSync(
-  new URL('../../canvas/CanvasGenerationPanel.jsx', import.meta.url), 'utf8');
-const canvasBlend = readFileSync(new URL('../../canvas/CanvasBlendPanel.jsx', import.meta.url), 'utf8');
+  new URL("../../../../../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx", import.meta.url), 'utf8');
+const canvasBlend = readFileSync(new URL("../../../../../bundled/canvas/frontend/components/canvas/CanvasBlendPanel.jsx", import.meta.url), 'utf8');
 const stackPanel = readFileSync(new URL('./LoraStackPanel.jsx', import.meta.url), 'utf8');
 const stackComposition = readFileSync(new URL('./StackCompositionPanel.jsx', import.meta.url), 'utf8');
 const facts = readFileSync(new URL('../../../utils/generatedImageFacts.js', import.meta.url), 'utf8');

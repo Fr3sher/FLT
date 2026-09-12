@@ -11,9 +11,9 @@ import assert from 'node:assert/strict'
 import { createElement, renderToStaticMarkup } from './support/mountJsx.mjs'
 
 const { default: VideoLineageGraph, VideoCheckpointPopover } =
-  await import('../src/components/videobank/VideoLineageGraph.jsx')
-const { default: VideoSampleLightbox } = await import('../src/components/videobank/VideoSampleLightbox.jsx')
-const { pillActionModel } = await import('../src/components/videobank/videoLineage.js')
+  await import("../../bundled/video/frontend/videobank/VideoLineageGraph.jsx")
+const { default: VideoSampleLightbox } = await import("../../bundled/video/frontend/videobank/VideoSampleLightbox.jsx")
+const { pillActionModel } = await import("../../bundled/video/frontend/videobank/videoLineage.js")
 
 const file = (filename, extra = {}) => ({ filename, size: 314572800, deployed_as: null, undeployable: false, ...extra })
 const POSTER = '/api/video-dataset/9/train/sample/poster?run_id=12&filename=1725__000000100_0.mp4'

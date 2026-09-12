@@ -6,8 +6,8 @@ import assert from 'node:assert/strict'
 import {
   EMPTY_GRAPH_NOTE, PREVIEWS_NOTE, graphSummary, nodeGroup, pillActionModel, pillKey,
   pillPreview, pillStep, samplesOfStep, videoDeployHint,
-} from './videoLineage.js'
-import { CONTINUE_LOCAL_REASON, HAND_PLACED_REASON, stepActionModel } from './videoCheckpoints.js'
+} from "../../../../bundled/video/frontend/videobank/videoLineage.js"
+import { CONTINUE_LOCAL_REASON, HAND_PLACED_REASON, stepActionModel } from "../../../../bundled/video/frontend/videobank/videoCheckpoints.js"
 import { runNumber, runIdentityLabel } from '../../utils/runIdentity.js'
 
 const file = (filename, extra = {}) => ({ filename, size: 1, deployed_as: null, undeployable: false, ...extra })

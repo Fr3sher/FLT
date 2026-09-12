@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clearScraperScanState, isDatasetImportBlocked, isStopGenerationBlocked, loadScraperScanState, saveScraperScanState } from './scraperState.js';
+import { clearScraperScanState, isDatasetImportBlocked, isStopGenerationBlocked, loadScraperScanState, saveScraperScanState } from "../../../../bundled/scrape/frontend/lib/scraperState.js";
 
 function memoryStorage() {
   const values = new Map();

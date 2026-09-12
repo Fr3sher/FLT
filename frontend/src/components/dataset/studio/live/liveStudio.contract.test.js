@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(here, p), 'utf8');
 const page = read('../../../../pages/StudioPage.jsx');
-const lane = read('./LiveStudio.jsx');
+const lane = read("../../../../../../bundled/live/frontend/studio/live/LiveStudio.jsx");
 
 test('the Studio page offers the Live lane as a third tab and remembers it', () => {
   assert.match(page, /\{ id: 'live', label: 'Live', icon: Radio, badge: 'beta' \}/, 'the tab says beta next to Live');
