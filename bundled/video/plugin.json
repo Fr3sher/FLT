@@ -29,6 +29,11 @@
     ],
     "install_groups": [],
     "probes": [
+      "video",
+      "video_detail",
+      "video_decode",
+      "video_detect",
+      "video_encode",
       "video_host_ready",
       "comfyui.video_studio_missing",
       "comfyui.video_studio_ready",
@@ -38,6 +43,8 @@
     ],
     "engines": [],
     "config_sections": [
+      "video",
+      "shot_detect",
       "video_caption",
       "video_bank"
     ],

@@ -17,6 +17,9 @@ def encoder_ready(force=False):
 
 
 def facts():
+    from lds_sdk.lifecycle import is_available
+    if not is_available('live'):
+        return {}
     from lds_sdk.local_render import comfyui_reachable
     missing = missing_weights()
     reachable = comfyui_reachable()

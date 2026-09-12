@@ -12,7 +12,9 @@
   "owns": {
     "install_actions": [],
     "install_groups": [],
-    "probes": [],
+    "probes": [
+      "civitai"
+    ],
     "engines": [],
     "config_sections": [
       "civitai"

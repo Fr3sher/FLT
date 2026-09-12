@@ -14,7 +14,10 @@
       "scrape_extras"
     ],
     "install_groups": [],
-    "probes": [],
+    "probes": [
+      "scrape_deps",
+      "scrape_deps_detail"
+    ],
     "config_sections": [],
     "config_keys_in_shared_sections": {
       "klein": [

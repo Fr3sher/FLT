@@ -16,7 +16,10 @@ __version__ = '1.0.7'
 
 
 def register(ctx):
+    from .probes import PROBES
     from .routes import bp
     ctx.register_blueprint(bp, url_prefix='/api')
     ctx.register_install_action('scrape_extras', label='Install web scraping dependencies',
                                 python='app', requirements=ctx.dir / 'requirements.txt')
+    for key, fn in PROBES.items():
+        ctx.register_probe(key, fn)

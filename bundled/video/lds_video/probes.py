@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import time
+from copy import deepcopy
 
 _TTL_S = 8.0
 _lock = threading.Lock()
@@ -83,7 +84,27 @@ def video_host_ready():
         return False
 
 
+def _video_piece(key):
+    # Preserve main's three independently cached checks and interpreter choices.
+    from lds_sdk.video_host.capabilities import probe_video
+    return probe_video()[key]
+
+
+def _when_enabled(fn, empty):
+    def probe():
+        from lds_sdk.lifecycle import is_available
+        if not is_available('video'):
+            return deepcopy(empty)
+        return fn()
+    return probe
+
+
 PROBES = {
+    'video': lambda: _video_piece('ok'),
+    'video_detail': lambda: _video_piece('detail'),
+    'video_decode': lambda: _video_piece('decode'),
+    'video_detect': lambda: _video_piece('detect'),
+    'video_encode': lambda: _video_piece('encode'),
     'video_host_ready': video_host_ready,
     'comfyui.video_studio_missing': video_studio_missing,
     'comfyui.video_studio_ready': video_studio_ready,
@@ -91,3 +112,7 @@ PROBES = {
     'comfyui.video_studio_sage': video_studio_sage,
     'dlss5nr': dlss5nr,
 }
+
+_EMPTY_PROBES = {'video_detail': '', 'comfyui.video_studio_missing': [],
+                 'comfyui.video_studio_options': {}, 'comfyui.video_studio_sage': {}, 'dlss5nr': {}}
+PROBES = {key: _when_enabled(fn, _EMPTY_PROBES.get(key, False)) for key, fn in PROBES.items()}

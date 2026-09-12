@@ -49,8 +49,10 @@ def _drop_links_of_dataset(dataset_id):
 
 
 def register(ctx):
+    from .probes import configured
     from .routes import bp
     ctx.register_blueprint(bp, url_prefix='/api/civitai')
+    ctx.register_probe('civitai', configured)
     ctx.register_hook('lineage.checkpoints', _stamp_lineage)
     ctx.register_hook('training_run.delete_summary', _count_links_for_summary)
     ctx.register_hook('training_run.delete', _detach_links_of_run)
