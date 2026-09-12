@@ -158,7 +158,6 @@ test('the set of files allowed to raw-fetch is closed', () => {
     'pages/CloudRunsPage.jsx',                             // history/lineage GETs render their own error states
     'components/runs/RunsHub.jsx',                         // inherited lineage GETs and config blob download, own error states
     'components/dataset/CloudLaunchDialog.jsx',            // readiness/offers polls inside the dialog, own copy
-    'components/dataset/PublishHfModal.jsx',               // whoami/status best-effort, null on failure
     'components/dataset/ConceptFaceMaskField.jsx',        // best-effort mask preview GET, null on failure
     'components/dataset/TrainingPanel.jsx',                // status poll + preflight GET with local handling
     'components/dataset/useTrainingPresets.js',          // inherited the panel's best-effort preset-list GET (hook wave 1)

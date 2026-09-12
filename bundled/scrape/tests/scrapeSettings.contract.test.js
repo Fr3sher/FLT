@@ -78,7 +78,7 @@ test('Pexels key and attribution markup stay wired without nested controls', () 
   // calling it would still match a bare name-presence check, and the wiring this
   // test exists to guarantee (selected items are actually mapped before import)
   // would then be unpinned.
-  assert.match(panelSource, /\.map\(it => scrapeItemToImportPayload\(it,\s*\{\s*sourceUrl: activeScanUrl, platform: activePlatform/);
+  assert.match(panelSource, /\.filter\(\(it\) => selected\.has\(it\.url\)[\s\S]*?\.map\(scrapeItemToImportPayload\)/);
   for (const field of ['platform', 'source_url', 'photographer', 'photographer_url']) {
     assert.match(scraperSourceSearchSource, new RegExp(`${field}:`), `selected items forward ${field}`);
   }

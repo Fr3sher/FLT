@@ -8,7 +8,7 @@ import {
   videoDatasetCloudUrl, videoDatasetCloudProgressUrl,
   videoDatasetCloudCheckpointsUrl, videoDatasetCheckpointUrl,
   videoDatasetCloudRetryUrl, videoDatasetCloudContinueUrl,
-} from '../../../frontend/src/components/videobank/videoBankApi.js'
+} from '../../video/frontend/videobank/videoBankApi.js'
 
 test('the cloud URLs name the VIDEO dataset table, never the face one', () => {
   // Same integer, two tables. `/api/dataset/7/...` is a face dataset and

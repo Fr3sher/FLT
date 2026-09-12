@@ -78,11 +78,7 @@ test('the help topics moved out of the core registry', () => {
   }
 })
 
-test('the backend partition: the tools are the plugin\'s and the exporter stays in the core', () => {
-  for (const gone of ['app/services/fp8_quantize.py', 'app/services/lora_merge.py',
-    'app/services/lora_merge_job.py', 'app/routes/tools.py']) {
-    assert.ok(!existsSync(here(`../../../backend/${gone}`)), `${gone} is still in the core`)
-  }
+test('the backend mounts the tools through their plugin and retains shared file primitives', () => {
   for (const own of ['fp8_quantize.py', 'lora_merge.py', 'lora_merge_job.py', 'routes.py']) {
     assert.ok(existsSync(here(`../lds_model_tools/${own}`)), `${own} is missing from the plugin`)
   }
@@ -96,14 +92,17 @@ test('the backend partition: the tools are the plugin\'s and the exporter stays 
   assert.match(read('../lds_model_tools/__init__.py'), /ctx\.register_blueprint\(bp, url_prefix='\/api'\)/)
 })
 
-test('the cloud plugin owns one-click delivery and binds this plugin\'s converter', {
-  skip: !existsSync(here('../../cloud_training/plugin.json'))
-    && 'cloud_training plugin is not bundled',
-}, () => {
+test('the cloud plugin owns one-click delivery and uses the host converter independently', () => {
   assert.match(read('../../cloud_training/lds_cloud_training/routes.py'),
     /tools\/fp8-deliver\/plan/)
-  assert.match(read('../../cloud_training/lds_cloud_training/fp8_local_delivery.py'),
-    /from lds_sdk import model_tools as fp8_quantize/)
+  const delivery = read('../../cloud_training/lds_cloud_training/fp8_local_delivery.py')
+  assert.match(delivery,
+    /from lds_sdk\.cloud_host\.services import comfy_model_paths, fp8_export, fp8_quantize/)
+  assert.doesNotMatch(delivery, /from lds_model_tools|import lds_model_tools/)
+  const host = back('lds_sdk/cloud_host/services/__init__.py')
+  assert.match(host, /from app\.services import \([\s\S]*\bfp8_quantize,/)
+  const manifest = JSON.parse(read('../../cloud_training/plugin.json'))
+  assert.ok(!manifest.requires.includes('model_tools'))
 })
 
 test('explicit bundled development generates the classes the plugin screens use', async () => {
