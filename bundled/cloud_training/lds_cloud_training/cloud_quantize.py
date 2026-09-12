@@ -167,7 +167,8 @@ def has_unreleased_rental():
         return True
     legacy = status() if not receipt else {}
     return bool((receipt and not receipt['released']) or
-                (not receipt and (legacy.get('status') in ('provisioning', 'running')
+                (not receipt and (legacy.get('instance_id') is not None
+                                  or legacy.get('status') in ('provisioning', 'running')
                                   or legacy.get('cleanup_pending'))))
 
 

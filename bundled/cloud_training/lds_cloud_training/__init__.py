@@ -13,6 +13,8 @@ def _disable_blockers(plugin_id, reasons):
         return list(reasons) + ['Release the kept cloud training pod before disabling this plugin.']
     if cloud_quantize._lock.locked() or cloud_quantize.status().get('status') in ('provisioning', 'running'):
         return list(reasons) + ['Wait for cloud quantization to finish before disabling this plugin.']
+    if cloud_quantize.has_unreleased_rental():
+        return list(reasons) + ['Resolve the cloud quantization rental before disabling this plugin.']
     if fp8_local_delivery._lock.locked() or fp8_local_delivery.status().get('status') in ('downloading', 'quantizing'):
         return list(reasons) + ['Wait for FP8 model delivery to finish before disabling this plugin.']
     return reasons

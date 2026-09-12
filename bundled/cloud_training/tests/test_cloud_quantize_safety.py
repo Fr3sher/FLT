@@ -58,6 +58,29 @@ def test_corrupt_or_expiring_receipt_envelope_blocks_admission_without_erasure(l
     assert db.session.get(SystemState, lane._RENTAL_KEY).value == raw
 
 
+@pytest.mark.parametrize('state', ['error', 'done', 'corrupt', 'empty'])
+def test_disable_keeps_cleanup_available_until_rental_release_is_proven(lane, monkeypatch, state):
+    from lds_cloud_training import _disable_blockers
+    from lds_sdk.cloud_host.extensions import db
+    from lds_sdk.cloud_host.models import SystemState
+
+    if state in ('error', 'done'):
+        lane.queue_manager._set_system_state('cloud_quantize', {
+            'status': state, 'instance_id': 70, 'label': lane.LABEL_PREFIX + 'old'}, ttl_seconds=None)
+    elif state == 'corrupt':
+        db.session.add(SystemState(key=lane._RENTAL_KEY, value='not-json'))
+        db.session.commit()
+    monkeypatch.setattr(lane.vast_client, 'list_instances',
+                        lambda **_kw: pytest.fail('Disable must not contact a provider'))
+    reasons = _disable_blockers('cloud_training', ['existing'])
+    assert reasons[0] == 'existing'
+    if state == 'empty':
+        assert reasons == ['existing']
+    else:
+        assert len(reasons) == 2
+        assert 'quantization rental' in reasons[1]
+
+
 OFFER = {'offer_id': 77, 'machine_id': 5, 'gpu_name': 'fixture', 'dph_total': 0.09,
          'inet_down': 1000, 'disk_space_gb': 512.0}
 PLAN = {'repo_id': 'fixture/model', 'weight_path': 'master.safetensors',
