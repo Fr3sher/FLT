@@ -11,7 +11,8 @@ from lds_sdk.lifecycle import is_available, state_change_lock
 
 __all__ = ['ACTIVE_STATES', '_run_param', 'cfg', 'checkpoint_store_dir',
            'delete_cloud_checkpoint', 'get_active_runs', 'latest_run_for',
-           'month_spend_usd', 'run_checkpoint_files', 'run_checkpoint_path', 'get_run']
+           'month_spend_usd', 'run_checkpoint_files', 'run_checkpoint_path', 'get_run',
+           'full_transformer_token_preflight']
 
 
 def get_run(user_id, run_id, *, dataset_id, dataset_table):
@@ -55,3 +56,8 @@ def get_active_runs(*args, **kwargs):
 
 def month_spend_usd(*args, **kwargs):
     return _active_product().month_spend_usd(*args, **kwargs)
+
+
+def full_transformer_token_preflight(*args, **kwargs):
+    with state_change_lock:
+        return _active_product().full_transformer_token_preflight(*args, **kwargs)

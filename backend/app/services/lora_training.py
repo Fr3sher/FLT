@@ -7526,9 +7526,16 @@ def _pf_dense_mode(ds, ttype, mode, lane, slider, blockers, _check):
         # the first place an absent token, wrong token type/scope, or unaccepted
         # Krea licence is discovered.
         try:
-            from . import cloud_training as cloud
-            hf_cloud_token_status = cloud.full_transformer_token_preflight(
-                required_base_repo=official_base_repo(ds, ttype))
+            from lds_sdk import cloud_training as cloud
+            with cloud.state_change_lock:
+                if not cloud.is_available('cloud_training'):
+                    hf_cloud_token_status = {
+                        'ok': False, 'configured': False,
+                        'error': 'Install and enable Cloud training in Plugins before preparing a cloud run.',
+                    }
+                else:
+                    hf_cloud_token_status = cloud.full_transformer_token_preflight(
+                        required_base_repo=official_base_repo(ds, ttype))
             if not isinstance(hf_cloud_token_status, dict):
                 raise RuntimeError('invalid token preflight response')
         except Exception:
@@ -7555,7 +7562,7 @@ def _pf_dense_mode(ds, ttype, mode, lane, slider, blockers, _check):
             _check(
                 'hf_cloud_token', 'Hugging Face cloud token', 'fail',
                 detail, 'gf-training', bypassable=False,
-                hint=('Add HF_CLOUD_TOKEN in Settings with read access to '
+                hint=('Open Plugins → Cloud training → Settings and add HF_CLOUD_TOKEN with read access to '
                       'krea/Krea-2-Raw and repository write access. A '
                       'fine-grained token is recommended; global write is '
                       'accepted with a warning.'),
