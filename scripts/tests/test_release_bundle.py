@@ -81,11 +81,16 @@ def test_a_tracked_runtime_symlink_cannot_read_an_external_target(repository, tm
 def test_inherited_git_context_cannot_select_another_repository(repository, tmp_path, monkeypatch):
     expected = git(repository, 'rev-parse', 'HEAD').decode().strip()
     other = tmp_path / 'other'
-    git(tmp_path, 'clone', '-q', '--no-local', str(repository), str(other))
+    other.mkdir()
+    git(other, 'init', '-q')
     git(other, 'config', 'user.name', 'lora-dataset-studio')
     git(other, 'config', 'user.email', 'noreply@lora-dataset-studio.dev')
+    for name in bundle.REQUIRED:
+        destination = other / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text('other committed tree\n', encoding='utf-8')
     (other / 'backend/app/version.py').write_text("APP_VERSION = 'private-tree'\n", encoding='utf-8')
-    git(other, 'add', '--', 'backend/app/version.py')
+    git(other, 'add', '--', *bundle.REQUIRED)
     git(other, 'commit', '-q', '-m', 'Synthetic other tree')
     monkeypatch.setenv('GIT_DIR', str(other / '.git'))
     monkeypatch.setenv('GIT_WORK_TREE', str(other))
