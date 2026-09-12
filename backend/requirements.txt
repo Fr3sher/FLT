@@ -14,3 +14,6 @@ Send2Trash>=1.8           # Bank "Delete rejected from disk" -> OS trash instead
 # (start.bat), and it shipped a test runner nobody runs. They live in
 # requirements-dev.txt, the common CI/release test baseline. Runtime bridge tests
 # add the separate CPU-only requirements-torch-tests.txt overlay -- see its header.
+
+# Plugin manifest version and dependency constraints.
+packaging==26.0

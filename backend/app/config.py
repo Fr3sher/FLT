@@ -56,6 +56,7 @@ _V3_KREA_REF_BOOST = 0.25
 _V3_KREA_STEPS = 8
 
 DEFAULTS = {
+    'plugins': {'enabled': {}},
     # host: '127.0.0.1' = this machine only ; '0.0.0.0' = reachable from the LAN
     # (phone, tablet, another PC) — the Settings "Server" card's LAN toggle just
     # flips this. Port defaults to 5050 to match start.bat's default bind (so the
@@ -1699,3 +1700,14 @@ def secret_key() -> str:
     if not f.exists():
         f.write_text(_secrets.token_hex(32), encoding='utf-8')
     return f.read_text(encoding='utf-8').strip()
+
+
+def register_plugin_defaults(plugin_id: str, mapping: dict) -> None:
+    """A plugin's own settings defaults, merged under DEFAULTS['plugins'][<id>]
+    at load. Keys a plugin owns inside a shared core section stay in the core
+    DEFAULTS above (a stored key never moves)."""
+    global _cache
+    section = DEFAULTS.setdefault('plugins', {})
+    section[plugin_id] = _deep_merge(section.get(plugin_id, {}), mapping)
+    with _lock:
+        _cache = None
