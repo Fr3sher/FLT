@@ -1,0 +1,13 @@
+{
+  "name": "@lds-plugins/scrape",
+  "version": "1.0.7",
+  "private": true,
+  "type": "module",
+  "lds": {
+    "entry": "frontend/index.js",
+    "sdk": "1.7.0"
+  },
+  "dependencies": {
+    "lucide-react": "1.34.0"
+  }
+}

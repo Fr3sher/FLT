@@ -1,0 +1,13 @@
+{
+  "name": "@lds-plugins/model-tools",
+  "version": "1.0.8",
+  "private": true,
+  "type": "module",
+  "lds": {
+    "entry": "frontend/index.js",
+    "sdk": "1.7.0"
+  },
+  "dependencies": {
+    "lucide-react": "1.34.0"
+  }
+}

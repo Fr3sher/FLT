@@ -1,0 +1,66 @@
+{
+  "id": "hf_publish",
+  "bundled": true,
+  "name": "Publish to Hugging Face",
+  "version": "1.0.5",
+  "api": 1,
+  "description": "Export a dataset to the Hugging Face Hub as a dataset repo — the kept images as metadata-free PNG copies, captions matching the dataset kind, a metadata.jsonl and a dataset card — from the dataset's Import & export section. Private by default, consent required, the reference photo off by default. Uses the HF_TOKEN the app already holds for gated downloads and cloud training.",
+  "requires": [],
+  "python_package": "lds_hf_publish",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": true,
+  "owns": {
+    "install_actions": [],
+    "install_groups": [],
+    "probes": [
+      "hf_publish"
+    ],
+    "engines": [],
+    "config_sections": [],
+    "config_keys_in_shared_sections": {},
+    "help_topics": [
+      "hf-publish",
+      "hf-publish-token"
+    ],
+    "tables": [],
+    "whats_new_ids": [
+      "2026-09-09-hf-style-dataset-card"
+    ],
+    "model_slots": []
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "network",
+    "datasets:read",
+    "secrets:HF_TOKEN"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Open dataset export",
+        "path": "/datasets?section=export"
+      }
+    ],
+    "setup": {
+      "label": "Configure",
+      "path": "/plugins/hf_publish/settings"
+    },
+    "setup_hint": "Use a Hugging Face token with permission to write the destination repository.",
+    "surfaces": [
+      "Dataset export",
+      "Publishing dialog"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.12,<2"
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "using-the-app#publish-a-dataset-to-hugging-face"
+    ]
+  }
+}

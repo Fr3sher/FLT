@@ -1,0 +1,105 @@
+{
+  "id": "scrape",
+  "bundled": true,
+  "name": "Web scraping",
+  "version": "1.0.7",
+  "api": 1,
+  "description": "Search Reddit, Pexels or the open web by keyword, or scan a gallery URL, and import the pictures or clips you pick into a dataset, an image bank or a video bank.",
+  "requires": [],
+  "python_package": "lds_scrape",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": true,
+  "owns": {
+    "install_actions": [
+      "scrape_extras"
+    ],
+    "install_groups": [],
+    "probes": [],
+    "config_sections": [],
+    "config_keys_in_shared_sections": {
+      "klein": [
+        "small_image_prompt"
+      ]
+    },
+    "help_topics": [
+      "video-bank-scrape",
+      "workspace-scrape",
+      "bank-scrape",
+      "action-scrape-scan",
+      "action-scrape-websearch",
+      "REDDIT_CLIENT_ID",
+      "PEXELS_API_KEY",
+      "klein.small_image_prompt"
+    ],
+    "tables": [],
+    "whats_new_ids": [
+      "2026-08-06-bank-scrape-keeps-provenance",
+      "2026-07-28-scrape-straight-into-a-bank",
+      "2026-07-22-install-everything-covers-scraper",
+      "2026-07-21-instagram-scrape-and-english-messages",
+      "2026-07-17-scrape-section"
+    ]
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "network",
+    "datasets:write",
+    "banks:write",
+    "secrets:CIVITAI_API_KEY",
+    "secrets:PEXELS_API_KEY",
+    "secrets:REDDIT_CLIENT_ID"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Open image bank",
+        "path": "/bank"
+      },
+      {
+        "label": "Open datasets",
+        "path": "/datasets"
+      }
+    ],
+    "setup": {
+      "label": "Configure",
+      "path": "/plugins/scrape/settings"
+    },
+    "setup_hint": "Prepare scraping dependencies and source credentials in this plug-in. Some sources also need an existing login session.",
+    "surfaces": [
+      "Image bank",
+      "Dataset imports",
+      "Video bank imports"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.15,<2",
+    "lds": ">=2026.9.4",
+    "python": ">=3.10,<4",
+    "os": [
+      "windows",
+      "linux",
+      "darwin"
+    ],
+    "arch": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "settings-reference#web-scraping-source-credentials",
+      "settings-reference#klein-rescue-small-scraped-images",
+      "using-the-app#import-images-with-web-scraping"
+    ]
+  },
+  "schema_version": 2,
+  "publisher": {
+    "id": "lds",
+    "name": "LoRA Dataset Studio"
+  },
+  "data_schema": 1
+}

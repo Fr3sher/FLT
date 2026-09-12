@@ -1,0 +1,125 @@
+{
+  "id": "canvas",
+  "bundled": true,
+  "name": "Canvas",
+  "version": "1.0.0",
+  "api": 1,
+  "description": "Explore all your training runs on a visual board. Arrange checkpoints and image groups, compare or blend LoRAs, save layouts and export the board.",
+  "requires": [],
+  "python_package": "lds_canvas",
+  "frontend": "frontend/index.js",
+  "owns": {
+    "install_actions": [],
+    "install_groups": [],
+    "probes": [],
+    "config_sections": [
+      "canvas"
+    ],
+    "config_keys_in_shared_sections": {},
+    "help_topics": [
+      "page-canvas",
+      "canvas-undeploy-bulk",
+      "canvas-arrange",
+      "canvas-layouts",
+      "canvas-image-delete",
+      "canvas-external-loras",
+      "canvas-generate",
+      "canvas-blend",
+      "canvas-continue",
+      "canvas-pin-all",
+      "canvas-reference-image",
+      "canvas-pinned-images",
+      "canvas-image-groups",
+      "canvas-deploy-state",
+      "canvas-run-gallery",
+      "canvas-delete-run-cascade"
+    ],
+    "tables": [
+      "canvas_node_position",
+      "canvas_image_node",
+      "canvas_lane_placement",
+      "canvas_layout_preset"
+    ],
+    "whats_new_ids": [
+      "2026-09-01-canvas-lanes-move-and-resize",
+      "2026-08-20-canvas-room-to-work",
+      "2026-08-18-canvas-one-grid-per-checkpoint",
+      "2026-08-17-canvas-bulk-undeploy",
+      "2026-08-10-canvas-gallery-open-folder",
+      "2026-08-10-canvas-edges-tinted-per-dataset",
+      "2026-08-09-canvas-pins-float-both-ways",
+      "2026-08-09-canvas-phone-board-room",
+      "2026-08-09-canvas-external-lora-links",
+      "2026-08-09-canvas-phone-toolbar",
+      "2026-08-09-canvas-external-loras",
+      "2026-08-08-the-canvas-controls-live-on-the-board",
+      "2026-08-08-canvas-filter-bar",
+      "2026-08-08-canvas-zoom-labels",
+      "2026-08-08-canvas-layout-presets",
+      "2026-08-08-canvas-export-png",
+      "2026-08-08-canvas-delete-image",
+      "2026-08-04-canvas-says-which-run-trained-a-full-model",
+      "2026-08-04-canvas-drop-keeps-your-view",
+      "2026-08-03-canvas-images-go-anywhere",
+      "2026-08-03-canvas-group-drag-out-crash",
+      "2026-08-03-canvas-usable-on-a-phone",
+      "2026-08-03-canvas-opens-again-hotfix",
+      "2026-08-03-canvas-blend-provenance",
+      "2026-08-03-canvas-group-bar-reachable",
+      "2026-08-03-canvas-image-controls-see-through",
+      "2026-08-03-canvas-filter-opens-folded",
+      "2026-08-03-canvas-blend",
+      "2026-08-01-canvas-runs-stay-separate-and-in-epoch-order",
+      "2026-08-01-canvas-shows-the-dataset-reference-face",
+      "2026-07-28-download-canvas-images-one-or-the-whole-gallery",
+      "2026-07-28-canvas-fuse-pinned-images",
+      "2026-07-28-canvas-pin-all-generated-images",
+      "2026-07-28-canvas-node-buttons-reachable-on-a-phone",
+      "2026-07-28-pin-to-canvas-from-the-thumbnail",
+      "2026-07-27-canvas-pinned-images",
+      "2026-07-27-canvas-deployed-at-a-glance",
+      "2026-07-27-canvas-run-card-opens-everything",
+      "2026-07-27-canvas-checkpoint-actions",
+      "2026-07-27-canvas-details-on-demand",
+      "2026-07-27-canvas-generation-visible",
+      "2026-07-26-canvas-generate-from-the-board",
+      "2026-07-26-canvas-move-cards",
+      "2026-07-17-canvas-lora-chain"
+    ],
+    "model_slots": []
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "comfyui",
+    "datasets:write"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Open Canvas",
+        "path": "/canvas"
+      }
+    ],
+    "setup": {
+      "label": "Configure local generation",
+      "path": "/setup?step=comfyui"
+    },
+    "setup_hint": "No extra Python runtime or model is needed for the board. Generate with the image engines already configured in LDS. Image upscaling and the resource monitor are optional plug-ins.",
+    "surfaces": [
+      "Canvas"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.9,<2"
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "using-the-app#the-lora-canvas-every-run-on-one-board",
+      "using-the-app#undeploy-several-loras-at-once"
+    ]
+  }
+}

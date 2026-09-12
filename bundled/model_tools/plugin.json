@@ -1,0 +1,96 @@
+{
+  "id": "model_tools",
+  "bundled": true,
+  "name": "Model tools",
+  "version": "1.0.8",
+  "api": 1,
+  "description": "Quantize a full-precision model to the fp8 file ComfyUI loads, and merge one or more LoRAs into a base checkpoint to get a complete model — pure file-in / file-out work on this machine, no GPU or training environment needed. Doors in the dataset's Checkpoints & LoRAs panel, on each delivered full model, under the full-model recipe, and in this plug-in’s settings.",
+  "requires": [],
+  "python_package": "lds_model_tools",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": false,
+  "owns": {
+    "install_actions": [],
+    "install_groups": [],
+    "probes": [
+      "model_tools"
+    ],
+    "engines": [],
+    "config_sections": [
+      "quantize"
+    ],
+    "config_keys_in_shared_sections": {},
+    "help_topics": [
+      "storage.fp8_quantize",
+      "training.fp8_quantize_local",
+      "workspace-lora-merge"
+    ],
+    "tables": [],
+    "whats_new_ids": [
+      "2026-09-09-model-tools-managed-cpu-engine",
+      "2026-09-09-model-tools-local-without-cloud",
+      "2026-08-04-quantizing-no-longer-fails-on-the-paging-file",
+      "2026-08-04-merge-a-lora-into-a-base-checkpoint",
+      "2026-08-04-fp8-quantize-runs-where-torch-lives",
+      "2026-08-04-quantize-to-fp8-in-one-click",
+      "2026-08-04-quantize-to-fp8-from-settings-storage",
+      "2026-08-03-quantize-an-existing-model-to-fp8"
+    ],
+    "model_slots": []
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "comfyui",
+    "filesystem"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Open Model tools",
+        "path": "/plugins/model_tools/settings"
+      },
+      {
+        "label": "Open checkpoints",
+        "path": "/datasets?section=checkpoints"
+      }
+    ],
+    "setup": {
+      "label": "Configure",
+      "path": "/plugins/model_tools/settings"
+    },
+    "setup_hint": "Install the CPU engine in Model tools settings, then choose local model files. Quantization and merging share this isolated environment; no other plugin or GPU is required.",
+    "surfaces": [
+      "Model tools settings",
+      "Dataset checkpoints",
+      "Full model recipes"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.15,<2",
+    "lds": ">=2026.9.4",
+    "python": ">=3.10,<4",
+    "os": ["windows", "linux", "darwin"],
+    "arch": ["x86_64", "arm64"]
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "settings-reference#model-tools-configuration-keys",
+      "settings-reference#quantize-a-delivered-checkpoint",
+      "using-the-app#merge-a-lora-into-a-base-checkpoint",
+      "settings-reference#quantize-an-existing-model-to-fp8",
+      "dataset-guide#quantizing-a-model-you-already-have",
+      "dataset-guide#quantize-to-fp8-one-click-no-path-to-find"
+    ]
+  },
+  "schema_version": 2,
+  "publisher": {
+    "id": "lds",
+    "name": "LoRA Dataset Studio"
+  },
+  "data_schema": 1,
+  "requirements": "requirements-workers.txt"
+}
