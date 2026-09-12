@@ -128,7 +128,7 @@ class PluginContext:
         def while_available(callback):
             @wraps(callback)
             def run(*args, **kwargs):
-                return callback(*args, **kwargs) if available() else None
+                return self.app.ensure_sync(callback)(*args, **kwargs) if available() else None
             return run
 
         # URL preprocessors execute even before app.before_request; global
