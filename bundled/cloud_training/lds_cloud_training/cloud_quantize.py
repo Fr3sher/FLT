@@ -21,7 +21,7 @@ never touched. vast.ai has no CPU-only instances, so the selection asks for the
 smallest card that clears the price filter and instead filters on DOWNLINK
 bandwidth and disk, which are the things that actually decide the bill.
 
-HOW THE POD IS DRIVEN, AND HOW IT IS GUARANTEED TO DIE
+HOW THE POD IS DRIVEN, AND HOW ITS CLEANUP IS TRACKED
 -------------------------------------------------------
 No inbound connection to the pod is needed:
 
@@ -30,16 +30,15 @@ No inbound connection to the pod is needed:
 * it reports back by uploading a tiny JSON result file to the SAME Hugging Face
   repo, which we already have a token for. We poll the Hub, not the pod.
 
-Destruction is enforced from three sides, because a forgotten pod on a
-minutes-long job is the worst possible outcome:
+Cleanup is attempted on every outcome, with unresolved billing kept visible:
 
-1. the monitor destroys the instance in a ``finally`` — success, failure or
+1. the monitor requests verified cleanup in a ``finally`` — success, failure or
    exception;
-2. a HARD deadline (``cloud.quantize.max_minutes``, default 60) destroys it even
-   if nothing was ever reported;
-3. ``reconcile_orphans`` destroys any instance carrying this lane's label prefix
-   that no live job claims — it runs on every status poll and at every start, so
-   an app restart mid-job still reaps the machine.
+2. a HARD deadline (``cloud.quantize.max_minutes``, default 60) triggers cleanup
+   even if nothing was ever reported;
+3. recovery uses a durable local receipt and the original provider credential.
+   A matching label alone never authorizes deletion. Ambiguous creation or
+   cleanup remains visible and blocks another rental until safely resolved.
 """
 from __future__ import annotations
 
@@ -47,12 +46,18 @@ import base64
 import json
 import logging
 import os
+from pathlib import Path
+import re
 import threading
 import time
 import uuid
 
+from filelock import FileLock, Timeout
+
 from lds_sdk.cloud_host import config as cfg
+from lds_sdk.cloud_host.extensions import db
 from lds_sdk.cloud_host.job_queue import queue_manager
+from lds_sdk.cloud_host.models import SystemState
 from lds_sdk.cloud_host.services import fp8_export
 from lds_cloud_training import vast_client
 
@@ -60,11 +65,11 @@ logger = logging.getLogger(__name__)
 
 _STATE_KEY = 'cloud_quantize'
 _STATE_TTL = 6 * 3600
+_RENTAL_KEY = 'cloud_quantize_rental'
 _lock = threading.Lock()
+_credentials = {}
 
-# Every instance this lane rents carries it. reconcile_orphans will destroy
-# anything with this prefix that no live job claims — so the label is a safety
-# device, not a cosmetic name.
+# Labels are unique within a durable local intent, never ownership by prefix.
 LABEL_PREFIX = 'lds-quantize-'
 
 # The pod reports here, in the repo it is already authenticated against.
@@ -110,6 +115,159 @@ def max_minutes() -> int:
 
 def status() -> dict:
     return queue_manager._get_system_state(_STATE_KEY, {}) or {}
+
+
+def _receipt():
+    # The general KV reader treats malformed/expired values as absent and may
+    # delete them. A rental proof must never inherit those cache semantics.
+    row = db.session.get(SystemState, _RENTAL_KEY)
+    if row is None:
+        return None
+    try:
+        envelope = json.loads(row.value)
+    except (TypeError, ValueError):
+        envelope = None
+    if not isinstance(envelope, dict) or envelope.get('exp') is not None:
+        raise CloudQuantizeError('The local quantization rental proof is damaged; review the provider manually.')
+    value = envelope.get('v')
+    if (not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] != 1
+            or not isinstance(value.get('job_id'), str)
+            or not re.fullmatch(r'[a-f0-9]{32}', value['job_id'])
+            or value.get('label') != LABEL_PREFIX + value['job_id']
+            or not isinstance(value.get('fingerprint'), str)
+            or not re.fullmatch(r'[a-f0-9]{64}', value['fingerprint'])
+            or any(type(value.get(key)) is not bool for key in ('pending', 'released', 'delete_pending'))
+            or (value.get('instance_id') is not None and not _instance_id(value['instance_id']))
+            or (value['pending'] and (value['released'] or value.get('instance_id') is not None))
+            or (value['delete_pending'] and value.get('instance_id') is None)):
+        raise CloudQuantizeError('The local quantization rental proof is damaged; review the provider manually.')
+    return dict(value)
+
+
+def _instance_id(value):
+    return (type(value) is int and value > 0) or (
+        isinstance(value, str) and re.fullmatch(r'[1-9][0-9]*', value) is not None)
+
+
+def _save_receipt(receipt, **updates):
+    value = {**receipt, **updates}
+    try:
+        queue_manager._set_system_state(_RENTAL_KEY, value, ttl_seconds=None)
+    except Exception:
+        db.session.rollback()  # discard uncommitted proof before any recovery read
+        raise
+    return value
+
+
+def has_unreleased_rental():
+    """Local-only disable/admission check, including damaged proof and legacy jobs."""
+    try:
+        receipt = _receipt()
+    except CloudQuantizeError:
+        return True
+    legacy = status() if not receipt else {}
+    return bool((receipt and not receipt['released']) or
+                (not receipt and (legacy.get('status') in ('provisioning', 'running')
+                                  or legacy.get('cleanup_pending'))))
+
+
+def _lease():
+    # Held across the worker lifetime, also preventing a second LDS process
+    # sharing this data directory from treating that active rental as orphaned.
+    directory = Path(cfg.data_dir())
+    directory.mkdir(parents=True, exist_ok=True)
+    lease = FileLock(str(directory / 'cloud-quantize.lock'), timeout=0, thread_local=False)
+    lease.acquire()
+    return lease
+
+
+def _remember(credential):
+    _credentials[credential.fingerprint] = credential
+    return credential
+
+
+def _credential_for(receipt):
+    credential = _credentials.get(receipt['fingerprint'])
+    if credential is None:
+        credential = vast_client.capture_credentials()
+    if credential.fingerprint != receipt['fingerprint']:
+        raise CloudQuantizeError('Restore the original vast.ai credential before recovering this rental.')
+    return _remember(credential)
+
+
+def _cleanup_pending(message):
+    current = status()
+    queue_manager._set_system_state(_STATE_KEY, {
+        **current, 'status': 'error', 'cleanup_pending': True, 'error': message,
+    }, ttl_seconds=None)
+
+
+def _redact_error(error, token=None):
+    message = vast_client._scrub(str(error))
+    return message.replace(token, '[redacted]') if token else message
+
+
+def _reserve(credential):
+    if has_unreleased_rental():
+        raise CloudQuantizeError('A previous quantization rental still needs recovery; no new machine was requested.')
+    nonce = uuid.uuid4().hex
+    return _save_receipt({'schema_version': 1, 'job_id': nonce, 'label': LABEL_PREFIX + nonce,
+                          'fingerprint': credential.fingerprint, 'pending': False,
+                          'released': False, 'delete_pending': False, 'instance_id': None,
+                          'created_at': time.time()})
+
+
+def _cleanup_owned(receipt, credential):
+    """Caller holds the cross-process lease; never infer ownership from a prefix."""
+    if receipt['released']:
+        return []
+    if receipt['instance_id'] is None and not receipt['pending']:
+        _save_receipt(receipt, released=True, released_at=time.time())
+        return []                         # the durable CREATE boundary was never crossed
+    if credential.fingerprint != receipt['fingerprint']:
+        raise CloudQuantizeError('The cleanup account does not match the rental proof.')
+    instances = vast_client.list_instances(credential=credential)
+    if (not isinstance(instances, list) or any(not isinstance(item, dict)
+            or not _instance_id(item.get('instance_id'))
+            or (item.get('label') is not None and not isinstance(item.get('label'), str))
+            for item in instances)):
+        raise CloudQuantizeError('The provider inventory is incomplete; rental cleanup was not attempted.')
+    matching = [item for item in instances if item['label'] == receipt['label']]
+    known = receipt['instance_id']
+    target = [item for item in instances if known is not None and str(item['instance_id']) == str(known)]
+    if len(matching) > 1 or len(target) > 1:
+        raise CloudQuantizeError('The provider returned ambiguous rental identities; review cleanup manually.')
+    if known is None:
+        if not matching:
+            raise CloudQuantizeError('The CREATE result is still uncertain; no second machine will be requested.')
+        target = matching
+        known = target[0]['instance_id']
+        if sum(str(item['instance_id']) == str(known) for item in instances) != 1:
+            raise CloudQuantizeError('The provider returned an ambiguous instance id; cleanup was refused.')
+        receipt = _save_receipt(receipt, instance_id=known, pending=False)
+    elif not target:
+        if matching:
+            raise CloudQuantizeError('The rental label now names another instance; cleanup was refused.')
+        observed = vast_client.get_instance(known, credential=credential)
+        if observed is None:
+            if not receipt['delete_pending']:
+                raise CloudQuantizeError('Absence alone does not confirm rental cleanup; review the provider manually.')
+        elif (not isinstance(observed, dict) or str(observed.get('instance_id')) != str(known)
+              or observed.get('label') != receipt['label']):
+            raise CloudQuantizeError('The observed instance does not match the local rental proof.')
+        # A persisted DELETE intent may be retried with the original account;
+        # only the provider's successful/idempotent DELETE response acquits it.
+        target = [observed] if observed is not None else []
+    if target and target[0]['label'] != receipt['label']:
+        raise CloudQuantizeError('The observed instance does not match the local rental proof.')
+    # A duplicate id anywhere in the listing is ambiguous, including adoption.
+    if sum(str(item['instance_id']) == str(known) for item in instances) > 1:
+        raise CloudQuantizeError('The provider returned an ambiguous instance id; cleanup was refused.')
+    receipt = _save_receipt(receipt, delete_pending=True)
+    if vast_client.destroy_instance(known, credential=credential) is not True:
+        raise CloudQuantizeError('The provider did not confirm cleanup; the rental may still be billing.')
+    _save_receipt(receipt, released=True, pending=False, released_at=time.time())
+    return [known]
 
 
 # --- planning -------------------------------------------------------------------
@@ -170,14 +328,16 @@ def plan(repo_id, *, filename=None, keep_bf16=True, token=None, _api=None,
         raise CloudQuantizeError(
             'no Hugging Face token configured — add HF_CLOUD_TOKEN in '
             'Settings ▸ Local tools so the pod can read and write this repository')
-    if not cfg.secret('VAST_API_KEY'):
+    try:
+        vast_client.capture_credentials()
+    except vast_client.VastError:
         raise CloudQuantizeError('no vast.ai API key configured — add it in Settings ▸ Training')
 
     api = _api or _hf_api(token)
     try:
         info = api.repo_info(repo_id=repo, repo_type='model', files_metadata=True)
     except Exception as e:
-        raise CloudQuantizeError(f'could not read {repo} on Hugging Face: {e}') from e
+        raise CloudQuantizeError(f'could not read {repo} on Hugging Face: {_redact_error(e, token)}') from e
     found = _weight_sibling(info, filename)
     if not found:
         raise CloudQuantizeError(
@@ -316,7 +476,7 @@ def build_onstart(planned: dict, *, export_budget_seconds=None) -> str:
         'open("/workspace/lds/result.json", "w").write(json.dumps(out))',
         'HfApi(token=os.environ.get("HF_TOKEN")).upload_file('
         'path_or_fileobj="/workspace/lds/result.json", '
-        f'path_in_repo={RESULT_FILE!r}, repo_id={planned["repo_id"]!r}, repo_type="model")',
+        f'path_in_repo={planned.get("result_file", RESULT_FILE)!r}, repo_id={planned["repo_id"]!r}, repo_type="model")',
         'PY',
     ])
 
@@ -325,16 +485,18 @@ def build_onstart(planned: dict, *, export_budget_seconds=None) -> str:
 
 def start(app, repo_id, *, filename=None, keep_bf16=True, token=None,
           quoted_price=None, _api=None, _offers=None) -> dict:
-    """Rent, convert, upload, destroy. Refuses before renting; never leaks.
+    """Rent, convert, upload, then confirm cleanup or retain its recovery proof.
 
     ``quoted_price`` is the $/h the user actually read on screen before clicking
     (the estimate is a separate, earlier request). It is what the rental is held
     to — see _rent — so a market that moved between the two is reported instead
     of being paid.
     """
+    credential = _remember(vast_client.capture_credentials())
     token = token or cfg.secret('HF_CLOUD_TOKEN') or cfg.secret('HF_TOKEN')
-    planned = plan(repo_id, filename=filename, keep_bf16=keep_bf16, token=token,
-                   _api=_api, _offers=_offers)
+    with vast_client.using_credentials(credential):
+        planned = plan(repo_id, filename=filename, keep_bf16=keep_bf16, token=token,
+                       _api=_api, _offers=_offers)
     if quoted_price:
         try:
             planned['quoted_price_per_hour'] = max(0.0, float(quoted_price))
@@ -346,15 +508,32 @@ def start(app, repo_id, *, filename=None, keep_bf16=True, token=None,
             'the price cap right now — raise it in Settings ▸ Training and retry')
     reconcile_orphans()
     with _lock:
-        if status().get('status') in ('provisioning', 'running'):
-            raise CloudQuantizeError('a cloud quantization is already running')
-        _set('provisioning', planned)
+        try:
+            lease = _lease()
+        except Timeout as exc:
+            raise CloudQuantizeError('A quantization worker already holds this data directory.') from exc
+        receipt = None
+        try:
+            receipt = _reserve(credential)
+            planned = {**planned, 'result_file': f'_lds_fp8_result_{receipt["job_id"]}.json'}
+            _set('provisioning', planned)
 
-    def _run():
-        with app.app_context():
-            _drive(planned, token, _api=_api)
+            def _run():
+                with app.app_context():
+                    _drive(planned, token, _api=_api, _credential=credential, _intent=receipt, _rental_lease=lease)
 
-    threading.Thread(target=_run, daemon=True).start()
+            threading.Thread(target=_run, daemon=True).start()
+        except BaseException:
+            # No worker was admitted. A reserved intent cannot have sent CREATE.
+            try:
+                current = _receipt()
+                if (receipt and current and current['job_id'] == receipt['job_id']
+                        and not current['pending'] and current['instance_id'] is None):
+                    _save_receipt(current, released=True, released_at=time.time())
+                    _set('error', planned, error='The quantization worker could not start; no machine was requested.')
+            finally:
+                lease.release()
+            raise
     return planned
 
 
@@ -373,7 +552,7 @@ def _repriced(planned, offer) -> dict:
             'estimated_cost': round(price * minutes / 60.0, 3)}
 
 
-def _rent(planned, *, label, env, _sleep=None):
+def _rent(planned, *, label, env, _sleep=None, credential=None):
     """Rent a machine that can hold this job — trying more than one.
 
     The first cloud quantization died on ``create_instance failed: HTTP 400 {}``
@@ -409,12 +588,30 @@ def _rent(planned, *, label, env, _sleep=None):
         return chosen
 
     def _create(offer):
-        return vast_client.create_instance(
-            offer['offer_id'], disk_gb=disk_gb, label=label, image=image,
-            env=env, onstart=onstart)
+        receipt = _receipt()
+        if (not receipt or receipt['released'] or receipt['label'] != label
+                or receipt['fingerprint'] != credential.fingerprint or receipt['pending']
+                or receipt['instance_id'] is not None):
+            raise CloudQuantizeError('A fresh, local rental intent is required before CREATE.')
+        receipt = _save_receipt(receipt, pending=True)
+        try:
+            instance_id = vast_client.create_instance(
+                offer['offer_id'], disk_gb=disk_gb, label=label, image=image,
+                env=env, onstart=onstart, credential=credential)
+        except vast_client.VastCreateUncertain:
+            raise
+        except vast_client.VastError:
+            _save_receipt(receipt, pending=False)    # provider explicitly refused the ask
+            raise
+        except Exception as exc:
+            raise vast_client.VastCreateUncertain('The quantization CREATE result is uncertain.') from exc
+        if not _instance_id(instance_id):
+            raise vast_client.VastCreateUncertain('The quantization CREATE returned no valid instance id.')
+        _save_receipt(receipt, instance_id=instance_id, pending=False)
+        return instance_id
 
-    # Every attempt carries the same label, so a contract created by a call that
-    # then failed on the wire is still reaped by reconcile_orphans.
+    # Only explicit refusals can retry. The shared rental helper propagates
+    # VastCreateUncertain, preserving this pending intent without another CREATE.
     return cloud_training.rent_with_fresh_offers(
         search=lambda: _search_offers(disk_gb), create=_create, pick=_pick,
         sleep=_sleep,
@@ -423,55 +620,65 @@ def _rent(planned, *, label, env, _sleep=None):
             'cap right now — raise it in Settings ▸ Training and retry'))
 
 
-def _drive(planned, token, *, _api=None, _sleep=time.sleep, _now=time.monotonic):
-    label = LABEL_PREFIX + uuid.uuid4().hex[:10]
+def _drive(planned, token, *, _api=None, _sleep=time.sleep, _now=time.monotonic,
+           _credential=None, _intent=None, _rental_lease=None):
+    credential = _remember(_credential or vast_client.capture_credentials())
+    lease = _rental_lease or _lease()
+    receipt = _intent
     instance_id = None
     deadline = _now() + max_minutes() * 60
     try:
-        env = {'HF_TOKEN': token or ''}
-        instance_id, offer = _rent(planned, label=label, env=env, _sleep=_sleep)
-        planned = _repriced(planned, offer)
-        _set('running', planned, instance_id=instance_id, label=label,
-             started_at=time.time())
-        api = _api or _hf_api(token)
-        result = None
-        while _now() < deadline:
-            _sleep(_int_cfg('poll_seconds', DEFAULT_POLL_SECONDS))
-            result = _read_result(api, planned['repo_id'])
-            if result is not None:
-                break
-        if result is None:
-            raise CloudQuantizeError(
-                f'the machine reported nothing within {max_minutes()} minutes — '
-                'it has been destroyed; nothing in your repository was changed')
-        if not result.get('ok') or not result.get('uploaded'):
-            raise CloudQuantizeError(str(result.get('error')
-                                         or 'the quantization failed on the pod'))
-        _set('done', planned, instance_id=instance_id, result=result)
+        receipt = receipt or _reserve(credential)
+        planned = {**planned, 'result_file': f'_lds_fp8_result_{receipt["job_id"]}.json'}
+        with vast_client.using_credentials(credential):
+            env = {'HF_TOKEN': token or ''}
+            instance_id, offer = _rent(planned, label=receipt['label'], env=env,
+                                       _sleep=_sleep, credential=credential)
+            planned = _repriced(planned, offer)
+            _set('running', planned, instance_id=instance_id, label=receipt['label'],
+                 started_at=time.time())
+            api = _api or _hf_api(token)
+            result = None
+            while _now() < deadline:
+                _sleep(_int_cfg('poll_seconds', DEFAULT_POLL_SECONDS))
+                result = _read_result(api, planned['repo_id'], token=token, result_file=planned['result_file'])
+                if result is not None:
+                    break
+            if result is None:
+                raise CloudQuantizeError(
+                    f'the machine reported nothing within {max_minutes()} minutes; '
+                    'no result was confirmed and rental cleanup must be checked')
+            if not result.get('ok') or not result.get('uploaded'):
+                raise CloudQuantizeError(str(result.get('error')
+                                             or 'the quantization failed on the pod'))
+            _set('done', planned, instance_id=instance_id, result=result)
     except Exception as e:
-        logger.warning('cloud quantization failed (%s): %s', planned['repo_id'], e)
-        _set('error', planned, instance_id=instance_id, error=str(e)[:400])
+        with vast_client.using_credentials(credential):
+            message = _redact_error(e, token)
+        logger.warning('cloud quantization failed: %s', message[:400])
+        _set('error', planned, instance_id=instance_id, error=message[:400])
     finally:
-        # THE line that matters: whatever happened above, the machine goes.
-        if instance_id:
-            try:
-                if not vast_client.destroy_instance(instance_id):
-                    logger.warning('cloud quantization: destroy of %s FAILED — '
-                                   'reconcile_orphans will retry', instance_id)
-            except Exception:
-                logger.exception('cloud quantization: destroy of %s raised', instance_id)
         try:
-            _cleanup_result(_api or _hf_api(token), planned['repo_id'])
+            current = _receipt()
+            if receipt and current and current['job_id'] == receipt['job_id']:
+                _cleanup_owned(current, credential)
         except Exception:
-            logger.debug('could not remove the pod result marker', exc_info=True)
+            _cleanup_pending('Quantization cleanup is unconfirmed; the rental may still be billing. Restore its original credential and refresh status.')
+        finally:
+            lease.release()
+        if receipt and 'result_file' in planned:
+            try:
+                _cleanup_result(_api or _hf_api(token), planned['repo_id'], result_file=planned['result_file'])
+            except Exception:
+                logger.debug('Could not remove this quantization result marker.')
 
 
-def _read_result(api, repo_id):
+def _read_result(api, repo_id, *, token=None, result_file=RESULT_FILE):
     """The pod's JSON verdict, or None while it has not been uploaded yet."""
     try:
         from huggingface_hub import hf_hub_download
-        path = hf_hub_download(repo_id=repo_id, filename=RESULT_FILE,
-                               repo_type='model')
+        path = hf_hub_download(repo_id=repo_id, filename=result_file,
+                               repo_type='model', token=token)
     except Exception:
         return None
     try:
@@ -482,37 +689,38 @@ def _read_result(api, repo_id):
     return parsed if isinstance(parsed, dict) else None
 
 
-def _cleanup_result(api, repo_id):
-    api.delete_file(path_in_repo=RESULT_FILE, repo_id=repo_id, repo_type='model')
+def _cleanup_result(api, repo_id, *, result_file=RESULT_FILE):
+    api.delete_file(path_in_repo=result_file, repo_id=repo_id, repo_type='model')
 
 
 def reconcile_orphans() -> list:
-    """Destroy every instance of this lane that no LIVE job claims.
-
-    Called at every start and on every status poll, so an app restart in the
-    middle of a job cannot leave a machine billing. The claimed instance of a
-    job still marked running is deliberately spared.
-    """
-    live = status()
-    claimed = str(live.get('instance_id') or '') if live.get('status') == 'running' else ''
-    killed = []
+    """Recover only this data directory's durable rental, on its original account."""
     try:
-        instances = vast_client.list_instances()
-    except Exception:
+        lease = _lease()
+    except Timeout:
+        return []
+    try:
+        receipt = _receipt()
+        if not receipt:
+            if has_unreleased_rental():
+                _cleanup_pending('A legacy quantization has no account-bound rental proof; review its machine manually before another rental.')
+            return []
+        if receipt['released']:
+            return []
+        credential = _credential_for(receipt)
+        killed = _cleanup_owned(receipt, credential)
+        current = status()
+        if current.get('cleanup_pending'):
+            queue_manager._set_system_state(_STATE_KEY, {**current, 'cleanup_pending': False}, ttl_seconds=None)
         return killed
-    for inst in instances:
-        label = str(inst.get('label') or '')
-        if not label.startswith(LABEL_PREFIX):
-            continue
-        if claimed and str(inst.get('instance_id')) == claimed:
-            continue
+    except Exception:
         try:
-            if vast_client.destroy_instance(inst['instance_id']):
-                killed.append(inst['instance_id'])
-                logger.warning('reaped orphan quantization pod %s', inst['instance_id'])
+            _cleanup_pending('Quantization recovery needs its intact local proof and original credential; no new rental is allowed.')
         except Exception:
-            logger.exception('could not reap %s', inst.get('instance_id'))
-    return killed
+            logger.warning('Could not persist quantization recovery status.')
+        return []
+    finally:
+        lease.release()
 
 
 def _set(state, planned, **extra):
