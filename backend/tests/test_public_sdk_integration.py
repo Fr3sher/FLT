@@ -24,7 +24,7 @@ from app.plugins import registry
 from app.plugins.loader import load_plugins
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = ('camera_angles', 'canvas', 'hf_publish', 'image_upscale', 'live',
+PRODUCTS = ('camera_angles', 'canvas', 'civitai_publish', 'hf_publish', 'image_upscale', 'live',
             'model_tools', 'resource_monitor', 'scrape', 'seedvr2')
 
 
@@ -65,8 +65,10 @@ def host(tmp_path, monkeypatch):
 
 def activate(host, enabled):
     app, csrf, root = host
+    discovered = {json.loads(path.read_text(encoding='utf-8'))['id']
+                  for path in (ROOT / 'bundled').glob('*/plugin.json')}
     (root / 'config.json').write_text(json.dumps({'plugins': {'enabled': {
-        pid: pid in enabled for pid in PRODUCTS}}}), encoding='utf-8')
+        pid: pid in enabled for pid in discovered}}}), encoding='utf-8')
     with app.app_context():
         return load_plugins(app, csrf)
 
@@ -84,7 +86,9 @@ def test_each_public_product_registers_alone_with_real_sdk(host, pid):
 
 def test_public_products_register_together_without_duplicate_routes(host):
     loaded = activate(host, PRODUCTS)
-    assert {pid: r.error for pid, r in loaded.records.items() if r.state != 'loaded'} == {}
+    assert {pid: loaded.records[pid].error for pid in PRODUCTS
+            if loaded.records[pid].state != 'loaded'} == {}
+    assert all(record.state == 'disabled' for pid, record in loaded.records.items() if pid not in PRODUCTS)
     routes = [(r.rule, tuple(sorted(r.methods))) for r in host[0].url_map.iter_rules()]
     assert len(routes) == len(set(routes))
 
