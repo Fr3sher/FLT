@@ -1,262 +1,191 @@
 import { useEffect, useRef, useState } from 'react'
-import { apiFetch, postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
+import { apiFetch, postJson, useToast, HelpBadge } from '@lds/plugin-sdk'
 import {
-  INSTALL_ALL_ACTION_LABELS, seedvr2InstallPlan, seedvr2NeedsComfyuiRestart,
+  INSTALL_ALL_ACTION_LABELS, SEEDVR2_ACTIONS, seedvr2InstallPlan, seedvr2NeedsComfyuiRestart,
+  seedvr2PreparationPlan, seedvr2PreparationState, seedvr2PreparationError,
 } from '../lib/setup.js'
-import { HelpBadge } from '@lds/plugin-sdk'
 import { ceilingLine, tilingStatus, TTP_PACK, TTP_URL } from '../lib/seedvr2Tiling.js'
 import { fmtSize } from '@lds/plugin-sdk/setup'
 
 const POLL_MS = 1200
-
-const ROW_META = {
-  idle: { glyph: '○', cls: 'text-content-subtle', word: 'waiting' },
-  queued: { glyph: '○', cls: 'text-content-subtle', word: 'queued' },
-  running: { glyph: '⟳', cls: 'text-primary', word: 'downloading…' },
-  success: { glyph: '✓', cls: 'text-emerald-400', word: 'done' },
-  error: { glyph: '✗', cls: 'text-rose-400', word: 'needs attention' },
-}
-
-
-/* The three places this feature actually comes from. Verified 2026-08-02 (HTTP
-   200 on each), and worth linking rather than naming: the pack URL is what
-   someone who prefers cloning by hand needs, the weights repo is what the
-   button below downloads (3.9 GB — say where from), and the original project is
-   the credit. Apache-2.0 throughout. */
-const TILING_TONE = {
-  ready: 'border-emerald-500/30 bg-emerald-500/10',
-  restart: 'border-amber-500/40 bg-amber-500/10',
-  absent: 'border-border bg-surface-raised',
-  unknown: 'border-border bg-surface-raised',
-}
-
+const MAX_POLL_FAILURES = 5
 const PACK_URL = 'https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler'
 const WEIGHTS_URL = 'https://huggingface.co/numz/SeedVR2_comfyUI'
 const PROJECT_URL = 'https://github.com/ByteDance-Seed/SeedVR'
+const STATUS_WORDS = { idle: 'waiting', queued: 'queued', running: 'preparing…', success: 'prepared', error: 'needs attention' }
 
-// SeedVR2 — the FIDELITY upscaler (issue #32, requested by SurpassHR).
-//
-// TWO HALVES, INSTALLED DIFFERENTLY, AND THE CARD SAYS SO
-// -------------------------------------------------------
-// The WEIGHTS are two files in a folder: the app downloads them here, on a click,
-// like every other model. The NODE PACK is code with thirteen Python
-// dependencies that belong in ComfyUI's own interpreter — which this app does not
-// own and must never pip into. Cloning it would land a pack that fails to import
-// and leave the user reading "install the pack" about a pack that is right there.
-// So the pack is a clear instruction (ComfyUI-Manager, which installs the
-// requirements properly) and never a fake button.
-//
-// Like the Krea card, this is deliberately NOT part of "Install everything":
-// 3.9 GB for a capability nobody asked for is hostile on a metered link.
 export default function SeedVr2InstallCard({ caps, onDone }) {
   const toast = useToast()
   const [phase, setPhase] = useState('idle')
   const [tracked, setTracked] = useState([])
   const [statuses, setStatuses] = useState({})
+  const [error, setError] = useState('')
+  const [checking, setChecking] = useState(false)
   const timer = useRef(null)
   const mounted = useRef(true)
-
-  const plan = seedvr2InstallPlan(caps)
+  const generation = useRef(0)
+  const starting = useRef(false)
   const cu = caps?.comfyui || {}
-  const dirValid = !!cu.dir_valid
+  const plan = seedvr2InstallPlan(caps)
   const ready = cu.seedvr2_ready === true
   const needsRestart = seedvr2NeedsComfyuiRestart(caps)
-  // The optional high-resolution lane. Its own detection, its own wording:
-  // it is a SECOND pack, from a different author, and it is not required.
+  const running = phase === 'running'
+  const rows = ready && !running ? [] : phase === 'idle' ? plan : tracked
+  const doneCount = rows.filter(action => statuses[action]?.state === 'success').length
   const tiling = tilingStatus(caps)
   const ceiling = ceilingLine(caps)
-  // On disk but not loaded is a RESTART; absent from disk is an install the user
-  // has to run in ComfyUI. Two different sentences, so they are two states.
-  const packMissing = !cu.seedvr2_nodes_installed
-    && Array.isArray(cu.seedvr2_nodes_missing) && cu.seedvr2_nodes_missing.length > 0
-  const rows = (phase === 'idle' ? plan : tracked) || []
-  const doneCount = rows.filter((a) => (statuses[a] || {}).state === 'success').length
-  const isTerminal = (s) => s && (s.state === 'success' || s.state === 'error')
+  const current = token => mounted.current && generation.current === token
 
-  const poll = (actions) => {
-    apiFetch(`/api/setup/install-all/status?actions=${actions.join(',')}`).then((r) => {
-      if (!mounted.current) return
-      const st = r.statuses || {}
-      setStatuses(st)
-      if (actions.length && actions.every((a) => isTerminal(st[a]))) {
-        setPhase('done')
-        onDone?.()
-        const failed = actions.filter((a) => (st[a] || {}).state === 'error')
-        if (failed.length) {
-          toast.warning(`${actions.length - failed.length} of ${actions.length} SeedVR2 files `
-            + 'downloaded — the rest need a look below.')
-        } else {
-          toast.success('SeedVR2 weights downloaded.')
-        }
-      } else {
-        timer.current = setTimeout(() => poll(actions), POLL_MS)
-      }
-    }).catch(() => {
-      if (mounted.current) timer.current = setTimeout(() => poll(actions), POLL_MS)
-    })
+  const settle = (actions, st) => {
+    setStatuses(st)
+    const state = seedvr2PreparationState(actions, st)
+    if (state === 'running') return false
+    clearTimeout(timer.current)
+    if (state === 'prepared') {
+      setPhase('prepared')
+      onDone?.()
+    } else {
+      setPhase('error')
+      setError(state === 'error' ? seedvr2PreparationError(actions, st)
+        : 'Progress is unavailable. Re-check the connection before trying again.')
+    }
+    return true
   }
 
-  // Re-attach to a download still in flight (the user left this screen and came
-  // back — the backend kept going).
+  const poll = async (actions, token, failures = 0) => {
+    try {
+      const reply = await apiFetch(`/api/setup/install-all/status?actions=${encodeURIComponent(actions.join(','))}`)
+      if (!current(token)) return
+      if (!settle(actions, reply.statuses || {})) timer.current = setTimeout(() => poll(actions, token), POLL_MS)
+    } catch {
+      if (!current(token)) return
+      if (failures + 1 >= MAX_POLL_FAILURES) {
+        setPhase('error')
+        setError('Progress could not be reached. Preparation may still be running. Re-check the connection before trying again.')
+      } else timer.current = setTimeout(() => poll(actions, token, failures + 1), POLL_MS)
+    }
+  }
+
   useEffect(() => {
     mounted.current = true
-    if (plan.length) {
-      apiFetch(`/api/setup/install-all/status?actions=${plan.join(',')}`).then((r) => {
-        if (!mounted.current) return
-        const st = r.statuses || {}
-        if (plan.some((a) => ['running', 'queued'].includes((st[a] || {}).state))) {
-          setTracked(plan); setStatuses(st); setPhase('running'); poll(plan)
-        }
-      }).catch(() => { /* not attached — stay idle */ })
-    }
-    return () => { mounted.current = false; clearTimeout(timer.current) }
+    const token = generation.current
+    apiFetch(`/api/setup/install-all/status?actions=${encodeURIComponent(SEEDVR2_ACTIONS.join(','))}`).then(reply => {
+      if (!current(token)) return
+      const st = reply.statuses || {}
+      // Reattach only to work the backend reports in flight, not stale probes.
+      const active = SEEDVR2_ACTIONS.filter(action => ['running', 'queued'].includes(st[action]?.state))
+      if (active.length) {
+        setTracked(active); setStatuses(st); setPhase('running')
+        poll(active, token)
+      }
+    }).catch(() => { /* Reading status does not authorize an installation. */ })
+    return () => { mounted.current = false; generation.current += 1; clearTimeout(timer.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const start = async () => {
-    setPhase('running'); setStatuses({})
+    if (starting.current) return
+    starting.current = true
+    clearTimeout(timer.current)
+    const token = ++generation.current
+    setPhase('running'); setError(''); setStatuses({}); setTracked([])
     try {
-      const r = await postJson('/api/setup/install-group/seedvr2', {})
-      const actions = r.plan || []
-      setTracked(actions); setStatuses(r.statuses || {})
-      if (!actions.length) { setPhase('done'); onDone?.(); return }
-      poll(actions)
-    } catch (e) {
-      setPhase('idle')
-      toast.error(e.message || 'Could not start the SeedVR2 download.')
-    }
+      const reply = await postJson('/api/setup/install-group/seedvr2', {})
+      if (!current(token)) return
+      const actions = seedvr2PreparationPlan(reply.plan)
+      setTracked(actions)
+      if (!settle(actions, reply.statuses || {})) poll(actions, token)
+    } catch (failure) {
+      if (!current(token)) return
+      const message = failure.message || 'Could not start SeedVR2 preparation.'
+      setPhase('error'); setError(message); toast.error(message)
+    } finally { starting.current = false }
   }
 
-  const nothingToDownload = plan.length === 0 && phase !== 'running'
+  const recheck = async () => {
+    setChecking(true)
+    try { await onDone?.() } catch (failure) { toast.error(failure.message || 'Could not re-check ComfyUI.') }
+    finally { if (mounted.current) setChecking(false) }
+  }
 
   return (
     <section className="rounded-xl border border-border bg-surface p-4 sm:p-5">
-      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <h3 className="text-base font-semibold text-content">
-          SeedVR2 — fidelity upscaler
-          <HelpBadge topic="setup-seedvr2-install" className="ml-2" />
+          SeedVR2 — fidelity upscaler <HelpBadge topic="setup-seedvr2-install" className="ml-2" />
         </h3>
-        {phase === 'running' && (
-          <span className="shrink-0 text-xs font-medium tabular-nums text-content-muted">
-            {doneCount} / {rows.length}
-          </span>
-        )}
+        {running && <span className="text-xs tabular-nums text-content-muted">Preparing {doneCount} / {rows.length || '…'}</span>}
       </div>
       <p className="mt-1 text-sm text-content-muted">
-        The second way to run ✨ Upscale &amp; improve. Klein re-renders detail from a prompt —
-        sharper, but skin and colour can shift; SeedVR2 resolves detail at a higher resolution
-        and leaves the original look alone. It needs a community node pack plus two model files
-        (<span className="whitespace-nowrap">~3.9 GB</span>), so it is installed on request,
-        not by &ldquo;Install everything&rdquo;.
+        Restore detail at a higher resolution while preserving the image’s look.
+        Prepare the node pack, its dependencies and two model files (~3.9 GB) together.
+        Compatible files already present are reused. No other LDS plugin is required.
       </p>
-      <p className="mt-1 text-xs text-content-subtle">
+      <p className="mt-2 text-xs text-content-subtle">
         <a href={PACK_URL} target="_blank" rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">Node pack →</a>
         {' · '}
         <a href={WEIGHTS_URL} target="_blank" rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">Model weights →</a>
         {' · '}
         <a href={PROJECT_URL} target="_blank" rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">SeedVR2 by ByteDance-Seed →</a>
-        {' — all Apache-2.0.'}
+        {' — Apache-2.0. Dependencies retain their own licences.'}
       </p>
 
-      {!dirValid ? (
-        <p className="mt-3 text-xs text-content-subtle">
-          Point the app at a valid ComfyUI folder first (the ComfyUI step) — the weights go
-          inside it, under <code>models/SEEDVR2</code>.
-        </p>
-      ) : nothingToDownload ? (
-        // "Nothing left to download" is NOT "it works" — the node pack is
-        // installed outside this app, so the weights can all be there while the
-        // capability stays dark. The real verdict comes from the backend.
-        ready ? (
-          <p className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-content">
-            ✓ SeedVR2 is ready — it appears in the workspace bulk actions.
-          </p>
-        ) : (
-          <p className="mt-3 break-words rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-content">
-            ⚠ The weights are in place, but SeedVR2 cannot run yet — see the node pack note below.
-          </p>
-        )
-      ) : (
+      {!cu.dir_valid ? <p className="mt-3 text-sm text-content-muted">Choose a supported local ComfyUI installation in Local tools first.</p> : (
         <>
-          {phase === 'running' && rows.length > 0 && (
-            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface-raised">
-              <div className="h-full rounded-full bg-gradient-primary transition-[width] duration-300"
-                style={{ width: `${Math.round((doneCount / rows.length) * 100)}%` }} />
-            </div>
+          {ready && !running ? <p className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-content">
+            ✓ SeedVR2 is ready — ComfyUI reports the required nodes and models.
+          </p> : !running && (needsRestart || phase === 'prepared' || plan.length === 0) && (
+            <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-content">
+              {phase === 'prepared' ? (plan.some(action => !tracked.includes(action))
+                ? 'Selected steps prepared. Other components still need preparation. ' : 'Files prepared. ') : ''}
+              {needsRestart || tracked.includes('seedvr2_nodes')
+                ? 'Restart ComfyUI, then re-check. The node pack is on disk but its required classes have not been confirmed.'
+                : 'Start ComfyUI and re-check. Its required nodes and models must be confirmed before SeedVR2 is ready.'}
+            </p>
           )}
-          <ul className="mt-3 space-y-1.5">
-            {rows.map((a) => {
-              const s = statuses[a] || {}
-              const state = phase === 'idle' ? 'idle' : (s.state || 'idle')
-              const m = ROW_META[state] || ROW_META.idle
-              const pr = s.progress
-              return (
-                <li key={a} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span aria-hidden="true" className={m.cls}>{m.glyph}</span>
-                    <span className="truncate text-content-muted">
-                      {INSTALL_ALL_ACTION_LABELS[a] || a}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-xs tabular-nums text-content-subtle">
-                    {state === 'running' && pr && pr.total
-                      ? `${pr.pct != null ? `${pr.pct}% · ` : ''}${fmtSize(pr.done)} / ${fmtSize(pr.total)}`
-                      : (phase === 'idle' ? '' : m.word)}
+          {error && !ready && <p role="alert" className="mt-3 whitespace-pre-wrap break-words rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-content">{error}</p>}
+          {rows.length > 0 && (
+            <ul className="mt-3 space-y-2" aria-label="SeedVR2 preparation steps">
+              {rows.map(action => {
+                const status = statuses[action] || {}
+                const state = status.state || 'idle'
+                const progress = status.progress
+                return <li key={action} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm text-content-muted">
+                  <span>{INSTALL_ALL_ACTION_LABELS[action]}</span>
+                  <span className={`text-xs tabular-nums ${state === 'error' ? 'text-rose-300' : 'text-content-subtle'}`}>
+                    {state === 'running' && progress?.total
+                      ? `${progress.pct != null ? `${progress.pct}% · ` : ''}${fmtSize(progress.done)} / ${fmtSize(progress.total)}`
+                      : STATUS_WORDS[state] || 'unknown'}
                   </span>
                 </li>
-              )
-            })}
-          </ul>
-          <button type="button" onClick={start} disabled={phase === 'running'}
-            className="mt-4 w-full rounded-lg border border-primary/50 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50 sm:w-auto">
-            {phase === 'running' ? 'Downloading…' : `Download SeedVR2 models (${plan.length})`}
-          </button>
+              })}
+            </ul>
+          )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            {(running || (!ready && plan.length > 0)) && <button type="button" onClick={start} disabled={running}
+              className="w-full rounded-lg border border-primary/50 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50 sm:w-auto">
+              {running ? 'Preparing SeedVR2…' : 'Prepare SeedVR2'}
+            </button>}
+            {!running && <button type="button" onClick={recheck} disabled={checking}
+              className="rounded-lg border border-border px-4 py-2 text-sm text-content-muted disabled:opacity-50">
+              {checking ? 'Checking…' : 'Re-check ComfyUI'}
+            </button>}
+          </div>
+          {!ready && !running && <p className="mt-2 text-xs text-content-subtle">
+            Preparation does not restart ComfyUI. Finish any work there before restarting it.
+          </p>}
         </>
       )}
 
-      {/* THE OPTIONAL HIGH-RESOLUTION LANE — a different pack, a different
-          author, and genuinely optional: without it the upscaler still works,
-          it is only limited to what the card holds in one pass. Contributed by
-          SurpassHR (GitHub #32), who hit that limit as a CUDA out-of-memory and
-          shipped the tiled workflow this lane is ported from. */}
-      <div className={`mt-3 rounded-md border px-3 py-2 text-sm text-content ${
-        TILING_TONE[tiling.state] || TILING_TONE.absent}`}>
-        <div className="font-semibold">
-          {tiling.state === 'ready' ? '✓' : '○'} High-resolution upscales (tiling)
-        </div>
-        {ceiling && <p className="mt-1 text-content-muted">{ceiling}</p>}
-        <p className="mt-1 text-content-muted">{tiling.text}</p>
-        <p className="mt-1 text-xs text-content-subtle">
-          <a href={TTP_URL} target="_blank" rel="noreferrer"
-            className="text-sky-300 underline hover:text-sky-200">{TTP_PACK} →</a>
-          {' — MIT. Tiling workflow contributed by SurpassHR (GitHub #32).'}
+      <details className="mt-4 rounded-md border border-border px-3 py-2 text-sm text-content">
+        <summary className="cursor-pointer font-medium">Advanced: optional high-resolution tiling</summary>
+        {ceiling && <p className="mt-2 text-content-muted">{ceiling}</p>}
+        <p className="mt-2 text-content-muted">{tiling.text}</p>
+        <p className="mt-2 text-xs text-content-subtle">
+          <a href={TTP_URL} target="_blank" rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">{TTP_PACK} →</a>
+          {' — MIT. Tiling workflow contributed by SurpassHR (GitHub #32). This optional pack is not included in Prepare SeedVR2.'}
         </p>
-      </div>
-
-      {/* The half this app deliberately does NOT install. Spelled out rather than
-          hidden behind a button that could not work: the pack's Python
-          dependencies have to land in ComfyUI's interpreter, which is exactly
-          what ComfyUI-Manager does and what a bare clone does not. */}
-      {needsRestart ? (
-        <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-content">
-          ⚠ The SeedVR2 node pack is installed but ComfyUI has not loaded it yet.
-          <span className="text-content-muted"> ComfyUI only registers custom nodes at
-            startup — restart it, and this page turns green on its own. If it still does not,
-            the pack&rsquo;s Python dependencies failed to install: ComfyUI&rsquo;s console says
-            which one.</span>
-        </p>
-      ) : packMissing && (
-        <p className="mt-3 break-words rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-content">
-          ⚠ The SeedVR2 node pack is not installed in ComfyUI.
-          <span className="text-content-muted"> Install it from ComfyUI itself — search
-            &ldquo;SeedVR2&rdquo; in ComfyUI-Manager — then restart ComfyUI. The app does not
-            install this one for you: it pulls thirteen Python packages that have to go into
-            ComfyUI&rsquo;s own environment, and a plain copy of the folder would not work.{' '}
-            <a href={PACK_URL} target="_blank" rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">
-              Open the node pack on GitHub →</a></span>
-        </p>
-      )}
+      </details>
     </section>
   )
 }

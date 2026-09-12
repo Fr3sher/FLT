@@ -275,7 +275,7 @@ def _memory_flags(layout: _PortableLayout) -> list:
 def _spawn(layout: _PortableLayout):
     """Spawn only the fixed, LDS-owned ComfyUI command.  No user .bat is involved."""
     argv = [
-        str(layout.python_exe), '-s', 'main.py',
+        str(layout.python_exe), '-X', 'utf8', '-s', 'main.py',
         '--windows-standalone-build',
         '--disable-auto-launch',
         '--preview-method', 'none',

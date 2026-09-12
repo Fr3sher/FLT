@@ -2,8 +2,7 @@
 
    Three links, asked for by a user on the Setup card, each answering a question
    the card raises and could not answer:
-     * the node pack — the card tells you to install it through ComfyUI-Manager,
-       and someone who would rather clone it by hand had no repo to go to;
+     * the node pack — the preparation includes code from this project;
      * the weights repo — a button downloads 3.9 GB, and where from is not a
        detail;
      * the original project — SeedVR2 is ByteDance-Seed's work, and the app
@@ -35,12 +34,10 @@ test('the Setup card links the pack, the weights and the original project', () =
   assert.match(setup, /<a href=\{PROJECT_URL\} target="_blank" rel="noreferrer"/)
 })
 
-test('the pack link is offered AT the moment the card asks you to install it', () => {
-  // The "install it from ComfyUI-Manager" warning used to end on a bare URL in
-  // a <span>: the one place the link is actionable was the one place it was not
-  // a link.
-  assert.match(setup, /Open the node pack on GitHub/)
-  assert.doesNotMatch(setup, /Source: <span className="break-all">\{PACK_URL\}<\/span>/)
+test('the card prepares the complete product without legacy manual-package instructions', () => {
+  assert.match(setup, /Prepare SeedVR2/)
+  assert.match(setup, /node pack, its dependencies and two model files/)
+  assert.doesNotMatch(setup, /thirteen Python|does not install this one|Klein re-renders/)
 })
 
 test('the Settings card carries the same three sources', () => {

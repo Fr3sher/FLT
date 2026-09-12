@@ -2,7 +2,7 @@
   "id": "seedvr2",
   "bundled": true,
   "name": "SeedVR2",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "api": 1,
   "description": "Faithful image restoration with SeedVR2, including high-resolution tiling, model preparation, settings and independent finishing. No Klein Improve or other LDS plug-in required.",
   "requires": [],
@@ -11,6 +11,7 @@
   "in_process_requirements": true,
   "owns": {
     "install_actions": [
+      "seedvr2_nodes",
       "seedvr2_model",
       "seedvr2_vae"
     ],
@@ -63,7 +64,52 @@
     "model_slots": []
   },
   "models": [],
-  "node_packs": [],
+  "node_packs": [
+    {
+      "pack": "SeedVR2",
+      "url": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+      "search": "SeedVR2",
+      "classes": [
+        "SeedVR2LoadDiTModel",
+        "SeedVR2LoadVAEModel",
+        "SeedVR2VideoUpscaler"
+      ],
+      "installation": {
+        "id": "seedvr2",
+        "version": "2.5.24-lds.1",
+        "folder": "seedvr2_videoupscaler",
+        "url": "https://codeload.github.com/numz/ComfyUI-SeedVR2_VideoUpscaler/zip/4490bd1f482e026674543386bb2a4d176da245b9",
+        "sha256": "04c61842bc00fd8673e6bc9a3b1b1935955461f363791070ed14d67d2a2e77fb",
+        "requirements": [
+          "torch==2.14.0",
+          "torchvision==0.29.0",
+          "safetensors==0.8.0",
+          "numpy==2.5.2",
+          "tqdm==4.70.1",
+          "psutil==7.2.2",
+          "einops==0.8.2",
+          "omegaconf==2.3.1",
+          "diffusers==0.40.0",
+          "peft==0.20.0",
+          "rotary-embedding-torch==0.9.1",
+          "opencv-python==5.0.0.93",
+          "gguf==0.19.0",
+          "matplotlib==3.11.2",
+          "antlr4-python3-runtime==4.9.3"
+        ],
+        "archive_prefix": "ComfyUI-SeedVR2_VideoUpscaler-4490bd1f482e026674543386bb2a4d176da245b9",
+        "wheels": [
+          {
+            "filename": "antlr4_python3_runtime-4.9.3+lds.1-py3-none-any.whl",
+            "sha256": "4e909ac01d54970b10622e90c2645dad8b186d4d79b5864fa60bb155379173ef"
+          }
+        ],
+        "action": "seedvr2_nodes",
+        "python": ">=3.12",
+        "wheelhouse": "resources/wheels"
+      }
+    }
+  ],
   "permissions": [
     "comfyui",
     "filesystem",
@@ -90,7 +136,7 @@
       "label": "Prepare SeedVR2",
       "path": "/plugins/seedvr2/settings"
     },
-    "setup_hint": "Connect ComfyUI; prepare the SeedVR2 node pack in its own environment and explicitly download its two model files. Tiling is included and uses the optional TTP node pack. No Klein Improve or other LDS plug-in is required.",
+    "setup_hint": "Connect a compatible ComfyUI Windows portable, then prepare the SeedVR2 node pack and its two model files together. Restart ComfyUI when idle and re-check readiness. Existing packages are preserved; TTP tiling remains optional. No other LDS plugin is required.",
     "surfaces": [
       "Bank",
       "Dataset",
@@ -101,11 +147,18 @@
     ]
   },
   "compatibility": {
-    "api": ">=1.17,<2",
+    "api": ">=1.20,<2",
     "lds": ">=2026.9.4",
     "python": ">=3.10,<4",
-    "os": ["windows", "linux", "darwin"],
-    "arch": ["x86_64", "arm64"]
+    "os": [
+      "windows",
+      "linux",
+      "darwin"
+    ],
+    "arch": [
+      "x86_64",
+      "arm64"
+    ]
   },
   "guide_ownership": {
     "chapters": [],

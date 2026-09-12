@@ -23,11 +23,11 @@ export const HELP = [
   setting('seedvr2.vae', 'engines', 'seedvr2-vae', 'SeedVR2 VAE build',
     ['seedvr2 vae', 'vae', 'ema_vae_fp16', 'vae not found', 'pin the vae',
      'renamed vae', 'models/SEEDVR2', 'model location', 'dit', 'weights folder']),
-  setupStep('setup-seedvr2-install', 'install', 'Install the SeedVR2 upscaler',
+  setupStep('setup-seedvr2-install', 'install', 'Prepare SeedVR2 nodes and models',
     ['seedvr2', 'seed vr2', 'seedvr', 'upscale', 'upscaler', 'upscaling', 'super resolution',
      'super-resolution', 'restore', 'restoration', 'sharpen', 'fidelity', 'keeps colours',
      'colour shift', 'color shift', 'changes the image', 'node pack',
-     'ComfyUI-SeedVR2_VideoUpscaler', 'comfyui-manager', 'dit', 'vae', 'models/SEEDVR2',
+     'ComfyUI-SeedVR2_VideoUpscaler', 'prepare', 'restart', 're-check', 'dit', 'vae', 'models/SEEDVR2',
      '3b', '7b', 'fp8', 'blocks to swap', 'target resolution', 'install seedvr2']),
 ].map(topic => ({ ...topic, guide: { chapter: 'settings-reference', anchor: 'seedvr2-upscaling-local' } }))
 
