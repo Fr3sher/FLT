@@ -159,3 +159,24 @@ A compatible managed node can be shared by independent plugins without making
 one plugin depend on the other. Package uninstall does not remove shared nodes
 or model files. A plugin-code rollback is not a rollback of ComfyUI's Python
 environment. Qualify each actual archive and runtime before offering it to users.
+
+## Dependency presence hints
+
+`lds_sdk.setup.missing_modules(names)` checks which top-level Python modules are
+absent from the host interpreter, without importing the requested modules:
+
+```python
+from lds_sdk.setup import missing_modules
+
+missing = missing_modules(['example_helper'])
+```
+
+Pass a list or tuple of at most 64 module names. Names must be ASCII Python
+identifiers; paths and dotted submodules are rejected with `ValueError` before
+inspection, because resolving a submodule could import its parent. The result
+is a list of missing names. Discovery errors are treated as absence.
+
+This is a preparation hint, not proof that a module or its native dependencies
+can load. It neither installs packages nor validates a plugin worker or ComfyUI
+environment. Keep the owning plugin's lifecycle checks around its preparation
+UI and use the normal installation actions for any requested changes.
