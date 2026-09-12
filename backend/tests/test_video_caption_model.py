@@ -26,11 +26,15 @@ Three consequences, one test section each:
 No model is ever loaded here: the worker is a seam and is monkeypatched.
 """
 
-from app.services import video_caption as vc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_caption as vc
 
 # The video-extra gate answers for the MACHINE: without this the route test passes
 # where PyAV/ffmpeg are installed and 503s on CI. Imported for its autouse effect.
 from _video_extra import video_extra_ready  # noqa: F401
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 DEFAULT_MODEL = 'Qwen/Qwen3-VL-4B-Instruct'
 
@@ -132,7 +136,7 @@ def test_a_folder_with_no_snapshot_is_not_a_cached_model(tmp_path, monkeypatch):
 
 def test_the_configured_model_is_handed_to_the_worker(app, monkeypatch):
     """A setting the worker never receives is a setting that does nothing."""
-    from app.services import video_caption_worker as vcw
+    from lds_video import video_caption_worker as vcw
     seen = {}
 
     class _Spy:
@@ -218,7 +222,7 @@ def _fake_seams(monkeypatch):
 
 def _bank_with_clips(app, n):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -235,14 +239,14 @@ def _bank_with_clips(app, n):
 
 
 def _clip_ids(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.id for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]
 
 
 def _models(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.caption_model for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]
@@ -255,7 +259,7 @@ def test_the_bank_payload_says_which_model_will_caption(app, client, tmp_path,
     """On the payload the workspace already polls, not behind a new route: one
     string that changes when a config file is hand-edited does not deserve a
     request per bank per two seconds."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     monkeypatch.setattr(svc, '_probe_file', lambda _p: {
         'duration_s': 60.0, 'fps_native': 30.0, 'width': 640, 'height': 480,
         'codec': 'h264', 'probe_state': 'ok', 'file_size': 4096})
@@ -278,7 +282,7 @@ def test_the_infer_script_takes_the_model_from_the_handshake(app):
     default it is being checked against."""
     import ast
     from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / 'infer'
+    src = (Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'infer'
            / 'video_caption_infer.py').read_text(encoding='utf-8')
     tree = ast.parse(src)
     for node in ast.walk(tree):
@@ -345,7 +349,7 @@ def test_the_route_takes_a_model_for_one_run_without_changing_the_setting(
         app, client, tmp_path, monkeypatch):
     """Same shape as the per-run style: captioning one bank on the 8B must not
     silently re-point every other bank."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     monkeypatch.setattr(svc, '_probe_file', lambda _p: {
         'duration_s': 60.0, 'fps_native': 30.0, 'width': 640, 'height': 480,
         'codec': 'h264', 'probe_state': 'ok', 'file_size': 4096})
@@ -368,7 +372,7 @@ def test_the_route_takes_a_model_for_one_run_without_changing_the_setting(
 
 def test_the_payload_offers_the_models_with_their_cached_flag(
         app, client, tmp_path, monkeypatch):
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     monkeypatch.setattr(svc, '_probe_file', lambda _p: {
         'duration_s': 60.0, 'fps_native': 30.0, 'width': 640, 'height': 480,
         'codec': 'h264', 'probe_state': 'ok', 'file_size': 4096})
@@ -391,7 +395,7 @@ def test_the_payload_names_the_engine_and_the_device(
     "which engine captions video?" is a fair question with a wrong-guess cost.
     The payload answers it before the click: LDS's own transformers worker,
     and the device the launch will actually pick."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     monkeypatch.setattr(svc, '_probe_file', lambda _p: {
         'duration_s': 60.0, 'fps_native': 30.0, 'width': 640, 'height': 480,
         'codec': 'h264', 'probe_state': 'ok', 'file_size': 4096})

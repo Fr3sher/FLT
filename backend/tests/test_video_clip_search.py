@@ -22,7 +22,10 @@ here, so the suite stays green with neither PyAV nor torch installed.
 import pytest
 
 from app.services import clip_text_encoder
-from app.services import video_clip_search as vcs
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_clip_search as vcs
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- which frames of a shot get embedded ---------------------------------------
@@ -298,7 +301,7 @@ def test_a_bank_with_new_shots_does_not_re_decode_the_failed_ones(app):
     that grew — it costs nothing, which is what lets it ride the button the user
     was going to click anyway instead of needing one of its own."""
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
 
     bank_id = _bank_with_clips(app, 3)
     _mark_all(app, bank_id, 'unreadable')
@@ -327,11 +330,11 @@ def test_the_job_says_the_pass_was_abandoned_and_runs_nothing_after_it(
     consume the vectors this pass did not produce, so letting them run would bury
     the one line that matters under two "0 shot(s) rated" — the same silence the
     original failure hid behind."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
 
     bank_id = _bank_with_clips(app, 2)
     monkeypatch.setattr(
-        'app.services.video_clip_search.run_embed',
+        'lds_video.video_clip_search.run_embed',
         lambda *a, **k: {'embedded': 0, 'unreadable': 0,
                          'aborted': 'the frame encoder could not run: boom'})
 
@@ -354,7 +357,7 @@ def test_the_job_says_the_pass_was_abandoned_and_runs_nothing_after_it(
 
 def _mark_all(app, bank_id, state):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         for clip in VideoClip.query.filter_by(bank_id=bank_id).all():
             clip.embed_state = state
@@ -381,7 +384,7 @@ def test_recutting_a_shot_forgets_what_it_used_to_look_like(app, monkeypatch):
     contains, so a search would return it for a car that is now in the
     neighbouring shot and point the player at a second outside its own bounds.
     Exactly the reason a re-cut already drops the thumbnail and the metrics."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     bank_id = _bank_with_clips(app, 2)
     _fake_seams(monkeypatch)
     cid = _clip_ids(app, bank_id)[0]
@@ -407,7 +410,7 @@ def test_the_next_pass_sweeps_away_the_vectors_of_a_shot_that_was_recut(app,
     the file has to be swept somewhere, and the only free place is a pass that
     was going to rewrite it anyway. Without this the store grows orphans forever
     on a bank that is trimmed often."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     bank_id = _bank_with_clips(app, 2)
     _fake_seams(monkeypatch)
     cid = _clip_ids(app, bank_id)[0]
@@ -623,7 +626,7 @@ def test_real_decode_writes_one_readable_frame_per_requested_time(tmp_path):
 def test_the_embedding_frames_are_bigger_than_the_analysis_frames():
     """Two passes, two sizes, on purpose — pinned as data so a refactor that
     'unifies' them has to argue with a test rather than with a comment."""
-    from app.services import video_metrics_scan
+    from lds_video import video_metrics_scan
     assert vcs.EMBED_LONG_SIDE > video_metrics_scan.ANALYSIS_WIDTH
     assert vcs.EMBED_LONG_SIDE >= 224
 
@@ -664,7 +667,7 @@ def _store(app, bank_id, vectors):
     """Write a vector store directly — the search's input, without a pass."""
     with app.app_context():
         from app.extensions import db
-        from app.models import VideoClip
+        from lds_video.models import VideoClip
         store = {}
         for cid, vecs in vectors.items():
             clip = db.session.get(VideoClip, cid)
@@ -680,7 +683,7 @@ def _store(app, bank_id, vectors):
 
 def _bank_with_clips(app, n):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -697,14 +700,14 @@ def _bank_with_clips(app, n):
 
 
 def _clip_ids(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.id for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]
 
 
 def _states(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.embed_state for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]

@@ -9,9 +9,12 @@ No ffmpeg, no PyAV, no torch: the media seams are the routes suite's.
 """
 import pytest
 
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_bank_service as svc
 
 from _video_extra import detect_source_stub, video_extra_ready  # noqa: F401
+
+pytestmark = pytest.mark.plugins('video')
 
 
 @pytest.fixture()
@@ -67,6 +70,7 @@ def test_the_report_has_the_image_preflight_shape_and_a_verdict(client, tmp_path
     assert body['can_override'] is False
 
 
+@pytest.mark.plugins('video', 'cloud_training')
 def test_the_two_lanes_read_different_things(client, tmp_path, seams):
     """Machine rows (ai-toolkit, weights) mean nothing for a rented pod; account
     rows (the vast key, the run limit, the budget) mean nothing for this box."""
@@ -84,6 +88,7 @@ def test_the_two_lanes_read_different_things(client, tmp_path, seams):
         assert 'clips' in lane and 'target' in lane
 
 
+@pytest.mark.plugins('video', 'cloud_training')
 def test_no_vast_key_is_a_BLOCKER_on_the_cloud_lane(client, tmp_path, seams, monkeypatch):
     from app.services import cloud_training as ct
     monkeypatch.setattr(ct.cfg, 'secret', lambda key, *a, **k: '' if key == 'VAST_API_KEY' else None)
@@ -96,6 +101,7 @@ def test_no_vast_key_is_a_BLOCKER_on_the_cloud_lane(client, tmp_path, seams, mon
     assert any('vast.ai' in b for b in body['blockers'])
 
 
+@pytest.mark.plugins('video', 'cloud_training')
 def test_an_empty_folder_blocks_both_lanes(client, tmp_path, seams):
     import os
     ds_id = _promoted(client, tmp_path)
@@ -113,7 +119,7 @@ def test_a_missing_reference_set_is_a_blocker_with_its_destination(client, tmp_p
                                                                     monkeypatch):
     """The row has to point at the section that fixes it: the readiness card's
     Fix → button jumps there, and a blocker with no destination is a dead end."""
-    from app.services import video_targets
+    from lds_video import video_targets
     profile = dict(video_targets.get('wan22_14b') or {})
     profile['requires_references'] = True
     monkeypatch.setattr(video_targets, 'get',
@@ -132,14 +138,38 @@ def test_an_unknown_dataset_is_a_404(client):
     assert client.get('/api/video-dataset/9999/train/preflight').status_code == 404
 
 
+@pytest.mark.plugins('video')
+def test_cloud_preflight_is_blocked_without_querying_an_absent_owner(client, tmp_path, seams,
+                                                                    monkeypatch):
+    from lds_sdk import cloud_training
+    from lds_sdk.lifecycle import is_available
+
+    def forbidden_account_read(*args, **kwargs):
+        raise AssertionError('Cloud OFF must not query account state')
+    monkeypatch.setattr(cloud_training, 'get_active_runs', forbidden_account_read)
+    monkeypatch.setattr(cloud_training, 'month_spend_usd', forbidden_account_read)
+    assert not is_available('cloud_training')
+    ds_id = _promoted(client, tmp_path)
+
+    response = client.get(f'/api/video-dataset/{ds_id}/train/preflight?lane=cloud')
+    assert response.status_code == 200
+    report = response.get_json()
+    assert report['verdict'] == 'blocked'
+    row = _rows(report)['cloud_plugin']
+    assert row['status'] == 'fail' and row['scope'] == 'cloud'
+    assert row['target'] is None, 'the workspace jump callback only accepts section ids'
+    assert row['detail'] == 'Install and enable Cloud training in Plugins before renting a GPU.'
+
+
+@pytest.mark.plugins('video', 'cloud_training')
 def test_the_cloud_launch_relays_allow_parallel_run_to_the_guardrails(client, tmp_path,
                                                                        seams, monkeypatch):
     """The guardrails' `PARALLEL_RUN:` refusal is CONFIRMABLE by contract, and the
     answer travels as `allow_parallel_run`. The image route relayed it; the
     video route dropped it, so the question the server asked could never be
     answered from the video lane."""
-    from app.services import cloud_training as ct
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import cloud_video_training as cvt
     seen = {}
 
     def spy(dataset_id, fam, dataset_table=None, allow_parallel_run=False):

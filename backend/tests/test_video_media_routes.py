@@ -22,9 +22,12 @@ import os
 
 import pytest
 
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_bank_service as svc
 
 from _video_extra import detect_source_stub
+
+pytestmark = pytest.mark.plugins('video')
 
 SOURCE_BYTES = b'\x11' * 4096
 
@@ -126,7 +129,7 @@ def test_a_relpath_that_escapes_the_bank_folder_is_a_404_not_a_500(
     A 500 tells whoever tried that the file exists and the read got far enough to
     crash; a distinct 403 tells them the path was real and the guard caught it.
     Both are answers. One answer for every refusal is the only one that isn't."""
-    from app.models import VideoSource
+    from lds_video.models import VideoSource
     from app.extensions import db
     secret = tmp_path / 'secret.txt'
     secret.write_bytes(b'API_KEY=hunter2')
@@ -146,7 +149,7 @@ def test_a_sibling_folder_sharing_the_banks_prefix_is_not_reachable(
         app, client, tmp_path):
     """The prefix check has to carry the separator: without it a bank rooted at
     `…/rushes` accepts `…/rushes-secret/x.mp4` as "contained"."""
-    from app.models import VideoSource
+    from lds_video.models import VideoSource
     from app.extensions import db
     sibling = tmp_path / 'rushes-secret'
     sibling.mkdir()
@@ -224,7 +227,7 @@ def test_a_dataset_clip_filename_that_escapes_its_folder_is_a_404(
         app, client, tmp_path, seams):
     """We write these filenames ourselves — and "we wrote it ourselves" is the
     assumption every path-traversal write-up opens on. The column is reachable."""
-    from app.models import VideoDatasetClip
+    from lds_video.models import VideoDatasetClip
     from app.extensions import db
     secret = tmp_path / 'secret.txt'
     secret.write_bytes(b'API_KEY=hunter2')

@@ -19,7 +19,10 @@ seam skips itself when the extra is absent, and says so.
 """
 import pytest
 
-from app.services import video_metrics_scan as scan
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_metrics_scan as scan
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _fake_frames(n=48, luma=0.5, sharp=100.0, motion=0.003):
@@ -166,7 +169,7 @@ def _bank_with_clips(app, n):
     closed on return, and a detached instance blows up on first attribute read —
     which is a fact about the test, not about the scan."""
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -184,7 +187,7 @@ def _bank_with_clips(app, n):
 
 def _summaries(app, bank_id):
     import json
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         rows = VideoClip.query.filter_by(bank_id=bank_id).order_by(VideoClip.id).all()
         return [json.loads(r.metrics_json) if r.metrics_json else {} for r in rows]

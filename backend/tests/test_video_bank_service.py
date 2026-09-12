@@ -30,10 +30,13 @@ import pytest
 
 from app.config import LOCAL_USER
 from app.extensions import db
-from app.models import VideoClip, VideoDataset, VideoDatasetClip, VideoSource
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoClip, VideoDataset, VideoDatasetClip, VideoSource
+from lds_video import video_bank_service as svc
 
 from _video_extra import detect_source_stub
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- fakes for the four media seams -------------------------------------------
@@ -561,7 +564,7 @@ def _measured_bank(app, tmp_path, sharpest=None):
     """A bank with one detected clip, optionally carrying a measured sharpest
     frame. Returns (bank_id, clip_id, expected_middle)."""
     import json as _json
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         bank_id, _ = _bank(app, tmp_path, ('a.mp4',))
         svc.start_probe(app, LOCAL_USER, bank_id)
@@ -653,7 +656,7 @@ def _ready_for_promotion(app, tmp_path, *, width, height):
     """A bank with one probed source of the given geometry and one KEPT clip long
     enough for any profile's default length."""
     from app.extensions import db
-    from app.models import VideoClip, VideoSource
+    from lds_video.models import VideoClip, VideoSource
     with app.app_context():
         bank_id, _ = _bank(app, tmp_path, ('a.mp4',))
         src = VideoSource.query.filter_by(bank_id=bank_id).first()
@@ -675,9 +678,9 @@ def test_dataset_rows_carry_a_step_suggestion_derived_from_their_own_count(app):
     never read it - it prefills an editable field, and what the user sends is
     what trains."""
     from app.extensions import db
-    from app.models import VideoDataset, VideoDatasetClip
-    from app.services import video_bank_service as svc
-    from app.services import video_training
+    from lds_video.models import VideoDataset, VideoDatasetClip
+    from lds_video import video_bank_service as svc
+    from lds_video import video_training
     with app.app_context():
         ds = VideoDataset(user_id='local', name='sugg', target_profile='wan22_14b',
                           fps=16, frames=81, output_dir='/tmp/x')
@@ -698,7 +701,7 @@ def test_the_trigger_rides_every_sidecar_exactly_once():
     trigger without ever doubling it. Doubling is not cosmetic - fal measured a
     duplicated trigger degrading prompt adherence. Idempotent on captions that
     already start with it; absent, the sidecar is the caption verbatim."""
-    from app.services.video_bank_service import _with_trigger
+    from lds_video.video_bank_service import _with_trigger
     assert _with_trigger('mychar', 'a woman walks') == 'mychar, a woman walks'
     assert _with_trigger('mychar', 'Mychar, a woman walks') == 'Mychar, a woman walks'
     assert _with_trigger('mychar', '') == 'mychar'
@@ -714,7 +717,7 @@ def test_a_stills_set_reuses_the_image_lane_exporter_and_registers_its_rows(
     sidecar prepend then guards re-edits), and registers rows so the dataset
     page shows what a promotion shows. An export that yields nothing rolls the
     whole creation back: an empty dataset row would be a promise of training."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     from app.services import lora_training as lt
 
     def fake_export(user_id, dataset_id, masked=True, dest_dir=None, **kw):
@@ -752,8 +755,8 @@ def test_references_cover_every_clip_or_are_refused(app, tmp_path, monkeypatch):
     replacing the previous set whole, and only the target that READS references
     accepts them at all."""
     from app.extensions import db
-    from app.models import VideoDataset, VideoDatasetClip
-    from app.services import video_bank_service as svc
+    from lds_video.models import VideoDataset, VideoDatasetClip
+    from lds_video import video_bank_service as svc
     with app.app_context():
         out = tmp_path / 'ds'
         out.mkdir()
@@ -794,15 +797,15 @@ def _pan_scores():
     """A metrics blob the camera pass could have written: measured, panning
     right, camera clearly dominant — the STORED RATES, not label names, because
     labels() derives at read time from exactly these keys."""
-    from app.services import video_camera_motion as vcm
+    from lds_video import video_camera_motion as vcm
     return {vcm.STATE_KEY: 'ok', 'camera_coverage': 1.0,
             'camera_pan_rate': vcm.PAN_FLOOR * 10}
 
 
 def test_the_sidecar_gains_the_classifier_camera_line():
     import json as _json
-    from app.services import video_camera_motion as vcm
-    from app.services.video_bank_service import compose_sidecar_text
+    from lds_video import video_camera_motion as vcm
+    from lds_video.video_bank_service import compose_sidecar_text
     scores = _pan_scores()
     phrase = vcm.camera_phrase(scores)
     assert phrase, 'fixture scores must produce a phrase for this test to mean anything'
@@ -817,7 +820,7 @@ def test_no_camera_line_when_the_classifier_had_nothing_honest_to_say():
     """Unmeasured metrics, unreadable JSON, no JSON at all: the caption stays
     exactly what it was — a prompt silent about the camera teaches nothing
     false, a guessed one teaches the wrong word."""
-    from app.services.video_bank_service import compose_sidecar_text
+    from lds_video.video_bank_service import compose_sidecar_text
 
     assert compose_sidecar_text('mychar', 'a woman walks', None) \
         == 'mychar, a woman walks'
@@ -831,7 +834,7 @@ def test_a_camera_line_alone_is_still_a_sidecar():
     """A clip with no caption but a measured camera writes the one honest thing
     it knows rather than an empty prompt."""
     import json as _json
-    from app.services.video_bank_service import compose_sidecar_text
+    from lds_video.video_bank_service import compose_sidecar_text
     text = compose_sidecar_text('', None, _json.dumps(_pan_scores()))
     assert text.startswith('Camera: ')
 
@@ -840,7 +843,7 @@ def test_a_camera_line_alone_is_still_a_sidecar():
 
 def test_audio_line_only_for_targets_that_keep_audio_and_only_when_measured():
     import json as _json
-    from app.services.video_bank_service import compose_sidecar_text
+    from lds_video.video_bank_service import compose_sidecar_text
 
     no_track = _json.dumps({'audio_state': 'none'})
     near_silent = _json.dumps({'audio_state': 'ok', 'silence_ratio': 1.0,
@@ -870,7 +873,7 @@ def test_published_word_budgets_and_only_published_ones():
     """WAN's own rewriter caps at 200 (T2V) / 100 (I2V) words — published, so
     carried. H3 published none, so it carries none: an invented budget is a
     figure somebody plans around."""
-    from app.services import video_targets as vt
+    from lds_video import video_targets as vt
     assert vt.get('wan22_14b').get('caption_word_budget') == 200
     assert vt.get('wan22_14b_i2v').get('caption_word_budget') == 100
     assert 'caption_word_budget' not in vt.get('minimax_h3')

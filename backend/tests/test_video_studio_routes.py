@@ -7,6 +7,8 @@ was actually built from, and does a finished job find its way back to the row.
 from pathlib import Path
 import pytest
 
+pytestmark = pytest.mark.plugins('video')
+
 
 def _comfy(monkeypatch, reachable=True):
     # The gate asks ComfyUI alone (probe_comfyui), never the whole-app probe:
@@ -19,7 +21,7 @@ def _comfy(monkeypatch, reachable=True):
 @pytest.fixture()
 def queued(app, monkeypatch):
     """Enqueue without ComfyUI: preflight open, queue captured."""
-    from app.services import video_test_studio as vts
+    from lds_video import video_test_studio as vts
     seen = {}
     monkeypatch.setattr(vts, 'preflight', lambda wf: None)
     from app.job_queue import queue_manager
@@ -89,7 +91,7 @@ def test_a_queued_clip_records_the_graph_it_was_built_from(client, app, monkeypa
 
     with app.app_context():
         from app.extensions import db
-        from app.models import VideoTestClip
+        from lds_video.models import VideoTestClip
         clip = db.session.get(VideoTestClip, body['clip_id'])
         assert clip.status == 'pending'
         assert clip.mode == 't2v' and clip.seed == 99
@@ -110,7 +112,7 @@ def test_an_unknown_sparse_level_is_stored_as_off(client, app, monkeypatch, queu
                     json={'mode': 't2v', 'prompt': 'p', 'sparse': 'turbocharged'})
     with app.app_context():
         from app.extensions import db
-        from app.models import VideoTestClip
+        from lds_video.models import VideoTestClip
         assert db.session.get(VideoTestClip, r.get_json()['clip_id']).sparse == ''
 
 
@@ -118,7 +120,7 @@ def test_a_missing_asset_answers_the_studios_own_409(client, app, monkeypatch):
     """Same structured refusal as the image studio, so the banner that lists
     missing weights and node packs needed no new plumbing."""
     from app.services import lora_test_studio as lts
-    from app.services import video_test_studio as vts
+    from lds_video import video_test_studio as vts
     _comfy(monkeypatch)
 
     def boom(_wf):
@@ -138,7 +140,7 @@ def test_a_missing_asset_answers_the_studios_own_409(client, app, monkeypatch):
 
 def _clip(app, **kw):
     from app.extensions import db
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     row = VideoTestClip(job_id=kw.pop('job_id', 'job-1'), status='pending',
                         prompt='p', mode='t2v', **kw)
     db.session.add(row)
@@ -148,8 +150,8 @@ def _clip(app, **kw):
 
 def test_a_finished_job_lands_on_its_clip(app, monkeypatch):
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import video_test_studio as vts
     with app.app_context():
         cid = _clip(app)
         monkeypatch.setattr(vts, '_bring_clip_home', lambda fn: None)
@@ -170,7 +172,7 @@ def test_a_clip_lands_even_when_comfyui_still_holds_the_mp4(app, tmp_path, monke
     """
     import os
     from app.services import lora_test_studio as lts
-    from app.services import video_test_studio as vts
+    from lds_video import video_test_studio as vts
     from app.utils import comfy_fs
 
     out_dir = tmp_path / 'output'
@@ -200,8 +202,8 @@ def test_a_clip_lands_even_when_comfyui_still_holds_the_mp4(app, tmp_path, monke
 
 def test_a_failed_job_keeps_the_reason_comfyui_gave(app):
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import video_test_studio as vts
     with app.app_context():
         cid = _clip(app)
         vts.link_completed_clip('job-1', None, failed=True,
@@ -215,8 +217,8 @@ def test_a_late_completion_never_overwrites_a_settled_clip(app, monkeypatch):
     """A job whose row was already resolved (cancelled, replaced) must not write
     its result over the good one — the image studio learned this the same way."""
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import video_test_studio as vts
     with app.app_context():
         cid = _clip(app)
         row = db.session.get(VideoTestClip, cid)
@@ -241,7 +243,7 @@ def test_the_queue_dispatches_a_video_job_to_this_lane(app, monkeypatch):
             job_metadata=json.dumps({'is_video_test': True, 'clip_id': 3}))
         db.session.add(job)
         db.session.commit()
-        from app.services import video_test_studio as vts
+        from lds_video import video_test_studio as vts
         monkeypatch.setattr(vts, 'link_completed_clip',
                             lambda *a, **k: seen.update({'args': a, 'kw': k}))
         job_queue._dispatch_completion(job, 'out.mp4', False)
@@ -269,7 +271,7 @@ def test_deploy_refuses_a_run_that_is_not_a_video_run(client, app):
 def test_deploy_copies_the_checkpoint_and_names_it_for_the_loader(client, app, tmp_path, monkeypatch):
     from app.extensions import db
     from app.models import CloudTrainingRun
-    from app.services import video_test_studio as vts
+    from lds_video import video_test_studio as vts
     store = tmp_path / 'run_7'
     store.mkdir()
     (store / 'lds7_jessy.safetensors').write_bytes(b'W' * 32)
@@ -320,7 +322,7 @@ def test_deploy_only_ever_resolves_a_basename(client, app, tmp_path, bad):
 # --- the read side -----------------------------------------------------------
 
 def test_options_publishes_the_catalogue_rather_than_restating_it(client):
-    from app.services import video_targets
+    from lds_video import video_targets
     body = client.get('/api/video-studio/options').get_json()
     profile = video_targets.get('minimax_h3')
     assert body['fps'] == profile['fps']
@@ -330,7 +332,7 @@ def test_options_publishes_the_catalogue_rather_than_restating_it(client):
 
 
 def test_clips_history_rates_and_deletes(client, app, tmp_path, monkeypatch):
-    from app.services import video_test_studio as vts
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: tmp_path)
     with app.app_context():
         cid = _clip(app, job_id='job-h')
@@ -373,7 +375,7 @@ def test_a_gallery_image_resolves_to_the_picture_the_user_is_looking_at(app, tmp
     from PIL import Image
     from app.extensions import db
     from app.models import FaceDataset, LoraTestImage
-    from app.routes.video_studio import _resolve_source
+    from lds_video.routes.video_studio import _resolve_source
     from app.services.dataset_storage import dataset_path
 
     with app.app_context():
@@ -418,9 +420,9 @@ def test_a_clip_publishes_the_start_frame_reuse_needs(app):
     frame empty, so Generate stayed blocked on 'Pick a start frame' — every
     setting back except the one that decides whether the button works. The row
     had stored the staged file all along; the payload never published it."""
-    from app.routes.video_studio import _clip_dict
+    from lds_video.routes.video_studio import _clip_dict
     from app.extensions import db
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
 
     with app.app_context():
         clip = VideoTestClip(prompt='she turns', mode='i2v', status='done',
@@ -435,7 +437,7 @@ def test_a_clip_publishes_the_start_frame_reuse_needs(app):
 
 
 def test_options_carry_the_launch_advice_the_running_comfyui_earns(client, monkeypatch):
-    from app.services import video_test_studio as vts
+    from lds_video import video_test_studio as vts
     # Started without the flag on a 48 GB machine, on a ComfyUI that knows it: told.
     monkeypatch.setattr(vts, 'comfyui_launch_facts',
                         lambda timeout=3: (['main.py', '--listen', '127.0.0.1'], 47.7, '0.30.1'))
@@ -464,7 +466,7 @@ class _Resp:
 
 
 def _facts_with(app, monkeypatch, response=None, raising=None):
-    from app.services import video_test_studio as vts
+    from lds_video import video_test_studio as vts
     import requests
     seen = {}
 
@@ -533,9 +535,9 @@ def _job(app, job_id='job-1', started=None, completed=None, status='completed'):
 def test_a_finished_clip_records_how_long_the_queue_spent_on_it(app, monkeypatch):
     from datetime import datetime, timedelta
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.routes.video_studio import _clip_dict
-    from app.services import video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video.routes.video_studio import _clip_dict
+    from lds_video import video_test_studio as vts
     with app.app_context():
         cid = _clip(app)
         t0 = datetime(2026, 9, 2, 22, 0, 0)
@@ -551,8 +553,8 @@ def test_a_finished_clip_records_how_long_the_queue_spent_on_it(app, monkeypatch
 def test_a_failed_clip_keeps_how_long_it_ran_before_dying(app):
     from datetime import datetime, timedelta
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import video_test_studio as vts
     with app.app_context():
         cid = _clip(app)
         t0 = datetime(2026, 9, 2, 22, 0, 0)
@@ -565,8 +567,8 @@ def test_a_failed_clip_keeps_how_long_it_ran_before_dying(app):
 def test_render_time_is_null_whenever_the_queue_cannot_say(app, monkeypatch):
     from datetime import datetime, timedelta
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr(vts, '_bring_clip_home', lambda fn: None)
     t0 = datetime(2026, 9, 2, 22, 0, 0)
     cases = {
@@ -592,8 +594,8 @@ def test_a_job_the_queue_cancelled_gets_no_render_time(app, monkeypatch):
     # measures the outage; the card must say nothing rather than "6 h".
     from datetime import datetime, timedelta
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import video_test_studio as vts
     with app.app_context():
         cid = _clip(app)
         t0 = datetime(2026, 9, 2, 22, 0, 0)
@@ -606,8 +608,8 @@ def test_a_job_the_queue_cancelled_gets_no_render_time(app, monkeypatch):
 def test_a_job_settled_within_the_same_tick_measures_zero_not_nothing(app, monkeypatch):
     from datetime import datetime
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import video_test_studio as vts
     with app.app_context():
         cid = _clip(app)
         t0 = datetime(2026, 9, 2, 22, 0, 0)
@@ -626,8 +628,9 @@ def test_the_render_time_survives_the_queues_real_completion_path(app, monkeypat
     import time
     from app import job_queue
     from app.extensions import db
-    from app.models import ImageGenerationQueue, VideoTestClip
-    from app.services import video_test_studio as vts
+    from app.models import ImageGenerationQueue
+    from lds_video.models import VideoTestClip
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr(job_queue, '_drop_staged_inputs', lambda md: None)
     monkeypatch.setattr(vts, '_bring_clip_home', lambda fn: None)
     with app.app_context():

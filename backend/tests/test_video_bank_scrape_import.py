@@ -29,7 +29,10 @@ from unittest.mock import patch
 import pytest
 
 from app.config import LOCAL_USER
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_bank_service as svc
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- fixtures of bytes ---------------------------------------------------------
@@ -102,7 +105,7 @@ def _files(bank):
 
 
 def _sources(bank_id):
-    from app.models import VideoSource
+    from lds_video.models import VideoSource
     return VideoSource.query.filter_by(bank_id=bank_id).all()
 
 
@@ -322,7 +325,7 @@ def _own_folder_bank(tmp_path, name='Own footage', folder='my_rushes'):
     """A bank pointed at a folder of the USER's own, the way `create_bank` makes
     one — the destination this lane spent a wave refusing."""
     from app.extensions import db
-    from app.models import VideoBank
+    from lds_video.models import VideoBank
     rushes = tmp_path / folder
     rushes.mkdir(exist_ok=True)
     bank = VideoBank(user_id=LOCAL_USER, name=name, source_path=str(rushes))
@@ -460,7 +463,7 @@ def test_a_bank_the_user_pointed_at_a_dataset_folder_is_refused_too(app, tmp_pat
     with app.app_context():
         from app import config as cfg
         from app.extensions import db
-        from app.models import VideoBank
+        from lds_video.models import VideoBank
         inside = cfg.dataset_images_root() / '42'
         inside.mkdir(parents=True, exist_ok=True)
         bank = VideoBank(user_id=LOCAL_USER, name='On a dataset',

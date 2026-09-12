@@ -24,9 +24,12 @@ import pytest
 from app.extensions import db
 
 from app.config import LOCAL_USER
-from app.models import VideoClip, VideoDataset, VideoSource
-from app.services import shot_probs
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoClip, VideoDataset, VideoSource
+from lds_video import shot_probs
+from lds_video import video_bank_service as svc
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _promote(clip):
@@ -63,7 +66,7 @@ def _vector(peaks, n=100):
 def _detect(single, every=None, fps=25.0):
     """The detect seam, answering with a vector instead of a model."""
     def run(path, fps_native=None, **kwargs):
-        from app.services import shot_detect as sd
+        from lds_video import shot_detect as sd
         probs = {'single': single, 'all': every}
         return {'clips': sd.clips_from_probs(probs, fps_native=fps_native or fps,
                                              threshold=kwargs.get('threshold'),

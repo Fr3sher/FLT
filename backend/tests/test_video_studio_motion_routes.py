@@ -8,10 +8,13 @@ enrichment button spent a day rewriting prompts with no idea what picture they
 animate, and how ✨ Auto wrote the same beat for a 1 s clip and a 15 s one.
 """
 
+import pytest
+pytestmark = pytest.mark.plugins('video')
+
 
 def test_the_panel_s_pieces_reach_the_writer(client, monkeypatch):
     """image + instruction + model + the clip length, from ✨ Auto."""
-    from app.services import video_motion_prompt as vmp
+    from lds_video import video_motion_prompt as vmp
     seen = {}
 
     def fake(image_name, instruction=None, model=None, seconds=None, shots=1):
@@ -35,7 +38,7 @@ def test_the_panel_s_pieces_reach_the_writer(client, monkeypatch):
 
 def test_the_enrichment_is_told_which_frame_the_clip_starts_from(client, monkeypatch):
     """Without the frame, "make her look out of the window" invents a window."""
-    from app.services import video_motion_prompt as vmp
+    from lds_video import video_motion_prompt as vmp
     seen = {}
 
     def fake(prompt, image=None, model=None, seconds=None, shots=1):
@@ -63,8 +66,8 @@ def test_enrich_at_launch_writes_from_what_the_launch_carries(client, monkeypatc
     clip. And the frame is named to the writer only when it will be animated:
     a text-to-video launch that still carries a stale staged name must not
     produce a prompt that references <Picture 1>."""
-    from app.services import video_motion_prompt as vmp
-    from app.services import video_test_studio as vts
+    from lds_video import video_motion_prompt as vmp
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
     monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
@@ -100,7 +103,7 @@ def test_enrich_at_launch_writes_from_what_the_launch_carries(client, monkeypatc
 
 
 def test_a_refusal_arrives_as_a_sentence_not_a_stack_trace(client, monkeypatch):
-    from app.services import video_motion_prompt as vmp
+    from lds_video import video_motion_prompt as vmp
 
     def refuse(*a, **kw):
         raise ValueError('no local model to write it with — Ollama: not running')
@@ -114,7 +117,7 @@ def test_a_refusal_arrives_as_a_sentence_not_a_stack_trace(client, monkeypatch):
 
 
 def test_the_model_window_lists_the_providers_own_and_saves_a_choice(client, monkeypatch):
-    from app.services import video_motion_prompt as vmp
+    from lds_video import video_motion_prompt as vmp
     monkeypatch.setattr(vmp, 'model_choices',
                         lambda: {'provider': 'ollama', 'label': 'Ollama',
                                  'reachable': True, 'current': '',
@@ -138,7 +141,7 @@ def test_the_fence_and_a_transport_failure_arrive_as_409s_not_as_a_bare_500(
     plain transport failure is a 409 sentence without the code. Measured
     before the fix: the routes caught ValueError/TypeError only, so the fence
     — a RuntimeError — fell through as a 500 with nothing to show."""
-    from app.services import video_motion_prompt as vmp
+    from lds_video import video_motion_prompt as vmp
     from app.services.vision_lmstudio import LocalLmStudioFenceError
     from app.services.vision_ollama import LocalOllamaFenceError
 
@@ -175,8 +178,8 @@ def test_a_launch_whose_enrichment_failed_still_launches_and_says_so(
     the enrichment must not refuse the launch — but the answer carries why it
     ran the un-enriched prompt, so the panel can say it instead of a clip
     that silently ignored the checkbox."""
-    from app.services import video_motion_prompt as vmp
-    from app.services import video_test_studio as vts
+    from lds_video import video_motion_prompt as vmp
+    from lds_video import video_test_studio as vts
     from app.services.vision_ollama import LocalOllamaFenceError
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
@@ -222,7 +225,7 @@ def test_the_enhancement_says_when_it_had_nothing_to_add(client, monkeypatch):
     exactly like a request that worked. The flag is what lets the panel tell
     the two apart. (An UNUSABLE answer is not this case: the service raises
     and the route says so — the test below.)"""
-    from app.services import video_motion_prompt as vmp
+    from lds_video import video_motion_prompt as vmp
     monkeypatch.setattr(vmp, 'enhance', lambda prompt, **kw: prompt)
     r = client.post('/api/video-studio/motion/enhance', json={'prompt': '  she turns  '})
     assert r.status_code == 200
@@ -237,8 +240,8 @@ def test_the_enhancement_says_when_it_had_nothing_to_add(client, monkeypatch):
 def test_the_shot_count_reaches_the_writer_on_all_three_gestures(client, monkeypatch):
     """`shots` is in every body the panel sends; a route that read it on two of
     the three gestures would cut a 3-shot ✨ Auto into one shot at launch."""
-    from app.services import video_motion_prompt as vmp
-    from app.services import video_test_studio as vts
+    from lds_video import video_motion_prompt as vmp
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
     monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
@@ -267,9 +270,9 @@ def test_the_three_writers_run_inside_the_gpu_exclusive_vision_window(client, mo
     `gpu_exclusive` anywhere in the route module."""
     import contextlib
 
-    from app.routes import video_studio as vsr
-    from app.services import video_motion_prompt as vmp
-    from app.services import video_test_studio as vts
+    from lds_video.routes import video_studio as vsr
+    from lds_video import video_motion_prompt as vmp
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
     monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
@@ -317,8 +320,8 @@ def test_a_queued_clip_refuses_the_buttons_with_its_reason_and_lets_the_launch_t
     already rendering is exactly that): the ✨ buttons answer 503 with the
     reason in `detail` — the bare "GPU busy" alone does not say what to wait
     for — and the launch still launches, un-enriched and saying why."""
-    from app.services import video_motion_prompt as vmp
-    from app.services import video_test_studio as vts
+    from lds_video import video_motion_prompt as vmp
+    from lds_video import video_test_studio as vts
     from app.job_queue import queue_manager
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
@@ -357,8 +360,8 @@ def test_an_unusable_enrichment_is_a_sentence_on_the_button_and_a_reason_at_laun
     """The service refuses an unusable answer in words. The button shows the
     sentence (a 409, the field untouched); the launch still launches with the
     typed prompt and carries the same words as the reason."""
-    from app.services import video_motion_prompt as vmp
-    from app.services import video_test_studio as vts
+    from lds_video import video_motion_prompt as vmp
+    from lds_video import video_test_studio as vts
 
     def unusable(*a, **kw):
         raise RuntimeError('The model answered nothing usable as a prompt — your text '
@@ -390,8 +393,8 @@ def test_a_launch_heads_an_image_to_video_prompt_once_and_unnames_the_picture_in
     ✨, or reused from a clip — is never headed twice. And a text-to-video
     launch is the mirror: a prompt written for a start frame, then launched
     without one, would name a picture the encoder is not given."""
-    from app.services import video_motion_prompt as vmp
-    from app.services import video_test_studio as vts
+    from lds_video import video_motion_prompt as vmp
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
     monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
@@ -434,8 +437,8 @@ def test_a_typed_prompt_in_the_headers_english_launches_whole_and_nothing_launch
     emptiness check sitting before the rewrite; an image-to-video one was
     not given the official header at all. The header is known by its shape
     now, and the text is judged again after the rewrite."""
-    from app.services import video_motion_prompt as vmp
-    from app.services import video_test_studio as vts
+    from lds_video import video_motion_prompt as vmp
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
     monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
@@ -513,8 +516,8 @@ def test_a_typed_prompt_in_the_headers_english_launches_whole_and_nothing_launch
 # wrong: one window for the whole strip, and one bad frame not costing the rest.
 
 def test_one_window_writes_for_the_whole_strip(client, monkeypatch):
-    from app.services import video_motion_prompt as vmp
-    from app.routes import video_studio as vs
+    from lds_video import video_motion_prompt as vmp
+    from lds_video.routes import video_studio as vs
     windows = []
 
     class _W:
@@ -545,7 +548,7 @@ def test_a_typed_prompt_enriches_every_frame_instead_of_proposing(client, monkey
     """The panel's own rule, applied N times: typed motion → enrich each frame
     from it; nothing typed → propose from the frame alone. Getting this backwards
     would silently throw away what the user wrote."""
-    from app.services import video_motion_prompt as vmp
+    from lds_video import video_motion_prompt as vmp
     calls = []
     monkeypatch.setattr(vmp, 'enhance',
                         lambda text, **kw: (calls.append(('enhance', text, kw.get('image'))) or 'rich'))
@@ -561,7 +564,7 @@ def test_a_typed_prompt_enriches_every_frame_instead_of_proposing(client, monkey
 
 
 def test_one_unwritable_frame_does_not_cost_the_others(client, monkeypatch):
-    from app.services import video_motion_prompt as vmp
+    from lds_video import video_motion_prompt as vmp
 
     def flaky(name, **kw):
         if name == 'bad.png':
@@ -583,7 +586,7 @@ def test_one_unwritable_frame_does_not_cost_the_others(client, monkeypatch):
 def test_an_empty_or_oversized_strip_is_refused_before_the_gpu(client):
     r = client.post('/api/video-studio/motion/write-batch', json={'images': []})
     assert r.status_code == 400
-    from app.routes.video_studio import MAX_WRITE_BATCH
+    from lds_video.routes.video_studio import MAX_WRITE_BATCH
     r = client.post('/api/video-studio/motion/write-batch',
                     json={'images': [f'{i}.png' for i in range(MAX_WRITE_BATCH + 1)]})
     assert r.status_code == 400

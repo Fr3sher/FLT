@@ -8,7 +8,10 @@ refusal when the nodes are absent.
 """
 import pytest
 
-from app.services import video_test_studio as vts
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_test_studio as vts
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def test_the_graph_is_the_generators_own_recipe():
@@ -49,7 +52,7 @@ def test_the_rate_follows_the_source_and_the_multiplier():
 
 def _clip(app, **kw):
     from app.extensions import db
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     with app.app_context():
         row = VideoTestClip(**{'status': 'done', 'filename': 'clip.mp4',
                                'mode': 'i2v', 'fps': 24, 'frames': 56,
@@ -64,7 +67,7 @@ def test_smoothing_makes_a_NEW_clip_and_leaves_the_original_alone(app, tmp_path,
     end that. The new row carries the source's settings, twice its rate, and a
     pointer back."""
     from app.extensions import db
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'\x00' * 8)
     monkeypatch.setattr(vts, 'registered_classes',

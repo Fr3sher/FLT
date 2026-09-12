@@ -12,11 +12,15 @@ Three facts this pins, each measured before it was written:
 import json
 from pathlib import Path
 
-from app.services import video_caption as vc
-from app.services import video_caption_worker as vcw
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_caption as vc
+from lds_video import video_caption_worker as vcw
 
-INFER = Path(__file__).resolve().parents[1] / 'infer' / 'video_caption_infer.py'
-WORKER = Path(__file__).resolve().parents[1] / 'app' / 'services' / 'video_caption_worker.py'
+import pytest
+pytestmark = pytest.mark.plugins('video')
+
+INFER = Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'infer' / 'video_caption_infer.py'
+WORKER = Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'lds_video' / 'video_caption_worker.py'
 
 PARA = 'A woman in a red dress walks to the window and turns into the light.'
 TAILED = (PARA + '\n---\nSubject: a woman in a red dress\nMotion: walks to the window and turns\n'
@@ -49,7 +53,7 @@ def test_both_prompts_ask_for_the_labelled_tail_after_the_paragraph():
 
 def _bank_with_one_clip(app):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -81,7 +85,7 @@ class _FakeWorker:
 
 
 def test_run_captions_stores_the_prose_the_fields_and_the_measured_tokens(app, monkeypatch):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     monkeypatch.setattr(vc, '_write_caption_frames',
                         lambda src, times, dest, stem: [f'{dest}/{stem}_{i}.jpg'
                                                         for i, _ in enumerate(times)])
@@ -106,7 +110,7 @@ def test_run_captions_stores_the_prose_the_fields_and_the_measured_tokens(app, m
 
 
 def test_a_caption_without_a_tail_stores_no_fields_and_no_invented_count(app, monkeypatch):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
 
     class _Bare(_FakeWorker):
         def __init__(self, **kw):
@@ -143,7 +147,7 @@ def test_tokenizer_discovery_reads_the_declared_caches_and_returns_none_when_abs
 # --- the sidecar plan -----------------------------------------------------------------
 
 def test_plan_sidecar_serves_the_paragraph_when_it_fits_the_window():
-    from app.services.video_bank_service import (
+    from lds_video.video_bank_service import (
         SIDECAR_TOKEN_RESERVE, plan_sidecar, trigger_token_bound,
     )
     plan = plan_sidecar('mychar', 'a woman walks in soft light', None,
@@ -157,7 +161,7 @@ def test_plan_sidecar_serves_the_paragraph_when_it_fits_the_window():
 
 
 def test_plan_sidecar_serves_the_short_form_where_the_encoder_would_cut():
-    from app.services.video_bank_service import plan_sidecar
+    from lds_video.video_bank_service import plan_sidecar
     plan = plan_sidecar('mychar', 'a long paragraph the encoder would truncate', None,
                         fields_json=FIELDS, caption_tokens=500, token_budget=512)
     assert plan['served_short'] is True
@@ -172,7 +176,7 @@ def test_plan_sidecar_serves_the_short_form_where_the_encoder_would_cut():
 
 
 def test_plan_sidecar_never_cuts_and_never_invents_a_window():
-    from app.services.video_bank_service import plan_sidecar
+    from lds_video.video_bank_service import plan_sidecar
     # No fields: the paragraph, whole — and counted over, so the preflight says so.
     long = ' '.join(['word'] * 400)
     plan = plan_sidecar('', long, None, fields_json=None, caption_tokens=None,
@@ -194,7 +198,7 @@ def test_the_estimate_holds_against_what_refuted_it():
     but held 0/984 real + 0/1600 synthetic against the 512 window (the ratio
     falls with length); CJK was its structural blind spot: a ~540-token ZH
     caption estimated at 42 and cut in silence."""
-    from app.services.video_bank_service import TOKENS_PER_WORD, estimate_tokens
+    from lds_video.video_bank_service import TOKENS_PER_WORD, estimate_tokens
     assert TOKENS_PER_WORD >= 1.36          # the measured mean floor
     assert estimate_tokens('one two three') == 5
     assert estimate_tokens('') == 0 and estimate_tokens(None) == 0
@@ -211,7 +215,7 @@ def test_the_trigger_is_bounded_at_the_byte_ceiling_not_guessed_from_words():
     strings triggers are made of. One token per input byte is the ceiling
     sentencepiece cannot exceed, so the bound is provable, and its overshoot
     on a friendly trigger only tightens the budget check."""
-    from app.services.video_bank_service import plan_sidecar, trigger_token_bound
+    from lds_video.video_bank_service import plan_sidecar, trigger_token_bound
     assert trigger_token_bound('zylphraxian_cinematic_style_v3') >= 16
     assert trigger_token_bound('') == 0 and trigger_token_bound(None) == 0
     # The refuter's breach, replayed against the fix: a 45-byte invented
@@ -225,7 +229,7 @@ def test_the_trigger_is_bounded_at_the_byte_ceiling_not_guessed_from_words():
 # --- the published window, and only the published one --------------------------------
 
 def test_every_wan_profile_carries_the_published_umt5_window_and_nobody_invents_one():
-    from app.services import video_targets as vt
+    from lds_video import video_targets as vt
     for key in ('wan21', 'wan21_i2v', 'wan22_14b', 'wan22_14b_i2v', 'wan22_ti2v5b'):
         assert vt.get(key).get('caption_token_budget') == 512, key
     for key in ('ltx2', 'ltx23', 'minimax_h3', 'minimax_h3_ref2va', 'generic'):
@@ -243,8 +247,12 @@ def test_the_child_counts_with_sentencepiece_first_and_on_the_prose():
     # sentencepiece BEFORE transformers — 5.3 cannot rebuild this tokenizer's
     # precompiled normalizer from the .model file (measured 2026-09-01).
     assert code.index('import sentencepiece as spm') < code.index('from transformers import AutoTokenizer')
-    # Counted on the PROSE: the parent's stdlib-only splitter, imported by path.
-    assert "'caption_fields.py'" in code
+    # Counted on the PROSE: the worker packages the parent's stdlib-only helper.
+    import ast
+    assert 'import _caption_fields' in code
+    child_fields = INFER.with_name('_caption_fields.py').read_text(encoding='utf-8')
+    parent_fields = WORKER.with_name('caption_fields.py').read_text(encoding='utf-8')
+    assert ast.dump(ast.parse(child_fields)) == ast.dump(ast.parse(parent_fields))
     assert 'split_caption_fields(caption)[0]' in code
     assert "'tokens': tokens" in code
     assert "'token_counter': token_counter" in code
@@ -263,7 +271,7 @@ def test_a_human_edit_sheds_every_machine_derived_column(app, monkeypatch):
     same honesty owes the fields and the token count. Stale ones would serve
     the OLD caption's facets — and, past the budget, its short form INSTEAD of
     the human's words in the exported .txt."""
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     monkeypatch.setattr(vc, '_write_caption_frames',
                         lambda src, times, dest, stem: [f'{dest}/{stem}_0.jpg'])
     monkeypatch.setattr(vc, '_caption_frames', lambda paths, prompt, **kw: TAILED)
@@ -289,7 +297,7 @@ def test_a_tail_cut_by_the_generation_cap_never_becomes_the_caption():
     `mychar, a woman in a red dre.` and the paragraph was silently thrown
     away. The floor refuses the stump: the paragraph ships WHOLE, stays
     counted over the window, and the plan says the tail was incomplete."""
-    from app.services.video_bank_service import plan_sidecar
+    from lds_video.video_bank_service import plan_sidecar
     stump = json.dumps({'subject': 'a woman in a red dre', 'motion': None,
                         'setting': None, 'style': None, 'short': None})
     long_para = ' '.join(['word'] * 400)
@@ -305,7 +313,7 @@ def test_a_complete_but_skeletal_tail_is_refused_too():
     """Four labels of one word each pass the completeness check and still
     cannot stand in for a 400-word paragraph — the length floor (twenty
     words, what the prompt asks of `short` alone) refuses them."""
-    from app.services.video_bank_service import plan_sidecar
+    from lds_video.video_bank_service import plan_sidecar
     thin = json.dumps({'subject': 'woman', 'motion': 'walks', 'setting': 'room',
                        'style': 'soft', 'short': 'x'})
     plan = plan_sidecar('', ' '.join(['word'] * 400), None, fields_json=thin,

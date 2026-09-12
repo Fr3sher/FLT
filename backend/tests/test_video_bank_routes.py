@@ -23,12 +23,15 @@ import os
 
 import pytest
 
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_bank_service as svc
 
 # The video-extra gate answers for the MACHINE, so without this these route
 # tests pass where PyAV/ffmpeg are installed and 503 where they are not.
 # Imported for its autouse effect; see _video_extra.py for why not importorskip.
 from _video_extra import detect_source_stub, video_extra_ready  # noqa: F401
+
+pytestmark = pytest.mark.plugins('video')
 
 
 @pytest.fixture()
@@ -294,7 +297,7 @@ def test_promoting_without_ffmpeg_is_a_503_before_anything_is_created(
     """503, not 400: nothing about the request is wrong, a tool is missing. And it
     has to land BEFORE the dataset row, or the user is left with an empty folder to
     clean up after a refusal."""
-    from app.models import VideoDataset
+    from lds_video.models import VideoDataset
     bank_id = _ready_bank(client, tmp_path)
     monkeypatch.setattr(svc, '_ffmpeg_or_raise', lambda: (_ for _ in ()).throw(
         RuntimeError('ffmpeg is required to cut clips and was not found')))
@@ -621,7 +624,7 @@ def test_a_shot_promoted_into_ANOTHER_dataset_keeps_its_mark_on_a_rowid_collisio
     shot — the second clause of the un-promote filter is the only thing that
     stops it, and with it removed by hand the whole targeted suite stayed green."""
     from app.extensions import db
-    from app.models import VideoClip, VideoDatasetClip
+    from lds_video.models import VideoClip, VideoDatasetClip
     bank_id, ds_a = _promote(client, tmp_path)
     bank_b = _ready_bank(client, tmp_path / 'second')
     ds_b = client.post(f'/api/video-bank/{bank_b}/promote',
@@ -706,7 +709,7 @@ def test_the_measure_pass_launches_and_reports_busy_like_every_other(
         client, tmp_path, seams, monkeypatch):
     """Same envelope as probe/detect/thumbs: 202 to launch. A user must not sense
     a seam between wave-1 passes and wave-2 ones."""
-    from app.services import video_metrics_scan
+    from lds_video import video_metrics_scan
     monkeypatch.setattr(video_metrics_scan, '_read_clip_frames',
                         lambda path, start, end, fps: [
                             {'luma': 0.5, 'sharp': 100.0, 'motion': 0.003}] * 10)
@@ -739,7 +742,7 @@ def test_clip_listings_carry_scores_and_flags(client, tmp_path, seams, app):
     bank_id = _ready_bank(client, tmp_path)
     import json as _json
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         clip = VideoClip.query.filter_by(bank_id=bank_id).first()
         clip.metrics_json = _json.dumps({
@@ -777,7 +780,7 @@ def test_the_dry_run_endpoint_counts_per_rule_before_anything_is_cut(
     bank_id = _ready_bank(client, tmp_path)
     import json as _json
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         clip = VideoClip.query.filter_by(bank_id=bank_id).first()
         clip.metrics_json = _json.dumps({
@@ -847,7 +850,7 @@ def test_adjusting_the_bounds_forgets_the_thumbnail_and_the_measurements(
     for the thumbnails again on its own."""
     import json as _json
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     bank_id = _cut_bank(client, tmp_path)
     clip = _clips(client, bank_id)[0]
     assert clip['thumb_state'] == 'ok'

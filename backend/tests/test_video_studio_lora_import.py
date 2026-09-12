@@ -9,14 +9,20 @@ import os
 
 import pytest
 
-from app.services import video_test_studio as vts
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_test_studio as vts
+
+pytestmark = pytest.mark.plugins('video')
 
 
 @pytest.fixture
 def loras_dir(tmp_path, monkeypatch):
+    from app.services import video_test_studio as h3_host
     dest = tmp_path / 'loras' / 'h3' / 'lds'
     dest.mkdir(parents=True)
-    monkeypatch.setattr(vts, '_loras_write_dir', lambda: str(dest))
+    # import_external_lora is the shared H3 SDK adapter; its implementation
+    # still resolves this host primitive, not the plugin's compatibility alias.
+    monkeypatch.setattr(h3_host, '_loras_write_dir', lambda: str(dest))
     return dest
 
 

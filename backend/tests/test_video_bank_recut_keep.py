@@ -10,8 +10,12 @@ version"), so a surviving shot has byte-identical bounds and everything
 measured about that span is still true of it.
 """
 from app.extensions import db
-from app.models import VideoBank, VideoClip, VideoSource
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoBank, VideoClip, VideoSource
+from lds_video import video_bank_service as svc
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 LOCAL_USER = 'local'
 
@@ -89,7 +93,7 @@ def test_a_promoted_clip_is_never_given_a_twin(app):
     """Promoted clips survive every drop; re-inserting their span used to add a
     duplicate row for the same footage. The skip set is measured against what
     the file HOLDS, not against what was kept."""
-    from app.models import VideoDataset
+    from lds_video.models import VideoDataset
     bank_id, src_id = _bank_with_shots(app, [(0.0, 4.0)])
     with app.app_context():
         ds = VideoDataset(user_id=LOCAL_USER, name='d', target_profile='wan22_14b',

@@ -30,8 +30,11 @@ import os
 
 import pytest
 
-from app.services import video_targets as vt
-from app.services import video_training as vtrain
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_targets as vt
+from lds_video import video_training as vtrain
+
+pytestmark = pytest.mark.plugins('video')
 
 
 class _VideoDS:

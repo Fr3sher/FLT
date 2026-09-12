@@ -9,13 +9,16 @@ import os
 
 import pytest
 
-from app.services import neural_render as nr
-from app.services import video_test_studio as vts
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import neural_render as nr
+from lds_video import video_test_studio as vts
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _clip(app, **kw):
     from app.extensions import db
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     with app.app_context():
         row = VideoTestClip(**{'status': 'done', 'filename': 'clip.mp4', 'mode': 'i2v',
                                'fps': 24, 'frames': 56, 'prompt': 'she turns',
@@ -37,7 +40,7 @@ def _join_thread(src_id):
 
 
 def test_the_render_is_a_new_row_pointing_at_its_source(app, tmp_path, monkeypatch):
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'ORIGINAL')
     _ready(monkeypatch)
@@ -71,7 +74,7 @@ def test_the_render_is_a_new_row_pointing_at_its_source(app, tmp_path, monkeypat
 
 
 def test_a_failed_render_lands_as_failed_with_the_childs_sentence(app, tmp_path, monkeypatch):
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'ORIGINAL')
     _ready(monkeypatch)
@@ -169,7 +172,7 @@ def test_a_render_remembers_its_dials_and_the_mode_it_used(app, client, tmp_path
     """The card can say seed and steps; for a render the dials are what
     differed, so they travel with the row — as asked, then as used."""
     import json
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'ORIGINAL')
     _ready(monkeypatch)
@@ -195,7 +198,7 @@ def test_a_render_remembers_its_dials_and_the_mode_it_used(app, client, tmp_path
 def test_a_neural_render_measures_its_own_time_done_or_failed(app, tmp_path, monkeypatch):
     """This lane never goes through the queue, so nothing stamps it: the thread
     times itself, on both outcomes, and the card can say how long the pass took."""
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'ORIGINAL')
     _ready(monkeypatch)

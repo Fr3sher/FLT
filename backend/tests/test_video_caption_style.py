@@ -29,12 +29,16 @@ model: two styles do not write comparable captions either, and mixing them acros
 one bank is precisely what making this configurable invites.
 """
 
-from app.services import video_caption as vc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_caption as vc
 
 # The video-extra gate answers for the MACHINE, so without this these route
 # tests pass where PyAV/ffmpeg are installed and 503 where they are not.
 # Imported for its autouse effect; see _video_extra.py for why not importorskip.
 from _video_extra import video_extra_ready  # noqa: F401
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- the styles themselves ---------------------------------------------------------
@@ -171,7 +175,7 @@ def test_the_route_takes_a_style_for_one_run_without_changing_the_setting(
         app, client, tmp_path, monkeypatch):
     """A per-run choice next to the button, with the config key as its default.
     Captioning one bank plainly must not silently re-point every other bank."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     monkeypatch.setattr(svc, '_probe_file', lambda _p: {
         'duration_s': 60.0, 'fps_native': 30.0, 'width': 640, 'height': 480,
         'codec': 'h264', 'probe_state': 'ok', 'file_size': 4096})
@@ -191,7 +195,7 @@ def test_the_route_takes_a_style_for_one_run_without_changing_the_setting(
 
 def test_the_payload_offers_the_styles_and_says_which_one_is_current(
         app, client, tmp_path, monkeypatch):
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     monkeypatch.setattr(svc, '_probe_file', lambda _p: {
         'duration_s': 60.0, 'fps_native': 30.0, 'width': 640, 'height': 480,
         'codec': 'h264', 'probe_state': 'ok', 'file_size': 4096})
@@ -219,7 +223,7 @@ def _fake_seams(monkeypatch):
 
 def _bank_with_clips(app, n):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -236,14 +240,14 @@ def _bank_with_clips(app, n):
 
 
 def _clip_ids(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.id for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]
 
 
 def _styles(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.caption_style for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]
