@@ -60,3 +60,32 @@ def test_shared_blueprints_can_register_on_another_app_without_retaining_its_sta
     url = '/api/plugins/sample.feature/work'
     assert app.test_client().get(url).status_code == 409
     assert second_app.test_client().get(url).status_code == 200
+
+
+@pytest.mark.parametrize(('decorator', 'url', 'expected'), [
+    ('before_app_request', '/api/plugins/sample.feature/work', 409),
+    ('before_app_request', '/api/core', 200),
+    ('url_value_preprocessor', '/api/plugins/sample.feature/work', 409),
+    ('app_url_value_preprocessor', '/api/plugins/sample.feature/work', 409),
+    ('app_url_value_preprocessor', '/api/core', 200),
+])
+def test_off_plugin_cannot_run_early_or_global_blueprint_callbacks(host, decorator, url, expected):
+    app, csrf, root = host
+    code = ROUTES + f'''
+@first.{decorator}
+def early(*args):
+    current_app.extensions['early'] = current_app.extensions.get('early', 0) + 1
+    return {{'intercepted': True}}, 202
+'''
+    write_plugin(root / 'plugins', 'sample.feature', package='lds_registration_admission', code=code)
+    app.add_url_rule('/api/core', 'core', lambda: {'core': True})
+    load_plugins(app, csrf)
+    client = app.test_client()
+    client.get(url)
+    assert app.extensions['early'] == 1
+    cfg.save_config({'plugins': {'enabled': {'sample.feature': False}}})
+    response = client.get(url)
+    assert response.status_code == expected
+    assert app.extensions['early'] == 1
+    if expected == 200:
+        assert response.get_json() == {'core': True}
