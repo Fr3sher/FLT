@@ -301,7 +301,7 @@ function CloudLaunchDialog({
               This run requires an <code>HF_CLOUD_TOKEN</code> that can read the Krea 2 base it
               trains from ({denseBase}) and write the delivery repository. A tightly scoped fine-grained token is recommended. A global
               write token is also accepted with a warning. Configure it in{' '}
-              <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">Settings ▸ Local tools</SettingsLink>
+              <SettingsLink pluginId="cloud_training" focus="HF_CLOUD_TOKEN" tone="warning">Cloud training settings</SettingsLink>
               {' '}before renting the GPU.
             </p>
           )
@@ -311,7 +311,7 @@ function CloudLaunchDialog({
           <div role="alert"
             className="rounded-lg border border-red-400/45 bg-red-500/10 px-3 py-2 text-red-100 text-[0.75rem] leading-relaxed">
             <span className="font-semibold">Hugging Face delivery blocked.</span>{' '}{hfTokenIssue}{' '}
-            Fix <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">HF_CLOUD_TOKEN in Settings ▸ Local tools</SettingsLink>,
+            Fix <SettingsLink pluginId="cloud_training" focus="HF_CLOUD_TOKEN" tone="warning">HF_CLOUD_TOKEN in Cloud training settings</SettingsLink>,
             then reload the offers. Launch stays disabled to prevent renting a GPU without a delivery path.
           </div>
         )}
@@ -343,7 +343,7 @@ function CloudLaunchDialog({
         {!loading && !error && tiers.length === 0 && (
           <p className="m-0 text-content-muted text-sm">
             No GPU available under ${data?.max_price_per_hour}/h right now. Try again shortly, or{' '}
-            <SettingsLink section="training" focus="cloud-max-price-per-hour">
+            <SettingsLink pluginId="cloud_training" focus="cloud-max-price-per-hour">
               increase the price cap in Settings
             </SettingsLink>.
           </p>

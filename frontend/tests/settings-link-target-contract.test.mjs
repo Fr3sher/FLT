@@ -40,14 +40,31 @@ const walk = (dirUrl) => {
   }
   return out
 }
-const SOURCES = walk(new URL('../src/', import.meta.url))
+const BUNDLED = new URL('../../bundled/', import.meta.url)
+const SOURCES = [
+  ...walk(new URL('../src/', import.meta.url)),
+  ...readdirSync(BUNDLED, { withFileTypes: true }).filter(entry => entry.isDirectory())
+    .flatMap(entry => walk(new URL(`${entry.name}/frontend/`, BUNDLED))),
+]
+// Concrete settings components behind the public owners used by targeted links.
+const PLUGIN_SETTINGS = {
+  cloud_training: ['../bundled/cloud_training/frontend/settings/CloudTrainingGroup.jsx'],
+  image_upscale: ['../bundled/image_upscale/frontend/panels/KleinImproveSettings.jsx',
+    '../bundled/image_upscale/frontend/panels/ImproveFinishCard.jsx'],
+  scrape: ['../bundled/scrape/frontend/panels/ScrapeSettingsGroup.jsx'],
+}
 
 // DOM ids the Settings sections actually render: literal id="…" plus the secret
 // field keys (SecretField renders id={f.key}, so the config key IS the DOM id).
-const settingsDomIds = () => {
+const settingsDomIds = (owner = null) => {
   const dir = new URL('../src/components/settings/', import.meta.url)
   let src = ''
-  for (const f of readdirSync(dir)) if (f.endsWith('.jsx')) src += read(`src/components/settings/${f}`) + '\n'
+  if (owner) {
+    assert.ok(PLUGIN_SETTINGS[owner], `Settings source inventory missing for ${owner}`)
+    src = PLUGIN_SETTINGS[owner].map(read).join('\n')
+  } else {
+    for (const f of readdirSync(dir)) if (f.endsWith('.jsx')) src += read(`src/components/settings/${f}`) + '\n'
+  }
   const ids = new Set()
   for (const m of src.matchAll(/id="([^"]+)"/g)) ids.add(m[1])
   for (const m of src.matchAll(/\bkey:\s*'([^']+)'/g)) ids.add(m[1])
@@ -67,7 +84,7 @@ const usages = () => {
   const out = []
   for (const { path, src } of SOURCES) {
     for (const m of src.matchAll(/<SettingsLink\b([\s\S]*?)>/g)) {
-      out.push({ file: path, tag: m[1], section: attr(m[1], 'section'), focus: attr(m[1], 'focus') })
+      out.push({ file: path, tag: m[1], section: attr(m[1], 'section'), plugin: attr(m[1], 'pluginId'), focus: attr(m[1], 'focus') })
     }
   }
   return out
@@ -77,6 +94,14 @@ const usages = () => {
    "no single field answers this label", not "nobody got round to it". */
 const WITHOUT_TARGET = [
   {
+    file: 'ImprovePreparationLinks.jsx', section: 'engine.plugin',
+    reason: 'Preparing this engine may need both downloads and options; its whole plugin settings page owns that installation flow.',
+  },
+  {
+    file: 'SetupPage.jsx', section: 's.plugin',
+    reason: 'Each readiness item links to the owning plugin preparation page because a recipe can require several downloads and settings.',
+  },
+  {
     file: 'TrainingPanel.jsx',
     section: 'training',
     reason: '"Defaults & cloud limits" names two things in two cards '
@@ -85,7 +110,7 @@ const WITHOUT_TARGET = [
   },
   {
     file: 'VideoCloudLaunchDialog.jsx',
-    section: 'training',
+    section: 'cloud_training',
     reason: 'The link sits under the OFFERS ERROR of the video launch window, and '
       + 'that error has three causes with three different fields (the vast.ai key, '
       + 'the price cap, the fleet limit) — the message names the cause, a single '
@@ -121,8 +146,9 @@ test('every target a SettingsLink uses is a DOM id the Settings really render', 
   for (const u of usages()) {
     if (!u.focus || u.focus.kind !== 'literal') continue
     checked += 1
-    assert.ok(ids.has(u.focus.value),
-      `${u.file}: SettingsLink focus="${u.focus.value}" is not rendered by any settings/*.jsx `
+    const ownerIds = u.plugin?.kind === 'literal' ? settingsDomIds(u.plugin.value) : ids
+    assert.ok(ownerIds.has(u.focus.value),
+      `${u.file}: SettingsLink focus="${u.focus.value}" is not rendered by the linked settings owner `
       + '— a ?focus= that resolves to nothing scrolls nowhere and reports nothing.')
   }
   assert.ok(checked >= 3, `expected several targeted links, found ${checked}`)
@@ -149,19 +175,21 @@ test('the three improve pointers land on the three things they name', () => {
   // did. The third arrived with the preset chain: the panel tunes a preset's
   // strengths in place, and BUILDING that preset (adding, removing,
   // reordering) stays one click away, in the card that owns the list.
-  const note = read('src/components/dataset/KleinImproveNote.jsx')
+  const note = read('../bundled/image_upscale/frontend/panels/KleinImproveNote.jsx')
   const tags = [...note.matchAll(/<SettingsLink\b[\s\S]*?>/g)].map((m) => m[0])
   assert.equal(tags.length, 3,
     'the note must offer the instruction, the strength AND the preset list')
-  for (const tag of tags) assert.match(tag, /section="engines"/)
+  assert.equal(tags.filter(tag => /pluginId="image_upscale"/.test(tag)).length, 2)
+  assert.equal(tags.filter(tag => /section="engines"/.test(tag)).length, 1)
   assert.ok(tags.some((t) => /focus="identity-prompt-klein-improve"/.test(t)))
   assert.ok(tags.some((t) => /focus="klein-improve-strength"/.test(t)))
   assert.ok(tags.some((t) => /focus="klein-generation-lora-presets"/.test(t)))
   // Each target is the thing its label names, not a section that contains it.
   const engines = read('src/components/settings/EnginesSection.jsx')
-  assert.match(engines, /id="klein-improve-strength"/)
-  assert.match(engines, /id="klein-improve-strength"[^>]*>\s*[\s\S]{0,200}?Upscale &amp; improve — strength/)
-  assert.match(engines, /id="identity-prompt-klein-improve"/)
+  const improve = read('../bundled/image_upscale/frontend/panels/KleinImproveSettings.jsx')
+  assert.match(improve, /id="klein-improve-strength"/)
+  assert.match(improve, /id="klein-improve-strength"[^>]*>\s*[\s\S]{0,200}?Upscale &amp; improve — strength/)
+  assert.match(improve, /id="identity-prompt-klein-improve"/)
   // The preset CARD is the half the panel does not do: it is where a row is
   // added, removed or reordered, which is why the chain points at it by id
   // rather than at Engines at large.
@@ -175,10 +203,11 @@ test('a link without a target is one we decided to leave section-wide', () => {
   const allowed = new Map(WITHOUT_TARGET.map((e) => [`${e.file}:${e.section}`, e]))
   for (const u of usages()) {
     if (u.focus) continue
-    assert.ok(u.section, `${u.file}: SettingsLink without a section`)
-    const key = `${u.file}:${u.section.value}`
+    const owner = u.plugin || u.section
+    assert.ok(owner, `${u.file}: SettingsLink without a section or plugin`)
+    const key = `${u.file}:${owner.value}`
     assert.ok(allowed.has(key),
-      `${u.file}: SettingsLink section="${u.section.value}" carries no focus. Give it the DOM `
+      `${u.file}: SettingsLink section="${owner.value}" carries no focus. Give it the DOM `
       + 'id of the field its label promises, or add it to WITHOUT_TARGET here with the reason.')
     assert.ok(allowed.get(key).reason.length > 40, `${key}: reason too thin to be a decision`)
   }
@@ -189,4 +218,13 @@ test('the focus mechanism owns the scroll — no second scroll is added alongsid
   // links makes that path hotter, so the rule is asserted here too.
   const decide = read('src/pages/settingsDeepLink.js')
   assert.match(decide, /if \(hasFocus\) return false/)
+})
+
+
+test('plugin-owned settings links preserve their owning route and field', () => {
+  for (const [plugin, focus] of [['cloud_training', 'cloud-max-price-per-hour'],
+    ['cloud_training', 'HF_CLOUD_TOKEN'], ['image_upscale', 'klein-improve-strength']]) {
+    assert.equal(settingsLinkHref('training', focus, plugin), `#/plugins/${plugin}/settings?focus=${focus}`)
+    assert.ok(settingsDomIds(plugin).has(focus))
+  }
 })

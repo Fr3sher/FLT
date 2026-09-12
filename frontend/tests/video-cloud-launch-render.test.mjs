@@ -16,9 +16,20 @@ import { createElement, renderToStaticMarkup } from './support/mountJsx.mjs'
 
 const { MemoryRouter } = await import('react-router')
 const { default: VideoCloudLaunchDialog } =
-  await import('../src/components/videobank/VideoCloudLaunchDialog.jsx')
+  await import('../../bundled/cloud_training/frontend/video/VideoCloudLaunchDialog.jsx')
 const { default: CloudTierEstimate } =
   await import("../../bundled/cloud_training/frontend/shared/CloudTierEstimate.jsx")
+
+const { configureHostRuntime } = await import('../src/plugins/runtimeHost.jsx')
+const { publishRuntime } = await import('../src/plugins/loadPlugins.js')
+test.beforeEach(t => {
+  const saved = { window: globalThis.window, fetch: globalThis.fetch }
+  t.after(() => Object.assign(globalThis, saved))
+  globalThis.window = {}
+  globalThis.fetch = () => { throw new Error('Render tests must not contact a provider') }
+  configureHostRuntime()
+  publishRuntime()
+})
 
 const DS = { id: 9, target_label: 'Wan 2.2 T2V A14B', frames: 81, clips: 6 }
 const render = (Component, props) => renderToStaticMarkup(

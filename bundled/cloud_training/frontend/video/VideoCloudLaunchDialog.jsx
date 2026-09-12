@@ -85,13 +85,13 @@ export default function VideoCloudLaunchDialog({ ds, steps, cloudStatus, onClose
         {error && (
           <p className="m-0 text-sm text-red-300">
             ⚠ {error}{' '}
-            <SettingsLink section="training" tone="warning">Cloud settings</SettingsLink>
+            <SettingsLink pluginId="cloud_training" tone="warning">Cloud settings</SettingsLink>
           </p>
         )}
         {!loading && !error && tiers.length === 0 && (
           <p className="m-0 text-sm text-content-muted">
             {offersEmptyMessage(data)}{' '}
-            <SettingsLink section="training" focus="cloud-max-price-per-hour">
+            <SettingsLink pluginId="cloud_training" focus="cloud-max-price-per-hour">
               increase the price cap in Settings
             </SettingsLink>.
           </p>
