@@ -12,19 +12,17 @@
  * on launch; the preflight below exists so the refusal is read BEFORE the GPU
  * picker opens rather than rendered as a 409 after it.
  */
-import { videoDatasetCloudUrl } from "@lds/plugin-sdk/cloud-host";
-import { videoDatasetUrl } from "@lds/plugin-sdk/cloud-host";
 
 export function videoOffersUrl(datasetId, steps) {
   const n = Math.max(100, Number(steps) || 1000)
-  return `${videoDatasetCloudUrl(datasetId)}/offers?steps=${n}`
+  return `/api/video-dataset/${datasetId}/train/cloud/offers?steps=${n}`
 }
 
 /** `lane` rides in the query only for the cloud lane, exactly like the image
  * lane's preflightUrl: a request with no lane is the local (machine-reading)
  * report, which is what the readiness card in the workspace shows. */
 export function videoPreflightUrl(datasetId, lane) {
-  const base = `${videoDatasetUrl(datasetId)}/train/preflight`
+  const base = `/api/video-dataset/${datasetId}/train/preflight`
   return lane === 'cloud' ? `${base}?lane=cloud` : base
 }
 

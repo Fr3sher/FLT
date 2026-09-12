@@ -1,4 +1,4 @@
-import { VAST_REFERRAL_ID } from "@lds/plugin-sdk/cloud-host";
+import { vastReferralId } from "@lds/plugin-sdk/links";
 import { vastSignupUrl } from "@lds/plugin-sdk/links";
 import { VastReferralDisclosure } from "@lds/plugin-sdk/links";
 
@@ -11,7 +11,7 @@ const link = 'text-primary underline'
    SetupPage: the page is not mountable under node --test, this is, so the
    pairing of link and disclosure is rendered in both states by
    tests/vast-key-guide-render.test.mjs. */
-export default function CloudSignupNote({ referralId = VAST_REFERRAL_ID } = {}) {
+export default function CloudSignupNote({ referralId = vastReferralId() } = {}) {
   return (
     <>
       <p className="mt-2 text-content-muted text-xs">

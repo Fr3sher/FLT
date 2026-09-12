@@ -4,7 +4,7 @@
 // slice 1). TrainingPanel re-exports both components, so every existing
 // import path keeps working.
 import { useEffect, useState } from 'react';
-import { Fp8QuantizeTool } from "@lds/plugin-sdk/cloud-host";
+import { PluginSlot } from "@lds/plugin-sdk/ui";
 import { UseDatasetCaptionsButton } from "@lds/plugin-sdk/training";
 import { baseOptionSuffix } from "../lib/trainingFamily.js";
 import { fmtBytes } from "@lds/plugin-sdk/data";
@@ -452,7 +452,7 @@ export function FullTransformerAdvancedRecipe({
             out of a repository that holds several 26 GB files. `suggestedPath`
             pre-fills the manual field with the custom base already on screen,
             when there is one. */}
-        <Fp8QuantizeTool disabled={disabled} target={quantizeTarget}
+        <PluginSlot slot="dense.recipe.tool" surface="dense" disabled={disabled} target={quantizeTarget}
           suggestedPath={suggestedQuantizePath} />
       </div>
     </section>

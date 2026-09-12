@@ -2,18 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { apiFetch, postJson } from '@lds/plugin-sdk'
 import { useToast } from '@lds/plugin-sdk'
 import { HelpBadge } from '@lds/plugin-sdk'
-import {
-  videoDatasetCloudUrl, videoDatasetCloudProgressUrl,
-  videoDatasetCloudCheckpointsUrl,
-  videoDatasetCloudRetryUrl, videoDatasetCloudContinueUrl,
-} from './videoBankApi.js'
-import {
-  isActive, launchBlockedReason, runSummary, canRetry, canContinue,
-} from './videoCloudStatus.js'
+import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui'
 import { ensureLicenceAck } from './licenceAck.js'
-import { postWithConfirmations } from '@lds/plugin-sdk/training'
-import VideoCloudLaunchDialog from './VideoCloudLaunchDialog.jsx'
-import { CLOUD_STATUS_URL, preflightGate, videoPreflightUrl } from './videoCloudLaunch.js'
 
 /** Targets that have been trained end to end at least once — locally or on a
  * rented pod, it does not matter which: what the note below cares about is
@@ -71,17 +61,13 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
   const [progress, setProgress] = useState(null)
   const [busyLocal, setBusyLocal] = useState(false)
 
-  // Cloud lane.
-  const [run, setRun] = useState(null)
-  const [groups, setGroups] = useState([])
-  const [busyCloud, setBusyCloud] = useState(false)
-  // The launch WINDOW — the image lane's dialog, for video: one radio per GPU
-  // class with its price, the rough duration and total for this set, the
-  // runtime-cap warning, and the month's spend. It replaced an inline <select>
-  // that rented a pod on a click with the cost hidden in a closed dropdown.
-  const [cloudDialog, setCloudDialog] = useState(false)
-  const [cloudStatus, setCloudStatus] = useState(null)
-  const [opening, setOpening] = useState(false)
+  // Cloud Training contributes the optional lane; Video keeps the shared dials.
+  const [launchHost, setLaunchHost] = useState(null)
+  const [cloudSaveCount, setCloudSaveCount] = useState(0)
+  const cloudAvailable = hasContributions('training.launch', 'video')
+  const confirmLicence = () => ensureLicenceAck(ds, {
+    storage: window.localStorage, confirmFn: window.confirm,
+  })
 
   const pollLocal = useCallback(async () => {
     try {
@@ -98,37 +84,11 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
     return () => clearInterval(t)
   }, [localActive, pollLocal])
 
-  const refreshCloud = useCallback(async () => {
-    try {
-      setRun(await apiFetch(videoDatasetCloudProgressUrl(ds.id), { background: true }))
-    } catch { /* a poll that fails is not worth a toast */ }
-    try {
-      const d = await apiFetch(videoDatasetCloudCheckpointsUrl(ds.id), { background: true })
-      setGroups(d.groups || [])
-    } catch { setGroups([]) }
-  }, [ds.id])
-  useEffect(() => { refreshCloud() }, [refreshCloud])
-  useEffect(() => {
-    if (!isActive(run?.status)) return undefined
-    const t = setInterval(refreshCloud, 5000)
-    return () => clearInterval(t)
-  }, [run?.status, refreshCloud])
-
-  // Told, rather than guessed at from outside: these two polls are the only
-  // things that know when a save lands, and the workspace's Checkpoints & LoRAs
-  // section re-reads on the number they report. A COUNT of steps (cloud) and
-  // files (local), so a caller passing an inline arrow does not re-fire it on
-  // every render — and a harvest that adds a step changes it.
-  const saveCount = groups.reduce((n, g) => n + (g.steps?.length || 0), 0)
+  // Report both destinations through the workspace's existing refresh signal.
+  const saveCount = (cloudAvailable ? cloudSaveCount : 0)
     + (progress?.checkpoints?.length || 0)
   useEffect(() => { onSaveCount?.(saveCount) }, [saveCount, onSaveCount])
-  // The other direction: that section deleted a run or a save, and this card's
-  // "Train further" must not offer what is gone.
-  useEffect(() => {
-    if (!refreshKey) return
-    refreshCloud()
-    pollLocal()
-  }, [refreshKey, refreshCloud, pollLocal])
+  useEffect(() => { if (refreshKey) pollLocal() }, [refreshKey, pollLocal])
 
   const startLocal = async (acceptDownload = false) => {
     // The licence question comes BEFORE anything is spent — not after the
@@ -183,75 +143,9 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
     }
   }
 
-  const postCloud = async (url, body, okMessage) => {
-    // Every caller of this helper rents a pod (launch, retry, continue), so the
-    // licence gate lives here once rather than on three buttons. Retries after
-    // a first acknowledged launch pass silently — the yes belongs to the
-    // profile, and it was already given.
-    if (!ensureLicenceAck(ds, {
-      storage: window.localStorage, confirmFn: window.confirm,
-    })) return
-    setBusyCloud(true)
-    try {
-      // The guardrails' `PARALLEL_RUN:` refusal is a QUESTION by contract
-      // ("second pod, billed separately — launch anyway?"). Posting bare turned
-      // it into a dead error on this lane; the loop relays the answer as
-      // allow_parallel_run, exactly as the image lane does.
-      const d = await postWithConfirmations((b) => postJson(url, b), body, 'Launch anyway (force)')
-      if (d === null) return false                 // declined: nothing rented
-      toast.success(okMessage)
-      refreshCloud()
-      return true
-    } catch (e) {
-      toast.error(e?.message || 'The cloud run could not be started.')
-      return false
-    } finally {
-      setBusyCloud(false)
-    }
-  }
-
-  /** ☁ Open the launch window — AFTER the preflight, BEFORE the money.
-   *
-   * Order matters and each step is a different question: the licence (does
-   * the user accept this model's terms — once per profile), the cloud-lane
-   * preflight (a blocker stops here and is shown; warnings become ONE confirm,
-   * the image lane's rule), then the window with the offers. A preflight that
-   * cannot be reached never blocks: the server re-decides on launch. */
-  const openCloudDialog = async () => {
-    if (!ensureLicenceAck(ds, {
-      storage: window.localStorage, confirmFn: window.confirm,
-    })) return
-    setOpening(true)
-    try {
-      const report = await apiFetch(videoPreflightUrl(ds.id, 'cloud'), { background: true })
-        .catch(() => null)
-      const gate = preflightGate(report, { lane: 'cloud' })
-      if (!gate.ok) {
-        toast.error(`Not ready for the cloud — ${gate.blockers.join(' · ')}`)
-        return
-      }
-      if (gate.confirmText && !window.confirm(gate.confirmText)) return
-      // Account-wide, for the footer's "this month: $x of $y". Best effort.
-      apiFetch(CLOUD_STATUS_URL, { background: true })
-        .then((d) => setCloudStatus(d)).catch(() => setCloudStatus(null))
-      setCloudDialog(true)
-    } finally {
-      setOpening(false)
-    }
-  }
-
-  /** The dialog's own launch: the chosen GPU class rides as gpu_name, and the
-   * dialog closes only on a real success (a declined question or a refusal
-   * keeps it open, next to the offers that were being compared). */
-  const launchCloud = (gpuName) => postCloud(videoDatasetCloudUrl(ds.id),
-    { steps, ...(doI2v ? { do_i2v: true } : {}), ...(gpuName ? { gpu_name: gpuName } : {}) },
-    'Renting a pod — the panel follows it from here.')
-
   if (!ds.training_verified) return null
 
   const dl = progress?.download
-  const blocked = launchBlockedReason(ds, run)
-  const latestGroup = groups[0] || null
 
   return (
     <section className="flex flex-col gap-1.5 border-t border-border pt-1.5">
@@ -299,43 +193,9 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
               {busyLocal ? 'Starting…' : '▶ Train on this PC'}
             </button>
             <HelpBadge topic="video-train-local" />
-            <button type="button" disabled={busyCloud || opening || Boolean(blocked)}
-              onClick={openCloudDialog}
-              title={blocked || (opening
-                ? 'Checking the set and the account before the offers open…'
-                : 'Compare GPU offers with their price, duration and total before renting one')}
-              className="rounded border border-border bg-surface-raised px-2 py-1 text-[0.6875rem] font-semibold text-content hover:bg-surface disabled:opacity-40">
-              {/* Bare text on purpose: the exact label is an inventoried surface
-                  (bankSurfaceInventory reads literal button text). It opens a
-                  window now, and it stays "☁ Train in the cloud". */}
-              ☁ Train in the cloud
-            </button>
-            <HelpBadge topic="video-cloud-training" />
-            {canRetry(run) && (
-              <button type="button" disabled={busyCloud}
-                onClick={() => postCloud(videoDatasetCloudRetryUrl(ds.id), { run_id: run.run_id },
-                  'Relaunched on a fresh pod with the same settings.')}
-                className="rounded border border-border bg-surface-raised px-2 py-1 text-[0.6875rem] text-content hover:bg-surface disabled:opacity-40">
-                ↻ Retry
-              </button>
-            )}
-            {canContinue(run, latestGroup) && (
-              <button type="button" disabled={busyCloud}
-                onClick={() => postCloud(videoDatasetCloudContinueUrl(ds.id),
-                  { run_id: latestGroup.run_id, extra_steps: steps },
-                  `Continuing from the last harvested step, +${steps} steps.`)}
-                className="rounded border border-border bg-surface-raised px-2 py-1 text-[0.6875rem] text-content hover:bg-surface disabled:opacity-40">
-                ▶ Train further
-              </button>
-            )}
+            <span ref={setLaunchHost} className="contents" />
           </div>
         </>
-      )}
-
-      {!localActive && blocked && (
-        <p className="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[0.6875rem] text-amber-100">
-          {blocked}
-        </p>
       )}
 
       {localActive && (
@@ -345,18 +205,6 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
             : progress.step != null
               ? `Step ${progress.step}${progress.total ? ` / ${progress.total}` : ''}${progress.loss != null ? ` · loss ${progress.loss}` : ''}${progress.eta ? ` · ${progress.eta} left` : ''}`
               : 'Starting up…'}
-        </p>
-      )}
-
-      {run?.run_id && (
-        <p className="text-[0.6875rem] text-content-muted">
-          ☁ {runSummary(run)}
-          {run.phase_detail ? ` — ${run.phase_detail}` : ''}
-        </p>
-      )}
-      {run?.error && (
-        <p className="rounded border border-rose-500/60 bg-rose-500/10 px-2 py-1 text-[0.6875rem] text-rose-100">
-          {run.error}
         </p>
       )}
 
@@ -380,10 +228,12 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
         </p>
       )}
 
-      {cloudDialog && (
-        <VideoCloudLaunchDialog ds={ds} steps={steps} cloudStatus={cloudStatus}
-          onClose={() => setCloudDialog(false)} onLaunch={launchCloud} />
-      )}
+      <PluginSlot slot="training.launch" surface="video"
+        ds={ds} steps={steps} doI2v={doI2v} confirmLicence={confirmLicence}
+        cloudUrl={`/api/video-dataset/${ds.id}/train/cloud`}
+        preflightUrl={`/api/video-dataset/${ds.id}/train/preflight?lane=cloud`}
+        launchHost={launchHost} localActive={localActive}
+        onSaveCount={setCloudSaveCount} refreshKey={refreshKey} />
     </section>
   )
 }

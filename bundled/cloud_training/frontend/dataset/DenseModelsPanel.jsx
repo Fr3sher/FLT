@@ -4,8 +4,7 @@ import { apiFetch } from "@lds/plugin-sdk";
 import { HelpBadge } from "@lds/plugin-sdk";
 import { postJsonResult as postJson } from "@lds/plugin-sdk";
 import useHubPresence from "../shared/useHubPresence";
-import { Fp8QuantizeTool } from "@lds/plugin-sdk/cloud-host";
-import { LoraMergeTool } from "@lds/plugin-sdk/cloud-host";
+import { PluginSlot } from "@lds/plugin-sdk/ui";
 import { denseActions } from "./denseModels";
 import { denseFileRows } from "./denseModels";
 import { denseGuidanceLine } from "./denseModels";
@@ -170,8 +169,6 @@ export default function DenseModelsPanel({ datasetId, models = [], onChanged = n
   const fetched = useHubPresence(models.map((m) => m.run_id));
   const hubPresence = hubPresenceOverride || fetched;
   const [plans, setPlans] = useState({});          // run_id -> send plan
-  const [quantizeFor, setQuantizeFor] = useState(null);
-  const [mergeFor, setMergeFor] = useState(null);
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState(null);
   const pollRef = useRef(null);
@@ -335,50 +332,8 @@ export default function DenseModelsPanel({ datasetId, models = [], onChanged = n
                 <p className="m-0 mt-1 text-amber-200 text-[0.625rem]">{actions.activeNote}</p>
               )}
 
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {actions.quantize && (
-                  <button type="button"
-                    onClick={() => setQuantizeFor(
-                      quantizeFor?.run_id === entry.run_id ? null : entry)}
-                    // A button whose own promise is "quantizing fetches it
-                    // first" cannot be offered once the repository it would
-                    // fetch from has been measured gone: clicking it can only
-                    // fail, and the reason belongs here, before the click.
-                    disabled={busy || !actions.quantize.enabled}
-                    title={actions.quantize.reason || undefined}
-                    className="rounded-md border border-sky-300/40 bg-sky-400/15 px-2.5 py-1 text-[0.6875rem] font-semibold text-sky-50 hover:bg-sky-400/25 disabled:opacity-40">
-                    {quantizeFor?.run_id === entry.run_id ? 'Hide' : actions.quantize.label}
-                  </button>
-                )}
-                {/* Only for a master that is HERE. Merging reads the whole
-                    checkpoint tensor by tensor, so a model that exists only in a
-                    Hugging Face repo has nothing to merge into yet — offering the
-                    button anyway would be a refusal dressed as an action. */}
-                {entry.master?.path && (
-                  <button type="button"
-                    onClick={() => setMergeFor(
-                      mergeFor?.run_id === entry.run_id ? null : entry)}
-                    disabled={busy}
-                    title="Fold a LoRA into this model's weights and write a new full model"
-                    className="rounded-md border border-sky-300/40 bg-sky-400/15 px-2.5 py-1 text-[0.6875rem] font-semibold text-sky-50 hover:bg-sky-400/25 disabled:opacity-40">
-                    {mergeFor?.run_id === entry.run_id ? 'Hide' : '🧬 Merge a LoRA in'}
-                  </button>
-                )}
-              </div>
-
-              {actions.quantize?.reason && (
-                <p className="m-0 mt-1 text-content-subtle text-[0.625rem] leading-snug">
-                  {actions.quantize.reason}
-                </p>
-              )}
-
-              {mergeFor?.run_id === entry.run_id && (
-                <div className="mt-1.5 rounded-md border border-sky-300/30 bg-app/50 px-2 py-1.5">
-                  <LoraMergeTool framed={false} family={entry.train_type}
-                    base={entry.master.path}
-                    baseLabel="this run’s full model" />
-                </div>
-              )}
+              <PluginSlot slot="dense.model.tool" surface="dense"
+                entry={entry} busy={busy} actions={actions} />
 
               {/* The honest limit, next to the thing that would otherwise look
                   broken: the Test Studio is entered through a LoRA of this
@@ -399,20 +354,6 @@ export default function DenseModelsPanel({ datasetId, models = [], onChanged = n
                 </>
               )}
 
-              {quantizeFor?.run_id === entry.run_id && (
-                <div className="mt-1.5 rounded-md border border-sky-300/30 bg-app/50 px-2 py-1.5">
-                  <Fp8QuantizeTool framed={false} manualPath={false}
-                    target={{
-                      label: 'This run’s full model',
-                      name: entry.master?.filename || entry.hub?.weight_filename || '',
-                      sizeBytes: entry.master?.size_bytes || 0,
-                      family: entry.train_type,
-                      path: entry.master?.path || null,
-                      repoId: entry.master ? null : (entry.hub?.repo_id || null),
-                      filename: entry.master ? null : (entry.hub?.weight_filename || null),
-                    }} />
-                </div>
-              )}
             </li>
           );
         })}
