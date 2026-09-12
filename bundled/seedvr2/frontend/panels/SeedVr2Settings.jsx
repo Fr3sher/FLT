@@ -66,12 +66,12 @@ export default function SeedVr2Card({ config, setField, configDefaults, caps }) 
     <Card
       id="seedvr2-engine"
       title="SeedVR2 upscaling (local)"
-      help="SeedVR2 resolves detail at a higher resolution and leaves the original look alone. It works independently of Klein Improve. Pick it per batch from the bulk actions in the dataset workspace, or choose its default in the shared improvement engine preference. It needs the ComfyUI-SeedVR2_VideoUpscaler node pack in ComfyUI plus two model files — SeedVR2 Setup downloads the models and says what is missing."
+      help="SeedVR2 resolves detail at a higher resolution and leaves the original look alone. It works independently of Klein Improve. Pick it per batch from the bulk actions in the dataset workspace, or choose its default in the shared improvement engine preference. Open Preparation above to prepare its ComfyUI node pack and two model files."
     >
       <p className={ready ? 'text-[0.6875rem] text-emerald-300' : 'text-[0.6875rem] text-amber-300'}>
         {ready
           ? 'Ready — SeedVR2 appears in the workspace bulk actions.'
-          : 'Not ready yet. SeedVR2 Setup lists what is missing and can download the weights; the node pack itself is installed from ComfyUI (search “SeedVR2” in ComfyUI-Manager), then restart ComfyUI.'}
+          : 'Not ready yet. Open Preparation above, connect a compatible ComfyUI Windows portable, then review and install the node pack and model files together. Restart ComfyUI when idle and re-check. Other ComfyUI installations show their manual preparation steps.'}
       </p>
 
       <p className="mt-1 text-[0.6875rem] text-content-subtle">

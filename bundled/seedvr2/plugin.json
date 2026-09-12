@@ -2,7 +2,7 @@
   "id": "seedvr2",
   "bundled": true,
   "name": "SeedVR2",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "api": 1,
   "description": "Faithful image restoration with SeedVR2, including high-resolution tiling, model preparation, settings and independent finishing. No Klein Improve or other LDS plug-in required.",
   "requires": [],
