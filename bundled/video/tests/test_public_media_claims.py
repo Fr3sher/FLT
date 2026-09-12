@@ -106,14 +106,15 @@ def test_video_off_skips_all_previously_registered_probes(host, monkeypatch):
 @pytest.mark.parametrize('missing', [None, 'curl_cffi', 'gallery_dl', 'bs4', 'cloudscraper', 'instaloader', 'ddgs', 'yt_dlp'])
 def test_scrape_package_presence_matches_public_main_without_import_or_network(host, monkeypatch, missing):
     loaded = activate(host, {'scrape'})
-    from lds_scrape import probes
     seen = []
 
     def find(name):
         seen.append(name)
         return None if name == missing else object()
 
-    monkeypatch.setattr(probes.importlib.util, 'find_spec', find)
+    # The product delegates presence checks to the real SDK; only its lookup
+    # transport is replaced so no optional package is imported.
+    monkeypatch.setattr(importlib.util, 'find_spec', find)
     with host[0].app_context():
         assert loaded.probes['scrape_deps'][1]() is (missing is None)
         assert loaded.probes['scrape_deps_detail'][1]() == ('scrape deps OK' if missing is None else 'missing: ' + missing)
@@ -123,8 +124,7 @@ def test_scrape_package_presence_matches_public_main_without_import_or_network(h
 def test_scrape_off_never_inspects_installed_packages(host, monkeypatch):
     loaded = activate(host, {'scrape'})
     from app import config
-    from lds_scrape import probes
-    monkeypatch.setattr(probes.importlib.util, 'find_spec', lambda *_a: pytest.fail('OFF Scrape inspected packages'))
+    monkeypatch.setattr(importlib.util, 'find_spec', lambda *_a: pytest.fail('OFF Scrape inspected packages'))
     config.save_config({'plugins': {'enabled': {'scrape': False}}})
     with host[0].app_context():
         assert loaded.probes['scrape_deps'][1]() is False

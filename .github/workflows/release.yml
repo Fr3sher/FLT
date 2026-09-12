@@ -96,7 +96,7 @@ jobs:
           Get-Content ../release-notes.md -Raw | Write-Host
           Get-Content ../release-notes.md -Raw >> $env:GITHUB_STEP_SUMMARY
 
-      - name: Run all frontend tests
+      - name: Run all frontend tests (core and bundled plugins)
         working-directory: frontend
         run: npm test
 
@@ -133,10 +133,7 @@ jobs:
       - name: Enforce release asset policy
         run: python scripts/check_release_artifacts.py
 
-      - name: Test release asset guard
-        run: python -m unittest discover -s scripts/tests -p 'test_*.py'
-
-      - name: Run the test suite
+      - name: Run backend and release tooling tests
         # Parallel: xdist workers are separate processes and this suite was
         # hardened for it (in-memory SQLite per app instance, shared registries
         # reset by fixtures). `auto` sizes to the runner rather than pinning a
@@ -146,7 +143,24 @@ jobs:
         # test_docker_launcher_fake_e2e asserts on a message PowerShell wraps by
         # path length — measured: it fails at the default path, passes at a short
         # one. D: is the runner's workspace drive.
-        run: python -m pytest backend/tests -q -n auto --dist loadfile --basetemp=D:/t
+        # pytest also discovers the unittest cases and pytest functions in scripts/tests.
+        run: python -X utf8 -m pytest backend/tests scripts/tests -q -n auto --dist loadfile --basetemp=D:/t
+
+      - name: Run bundled Python contracts in isolated processes
+        shell: pwsh
+        run: |
+          # Product harnesses replace SDK modules; never collect them with the
+          # host suite or another product in the same Python process.
+          $tested = 0
+          foreach ($plugin in (Get-ChildItem -LiteralPath bundled -Directory | Sort-Object Name)) {
+            $tests = Join-Path $plugin.FullName 'tests'
+            if (-not (Test-Path -LiteralPath $tests -PathType Container)) { continue }
+            if (-not (Get-ChildItem -LiteralPath $tests -Filter 'test_*.py' -File -Recurse)) { continue }
+            python -X utf8 -m pytest $tests -q -p no:flask "--basetemp=D:/pt/$($plugin.Name)"
+            if ($LASTEXITCODE -ne 0) { throw "Python contracts failed: $($plugin.Name)" }
+            $tested++
+          }
+          if ($tested -eq 0) { throw 'No bundled Python contracts were discovered.' }
 
       - name: Build the Windows source ZIP
         shell: pwsh
