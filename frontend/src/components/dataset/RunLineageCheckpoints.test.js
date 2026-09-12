@@ -2,29 +2,29 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const graph = fs.readFileSync(new URL('./RunLineageGraph.jsx', import.meta.url), 'utf8');
-const cloud = fs.readFileSync(new URL('../../pages/CloudRunsPage.jsx', import.meta.url), 'utf8');
-const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8');
+const graph = fs.readFileSync(new URL('./RunLineageGraph.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const cloud = fs.readFileSync(new URL('../runs/RunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 // The card, the pill and the edges are no longer private to this component —
 // they were extracted so the LoRA Canvas draws with the SAME ones (a lookalike
 // would drift the first time either surface was tweaked).
-const nodes = fs.readFileSync(new URL('./lineageNodes.jsx', import.meta.url), 'utf8');
-const edges = fs.readFileSync(new URL('./lineageEdges.jsx', import.meta.url), 'utf8');
-const canvas = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
+const nodes = fs.readFileSync(new URL('./lineageNodes.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const edges = fs.readFileSync(new URL('./lineageEdges.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const canvas = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 // …and so are the ACTIONS. The popover (⬇ download, ▶ continue, 📦 deploy,
 // ⏏ undeploy, 🗑 delete, ⓘ details) was ~90 lines inlined in the graph, which is
 // why the canvas had none at all; it now lives in one component on one pure
 // rule set, driven by one hook.
-const popover = fs.readFileSync(new URL('./CheckpointActionsPopover.jsx', import.meta.url), 'utf8');
-const popoverRules = fs.readFileSync(new URL('./checkpointPopover.js', import.meta.url), 'utf8');
-const actionsHook = fs.readFileSync(new URL('../../hooks/useCheckpointActions.js', import.meta.url), 'utf8');
+const popover = fs.readFileSync(new URL('./CheckpointActionsPopover.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const popoverRules = fs.readFileSync(new URL('./checkpointPopover.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const actionsHook = fs.readFileSync(new URL('../../hooks/useCheckpointActions.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('the drawing is shared with the canvas, not duplicated', () => {
   // Both surfaces IMPORT the card/pill/edges; neither declares its own.
   assert.match(graph, /import \{ GraphCard, CheckpointPill \} from '\.\/lineageNodes'/);
   assert.match(graph, /import \{ LineageEdgeDefs, LineageEdges \} from '\.\/lineageEdges'/);
-  assert.match(canvas, /import \{ GraphCard, CheckpointPill \} from '\.\.\/dataset\/lineageNodes'/);
-  assert.match(canvas, /import \{ LineageEdgeDefs, LineageEdges \} from '\.\.\/dataset\/lineageEdges'/);
+  assert.match(canvas, /import \{ GraphCard, CheckpointPill \} from '@lds\/plugin-sdk\/canvas'/);
+  assert.match(canvas, /import \{ LineageEdgeDefs, LineageEdges \} from '@lds\/plugin-sdk\/canvas'/);
   for (const src of [graph, canvas]) {
     assert.doesNotMatch(src, /function GraphCard\(/);
     assert.doesNotMatch(src, /function CheckpointPill\(/);
@@ -42,8 +42,8 @@ test('the canvas GENERATES through the Test Studio, it does not grow a second on
   // now is the shape of the opening: the canvas mounts the Studio's panel and the
   // Studio's hooks. A canvas that re-declared a prompt field, a seed control or a
   // launch call would be the drift this whole design exists to prevent.
-  const panel = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx", import.meta.url), 'utf8');
-  assert.match(panel, /import RunSetupPanel from '\.\.\/dataset\/studio\/RunSetupPanel'/);
+  const panel = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(panel, /import \{ RunSetupPanel \} from '@lds\/plugin-sdk\/canvas'/);
   assert.match(panel, /useStudioForm/);
   assert.match(panel, /useCanvasStudio/);
   assert.doesNotMatch(panel, /<textarea/);          // the prompt field is PromptField's
@@ -54,8 +54,8 @@ test('the canvas GENERATES through the Test Studio, it does not grow a second on
 });
 
 test('the canvas launch goes through ONE call site, so no setting can be dropped', () => {
-  const hook = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/hooks/useCanvasStudio.js", import.meta.url), 'utf8');
-  const setup = fs.readFileSync(new URL('./studio/RunSetupPanel.jsx', import.meta.url), 'utf8');
+  const hook = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/hooks/useCanvasStudio.js", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const setup = fs.readFileSync(new URL('./studio/RunSetupPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // RunSetupPanel owns genSettings in local state and passes it to studio.launch.
   // The canvas therefore swaps studio.launch — NOT the onLaunch handler, which
   // would have silently lost the global generation settings from a canvas run.
@@ -68,10 +68,10 @@ test('the canvas launch goes through ONE call site, so no setting can be dropped
 });
 
 test('the canvas refuses mixed families and deploys before generating — in the pure layer', () => {
-  const rules = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/utils/canvasGeneration.js", import.meta.url), 'utf8');
+  const rules = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/utils/canvasGeneration.js", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // Both decisions are arithmetic a test can check without a browser (behaviour
   // covered in canvasGeneration.test.js); the component must USE them.
-  assert.match(canvas, /from '\.\.\/\.\.\/utils\/canvasGeneration'/);
+  assert.match(canvas, /from '\.\.\/\.\.\/utils\/canvasGeneration\.js'/);
   assert.match(canvas, /describeCanvasLaunch\(picks\)/);
   assert.match(rules, /cannot run together/);
   assert.match(rules, /different base models/);
@@ -84,7 +84,7 @@ test('the canvas moves cards through the PURE placement layer, not by hand', () 
   // The whole point of the layer is that "a new run moves nothing" is arithmetic
   // a test can check without a browser. A component that recomputed positions
   // inline would put that rule back out of reach.
-  assert.match(canvas, /from '\.\.\/\.\.\/utils\/canvasPlacement'/);
+  assert.match(canvas, /from '\.\.\/\.\.\/utils\/canvasPlacement\.js'/);
   assert.match(canvas, /applyPlacement\(/);
   assert.match(canvas, /pinSnapshot\(/);
   assert.doesNotMatch(canvas, /function applyPlacement|function pinSnapshot/);
@@ -99,7 +99,7 @@ test('the canvas disambiguates the touch gesture with a long press', () => {
 });
 
 test('✦ Tidy up exists and is wired to the page, not to a local reset', () => {
-  const page = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/pages/CanvasPage.jsx", import.meta.url), 'utf8');
+  const page = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/pages/CanvasPage.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(canvas, /Tidy up/);
   // Through `handleTidyUp` since the frame stopped resizing itself: the button
   // arms a re-fit and then delegates, unchanged, to the page's handler. What is
@@ -117,7 +117,7 @@ test('the checkpoint popover is ONE component, hosted by BOTH surfaces', () => {
   // the first today and drift on the first change — exactly what happened to the
   // canvas, which shipped with no actions at all rather than a copy.
   assert.match(graph, /import CheckpointActionsPopover from '\.\/CheckpointActionsPopover'/);
-  assert.match(canvas, /import CheckpointActionsPopover from '\.\.\/dataset\/CheckpointActionsPopover'/);
+  assert.match(canvas, /import \{ CheckpointActionsPopover \} from '@lds\/plugin-sdk\/canvas'/);
   assert.match(graph, /<CheckpointActionsPopover/);
   assert.match(canvas, /<CheckpointActionsPopover/);
   assert.match(popover, /export default function CheckpointActionsPopover\(/);
@@ -147,7 +147,7 @@ test('both surfaces place the popover through the PURE geometry, and it never le
   // Two spaces, one module: world units inside the graph's <svg>, screen pixels
   // over the zoomed board. Behaviour (flip above, clamp, narrow on a 400-px
   // screen) is covered in checkpointPopover.test.js — the hosts must USE it.
-  assert.match(graph, /checkpointPopoverPlacement\(openCk\.pill, g\)/);
+  assert.match(graph, /checkpointPopoverPlacement\(openCk\.pill, g, \{ height \}\)/);
   assert.match(canvas, /clampPopoverToViewport\(openCk\.anchor/);
   assert.match(popoverRules, /export function checkpointPopoverPlacement\(/);
   assert.match(popoverRules, /export function clampPopoverToViewport\(/);
@@ -184,7 +184,7 @@ test('the graph opens for any run with a checkpoint, not only 2+ run lineages', 
 test('continue-from-checkpoint is cloud-only by default and allows terminal (done OR failed) runs', () => {
   // The rule lives in the JSX-free helper (behaviour covered by
   // lineageContinue.test.js); the popover must USE it, not re-implement one.
-  const rule = fs.readFileSync(new URL('./lineageContinue.js', import.meta.url), 'utf8');
+  const rule = fs.readFileSync(new URL('./lineageContinue.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(popoverRules, /import \{ canContinueFromCheckpoint \} from '\.\/lineageContinue\.js'/);
   assert.match(popoverRules, /canContinueFromCheckpoint\(node, pill, \{/);
   // still cloud-only with a run id, unless the mount opted into 'any'
@@ -198,11 +198,11 @@ test('continue-from-checkpoint is cloud-only by default and allows terminal (don
   assert.match(rule, /pill\?\.download_url/);
 });
 
-test('the Runs hub keeps the CLOUD gate — it passes no continueSource', () => {
-  // The invariant: the hub's popover must not change. It wires the handler and
-  // nothing else, so the graph falls back to its 'cloud' default.
-  assert.match(cloud, /onContinueCheckpoint=\{continueFromCheckpoint\}/);
-  assert.doesNotMatch(cloud, /continueSource/);
+test('the Runs hub delegates checkpoint availability to its shared continuation controller', () => {
+  // Keep the source identity, while the controller decides which local or
+  // optional Cloud continuation can actually address this checkpoint.
+  assert.match(cloud, /onContinueCheckpoint=\{canContinueRun\?\.\(run\) \? continueFromCheckpoint : undefined\}/);
+  assert.match(cloud, /continueSource=\{run.source\}/);
 });
 
 test('the dataset panel offers the SAME pill gesture through its local flow', () => {
@@ -215,7 +215,7 @@ test('the dataset panel offers the SAME pill gesture through its local flow', ()
   assert.match(panel, /setContinueInitialStep\(step\);\s*setContinueError\(null\);\s*setContinueOpen\(true\);/);
   assert.match(panel, /initialFromStep=\{continueInitialStep\}/);
   // the plain Continue button clears the pill pick, so it still opens on latest
-  assert.match(panel, /setContinueInitialStep\(null\); setContinueError\(null\); setContinueOpen\(true\)/);
+  assert.match(panel, /setContinueInitialStep\(null\); setContinueSource\(null\); setContinueError\(null\); setContinueOpen\(true\)/);
   // ONE continue call site (the guarded helper picks the lane's hook inside it),
   // never a second continue request assembled somewhere else in the panel
   assert.equal((panel.match(/payload\.extraSteps/g) || []).length, 1);
@@ -301,7 +301,7 @@ test('the compact pill COUNTS results instead of showing an illegible thumbnail'
 test('a preview opens LARGE in a lightbox — shared, so the canvas is not a dead click', () => {
   // On the board the thumbnail was clickable and did nothing: the host passed no
   // handler. The lightbox is one component now, mounted by both.
-  const lightbox = fs.readFileSync(new URL('./PreviewLightbox.jsx', import.meta.url), 'utf8');
+  const lightbox = fs.readFileSync(new URL('./PreviewLightbox.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(lightbox, /export default function PreviewLightbox\(/);
   assert.match(nodes, /e\.stopPropagation\(\); onZoomPreview/);
   for (const src of [graph, canvas]) {
@@ -333,7 +333,7 @@ test('the pill delete aims at what the pill SHOWS — deployed copy vs training 
   // surfaces.
   assert.match(actionsHook, /const target = checkpointDeleteTarget\(node, pill\);/);
   assert.match(actionsHook, /postJson\(`\/api\/dataset\/\$\{datasetId\}\/\$\{target\.path\}`, target\.body\)/);
-  const helpers = fs.readFileSync(new URL('./lineagePreview.js', import.meta.url), 'utf8');
+  const helpers = fs.readFileSync(new URL('./lineagePreview.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(helpers, /checkpointDeployed\(pill\)/);            // ONE source of truth for "deployed"
   assert.match(helpers, /path: 'train\/checkpoint\/delete'/);      // deployed → the ComfyUI copy
   assert.match(helpers, /path: 'train\/run-checkpoint\/delete'/);  // otherwise → the run's save
@@ -352,7 +352,7 @@ test('the pill delete aims at what the pill SHOWS — deployed copy vs training 
 });
 
 test('undeploy is EXPLICIT and symmetric with deploy — and never confusable with delete', () => {
-  const helpers = fs.readFileSync(new URL('./lineagePreview.js', import.meta.url), 'utf8');
+  const helpers = fs.readFileSync(new URL('./lineagePreview.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // ⏏ Undeploy sits next to "✓ Deployed", where 📦 Deploy sits when it isn't —
   // no longer only reachable through the retreat row.
   assert.match(popover, /✓<\/span> Deployed/);
@@ -387,25 +387,27 @@ test('the detail drawer opens from ⓘ Details, not from touching a card', () =>
 });
 
 test('📤 Civitai is a row of the shared popover, and BOTH hosts open the same dialog from it', () => {
-  // The row lives in the popover (one set of actions, one set of labels)…
-  assert.match(popover, /data-testid="checkpoint-civitai"/);
-  assert.match(popover, /onPublish\(node, pill\)/);
-  // …and never on a run card: a page is made from ONE save.
-  assert.match(popover, /typeof onPublish === 'function' && !a\.isRun/);
-  // Each host hands the checkpoint to the shared dialog — a host that forgot
-  // would show the popover without the row, silently.
-  assert.match(graph, /onPublish=\{handlePublish\}/);
-  assert.match(canvas, /onPublish=\{\(node, pill\) => setPublishCk\(\{ node, pill \}\)\}/);
-  assert.match(graph, /<CivitaiPublishModal context=\{\{ kind: 'checkpoint'/);
-  assert.match(canvas, /<CivitaiPublishModal context=\{\{ kind: 'checkpoint'/);
+  const read = rel => fs.readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const row = read('../../../../bundled/civitai_publish/frontend/panels/CheckpointCivitaiRow.jsx');
+  const layer = read('../../../../bundled/civitai_publish/frontend/panels/CheckpointCivitaiLayer.jsx');
+  const descriptor = read('../../../../bundled/civitai_publish/frontend/index.js');
+  assert.match(popover, /<PluginSlot slot="checkpoint.action" surface=\{surface\}/);
+  assert.match(row, /data-testid="checkpoint-civitai"/);
+  assert.match(row, /if \(isRun \|\| !pill\) return null/);
+  assert.match(row, /openCheckpointPublish\(node, pill\)/);
+  assert.match(layer, /<CivitaiPublishModal context=\{context\}/);
+  assert.match(descriptor, /'checkpoint.action'/);
+  assert.match(descriptor, /'checkpoint.layer'/);
+  assert.match(graph, /<PluginSlot slot="checkpoint.layer" surface="graph"/);
+  assert.match(canvas, /<PluginSlot slot="checkpoint.layer" surface="canvas"/);
 });
 
 test('a generation launched from the board is the BOARD’s state, recoverable', () => {
   // Reported from real use: closing the settings panel (or leaving the page) lost
   // the run in flight, because the run id lived in the panel's own hook.
-  const runHook = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/hooks/useCanvasRun.js", import.meta.url), 'utf8');
-  const studio = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/hooks/useCanvasStudio.js", import.meta.url), 'utf8');
-  const tracker = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasRunTracker.jsx", import.meta.url), 'utf8');
+  const runHook = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/hooks/useCanvasRun.js", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const studio = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/hooks/useCanvasStudio.js", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const tracker = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasRunTracker.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // The panel no longer owns the run: it receives the board's tracker.
   assert.doesNotMatch(studio, /useStudioRun\(/);
   assert.match(studio, /const runId = tracker\?\.runId \?\? null;/);
@@ -423,8 +425,8 @@ test('a finished generation SAYS where the images went, and the board re-reads i
   // The other half of the same report: the images landed in the checkpoint's
   // gallery and nothing said so — and the board did not even refresh, so the
   // × N badge only appeared after a full reload.
-  const rules = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/utils/canvasRunResults.js", import.meta.url), 'utf8');
-  const tracker = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasRunTracker.jsx", import.meta.url), 'utf8');
+  const rules = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/utils/canvasRunResults.js", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const tracker = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasRunTracker.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(rules, /export function readyImageCount\(/);
   assert.match(rules, /export function canvasRunDatasetIds\(/);
   // Each finished run names its checkpoints, and each one opens its gallery.
@@ -441,7 +443,7 @@ test('a finished generation SAYS where the images went, and the board re-reads i
 });
 
 test('the lineage payload carries the deployed copy name from the testable map', () => {
-  const svc = fs.readFileSync(new URL('../../../../backend/app/services/cloud_training.py', import.meta.url), 'utf8');
+  const svc = fs.readFileSync(new URL('../../../../backend/app/services/cloud_training.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // Same map that sets `testable` also names the deployed file — no second
   // source. Both now live in ONE annotator, shared with the Checkpoints panel,
   // so the two surfaces can never disagree on what is deployed.
@@ -460,19 +462,19 @@ test('the dataset panel feeds the graph the ★ best-settings pin', () => {
   // shape and the ⚠ warning was silently dead on every modern pin.
   assert.match(panel, /bestSettingsLora=\{ds\.data\?\.best_settings_loras \|\| null\}/);
   assert.match(panel, /\(ds\.data\?\.best_settings_loras \|\| \[\]\)/);
-  const tree = fs.readFileSync(new URL('./RunLineageTree.jsx', import.meta.url), 'utf8');
+  const tree = fs.readFileSync(new URL('./RunLineageTree.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(tree, /bestSettingsLora=\{bestSettingsLora\}/);
 });
 
 test('the canvas warns before deleting a ★ pinned checkpoint, with ITS lane pin', () => {
   // The board's dataset index publishes the pin…
-  const svc = fs.readFileSync(new URL('../../../../backend/app/services/cloud_training.py', import.meta.url), 'utf8');
+  const svc = fs.readFileSync(new URL('../../../../backend/app/services/cloud_training.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(svc, /'best_settings_loras': studio\.best_settings_lora_filenames\(ds\)/);
   // …the page puts it on the lane…
-  const page = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/pages/CanvasPage.jsx", import.meta.url), 'utf8');
+  const page = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/pages/CanvasPage.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(page, /bestSettingsLoras: row\?\.best_settings_loras \|\| \[\]/);
   // …and the board hands the hook the pin of the lane whose popover is OPEN,
   // never another dataset's.
-  const canvasSrc = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
+  const canvasSrc = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(canvasSrc, /bestSettingsLora: openCk\?\.lane\?\.bestSettingsLoras \|\| null/);
 });

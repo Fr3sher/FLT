@@ -9,8 +9,11 @@ import { readFileSync } from 'node:fs';
 
 // The flow spans the panel and the extracted CloudLaunchDialog (slice 1):
 // the contract is about the FEATURE, so it reads both sources as one text.
-const panel = readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8')
-  + readFileSync(new URL("../../../../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx", import.meta.url), 'utf8');
+const read = rel => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const panel = readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + readFileSync(new URL("../../../../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + read('../../../../bundled/cloud_training/frontend/dataset/cloudTraining.js')
+  + read('../../../../bundled/cloud_training/frontend/dataset/DatasetCloudTraining.jsx');
 
 test('cloud dialog embeds the custom-base push gate and blocks launch until ready', () => {
   assert.match(panel, /function CustomBasePushSection\(/);

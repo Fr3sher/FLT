@@ -30,7 +30,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Clapperboard, Play } from 'lucide-react';
 import { apiFetch, del, postJson } from '@lds/plugin-sdk';
 import { HelpBadge } from '@lds/plugin-sdk';
-import useOllamaFence from '@lds/plugin-sdk/inference';
+import { useOllamaFence } from '@lds/plugin-sdk/inference';
 import { SUPERSEDED_ANSWER_NOTICE, keepAnswer } from '@lds/plugin-sdk/inference';
 import { OllamaFenceNotice } from '@lds/plugin-sdk/inference';
 import { useToast } from '@lds/plugin-sdk';

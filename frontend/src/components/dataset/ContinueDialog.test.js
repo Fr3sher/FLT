@@ -2,10 +2,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const dialog = fs.readFileSync(new URL('./ContinueDialog.jsx', import.meta.url), 'utf8');
-const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8');
-const cloud = fs.readFileSync(new URL('../../pages/CloudRunsPage.jsx', import.meta.url), 'utf8');
-const hook = fs.readFileSync(new URL('../../hooks/useDataset.js', import.meta.url), 'utf8');
+const dialog = fs.readFileSync(new URL('./ContinueDialog.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const hub = fs.readFileSync(new URL('../runs/RunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const hook = fs.readFileSync(new URL('../../hooks/useDataset.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+
+const read = rel => fs.readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const cloud = read('../../../../bundled/cloud_training/frontend/CloudRunsHub.jsx');
+const controller = read('../runs/useRunsHubContinue.js');
+const lane = read('../../../../bundled/cloud_training/frontend/dataset/cloudTraining.js');
 
 test('the dialog resolves a flexible-continue payload (steps, checkpoint, overrides)', () => {
   // fromStep is null only when the newest checkpoint is chosen — the in-place resume.
@@ -25,13 +30,15 @@ test('the dialog resolves a flexible-continue payload (steps, checkpoint, overri
 test('both hubs open the shared ContinueDialog', () => {
   assert.match(panel, /import ContinueDialog from '\.\/ContinueDialog'/);
   assert.match(panel, /<ContinueDialog/);
-  assert.match(cloud, /import ContinueDialog from '\.\.\/components\/dataset\/ContinueDialog'/);
-  assert.match(cloud, /<ContinueDialog/);
+  assert.match(hub, /import ContinueDialog from '\.\.\/dataset\/ContinueDialog\.jsx'/);
+  assert.match(hub, /<ContinueDialog \{\.\.\.dialog\}/);
 });
 
 test('local continue still routes through the guarded, accumulating request helper', () => {
   assert.match(panel, /runConfirmableTrainingRequest/);
-  assert.match(panel, /\(continueOpts\) => \(inCloud \? ds\.continueTrainingInCloud : ds\.continueTraining\)\(/);
+  assert.match(panel, /\(continueOpts\) => \{/);
+  assert.match(panel, /if \(pluginLane\) \{[\s\S]*?pluginLane\.resume\(payload/);
+  assert.match(panel, /return ds\.continueTraining\(/);
   assert.match(panel, /fromStep:\s*payload\.fromStep,\s*overrides:\s*payload\.overrides/);
   assert.match(panel, /resumeMode:\s*payload\.resumeMode,\s*stateBundleId:\s*payload\.stateBundleId/);
   assert.match(panel, /confirmableRetryFlag\(error, 'Continue anyway \(force\)'\)/);
@@ -96,8 +103,8 @@ test('full state locks trajectory-changing cadence, timestep and LR controls', (
 
 test('both hubs feed the dialog the run optimizer + current LR for the hint', () => {
   assert.match(panel, /optimizer:\s*adv\?\.optimizer,\s*learning_rate:\s*adv\?\.learning_rate/);
-  assert.match(cloud, /optimizer:\s*continueRunTarget\.settings\?\.optimizer/);
-  assert.match(cloud, /learning_rate:\s*continueRunTarget\.settings\?\.lr/);
+  assert.match(controller, /optimizer:\s*target\.settings\?\.optimizer/);
+  assert.match(controller, /learning_rate:\s*target\.settings\?\.lr/);
 });
 
 test('the dialog can open on a specific checkpoint (◉ Graph "continue from here")', () => {
@@ -150,57 +157,63 @@ test('a full model can choose HOW its 26 GB reaches the pod, priced', () => {
 });
 
 test('the Runs hub fetches that plan and sends the chosen road', () => {
-  assert.match(cloud, /transportPlan=\{transportPlan\}/);
+  assert.match(controller, /initialFromStep: initialStep, lanes, transportPlan/);
   assert.match(cloud, /\/api\/dataset\/train\/cloud\/resume-plan/);
   assert.match(cloud, /payload\.transport \? \{ transport: payload\.transport \}/);
   // A missing forecast must never block the resume: the roads still exist and
   // the backend still refuses the impossible one with its reason.
-  assert.match(cloud, /catch \{[\s\S]*?setTransportPlan\(null\)/);
+  assert.match(controller, /setTransportPlan\(null\)/);
+  assert.match(controller, /cloud\.plan\(run\)[\s\S]*?\.catch\(\(\) =>/);
 });
 
 test('the Runs hub offers the picker too, with its own lane rule', () => {
   // It used to pass no `lanes` (a deliberate scope choice) and silently
   // relaunched a pod — Continue opened from the Runs page gave no choice at all.
-  assert.match(cloud, /lanes=\{continueLanes\}/);
+  assert.match(controller, /const lanes = target \? \{ local, \.\.\.\(remote \? \{ cloud: remote \}/);
   // the hub's guards differ from the panel's (many datasets, machine-wide local
   // single-flight), so they live in their own unit-tested rule
-  assert.match(cloud, /runsHubContinueLanes\(continueRunTarget/);
+  assert.match(cloud, /runsHubContinueLanes\(run/);
+  assert.match(controller, /localContinuationAvailability\(target/);
 });
 
 test('the dataset panel routes the chosen lane to the matching call', () => {
   // ONE dialog, two hooks — no third resume path, same guarded request helper
   // (the lane is normalised through preflightLane.js now — same rule, one place,
   // because the preflight gate needs it too)
-  assert.match(panel, /const lane = laneOfPayload\(payload\);\s*\n\s*const inCloud = lane === 'cloud';/);
-  assert.match(panel, /\(inCloud \? ds\.continueTrainingInCloud : ds\.continueTraining\)\(/);
+  assert.match(panel, /const lane = laneOfPayload\(payload\)/);
+  assert.match(panel, /pluginLanes\.find\(\(l\) => l\.id === lane/);
+  assert.match(panel, /pluginLane\.resume\(payload/);
+  assert.match(panel, /if \(lane !== 'local'\) return \{ ok: false, error: 'This training plugin is disabled\.'/);
+  assert.match(panel, /return ds\.continueTraining\(/);
   assert.match(panel, /lanes=\{continueLanes\}/);
-  assert.match(panel, /where=\{laneOfStep\(continueInitialStep\)\}/);
+  assert.match(panel, /where=\{continueSource\?\.source \|\| laneOfStep\(continueInitialStep\)\}/);
   // each lane carries its own honest reason, cloud reusing the app's single source
-  assert.match(panel, /Cloud training needs a vast\.ai API key/);
+  assert.match(lane, /Cloud training needs a vast\.ai API key/);
   assert.match(panel, /Local training needs ai-toolkit/);
-  assert.match(panel, /cloudDisabledReason\s*\?\s*\{ available: false, reason: cloudDisabledReason \}/);
+  assert.match(lane, /reason \? \{ available: false, reason \}/);
 });
 
 test('the cloud lane posts the local checkpoint to the continue-local endpoint', () => {
-  assert.match(hook, /train\/cloud\/continue-local/);
+  assert.match(lane, /train\/cloud\/continue-local/);
   // it reuses the local payload shape (selection + safe overrides + from_step)
-  assert.match(hook, /const continueTrainingInCloud = useCallback/);
+  assert.match(lane, /async resume\(payload, \{ ds, base, variant, trainType, opts, toast \}\)/);
   assert.match(hook, /opts\.fromStep != null \? \{ from_step: opts\.fromStep \} : \{\}/);
-  assert.match(hook, /continueTraining, continueTrainingInCloud,/);
+  assert.doesNotMatch(hook, /continueTrainingInCloud/);
+  assert.match(panel, /contributions\('training\.continue\.lane', 'dataset'\)/);
 });
 
 test('a ◉ Graph checkpoint pill opens the cloud Continue dialog pre-filled', () => {
-  const graph = fs.readFileSync(new URL('./RunLineageGraph.jsx', import.meta.url), 'utf8');
-  const tree = fs.readFileSync(new URL('./RunLineageTree.jsx', import.meta.url), 'utf8');
+  const graph = fs.readFileSync(new URL('./RunLineageGraph.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const tree = fs.readFileSync(new URL('./RunLineageTree.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // the graph surfaces a "continue from here" action, threaded through the tree.
   // The action itself lives in the SHARED popover now (one popover for the graph
   // and the canvas); the graph's job is to hand it the mount's handler.
-  const popover = fs.readFileSync(new URL('./CheckpointActionsPopover.jsx', import.meta.url), 'utf8');
+  const popover = fs.readFileSync(new URL('./CheckpointActionsPopover.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(graph, /onContinue=\{typeof onContinueCheckpoint === 'function' \? onContinueCheckpoint : undefined\}/);
   assert.match(popover, /onClick=\{\(\) => \{ onContinue\(node, pill\); onClose\?\.\(\); \}\}/);
   assert.match(tree, /onContinueCheckpoint=\{onContinueCheckpoint\}/);
   // the Runs page maps a pill to the run and opens the dialog on that step
-  assert.match(cloud, /continueFromCheckpoint/);
-  assert.match(cloud, /setContinueInitialStep\(pill\?\.step/);
-  assert.match(cloud, /initialFromStep=\{continueInitialStep\}/);
+  assert.match(controller, /continueFromCheckpoint/);
+  assert.match(controller, /open\(\{[\s\S]*?pill\?\.step \?\? null\)/);
+  assert.match(controller, /initialFromStep: initialStep/);
 });

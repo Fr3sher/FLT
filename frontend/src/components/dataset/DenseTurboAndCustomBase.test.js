@@ -20,9 +20,14 @@ import {
 
 // Slice 1 moved the dense recipe/picker and the cloud dialog to their own
 // files; this flow spans all three, so the contract reads them as one text.
-const panel = readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8')
-  + readFileSync(new URL('./FullTransformerRecipe.jsx', import.meta.url), 'utf8')
-  + readFileSync(new URL("../../../../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx", import.meta.url), 'utf8');
+const read = rel => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const panel = readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + readFileSync(new URL('../../../../bundled/cloud_training/frontend/dataset/FullTransformerRecipe.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + readFileSync(new URL("../../../../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + read('../../../../bundled/cloud_training/frontend/dataset/cloudTraining.js')
+  + read('../../../../bundled/cloud_training/frontend/dataset/DatasetCloudTraining.jsx')
+  + read('../../../../bundled/cloud_training/frontend/dataset/DenseRecipePanel.jsx')
+  + read('../../../../bundled/cloud_training/frontend/dataset/DenseModePicker.jsx');
 
 const picker = panel.slice(
   panel.indexOf('DENSE_BASE_PICKER_START'),
@@ -57,8 +62,8 @@ test('the full-model recipe renders its own base and variant controls', () => {
   assert.match(picker, /baseSummary=\{denseBaseSummary\}/);
   assert.match(picker, /busy=\{trainingModeBusy\}/);
   const denseArm = panel.slice(
-    panel.indexOf('FULL_TRANSFORMER_ADVANCED_BRANCH_START'),
-    panel.indexOf('LORA_ADVANCED_CONTROLS_START'));
+    panel.indexOf('DENSE_BASE_PICKER_START'),
+    panel.indexOf('DENSE_BASE_PICKER_END'));
   assert.ok(denseArm.includes('DENSE_BASE_PICKER_START'));
 });
 

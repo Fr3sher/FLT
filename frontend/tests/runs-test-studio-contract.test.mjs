@@ -13,13 +13,14 @@ import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js';
 const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE];
 
 const source = fs.readFileSync(
-  new URL('../src/pages/CloudRunsPage.jsx', import.meta.url),
+  new URL('../src/components/runs/RunsHub.jsx', import.meta.url),
   'utf8',
-);
+).replace(/\r\n/g, '\n')
+  + fs.readFileSync(new URL('../../bundled/cloud_training/frontend/CloudRunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const guide = fs.readFileSync(
   new URL('../../docs/guide/using-the-app.md', import.meta.url),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 test('Runs uses one dataset-aware helper for every Test Studio surface', () => {
   assert.match(source,

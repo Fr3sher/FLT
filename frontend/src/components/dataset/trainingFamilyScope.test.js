@@ -4,11 +4,13 @@ import test from 'node:test';
 
 import {
   baseOptionSuffix, baseSelectionNote, basesForFamily,
-  cloudUnsupportedFamilyReason, isCustomWeightsBase, looksAbsoluteBase,
+  isCustomWeightsBase, looksAbsoluteBase,
   typedBaseNote,
 } from './trainingFamilyScope.js';
+import { cloudUnsupportedFamilyReason } from '../../../../bundled/cloud_training/frontend/lib/trainingFamily.js';
 
-const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8');
+const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + fs.readFileSync(new URL('../../../../bundled/cloud_training/frontend/dataset/cloudTraining.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 // The families the panel's own selector offers — the list these helpers must
 // stay exhaustive against.

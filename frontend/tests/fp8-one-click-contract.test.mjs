@@ -30,7 +30,7 @@ import { createElement, renderToStaticMarkup } from './support/mountJsx.mjs'
 
 /* ⚠️ Dynamic — the hooks that teach Node to read .jsx are installed while
    mountJsx.mjs is evaluated, and a static import would already be linked. */
-const Fp8Deliver = await import('../src/components/dataset/Fp8QuantizeTool.jsx')
+const Fp8Deliver = await import('../../bundled/model_tools/frontend/panels/Fp8QuantizeTool.jsx')
 const { denseQuantizeTarget, fullTransformerArtifactFiles } =
   await import('../src/utils/trainingMode.js')
 const { getHelpTopic, searchHelpTopics } = await import('../src/help/helpRegistry.js')
@@ -44,12 +44,14 @@ const walk = (dirUrl) => {
     const child = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dirUrl)
     if (entry.isDirectory()) out.push(...walk(child))
     else if (/\.jsx?$/.test(entry.name) && !/\.test\.jsx?$/.test(entry.name)) {
-      out.push([fileURLToPath(child), readFileSync(fileURLToPath(child), 'utf8')])
+      out.push([fileURLToPath(child), readFileSync(fileURLToPath(child), 'utf8').replace(/\r\n/g, '\n')])
     }
   }
   return out
 }
-const SRC_FILES = walk(new URL('../src/', import.meta.url))
+const REPO_DIR = fileURLToPath(new URL('../../', import.meta.url)).replace(/\\/g, '/')
+const SRC_FILES = [...walk(new URL('../src/', import.meta.url)),
+  ...walk(new URL('../../bundled/', import.meta.url))]
 
 const JOB = 'Krea_lds146_subject_Krea-2-Raw'
 const PLAN = {
@@ -71,10 +73,29 @@ const PLAN = {
 
 // ---- the cloud button is gone, and stays gone -------------------------------
 
+const { configureHostRuntime } = await import('../src/plugins/runtimeHost.jsx')
+const { publishRuntime } = await import('../src/plugins/loadPlugins.js')
+const { registerDescriptor, resetRegistry, setEnabled } = await import('../src/plugins/registry.js')
+const { default: modelTools } = await import('../../bundled/model_tools/frontend/index.js')
+const manifest = JSON.parse(readSource('../bundled/model_tools/plugin.json'))
+test.beforeEach(t => {
+  const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch }
+  t.after(() => { Object.assign(globalThis, saved); resetRegistry() })
+  globalThis.window = {}
+  globalThis.document = { cookie: '', querySelector: () => null }
+  globalThis.fetch = () => { throw new Error('Rendering must not contact any service') }
+  resetRegistry()
+  configureHostRuntime()
+  publishRuntime()
+  assert.equal(registerDescriptor(modelTools, { guideOwnership: manifest.guide_ownership }), true)
+  setEnabled(['model_tools'])
+})
+
+
 test('nothing in the UI calls the cloud quantization endpoints any more', () => {
   const callers = SRC_FILES
     .filter(([, src]) => src.includes('/api/cloud/quantize'))
-    .map(([path]) => path.replace(/\\/g, '/').split('/src/')[1])
+    .map(([path]) => path.replace(/\\/g, '/').slice(REPO_DIR.length))
   assert.deepEqual(callers, [],
     'the cloud quantize surface was removed on purpose — the engine stays dormant server-side')
   const named = SRC_FILES.filter(([, src]) => src.includes('CloudQuantizeButton'))
@@ -91,7 +112,7 @@ test('no poller treats apiFetch as if it resolved a Response', () => {
   // manual quantizer, and it is invisible to any test that never polls.
   const offenders = SRC_FILES
     .filter(([, src]) => /apiFetch\([^)]*\)[\s\S]{0,120}?\.then\(\s*\(?\w+\)?\s*=>\s*\w+\.json\(\)/.test(src))
-    .map(([path]) => path.replace(/\\/g, '/').split('/src/')[1])
+    .map(([path]) => path.replace(/\\/g, '/').slice(REPO_DIR.length))
   assert.deepEqual(offenders, [])
 })
 
@@ -128,12 +149,13 @@ test('nothing to aim at when there is no master, or an fp8 twin already exists',
 })
 
 test('the recipe card is the ONE surface, and it is handed that target', () => {
-  // The recipe card moved to FullTransformerRecipe.jsx (slice 1); the
-  // hand-off props stay in the panel body, so the contract reads both.
+  // The Cloud recipe passes its selected model to the optional Model tools
+  // contribution. Follow both ends of that hand-off.
   const panel = read('src/components/dataset/TrainingPanel.jsx')
-    + read('src/components/dataset/FullTransformerRecipe.jsx')
-  assert.match(panel, /<Fp8QuantizeTool disabled=\{disabled\} target=\{quantizeTarget\}/)
-  assert.match(panel, /quantizeTarget=\{denseQuantizeTarget\(cloudLastHere \|\| \{\}\)\}/)
+    + read('../bundled/cloud_training/frontend/dataset/FullTransformerRecipe.jsx')
+    + read('../bundled/cloud_training/frontend/dataset/DenseRecipePanel.jsx')
+  assert.match(panel, /<PluginSlot slot="dense.recipe.tool" surface="dense" disabled=\{disabled\} target=\{quantizeTarget\}/)
+  assert.match(panel, /const quantizeTarget = denseQuantizeTarget\(cloudLastHere \|\| \{\}\)/)
   // The custom base already on screen pre-fills the manual field instead of
   // earning a second button of its own.
   // `looksAbsolute` moved into trainingFamilyScope.js as `looksAbsoluteBase`
@@ -222,6 +244,7 @@ test('a model already on this machine is never offered for deletion', () => {
 
 test('a download in flight shows the phase, the bytes, the target and a way out', () => {
   const html = render(Fp8Deliver.Fp8DeliverProgress, {
+    onCancel: () => {},
     state: {
       status: 'downloading', weight_name: `${JOB}.safetensors`,
       downloaded_bytes: 6_400_000_000, download_total_bytes: 25_600_000_000,

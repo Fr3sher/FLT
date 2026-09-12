@@ -47,6 +47,18 @@ export default {
   },
   hosts: [],
   help: ([
+    { id: 'training.fp8_deliver', kind: 'action',
+    title: 'Quantize to fp8 in one click (and where the file lands)',
+    keywords: ['quantize', 'quantise', 'fp8', 'one click', 'button', 'download',
+      'hugging face', 'hf', 'repository', 'master', 'bf16', 'comfyui', 'comfy',
+      'diffusion_models', 'checkpoints folder', 'full model', 'dense', 'krea',
+      'disk space', 'not enough disk space', 'another folder', 'junction',
+      'resume', 'cancel', 'stop', 'keep master', 'delete master',
+      'torch', 'safetensors', 'no module named', 'quantize.python', 'interpreter'],
+    guide: { chapter: 'dataset-guide', anchor: 'quantizing-a-model-you-already-have' },
+    app: { route: '/datasets?section=training' },
+    tip: { trigger: 'fp8-deliver-one-click',
+      text: 'New: “✨ Quantize to fp8” on a delivered full model does the whole thing — it fetches the master from your private Hugging Face repo, converts it, and leaves the fp8 file in ComfyUI’s own models folder. It tells you which checkpoint it takes and where the file lands before it starts, refuses if the disk is too small, and can be stopped and resumed.' } },
     // The fp8 tool's SECOND door, and the findable one. Its first
     // (training.fp8_quantize_local, below) sits inside a dense dataset's recipe
     // card — which the person this helps most, someone who downloaded a 26 GB
