@@ -1,5 +1,7 @@
 """Provenance registry: dataset fingerprint -> human version (v1/v2/...),
 manifest diffs, and the version suffix on deployed checkpoint names."""
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 from app.extensions import db
 import os
@@ -7,6 +9,8 @@ import os
 import pytest
 
 from app.config import LOCAL_USER
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
@@ -252,7 +256,7 @@ def test_cloud_checkpoints_lists_synced_saves_and_checks_files(app, ds_with_imag
     import json as _json
     from app.extensions import db
     from app.models import CloudTrainingRun
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     ds_id, _ = ds_with_images
     with app.app_context():
         d10 = tmp_path / 'r10'
@@ -272,7 +276,8 @@ def test_cloud_checkpoints_lists_synced_saves_and_checks_files(app, ds_with_imag
             train_params=_json.dumps({'train_type': 'krea'}))
         db.session.add_all([active, deleted])
         db.session.commit()
-        out = ct.cloud_checkpoints(ds_id, 'krea')
+        from app.services.cloud_training import cloud_checkpoints
+        out = cloud_checkpoints(ds_id, 'krea')
         assert len(out) == 1                              # missing file filtered out
         assert out[0]['step'] == 1000 and out[0]['active'] is True
         assert out[0]['version'] == 2 and out[0]['cloud'] is True
@@ -280,7 +285,7 @@ def test_cloud_checkpoints_lists_synced_saves_and_checks_files(app, ds_with_imag
         assert ct._run_payload(active)['checkpoint_ready'] is True
         assert ct._run_payload(deleted)['checkpoint_ready'] is False
         # family filter: zimage view doesn't show krea saves
-        assert ct.cloud_checkpoints(ds_id, 'zimage') == []
+        assert cloud_checkpoints(ds_id, 'zimage') == []
 
 
 def test_checkpoint_download_targets_run_id(app, client, monkeypatch, ds_with_images, tmp_path):
@@ -378,7 +383,7 @@ def test_import_route_accepts_cloud_run_id(app, client, monkeypatch, ds_with_ima
 
 
 def test_cloud_launch_registers_and_stamps_version(app, client, monkeypatch, ds_with_images):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     ds_id, _ = ds_with_images
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
     monkeypatch.setattr(ct, '_start_monitor', lambda *a, **k: None)
@@ -486,7 +491,8 @@ def test_cloud_checkpoint_groups_carry_run_identity_and_map_epochs(app, ds_with_
             db.session.commit()
             run_ids.append(r.id)
 
-        groups = ct.cloud_checkpoint_groups(ds_id, 'krea')
+        from app.services.cloud_training import cloud_checkpoint_groups
+        groups = cloud_checkpoint_groups(ds_id, 'krea')
         assert [g['run_id'] for g in groups] == run_ids[::-1]   # newest run first
         for g in groups:
             assert g['source'] == 'cloud' and g['status'] == 'done'
@@ -587,7 +593,7 @@ def test_one_run_number_record_id_rides_every_cloud_payload(app, ds_with_images,
     import json as _json
     from app.models import CloudTrainingRun
     from app.services import checkpoint_registry as reg
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     ds_id, _ = ds_with_images
     with app.app_context():
         def mk_run(i):
@@ -606,7 +612,8 @@ def test_one_run_number_record_id_rides_every_cloud_payload(app, ds_with_images,
                                   steps=500, cloud_run_id=tracked.id)
         assert rec is not None
 
-        by_run = {g['run_id']: g for g in ct.cloud_checkpoint_groups(ds_id, 'krea')}
+        from app.services.cloud_training import cloud_checkpoint_groups
+        by_run = {g['run_id']: g for g in cloud_checkpoint_groups(ds_id, 'krea')}
         assert by_run[tracked.id]['record_id'] == rec.id
         assert by_run[legacy.id]['record_id'] is None
 

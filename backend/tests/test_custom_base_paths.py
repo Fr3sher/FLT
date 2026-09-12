@@ -17,10 +17,14 @@ Covers the binding guardrails of the feature:
 Plus: the per-family builders emit the right ai-toolkit config field for a
 custom .safetensors (name_or_path override; SDXL vae_path/te_name_or_path).
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 import struct
 
 import pytest
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 # --- fake .safetensors: 8-byte LE header length + JSON metadata (no real weights) ---
@@ -285,7 +289,7 @@ def test_cloud_custom_weights_need_pushed_private_repo(app, tmp_path, monkeypatc
     """A persisted Krea custom base is no longer flat-refused: the cloud lane
     trains it from a private HF repo. Without HF_TOKEN the launch still fails
     BEFORE renting, with the actionable token message."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import face_dataset_service as svc
     from app.config import LOCAL_USER
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
@@ -299,7 +303,7 @@ def test_cloud_custom_weights_need_pushed_private_repo(app, tmp_path, monkeypatc
 
 
 def test_cloud_refuses_persisted_sdxl_override(app, tmp_path, monkeypatch):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import face_dataset_service as svc
     from app.config import LOCAL_USER
     monkeypatch.setenv('VAST_API_KEY', 'k-test')

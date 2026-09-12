@@ -12,11 +12,15 @@ left the previous family's base attached; and the panel re-seeded itself from
 that column on every mount, which is why "change the model and come back" (a
 purely client-side reset) fixed it until the next reload.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 
 import pytest
 
 from app.config import LOCAL_USER
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 ZIMAGE_MERGE = 'z image\\bigLove_zt3.safetensors'
 
@@ -242,7 +246,7 @@ def test_cloud_readiness_names_the_family_not_a_missing_file(app, style_ds):
     """The reported modal said "The local file is unavailable (missing) —
     restore it to push". The file was never missing: base_push_state resolved a
     Z-Image merge NAME as a Krea absolute path and blamed the disk."""
-    from app.services import hf_base_push
+    from lds_cloud_training import hf_base_push
     from app.services import face_dataset_service as svc
     with app.app_context():
         ds = svc.get_dataset(LOCAL_USER, style_ds)
@@ -256,7 +260,7 @@ def test_cloud_readiness_names_the_family_not_a_missing_file(app, style_ds):
 
 
 def test_cloud_push_refuses_another_familys_base(app, style_ds):
-    from app.services import hf_base_push
+    from lds_cloud_training import hf_base_push
     with app.app_context():
         with pytest.raises(hf_base_push.HfPublishError) as e:
             hf_base_push.start_push(app, style_ds, 'krea', 'base', ZIMAGE_MERGE,
@@ -268,7 +272,7 @@ def test_cloud_push_refuses_when_the_local_file_is_absent(app, style_ds, tmp_pat
     """Independent of the family question: an action must not be offered for a
     file that is not there. Absent locally, the one-time upload has nothing to
     send — refused synchronously, before any thread or HF call."""
-    from app.services import hf_base_push
+    from lds_cloud_training import hf_base_push
     missing = str(tmp_path / 'deleted_after_being_chosen.safetensors')
     with app.app_context():
         with pytest.raises(hf_base_push.HfPublishError) as e:
@@ -279,7 +283,7 @@ def test_cloud_push_refuses_when_the_local_file_is_absent(app, style_ds, tmp_pat
 
 def test_cloud_launch_guard_refuses_another_familys_base(app, style_ds):
     """require_base_repo is what runs before a pod is RENTED."""
-    from app.services import hf_base_push
+    from lds_cloud_training import hf_base_push
     from app.services import face_dataset_service as svc
     with app.app_context():
         ds = svc.get_dataset(LOCAL_USER, style_ds)

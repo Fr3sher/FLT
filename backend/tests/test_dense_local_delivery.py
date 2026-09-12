@@ -5,13 +5,17 @@ then let the pod go. Everything after the proof — the Hugging Face backup, the
 pod cleanup — is allowed to fail without costing the run, and everything before
 it is allowed to fail without costing the pod.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 import struct
 
 import pytest
 
-from app.services import dense_local_delivery as dld
-from app.services.aitoolkit_remote import TransferCancelled
+from lds_cloud_training import dense_local_delivery as dld
+from lds_cloud_training.aitoolkit_remote import TransferCancelled
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 GB = 1000 ** 3
 
@@ -63,7 +67,12 @@ class _FakeRemote:
 
 @pytest.fixture()
 def ct(app, monkeypatch):
-    from app.services import cloud_training, storage_locations
+    from lds_cloud_training import cloud_training
+    monkeypatch.setenv('VAST_API_KEY', 'vast-test')
+    monkeypatch.setattr(cloud_training.vast_client, 'get_instance',
+                        lambda iid, **_kw: {'instance_id': '9001', 'label': 'lds-9001'}
+                        if str(iid) == '9001' else None)
+    from app.services import storage_locations
     monkeypatch.setattr(storage_locations, 'free_space',
                         lambda path: {'free_bytes': 4 * 1000 ** 4,
                                       'total_bytes': 8 * 1000 ** 4})
@@ -76,7 +85,7 @@ def _dense_run(ct, dataset_id, tmp_path, delivery='both', **params):
     run = ct.CloudTrainingRun(
         dataset_id=dataset_id, status='training', run_name='dense',
         job_name='Krea_lds1_dense', remote_job_id='job-1',
-        vast_instance_id='pod-1', base_url='http://pod.example',
+        vast_instance_id='9001', vast_label='lds-9001', base_url='http://pod.example',
         staging_dir=str(staging),
         train_params=json.dumps({
             'training_mode': 'full_transformer', 'train_type': 'krea',
@@ -240,8 +249,8 @@ def test_the_pod_dies_only_after_the_local_copy_is_proven(
     destroyed = []
     pushed = []
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(iid) or True)
-    from app.services import dense_pod_hub
+                        lambda iid, **_kw: destroyed.append(iid) or True)
+    from lds_cloud_training import dense_pod_hub
     monkeypatch.setattr(
         dense_pod_hub, 'push_master',
         lambda *a, **k: pushed.append(k) or {
@@ -271,7 +280,7 @@ def test_the_pod_dies_only_after_the_local_copy_is_proven(
         assert len(pushed) == 1
         assert pushed[0]['src_path'].endswith('_000003000.safetensors')
         # ... and only THEN is the machine released.
-        assert destroyed == ['pod-1']
+        assert destroyed == ['9001']
         # Long transfers resume and can be interrupted.
         assert all(d['resume'] and d['cancellable'] for d in remote.downloads)
 
@@ -282,7 +291,7 @@ def test_a_truncated_download_keeps_the_pod(
     remote = _FakeRemote({path: _safetensors(b'x' * 64)}, truncate={path})
     destroyed = []
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(iid) or True)
+                        lambda iid, **_kw: destroyed.append(iid) or True)
     with app.app_context():
         run = _dense_run(ct, dataset_id, tmp_path, delivery='local')
         assert ct._deliver_dense_locally(run, remote) is False
@@ -302,7 +311,7 @@ def test_cancelling_a_transfer_keeps_the_pod_and_what_landed(
     remote = _FakeRemote({path: _safetensors(b'x' * 64)})
     destroyed = []
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(iid) or True)
+                        lambda iid, **_kw: destroyed.append(iid) or True)
     with app.app_context():
         run = _dense_run(ct, dataset_id, tmp_path, delivery='local')
         assert ct._deliver_dense_locally(
@@ -321,8 +330,8 @@ def test_a_refused_hub_backup_still_leaves_the_run_done(
     to continue this model later, and nothing else."""
     path = '/o/Krea_lds1_dense_000003000.safetensors'
     remote = _FakeRemote({path: _safetensors(b'x' * 64)})
-    monkeypatch.setattr(ct.vast_client, 'destroy_instance', lambda iid: True)
-    from app.services import dense_pod_hub
+    monkeypatch.setattr(ct.vast_client, 'destroy_instance', lambda iid, **_kw: True)
+    from lds_cloud_training import dense_pod_hub
     monkeypatch.setattr(dense_pod_hub, 'push_master', lambda *a, **k: {
         'state': 'failed', 'result': None,
         'detail': 'No Hugging Face copy was made (403 storage limit).'})

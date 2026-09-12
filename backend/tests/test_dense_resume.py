@@ -12,16 +12,21 @@ multipart body built in memory. The other road (pushing the local copy from
 this computer, in resumable slices) lives in test_dense_resume_direct.py; what
 is tested HERE is that offering it changed nothing about this one.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 
 import pytest
 
-from app.services import dense_pod_hub
+from lds_cloud_training import dense_pod_hub
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
 def ct(app, monkeypatch):
-    from app.services import cloud_training, storage_locations
+    from lds_cloud_training import cloud_training
+    from app.services import storage_locations
     monkeypatch.setattr(storage_locations, 'free_space',
                         lambda path: {'free_bytes': 4 * 1000 ** 4,
                                       'total_bytes': 8 * 1000 ** 4})
