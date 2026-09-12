@@ -815,17 +815,14 @@ def test_the_local_engine_ids_and_labels_match_the_frontend():
     import re
     from pathlib import Path
     from app.services import face_dataset_service as svc
-    js = (Path(__file__).resolve().parents[2] / 'frontend' / 'src' / 'components'
-          / 'dataset' / 'engineSelection.js')
+    js = (Path(__file__).resolve().parents[2] / 'frontend' / 'src' / 'engines'
+          / 'catalog.js')
     if not js.exists():
         pytest.skip('frontend source not present')
     src = js.read_text(encoding='utf-8')
-    m = re.search(r'export const LOCAL_ENGINES\s*=\s*\[(.*?)\];', src, re.S)
-    assert m, 'LOCAL_ENGINES declaration not found in engineSelection.js'
-    assert tuple(re.findall(r"'([^']+)'", m.group(1))) == svc.LOCAL_ENGINES
     labels = dict(re.findall(
-        r"(\w+):\s*'([^']*)'",
-        re.search(r'export const ENGINE_LABELS\s*=\s*\{(.*?)\};', src, re.S).group(1)))
+        r"\{ id: '([^']+)', label: '([^']+)', kind: 'local'", src))
+    assert tuple(labels) == svc.LOCAL_ENGINES
     for engine in svc.LOCAL_ENGINES:
         assert labels.get(engine) == svc.LOCAL_ENGINE_LABELS[engine], engine
 

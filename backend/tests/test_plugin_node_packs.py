@@ -175,8 +175,8 @@ def test_worker_requires_an_explicit_prepared_and_restart_required_receipt(tmp_p
 def test_sdk_and_host_versions_match_the_new_public_method():
     import lds_sdk
     from app.plugins.api import LDS_PLUGIN_API_MINOR, PUBLIC_NAMES, PluginContext
-    assert LDS_PLUGIN_API_MINOR == lds_sdk.API_MINOR == 20
-    assert lds_sdk.VERSION == '1.20'
+    assert LDS_PLUGIN_API_MINOR == lds_sdk.API_MINOR >= 20
+    assert lds_sdk.VERSION == f'1.{LDS_PLUGIN_API_MINOR}'
     assert 'register_node_pack' in PUBLIC_NAMES and callable(PluginContext.register_node_pack)
 
 

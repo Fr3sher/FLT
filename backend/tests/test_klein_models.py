@@ -11,6 +11,8 @@ import io
 import os
 import struct
 
+import pytest
+
 from PIL import Image
 
 # Smallest structurally-valid safetensors header (8-byte LE length + '{}'), so a
@@ -796,6 +798,7 @@ def test_generate_route_refuses_nsfw_on_api_engines(client):
     assert 'Klein' in resp.get_json()['error']
 
 
+@pytest.mark.plugins('api_engines')
 def test_service_fanout_refuses_nsfw_on_api_engines(app):
     import pytest
     from app.services import face_dataset_service as svc

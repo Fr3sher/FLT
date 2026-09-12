@@ -1469,7 +1469,8 @@ def test_install_all_uses_managed_ml_support_independently_from_host_version():
     assert 'face_scoring' not in plan and 'masks' not in plan
 
 
-def test_install_all_plan_leaves_scrape_preparation_to_its_owner():
+@pytest.mark.plugins('scrape')
+def test_install_all_plan_leaves_scrape_preparation_to_its_owner(app):
     """A known plugin installer remains explicit, even when its dependency is absent."""
     from app import setup_installer
     assert setup_installer.known_action('scrape_extras')

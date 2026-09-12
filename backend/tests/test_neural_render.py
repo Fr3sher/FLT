@@ -47,7 +47,7 @@ def test_temporal_width_floor_is_the_measured_one_in_both_halves():
     src = (nr.cfg.BACKEND_DIR / 'infer' / 'dlss5nr_infer.py').read_text(encoding='utf-8')
     m = re.search(r'^TEMPORAL_MIN_WIDTH = (\d+)', src, re.M)
     assert m and int(m.group(1)) == nr.TEMPORAL_MIN_WIDTH
-    js = (nr.cfg.BACKEND_DIR.parent / 'frontend' / 'src' / 'components' / 'videobank'
+    js = (nr.cfg.BACKEND_DIR.parent / 'bundled' / 'video' / 'frontend' / 'videobank'
           / 'neuralRenderParams.js').read_text(encoding='utf-8')
     m = re.search(r'export const TEMPORAL_MIN_WIDTH = (\d+)', js)
     assert m and int(m.group(1)) == nr.TEMPORAL_MIN_WIDTH
