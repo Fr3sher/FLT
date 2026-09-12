@@ -175,8 +175,8 @@ class PluginContext:
         if verify is not None and not callable(verify):
             raise TypeError('An install verification must be callable.')
         if python == 'capability':
-            from ..setup_installer import _CAPABILITY_ML_ACTIONS
-            if key not in _CAPABILITY_ML_ACTIONS or callable(run):
+            from ..setup_installer import _MANAGED_CAPABILITY_ACTIONS
+            if key not in _MANAGED_CAPABILITY_ACTIONS or callable(run):
                 raise ValueError('A capability install must name a scoped host capability and use its pip recipe.')
         if python in ('app', 'capability') and not ((self._manifest.bundled or self._manifest.official)
                                     and self._manifest.in_process_requirements):
