@@ -6,6 +6,5 @@ update check just compares the latest GitHub release tag (stripped of a leading
 picks it up automatically (backend/ is copied verbatim into the archive).
 """
 APP_VERSION = '2026.09.14'
-# Release tooling reads this marker from the tagged tree. It does not opt an
-# existing installation into prerelease updates.
-APP_RELEASE_CHANNEL = 'v2-preview'
+# Release tooling reads this marker from the tagged tree.
+APP_RELEASE_CHANNEL = 'v2'

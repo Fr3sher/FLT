@@ -176,8 +176,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # The notes explain the update channel of this tagged tree, followed
-          # by its new core entries. V2 previews must never replace stable V1
-          # as the latest release or silently opt V1 installations into V2.
+          # by its new core entries. The stable V2 channel becomes the latest
+          # release; a preview channel remains opt-in.
           #
           # --generate-notes is deliberately GONE. It builds "What's Changed"
           # from MERGED PULL REQUESTS, and everything here lands straight on
@@ -190,6 +190,9 @@ jobs:
           if ($channel.Count -gt 0 -and $channel[0].Groups[1].Value -eq 'v2-preview') {
             $publishFlags = @('--prerelease', '--latest=false')
             $releaseTitle = 'LoRA Dataset Studio V2 — Preview'
+          } elseif ($channel.Count -gt 0 -and $channel[0].Groups[1].Value -eq 'v2') {
+            $publishFlags = @('--latest=true')
+            $releaseTitle = "LoRA Dataset Studio V2 — $env:RELEASE_REF_NAME"
           }
           gh release create "$env:RELEASE_REF_NAME" `
             "packaging/dist/LoRA-Dataset-Studio-windows.zip" `

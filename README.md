@@ -1,4 +1,4 @@
-# LoRA Dataset Studio V2 — Preview
+# LoRA Dataset Studio V2
 
 [![CI](https://github.com/perfectgf/lora-dataset-studio/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/perfectgf/lora-dataset-studio/actions/workflows/ci.yml) [![Join our Discord](https://img.shields.io/discord/1525908170331914411?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/j6hnJBFtXE) [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/perfectgf)
 
@@ -6,7 +6,7 @@
 
 The core and the 13 public plugins are available at no charge, with public source under the project's PolyForm Noncommercial license, no account required for the core and no telemetry. Additional optional paid plugins may be offered later. API engines and rented GPUs are optional; local and manual workflows remain available.
 
-> **V2 is an opt-in preview.** Install from the [`v2` branch](https://github.com/perfectgf/lora-dataset-studio/tree/v2) or the [V2 preview release](https://github.com/perfectgf/lora-dataset-studio/releases/tag/v2026.09.14). The stable release remains V1; its **Update & restart** button does not migrate you to V2. Start with the core, then install the optional features described below from **Plugins → Store**.
+> **V2 is now the main LDS release.** Install from the default [`main` branch](https://github.com/perfectgf/lora-dataset-studio/tree/main) or the [latest release](https://github.com/perfectgf/lora-dataset-studio/releases/latest). Existing V1 installations can use **Update & restart** to upgrade the core while keeping their datasets, media and history. Then install the optional features you use from **Plugins → Store** and review each plugin's settings before its first run.
 
 <h3 align="center">❤ Keep the project in development</h3>
 
@@ -386,7 +386,7 @@ The Store offers **13 free public plugins**: API image engines, Camera angles, C
 
 ### Option 1 — release ZIP + start.bat (Windows)
 
-Download **`LoRA-Dataset-Studio-windows.zip`** from the [V2 preview release](https://github.com/perfectgf/lora-dataset-studio/releases/tag/v2026.09.14). Extract the entire archive into a new folder, then double-click:
+Download **`LoRA-Dataset-Studio-windows.zip`** from the [latest release](https://github.com/perfectgf/lora-dataset-studio/releases/latest). For a new installation, extract the entire archive into a new folder, then double-click:
 
 ```text
 start.bat
@@ -394,19 +394,19 @@ start.bat
 
 `start.bat` uses Python 3.10–3.12 if available. If none is installed, it downloads a self-contained CPython 3.12 into `.python\`, creates `.venv`, installs the core requirements, opens `http://127.0.0.1:5050/`, and starts the server. It requires no admin rights and changes no system PATH.
 
-**Preview ZIP updates are manual:** download the next V2 preview release and follow its instructions. The ZIP updater currently follows stable releases; it does not select V2 previews. Keep your existing data safe when changing installations. A git checkout follows its configured branch instead and needs `git` on your PATH, which an install made through a desktop Git client does not always provide.
+On an existing ZIP installation, **Update & restart** downloads the next release and swaps the core in, keeping `data/`, `config.json`, `.env`, `.venv` and `.python` untouched. Install and update optional plugins separately from the Store. A git checkout follows its configured branch instead and needs `git` on your PATH, which an install made through a desktop Git client does not always provide.
 
-To follow V2 commits with **Update & restart**, explicitly clone the `v2` branch:
+The default `main` branch now carries V2. Clone it to follow its commits with **Update & restart**:
 
 ```bash
-git clone --branch v2 https://github.com/perfectgf/lora-dataset-studio.git lora-dataset-studio-v2
-cd lora-dataset-studio-v2
+git clone https://github.com/perfectgf/lora-dataset-studio.git
+cd lora-dataset-studio
 start.bat
 ```
 
 ### Option 2 — manual venv (any OS)
 
-Clone `v2` as above or download its [source archive](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/v2.zip), open a terminal in its root, then run:
+Clone the default branch as above or download its [source archive](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/main.zip), open a terminal in its root, then run:
 
 ```bash
 python -m venv .venv
@@ -427,7 +427,7 @@ npm run build
 
 ### Option 3 — Docker + your existing ComfyUI
 
-**Beginner Windows flow:** download/extract the [**V2 source ZIP**](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/v2.zip) — the release asset `LoRA-Dataset-Studio-windows.zip` does not carry the Docker launchers — start Docker Desktop, then double-click **`start-docker.bat`**. On the first run, select either the ComfyUI folder containing `main.py` and `models`, or its portable parent containing `ComfyUI\main.py`. LDS validates the folder and remembers it for this checkout.
+**Beginner Windows flow:** download/extract the [**source ZIP**](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/main.zip) — the release asset `LoRA-Dataset-Studio-windows.zip` does not carry the Docker launchers — start Docker Desktop, then double-click **`start-docker.bat`**. On the first run, select either the ComfyUI folder containing `main.py` and `models`, or its portable parent containing `ComfyUI\main.py`. LDS validates the folder and remembers it for this checkout.
 
 Start your usual ComfyUI on the host. LDS uses `http://host.docker.internal:8188` from its container and mounts the selected folder at `/external-comfyui`. If the folder later moves, double-click **`configure-docker.bat`**. The launcher chooses a free Studio port and opens the browser automatically.
 
@@ -435,7 +435,7 @@ Start your usual ComfyUI on the host. LDS uses `http://host.docker.internal:8188
 
 **Beginner Windows flow:**
 
-1. Download the [V2 source ZIP](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/v2.zip), then extract the complete folder.
+1. Download the [source ZIP](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/main.zip), then extract the complete folder.
 2. Start **Docker Desktop** and wait until it reports that Docker is running.
 3. Double-click **`start-docker-gpu.bat`** in the extracted folder.
 4. Leave the first build/start running; it downloads the image and ComfyUI environment. The launcher prints both actual addresses and opens Studio as soon as Studio responds, while its batch window stays open until ComfyUI finishes its first boot. You do not need to open a second ComfyUI window.
@@ -468,15 +468,13 @@ docker compose up --build          # docker-compose.yml, the default file
 
 Studio answers on `http://127.0.0.1:5050/` and its data lives in `./data-docker`. This is the only Docker lane that needs no NVIDIA support at all.
 
-During the V2 preview, update a `v2` git checkout with `git pull --ff-only`, then restart its Docker launcher with `--rebuild`. Source ZIP updates are manual. **`update-docker.bat` follows stable V1 (or `main` when requested), so do not use it to update this preview.** `start-docker.bat` also accepts `--configure`, which is what `configure-docker.bat` calls.
+To update a Docker install, double-click **`update-docker.bat`** for the latest stable release, or pass `main` to follow commits on the main branch. It rebuilds transactionally and rolls back if the container does not come up healthy. Both `start-docker.bat` and `start-docker-gpu.bat` accept `--rebuild` and `--update-rebuild`; `start-docker.bat` also accepts `--configure`, which is what `configure-docker.bat` calls. After upgrading from V1, install the optional features you use from **Plugins → Store**.
 
 ### Option 5 — Pinokio (one click, any OS)
 
-**The default Pinokio URL below installs stable V1. For this V2 preview, use the ZIP or explicit `v2` checkout above.**
-
 In [Pinokio](https://pinokio.computer), open **Discover → Download from URL** and paste `https://github.com/perfectgf/lora-dataset-studio.git`, then click **Install** and **Start**. Pinokio builds the Python environment, installs the core requirements and opens Studio; **Update** fast-forwards the same checkout the in-app updater uses.
 
-Only the core app is installed this way — ComfyUI, Ollama, ai-toolkit and the optional ML helpers are still connected from the app's own **Setup** screen. Updates go through Pinokio's **Update** tab: because Pinokio starts and stops the server, the app detects this install shape and shows *Stop → Update → Start* instead of its own **Update & restart** button, which would relaunch the server outside Pinokio's control.
+Only the core app is installed this way. Complete **Setup**, then choose your optional features in **Plugins → Store**; each plugin carries its own settings and preparation steps. Updates go through Pinokio's **Update** tab: because Pinokio starts and stops the server, the app detects this install shape and shows *Stop → Update → Start* instead of its own **Update & restart** button, which would relaunch the server outside Pinokio's control.
 
 ### External tools (install once, connect in Settings)
 

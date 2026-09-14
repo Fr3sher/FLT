@@ -1,6 +1,6 @@
-## LoRA Dataset Studio V2 — Preview
+## LoRA Dataset Studio V2
 
-This is an **opt-in preview on the `v2` branch**. The stable V1 release remains available. Updating an existing V1 installation does **not** switch it to V2.
+**V2 is now the main LDS release.** Existing V1 installations can upgrade from **Settings → Maintenance → Update & restart**. Your datasets, media and history stay in place. Optional features are now plugins: open **Plugins → Store** after updating, install the ones you use and review their settings before the first run.
 
 ### Install the core, then choose your plugins
 
@@ -10,14 +10,14 @@ Download **`LoRA-Dataset-Studio-windows.zip`** below, extract it into a new fold
 
 The core and these public plugins are available at no charge, with their source published under the project's PolyForm Noncommercial license. Additional optional paid plugins may be offered later.
 
-### Updates during the preview
+### Two ways to install and update
 
-**ZIP installations:** download later V2 preview releases manually. The in-app ZIP updater follows stable releases; a V2 preview update channel is not implemented yet. Keep your existing data safe and follow the instructions for the release you install.
+**ZIP installations:** **Update & restart** installs the next published release, preserving your data and local configuration. The ZIP below contains the core; plugins are installed and updated separately through the Store.
 
-**Git installations:** explicitly clone `v2`. Once on that branch, **Update & restart** follows its commits.
+**Git installations:** the default `main` branch now carries V2. **Update & restart** follows the commits of your checkout's configured branch. A checkout on another branch stays on that branch.
 
 ```text
-git clone --branch v2 https://github.com/perfectgf/lora-dataset-studio.git lora-dataset-studio-v2
-cd lora-dataset-studio-v2
+git clone https://github.com/perfectgf/lora-dataset-studio.git
+cd lora-dataset-studio
 start.bat
 ```

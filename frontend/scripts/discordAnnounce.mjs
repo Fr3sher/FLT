@@ -101,13 +101,18 @@ export function isV2PreviewVersion(source) {
   return /^APP_RELEASE_CHANNEL = 'v2-preview'\s*$/m.test(source);
 }
 
-export function renderAnnouncement({ tag, entries, previousTag, preview = false, limit = DISCORD_LIMIT }) {
+export function isV2StableVersion(source) {
+  return /^APP_RELEASE_CHANNEL = 'v2'\s*$/m.test(source);
+}
+
+export function renderAnnouncement({ tag, entries, previousTag, preview = false, v2 = false, limit = DISCORD_LIMIT }) {
   if (!entries.length) {
     throw new Error(`nothing to announce for ${tag}: no What's-new entry since `
       + `${previousTag || 'the previous release'}. An announcement that lists nothing `
       + 'is how a wave gets skipped — fix the changelog, do not post an empty message.');
   }
-  const releaseName = preview ? `LoRA Dataset Studio V2 — Preview (${tag})` : tag;
+  const releaseName = preview ? `LoRA Dataset Studio V2 — Preview (${tag})`
+    : v2 ? `LoRA Dataset Studio V2 (${tag})` : tag;
   const head = `## 🎁 ${releaseName} is out — ${entries.length} change${entries.length > 1 ? 's' : ''}\n`;
   const credits = extractCredits(entries);
   const tail = [
@@ -119,7 +124,9 @@ export function renderAnnouncement({ tag, entries, previousTag, preview = false,
       ? `Try V2 with the preview ZIP or an explicit **v2** checkout: <${REPO_URL}/releases/tag/${tag}>\n`
         + 'Complete the core Setup, then choose your plugins in **Plugins ▸ Store**. '
         + 'V1 Update & restart does not switch to V2; preview ZIP updates are manual.'
-      : `Update from **Settings ▸ Maintenance ▸ Update & restart**, or grab the ZIP: <${REPO_URL}/releases/tag/${tag}>`,
+      : `Update from **Settings ▸ Maintenance ▸ Update & restart**, or grab the ZIP: <${REPO_URL}/releases/tag/${tag}>`
+        + (v2 ? '\nV2 is now the main release. Your datasets, media and history stay in place. '
+          + 'Choose from **13 free public plugins** in **Plugins ▸ Store**, then review each plugin’s settings and preparation steps.' : ''),
   ].filter(Boolean).join('\n');
 
   const lines = renderLines(entries);
@@ -178,10 +185,11 @@ async function main() {
   const taggedVersion = execFileSync('git', ['show', `${tag}:backend/app/version.py`],
     { cwd: repoRoot, encoding: 'utf8' });
   const preview = isV2PreviewVersion(taggedVersion);
+  const v2 = isV2StableVersion(taggedVersion);
 
   let messages;
   try {
-    messages = renderAnnouncement({ tag, entries, previousTag, preview });
+    messages = renderAnnouncement({ tag, entries, previousTag, preview, v2 });
   } catch (err) {
     console.error(String(err.message));
     process.exit(2);
