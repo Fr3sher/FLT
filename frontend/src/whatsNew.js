@@ -84,13 +84,24 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-14-v2-choose-your-plugins',
+    date: '2026-09-14',
+    title: 'Start with the LDS core and add the plugins you need',
+    image: 'docs/screenshots/plugins/public-store-catalog.png',
+    blurb: 'V2 separates the core setup from optional features. Start importing and organising '
+      + 'datasets, then choose plugins from the Store. Each plugin brings its own screens, '
+      + 'settings and preparation steps, including required ComfyUI custom nodes. '
+      + 'Plugin updates are listed with their plugin; this feed covers the LDS core.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-14-bank-score-retry-errors',
     date: '2026-09-14',
     title: 'Bank scoring recovers from failed images',
     blurb: 'Run Score again to retry failed images while keeping successful cached work. '
       + 'A failing aesthetic or NSFW scorer now preserves the CLIP index and the other scores. '
       + 'Failed images are reported clearly, and an empty semantic index no longer looks like '
-      + 'an incomplete installation.',
+      + 'an incomplete installation. Reported by perv0839 (Discord).',
     to: '/bank',
   },
   {

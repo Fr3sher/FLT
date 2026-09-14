@@ -23,9 +23,10 @@ LOCAL_DIRS = {'extensions', '__pycache__', 'node_modules', 'tests', 'data',
               'bundled', 'venv', '.venv', '.pytest_cache'}
 ARCHIVE_SUFFIXES = ('.zip', '.whl', '.tar', '.gz', '.bz2', '.xz', '.tgz',
                     '.tbz2', '.txz', '.7z', '.rar', '.pyz')
+PUBLIC_STORE_FILES = {'store/bootstrap.json', 'store/public-root.json'}
 REQUIRED = ROOT_FILES | {'backend/run.py', 'backend/requirements.txt',
                         'backend/app/version.py', 'backend/lds_sdk/__init__.py',
-                        'frontend/dist/index.html', 'scripts/bootstrap_python.ps1'}
+                        'frontend/dist/index.html', 'scripts/bootstrap_python.ps1'} | PUBLIC_STORE_FILES
 
 
 def runtime_member(name: str) -> bool:
@@ -34,7 +35,7 @@ def runtime_member(name: str) -> bool:
     if (not parts or name.startswith('/') or any(part in {'', '.', '..'} for part in parts)
             or '\\' in name or ':' in name):
         raise ValueError('Invalid Git member path')
-    if name in ROOT_FILES or name == 'scripts/bootstrap_python.ps1':
+    if name in ROOT_FILES or name == 'scripts/bootstrap_python.ps1' or name in PUBLIC_STORE_FILES:
         return True
     if any(part.casefold() in LOCAL_DIRS or part.startswith('.') for part in parts):
         return False

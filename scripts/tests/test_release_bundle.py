@@ -31,7 +31,8 @@ def repository(tmp_path):
     files.update({path: 'local-only\n' for path in (
         'backend/extensions/private/__init__.py', 'backend/data/session.json',
         'backend/app/.env', 'backend/tests/test_private.py',
-        'bundled/private/plugin.json', 'plugins/private/plugin.json', '.env')})
+        'bundled/private/plugin.json', 'plugins/private/plugin.json', '.env',
+        'store/keys/targets.pem', 'store/commerce.json', 'store/private/registry.json')})
     for name, body in files.items():
         destination = repo / name
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -51,6 +52,8 @@ def test_zip_uses_exact_committed_bytes_and_excludes_local_products(repository, 
     assert members['backend/app/version.py'] == b"APP_VERSION = '2026.9.13'\n"
     assert members['backend/app/plugins/loader.py'] == b'host plugin loader\n'
     assert members['frontend/dist/assets/app.js'] == b'export const value = "committed";\n'
+    assert {name for name in members if name.startswith('store/')} == bundle.PUBLIC_STORE_FILES
+    assert all(members[name] == b'committed\n' for name in bundle.PUBLIC_STORE_FILES)
     assert not any(b'local-only' in content or b'untracked' in content for content in members.values())
     info = json.loads(members['build_info.json'])
     assert info['commit'] == git(repository, 'rev-parse', 'HEAD').decode().strip()

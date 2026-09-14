@@ -107,14 +107,13 @@ jobs:
       - name: Note if the tracked frontend build differs from a fresh CI build
         shell: pwsh
         run: |
-          # The step above rebuilt frontend/dist, and the ZIP packages THAT fresh
-          # build — so the release artifact is never stale. A byte diff here only
-          # means the committed dist was built on a different toolchain (e.g. a
-          # newer Node minor than this runner), which is cosmetic for git-clone
-          # users, not a stale release. Report it, don't block the release.
+          # The ZIP builder reads the committed tree, including frontend/dist;
+          # it does not package this job's working-tree rebuild. Report a diff
+          # here for review: toolchain drift can change bytes, but source changes
+          # still require a committed frontend build before tagging.
           $changes = @(git status --porcelain --untracked-files=all -- frontend/dist)
           if ($changes.Count -gt 0) {
-            Write-Warning "Committed frontend/dist differs from a fresh CI build (toolchain drift). The ZIP ships the fresh build; consider recommitting dist from the release toolchain."
+            Write-Warning "Committed frontend/dist differs from a fresh CI build. The ZIP ships the committed build; confirm that its sources are current and any difference is toolchain drift."
             $changes | ForEach-Object { Write-Host $_ }
           }
 
@@ -176,17 +175,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # release-notes.md was built at the top of this job: the install
-          # preamble (the ZIP updates only from release to release, a git clone
-          # updates from every commit - people cannot guess that, so every
-          # release says it) followed by the 🎁 What's new entries this tag adds.
+          # The notes explain the update channel of this tagged tree, followed
+          # by its new core entries. V2 previews must never replace stable V1
+          # as the latest release or silently opt V1 installations into V2.
           #
           # --generate-notes is deliberately GONE. It builds "What's Changed"
           # from MERGED PULL REQUESTS, and everything here lands straight on
           # main - so it contributed an empty heading plus one useful line, the
           # Full Changelog compare link, which the generator now emits itself.
           # Three releases shipped a preamble-only body before that was noticed.
+          $channel = (Select-String -Path backend/app/version.py -Pattern "^APP_RELEASE_CHANNEL = '([^']+)'$").Matches
+          $publishFlags = @()
+          $releaseTitle = "LoRA Dataset Studio $env:RELEASE_REF_NAME"
+          if ($channel.Count -gt 0 -and $channel[0].Groups[1].Value -eq 'v2-preview') {
+            $publishFlags = @('--prerelease', '--latest=false')
+            $releaseTitle = 'LoRA Dataset Studio V2 — Preview'
+          }
           gh release create "$env:RELEASE_REF_NAME" `
             "packaging/dist/LoRA-Dataset-Studio-windows.zip" `
-            --title "LoRA Dataset Studio $env:RELEASE_REF_NAME" `
-            --notes-file release-notes.md
+            --title $releaseTitle `
+            --notes-file release-notes.md @publishFlags
