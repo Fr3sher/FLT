@@ -132,6 +132,25 @@ jobs:
       - name: Enforce release asset policy
         run: python scripts/check_release_artifacts.py
 
+      - name: Run bundled Python contracts in isolated processes
+        shell: pwsh
+        run: |
+          # Product harnesses replace SDK modules; never collect them with the
+          # host suite or another product in the same Python process.
+          # Run these before the longer host suite. pytest creates each leaf
+          # basetemp directory, but its parent must exist on a fresh runner.
+          New-Item -ItemType Directory -Path 'D:/pt' -Force -ErrorAction Stop | Out-Null
+          $tested = 0
+          foreach ($plugin in (Get-ChildItem -LiteralPath bundled -Directory | Sort-Object Name)) {
+            $tests = Join-Path $plugin.FullName 'tests'
+            if (-not (Test-Path -LiteralPath $tests -PathType Container)) { continue }
+            if (-not (Get-ChildItem -LiteralPath $tests -Filter 'test_*.py' -File -Recurse)) { continue }
+            python -X utf8 -m pytest $tests -q -p no:flask "--basetemp=D:/pt/$($plugin.Name)"
+            if ($LASTEXITCODE -ne 0) { throw "Python contracts failed: $($plugin.Name)" }
+            $tested++
+          }
+          if ($tested -eq 0) { throw 'No bundled Python contracts were discovered.' }
+
       - name: Run backend and release tooling tests
         # Parallel: xdist workers are separate processes and this suite was
         # hardened for it (in-memory SQLite per app instance, shared registries
@@ -144,22 +163,6 @@ jobs:
         # one. D: is the runner's workspace drive.
         # pytest also discovers the unittest cases and pytest functions in scripts/tests.
         run: python -X utf8 -m pytest backend/tests scripts/tests -q -n auto --dist loadfile --basetemp=D:/t
-
-      - name: Run bundled Python contracts in isolated processes
-        shell: pwsh
-        run: |
-          # Product harnesses replace SDK modules; never collect them with the
-          # host suite or another product in the same Python process.
-          $tested = 0
-          foreach ($plugin in (Get-ChildItem -LiteralPath bundled -Directory | Sort-Object Name)) {
-            $tests = Join-Path $plugin.FullName 'tests'
-            if (-not (Test-Path -LiteralPath $tests -PathType Container)) { continue }
-            if (-not (Get-ChildItem -LiteralPath $tests -Filter 'test_*.py' -File -Recurse)) { continue }
-            python -X utf8 -m pytest $tests -q -p no:flask "--basetemp=D:/pt/$($plugin.Name)"
-            if ($LASTEXITCODE -ne 0) { throw "Python contracts failed: $($plugin.Name)" }
-            $tested++
-          }
-          if ($tested -eq 0) { throw 'No bundled Python contracts were discovered.' }
 
       - name: Build the Windows source ZIP
         shell: pwsh
