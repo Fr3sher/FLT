@@ -58,6 +58,7 @@ from .. import config as cfg
 from ..extensions import db
 from ..models import (BankDupDistinct, BankImage, FaceDataset, FaceDatasetImage,
                       ImageBank)
+from ..utils.redact import redact_tokens, redact_user_paths
 from . import (bank_jobs, bank_semantic_engine, bank_transfer_metadata, bank_undo, caption_origin,
                dataset_activity, face_models, image_encoding, path_guard, trash)
 # The scope vocabulary is a leaf (pass_scopes.py) so face_dataset_service never
@@ -7500,12 +7501,25 @@ def _score_job(bank_id, rescore=False):
         # (below). It counts PATHS it was handed, so it is the wrong thing to
         # report as "scored": see the counter in the write-back loop.
         ok = [r for r in results.values() if r.get('state') == 'ok']
+        failed = sum(r.get('state') == 'error' for r in results.values())
+        failure_note = ''
+        if failed:
+            failure_note = (f'{failed} image(s) failed; run Score again to retry '
+                            'them. Successful cached images are kept.')
+            causes = list(dict.fromkeys(
+                redact_user_paths(redact_tokens(str(reason)))
+                for reason in (data.get('image_errors') or [])[:3]))
+            if causes:
+                failure_note += ' ' + ' · '.join(causes)
+        if failed and not ok:
+            bank_jobs.fail(job, 'Scoring failed — ' + failure_note)
+            return
         # Name any head that produced nothing, so a degraded pass says so out loud
         # (graceful degradation must be visible, never a silent gap).
         missing = []
-        if ok and not any('aesthetic' in r for r in ok):
+        if ok and any('aesthetic' not in r for r in ok):
             missing.append('aesthetic')
-        if ok and not any('nsfw' in r for r in ok):
+        if ok and any('nsfw' not in r for r in ok):
             missing.append('NSFW')
         detail = (f'done — scored {scored} image(s), '
                   + group_summary(sizes.values(), 'style group',
@@ -7522,6 +7536,8 @@ def _score_job(bank_id, rescore=False):
             detail += (f' · {computed} newly computed, '
                        f'{reused} reused from cache')
         detail += skipped
+        if failure_note:
+            detail += ' · ' + failure_note
         if missing:
             detail += f' ({" + ".join(missing)} head unavailable'
             # WHY, when the child said so. Both heads fetch their weights over the
@@ -7533,7 +7549,8 @@ def _score_job(bank_id, rescore=False):
             # exactly what it said before rather than growing an empty bracket.
             why = data.get('head_errors') or {}
             causes = list(dict.fromkeys(
-                str(why[k]) for k in ('aesthetic', 'nsfw') if why.get(k)))
+                redact_user_paths(redact_tokens(str(why[k])))
+                for k in ('aesthetic', 'nsfw') if why.get(k)))
             if causes:
                 detail += ' — ' + ' · '.join(causes)
             detail += ')'

@@ -84,6 +84,16 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-14-bank-score-retry-errors',
+    date: '2026-09-14',
+    title: 'Bank scoring recovers from failed images',
+    blurb: 'Run Score again to retry failed images while keeping successful cached work. '
+      + 'A failing aesthetic or NSFW scorer now preserves the CLIP index and the other scores. '
+      + 'Failed images are reported clearly, and an empty semantic index no longer looks like '
+      + 'an incomplete installation.',
+    to: '/bank',
+  },
+  {
     id: '2026-09-07-training-speed-levers',
     date: '2026-09-07',
     title: 'Trade memory back for time: batch size, quantisation backend, checkpointing and compile',

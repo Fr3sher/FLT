@@ -19,7 +19,7 @@ export default function BankSemanticEngine({ state, disabled = false,
     ? `${state.indexed.toLocaleString()} of ${state.total.toLocaleString()} image(s) ready`
     : state.indexed > 0
       ? `${state.indexed.toLocaleString()} image(s) indexed, but the selected engine is not ready`
-      : 'Not ready yet'
+      : 'No images indexed in this bank yet'
 
   // Which device the index will really use, and — when a card sits unused — the
   // way out. Same offer Score has had, same detector behind it.
@@ -59,7 +59,7 @@ export default function BankSemanticEngine({ state, disabled = false,
           {state.engine === 'siglip2' && capsLoading ? 'checking the Quality tool…' : status}
         </span>
         {state.engine === 'clip' && (
-          <span className="text-content-subtle">Produced by ✨ Score.</span>
+          <span className="text-content-subtle">Run ✨ Score to build the CLIP index.</span>
         )}
         {state.engine === 'siglip2' && !capsLoading && action && (
           <button type="button" onClick={onIndex} disabled={disabled || switching || live}
