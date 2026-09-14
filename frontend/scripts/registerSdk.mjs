@@ -7,10 +7,15 @@ const base = new URL('../../sdk/frontend/', import.meta.url)
 const pkg = JSON.parse(readFileSync(new URL('package.json', base), 'utf8'))
 const hostParentURL = new URL('../package.json', import.meta.url).href
 const hostRequire = createRequire(hostParentURL)
-const sharedPackages = new Set(['react', 'react-dom', 'react-router', 'lucide-react'])
+// npm ci runs in frontend/ in CI. SDK build tools use that same dependency
+// tree, including the selector parser, rather than an ambient SDK installation.
+const sharedPackages = new Set([
+  'react', 'react-dom', 'react-router', 'lucide-react', ...Object.keys(pkg.dependencies || {}),
+])
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (sharedPackages.has(specifier.split('/')[0]) && context.parentURL !== hostParentURL) {
+    const name = specifier.split('/').slice(0, specifier.startsWith('@') ? 2 : 1).join('/')
+    if (sharedPackages.has(name) && context.parentURL !== hostParentURL) {
       // require.resolve also invokes synchronous hooks in newer Node versions.
       // The host-parent check lets its nested resolution continue normally.
       // CJS nextResolve retains its original parent; ESM accepts a new one.
