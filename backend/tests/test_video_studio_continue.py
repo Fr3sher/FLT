@@ -12,6 +12,21 @@ from lds_video import video_test_studio as vts
 pytestmark = pytest.mark.plugins('video')
 
 
+@pytest.fixture(autouse=True)
+def _preloaded_video_host_without_ffmpeg(monkeypatch):
+    """Mocks must work after SDK exports were bound, without a local encoder."""
+    from app.services import ffmpeg_tools as host_ffmpeg
+    from app.utils import comfy_fs as host_comfy_fs
+    from lds_sdk.video_host import comfy_fs, ffmpeg_tools
+
+    monkeypatch.setattr(host_ffmpeg, 'ffmpeg_path', lambda: None)
+    # A prior test's monkeypatch can materialize a lazy SDK export on undo.
+    # Store it explicitly, and restore the module dict (including absent keys).
+    monkeypatch.setitem(vars(ffmpeg_tools), 'ffmpeg_path', host_ffmpeg.ffmpeg_path)
+    for name in ('ensure_input_usable', 'stage_input_image'):
+        monkeypatch.setitem(vars(comfy_fs), name, getattr(host_comfy_fs, name))
+
+
 def _png(path, w=64, h=32):
     from PIL import Image
     Image.new('RGB', (w, h), (10, 20, 30)).save(path)
@@ -130,7 +145,7 @@ def test_the_generate_route_carries_continues_and_refuses_an_unfinished_parent(c
 def test_the_last_frame_is_extracted_once_refreshed_when_stale_and_the_route_stages_it(app, client, monkeypatch, tmp_path):
     from app.extensions import db
     from lds_video.models import VideoTestClip
-    from app.services import ffmpeg_tools
+    from lds_sdk.video_host import ffmpeg_tools
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: 'ffmpeg')
     calls = []
@@ -171,7 +186,7 @@ def test_the_last_frame_is_extracted_once_refreshed_when_stale_and_the_route_sta
         staged['src'] = src
         _png(os.path.join(str(tmp_path), dest))
         return os.path.join(str(tmp_path), dest)
-    from app.utils import comfy_fs
+    from lds_sdk.video_host import comfy_fs
     monkeypatch.setattr(comfy_fs, 'ensure_input_usable', lambda d: str(tmp_path))
     monkeypatch.setattr(comfy_fs, 'stage_input_image', stage)
     r = client.post(f'/api/video-studio/clip/{pid}/last-frame')
@@ -214,7 +229,7 @@ def _sounding(banner_for):
 def test_a_landed_part_is_joined_behind_its_parent_outside_the_write_transaction(app, monkeypatch, tmp_path):
     from app.extensions import db
     from lds_video.models import VideoTestClip
-    from app.services import ffmpeg_tools
+    from lds_sdk.video_host import ffmpeg_tools
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: 'ffmpeg')
     monkeypatch.setattr(vts, '_bring_clip_home', lambda filename: None)
@@ -264,7 +279,7 @@ def test_a_smoothed_parent_keeps_the_new_part_s_sound_and_one_cadence(app, monke
     length, trims one PART frame, and counts frames at the parent's cadence."""
     from app.extensions import db
     from lds_video.models import VideoTestClip
-    from app.services import ffmpeg_tools
+    from lds_sdk.video_host import ffmpeg_tools
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: 'ffmpeg')
     monkeypatch.setattr(vts, '_bring_clip_home', lambda filename: None)
@@ -295,7 +310,7 @@ def test_a_smoothed_parent_keeps_the_new_part_s_sound_and_one_cadence(app, monke
 def test_a_join_that_fails_or_raises_keeps_the_part_and_says_why(app, monkeypatch, tmp_path):
     from app.extensions import db
     from lds_video.models import VideoTestClip
-    from app.services import ffmpeg_tools
+    from lds_sdk.video_host import ffmpeg_tools
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: 'ffmpeg')
     monkeypatch.setattr(vts, '_bring_clip_home', lambda filename: None)
