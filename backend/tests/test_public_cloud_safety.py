@@ -3,7 +3,7 @@ import importlib
 import json
 from datetime import timedelta
 from dataclasses import FrozenInstanceError
-from types import SimpleNamespace
+from types import GeneratorType, SimpleNamespace
 
 import pytest
 
@@ -288,6 +288,34 @@ def test_sdk_history_and_script_export_keep_existing_main_identities(cloud):
     assert cloud_history.run_checkpoint_files is main.run_checkpoint_files
     assert facade.__file__ == fp8_export.__file__
     assert facade.fp8_name_for is fp8_export.fp8_name_for
+
+
+@pytest.mark.parametrize('module_name,helper_name', [
+    ('test_config', '_fresh'),
+    ('test_comfy_folder_overrides', '_fresh'),
+    ('test_krea_edit', '_fresh_config'),
+    ('test_krea_default_base_election', '_fresh_config'),
+    ('test_model_scanners_agree', 'tree'),
+])
+def test_config_fixture_resets_preserve_existing_sdk_imports(cloud, monkeypatch, tmp_path,
+                                                            module_name, helper_name):
+    """Reproduce the worker order: import SDK, reset another test's config, reuse SDK."""
+    from app import config
+    from lds_sdk.cloud_host import config as facade
+
+    before = {name: getattr(config, name) for name in facade.__all__}
+    helper = getattr(importlib.import_module(module_name), helper_name)
+    helper = getattr(helper, '__wrapped__', helper)  # The scanner uses a yield fixture.
+    result = helper(monkeypatch, tmp_path)
+    try:
+        if isinstance(result, GeneratorType):
+            next(result)
+        for name, original in before.items():
+            assert getattr(config, name) is original, name
+            assert getattr(facade, name) is original, name
+    finally:
+        if isinstance(result, GeneratorType):
+            result.close()
 
 
 def test_late_create_observation_restarts_monitoring(cloud, monkeypatch):

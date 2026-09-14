@@ -1,4 +1,4 @@
-import json, importlib, os
+import json, os
 import pytest
 
 
@@ -23,7 +23,9 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setenv('LDS_CONFIG', str(tmp_path / 'config.json'))
     monkeypatch.setenv('LDS_ENV', str(tmp_path / '.env'))
     import app.config as config
-    importlib.reload(config)
+    # Reset test state without replacing functions already imported by the SDK.
+    monkeypatch.setattr(config, 'ENV_PATH', tmp_path / '.env')
+    monkeypatch.setattr(config, '_cache', None)
     return config
 
 def test_defaults_when_no_file(tmp_path, monkeypatch):
