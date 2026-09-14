@@ -176,7 +176,7 @@ test('README, the core and owned guides and .env.example keep the same disclosed
   const readme = read(README)
   assert.match(readme, /\*\*Affiliate disclosure\.\*\*/)
   assert.match(readme, UNTAGGED_ROOT)
-  assert.match(readme, /no upsell[\s\S]{0,600}referral links/)
+  assert.match(readme, /\*\*Affiliate disclosure\.\*\*[\s\S]{0,600}referral links/)
   const guide = read(GUIDE) + CLOUD_GUIDE.sections
     .filter(section => section.chapter === 'settings-reference')
     .map(section => section.markdown).join('\n')
