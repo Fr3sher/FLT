@@ -869,3 +869,5 @@ def _start_workers(app):
 
     from .plugins.loader import run_boot_hooks
     run_boot_hooks(app)
+    from .services.legacy_cloud_recovery import start as recover_legacy_cloud
+    recover_legacy_cloud(app)
