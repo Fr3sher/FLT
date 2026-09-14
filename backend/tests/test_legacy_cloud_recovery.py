@@ -60,11 +60,56 @@ def test_existing_rental_is_supervised_without_enabling_features(app, recovery, 
 
 def test_clean_install_has_no_cloud_workers(app, recovery):
     bridge, _, calls = recovery
-    add_run(app, 'done')
     assert bridge.start(app) is False
     assert calls == []
     with app.app_context():
         assert not bridge.recovery_only()
+
+
+@pytest.mark.parametrize('status', ['done', 'error', 'stopped'])
+def test_failed_termination_of_terminal_rental_is_reconciled(app, recovery, monkeypatch, status):
+    bridge, cloud, calls = recovery
+    from app.extensions import db
+    from app.models import CloudTrainingRun
+
+    run_id = add_run(app, 'training')
+    monkeypatch.setenv('VAST_API_KEY', 'test-only-key')
+    destroyed = []
+
+    def destroy(instance):
+        destroyed.append(instance)
+        return len(destroyed) > 1  # The original termination fails; recovery succeeds.
+
+    monkeypatch.setattr(cloud.vast_client, 'destroy_instance', destroy)
+    monkeypatch.setattr(cloud.vast_client, 'list_instances',
+                        lambda: [{'instance_id': '700', 'label': f'lds-{run_id}'}])
+    with app.app_context():
+        row = db.session.get(CloudTrainingRun, run_id)
+        assert cloud._finish(row, status) is False
+        assert row.status == status
+        assert row.vast_instance_id == '700'
+
+    assert bridge.start(app) is True
+    assert [kind for kind, _ in calls] == ['supervisor', 'recover']
+    assert cloud.reconcile_orphans(app) == 1
+    assert destroyed == ['700', '700']
+    with app.app_context():
+        with pytest.raises(RuntimeError, match='before renting another pod'):
+            cloud._provision(SimpleNamespace())
+
+
+def test_historical_intent_recovers_pod_without_persisted_instance_id(app, recovery, monkeypatch):
+    bridge, cloud, _ = recovery
+    run_id = add_run(app, 'error', instance=None)
+    monkeypatch.setenv('VAST_API_KEY', 'test-only-key')
+    monkeypatch.setattr(cloud.vast_client, 'list_instances',
+                        lambda: [{'instance_id': '700', 'label': f'lds-{run_id}'}])
+    destroyed = []
+    monkeypatch.setattr(cloud.vast_client, 'destroy_instance',
+                        lambda instance: destroyed.append(instance) or True)
+    assert bridge.start(app) is True
+    assert cloud.reconcile_orphans(app) == 1
+    assert destroyed == ['700']
 
 
 @pytest.mark.parametrize('state,recovery_active', [('loaded', False), ('disabled', True)])

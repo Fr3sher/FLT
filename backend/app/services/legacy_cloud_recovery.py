@@ -19,7 +19,9 @@ def start(app) -> bool:
     Normal plugin workers retain ownership when registered. The fallback adds
     no routes, features or configuration; its marker also blocks the legacy
     monitor's automatic replacement rentals. Existing runtime/retention limits
-    still apply, including to terminal rows with deliberately kept pods.
+    still apply, including to terminal rows with deliberately kept pods. Any
+    historical rental intent needs reconciliation: a failed provider DELETE
+    can outlive a terminal row, or even the persistence of its instance ID.
     """
     registry = app.extensions.get('lds_plugins')
     if registry is not None:
@@ -37,10 +39,7 @@ def start(app) -> bool:
 
     try:
         with app.app_context():
-            pending = CloudTrainingRun.query.filter(
-                CloudTrainingRun.status.in_((*cloud_training.ACTIVE_STATES, 'error_pod_kept')),
-            ).first()
-            if pending is None:
+            if CloudTrainingRun.query.first() is None:
                 return False
         # Set before either worker can run: boot and monitor error recovery
         # both consult this app-specific mode before admitting another rental.
