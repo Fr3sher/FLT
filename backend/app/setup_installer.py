@@ -511,7 +511,8 @@ class Cancelled(Exception):
 
 def _new_run():
     return {'state': 'running', 'returncode': None, 'log': [], 'progress': None,
-            'waiting_for': None, 'cancel_event': threading.Event(), 'response': None}
+            'waiting_for': None, 'cancel_event': threading.Event(), 'response': None,
+            'runtime_notice': None}
 
 
 def _append(action, line):
@@ -864,7 +865,7 @@ def status(action) -> dict:
     if run is None:
         return {'state': 'idle', 'returncode': None, 'log': [], 'progress': None,
                 'waiting_for': None, 'cancel_requested': False,
-                'manual_command': cmd}
+                'manual_command': cmd, 'runtime_notice': None}
     return {'state': run['state'], 'returncode': run['returncode'],
             'log': list(run['log']), 'progress': run.get('progress'),
             # 'queued' -> which action it's waiting behind (the UI shows an honest
@@ -874,7 +875,8 @@ def status(action) -> dict:
                                      and run['cancel_event'].is_set()),
             # Kept for the diagnostic/debug log only — no longer shown as a user
             # "run this by hand" path (installs auto-recover or repair on re-click).
-            'manual_command': cmd}
+            'manual_command': cmd,
+            'runtime_notice': dict(run['runtime_notice']) if run.get('runtime_notice') else None}
 
 
 def start(action) -> dict:
@@ -3262,25 +3264,49 @@ def _ensure_managed_ml_env(action, env_dir) -> str:
         return ''
 
 
+def _bank_runtime_notice(action, python, selected, *, imports_ok=None, selection_failed=False):
+    """Receipt of a verified managed install, not a GPU/worker health verdict.
+
+    Paths belong to the local selection UI. Diagnostic text stays path-free.
+    Keep the receipt on the run so status polling never imports or computes.
+    """
+    profile = {'bank_scoring': 'scoring', 'bank_siglip2': 'semantic'}.get(action)
+    run = _runs.get(action)
+    if profile is None or run is None:
+        return
+    run['runtime_notice'] = {
+        'profile': profile, 'managed_python': python, 'effective_python': selected,
+        'uses_managed': _same_path(selected, python), 'managed_installed': True,
+        'selected_imports_ok': imports_ok, 'compute_tested': False,
+        'selection_failed': selection_failed,
+    }
+
+
 def _select_managed_python(action, key, python) -> bool:
     """Publish a ready runtime, preserving an explicit external selection."""
     configured = (cfg.get(f'{key}.python') or '').strip()
+    selection_location = ('the Python picker in Bank → Passes or below the repair result'
+                          if action in ('bank_scoring', 'bank_siglip2') else 'Settings')
     if configured and not _same_path(configured, python) and not _is_flask_venv(configured):
         _append(action, f'Keeping the selected borrowed {key} interpreter unchanged: '
                         f'{configured}. The managed environment is ready for selection '
-                        'in Settings.')
+                        f'in {selection_location}.')
         feature = {'watermark': 'watermark_inpaint', 'bank_semantic': 'bank_siglip2'}.get(key, key)
-        if not _verify_capability_import(feature, configured, log_action=action):
+        imports_ok = _verify_capability_import(feature, configured, log_action=action)
+        _bank_runtime_notice(action, python, configured, imports_ok=imports_ok)
+        if not imports_ok:
             _append(action, 'The managed install is ready, but the selected external '
-                            'runtime still cannot run this tool. That external runtime '
+                            'runtime failed its import check. That external runtime '
                             'was not modified. Select the managed interpreter in '
-                            'Settings to use the installed tool.')
+                            f'{selection_location}.')
             return False
         return True
     try:
         cfg.save_config({key: {'python': python}})
+        _bank_runtime_notice(action, python, python, imports_ok=True)
         return True
     except Exception as exc:
+        _bank_runtime_notice(action, python, configured or python, selection_failed=True)
         _append(action, f'Could not select the installed {key} environment: {exc}. '
                         'Click Install again to retry.')
         return False
