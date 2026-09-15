@@ -560,6 +560,22 @@ def watermark_python_select():
     return _interpreter_select('watermark_detect')
 
 
+@bp.post('/scoring-python/check', defaults={'profile': 'scoring'})
+@bp.post('/semantic-python/check', defaults={'profile': 'semantic'})
+@bp.post('/watermark-python/check', defaults={'profile': 'watermark_detect'})
+def interpreter_calculation_check(profile):
+    """Explicit synthetic calculation; detection/Setup never starts GPU work."""
+    from ..services import scoring_python_health
+    body = request.get_json(silent=True)
+    if body is not None and not isinstance(body, dict):
+        return jsonify({'error': 'Expected an object with a Python path.'}), 400
+    path = (body or {}).get('python', '')
+    if not isinstance(path, str) or len(path) > 4096 or '\x00' in path:
+        return jsonify({'error': 'Expected a valid Python path.'}), 400
+    result = scoring_python_health.check(path, profile)
+    return jsonify(result), 409 if result['status'] == 'busy' else 200
+
+
 @bp.post('/settings/test/<target>')
 def test_connection(target):
     from ..auth_policy import plugin_available
