@@ -84,6 +84,16 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-15-bank-python-calculation-check',
+    date: '2026-09-15',
+    title: 'Recover Bank scoring when a detected GPU Python fails',
+    blurb: 'Manage Score and SigLIP 2 Python from Bank ▸ Passes even when CUDA is detected. '
+      + 'See the Python actually used, explicitly select the managed environment after a repair, '
+      + 'and test a small calculation before starting a long pass. CUDA detection no longer '
+      + 'claims that calculations are verified. Reported by perv0839 (Discord).',
+    to: '/bank',
+  },
+  {
     id: '2026-09-14-v2-choose-your-plugins',
     date: '2026-09-14',
     title: 'Start with the LDS core and add the plugins you need',
