@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-15-studio-lower-step-counts',
+    date: '2026-09-15',
+    title: 'Image Studio: try fewer steps with compact controls',
+    blurb: 'Try 1–5 sampling steps alongside the existing presets. Three choices stay visible; use − and + to browse lower or higher values. Your selected step counts stay listed, including in comparison and blend runs.',
+    to: '/studio',
+  },
+  {
     id: '2026-09-15-bank-python-calculation-check',
     date: '2026-09-15',
     title: 'Recover Bank scoring when a detected GPU Python fails',

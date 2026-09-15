@@ -260,7 +260,7 @@ CFG_CHOICES = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0]
 # 25 is the sample-step count a dense Krea 2 run previews with — see
 # KREA_RAW_DEFAULTS below; without it in the picker the recommended setting for a
 # full-model artifact would not be selectable at all.
-STEPS_CHOICES = [6, 8, 10, 12, 16, 20, 24, 25, 30, 32, 40, 50]
+STEPS_CHOICES = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 25, 30, 32, 40, 50]
 
 # --- Per-BASE-MODEL sampler defaults (bobba84, GitHub #18) --------------------
 # Z-Image ships in two flavours that need opposite sampler settings, and the app

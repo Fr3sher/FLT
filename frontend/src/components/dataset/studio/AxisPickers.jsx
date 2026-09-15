@@ -1,3 +1,42 @@
+import { useState } from 'react';
+
+function StepChoices({ choices, selected, onToggle, label, amber = false }) {
+  const values = [...new Set([...choices, ...selected])].sort((a, b) => a - b);
+  const [position, setPosition] = useState(null);
+  const last = Math.max(0, values.length - 3);
+  const start = Math.min(last, Math.max(0, position ?? (values.indexOf(selected[0]) - 1)));
+  const buttonClass = 'min-h-10 min-w-10 rounded-lg border px-2.5 py-1 text-xs tabular-nums transition-colors';
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-content-muted text-[0.625rem] uppercase">{label}</span>
+      <div role="group" aria-label={label} className="flex items-center gap-2">
+        <button type="button" aria-label="Show lower step counts" title="Show lower step counts"
+          disabled={start === 0} onClick={() => setPosition(start - 1)}
+          className={`${buttonClass} border-border bg-surface text-content-muted disabled:opacity-30`}>
+          −
+        </button>
+        {values.slice(start, start + 3).map((v) => (
+          <button key={v} type="button" aria-pressed={selected.includes(v)} onClick={() => onToggle(v)}
+            className={`${buttonClass} ${selected.includes(v)
+              ? amber ? 'border-amber-400/60 bg-amber-500/20 text-amber-200 font-semibold'
+                : 'border-purple-400/60 bg-purple-500/20 text-purple-200 font-semibold'
+              : 'border-border bg-surface text-content-muted'}`}>
+            {v}
+          </button>
+        ))}
+        <button type="button" aria-label="Show higher step counts" title="Show higher step counts"
+          disabled={start === last} onClick={() => setPosition(start + 1)}
+          className={`${buttonClass} border-border bg-surface text-content-muted disabled:opacity-30`}>
+          +
+        </button>
+      </div>
+      <span className="text-[0.6875rem] text-content-muted break-words" aria-live="polite">
+        Selected: {selected.join(', ')}
+      </span>
+    </div>
+  );
+}
+
 // Axes optionnels du balayage : modèle Z-Image (select), formats / CFG / steps (multi-toggles).
 // Extrait behavior-preserving de LoraTestStudio.jsx (blocs modèle/formats/CFG/steps).
 // Chaque bloc conserve sa garde de rendu d'origine :
@@ -99,43 +138,17 @@ export default function AxisPickers({
       )}
 
       {Array.isArray(stepsChoices) && (
-        <div className="flex flex-col gap-1">
-          <span className="text-content-muted text-[0.625rem] uppercase">
-            {hasPass2 ? 'Steps · pass 1 — classic (multi)' : 'Steps (multi)'} — default {defaultSteps ?? 8}
-          </span>
-          <div className="flex gap-2 flex-wrap">
-            {stepsChoices.map((v) => (
-              <button key={v} type="button" onClick={() => onToggleStep(v)}
-                aria-pressed={effectiveSteps.includes(v)}
-                className={`px-2.5 py-1 rounded-lg border text-[0.75rem] tabular-nums transition-colors ${
-                  effectiveSteps.includes(v)
-                    ? 'border-purple-400/60 bg-purple-500/20 text-purple-200 font-semibold'
-                    : 'border-border bg-surface text-content-muted'}`}>
-                {v}
-              </button>
-            ))}
-          </div>
-        </div>
+        <StepChoices key={`steps-${defaultSteps}`} choices={stepsChoices}
+          selected={effectiveSteps} onToggle={onToggleStep}
+          label={`${hasPass2 ? 'Steps · pass 1 — classic (multi)' : 'Steps (multi)'} — default ${defaultSteps ?? 8}`} />
       )}
 
       {/* SDXL : 2e passe (detail daemon, node 57 du workflow HQ). Affichée seulement
           quand le backend la propose (steps2Choices non-null = dataset SDXL). */}
       {hasPass2 && (
-        <div className="flex flex-col gap-1">
-          <span className="text-content-muted text-[0.625rem] uppercase">Steps · pass 2 — detail daemon (multi) — default {defaultSteps2 ?? 8}</span>
-          <div className="flex gap-2 flex-wrap">
-            {steps2Choices.map((v) => (
-              <button key={v} type="button" onClick={() => onToggleStep2(v)}
-                aria-pressed={effectiveSteps2.includes(v)}
-                className={`px-2.5 py-1 rounded-lg border text-[0.75rem] tabular-nums transition-colors ${
-                  effectiveSteps2.includes(v)
-                    ? 'border-amber-400/60 bg-amber-500/20 text-amber-200 font-semibold'
-                    : 'border-border bg-surface text-content-muted'}`}>
-                {v}
-              </button>
-            ))}
-          </div>
-        </div>
+        <StepChoices key={`steps2-${defaultSteps2}`} choices={steps2Choices}
+          selected={effectiveSteps2} onToggle={onToggleStep2} amber
+          label={`Steps · pass 2 — detail daemon (multi) — default ${defaultSteps2 ?? 8}`} />
       )}
     </>
   );

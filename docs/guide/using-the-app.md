@@ -73,6 +73,9 @@ captioning rules and a few guards change with the dataset kind.
 10. **Pick the best checkpoint** — open the **Test Studio** from the dataset:
     grid-test checkpoint × strength, vote, rank by face similarity, and star ★
     the winning settings. The last checkpoint is almost never the best one.
+    The **Steps** picker includes 1–5 alongside the usual presets: three values
+    are visible at a time, with **− / +** to browse. Browsing keeps your selections;
+    **Selected** lists all step counts that will run, including those off-screen.
 11. **Export** — at any point, **Export ZIP** gives you the curated, captioned
     set as a standard ai-toolkit dataset. Nothing is locked in.
 
