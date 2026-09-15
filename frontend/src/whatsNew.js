@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-15-git-update-banner',
+    date: '2026-09-15',
+    title: 'Git updates: one consistent answer',
+    blurb: 'The banner, navigation badge and Settings now check the same update source. Git installations follow their configured branch, and checking an up-to-date branch clears an outdated banner.',
+    to: '/settings/maintenance',
+  },
+  {
     id: '2026-09-15-studio-lower-step-counts',
     date: '2026-09-15',
     title: 'Image Studio: try fewer steps with compact controls',

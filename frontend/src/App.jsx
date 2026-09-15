@@ -92,8 +92,8 @@ function CheckUpdatesButton() {
         setAvailable(!!d?.update_available)
         // The dot always lights up; the banner only surfaces if the user
         // hasn't dismissed it this session (manual checks clear the flag).
-        if (d?.update_available
-            && sessionStorage.getItem('updateBannerDismissed') !== '1') {
+        if (d?.ok && (!d.update_available
+            || sessionStorage.getItem('updateBannerDismissed') !== '1')) {
           window.dispatchEvent(new CustomEvent('lds:update-available', { detail: d }))
         }
       } catch { /* offline — the manual button stays available */ }
@@ -110,9 +110,9 @@ function CheckUpdatesButton() {
     try {
       const d = await apiFetch('/api/update/check?force=1')
       setAvailable(!!d?.update_available)
+      window.dispatchEvent(new CustomEvent('lds:update-available', { detail: d }))
       if (d?.update_available) {
         sessionStorage.removeItem('updateBannerDismissed')     // re-show even if dismissed
-        window.dispatchEvent(new CustomEvent('lds:update-available', { detail: d }))
         toast.success(`Update available — v${d.latest || d.remote_sha || 'new'}`)
       } else if (d?.ok) {
         // On a git checkout the release number alone is misleading — see versionLabel.
@@ -345,9 +345,8 @@ function NavBar() {
   )
 }
 
-/** One-shot update banner: the server caches the GitHub release check 6 h, the
- * banner shows once per browser session and is dismissible. Silent when the
- * feed is unreachable (offline / no public release yet). */
+/** Cached installation-aware check, shared with the nav badge and Settings:
+ * Git compares its branch; packaged installs compare releases. */
 function UpdateBanner() {
   const [info, setInfo] = useState(null)
   const [applying, setApplying] = useState(false)
@@ -355,14 +354,17 @@ function UpdateBanner() {
   const [error, setError] = useState(null)
   useEffect(() => {
     if (sessionStorage.getItem('updateBannerDismissed') === '1') return
-    apiFetch('/api/update/check')
+    apiFetch('/api/update/check?auto=1', { background: true })
       .then((d) => { if (d && d.update_available) setInfo(d) })
       .catch(() => { /* best-effort */ })
   }, [])
   // A manual "Check for updates" (nav button) surfaces the banner even after it
   // was dismissed this session, or when the passive mount check found nothing yet.
   useEffect(() => {
-    const onFound = (e) => { if (e.detail) setInfo(e.detail) }
+    const onFound = (e) => {
+      if (e.detail?.update_available) setInfo(e.detail)
+      else if (e.detail?.ok && !e.detail.reason) setInfo(null)
+    }
     window.addEventListener('lds:update-available', onFound)
     return () => window.removeEventListener('lds:update-available', onFound)
   }, [])
@@ -430,7 +432,7 @@ function UpdateBanner() {
                   : info.behind
                     ? `${info.behind} new commit${info.behind === 1 ? '' : 's'}`
                     : 'a new version'}
-              </span> (you run v{info.current}).
+              </span> (you run {versionLabel(info)}).
             </span>
             {dockerMode ? (
               <DockerUpdateInstructions />
