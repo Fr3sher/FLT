@@ -2483,102 +2483,97 @@ moved instead of marking thousands of images unusable.
 
 ## Make Score use a GPU Python you already have
 
-The **✨ Score** pass (aesthetic · NSFW · style) runs in its own small Python
-environment, and that environment deliberately carries **CPU-only PyTorch**: a
-first install stays a few hundred megabytes instead of pulling ~2.5 GB of CUDA
-wheels onto machines that may have no card at all.
+Open a bank, then **⚙ Passes → Manage Score Python…**. The button stays available
+when packages are missing, the interpreter uses the CPU, or CUDA is detected.
+Changing Python is disabled while a pass is active.
 
-On a machine that *does* have one, that default is expensive — CLIP measures
-about **336 ms per image on the CPU against ~15 ms on a recent card**, so a
-30 000-image bank is the difference between a coffee break and most of an
-afternoon. The bank says so: when Score is about to run on the CPU on a machine
-with an NVIDIA card, an amber note gives you the estimate and a button, **⚡ Use
-a GPU Python I already have**.
+The **✨ Score** pass (aesthetic · NSFW · style) normally uses the dedicated
+environment prepared by Setup. It carries **CPU-only PyTorch** to keep the first
+install small. You can select another Python that already has the required
+packages, such as a ComfyUI, ai-toolkit or conda environment. An environment that
+works for another app can still fail when running Score's calculations.
 
-That button is the point. If you train LoRAs or run ComfyUI, this machine
-*already* has a PyTorch with working CUDA. Score can simply borrow it — no
-download, no third environment to maintain.
+The dialog shows **Python used for Score** and the **Managed environment** as
+separate paths. Check the first one when diagnosing an error: that is the
+interpreter Score actually uses, including any fallback from an empty setting.
 
-The dialog lists the interpreters the app knows about (the environment it built
-for scoring, ai-toolkit's, ComfyUI's, its own) and reports each one **package by
-package**:
+Discovery checks the interpreters the app knows about, package by package:
 
-- **GPU ready** — everything the pass imports is there *and* PyTorch sees the
-  card. Pick it and the next Score run is minutes instead of hours.
-- **Missing packages** — the reason is named. The common one is an interpreter
-  with a perfect CUDA PyTorch but no **OpenCLIP**: Score needs `open_clip` and
-  `transformers`/`timm` too, so CUDA alone is not enough. Such an interpreter is
-  **refused**, on purpose — accepting it would trade slow-but-working scoring for
-  an import error an hour into the pass.
-- **CPU only** — it can run the pass, it just has no usable CUDA.
-- **No answer** — the path is not a working interpreter (moved venv, unplugged
-  drive). Nothing changes.
+- **CUDA detected · calculation not tested** — the required modules import and
+  PyTorch reports CUDA availability. This does not prove that cuDNN, attention
+  or a model calculation works.
+- **Missing packages** — a required import or class is unavailable. Score needs
+  `torch`, `open_clip`, `transformers`, `timm`, `numpy` and Pillow. The row names
+  the missing dependency and cannot be selected until it passes discovery.
+- **CPU only** — the required imports are present, but CUDA is not available in
+  that interpreter. A CPU calculation has not been verified by discovery either.
+- **No answer** — the interpreter could not be checked, for example because its
+  environment moved or did not respond.
 
-**The app never installs anything into an environment it did not create.** Your
-ai-toolkit venv runs your training and ComfyUI's runs your generation; a silent
-`pip install` into either is not something a dataset tool gets to do. When a
-package is missing the dialog shows you the exact command and leaves the choice
-to you — run it in a terminal, then hit **↻ Check again** and the row updates.
+**Test calculation** is a separate button on each usable interpreter. It runs a
+small convolution and attention calculation on the detected device and reports
+its result separately from discovery. It downloads no models and starts no Bank
+pass or training. A failure reports a bounded diagnostic; if another task is
+using the runtime, the check can be deferred. A passed check verifies those small
+operations, not every model or a complete scoring pass. Opening the dialog,
+checking imports or selecting a Python never starts this calculation automatically.
 
-**Not listed? That field is not a fallback.** Most machines have neither
-ai-toolkit nor ComfyUI where the app looks — or at all — so entering a path
-yourself is a first-class route, checked exactly the same way. Paste an
-interpreter *or* the environment folder that contains it: a venv, a conda or
-miniconda env, a uv venv, a portable bundle, the system Python, something on a
-second disk. Spaces, accents and quotes around the path are fine ("Copy as path"
-on Windows wraps it in quotes; that is handled). The layout is never assumed —
-the app knocks on the shapes an environment can have and keeps whichever one
-actually answers.
+**Setup → Quality tools → Bank scoring → Reinstall** repairs the managed
+environment even when Score uses an external Python. It preserves that external
+selection and never installs into it. After a repair, click **↻ Check again** in
+the picker, then **Use managed environment** if you want Score to use the
+repaired environment. You do not need to clear the Python setting first.
 
-No version of PyTorch or CUDA is required. The only question asked is the one
-that matters: do the packages import, and does PyTorch see a card. An old card
-on cu118, a 50-series that only works on cu128, a nightly build — all fine.
+**Back to the app default** clears the explicit selection. For Score, an empty
+`bank_scoring.python` falls back to the Python running the app; it does not
+explicitly select the managed environment. Use the dedicated managed button for
+that choice.
 
-**No NVIDIA card?** Then there is nothing to fix, and the app says so plainly
-instead of suggesting a CUDA install you could not use. Borrowing an interpreter
-is still offered, for one honest reason: if another Python here already has the
-packages, you can skip installing them a second time. It will not be faster.
+**The app never installs packages into an external environment.** When an
+external Python is missing a package, the dialog shows the command you can run
+yourself. Afterwards, use **↻ Check again** to refresh discovery. Diagnostic
+results are cleared when discovery refreshes so an old result does not describe
+a repaired or changed environment.
 
-**Back to the app default** puts everything back exactly as it was. The choice is
-reversible at any time, and the note under the passes always says which
-interpreter is in use. If you never open this dialog, nothing changes: an install
-that works today keeps working, untouched.
+**Not listed?** Enter an interpreter or its environment folder, then click
+**Check it**. Venvs, conda/miniconda environments, portable Python bundles and
+paths on other disks are supported, including spaces, accents and Windows
+“Copy as path” quotes. Checking a path adds it to the list; it does not select it.
+
+**No NVIDIA card?** CPU interpreters can still be selected to reuse packages
+already installed. The dialog does not suggest a CUDA speed-up in that case.
 
 ## Build the SigLIP 2 index on a GPU Python you already have
 
-The **SigLIP 2** semantic engine is the same story with a different dependency
-list. Its index is built by a worker that lives in the app's own environment —
-the CPU-only one — so on a machine with a card the index crawls for the same
-reason Score used to.
+Open **Bank → ⚙ Passes → Semantic engine → Manage SigLIP 2 Python…**. This
+management action stays visible independently of CUDA detection, installed
+packages and the selected semantic engine. During a pass or semantic operation,
+it remains visible but disabled.
 
-SigLIP 2 is the lighter of the two: **92.9 M parameters against 303 M for the
-CLIP ViT-L/14 Score runs**, measured at about **105 ms per image on the CPU**
-rather than 336. Lighter is not free: a 30 000-image bank is still the better
-part of an hour.
+The dialog has the same effective-path display, **Use managed environment**
+choice and explicit **Test calculation** as Score. CUDA detection alone does not
+verify the runtime, and the small calculation does not build or verify a Bank's
+semantic index. Building that index remains a separate action.
 
-The **Semantic engine** panel now tells you which device the index will actually
-use, and when a card is sitting idle it offers the same button, **⚡ Use a GPU
-Python I already have**. It is the same detector, the same dialog and the same
-promise — with one difference that matters:
+**The dependency list is SigLIP 2's, not Score's.** It checks PyTorch, NumPy,
+Pillow and a Transformers build carrying `Siglip2Model`. It does not require
+`open_clip` or `timm`. An interpreter missing a required import or class is
+refused for selection, with the missing dependency named.
 
-**The dependency list is SigLIP 2's, not Score's.** The semantic worker never
-imports `open_clip` or `timm`. An interpreter Score refuses for a missing
-OpenCLIP — the most common shape of a ComfyUI venv — can be perfectly good here,
-and refusing it would be a lie about a worker that does not need it. What it
-*does* need is a **Transformers recent enough to carry `Siglip2Model`** (4.49 or
-newer). That one is checked by really looking for the class, not just for the
-package: an older `transformers` imports fine and then dies at model load, an
-hour into an index. Such an interpreter is refused, and the repair line the
-dialog hands you carries the version floor.
+**Borrowing an interpreter downloads nothing.** The pinned SigLIP 2 checkpoint
+lives in the app's data folder, not inside the interpreter. Selecting a different
+Python does not move or duplicate those weights.
 
-**Borrowing an interpreter downloads nothing here.** The pinned SigLIP 2
-checkpoint lives in the app's own data folder, not inside the interpreter, so a
-borrowed Python needs no copy of it.
+**Setup → Quality tools → SigLIP 2 → Reinstall** repairs the managed Bank
+environment and preserves an existing external SigLIP 2 selection. Afterwards,
+refresh discovery and choose **Use managed environment** explicitly to run the
+index there. Repairing that environment does not change Score's Python selection.
 
-**Where the index runs is not where anything is installed.** Setup ▸ Quality
-tools always installs SigLIP 2 into the environment the app built, whatever you
-picked in this dialog — including when you later hit Install/repair, which now
-*keeps* your choice instead of quietly putting the index back on the CPU.
+**Back to the app default** clears `bank_semantic.python`, which then inherits
+`bank_scoring.python` or the app Python. That inherited Python can be external;
+clearing the setting is not the same as choosing the managed environment. Score
+and SigLIP 2 have separate explicit settings, but this fallback links them while
+the SigLIP 2 setting is empty.
 
 ## Run the watermark detector on a GPU Python you already have
 
@@ -2593,8 +2588,8 @@ Two things changed:
 
 - **The Bank's 🚩 Watermarks panel now says it.** When the fast detector is
   installed but its Python cannot reach CUDA on a machine that has a card, an
-  amber note names the situation and offers the same button as Score and
-  SigLIP 2: **⚡ Use a GPU Python I already have**. The pass summary also
+  amber note names the situation and offers **⚡ Use a GPU Python I already
+  have**, opening the shared interpreter picker. The pass summary also
   reports which device the scan *actually* ran on — "(detector on GPU, …)" or
   "(detector on CPU, …)" — read back from the scan itself, not from a guess.
 - **The picker speaks the detector's own dependency list.** It never imports
@@ -2612,9 +2607,10 @@ environment the app did not build — **Back to the app default** reverts the
 choice at any time, after which the scan falls back to Score's interpreter and
 then the app's own, exactly as before.
 
-Score and the semantic index are chosen separately. Pointing one at an
-interpreter never moves the other, and **Back to the app default** undoes either
-on its own.
+Each pass has its own explicit interpreter setting. Clearing a setting with
+**Back to the app default** restores its documented fallback; SigLIP 2 and the
+watermark detector can therefore inherit Score’s interpreter. Use **Use managed
+environment** to select the app-managed Python explicitly.
 
 ## Stopping Score, and what a relaunch costs
 
