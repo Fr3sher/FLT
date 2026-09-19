@@ -4,8 +4,7 @@
  *
  * The rule is a disclosure rule, and a disclosure is a property of the markup:
  * every vast.ai link carries the id, the disclosure follows each "create an
- * account" moment (not a tooltip, not another page), and the untagged link is
- * one click away. The pure module cannot see any of that — only a render can —
+ * account" moment (not a tooltip, not another page). The pure module cannot see any of that — only a render can —
  * and the same renders prove that with no id at all each surface is the plain
  * walkthrough with plain links.
  */
@@ -49,16 +48,15 @@ test('VastLink: any console page, tagged with the id, plain without one', () => 
   assert.deepEqual(hrefs(render(VastLink, { path: '/billing/', referralId: '' })), ['https://cloud.vast.ai/billing/'])
 })
 
-test('the disclosure renders nothing for untagged links, and a paragraph with the untagged link for tagged ones', () => {
+test('the disclosure remains visible for referral links without adding an untagged destination', () => {
   const none = render(VastReferralDisclosure, { referralId: '' })
   assert.deepEqual(hrefs(none), [])
   assert.doesNotMatch(none, /referral link/)
   const some = render(VastReferralDisclosure, { referralId: '12345', className: 'x' })
-  assert.deepEqual(hrefs(some), ['https://cloud.vast.ai/'])
+  assert.deepEqual(hrefs(some), [])
   assert.match(some, /<p class="x">Our vast\.ai links are referral links/)
   assert.match(some, /pays this project 3%/)
   assert.match(some, /costs you nothing/)
-  assert.match(some, /The untagged cloud\.vast\.ai link<\/a>\s*works exactly the same/, 'the untagged link is offered under its own name')
 })
 
 test('Settings guide, no referral id: plain links everywhere, no disclosure', () => {
@@ -72,19 +70,17 @@ test('Settings guide, no referral id: plain links everywhere, no disclosure', ()
   assert.doesNotMatch(html, /referral/i, 'nothing to disclose, nothing disclosed')
 })
 
-test('Settings guide, with a referral id: every link carries it, the disclosure follows the steps, the untagged link stays beside it', () => {
+test('Settings guide, with a referral id: every link carries it and the disclosure follows the steps', () => {
   const html = render(VastKeyGuide, { referralId: '12345' })
   assert.deepEqual(hrefs(html), [
     'https://cloud.vast.ai/?ref_id=12345',
     'https://cloud.vast.ai/billing/?ref_id=12345',
     'https://cloud.vast.ai/?ref_id=12345',
     'https://cloud.vast.ai/manage-keys/?ref_id=12345',
-    'https://cloud.vast.ai/',
-  ], 'sign-up, Billing, the vast.ai mention and Keys are tagged; the disclosure offers the untagged root')
+  ], 'sign-up, Billing, the vast.ai mention and Keys are all tagged')
   const steps = html.indexOf('</ol>')
   const disclosure = html.indexOf('referral links')
   assert.ok(steps > 0 && disclosure > steps, 'the disclosure sits right after the steps')
-  assert.match(html, /works exactly the same/, 'the untagged link is offered as a real alternative')
 })
 
 test('Setup note, no referral id: one plain link, no disclosure', () => {
@@ -94,9 +90,9 @@ test('Setup note, no referral id: one plain link, no disclosure', () => {
   assert.match(html, /No GPU\? You can skip this step/)
 })
 
-test('Setup note, with a referral id: the tagged link, then the disclosure with the untagged link', () => {
+test('Setup note, with a referral id: the tagged link, then the disclosure', () => {
   const html = render(CloudSignupNote, { referralId: '12345' })
-  assert.deepEqual(hrefs(html), ['https://cloud.vast.ai/?ref_id=12345', 'https://cloud.vast.ai/'])
+  assert.deepEqual(hrefs(html), ['https://cloud.vast.ai/?ref_id=12345'])
   const note = html.indexOf('No GPU?')
   const disclosure = html.indexOf('Our vast.ai links are referral links')
   assert.ok(note >= 0 && disclosure > note, 'the disclosure follows the note it discloses')
@@ -105,12 +101,14 @@ test('Setup note, with a referral id: the tagged link, then the disclosure with 
 test('the default renders use the id shipped in vastReferral.js', () => {
   for (const Surface of [VastKeyGuide, CloudSignupNote]) {
     const html = render(Surface)
-    assert.equal(hrefs(html)[0], vastSignupUrl(VAST_REFERRAL_ID))
+    for (const href of hrefs(html)) {
+      assert.equal(new URL(href).searchParams.get('ref_id'), VAST_REFERRAL_ID)
+    }
     assert.equal(/referral links/.test(html), VAST_REFERRAL_ID !== '')
   }
 })
 
-test('the settings-guide key line renders IN-APP with both links clickable and nothing relative', { skip: !VAST_REFERRAL_ID && 'no id shipped' }, () => {
+test('the settings-guide key line renders IN-APP with the referral link and nothing relative', { skip: !VAST_REFERRAL_ID && 'no id shipped' }, () => {
   const [chapter] = composeGuide([{ id: 'settings-reference',
     source: readFileSync(resolve(REPO, 'docs/guide/settings-reference.md'), 'utf8') }], [{ guide: GUIDE }])
   const guide = chapter.source
@@ -119,7 +117,9 @@ test('the settings-guide key line renders IN-APP with both links clickable and n
   const html = render(Markdown, { source: line })
   const links = hrefs(html)
   assert.ok(links.includes(vastSignupUrl(VAST_REFERRAL_ID)), 'the tagged link is a real link in-app')
-  assert.ok(links.includes('https://cloud.vast.ai/'), 'the untagged alternative is a real link in-app, not an <autolink> left as text')
+  for (const href of links.filter(href => new URL(href).hostname.endsWith('vast.ai'))) {
+    assert.equal(new URL(href).searchParams.get('ref_id'), VAST_REFERRAL_ID)
+  }
   assert.ok(links.every((h) => /^https?:\/\//.test(h)), `every href is absolute — the SPA serves neither README.md nor docs/: ${links.join(' ')}`)
   assert.doesNotMatch(html, /&lt;https/, 'no autolink escaped into visible text')
 })

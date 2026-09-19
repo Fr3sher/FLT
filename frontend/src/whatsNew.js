@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-19-vast-referral-links',
+    date: '2026-09-19',
+    title: 'Consistent Vast.ai referral links',
+    blurb: 'Vast.ai links in setup, settings and documentation consistently use the project referral link. The affiliate disclosure remains visible beside account-creation instructions.',
+  },
+  {
     id: '2026-09-19-plugin-installation-unlock',
     date: '2026-09-19',
     title: 'A clear way to unlock plugin installation',

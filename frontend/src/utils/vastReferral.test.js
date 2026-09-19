@@ -15,8 +15,7 @@ import { VAST_CONSOLE_URL, VAST_REFERRAL_ID, vastSignupUrl, vastUrl } from './va
  *   · the files allowed to build or render such a link are listed here, so a
  *     new surface is a decision, not an accident;
  *   · the disclosure renders beside the two "create an account" moments,
- *     decides its own visibility (empty id → nothing) and offers the ONE
- *     deliberately untagged link; its wording is written once;
+ *     decides its own visibility (empty id → nothing); its wording is written once;
  *   · README, the guides and .env.example carry the SAME id on every vast.ai
  *     URL, and every section that mentions vast.ai carries at least one such
  *     link — or no id at all anywhere when none is set (forks).
@@ -33,8 +32,6 @@ const read = (abs) => readFileSync(abs, 'utf8').replace(/\r\n/g, '\n')
    .test() calls carries its lastIndex from one file to the next). */
 const TAGGED = /https:\/\/cloud\.vast\.ai\/[a-z/-]*\?ref_id=([^)\s"'<>&]+)/g
 const ANY_VAST_URL = /https?:\/\/(?:[a-z0-9-]+\.)*vast\.ai\/?[^\s)"'<>`]*/gi
-/* The bare console root: not followed by a query string or a sub-path. */
-const UNTAGGED_ROOT = /https:\/\/cloud\.vast\.ai\/(?![?a-z])/
 
 function walk(dir, keep, out = []) {
   for (const name of readdirSync(dir)) {
@@ -81,9 +78,21 @@ test('vastUrl tags any console page with the id; no id → the plain page; the s
   assert.equal(vastUrl('/billing/', '12345'), 'https://cloud.vast.ai/billing/?ref_id=12345')
   assert.equal(vastUrl('instances/', ' 12345 '), 'https://cloud.vast.ai/instances/?ref_id=12345')
   assert.equal(vastUrl('/', 12345), 'https://cloud.vast.ai/?ref_id=12345')
-  assert.equal(vastUrl('/', 'a b&c'), 'https://cloud.vast.ai/?ref_id=a%20b%26c')
+  assert.equal(new URL(vastUrl('/', 'a b&c')).searchParams.get('ref_id'), 'a b&c')
   assert.equal(vastSignupUrl('12345'), vastUrl('/', '12345'))
   assert.equal(vastSignupUrl(), vastUrl('/', VAST_REFERRAL_ID))
+})
+
+test('existing queries and fragments keep their destination and receive exactly the configured referral', () => {
+  const url = new URL(vastUrl('/instances/?status=running&ref_id=other&ref_id=duplicate#offers'))
+  assert.equal(url.pathname, '/instances/')
+  assert.equal(url.searchParams.get('status'), 'running')
+  assert.equal(url.hash, '#offers')
+  assert.deepEqual(url.searchParams.getAll('ref_id'), [VAST_REFERRAL_ID])
+  const plain = new URL(vastUrl('/billing/?ref_id=old&tab=credit#balance', ''))
+  assert.equal(plain.searchParams.has('ref_id'), false)
+  assert.equal(plain.searchParams.get('tab'), 'credit')
+  assert.equal(plain.hash, '#balance')
 })
 
 test('the sources never spell a vast.ai URL or a ref_id out — vastUrl is the only builder', () => {
@@ -147,6 +156,8 @@ test('README, the core and owned guides and .env.example keep the same disclosed
   // Moved guide sections remain in the census: the core chapter alone can no
   // longer prove the product's links, and generated JS is not executable UI.
   const textFiles = [README, ENV_EXAMPLE, ...DOCS].map(f => ({ name: relRepo(f), text: read(f) }))
+  textFiles.push(...walk(resolve(REPO, 'bundled'), f => /[/\\]frontend[/\\]guide\.js$/.test(f))
+    .map(f => ({ name: relRepo(f), text: read(f) })))
   const productDocs = CLOUD_GUIDE.sections.map(section => ({
     name: `bundled/cloud_training/frontend/guide.js#${section.chapter}/${section.anchor}`, text: section.markdown,
   }))
@@ -158,10 +169,9 @@ test('README, the core and owned guides and .env.example keep the same disclosed
   }
   for (const { name, text } of textFiles) {
     for (const line of text.split('\n')) {
-      if (/untagged/i.test(line)) continue
       for (const url of vastUrls(line)) {
         if (/console\.vast\.ai\/api/.test(url)) continue
-        assert.ok(url.includes(`ref_id=${VAST_REFERRAL_ID}`), `${name}: untagged vast.ai link ${url}`)
+        assert.equal(new URL(url).searchParams.get('ref_id'), VAST_REFERRAL_ID, `${name}: wrong or missing referral on ${url}`)
       }
     }
     for (const id of taggedIds(text)) assert.equal(id, VAST_REFERRAL_ID, `${name}: a foreign referral id`)
@@ -175,13 +185,11 @@ test('README, the core and owned guides and .env.example keep the same disclosed
   }
   const readme = read(README)
   assert.match(readme, /\*\*Affiliate disclosure\.\*\*/)
-  assert.match(readme, UNTAGGED_ROOT)
   assert.match(readme, /\*\*Affiliate disclosure\.\*\*[\s\S]{0,600}referral links/)
   const guide = read(GUIDE) + CLOUD_GUIDE.sections
     .filter(section => section.chapter === 'settings-reference')
     .map(section => section.markdown).join('\n')
   assert.match(guide, /referral links/)
-  assert.match(guide, UNTAGGED_ROOT)
   assert.doesNotMatch(guide, /<https:\/\/cloud\.vast\.ai\/>/)
   assert.doesNotMatch(guide, /\]\(\.\.\/\.\.\/README\.md/)
 })

@@ -9,7 +9,7 @@ export const GUIDE = {
     {
       "chapter": "settings-reference",
       "anchor": "cloud-gpu-vast-ai",
-      "markdown": "## Cloud GPU (vast.ai)\n\n- **vast.ai API key** → `VAST_API_KEY` (secret). Add it to unlock **☁️ Train in cloud**. **Test** validates it (and auto-saves it first). The card includes a step-by-step guide to getting the key from [cloud.vast.ai](https://cloud.vast.ai/?ref_id=683073). The vast.ai links in this guide are referral links: vast.ai pays the project 3% of what a referred account spends, at no cost to you and with no change in the app (see the [affiliate disclosure](https://github.com/perfectgf/lora-dataset-studio#getting-api-keys) in the README); the untagged [cloud.vast.ai](https://cloud.vast.ai/) works exactly the same."
+      "markdown": "## Cloud GPU (vast.ai)\n\n- **vast.ai API key** → `VAST_API_KEY` (secret). Add it to unlock **☁️ Train in cloud**. **Test** validates it (and auto-saves it first). The card includes a step-by-step guide to getting the key from [cloud.vast.ai](https://cloud.vast.ai/?ref_id=683073). The vast.ai links in this guide are referral links: vast.ai pays the project 3% of what a referred account spends, at no cost to you and with no change in the app (see the [affiliate disclosure](https://github.com/perfectgf/lora-dataset-studio#getting-api-keys) in the README)."
     },
     {
       "chapter": "settings-reference",

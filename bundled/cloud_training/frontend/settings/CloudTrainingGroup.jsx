@@ -8,7 +8,7 @@ import { VastLink } from '@lds/plugin-sdk/links';
 
 /* First-time walkthrough, collapsed for users who already have a key.
    Every provider link uses the common referral builder; the disclosure's
-   untagged alternative stays directly below the signup instructions. */
+   referral disclosure stays directly below the signup instructions. */
 export function VastKeyGuide({ referralId = vastReferralId() } = {}) {
   const link = 'font-medium text-sky-300 underline hover:text-sky-200'
   const signup = vastSignupUrl(referralId)

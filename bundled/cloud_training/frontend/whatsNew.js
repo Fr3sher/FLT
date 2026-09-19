@@ -3,7 +3,7 @@ export const CLOUD_WHATS_NEW = [
     id: '2026-09-05-zz-vast-referral-link',
     date: '2026-09-05',
     title: 'Creating a vast.ai account through the app now supports the project, at no cost to you',
-    blurb: 'Every vast.ai link in the app and its docs is a referral link: vast.ai pays this project 3% of what a referred account spends there. Prices are identical, nothing in the app changes, and the untagged link sits right next to the disclosure.',
+    blurb: 'Every vast.ai link in the app and its docs is a referral link: vast.ai pays this project 3% of what a referred account spends there. Prices are identical, nothing in the app changes, and the disclosure sits beside the account-creation steps.',
     to: '/settings/training',
   },
 {
