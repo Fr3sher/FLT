@@ -189,6 +189,17 @@ a tab of the per-image caption editor in **Images**, on whichever tile you opene
 of an image bank's 🏷️ Caption window, so a captioner can be settled on the bank before
 anything is promoted.
 
+On a dataset, the Lab starts with its saved engine, model, vocabulary, length and
+extra instructions. It uses the dataset's character, style or concept base prompt,
+including body fidelity and appearance rules. The format follows the training family:
+booru for SDXL, prose otherwise. Expand **Prompt sent** under a result to read the
+composed instructions used for that candidate. Editing a candidate clears its old
+result; **Make default** saves its options, including extra instructions.
+
+Concept previews show the first captioning call; the batch also refines captions
+and removes concept terms afterwards. The Lab marks this distinction beside the
+prompt. Bank previews keep their descriptive prompt, including visible identity.
+
 **Stopping a run.** Started a big caption pass and realized it's captioning badly,
 or an option was mis-set? A **⏹ Stop** button sits in the captioning progress
 banner. It finishes the image being written (an inference is never cut off

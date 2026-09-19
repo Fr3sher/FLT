@@ -306,7 +306,7 @@ export const ACTION_TOPICS = [
     ['caption lab', 'lab', 'bench', 'compare', 'comparison', 'a/b', 'ab test', 'side by side',
      'candidate', 'preview', 'try', 'test a model', 'which model', 'engine', 'joycaption',
      'ollama', 'vision model', 'vocabulary', 'explicit', 'clinical', 'safe',
-     'length', 'concise', 'detailed'],
+     'length', 'concise', 'detailed', 'prompt sent', 'base prompt', 'extra instructions'],
     '/datasets?section=captions&panel=lab', 'dataset-guide', '3-captions-the-make-or-break-step'),
   action('action-caption-stop', 'Stop a captioning batch',
     ['caption', 'stop', 'cancel', 'abort', 'interrupt', 'batch', 'graceful', 'halt'],

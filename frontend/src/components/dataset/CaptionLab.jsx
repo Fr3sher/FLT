@@ -10,8 +10,8 @@ import {
    side, WITHOUT touching the stored caption. A candidate is engine × Ollama model ×
    vocabulary register × length preset; each runs through its surface's caption/preview
    endpoint (captionLabSurface.js — the two share ONE backend bench, so a candidate
-   cannot mean two things), which reuses the real caption bricks (descriptive by-path
-   pass) and never writes. Candidates run
+   shares candidate validation and inference). Dataset prompts follow their type;
+   bank prompts stay descriptive. Neither writes a caption. Candidates run
    SEQUENTIALLY — the GPU is single and serialized server-side, so firing them in parallel
    would just 409/503. Results live only while the modal is open (ephemeral bench).
 
@@ -32,6 +32,7 @@ const LENGTH_SHORT = { '': '', concise: 'Concise', detailed: 'Detailed' };
 let candidateSeq = 0;
 const newCandidate = (over = {}) => ({
   id: ++candidateSeq, backend: '', ollamaModel: '', vocabulary: '', length: '',
+  instructions: '', prompt: '', promptNote: '',
   status: 'idle', caption: '', chars: 0, durationMs: 0, error: '', cancelled: false, ...over,
 });
 
@@ -55,7 +56,30 @@ export default function CaptionLab({ surface, currentCaption, onKeep }) {
   const picker = modelPickerCopy(modelsProvider);
   const [candidates, setCandidates] = useState(() => [newCandidate()]);
   const [running, setRunning] = useState(false);
+  const [configLoading, setConfigLoading] = useState(Boolean(surface.optionsUrl));
+  const [configError, setConfigError] = useState('');
+  const [configAttempt, setConfigAttempt] = useState(0);
+  const defaultsRef = useRef({});
   const abortRef = useRef(false);
+
+  useEffect(() => {
+    if (!surface.optionsUrl) return;
+    let alive = true;
+    setConfigLoading(true);
+    setConfigError('');
+    apiFetch(surface.optionsUrl).then(({ options }) => {
+      if (!alive) return;
+      defaultsRef.current = {
+        backend: options.backend === 'none' ? '' : options.backend || '',
+        ollamaModel: options.ollama_model || '', vocabulary: options.vocabulary || '',
+        length: options.length || '', instructions: options.instructions || '',
+      };
+      setCandidates([newCandidate(defaultsRef.current)]);
+    }).catch((error) => {
+      if (alive) setConfigError(error.message || 'Could not load the saved caption method.');
+    }).finally(() => { if (alive) setConfigLoading(false); });
+    return () => { alive = false; };
+  }, [surface.optionsUrl, configAttempt]);
 
   useEffect(() => {
     let alive = true;
@@ -70,7 +94,10 @@ export default function CaptionLab({ surface, currentCaption, onKeep }) {
   }, []);
 
   const patch = (id, over) => setCandidates((cs) => cs.map((c) => (c.id === id ? { ...c, ...over } : c)));
-  const addCandidate = () => setCandidates((cs) => (cs.length >= MAX_CANDIDATES ? cs : [...cs, newCandidate()]));
+  const editCandidate = (id, over) => patch(id, {
+    ...over, status: 'idle', caption: '', prompt: '', promptNote: '', error: '',
+  });
+  const addCandidate = () => setCandidates((cs) => (cs.length >= MAX_CANDIDATES ? cs : [...cs, newCandidate(defaultsRef.current)]));
   const removeCandidate = (id) => setCandidates((cs) => (cs.length <= 1 ? cs : cs.filter((c) => c.id !== id)));
 
   // Run every candidate one after another. Between (and before) each we honor an abort;
@@ -79,9 +106,9 @@ export default function CaptionLab({ surface, currentCaption, onKeep }) {
     abortRef.current = false;
     setRunning(true);
     // Reset prior results so a re-run reads cleanly.
-    setCandidates((cs) => cs.map((c) => ({ ...c, status: 'idle', caption: '', error: '', cancelled: false })));
+    setCandidates((cs) => cs.map((c) => ({ ...c, status: 'idle', caption: '', prompt: '', promptNote: '', error: '', cancelled: false })));
     // Snapshot the ids/config now — state updates during the loop won't reorder the run.
-    const snapshot = candidates.map((c) => ({ id: c.id, backend: c.backend, ollamaModel: c.ollamaModel, vocabulary: c.vocabulary, length: c.length }));
+    const snapshot = candidates.map((c) => ({ id: c.id, backend: c.backend, ollamaModel: c.ollamaModel, vocabulary: c.vocabulary, length: c.length, instructions: c.instructions }));
     for (const c of snapshot) {
       if (abortRef.current) { patch(c.id, { status: 'idle' }); continue; }
       patch(c.id, { status: 'running', caption: '', error: '', cancelled: false });
@@ -89,13 +116,13 @@ export default function CaptionLab({ surface, currentCaption, onKeep }) {
         const started = performance.now();
         const r = await surface.preview(
           { backend: c.backend, ollama_model: c.ollamaModel, vocabulary: c.vocabulary,
-            length: c.length });
+            length: c.length, ...(surface.optionsUrl ? { instructions: c.instructions } : {}) });
         const elapsed = Math.round(performance.now() - started);
         if (r.cancelled) {
           patch(c.id, { status: 'cancelled', cancelled: true, durationMs: r.duration_ms ?? elapsed });
         } else {
           patch(c.id, { status: 'done', caption: r.caption || '', chars: r.chars ?? (r.caption || '').length,
-            durationMs: r.duration_ms ?? elapsed });
+            durationMs: r.duration_ms ?? elapsed, prompt: r.prompt || '', promptNote: r.prompt_note || '' });
         }
       } catch (e) {
         patch(c.id, { status: 'error', error: e.message || 'Preview failed' });
@@ -119,7 +146,7 @@ export default function CaptionLab({ surface, currentCaption, onKeep }) {
     try {
       await surface.applyConfig(
         { backend: c.backend, ollama_model: c.ollamaModel, vocabulary: c.vocabulary,
-          length: c.length });
+          length: c.length, ...(surface.optionsUrl ? { instructions: c.instructions } : {}) });
       toast.success(surface.applyDone);
     } catch (e) {
       toast.error(e.message || 'Could not apply this config');
@@ -149,13 +176,20 @@ export default function CaptionLab({ surface, currentCaption, onKeep }) {
               ■ Stop
             </button>
           ) : (
-            <button type="button" onClick={generate}
+            <button type="button" onClick={generate} disabled={configLoading || Boolean(configError)}
               className="inline-flex min-h-10 items-center justify-center lg:min-h-0 rounded-lg bg-gradient-primary px-3 py-1.5 text-xs font-semibold text-gray-950">
               ✨ Generate
             </button>
           )}
         </div>
       </div>
+
+      <p className="m-0 text-[0.6875rem] text-content-subtle">{surface.promptHelp}</p>
+      {configLoading && <p role="status" className="text-xs text-content-muted">Loading saved caption method…</p>}
+      {configError && <div role="alert" className="text-xs text-amber-300">
+        {configError} <button type="button" onClick={() => setConfigAttempt((n) => n + 1)}
+          className="min-h-10 underline">Retry</button>
+      </div>}
 
       {!modelsReachable && (
         <p className="m-0 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-[0.6875rem] text-amber-200">
@@ -180,32 +214,44 @@ export default function CaptionLab({ surface, currentCaption, onKeep }) {
                 <span className="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-content-subtle">
                   {configLabel(c)}
                 </span>
-                <button type="button" onClick={() => removeCandidate(c.id)} disabled={candidates.length <= 1}
+                <button type="button" onClick={() => removeCandidate(c.id)} disabled={running || candidates.length <= 1}
                   aria-label="Remove candidate"
                   className="inline-flex min-h-10 min-w-10 items-center justify-center text-content-subtle hover:text-content disabled:opacity-30 text-sm leading-none lg:min-h-0 lg:min-w-0">✕</button>
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                <select aria-label="Caption engine" value={c.backend} disabled={running}
-                  onChange={(e) => patch(c.id, { backend: e.target.value })} className={selectCls}>
+                <select aria-label="Caption engine" value={c.backend} disabled={running || configLoading}
+                  onChange={(e) => editCandidate(c.id, { backend: e.target.value })} className={selectCls}>
                   {CANDIDATE_ENGINES.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                 </select>
-                <select aria-label="Vocabulary" value={c.vocabulary} disabled={running}
-                  onChange={(e) => patch(c.id, { vocabulary: e.target.value })} className={selectCls}>
+                <select aria-label="Vocabulary" value={c.vocabulary} disabled={running || configLoading}
+                  onChange={(e) => editCandidate(c.id, { vocabulary: e.target.value })} className={selectCls}>
                   {VOCABULARY_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                 </select>
               </div>
-              <select aria-label="Caption length" value={c.length} disabled={running}
-                onChange={(e) => patch(c.id, { length: e.target.value })} className={selectCls}>
+              <select aria-label="Caption length" value={c.length} disabled={running || configLoading}
+                onChange={(e) => editCandidate(c.id, { length: e.target.value })} className={selectCls}>
                 {CAPTION_LENGTH_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
               </select>
-              <select aria-label={picker.modelLabel} value={c.ollamaModel} disabled={running || !OLLAMA_RELEVANT.has(c.backend)}
-                onChange={(e) => patch(c.id, { ollamaModel: e.target.value })}
+              <select aria-label={picker.modelLabel} value={c.ollamaModel} disabled={running || configLoading || !OLLAMA_RELEVANT.has(c.backend)}
+                onChange={(e) => editCandidate(c.id, { ollamaModel: e.target.value })}
                 className={`${selectCls} ${OLLAMA_RELEVANT.has(c.backend) ? '' : 'opacity-40'}`}>
                 <option value="">Default vision model</option>
                 {(c.ollamaModel && !models.includes(c.ollamaModel) ? [c.ollamaModel, ...models] : models)
                   .map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
+              {surface.optionsUrl && <label className="text-xs text-content-muted">
+                Extra instructions
+                <textarea aria-label="Extra instructions" value={c.instructions} maxLength={2000} rows={2} disabled={running || configLoading}
+                  onChange={(e) => editCandidate(c.id, { instructions: e.target.value })}
+                  className={selectCls + ' mt-1 resize-y'} />
+              </label>}
             </div>
+
+            {c.prompt && <details className="min-w-0 text-xs text-content-muted">
+              <summary className="min-h-10 cursor-pointer py-2">Prompt sent</summary>
+              {c.promptNote && <p className="mb-2 text-amber-300">{c.promptNote}</p>}
+              <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-app/60 p-2 font-sans">{c.prompt}</pre>
+            </details>}
 
             {/* Result */}
             <div className="flex min-h-[4rem] flex-1 flex-col rounded-lg border border-border bg-app/60 p-2">
@@ -226,7 +272,7 @@ export default function CaptionLab({ surface, currentCaption, onKeep }) {
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
-              <button type="button" onClick={() => makeDefault(c)} disabled={running}
+              <button type="button" onClick={() => makeDefault(c)} disabled={running || configLoading || Boolean(configError)}
                 title={surface.applyTitle}
                 className="inline-flex min-h-10 items-center justify-center lg:min-h-0 rounded-lg border border-border bg-surface px-2.5 py-1 text-[0.6875rem] font-medium text-content-muted hover:text-content disabled:opacity-40">
                 {surface.applyLabel}
@@ -240,7 +286,7 @@ export default function CaptionLab({ surface, currentCaption, onKeep }) {
         ))}
 
         {candidates.length < MAX_CANDIDATES && (
-          <button type="button" onClick={addCandidate} disabled={running}
+          <button type="button" onClick={addCandidate} disabled={running || configLoading || Boolean(configError)}
             className="flex min-h-[4rem] items-center justify-center rounded-xl border border-dashed border-border text-sm text-content-subtle hover:text-content disabled:opacity-40">
             + Add candidate
           </button>

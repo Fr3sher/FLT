@@ -90,6 +90,13 @@ export const WHATS_NEW = [
     blurb: 'The public V2 now supports the shared interfaces used by newer installed plugins, including Video reference frames. Existing plugin installations and their saved data stay in place.',
   },
   {
+    id: '2026-09-19-caption-lab-dataset-prompt',
+    date: '2026-09-19',
+    title: 'Caption Lab uses your dataset’s caption prompt',
+    blurb: 'The Lab now starts with your saved caption method and uses the same character, style or concept base prompt as the dataset pass, including appearance rules and extra instructions. Expand “Prompt sent” to inspect each result’s instructions. Concept previews show the initial caption; the batch’s later refinement and omission passes are indicated separately. Thanks to adamslowe for reporting the mismatch (#68).',
+    to: '/datasets?section=captions&panel=lab',
+  },
+  {
     id: '2026-09-15-git-update-banner',
     date: '2026-09-15',
     title: 'Git updates: one consistent answer',

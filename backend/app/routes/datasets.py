@@ -1172,9 +1172,8 @@ def dataset_image_caption_preview(dataset_id, image_id):
         with gpu_exclusive_vision_window(flag_ttl=600):
             result = svc.preview_caption(
                 LOCAL_USER, dataset_id, image_id,
-                backend=data.get('backend'), ollama_model=data.get('ollama_model', ''),
-                vocabulary=data.get('vocabulary'), length=data.get('length'),
-                instructions=data.get('instructions'),
+                **{key: data[key] for key in ('backend', 'ollama_model', 'vocabulary',
+                                             'length', 'instructions') if key in data},
                 should_cancel=lambda: dataset_activity.cancel_requested(dataset_id))
     except Exception as e:
         return _map_error(e)
