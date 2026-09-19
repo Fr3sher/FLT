@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-19-plugin-installation-unlock',
+    date: '2026-09-19',
+    title: 'A clear way to unlock plugin installation',
+    blurb: 'The plugin store now explains restricted installation and guides you through local access or an admin token for another computer. Locked install buttons lead to the unlock form, and an incorrect token gets a clear explanation. Thanks to lucasofff for reporting the confusing grey buttons.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-19-installed-plugin-compatibility',
     date: '2026-09-19',
     title: 'Keep your installed plugins when updating V2',

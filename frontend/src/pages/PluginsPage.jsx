@@ -13,6 +13,7 @@ import Catalog, { InstallPlan } from './store/Catalog.jsx';
 import { useCapabilities } from '../context/CapabilitiesContext';
 import { productReadiness } from '../plugins/readiness.js';
 import Library from './store/Library.jsx';
+import Administration from './store/Administration.jsx';
 
 // Store packages bring their screens, services and help together. The running
 // registry remains authoritative until a prepared transaction restarts LDS.
@@ -204,12 +205,13 @@ export default function PluginsPage() {
       if (request === catalogRequest.current) setCatalogLoading(false);
     }
   }, [adminToken]);
-  const unlockAdministration = () => {
+  const unlockAdministration = (event) => {
+    event.preventDefault();
     catalogAdminToken.current = adminDraft;
     catalogRequest.current = null;
     // Old permissions must not survive a change of credentials, even while the
     // new request is pending. Product descriptions remain safe to browse.
-    setCatalog(previous => previous ? { ...previous, status: 'unavailable', can_manage: undefined } : null);
+    setCatalog(previous => previous ? { ...previous, status: 'unavailable', can_manage: false } : null);
     if (adminToken === adminDraft) loadCatalog();
     else setAdminToken(adminDraft);
   };
@@ -370,15 +372,9 @@ export default function PluginsPage() {
             className={tab === key ? BTN_PRIMARY : BTN} onClick={() => setTab(key)}>{label}</button>)}
       </div>
 
-      {catalog?.can_manage === false && <details className="rounded-lg border border-border p-3 text-sm">
-        <summary className="min-h-10 cursor-pointer py-2 font-medium">Plugin administration</summary>
-        <p className="my-2 text-content-muted">Manage plugins from the local app, or enter the separate plugin admin token configured by the operator.</p>
-        <label className="flex flex-wrap items-center gap-2">Admin token
-          <input type="password" autoComplete="off" value={adminDraft} onChange={(e) => setAdminDraft(e.target.value)}
-            className="min-h-10 min-w-0 flex-1 rounded border border-border bg-surface px-3" />
-        </label>
-        <button type="button" className={BTN + ' mt-3'} onClick={unlockAdministration}>Unlock plugin changes</button>
-      </details>}
+      {catalog?.can_manage === false && <Administration value={adminDraft} onChange={setAdminDraft}
+        onUnlock={unlockAdministration} checking={catalogLoading}
+        rejected={Boolean(adminToken) && adminToken === adminDraft && !catalogLoading && catalog.status === 'ready'} />}
 
       {storePlan && <InstallPlan plan={storePlan} busy={busy} onConfirm={installFromStore} onCancel={() => setStorePlan(null)}
         onAcquire={id => { setPurchaseId(id); setStorePlan(null); setTab('purchases'); }} />}
@@ -411,6 +407,7 @@ export default function PluginsPage() {
       {['discover', 'updates'].includes(tab) && <div role="tabpanel" id={`store-${tab}`} aria-labelledby={`store-tab-${tab}`}>
         <Catalog catalog={catalog} installed={plugins} updatesOnly={tab === 'updates'} busy={busy || catalogLoading} onPlan={planInstall}
           loading={catalogLoading} onRetry={loadCatalog}
+          onUnlock={() => document.getElementById('plugin-admin-token')?.focus()}
           selectedId={tab === 'discover' ? requestedPlugin : ''} onClearSelection={() => {
             const next = new URLSearchParams(searchParams); next.delete('plugin'); setSearchParams(next, { replace: true });
           }} />

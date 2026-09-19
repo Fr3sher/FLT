@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
-import { Download, Search, ShoppingBag } from 'lucide-react';
+import { Download, LockKeyhole, Search, ShoppingBag } from 'lucide-react';
 import Presentation from './Presentation';
 
 const BTN = 'min-h-10 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-surface-raised disabled:opacity-50';
 
-export default function Catalog({ catalog, installed, updatesOnly = false, busy, onPlan, selectedId = '', onClearSelection, loading = false, onRetry }) {
+export default function Catalog({ catalog, installed, updatesOnly = false, busy, onPlan, onUnlock, selectedId = '', onClearSelection, loading = false, onRetry }) {
   const [search, setSearch] = useState('');
   const products = useMemo(() => (catalog?.products || []).filter((product) => {
     if (updatesOnly && !product.update_available) return false;
@@ -37,6 +37,7 @@ export default function Catalog({ catalog, installed, updatesOnly = false, busy,
         const incompatible = release.compatibility_issues.length > 0;
         const pending = Boolean(local?.pending_action);
         const paid = release.price.kind === 'paid';
+        const needsAdmin = catalog.can_manage === false && !pending && !incompatible;
         return <article key={product.id} data-store-product={product.id} className="flex min-w-0 flex-col rounded-xl border border-border bg-surface p-5">
           <Presentation key={manifest.version} release={release} />
           <div className="flex flex-wrap items-start justify-between gap-2">
@@ -64,10 +65,11 @@ export default function Catalog({ catalog, installed, updatesOnly = false, busy,
           </details>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <button type="button" className={BTN + ' inline-flex items-center gap-2'}
-              disabled={busy || pending || incompatible || catalog.status !== 'ready' || !catalog.can_manage}
-              onClick={() => onPlan(product.id, manifest.version)}>
-              {paid && !local ? <ShoppingBag className="h-4 w-4" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
-              {pending ? 'Change pending' : product.update_available ? 'Review update' : local ? 'Reinstall' : paid ? 'Review purchase' : 'Install'}
+              disabled={busy || pending || incompatible || catalog.status !== 'ready' || (!catalog.can_manage && !(needsAdmin && onUnlock))}
+              onClick={() => needsAdmin ? onUnlock?.() : onPlan(product.id, manifest.version)}>
+              {needsAdmin ? <LockKeyhole className="h-4 w-4" aria-hidden="true" />
+                : paid && !local ? <ShoppingBag className="h-4 w-4" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
+              {needsAdmin ? 'Unlock installation' : pending ? 'Change pending' : product.update_available ? 'Review update' : local ? 'Reinstall' : paid ? 'Review purchase' : 'Install'}
             </button>
             {local && <span className="text-xs text-content-muted">{local.active ? 'Active now' : 'Inactive'}</span>}
           </div>
