@@ -406,6 +406,8 @@ start.bat
 
 The former `main` branch is now [`v1`](https://github.com/perfectgf/lora-dataset-studio/tree/v1). It is read-only and no longer maintained; updates and contributions go to `v2`.
 
+**Want a guided migration?** [Download the V2 migration helper](https://github.com/perfectgf/lora-dataset-studio/releases/download/v2026.09.14.4/LDS-Migrate-to-V2.zip), extract it outside your installation and run `migrate-to-v2.bat`. It checks the Git installation, backs up the database/settings and switches branches while leaving media in place. [Instructions, backup scope and supported installations](docs/guide/migrate-to-v2.md).
+
 For an existing git installation still on `main`, stop LDS and run these commands from its folder, then start LDS again:
 
 ```bash
