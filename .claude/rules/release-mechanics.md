@@ -7,8 +7,8 @@ paths:
 # Release mechanics
 
 Releases are cut on validated waves/milestones only — never per commit, and
-always from `main` — never from `nightly`. Development lands on `nightly`;
-`main` receives it when the work is done, and a tag is cut from there (see
+always from `v2` — never from `nightly`. Development lands on `nightly`;
+`v2` receives it when the work is done, and a tag is cut from there (see
 CLAUDE.md, "Where work lands"). Announcements tell users to "Update & restart".
 
 - The dist-freshness check runs at release time (`release.yml`).

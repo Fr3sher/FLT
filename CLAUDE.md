@@ -23,11 +23,14 @@ any file.
   or `LDS_PRIVACY_NAMES`) — writing them here to forbid them would publish them;
   with no list that half SKIPS and says so.
 
-## Where work lands: `nightly` first, `main` when it is done
+## Where work lands: `nightly` first, `v2` when it is done
 
 Two branches, and the difference is what each one costs. `nightly` and work
 branches live in the private repository; the public repository carries only
-`main`, tags and releases.
+`v2`, the frozen legacy `v1` branch, tags and releases.
+
+`v2` is the maintained default branch. The former `main` is now `v1`,
+read-only and no longer maintained; fixes and contributions target `v2`.
 
 **`nightly` is where development happens.** Land there freely, as often as you
 like: targeted tests, the tree-wide invariants, both linters and the frontend
@@ -36,11 +39,11 @@ six minutes, it was being paid several times an evening, and during a fast
 development phase it cost more than the confidence it bought (maintainer's call,
 2026-08-31: "arrête avec les suites complètes en développement").
 
-**`main` is what the world runs, and it is where the full suite is paid — once.**
+**`v2` is what the world runs, and it is where the full suite is paid — once.**
 Maintainer's policy, 2026-09-05: ship visual improvements and fixes to existing
-public functions on `main` too. Keep new features and their dependent fixes on
+public functions on `v2` too. Keep new features and their dependent fixes on
 `nightly` while the plugin system is being completed. Do not merge all of
-`nightly` into `main` during this period: select independent commits and adapt
+`nightly` into `v2` during this period: select independent commits and adapt
 mixed commits without importing their new features. Rebuild `dist` from the
 selected stable sources. Run BOTH suites whole on the integrated stable tree
 before its push. One run for a wave, not one per commit.
@@ -52,18 +55,18 @@ before its push. One run for a wave, not one per commit.
   stays part of every nightly landing**. Skipping it is not a saving, it is a
   test instance serving last week's UI while you ask whether the feature works.
   A rebuild is seven seconds; the suite is what was expensive, not this.
-- **Nothing else guards nightly.** CI runs on `push: [main]` and on pull
+- **Nothing else guards nightly.** CI runs on `push: [v2]` and on pull
   requests only, so a push to nightly triggers no workflow at all. The local
   targeted tests are the entire safety net there — which is the trade, not an
   oversight.
-- **`main` stays releasable**, exactly as before. `release.yml` reruns both
+- **`v2` stays releasable**, exactly as before. `release.yml` reruns both
   suites unconditionally on a tag, so a release is gated a second time.
 - Feature branches still exist for anything worth reviewing on its own, and they
   are still pushed (see below) — they merge into `nightly`.
 - **Say what your green proves.** "Targeted + invariants + linters green; full
   backend suite not run (nightly)" is honest. "All tests pass" is not.
 
-## Tests — targeted while you work, full when a wave reaches `main`
+## Tests — targeted while you work, full when a wave reaches `v2`
 
 The backend suite is ~7 500 tests. Run whole and sequentially it takes **40
 minutes**; run on 8 workers it takes **7**, with the same result — measured, on
@@ -79,7 +82,7 @@ during a wave, so the full gate belongs at the **push**, not at every commit.
   `backend/tests/test_no_personal_data.py` and `backend/tests/test_*contract*.py`
   check invariants across the whole tree. Frontend: `node --test` from
   `frontend/` (~1 min — it carries the help-registry and What's-new contracts).
-- **Before the merge that puts a wave on `main`** — both suites, whole and
+- **Before the merge that puts a wave on `v2`** — both suites, whole and
   green, on that exact MERGED tree: `python -m pytest -n 8 --dist loadfile`
   (system Python) and `node --test` from `frontend/`. This is the one place the
   full backend suite is owed, and the tree it is owed on is the merged one: when
@@ -87,10 +90,10 @@ during a wave, so the full gate belongs at the **push**, not at every commit.
   theirs together. **Plus both linters**: `ruff check backend
   scripts packaging` and `npx eslint .` from `frontend/` — CI's Lint job runs
   outside the size gate, so a branch merged with a pre-gate file can turn
-  `main` red on lint alone with every test green (it happened: an F401 in a
+  `v2` red on lint alone with every test green (it happened: an F401 in a
   branch written before the gate existed). Non-negotiable. **Do not lean on CI for this**:
   its push gate is size-based (`.github/workflows/ci.yml`) and skips the heavy
-  jobs on a small push, so a red can reach `main` with nothing having run.
+  jobs on a small push, so a red can reach `v2` with nothing having run.
 - **Before landing on `nightly`, or an intermediate push on a branch** — the
   targeted tests above, plus the two families no filename leads to
   (`test_no_personal_data.py` and `test_*contract*.py`, 8 s together), both
@@ -210,16 +213,16 @@ the same reason. In that week 96 commits reached `main` and 7 went through a PR.
   `git ls-remote --heads origin` and the open PRs. An overlap found before the
   work is a conversation; found after, it is somebody's wasted evening.
 - **A finished feature branch merges into private `nightly`.** Stable fixes
-  and visual improvements also reach public `main` through the selective
+  and visual improvements also reach public `v2` through the selective
   integration policy above, with both suites green on that integrated tree.
-- **`main` stays releasable.** A branch may be red while it cooks; `main` may
+- **`v2` stays releasable.** A branch may be red while it cooks; `v2` may
   not. The gate does not move for what LANDS: both suites green on that exact
   tree before the push that makes the wave landable, and before anything reaches
-  `main`. An intermediate push on a branch is the "cooking" case — it owes the
+  `v2`. An intermediate push on a branch is the "cooking" case — it owes the
   targeted tests plus the tree-wide invariants, not the full suite (see Tests
   above). This bullet used to demand the full gate "before any push, to `main`
   or to a branch", which contradicted its own first sentence.
-- Small, obvious fixes may still go straight to `main`.
+- Small, obvious fixes may still go straight to `v2`.
 - **Delete the branch once it lands.** A stale remote branch claims work is in
   progress when it is finished — the same lie, reversed.
 

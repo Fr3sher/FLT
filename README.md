@@ -1,12 +1,12 @@
 # LoRA Dataset Studio V2
 
-[![CI](https://github.com/perfectgf/lora-dataset-studio/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/perfectgf/lora-dataset-studio/actions/workflows/ci.yml) [![Join our Discord](https://img.shields.io/discord/1525908170331914411?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/j6hnJBFtXE) [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/perfectgf)
+[![CI](https://github.com/perfectgf/lora-dataset-studio/actions/workflows/ci.yml/badge.svg?branch=v2)](https://github.com/perfectgf/lora-dataset-studio/actions/workflows/ci.yml) [![Join our Discord](https://img.shields.io/discord/1525908170331914411?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/j6hnJBFtXE) [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/perfectgf)
 
 **A complete, self-hosted training workflow in one browser tab:** source or generate a Character, Concept or Style dataset, curate it, caption it, clean watermarks, then train — a LoRA on five model families, locally or in the cloud, or a full Krea 2 model on a rented GPU — and compare checkpoints before export.
 
 The core and the 13 public plugins are available at no charge, with public source under the project's PolyForm Noncommercial license, no account required for the core and no telemetry. Additional optional paid plugins may be offered later. API engines and rented GPUs are optional; local and manual workflows remain available.
 
-> **V2 is now the main LDS release.** Install from the default [`main` branch](https://github.com/perfectgf/lora-dataset-studio/tree/main) or the [latest release](https://github.com/perfectgf/lora-dataset-studio/releases/latest). Existing V1 installations can use **Update & restart** to upgrade the core while keeping their datasets, media and history. Then install the optional features you use from **Plugins → Store** and review each plugin's settings before its first run.
+> **V2 is now the main LDS release.** Install from the default [`v2` branch](https://github.com/perfectgf/lora-dataset-studio/tree/v2) or the [latest release](https://github.com/perfectgf/lora-dataset-studio/releases/latest). Existing ZIP installations can use **Update & restart** to upgrade the core while keeping their datasets, media and history. Git installations still on `main` must first switch to `v2` as described below. Then install the optional features you use from **Plugins → Store** and review each plugin's settings before its first run.
 
 <h3 align="center">❤ Keep the project in development</h3>
 
@@ -396,7 +396,7 @@ start.bat
 
 On an existing ZIP installation, **Update & restart** downloads the next release and swaps the core in, keeping `data/`, `config.json`, `.env`, `.venv` and `.python` untouched. Install and update optional plugins separately from the Store. A git checkout follows its configured branch instead and needs `git` on your PATH, which an install made through a desktop Git client does not always provide.
 
-The default `main` branch now carries V2. Clone it to follow its commits with **Update & restart**:
+The default `v2` branch carries the maintained version of LDS. Clone it to follow its commits with **Update & restart**:
 
 ```bash
 git clone https://github.com/perfectgf/lora-dataset-studio.git
@@ -404,9 +404,19 @@ cd lora-dataset-studio
 start.bat
 ```
 
+The former `main` branch is now [`v1`](https://github.com/perfectgf/lora-dataset-studio/tree/v1). It is read-only and no longer maintained; updates and contributions go to `v2`.
+
+For an existing git installation still on `main`, stop LDS and run these commands from its folder, then start LDS again:
+
+```bash
+git fetch origin
+git switch v2
+git branch --set-upstream-to=origin/v2 v2
+```
+
 ### Option 2 — manual venv (any OS)
 
-Clone the default branch as above or download its [source archive](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/main.zip), open a terminal in its root, then run:
+Clone the default branch as above or download its [source archive](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/v2.zip), open a terminal in its root, then run:
 
 ```bash
 python -m venv .venv
@@ -427,7 +437,7 @@ npm run build
 
 ### Option 3 — Docker + your existing ComfyUI
 
-**Beginner Windows flow:** download/extract the [**source ZIP**](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/main.zip) — the release asset `LoRA-Dataset-Studio-windows.zip` does not carry the Docker launchers — start Docker Desktop, then double-click **`start-docker.bat`**. On the first run, select either the ComfyUI folder containing `main.py` and `models`, or its portable parent containing `ComfyUI\main.py`. LDS validates the folder and remembers it for this checkout.
+**Beginner Windows flow:** download/extract the [**source ZIP**](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/v2.zip) — the release asset `LoRA-Dataset-Studio-windows.zip` does not carry the Docker launchers — start Docker Desktop, then double-click **`start-docker.bat`**. On the first run, select either the ComfyUI folder containing `main.py` and `models`, or its portable parent containing `ComfyUI\main.py`. LDS validates the folder and remembers it for this checkout.
 
 Start your usual ComfyUI on the host. LDS uses `http://host.docker.internal:8188` from its container and mounts the selected folder at `/external-comfyui`. If the folder later moves, double-click **`configure-docker.bat`**. The launcher chooses a free Studio port and opens the browser automatically.
 
@@ -435,7 +445,7 @@ Start your usual ComfyUI on the host. LDS uses `http://host.docker.internal:8188
 
 **Beginner Windows flow:**
 
-1. Download the [source ZIP](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/main.zip), then extract the complete folder.
+1. Download the [source ZIP](https://github.com/perfectgf/lora-dataset-studio/archive/refs/heads/v2.zip), then extract the complete folder.
 2. Start **Docker Desktop** and wait until it reports that Docker is running.
 3. Double-click **`start-docker-gpu.bat`** in the extracted folder.
 4. Leave the first build/start running; it downloads the image and ComfyUI environment. The launcher prints both actual addresses and opens Studio as soon as Studio responds, while its batch window stays open until ComfyUI finishes its first boot. You do not need to open a second ComfyUI window.
