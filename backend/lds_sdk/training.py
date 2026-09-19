@@ -82,3 +82,10 @@ def network_geometry(record):
 def split_checkpoint_name(name):
     from app.services.video_training import split_checkpoint_name as split
     return split(name)
+
+
+def active_states():
+    from app.services.cloud_training import ACTIVE_STATES
+    return frozenset(ACTIVE_STATES)
+
+__all__.append("active_states")

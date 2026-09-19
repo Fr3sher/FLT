@@ -23,10 +23,11 @@ from sqlalchemy.sql.schema import Table
 _HISTORICAL_OWNERS = {
     'canvas': frozenset({'canvas_node_position', 'canvas_image_node',
                          'canvas_lane_placement', 'canvas_layout_preset'}),
-    'civitai_publish': frozenset({'civitai_link'}),
+    'civitai_publish': frozenset({'civitai_link', 'video_civitai_link'}),
     'cloud_training': frozenset({'cloud_training_run'}),
+    'creature_battle': frozenset({'creature_battle_run', 'plugin_video__creature_image'}),
     'video': frozenset({'video_bank', 'video_source', 'video_clip', 'video_dataset',
-                        'video_dataset_clip', 'video_test_clip'}),
+                        'video_dataset_clip', 'video_test_clip', 'video_checkpoint_preview'}),
 }
 
 
@@ -185,6 +186,12 @@ class _PluginDatabase:
         if name not in self.tables:
             raise ValueError('This table does not belong to the plugin.')
         from app.extensions import db
+        if name == 'creature_battle_run' and name not in db.metadata.tables:
+            from ._schema_extend import persistent_table
+            persistent_table(name,
+                db.Column('id', db.Integer, primary_key=True),
+                db.Column('user_id', db.String(36), nullable=False, index=True),
+                db.Column('run_id', db.String(64), nullable=False, unique=True))
         return db.metadata.tables[name]
 
 

@@ -11418,3 +11418,19 @@ def start_training_scheduler(app, interval_seconds=60):
 
     threading.Thread(target=_tick, daemon=True, name='train-scheduler').start()
     logger.info('Training scheduler démarré (tick %ss)', interval_seconds)
+
+
+def validate_resume_record_id(expected_record_id):
+    """An optional provenance fence, never a coercion of a caller's identity."""
+    if expected_record_id is not None and (
+            type(expected_record_id) is not int or expected_record_id < 1):
+        raise ValueError('expected_record_id must be a positive integer')
+    return expected_record_id
+
+
+def assert_resume_checkpoint_record(checkpoint, expected_record_id):
+    """Refuse a changed or ambiguous save before archiving, seeding or renting."""
+    expected_record_id = validate_resume_record_id(expected_record_id)
+    if expected_record_id is not None and checkpoint.get('record_id') != expected_record_id:
+        raise ValueError('The selected checkpoint belongs to another run or its provenance '
+                         'is unavailable. Refresh the run checkpoints before continuing.')

@@ -1,8 +1,13 @@
 """Model references use the same search roots and resolution as the LDS UI."""
-from app.services.model_integrity import FORM_STRUCTURED
-
 
 import os
+
+from app.services.model_integrity import FORM_STRUCTURED
+
+__all__ = ['search_roots', 'scan_family_folders', 'normalize_ref',
+           'resolve_ref', 'resolve_lora_path', 'resolve_model_file',
+           'detect_safetensors_arch', 'detect_lora_arch', 'lora_arch_conflicts',
+           'validate_model_file', 'quantization_report', 'FORM_STRUCTURED', 'list_models']
 
 
 def search_roots(folder_type):
@@ -61,4 +66,6 @@ def quantization_report(path):
     return model_integrity.quantization_report(path)
 
 
-__all__ = ['FORM_STRUCTURED', 'detect_lora_arch', 'detect_safetensors_arch', 'lora_arch_conflicts', 'normalize_ref', 'quantization_report', 'resolve_lora_path', 'resolve_model_file', 'resolve_ref', 'scan_family_folders', 'search_roots', 'validate_model_file']
+def list_models(folder_type):
+    from app.services.comfy_model_paths import list_models as operation
+    return operation(folder_type)

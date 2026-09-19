@@ -2925,3 +2925,23 @@ def ensure_ollama_running():
         else:
             return False
     return True
+
+
+def fetch_node_info(class_type, timeout=10, worker_url=None):
+    """ONE node's /object_info entry — its inputs and their choices — or None
+    when the target does not register it or cannot be reached. Kilobytes,
+    where the whole registry is megabytes: the right call for a question about
+    one node, such as which attention backends the block-attention switch can
+    offer on THIS ComfyUI."""
+    api = (worker_url or api_address() or '').rstrip('/')
+    if not api or not class_type:
+        return None
+    try:
+        r = requests.get(f'{api}/object_info/{class_type}', timeout=timeout)
+        if r.status_code != 200:
+            return None
+        data = r.json() or {}
+    except Exception:  # noqa: BLE001 — unreachable reads as unknown, never as absent
+        return None
+    entry = data.get(class_type) if isinstance(data, dict) else None
+    return entry if isinstance(entry, dict) else None

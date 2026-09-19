@@ -745,6 +745,12 @@ class BankFolderProbe(db.Model):
                 f'{self.subfolder!r} {self.verdict}>')
 
 
+VIDEO_START_FRAME = 'video_start_frame'
+VIDEO_LAST_FRAME = 'video_last_frame'
+VIDEO_FRAME_KINDS = (VIDEO_START_FRAME, VIDEO_LAST_FRAME)
+VIDEO_FRAME_CHECKPOINTS = ('start frame', 'last frame')
+
+
 class LoraTestImage(db.Model):
     """One cell image of a LoRA Test-Studio run (checkpoint x strength grid).
 
@@ -1807,3 +1813,7 @@ class VideoTestClip(db.Model):
 
     def __repr__(self):
         return f'<VideoTestClip {self.id} {self.status} lora={self.lora}>'
+
+
+# Persistent public contracts are also present in minimal embedded hosts.
+from lds_sdk import _legacy_schema, _video_schema  # noqa: E402,F401

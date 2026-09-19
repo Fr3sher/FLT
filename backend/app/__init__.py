@@ -237,6 +237,14 @@ event.listen(Engine, 'connect', _configure_sqlite_connection)
 # column already exists) and is additive only — never a drop. Names/types are
 # hardcoded constants (no user input) → safe to interpolate into the ALTER.
 _SCHEMA_ADDITIONS = (
+    ('video_dataset', 'best_settings', 'TEXT'),
+    ('cloud_training_run', 'video_preview_key', 'VARCHAR(36)'),
+    ('video_test_clip', 'generation_settings', 'TEXT'),
+    ('video_test_clip', 'end_image', 'VARCHAR(255)'),
+    ('video_test_clip', 'user_id', 'VARCHAR(255)'),
+    ('video_test_clip', 'references_json', 'TEXT'),
+    ('video_test_clip', 'ref_base', 'VARCHAR(16)'),
+    ('video_test_clip', 'ref_image_size', 'VARCHAR(8)'),
     ('video_dataset', 'trigger_word', 'VARCHAR(100)'),
     ('video_clip', 'caption_fields', 'TEXT'),
     ('video_clip', 'caption_tokens', 'INTEGER'),
@@ -735,6 +743,7 @@ def create_app(config_object=None):
 
     with app.app_context():
         from . import models  # noqa: F401
+        from lds_sdk import _legacy_schema, _video_schema  # noqa: F401
         db.create_all()
         _apply_additive_migrations()
         _cleanup_orphaned_lora_test_images()

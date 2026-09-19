@@ -10,3 +10,11 @@ def read_safetensors_header(path):
 
 
 __all__ = ['read_safetensors_header']
+
+
+from types import MappingProxyType
+from app.services.fp8_export import _DTYPE_BYTES, _HEADER_LEN_MAX
+
+DTYPE_BYTES = MappingProxyType(dict(_DTYPE_BYTES))
+MAX_HEADER_BYTES = _HEADER_LEN_MAX
+__all__ += ["DTYPE_BYTES", "MAX_HEADER_BYTES"]

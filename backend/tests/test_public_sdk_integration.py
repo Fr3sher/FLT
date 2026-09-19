@@ -93,10 +93,10 @@ def test_each_public_product_registers_alone_with_real_sdk(host, pid):
     loaded = activate(host, {pid})
     assert loaded.records[pid].state == 'loaded', loaded.records[pid].error
     assert all(r.state == 'disabled' for key, r in loaded.records.items() if key != pid)
-    # Only the existing main schema is present: no nightly video or battle schema.
-    assert len(db.metadata.tables) == 26
-    assert not any('creature' in name or name in {'video_civitai_link', 'video_checkpoint_preview'}
-                   for name in db.metadata.tables)
+    # Public Video/publication history persists even while the packages are absent.
+    assert len(db.metadata.tables) == 28
+    assert {'video_civitai_link', 'video_checkpoint_preview'} <= set(db.metadata.tables)
+    assert not any('creature' in name for name in db.metadata.tables)
 
 
 def test_public_products_register_together_without_duplicate_routes(host):
@@ -144,17 +144,18 @@ def test_resource_monitor_route_uses_public_cached_snapshot_and_obeys_disable(ho
     assert all('restart' not in r.rule and 'interrupt' not in r.rule for r in app.url_map.iter_rules())
 
 
-def test_public_h3_facade_delegates_to_main_only():
+def test_public_h3_primitives_preserve_legacy_shapes_and_add_reference_support():
     from lds_sdk import h3_render
     from app.services import video_test_studio
-    assert h3_render.build_workflow is video_test_studio.build_workflow
-    assert h3_render.profile is video_test_studio._profile
+    assert callable(h3_render.build_workflow)
+    assert h3_render.profile() == video_test_studio._profile()
     assert h3_render.snap_frames(50) == video_test_studio.snap_frames(50)
     with pytest.raises(AttributeError):
         getattr(h3_render, 'reference')
     from lds_sdk.h3_downloads import H3_DOWNLOADS
-    assert set(H3_DOWNLOADS) == {'h3_base', 'h3_text_encoder', 'h3_video_vae',
-                               'h3_audio_vae', 'h3_turbo_lora', 'h3_parasyte_lora', 'h3_dareties_lora'}
+    assert {'h3_base', 'h3_text_encoder', 'h3_video_vae', 'h3_audio_vae',
+            'h3_turbo_lora', 'h3_parasyte_lora', 'h3_dareties_lora'} <= set(H3_DOWNLOADS)
+    assert callable(h3_render.graft_reference_accel)
 
 
 def test_publish_png_strips_metadata_without_rewriting_master(tmp_path):

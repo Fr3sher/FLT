@@ -17,11 +17,10 @@ pytestmark = pytest.mark.plugins('video')
 
 @pytest.fixture
 def loras_dir(tmp_path, monkeypatch):
-    from app.services import video_test_studio as h3_host
+    from lds_sdk import h3_render as h3_host
     dest = tmp_path / 'loras' / 'h3' / 'lds'
     dest.mkdir(parents=True)
-    # import_external_lora is the shared H3 SDK adapter; its implementation
-    # still resolves this host primitive, not the plugin's compatibility alias.
+    # The SDK now owns the shared primitive used by independently installed lanes.
     monkeypatch.setattr(h3_host, '_loras_write_dir', lambda: str(dest))
     return dest
 

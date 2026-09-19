@@ -318,3 +318,17 @@ def promote(job_id) -> dict:
     row.priority = max(PRIORITY_NEXT, int(top) + 1)
     db.session.commit()
     return {'ok': True}
+
+
+def gpu_job():
+    """(job_id, prompt_id) of the job currently on the card — sent to ComfyUI,
+    or paused while ComfyUI still works on it — or (None, None). What a
+    progress bar read from ComfyUI's console may belong to; the prompt id is
+    what lets the console check that it does."""
+    row = (ImageGenerationQueue.query
+           .filter(ImageGenerationQueue.status.in_(
+               ('sent_to_comfy', 'stalled', 'cancel_requested', 'processing')))
+           .order_by(ImageGenerationQueue.started_at.desc().nullslast()).first())
+    if row is None:
+        return None, None
+    return row.job_id, row.comfyui_prompt_id

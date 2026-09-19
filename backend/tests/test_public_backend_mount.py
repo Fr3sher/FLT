@@ -65,7 +65,7 @@ def test_store_factory_starts_with_zero_plugins(factory):
     app = factory()
     assert app.extensions['lds_plugins'].records == {}
     assert app.test_client().get('/api/plugins', follow_redirects=True).status_code == 200
-    assert len(db.metadata.tables) == 26
+    assert len(db.metadata.tables) == 28
 
 
 @pytest.mark.parametrize('pid', PRODUCTS)
@@ -74,7 +74,7 @@ def test_true_factory_each_product_alone(factory, pid):
     records = app.extensions['lds_plugins'].records
     assert records[pid].state == 'loaded', records[pid].error
     assert all(r.state == 'disabled' for key, r in records.items() if key != pid)
-    assert len(db.metadata.tables) == 26
+    assert len(db.metadata.tables) == 28
 
 
 def test_true_factory_products_have_no_duplicate_url_method(factory):

@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-19-installed-plugin-compatibility',
+    date: '2026-09-19',
+    title: 'Keep your installed plugins when updating V2',
+    blurb: 'The public V2 now supports the shared interfaces used by newer installed plugins, including Video reference frames. Existing plugin installations and their saved data stay in place.',
+  },
+  {
     id: '2026-09-15-git-update-banner',
     date: '2026-09-15',
     title: 'Git updates: one consistent answer',

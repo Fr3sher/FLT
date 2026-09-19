@@ -14,6 +14,9 @@ export const PAIRED_SURFACES = Object.freeze({
   // dataset's Training panel and on the video set's training block — the
   // same feature on both kinds of set, at parity.
   'training.launch': ['dataset', 'video'],
+  // Shared extension points; their providers remain separately installed.
+  'video.neural-render-dialog': ['dataset', 'studio'],
+  'video.neural-compare': ['dataset', 'studio'],
   'lightbox.action': ['dataset', 'bank', 'gallery'],   // verbs on a generated image
   // The checkpoint popover's rows, and the layer its hosts keep mounted for a
   // row's dialog — on the two surfaces that mount the shared popover, and on

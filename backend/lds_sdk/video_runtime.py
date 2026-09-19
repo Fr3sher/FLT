@@ -100,3 +100,30 @@ class VideoQueue:
 
 queue = VideoQueue()
 __all__ = ['QueueRecord', 'VideoQueue', 'job', 'queue']
+
+
+def require_comfyui_enqueue_ready(*args, **kwargs):
+    from app.job_queue import require_comfyui_enqueue_ready
+    return require_comfyui_enqueue_ready(*args, **kwargs)
+
+
+def annotate_checkpoint_steps(rows, dataset_id, run_id, paths):
+    from app.plugins.hooks import run_filter
+    return run_filter('video_lineage.checkpoints', rows, dataset_id, run_id, paths)
+
+
+def battle_session():
+    """Current cloud session of the independent Creature Battle product."""
+    from .lifecycle import is_available, state_change_lock
+    from importlib import import_module
+    from .plugin_services import ServiceUnavailable
+    with state_change_lock:
+        if not is_available('creature_battle'):
+            return None
+        api = import_module('lds_creature_battle.public_api_v1')
+        operation = getattr(api, 'battle_session', None)
+        if getattr(api, 'API_VERSION', None) != 1 or not callable(operation):
+            raise ServiceUnavailable('creature_battle', 'Update Creature Battle to use its cloud renderer.')
+        return operation()
+
+__all__ += ["require_comfyui_enqueue_ready", "annotate_checkpoint_steps", "battle_session"]

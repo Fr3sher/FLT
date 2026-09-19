@@ -1,5 +1,10 @@
 """Shared FP8 artifact utility; conversion policy stays with the calling product."""
+
 from app.services.fp8_export import Fp8ExportError, PROGRESS_PREFIX, RESULT_PREFIX
+
+__all__ = ['Fp8ExportError', 'PROGRESS_PREFIX', 'RESULT_PREFIX', 'read_header',
+           'plan_quantization', 'fp8_name_for', 'verify_export', 'worker_script',
+           'estimate_fp8_bytes', 'typical_fp8_bytes']
 
 
 def read_header(path):
@@ -28,4 +33,11 @@ def worker_script():
     return fp8_export.__file__
 
 
-__all__ = ['Fp8ExportError', 'PROGRESS_PREFIX', 'RESULT_PREFIX', 'fp8_name_for', 'plan_quantization', 'read_header', 'verify_export', 'worker_script']
+def estimate_fp8_bytes(header):
+    from app.services.fp8_export import estimate_fp8_bytes as operation
+    return operation(header)
+
+
+def typical_fp8_bytes(size_bytes):
+    from app.services.fp8_export import typical_fp8_bytes as operation
+    return operation(size_bytes)

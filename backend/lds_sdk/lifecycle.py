@@ -15,3 +15,15 @@ def is_available(plugin_id):
 
 
 __all__ = ['is_available', 'state_change_lock']
+
+
+def require_plugins(plugin_ids, error_type=RuntimeError):
+    for plugin_id in plugin_ids:
+        if not is_available(plugin_id):
+            raise error_type(f'Cloud training requires the enabled {plugin_id} plugin. '
+                             'Enable it and restart the app before renting a GPU.')
+
+
+def probe():
+    from app import capabilities
+    return capabilities.probe()

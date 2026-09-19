@@ -17,6 +17,17 @@ const scrape = {
 
 test.beforeEach(() => resetRegistry())
 
+test('an optional video dialog provider registers before any video host', () => {
+  assert.equal(registerDescriptor({id: 'example.renderer', slots: {
+    'video.neural-render-dialog': [{id: 'dialog'}],
+    'video.neural-compare': [{id: 'compare'}],
+  }}), true)
+  assert.equal(contributions('video.neural-render-dialog', 'studio').length, 1)
+  assert.equal(contributions('video.neural-compare', 'dataset').length, 1)
+  setEnabled([])
+  assert.equal(contributions('video.neural-compare', 'studio').length, 0)
+})
+
 test('a valid descriptor registers and contributes on every paired surface', () => {
   assert.equal(registerDescriptor(scrape), true)
   assert.deepEqual(plugins().map((p) => p.id), ['scrape'])

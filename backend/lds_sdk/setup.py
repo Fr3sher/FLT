@@ -46,3 +46,22 @@ def missing_modules(names):
 
 __all__ = ['AlreadyRunning', 'resolve_install_folder', 'known_action', 'start', 'model_download_spec',
            'missing_modules']
+
+
+def bundled_node_pack_files(action):
+    """Bytes of a registered local node pack, independent of its install path."""
+    from pathlib import Path
+    from app import setup_installer
+    if action not in setup_installer._BUNDLED_NODE_PACKS:
+        raise ValueError('Unknown bundled node pack.')
+    root = Path(setup_installer._bundled_pack_source(action))
+    return {path.name: path.read_bytes() for path in sorted(root.glob('*.py'))}
+
+
+def bundled_node_pack_name(action):
+    """Stable install folder of a known host-supplied rendering primitive."""
+    from app import setup_installer
+    try:
+        return setup_installer._BUNDLED_NODE_PACKS[action]['folder']
+    except KeyError:
+        raise ValueError('Unknown bundled node pack.') from None
