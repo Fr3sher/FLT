@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, LockKeyhole, Search, ShoppingBag } from 'lucide-react';
 import Presentation from './Presentation';
 
@@ -84,8 +84,17 @@ export default function Catalog({ catalog, installed, updatesOnly = false, busy,
 }
 
 export function InstallPlan({ plan, busy, onConfirm, onCancel, onAcquire }) {
+  const panelRef = useRef(null);
+  useEffect(() => {
+    // The review sits above the catalog, often outside the viewport of the
+    // clicked card. Move to each new plan, without stealing focus on busy updates.
+    const panel = panelRef.current;
+    if (!panel) return;
+    panel.scrollIntoView({ block: 'center' });
+    panel.focus({ preventScroll: true });
+  }, [plan]);
   const purchase = plan.purchase_required?.length > 0;
-  return <section role="region" aria-label="Review plugin installation" className="space-y-4 rounded-xl border border-primary/40 bg-surface p-5" data-store-plan>
+  return <section ref={panelRef} role="region" aria-label="Review plugin installation" tabIndex={-1} className="space-y-4 rounded-xl border border-primary/40 bg-surface p-5" data-store-plan>
     <h2 className="text-lg font-semibold">{purchase ? 'Review your plugins' : 'Ready to install'}</h2>
     <ul className="divide-y divide-border">
       {plan.packages.map(({ manifest, action, will_enable: willEnable, previous_version: previousVersion, reason, remains_disabled: remainsDisabled }) => <li key={manifest.id} className="py-3">

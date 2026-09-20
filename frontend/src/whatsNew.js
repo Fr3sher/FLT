@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-20-plugin-install-review-focus',
+    date: '2026-09-20',
+    title: 'Plugin installation review stays in view',
+    blurb: 'Installing a plugin from lower in the catalog now brings its review panel into view and moves keyboard focus there, so the confirmation step is easy to find. Thanks to @strichinina for reporting and diagnosing this in #70.',
+  },
+  {
     id: '2026-09-19-vast-referral-links',
     date: '2026-09-19',
     title: 'Consistent Vast.ai referral links',
