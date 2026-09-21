@@ -146,11 +146,35 @@ LDS_CPUS=12
 
 GPU allocation is controlled by Docker/NVIDIA rather than these CPU/RAM variables. ComfyUI and LDS scoring share the selected GPU inside this container, so avoid overlapping large passes when VRAM is tight.
 
+## V2 plugins
+
+Both Docker images include the public Store configuration and trust root. No
+`./store` bind mount is needed. If an older V2 image reports **The store has not
+been connected to a trusted catalog yet**, update the source and rebuild the image.
+
+Docker forwards browser connections across its bridge, so even a browser opened
+on the host's localhost address can require plugin administrator authorization:
+
+1. Generate a random secret of at least 32 characters, for example with
+   `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+2. Set `LDS_PLUGIN_ADMIN_TOKEN=<your generated secret>` in the host `.env` file
+   mounted at `/app/.env`, then restart LDS when no work is running. If you pass
+   it as container environment instead, recreate the container to apply it.
+3. In **Plugins**, choose **Unlock installation** and enter the same secret.
+
+The installed packages, their data and the verified catalog cache live under
+`/data`, so keep that volume when rebuilding or recreating the container.
+The Store currently accepts one installation plan at a time: apply its changes
+before installing the next plugin. In the GPU image, **Apply changes and restart**
+restarts only LDS through its supervisor, after checking for active work. In the
+API-only/external-ComfyUI image, restart the Studio service with your usual
+Compose files (for the default stack: `docker compose restart studio`).
+
 ## Updates and restarts
 
-An in-app restart exits back to the container supervisor, which respawns LDS on the fixed container bind. It does not create a second loopback-only process.
+In the GPU image, an in-app restart exits back to the container supervisor, which respawns LDS on the fixed container bind. It does not create a second loopback-only process. The API-only image requires a container restart to apply plugin changes.
 
-The in-app source updater cannot replace the immutable `/app` files in an image. For a GitHub ZIP installation, double-click **`update-docker.bat`**: it downloads the latest stable Release, keeps the previously selected launcher, rebuilds the image, and preserves `.env`, app data, ComfyUI folders, bank sources, `ollama-data/` and the generated external-ComfyUI override. Pass `main` only when you explicitly want the preview branch.
+The in-app source updater cannot replace the immutable `/app` files in an image. For a GitHub ZIP installation, double-click **`update-docker.bat`**: it downloads the latest stable Release, keeps the previously selected launcher, rebuilds the image, and preserves `.env`, app data, ComfyUI folders, bank sources, `ollama-data/` and the generated external-ComfyUI override. Pass `v2` to follow the maintained branch; `main` remains an alias for `v2` for older commands.
 
 The code swap is transactional. The updater keeps the previous code aside, then calls the launcher with `--update-rebuild`, which returns only once Docker reports the Studio container healthy. On that confirmation the update is committed and the backup is removed; on any failure the previous code is put back and its launcher is restarted, so a failed update leaves you on the version you already had.
 

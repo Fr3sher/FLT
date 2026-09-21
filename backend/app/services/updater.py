@@ -45,17 +45,27 @@ DOCKER_UPDATE_INSTRUCTIONS = (
 
 
 def is_docker_runtime() -> bool:
-    """Whether this process is running in the immutable GPU Docker image."""
-    return os.environ.get('LDS_RUNTIME', '').strip().lower() == DOCKER_RUNTIME
+    """All Docker lanes run immutable application code, including API-only."""
+    return os.environ.get('LDS_RUNTIME', '').strip().lower() in {
+        'docker', 'docker-external-comfy', DOCKER_RUNTIME,
+    }
 
 
 def docker_update_payload() -> dict:
     """Structured manual-update contract shared by check/apply endpoints."""
+    runtime = os.environ.get('LDS_RUNTIME', '').strip().lower()
+    instructions = list(DOCKER_UPDATE_INSTRUCTIONS)
+    if runtime == 'docker':
+        instructions[1] = 'docker compose up -d --build'
+    elif runtime == 'docker-external-comfy':
+        instructions[1] = ('docker compose -f docker-compose.yml '
+                           '-f docker-compose.external-comfy.yml '
+                           '-f .docker-compose.external-comfy.override.yml up -d --build')
     return {
         'install_mode': 'docker',
         'can_apply': False,
         'manual': True,
-        'instructions': list(DOCKER_UPDATE_INSTRUCTIONS),
+        'instructions': instructions,
     }
 
 

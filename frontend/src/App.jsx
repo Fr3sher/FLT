@@ -435,7 +435,7 @@ function UpdateBanner() {
               </span> (you run {versionLabel(info)}).
             </span>
             {dockerMode ? (
-              <DockerUpdateInstructions />
+              <DockerUpdateInstructions status={info} />
             ) : pinokioMode ? (
               <PinokioUpdateInstructions />
             ) : (

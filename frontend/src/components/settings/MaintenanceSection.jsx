@@ -177,7 +177,7 @@ function UpdatesCard() {
                 <span aria-hidden>⬆</span>{' '}
                 Update available{s.latest ? ` — v${s.latest}` : ''}. The running container cannot replace its own image.
               </p>
-              <DockerUpdateInstructions />
+              <DockerUpdateInstructions status={s} />
             </div>
           ) : pinokioMode && s.update_available ? (
             <div className="space-y-2">

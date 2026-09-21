@@ -6,8 +6,8 @@
 .DESCRIPTION
   The default STABLE channel resolves the latest published GitHub Release and
   resolves that reference to one immutable commit, then downloads the archive
-  for that exact commit. MAIN is an explicit preview channel resolved the same
-  way; it never needs a Release to exist.
+  for that exact commit. V2 follows the maintained branch; MAIN remains an alias
+  for V2 for existing launchers. Neither needs a Release to exist.
 
   Before changing the installation, the script rejects unsafe ZIP paths,
   symlinks/reparse points, ambiguous archive roots and bundles missing the
@@ -24,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('stable', 'main')]
+    [ValidateSet('stable', 'v2', 'main')]
     [string]$Channel = 'stable',
 
     [string]$InstallRoot = '',
@@ -265,8 +265,8 @@ function Resolve-ArchiveSource(
         [string]$MetadataPath) {
     Assert-RepositoryName $Repo
 
-    $tag = 'main'
-    $reference = 'main'
+    $tag = 'v2'
+    $reference = 'v2'
     if ($SelectedChannel -eq 'stable') {
         $release = Get-ReleaseMetadata -Repo $Repo -MetadataPath $MetadataPath
         $tagProperty = if ($null -ne $release) {

@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-21-docker-v2-plugins',
+    date: '2026-09-21',
+    title: 'Install V2 plugins in Docker',
+    blurb: 'Docker images now include the public plugin Store configuration. GPU installs can apply plugin changes by restarting only LDS, and update instructions follow your Docker setup. The Docker updater also follows the maintained V2 branch. Thanks to _nofaceman for reporting the missing catalog.',
+  },
+  {
     id: '2026-09-20-plugin-install-review-focus',
     date: '2026-09-20',
     title: 'Plugin installation review stays in view',

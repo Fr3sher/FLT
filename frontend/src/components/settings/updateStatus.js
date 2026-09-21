@@ -16,16 +16,21 @@
    - 'unavailable' non-git and no downloadable release: don't promise an update
                    the app can't perform — link out to the releases page instead. */
 
-// Keep the two commands in one frontend-owned contract. Both the Settings card
-// and the app-wide banner render this list, so neither can drift into offering
-// an in-container update that Docker will discard on the next recreate.
+// Fallback for older GPU servers. New servers supply their lane's commands.
 export const DOCKER_UPDATE_COMMANDS = Object.freeze([
   'git pull',
   'docker compose -f docker-compose.gpu.yml up -d --build',
 ])
 
 export const DOCKER_UPDATE_GUIDE_URL =
-  'https://github.com/perfectgf/lora-dataset-studio#option-4--docker-gpu--comfyui'
+  'https://github.com/perfectgf/lora-dataset-studio/blob/v2/docs/guide/docker.md#updates-and-restarts'
+
+export function dockerUpdateCommands(status) {
+  const commands = status?.instructions
+  return Array.isArray(commands) && commands.length > 0
+    && commands.every((command) => typeof command === 'string' && command.trim())
+    ? commands : DOCKER_UPDATE_COMMANDS
+}
 
 export function isDockerInstall(s) {
   return s?.install_mode === 'docker'

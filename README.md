@@ -480,7 +480,7 @@ docker compose up --build          # docker-compose.yml, the default file
 
 Studio answers on `http://127.0.0.1:5050/` and its data lives in `./data-docker`. This is the only Docker lane that needs no NVIDIA support at all.
 
-To update a Docker install, double-click **`update-docker.bat`** for the latest stable release, or pass `main` to follow commits on the main branch. It rebuilds transactionally and rolls back if the container does not come up healthy. Both `start-docker.bat` and `start-docker-gpu.bat` accept `--rebuild` and `--update-rebuild`; `start-docker.bat` also accepts `--configure`, which is what `configure-docker.bat` calls. After upgrading from V1, install the optional features you use from **Plugins → Store**.
+To update a Docker install, double-click **`update-docker.bat`** for the latest stable release, or pass `v2` to follow the maintained branch (`main` remains a compatibility alias for `v2`). It rebuilds transactionally and rolls back if the container does not come up healthy. Both `start-docker.bat` and `start-docker-gpu.bat` accept `--rebuild` and `--update-rebuild`; `start-docker.bat` also accepts `--configure`, which is what `configure-docker.bat` calls. After upgrading from V1, install the optional features you use from **Plugins → Store**. Both images include the public Store configuration; [Docker plugin administration and restarts](docs/guide/docker.md#v2-plugins) explains how to unlock installation and apply changes.
 
 ### Option 5 — Pinokio (one click, any OS)
 

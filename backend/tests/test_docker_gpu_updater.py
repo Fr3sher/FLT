@@ -8,6 +8,7 @@ actual installation.
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import stat
 import struct
@@ -403,6 +404,7 @@ def test_static_contract_is_portable_stable_by_default_and_single_logic():
 
     assert 'set "LDS_UPDATE_CHANNEL=stable"' in bat
     assert 'if /I "!LDS_UPDATE_REQUEST!"=="main"' in bat
+    assert 'if /I "!LDS_UPDATE_REQUEST!"=="v2"' in bat
     assert 'pushd "%~dp0"' in bat
     assert '-InstallRoot "%~dp0."' in bat
     assert "EnableExtensions DisableDelayedExpansion" in bat
@@ -451,6 +453,33 @@ def test_static_contract_is_portable_stable_by_default_and_single_logic():
     lowered = script.lower()
     for forbidden in ("docker system prune", "docker image rm", "docker volume rm"):
         assert forbidden not in lowered
+
+
+@pytest.mark.parametrize('channel', ['v2', 'main'])
+def test_commit_channel_resolves_v2_including_legacy_alias(tmp_path, channel):
+    # Execute the actual resolver with a local commit lookup, without running
+    # the updater or contacting GitHub. A renamed branch must not strand users.
+    harness = tmp_path / 'resolve.ps1'
+    harness.write_text('''param($Source, $Channel)
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Source, [ref]$null, [ref]$null)
+$function = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Resolve-ArchiveSource'
+}, $false)
+Invoke-Expression $function.Extent.Text
+function Assert-RepositoryName { param($Repo) }
+function Get-ImmutableCommit { param($Repo, $Reference)
+    if ($Reference -ne 'v2') { throw "Unexpected branch: $Reference" }
+    return ('1' * 40)
+}
+Resolve-ArchiveSource -SelectedChannel $Channel -Repo 'sample/project' | ConvertTo-Json -Compress
+''', encoding='utf-8')
+    result = subprocess.run([POWERSHELL, '-NoProfile', '-File', str(harness),
+                             str(UPDATER), channel], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    source = json.loads(result.stdout)
+    assert source['Tag'] == 'v2'
+    assert source['Commit'] == TEST_COMMIT
 
 
 @pytest.mark.skipif(not COMSPEC, reason="cmd.exe is required")

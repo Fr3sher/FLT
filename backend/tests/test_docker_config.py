@@ -56,6 +56,8 @@ def test_container_runtime_tracks_server_defaults():
     assert image_env['LDS_CONFIG'] == '/data/config.json'
     assert image_env['LDS_HOST'] == '0.0.0.0'
     assert image_env['LDS_PORT'] == str(port)
+    assert image_env['LDS_RUNTIME'] == 'docker'
+    assert image_env['LDS_BIND_MANAGED'] == '1'
     assert f'EXPOSE {port}' in dockerfile
     assert f'http://127.0.0.1:{port}/api/health' in dockerfile
     assert f'- target: {port}' in compose

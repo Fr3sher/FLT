@@ -711,7 +711,7 @@ def update_apply():
     if updater.is_docker_runtime():
         return jsonify({
             'ok': False,
-            'reason': 'Docker GPU installs must be updated by rebuilding the image.',
+            'reason': 'Docker installs must be updated by rebuilding the image.',
             **updater.docker_update_payload(),
         })
     # Pinokio owns the process: pulling here would work, but the restart that

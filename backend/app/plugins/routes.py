@@ -43,12 +43,12 @@ def admin_mutation_gate():
 
 
 def restart_payload() -> dict:
-    if updater.is_docker_runtime():
-        mode, how = 'container', 'Restart the container (docker compose restart) for the change to apply.'
-    elif updater.is_pinokio_runtime():
+    if updater.is_pinokio_runtime():
         mode, how = 'pinokio', 'Stop the app in Pinokio, then Start it again, for the change to apply.'
     elif os.environ.get('LDS_RESTART_MODE', '').strip().lower() == 'supervisor':
         mode, how = 'self', 'Apply changes and restart LDS to use the requested plugin state.'
+    elif updater.is_docker_runtime():
+        mode, how = 'container', 'Restart the container (docker compose restart) for the change to apply.'
     else:
         mode, how = 'manual', 'Close the app and start it again for the change to apply.'
     return {'required': True, 'mode': mode, 'how': how, 'can_apply': mode == 'self'}

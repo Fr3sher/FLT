@@ -3,14 +3,14 @@ setlocal EnableExtensions DisableDelayedExpansion
 
 rem Portable one-click updater for the Docker installation.
 rem Double-click (or no argument) follows the latest published GitHub Release.
-rem Pass "main" explicitly to opt into the preview channel.
+rem Pass "v2" to follow the maintained branch; "main" is a compatibility alias.
 set "LDS_UPDATE_REQUEST=%~1"
 set "LDS_UPDATE_EXTRA=%~2"
 setlocal EnableDelayedExpansion
 if not "!LDS_UPDATE_EXTRA!"=="" (
     endlocal
     echo [ERROR] Too many arguments.
-    echo Usage : update-docker-gpu.bat [stable^|main]
+    echo Usage : update-docker-gpu.bat [stable^|v2^|main]
     pause
     exit /b 2
 )
@@ -26,14 +26,22 @@ if /I "!LDS_UPDATE_REQUEST!"=="main" (
     endlocal
     goto :channel_main
 )
+if /I "!LDS_UPDATE_REQUEST!"=="v2" (
+    endlocal
+    goto :channel_v2
+)
 endlocal
 echo [ERROR] Unknown channel.
-echo Usage : update-docker-gpu.bat [stable^|main]
+echo Usage : update-docker-gpu.bat [stable^|v2^|main]
 pause
 exit /b 2
 
 :channel_main
 set "LDS_UPDATE_CHANNEL=main"
+goto :channel_ready
+
+:channel_v2
+set "LDS_UPDATE_CHANNEL=v2"
 goto :channel_ready
 
 :channel_stable
