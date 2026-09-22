@@ -1,42 +1,20 @@
-"""LoRA Test Studio - checkpoint x strength sweep over the Z-Image pipeline.
+"""LoRA Test Studio: checkpoint/strength sweeps with fixed seeds and prompts.
 
-MVP of the « Studio de test de LoRA » (design 2026-06-12) : pour un dataset
-entraîné, balaye une grille checkpoint x strength en générations Z-Image
-(seed fixe, 1 prompt identité), note 👍/👎 chaque cellule et persiste les
-réglages gagnants sur le FaceDataset.
+Generate comparison grids for a trained dataset, collect votes and persist
+winning settings. Commit each row before enqueueing to avoid orphan jobs.
+Queue metadata marks is_lora_test; completion/failure/cancellation links through
+link_completed_test_image at the same hook as dataset jobs. Move completed files
+into the dataset folder. Runs are free, with one active run per dataset, and
+cannot start while training or vision owns the GPU.
 
-Clones the dataset fan-out mechanics exactly:
-  - row committed BEFORE enqueue (no orphan jobs),
-  - queue jobs tagged with metadata ``is_lora_test`` and linked back on
-    completion/failure/cancel by ``link_completed_test_image`` (called from
-    job_queue, same anchor point as ``is_dataset``),
-  - completed files moved to the per-dataset folder,
-  - free (never debited), one active run per dataset, refused while
-    training/vision holds the GPU.
+Cell counts have no hard cap: the serial queue and UI count/time estimate let
+users choose the workload. MAX_TEST_IMAGES is a frontend warning threshold,
+not an enforced limit.
 
-    ⚠️ Il n'y a PAS de plafond sur le nombre de cellules d'un run, et c'est
-    délibéré : cf. `build_matrix`, « la file est sérielle et l'utilisateur voit
-    le compte + l'estimation de durée avant de lancer ». Cette ligne a longtemps
-    annoncé un « hard-capped (MAX_TEST_IMAGES per run) » que rien n'appliquait —
-    `MAX_TEST_IMAGES` n'est lu QUE pour être renvoyé au frontend (`max_images`),
-    où il sert de seuil d'AVERTISSEMENT. Un commentaire qui promet une garantie
-    que le code ne tient pas est pire qu'un commentaire absent.
-
-Lifted from the parent project's app/services/lora_test_studio.py (1981
-lines) for LoRA Dataset Studio: SRC's module-level WORKFLOW_ZTURBO_PATH /
-WORKFLOW_HQ_PATH / WORKFLOW_KREA_TURBO_PATH constants become
-``cfg.BACKEND_DIR / 'workflows' / '<name>.json'`` accessors below;
-COMFYUI_OUTPUT_DIR becomes the live `_comfy_output_dir()` accessor (same
-pattern as klein_edit_helper). Single-user app: the ownership subsystem
-(`lora_ownership.filenames_owned_by_others`, cross-user `_run_owned` /
-`_owned_test_image` checks) is dropped - everything on disk that matches a
-dataset's trigger boundary IS that dataset's checkpoint, and every test-image
-row IS the local user's. `save_test_image_to_gallery` /
-`_studio_image_to_generation_settings` and the `GenerationLog`
-history-hiding stanza are dropped too - this app has no gallery/generator
-log to save into or hide from (`saved_to_gallery` isn't a column on our
-`LoraTestImage`).
-"""
+Workflow paths resolve under cfg.BACKEND_DIR/workflows; ComfyUI output uses a
+live accessor. This single-user app omits the original project's ownership and
+gallery-history subsystems. Exact dataset trigger boundaries identify deployed
+checkpoints, and every test-image row belongs to the local user."""
 from __future__ import annotations
 from ..utils.timestamps import naive_utcnow
 
@@ -133,7 +111,7 @@ def _cells():
     return LoraTestImage.query.filter(_is_cell())
 
 
-# Plafond dur d'images par run (~4-6 min de GPU max en Z-Image Turbo).
+# Hard image cap per run (roughly 4-6 minutes of GPU time with Z-Image Turbo).
 MAX_TEST_IMAGES = 24
 # Guest checkpoints (a LoRA file that is not in this dataset's trigger-matched
 # pool) share the Canvas plugin-node cap: enough for a mine-vs-theirs grid,
@@ -141,35 +119,24 @@ MAX_TEST_IMAGES = 24
 MAX_GUEST_CHECKPOINTS = 16
 GUEST_LABEL_PREFIX = 'Theirs · '
 
-# 🔆 LA plage de force d'un LoRA dans cette app — UN seul couple de bornes.
-#
-# Elle borne DEUX choses qui ne se ressemblent pas mais atterrissent dans la
-# même colonne (`LoraTestImage.strength`) : l'axe de balayage « Strengths » du
-# Test Studio, et le poids de TÊTE d'une pile 🧬 Blend (create_comparison_run
-# fait passer `combo[0]` par build_matrix). Deux bornes séparées ont donc un
-# mode de panne précis et silencieux : un blend réglé au-dessus de la borne de
-# l'axe n'est pas rendu plus faible, il est REFUSÉ, run entier compris.
-#
-# Le plafond est passé de 4.0 à 5.0 le 08/08/2026. C'était un plafond de
-# confort : rien côté ComfyUI n'interdit d'aller plus haut, et pousser un LoRA
-# sous-entraîné ou un style qu'on veut écrasant sont des usages réels qui
-# obligeaient à sortir de l'app. Ça reste un plafond — au-delà ce n'est plus
-# « fort », c'est du bruit — et le plancher négatif ne bouge pas : -2.0 est le
-# pôle inverse d'un slider LoRA, pas une force.
-#
-# ⚠️ Miroirs côté navigateur, à bouger dans le MÊME commit :
-#   frontend/src/components/dataset/studio/loraStack.js  (COMBINE_MAX_WEIGHT)
-#   frontend/src/components/dataset/studio/constants.js  (STRENGTH_CHOICES_EXTENDED)
+# One shared LoRA strength range governs both Studio sweeps and the leading
+# weight of Blend stacks, which both reach LoraTestImage.strength through
+# build_matrix. Different bounds would reject an entire blend unexpectedly.
+# The upper bound increased from 4 to 5 on 2026-08-08 to support stronger styles
+# and undertrained LoRAs; the -2 lower bound supports inverse slider effects.
+# Update browser mirrors in the same commit:
+# frontend/src/components/dataset/studio/loraStack.js (COMBINE_MAX_WEIGHT)
+# frontend/src/components/dataset/studio/constants.js (STRENGTH_CHOICES_EXTENDED).
 MIN_LORA_STRENGTH = -2.0
 MAX_LORA_STRENGTH = 5.0
 
-# Prompt preset d'identité (le trigger word du dataset est substitué).
+# Default identity prompt; substitute the dataset trigger word.
 IDENTITY_PROMPT_TEMPLATE = "{trigger}, close-up portrait, neutral expression, looking at camera"
 
-# Résolution du workflow ZTurbo (constante implicite du design).
+# ZTurbo workflow resolution.
 TEST_WIDTH, TEST_HEIGHT = 832, 1216
 
-# Chemins des workflows (copies verbatim de SRC/workflows/image-generation/).
+# Workflow paths for the bundled image-generation graphs.
 WORKFLOW_ZTURBO_PATH = cfg.BACKEND_DIR / 'workflows' / 'ZImage_bigLove_ZT3_optimal.json'
 WORKFLOW_HQ_PATH = cfg.BACKEND_DIR / 'workflows' / 'image_real_HQ.json'
 WORKFLOW_KREA_TURBO_PATH = cfg.BACKEND_DIR / 'workflows' / 'krea2_turbo.json'
@@ -182,8 +149,7 @@ def _comfy_output_dir():
     return str(d) if d else None
 
 
-# Formats testables (≈1 MP, multiples de 64 - sûrs pour Z-Image). Le cadrage peut
-# influencer le rendu du LoRA (« la balance »), d'où le choix laissé à l'utilisateur.
+# Test aspect ratios at about one megapixel, in multiples of 64; framing can affect LoRA appearance.
 TEST_ASPECTS = {
     '9:16': (832, 1216),
     '3:4':  (896, 1152),
@@ -191,9 +157,9 @@ TEST_ASPECTS = {
     '4:3':  (1152, 896),
     '16:9': (1216, 832),
 }
-# SDXL : MÊMES formats, mais côté long plafonné à 1024 = la base SDXL qui ne duplique
-# pas (les buckets ≈1 MP de Z-Image, côté long 1216, déforment les merges/DMD SDXL type
-# bigLove/mopMix). Multiples de 64. Choix utilisateur 2026-06-24 (« SDXL-safe ≤1024 »).
+# SDXL uses the same ratios with the long side capped at 1024. Z-Image's
+# 1216-pixel long-side buckets can distort SDXL merges/DMD checkpoints.
+# Keep dimensions in multiples of 64.
 TEST_ASPECTS_SDXL = {
     '9:16': (576, 1024),
     '3:4':  (768, 1024),
@@ -201,7 +167,7 @@ TEST_ASPECTS_SDXL = {
     '4:3':  (1024, 768),
     '16:9': (1024, 576),
 }
-# Formats Studio → valeurs d'aspectRatio de Generate (miroir de
+# Studio formats -> Generate aspectRatio values (mirrors
 # react-frontend/src/components/dataset/studio/constants.js:ASPECT_TO_GENERATE).
 _STUDIO_ASPECT_TO_GENERATE = {
     '9:16': 'portrait', '3:4': 'portrait', '1:1': 'square',
@@ -209,11 +175,9 @@ _STUDIO_ASPECT_TO_GENERATE = {
 }
 _MODE_LABEL_BY_FAMILY = {'zimage': 'Z-Image', 'krea': 'Krea 2 Turbo', 'sdxl': 'SDXL'}
 DEFAULT_ASPECT = '9:16'
-# Paliers de résolution (parité Generate) - mêmes clés que resolution.py/_TIERS. NULL =
-# table de formats fixe historique (comportement inchangé si le front n'envoie rien).
+# Resolution tiers match resolution.py/_TIERS; None preserves the legacy fixed dimensions.
 RESOLUTION_TIERS = ('fast', 'standard', 'hq', 'max')
-# Table de correspondance format studio ('9:16'…) → vocabulaire nommé de compute_tier_dims
-# ('square','landscape'…). Le studio n'expose que ces 5 ratios.
+# Map the five Studio ratios to compute_tier_dims names such as square and landscape.
 _ASPECT_TO_TIER_RATIO = {
     '1:1': 'square', '4:3': 'landscape', '3:4': 'portrait',
     '16:9': 'widescreen', '9:16': 'tall',
@@ -221,22 +185,19 @@ _ASPECT_TO_TIER_RATIO = {
 
 
 def _aspect_dims(aspect, train_type=None, resolution_tier=None, resolution_multiplier=1.0):
-    """(width, height) d'un format. Si `resolution_tier` (fast|standard|hq|max) est fourni,
-    délègue à `compute_tier_dims` (ratio nommé + mégapixels du palier, comme Generate),
-    avec le multiplicateur de résolution (1.0–1.9, clampé, défaut 1.0 = palier inchangé) ;
-    sinon table fixe par famille (SDXL côté long ≤1024, sinon table Z-Image historique -
-    le multiplicateur n'agit QUE sur le chemin par palier, pas sur les tables legacy).
-    Format inconnu → défaut. SDXL + palier : on re-borne le côté long à 1024×multiplicateur
-    (la bande SDXL-safe monte aussi avec le multiplicateur, multiples de 64) car
-    compute_tier_dims monte jusqu'à 1536 (safe Z-Image, déforme les merges/DMD SDXL)."""
+    """Resolve width/height for a ratio, defaulting on unknown input.
+
+    A supplied fast/standard/hq/max tier uses compute_tier_dims and a clamped
+    1.0-1.9 multiplier. Otherwise use family-specific legacy tables; the multiplier
+    does not affect them. SDXL tier output caps its long side at 1024*multiplier
+    in multiples of 64, avoiding dimensions that distort SDXL merges/DMD models."""
     if resolution_tier in RESOLUTION_TIERS:
         named = _ASPECT_TO_TIER_RATIO.get(aspect)
         if named:
             from ..utils.resolution import clamp_multiplier, compute_tier_dims
             w, h = compute_tier_dims(named, resolution_tier, resolution_multiplier)
             if (train_type or '').lower() == 'sdxl':
-                # Plafond SDXL mis à l'échelle du multiplicateur, sinon celui-ci serait
-                # silencieusement écrasé (le front affiche déjà 1024×mult pour SDXL).
+                # Scale the SDXL cap too, matching the frontend instead of silently cancelling its multiplier.
                 ceiling = 1024.0 * clamp_multiplier(resolution_multiplier)
                 longest = max(w, h)
                 if longest > ceiling:
@@ -247,10 +208,9 @@ def _aspect_dims(aspect, train_type=None, resolution_tier=None, resolution_multi
     table = TEST_ASPECTS_SDXL if (train_type or '').lower() == 'sdxl' else TEST_ASPECTS
     return table.get(aspect, table[DEFAULT_ASPECT])
 
-# Axes optionnels CFG / steps. Le défaut de la FAMILLE reste le réglage distillé
-# (cfg=1.0, 8 steps) : c'est ce que valent Z-Image Turbo, Krea 2 Turbo et les
-# checkpoints SDXL DMD-distillés que le studio teste. Tester plusieurs valeurs aide
-# à trouver le réglage qui tient le mieux l'identité.
+# Optional CFG/step axes retain distilled defaults (CFG 1, eight steps) for
+# Z-Image Turbo, Krea Turbo and distilled SDXL checkpoints. Sweeps help compare
+# identity consistency across settings.
 DEFAULT_CFG = 1.0
 DEFAULT_STEPS = 8
 # Additive only — these lists are echoed into the Studio pickers and a value that
@@ -469,13 +429,11 @@ def _accept_guest_checkpoints(guests) -> set:
 
 
 def _wilson_lower_bound(likes: int, voted: int, z: float = 1.96) -> float:
-    """Borne basse de l'intervalle de Wilson (95%) sur le taux de 👍.
+    """Return the 95% Wilson lower bound for the positive-vote rate, or zero.
 
-    C'est la métrique de tri correcte pour « meilleure config d'après les votes » :
-    un compte brut (likes − dislikes) favorise les configs simplement TESTÉES plus
-    souvent ; le taux brut (likes/voted) favorise les configs à 1 seul vote. Wilson
-    combine taux ÉLEVÉ *et* confiance (nb de votes) : 2👍/2 (0.34) bat 6👍4👎 (0.31),
-    et 5👍/5 (0.57) bat 2👍/2 (0.34). 0.0 si aucun vote."""
+    Ranking by raw counts favors often-tested configurations; raw rates favor
+    single-vote results. Wilson balances rate and confidence: 2/2 (0.34) beats
+    6/10 (0.31), while 5/5 (0.57) beats 2/2."""
     if voted <= 0:
         return 0.0
     p = likes / voted
@@ -487,22 +445,20 @@ def _wilson_lower_bound(likes: int, voted: int, z: float = 1.96) -> float:
 
 
 def identity_prompt(ds, with_trigger=True) -> str:
-    """Prompt de test par défaut. `with_trigger=False` (case « Trigger word »
-    décochée) rend le MÊME prompt sans le token : sinon le repli d'un prompt
-    vide réinjectait le trigger PAR LE TEXTE alors que la ligne (et la
-    lightbox) annonçaient « no trigger »."""
+    """Build the default prompt, omitting the trigger when with_trigger=False.
+
+    An empty custom prompt must not reintroduce a trigger through fallback text
+    while the UI claims "no trigger"."""
     if not with_trigger:
         return IDENTITY_PROMPT_TEMPLATE.format(trigger='').lstrip(', ')
     return IDENTITY_PROMPT_TEMPLATE.format(trigger=(ds.trigger_word or '').strip())
 
 
 def _prompt_with_trigger(prompt, trigger_word):
-    """Préfixe le trigger word du dataset au prompt (même ordre que
-    IDENTITY_PROMPT_TEMPLATE), SAUF si prompt/trigger vide ou si le trigger est déjà
-    présent comme TOKEN entier (insensible à la casse) → dédup, pas de doublon.
+    """Prepend the dataset trigger unless empty or already a whole token.
 
-    Utilisé UNIQUEMENT au montage du workflow (`_build_cell_workflow`) : le prompt
-    stocké sur la cellule reste BRUT (menu « prompts récents » propre)."""
+    Match case-insensitively to avoid duplication. Apply only during workflow
+    construction; keep persisted prompts raw for the recent-prompts menu."""
     p = (prompt or '').strip()
     t = (trigger_word or '').strip()
     if not p or not t:
@@ -529,46 +485,29 @@ def _prompt_with_triggers(prompt, trigger_words):
     return p
 
 
-# --- Discovery ---------------------------------------------------------------
-# Familles testables, dans l'ordre d'affichage du sélecteur. Libellés = source
-# unique partagée avec le label de LoRA (app.utils.comfyui.FAMILY_LABELS).
-#
-# CETTE LISTE DOIT COUVRIR TOUTE FAMILLE DÉPLOYABLE, et un test de contrat
-# (test_family_pool_parity.py) le vérifie contre lora_training._FAMILY_SUBDIR.
-# Elle est restée à trois pendant qu'on ajoutait le déploiement FLUX.1, FLUX.2
-# Klein et Anima, et le prix a été payé par l'utilisateur : un LoRA Klein était
-# écrit dans loras/flux2klein puis relu dans loras/z image, donc « déployé »
-# répondait NON pour toujours, le badge ne basculait jamais et Generate refusait
-# un fichier posé sur le disque (GitHub #52). La famille était aussi absente du
-# sélecteur du Test Studio, via available_families().
+# Discover deployable families in UI order, using shared FAMILY_LABELS.
+# Cover every family in lora_training._FAMILY_SUBDIR; the parity contract guards
+# this. Missing families previously caused deployed Klein files to be searched
+# in the Z-Image folder and incorrectly reported as undeployed (issue #52).
 FAMILIES = ('zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima')
 
-# DEUX QUESTIONS, DEUX LISTES. « Quelles familles le studio sait-il VOIR » (au-
-# dessus : toute famille déployable, sinon son LoRA se lit comme jamais déployé,
-# cf. GitHub #52) n'est PAS « avec quelles familles sait-il GÉNÉRER » (ici :
-# celles qui ont une voie complète — un workflow, un applicateur de réglages,
-# une whitelist de bases).
-#
-# Les confondre a coûté GitHub #53 : réparer #52 a mis Klein dans FAMILIES, donc
-# dans le sélecteur, donc à portée d'un bouton Generate qui n'a aucun workflow
-# Klein derrière — et l'utilisateur a reçu « no Z-Image model available », une
-# famille qu'il n'avait jamais choisie. Une liste répondait à la mauvaise
-# question ; ce n'est pas un `if` de plus qu'il fallait, c'est de cesser de
-# faire dire à une liste ce qu'elle ne sait pas.
+# Distinguish families whose LoRAs can be discovered from families the Studio
+# can generate with. Generation requires a complete workflow, settings adapter
+# and base allowlist. Conflating these lists exposed an unusable Klein Generate
+# choice that silently failed through the Z-Image path (issue #53).
 GENERATION_FAMILIES = ('zimage', 'sdxl', 'krea', 'flux2klein')
 
 
 def can_generate_with(family: str) -> bool:
-    """Le studio a-t-il une voie de génération pour cette famille ?"""
+    """Return whether Studio has a generation path for this family."""
     return (family or 'zimage').lower() in GENERATION_FAMILIES
 
 
 def _no_generation_lane(family: str) -> ValueError:
-    """L'erreur à lever quand on demande à générer dans une famille sans voie.
+    """Explain the requested family's missing generation path.
 
-    Elle NOMME la famille demandée. L'ancien message accusait Z-Image parce que
-    le repli silencieux y menait, ce qui envoyait chercher un modèle manquant
-    dans une famille sans rapport (GitHub #53, lunchingfriar)."""
+    Name that family instead of reporting an unrelated Z-Image model error after
+    a silent fallback."""
     label = FAMILY_LABELS.get((family or '').lower(), family or 'this family')
     return ValueError(
         f'generating from the board is not supported for {label} yet — its '
@@ -578,16 +517,11 @@ def _no_generation_lane(family: str) -> ValueError:
 
 
 def _pool_for_family(family: str) -> list[dict]:
-    """Pool de LoRA d'une famille : SDXL → loras/sdxl, Krea → loras/krea,
-    Z-Image → loras/z image, et toute autre famille déployable via son propre
-    dossier (get_family_loras, qui lit la table de _FAMILY_SUBDIR).
+    """Read the selected family's deployed LoRA pool through its own folder.
 
-    Le défaut n'était PAS la famille manquante, c'était le `return` final : une
-    famille inconnue retombait silencieusement sur le pool Z-Image au lieu de
-    dire qu'elle ne savait pas. Un mauvais dossier se lit comme un dossier vide,
-    et un dossier vide se lit comme « rien n'est déployé » — trois écrans plus
-    loin, sans un mot d'erreur. Une famille hors table renvoie donc [] désormais,
-    et le test de contrat garantit qu'aucune famille déployable n'y tombe."""
+    Use get_family_loras and the shared family-subfolder table. Unknown families
+    return [] rather than silently searching Z-Image. The parity contract ensures
+    no deployable family is missing."""
     f = (family or 'zimage').lower()
     if f == 'sdxl':
         return get_sdxl_loras()
@@ -601,14 +535,10 @@ def _pool_for_family(family: str) -> list[dict]:
 
 
 def _trigger_token_match(norm: str, trigger: str) -> bool:
-    """True si `norm` commence par `trigger` SUIVI d'un séparateur (`_`/`-`) ou de la
-    fin de chaîne - le trigger doit être un TOKEN entier, pas juste un préfixe.
+    """Match a trigger followed by '_'/'-' or the end of the normalized name.
 
-    ⚠️ Régression corrigée (bug found 2026-07-01) : un simple `startswith` faisait
-    qu'un trigger COURT s'offrait les LoRA d'un trigger plus LONG qui le préfixe
-    ('lola' ⊂ 'lola3869' ⊂ 'lola2') - ex. le dataset 'Lola' affichait les checkpoints
-    'lola3869'. Le nom est toujours '<trigger>-<step>' ou '<trigger>_<step>' (ou le
-    trigger nu), donc le caractère juste APRÈS le trigger doit être un séparateur."""
+    Require a complete token so a short trigger cannot claim checkpoints belonging
+    to a longer trigger that shares its prefix."""
     if not norm.startswith(trigger):
         return False
     rest = norm[len(trigger):]
@@ -616,26 +546,14 @@ def _trigger_token_match(norm: str, trigger: str) -> bool:
 
 
 def _trigger_match_checkpoints(ds, family=None) -> list[dict]:
-    """Checkpoints dont le nom matche le trigger word du dataset. Base commune à
-    `list_test_checkpoints`. Deux conventions (insensible à la casse), car
-    import_checkpoint copie le nom brut ai-toolkit alors que d'anciens imports étaient
-    renommés :
-      - '<Trigger>-<step>'        (nom propre,  ex. Lola-500)
-      - 'lora_<Trigger>_<step>'   (nom brut ai-toolkit, ex. lora_EVA6938_000001000)
-    Le POOL scanné dépend de `family` (sélecteur de famille du studio) ; à défaut on
-    retombe sur `ds.train_type`. Un même dataset entraîné sous PLUSIEURS pipelines a
-    des LoRA dans plusieurs dossiers (loras/sdxl, loras/krea, loras/z image) → c'est
-    `family` qui choisit lequel exposer. Le match est délimité par un séparateur
-    (cf. `_trigger_token_match`) : un trigger préfixe d'un autre ('lola' ⊂ 'lola3869')
-    ne s'offre PAS les LoRA du voisin. Returns [{filename, label}] (forme LoraLoader).
+    """List checkpoints matching the dataset's exact canonical trigger boundary.
 
-    ⚠️ Le trigger est CANONICALISÉ via `lt._safe_trigger` (la MÊME fonction qui nomme
-    le fichier côté entraînement/déploiement) avant le match : un trigger multi-mots
-    ('raw test upscale') se déploie en 'lora_raw_test_upscale_…' (espaces → '_'), donc
-    matcher le trigger brut avec espaces ne préfixait JAMAIS le nom sous-scoré et le
-    dataset disparaissait silencieusement du sélecteur du Studio (bug 2026-07-17).
-    Aucun consommateur de noms ne doit re-slugifier à la main : tous passent par
-    `_safe_trigger`."""
+    Support both legacy <trigger>-<step> and ai-toolkit lora_<trigger>_<step> names,
+    case-insensitively. The selected family chooses the pool; otherwise use the
+    dataset's train_type. Return [{filename, label}] in LoraLoader form.
+    Canonicalize with lt._safe_trigger, exactly as training/deployment do, so
+    multiword triggers match underscore-normalized filenames. Never independently
+    reimplement this slugging rule."""
     trigger = lt._safe_trigger(ds).lower()
     if not trigger:
         return []
@@ -646,7 +564,7 @@ def _trigger_match_checkpoints(ds, family=None) -> list[dict]:
         base = _basename(lora['filename'])
         stem = base.rsplit('.', 1)[0]
         norm = stem.lower()
-        if norm.startswith('lora_'):  # tolère le préfixe brut ai-toolkit
+        if norm.startswith('lora_'):  # accept ai-toolkit's raw prefix
             norm = norm[len('lora_'):]
         if _trigger_token_match(norm, trigger):
             # Pass the dataset's REAL trigger (not the safe/lowercased match form) so
@@ -670,10 +588,10 @@ def _trigger_match_checkpoints(ds, family=None) -> list[dict]:
 
 
 def list_test_checkpoints(ds, family=None) -> list[dict]:
-    """Checkpoints testables pour ce dataset = trigger match (dans la famille donnée).
-    `ds` est déjà restreint au user appelant en amont (single-user app : pas de
-    filtre d'ownership cross-user). Returns [{filename, label}], filename en forme
-    LoraLoader."""
+    """List the selected family's testable checkpoints for this dataset.
+
+    The caller already scopes ds to the local user. Return [{filename, label}]
+    with filenames in LoraLoader form; no cross-user ownership filter is needed."""
     return _trigger_match_checkpoints(ds, family)
 
 
@@ -692,16 +610,11 @@ def _known_checkpoints(ds, family=None) -> set:
 
 
 def available_families(ds) -> list[dict]:
-    """Familles (pipelines) sous lesquelles CE dataset a effectivement été entraîné =
-    celles dont le pool contient ≥1 checkpoint testable (trigger match).
-    Le même dataset peut apparaître sous plusieurs familles (ex. lola2 en ZIT+SDXL+Krea).
-    Returns [{family, label, count}], ordre FAMILIES. Vide si aucun LoRA déployé.
+    """List trained families with at least one matching, testable deployed checkpoint.
 
-    Ne propose QUE les familles avec lesquelles le studio sait générer : ce
-    retour remplit un sélecteur, et offrir un choix qui échouera au clic est pire
-    que ne pas l'offrir. Un LoRA Klein reste parfaitement visible comme déployé
-    ailleurs (c'est FAMILIES qui répond à ça) — il n'est simplement pas proposé
-    comme base d'un run de test tant qu'il n'a pas sa voie."""
+    Return [{family, label, count}] in FAMILIES order, or [] if none. Datasets may
+    appear in multiple families. Only expose families with a complete generation
+    path in this selector; other deployed families remain discoverable elsewhere."""
     out = []
     for fam in FAMILIES:
         if not can_generate_with(fam):
@@ -713,27 +626,24 @@ def available_families(ds) -> list[dict]:
 
 
 def permanent_lora_candidates(family) -> list[dict]:
-    """LoRA « always-on » (style/utilitaire) proposables en mode PERMANENT dans le studio :
-    les entrées du pool de la famille dont le nom NE commence PAS par `lora_` (= pas un
-    checkpoint de personnage ai-toolkit, mais un LoRA de style/effet - ex. Krea
-    realism_engine_krea2, krea2filterbypass3, PornMaster_Detail_Slider…). Ce sont des LoRA
-    partagés (pas de scoping owner). Returns [{filename, label}] (label = displayName du pool).
-    Concrètement surtout pour Krea (les dossiers sdxl/z-image ne contiennent que des `lora_*`)."""
+    """List family-pool style/utility LoRAs eligible for always-on Studio use.
+
+    Exclude names beginning with lora_, which represent trained checkpoint axes.
+    Return shared [{filename, label}] entries using the pool's display names."""
     out = []
     for lora in _pool_for_family(family):
         base = _basename(lora['filename'])
         if base.lower().startswith('lora_'):
-            continue  # personnage entraîné → c'est un AXE de test, pas un always-on
+            continue  # trained checkpoint: a test axis rather than an always-on utility
         out.append({'filename': lora['filename'],
                     'label': lora.get('displayName') or base.rsplit('.', 1)[0]})
     return out
 
 
 def _resolve_family(ds, requested, families=None) -> str:
-    """Famille effective du studio : la `requested` si elle est réellement présente ;
-    sinon le `train_type` du dataset s'il est présent ; sinon la 1ʳᵉ famille présente ;
-    sinon le `train_type` brut (fallback ultime, pool potentiellement vide). Garantit
-    qu'on n'affiche jamais une famille sans aucun LoRA quand d'autres en ont."""
+    """Choose a present requested family, then a present persisted family, then
+    any present family; finally fall back to raw train_type if none exist.
+    Avoid showing an empty family when another contains usable LoRAs."""
     fams = available_families(ds) if families is None else families
     keys = [f['family'] for f in fams]
     req = (requested or '').lower()
@@ -746,7 +656,7 @@ def _resolve_family(ds, requested, families=None) -> str:
 
 
 def list_sdxl_base_models() -> list[dict]:
-    """Checkpoints SDXL utilisables comme BASE de test = ceux de Generate.
+    """SDXL checkpoints usable as test bases: the same ones as Generate.
     Returns [{filename, label}]."""
     from ..utils.comfyui import get_checkpoint_models
     out = []
@@ -758,21 +668,17 @@ def list_sdxl_base_models() -> list[dict]:
 
 
 def list_all_testable_checkpoints(user_id) -> list[dict]:
-    """Pour le sélecteur autonome : agrège les checkpoints testables de TOUS les
-    datasets du user, UNE ENTRÉE PAR (dataset × famille).
+    """Aggregate standalone-picker entries for every local dataset/family pair.
 
-    ⚠️ Un dataset est MULTI-FAMILLE : le même trigger peut être déployé sous
-    loras/{z image, sdxl, krea}. On itère donc `available_families(ds)` (qui dérive la
-    famille du DOSSIER via family_of_lora, pas du scalaire `ds.train_type`) et on émet
-    une entrée par famille présente.
-
-    [{dataset_id, dataset_name, lora_label, trigger_word, family, family_label,
-      train_type (= family, pour le badge front), checkpoints:[{filename,label}]}]."""
+    Datasets can have deployments in multiple family folders. available_families
+    uses those folders rather than the scalar train_type. Return dataset identity,
+    trigger, family/label and checkpoints; train_type equals the entry's family
+    for the frontend badge."""
     out = []
     datasets = (FaceDataset.query.filter_by(user_id=str(user_id))
                 .order_by(FaceDataset.id.asc()).all())
     for ds in datasets:
-        for fam in available_families(ds):   # {'family','label','count'} par famille présente
+        for fam in available_families(ds):   # one family/label/count entry per present family
             cks = list_test_checkpoints(ds, fam['family'])
             if not cks:
                 continue
@@ -781,7 +687,7 @@ def list_all_testable_checkpoints(user_id) -> list[dict]:
                         'trigger_word': ds.trigger_word,
                         'family': fam['family'],
                         'family_label': fam['label'],
-                        'train_type': fam['family'],   # badge/verrou front = famille de CETTE entrée
+                        'train_type': fam['family'],   # frontend badge/gate uses this entry's family
                         'checkpoints': cks})
     return out
 
@@ -845,9 +751,8 @@ def gpu_busy_reason() -> str | None:
 
 
 def _active_run_count(dataset_id=None) -> int:
-    """In-flight cells (pending, no file yet). dataset_id=None → garde GLOBALE
-    (tous datasets confondus, ce qu'exige une comparaison multi-LoRA) ; fourni →
-    une seule run active par dataset (comportement historique)."""
+    """Find pending cells without files. dataset_id=None checks globally for
+    multi-LoRA comparisons; a supplied ID enforces one active run per dataset."""
     q = (_cells()
          .filter_by(status='pending')
          .filter(LoraTestImage.filename.is_(None)))
@@ -939,23 +844,14 @@ def _unknown_submit_recovery(rows, activity):
 
 
 def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=None, steps2_list=None) -> list[tuple]:
-    """Materialize the (checkpoint, strength, aspect) grid cells, validated:
-    non-empty checkpoint/strength axes, strengths in [MIN_LORA_STRENGTH,
-    MAX_LORA_STRENGTH] (0 = base model /
-    LoRA off, a valid control column; above 2.0 = over-cook / breaking-point range,
-    behind the « + » disclosure in the UI; NEGATIVE = the LoRA pulled the other
-    way — the whole point of a slider LoRA, and a legit probe for any LoRA —
-    behind a symmetric « − » disclosure) (deduped, order
-    kept), aspects within the whitelist (deduped, défaut 9:16). PAS de plafond sur
-    le nombre de cellules : la file est sérielle et l'utilisateur voit le compte +
-    l'estimation de durée avant de lancer (choix assumé sur sa propre machine).
+    """Validate and materialize the checkpoint/strength/aspect grid.
 
-    ⚠️ Ce plafond n'est PAS seulement celui de l'axe de balayage. En mode 🧬 Blend,
-    le poids de TÊTE de chaque combinaison passe par ici (cf. create_comparison_run :
-    `combo_strengths = [combo[0]]`) et atterrit dans la même colonne
-    `LoraTestImage.strength`. Un plafond de blend plus haut que celui-ci ne
-    donnerait donc pas un rendu clampé mais un run REFUSÉ — c'est pour ça qu'il
-    n'y a qu'un nombre, ici, et que COMBINE_MAX_WEIGHT le réutilise."""
+    Require nonempty checkpoint and strength axes, with deduplication preserving
+    order. Strengths use the shared bounds: zero is the base-model control;
+    negative values reverse the LoRA effect. Validate aspect ratios, defaulting
+    to 9:16. Do not cap the cell count: users see the serial workload estimate.
+    Blend leading weights also pass through this function into the strength
+    column, so COMBINE_MAX_WEIGHT must use the same upper bound."""
     cps = [c for c in (checkpoints or []) if isinstance(c, str) and c.strip()]
     sts = []
     for s in (strengths or []):
@@ -994,8 +890,7 @@ def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=Non
             sps.append(iv)
     if not sps:
         sps = [DEFAULT_STEPS]
-    # Axe steps2 (SDXL : 2e passe / detail daemon, node 57). Optionnel : sans valeurs
-    # → [None] (la 2e passe retombe sur les steps de la 1re ; Z-Image n'a pas de 2e passe).
+    # Optional SDXL steps2 controls its detail pass; None reuses first-pass steps. Z-Image has no second pass.
     sps2 = []
     for v in (steps2_list or []):
         try:
@@ -1008,8 +903,7 @@ def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=Non
         sps2 = [None]
     if not cps or not sts:
         raise ValueError('at least one checkpoint and one strength are required')
-    # Pas de plafond : la file est sérielle et l'utilisateur a déjà l'estimation
-    # du nombre de cellules / de la durée dans l'UI avant de lancer.
+    # No cell cap: the serial queue workload and time estimate are shown before launch.
     return [(c, s, a, cf, sp, sp2)
             for c in cps for s in sts for a in asp for cf in cfs for sp in sps for sp2 in sps2]
 
@@ -1035,13 +929,12 @@ def _krea_zero_strength_first(items, run_family, strength_of) -> list:
     return zero + nonzero
 
 
-# --- « 🔎 Describe » : image → TEST PROMPT via le modèle vision Ollama ---------
-# Upload guard (l'endpoint plafonne aussi, ceci est la borne de service).
+# Describe converts an image to a test prompt using Ollama vision; enforce the service upload limit too.
 STUDIO_DESCRIBE_MAX_BYTES = 20 * 1024 * 1024
 
-# Variante « prompt de génération » du captioning prose (CAPTION_PROMPT) : décrit la
-# scène/pose/cadrage/tenue directement, SANS identité (le LoRA la porte) et SANS trigger
-# word (le Studio l'injecte séparément dans le workflow — le prompt stocké reste brut).
+# Describe scene, pose, framing and clothing directly as a generation prompt.
+# Do not describe identity or add a trigger: the LoRA supplies identity and
+# Studio injects the trigger at workflow construction, keeping stored text raw.
 STUDIO_DESCRIBE_PROMPT = (
     "You are writing a TEXT-TO-IMAGE GENERATION PROMPT that would recreate this image.\n\n"
     "ABSOLUTE RULE - never describe WHO the person is. Do not mention identity or any "
@@ -1096,10 +989,9 @@ def describe_test_prompt(image_bytes: bytes) -> str:
 
 
 STUDIO_ENHANCE_MAX_CHARS = 4000
-# Enrichissement d'un prompt de test (texte→texte, PAS de vision). Contraintes dures :
-# ne rien inventer sur l'IDENTITÉ (le LoRA la porte) et ne PAS toucher au trigger word
-# (le Studio l'injecte au montage — un trigger recopié/déformé par le LLM créerait un
-# doublon ou un token mort).
+# Text-only prompt enrichment must not invent identity or modify trigger words.
+# Studio injects the trigger during workflow construction, preventing duplicated
+# or corrupted tokens from the language model.
 STUDIO_ENHANCE_PROMPT = (
     "You are rewriting a TEXT-TO-IMAGE GENERATION PROMPT so it renders better.\n\n"
     "Keep every subject, action, clothing item, setting and camera choice the author "
@@ -1170,12 +1062,11 @@ def apply_sdxl_lora_test_settings(workflow, *, base_ckpt, lora_name, strength,
                                   steps2=None, batch_size=1, filename_prefix=None,
                                   allowed_bases=None, allowed_loras=None,
                                   detail_amount=None):
-    """Configure une cellule de test sur le workflow HQ (SDXL) : checkpoint de base
-    (node 1) + LoRA testé via le LoraLoader subtle (node 25) + prompt/seed/dims/steps.
-    Le workflow HQ a DEUX passes : `steps` = passe 1 (KSampler node 5) ; `steps2` =
-    passe 2 (detail daemon, BasicScheduler node 57). `steps2=None` → la passe 2 retombe
-    sur `steps`. Node IDs = ceux d'app/main/routes.py. Mutate en place. Lève ValueError
-    si le checkpoint/LoRA n'est pas dans sa whitelist (anti path-injection)."""
+    """Configure an SDXL HQ cell in place with an allowlisted base and LoRA.
+
+    Node 1 loads the checkpoint; node 25 applies the tested LoRA. Set prompt,
+    seed, dimensions and steps. First-pass node 5 uses steps; detail-pass scheduler
+    57 uses steps2 or falls back to steps. Reject non-allowlisted paths."""
     if allowed_bases is not None and base_ckpt not in allowed_bases:
         raise ValueError(f"unknown SDXL checkpoint: {base_ckpt}")
     if allowed_loras is not None and lora_name not in allowed_loras:
@@ -1186,8 +1077,7 @@ def apply_sdxl_lora_test_settings(workflow, *, base_ckpt, lora_name, strength,
         if isinstance(n, dict) and key in n.get("inputs", {}):
             n["inputs"][key] = value
 
-    # base_ckpt est un BASENAME (get_checkpoint_models dépouille le dossier) ; le loader
-    # ComfyUI veut le chemin relatif (ex. 'Biglove\\…') → résoudre, sinon 400.
+    # Resolve the checkpoint basename to the relative path required by ComfyUI, including subfolders.
     _set("1", "ckpt_name", resolve_checkpoint_ckpt_name(base_ckpt))
     _set("25", "lora_name", lora_name)
     _set("25", "strength_model", float(strength))
@@ -1195,8 +1085,8 @@ def apply_sdxl_lora_test_settings(workflow, *, base_ckpt, lora_name, strength,
     _set("3", "text", prompt)
     _set("5", "seed", int(seed))
     if steps is not None:
-        _set("5", "steps", int(steps))          # passe 1 (KSampler)
-    # passe 2 (detail daemon, node 57) : steps2 si fourni, sinon retombe sur steps.
+        _set("5", "steps", int(steps))          # pass 1 (KSampler)
+    # pass 2 (detail daemon, node 57): use steps2 when provided, otherwise steps.
     _pass2 = steps2 if steps2 is not None else steps
     if _pass2 is not None:
         _set("57", "steps", int(_pass2))
@@ -1205,9 +1095,9 @@ def apply_sdxl_lora_test_settings(workflow, *, base_ckpt, lora_name, strength,
     _set("6", "width", int(width))
     _set("6", "height", int(height))
     _set("6", "batch_size", int(batch_size))
-    # DetailDaemon (classe DetailDaemonSamplerNode, node scanné par type comme la route
-    # generate) : la valeur du slider EST le détail effectif (fade=0). Clamp défensif
-    # [0,1] ; None → défaut du workflow conservé. Bande SDXL-safe ≈ 0-0.25.
+    # Find DetailDaemonSamplerNode by class. The slider is effective detail with
+    # fade=0; clamp to [0,1], preserving workflow defaults for None. SDXL-safe values
+    # are approximately 0-0.25.
     if detail_amount is not None:
         try:
             _da = max(0.0, min(1.0, float(detail_amount)))
@@ -1391,12 +1281,12 @@ def _krea_base_health(rel_name):
 
 
 def krea_alt_base_models() -> list:
-    """Bases Krea locales ALTERNATIVES à celle de l'entrée « Official » : les
-    checkpoints trouvés par get_krea_models() moins le défaut élu. Vide → aucun
-    choix à offrir (les sélecteurs restent cachés, comportement historique).
+    """Local Krea alternatives to the "Official" base: checkpoints from
+    get_krea_models() excluding the elected default. An empty list leaves the
+    selectors hidden, preserving the historical behavior.
 
-    L'exclusion se fait sur le BASENAME : la même base recopiée à la racine ET
-    dans un sous-dossier ne doit pas apparaître deux fois sous deux libellés."""
+    Compare BASENAMES: a base copied into both the root and a subdirectory must
+    not appear twice under different labels."""
     default = krea_default_base()
     bare = _basename(default).lower() if default else None
     return [m for m in get_krea_models() if not bare or _basename(m).lower() != bare]
@@ -1406,27 +1296,26 @@ def apply_klein_lora_test_settings(workflow, *, lora_name, strength, prompt, see
                                    width, height, cfg=None, steps=None, batch_size=1,
                                    filename_prefix=None, allowed_loras=None,
                                    base_model=None, allowed_bases=None):
-    """Configure une cellule de test sur le workflow FLUX.2 Klein texte-vers-image.
+    """Configure a test cell using the FLUX.2 Klein text-to-image workflow.
 
-    Klein est le moteur d'ÉDITION de l'app partout ailleurs (variations, improve,
-    inpaint), et cette voie est la seule qui lui demande de générer depuis un
-    simple prompt : le Test Studio compare des checkpoints à prompt et seed
-    identiques, il n'a aucune image source à éditer. Le graphe est donc bâti sur
-    EmptyFlux2LatentImage, et il est ENTIÈREMENT composé de nœuds vanilla — aucun
-    pack tiers, contrairement à la voie Krea (cf. test_workflow_portability).
+    Elsewhere Klein edits images (variations, improve, inpaint). This path alone
+    generates from a prompt: Test Studio compares checkpoints using identical
+    prompts and seeds without a source image. Its graph therefore uses
+    EmptyFlux2LatentImage and entirely vanilla nodes, unlike the Krea path
+    (see test_workflow_portability).
 
-    Les assets (UNET, encodeur de texte, VAE) sont résolus par les MÊMES fonctions
-    que le reste de la voie Klein plutôt que lus dans le JSON : les noms figés
-    dans un workflow livré ne valent que sur la machine où il a été capturé, et
-    c'est exactement ce qui a fait mentir d'autres graphes ici.
+    Resolve the UNET, text encoder and VAE through the same functions as the
+    other Klein paths. Names embedded in shipped JSON are only valid on the
+    machine where the workflow was captured, which previously made other graphs
+    misrepresent their assets.
 
-    Le LoRA testé est chargé en model-only (node 29) : les LoRA de personnage
-    produits par ai-toolkit pour Klein n'entraînent que le transformer.
+    Load the tested LoRA in model-only mode (node 29): character LoRAs produced
+    by ai-toolkit for Klein train only the transformer.
 
-    `base_model` : UNET Klein local à charger à la place de celui que la config
-    élit, même mécanique que Krea/SDXL/Z-Image. Validé contre `allowed_bases`
-    (anti path-injection), comme le LoRA. cfg est CLAMPÉ à 1.0 : Klein 9B est
-    guidance-distillé, une valeur au-dessus le fait diverger."""
+    `base_model` overrides the elected local Klein UNET, just as for Krea/SDXL/
+    Z-Image. Validate it against `allowed_bases` to prevent path injection, as
+    for the LoRA. Clamp cfg to 1.0: Klein 9B is guidance-distilled and diverges
+    above that value."""
     if allowed_loras is not None and lora_name not in allowed_loras:
         raise ValueError(f'unknown Klein LoRA: {lora_name}')
     if base_model and allowed_bases is not None and base_model not in allowed_bases:
@@ -1459,9 +1348,9 @@ def apply_klein_lora_test_settings(workflow, *, lora_name, strength, prompt, see
     _set('26', 'seed', int(seed))
     if steps is not None:
         _set('26', 'steps', max(1, min(50, int(steps))))
-    # Pas de `if cfg is not None` : la valeur vient d'un AXE de balayage du studio,
-    # et laisser passer un cfg > 1 sur un modèle guidance-distillé rendrait des
-    # cellules brûlées que l'utilisateur lirait comme un mauvais checkpoint.
+    # Do not guard with `if cfg is not None`: this value comes from a Studio
+    # sweep axis. Allowing cfg > 1 on a guidance-distilled model would produce
+    # burnt-out cells that users could mistake for a bad checkpoint.
     _set('26', 'cfg', 1.0)
     if filename_prefix is not None:
         _set('28', 'filename_prefix', filename_prefix)
@@ -1564,19 +1453,18 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
                                   base_model=None, allowed_bases=None,
                                   sampler_preset=None, hires_scale=None,
                                   hires_steps=None, hires_denoise=None):
-    """Configure une cellule de test sur le workflow Krea 2 Turbo : le LoRA testé est
-    injecté après le UNETLoader (node 20 → KSampler node 26), + prompt/seed/dims/steps/cfg.
-    `extra_loras` = LoRA « always-on » (style/utilitaire) chaînés EN PLUS dans le même
-    maillon (appliqués tels quels à cette cellule, hors batch). Krea est MONO-passe (pas
-    de steps2).
+    """Configure a Krea 2 Turbo test cell: inject the tested LoRA after the
+    UNETLoader (node 20 -> KSampler node 26), plus prompt/seed/dims/steps/cfg.
+    `extra_loras` are additional always-on style/utility LoRAs in the same chain,
+    applied unchanged to this cell outside the batch axis. Krea has one pass
+    (no steps2).
 
-    Mutate en place. Lève ValueError si le LoRA testé n'est pas dans sa whitelist
-    (anti path-injection).
+    Mutate in place. Raise ValueError if the tested LoRA is outside its allowlist
+    (path-injection protection).
 
-    `base_model` : UNET Krea local à charger dans le node 20 à la place du défaut
-    câblé du workflow — même mécanique de base que SDXL (`base_ckpt`) / Z-Image
-    (`z_model`). None = on ne touche pas au node (défaut). Validé contre
-    `allowed_bases` (anti path-injection, comme le LoRA)."""
+    `base_model` overrides the workflow's default local Krea UNET in node 20,
+    using the same mechanism as SDXL (`base_ckpt`) / Z-Image (`z_model`). None
+    leaves the node unchanged. Validate against `allowed_bases`, as for the LoRA."""
     if allowed_loras is not None and lora_name not in allowed_loras:
         raise ValueError(f"unknown Krea LoRA: {lora_name}")
     if base_model and allowed_bases is not None and base_model not in allowed_bases:
@@ -1608,8 +1496,8 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
         _set("26", "steps", max(1, min(50, int(steps))))
     if cfg is not None:
         _set("26", "cfg", max(1.0, min(10.0, float(cfg))))
-    # Sampler / scheduler (node 26) + précision UNET (node 20) - validés contre les
-    # MÊMES whitelists que la génération (anti-injection ; hors liste = ignoré).
+    # Validate sampler/scheduler (node 26) and UNET precision (node 20) against
+    # the same allowlists as generation; ignore unknown values to prevent injection.
     if sampler in KREA_ALLOWED_SAMPLERS:
         _set("26", "sampler_name", sampler)
     if scheduler in KREA_ALLOWED_SCHEDULERS:
@@ -1618,8 +1506,8 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
         _set("20", "weight_dtype", weight_dtype)
     if filename_prefix is not None:
         _set("28", "filename_prefix", filename_prefix)
-    # LoRA testé + always-on : une seule chaîne node 20 → 26 (même mécanique que la
-    # génération Krea). `allowed` contient TOUT le pool Krea (les always-on y sont).
+    # Tested and always-on LoRAs share one node 20 -> 26 chain, as in Krea
+    # generation. `allowed` contains the entire Krea pool, including always-on LoRAs.
     from ..utils.comfyui import inject_krea_loras
     requested = [{"filename": lora_name, "strength": float(strength)}]
     for e in (extra_loras or []):
@@ -1643,13 +1531,12 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
         # JSON, never mounted in the graph.
         allowed |= {r["filename"] for r in requested[1:]}
     inject_krea_loras(workflow, requested, allowed=allowed)
-    # Hi-res fix (2e passe latente) : APRES l'injection des LoRA — la passe 2
-    # est un clone de la passe 1, `model` compris, donc la cloner avant la
-    # câblerait sur l'UNETLoader nu et la passe 2 tournerait SANS les LoRA, sans
-    # erreur. Et AVANT le preset sampler, qui repointe tout consommateur du node
-    # qu'il remplace : à ce moment-là c'est notre LatentUpscaleBy, donc les deux
-    # se composent sans que ni l'un ni l'autre ait à connaître l'autre.
-    # hires_scale None/≤1 = OFF = aucun node ajouté (rendu identique à avant).
+    # Apply hi-res fix (second latent pass) after injecting LoRAs. Pass two
+    # clones pass one, including `model`; cloning earlier would silently connect
+    # it to the bare UNETLoader and omit LoRAs. Apply it before the sampler preset,
+    # which redirects consumers of the replaced node, now LatentUpscaleBy. This
+    # lets both transformations compose without knowing about each other.
+    # hires_scale None or <= 1 disables it: add no nodes and preserve rendering.
     from ..utils.comfyui import inject_krea_hires_fix
     inject_krea_hires_fix(workflow, hires_scale, steps=hires_steps,
                           denoise=hires_denoise)
@@ -1735,25 +1622,24 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
                          scheduler=None, weight_dtype=None,
                          detail_amount=None, trigger_word=None, available_classes=None,
                          sampler_preset=None, hires_scale=None, hires_denoise=None):
-    """Load the ZTurbo (Z-Image) / HQ (SDXL) / Krea workflow and configure one grid cell.
-    `extra_loras` = LoRA « always-on » (style/utilitaire) appliqués à CETTE cellule en plus
-    du checkpoint testé (hors batch). Raises ValueError if the workflow file is
-    unloadable.
+    """Load the ZTurbo (Z-Image) / HQ (SDXL) / Krea workflow and configure a cell.
+    `extra_loras` are always-on style/utility LoRAs applied to this cell alongside
+    the tested checkpoint, outside the batch axis. Raise ValueError if the
+    workflow file cannot be loaded.
 
-    `available_classes` = the target ComfyUI's /object_info class set (from
-    `_target_node_classes()`, fetched once per run). When provided, the built graph's
-    variant custom-node classes are rewritten to whatever the install actually
-    registers (NODE_CLASS_ALIASES) so the enqueued workflow validates on installs that
-    carry a node under an alternative name; None = keep the canonical names (fail open).
+    `available_classes` is the target ComfyUI /object_info class set (from
+    `_target_node_classes()`, fetched once per run). When provided, rewrite
+    variant custom-node classes to the registered names (NODE_CLASS_ALIASES),
+    so the graph validates on installations using alternative names. None keeps
+    the canonical names (fail open).
 
-    Le filename_prefix inclut le dataset_id ET un uuid court par cellule : sans
-    ça, le compteur ComfyUI (qui repart de 0 à chaque restart) produisait des
-    noms identiques entre datasets (`{uid}_LoraTest_00022_`) → collisions de
-    cache navigateur et confusion visuelle entre LoRA (ex. images eva6938 vues
-    dans le studio d'un autre LoRA). L'uuid garantit l'unicité même au sein d'un
-    dataset (re-runs après restart ComfyUI)."""
-    # Trigger word auto-injecté ICI (montage seul) - le prompt reste brut en base.
-    # `trigger_word` peut être une LISTE (combine : un trigger par LoRA de la pile).
+    filename_prefix includes dataset_id and a short UUID per cell. Without
+    these, ComfyUI's counter (reset on restart) produced identical filenames
+    across datasets (`{uid}_LoraTest_00022_`), causing browser-cache collisions
+    and showing one LoRA's images in another's studio. The UUID also prevents
+    collisions within a dataset when rerunning after a ComfyUI restart."""
+    # Inject trigger words here, only when building the graph; retain the raw
+    # prompt in storage. `trigger_word` may be a list, one per stacked LoRA.
     prompt = _prompt_with_triggers(prompt, trigger_word)
     ds_tag = f"d{dataset_id}_" if dataset_id is not None else ""
     fname = f"{user_id}_{ds_tag}LoraTest_{uuid.uuid4().hex[:8]}"
@@ -1765,10 +1651,10 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
         from ..utils.comfyui import get_checkpoint_models, inject_sdxl_loras
         allowed_bases = {m.get('name') for m in get_checkpoint_models() if m.get('name')}
         allowed_sdxl_loras = {l['filename'] for l in get_sdxl_loras()}
-        # Comme la génération SDXL normale : régler sampler/scheduler/cfg ET surtout
-        # toggler le LoRA DMD2 (ON pour checkpoints DMD-distillés type bigLove/mop, OFF
-        # pour SDXL full) selon le modèle de base. Sans ça, sortie cassée. Appliqué AVANT
-        # l'injection de test pour que la cfg/les steps du studio (axes) gagnent ensuite.
+        # As in normal SDXL generation, set sampler/scheduler/cfg and toggle DMD2
+        # according to the base: on for DMD-distilled checkpoints such as bigLove/mop,
+        # off for full SDXL. Otherwise output breaks. Apply before test injection so
+        # Studio cfg/steps axes can override these defaults.
         apply_optimal_sampler_params(workflow, z_model)
         apply_sdxl_lora_test_settings(
             workflow, base_ckpt=z_model, lora_name=checkpoint, strength=strength,
@@ -1777,7 +1663,7 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
             allowed_bases=allowed_bases, allowed_loras=allowed_sdxl_loras,
             detail_amount=detail_amount,
         )
-        if extra_loras:  # always-on chaînés après le Style LoRA (node 25)
+        if extra_loras:  # always-on entries chained after Style LoRA (node 25)
             inject_sdxl_loras(workflow, extra_loras, {e['filename'] for e in extra_loras})
         # DMD2 accelerator (node 10): resolve across loras roots or bypass when absent,
         # so the SDXL Studio never depends on the dev's personal 'DMD2\' subfolder nor
@@ -1797,20 +1683,18 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
             extra_loras=extra_loras,
             sampler=sampler, scheduler=scheduler, weight_dtype=weight_dtype,
             sampler_preset=sampler_preset,
-            # Base Krea locale optionnelle (z_model, même canal que SDXL/Z-Image) ;
-            # None = UNET câblé du workflow. Whitelist = scan disque (anti-injection).
+            # Optional local Krea base (z_model, as for SDXL/Z-Image). None keeps the
+            # workflow UNET. The disk-scan allowlist prevents path injection.
             base_model=z_model, allowed_bases=set(get_krea_models()),
-            # Hi-res fix : le réglage du RUN quand le panneau en a donné un,
-            # sinon le réglage global (krea_hires.*). Résolu ICI, dans le seul
-            # builder que toutes les voies traversent (grille Studio, Canvas,
-            # resume), pour que « défaut Settings » et « valeur du run » soient
-            # départagés à un seul endroit. OFF par défaut, donc une install qui
-            # n'y touche pas construit le même graphe qu'avant.
+            # Hi-res fix uses the explicit run setting, otherwise the global
+            # krea_hires.* setting. Resolve here, in the builder shared by the Studio
+            # grid, Canvas and resume, so run overrides and Settings defaults are
+            # arbitrated once. Default off preserves the existing graph.
             **_krea_hires_for_cell(hires_scale, hires_denoise),
         )
-        # Résolveur de classes (NODE_CLASS_ALIASES) : si le ComfyUI cible n'expose un
-        # node QUE sous un nom permuté, réécrire le class_type vers le nom réel pour que
-        # le graphe enqueué valide. available_classes None = on garde le canonique.
+        # Resolve NODE_CLASS_ALIASES against the target ComfyUI: rewrite class_type
+        # to the registered variant so the queued graph validates. When
+        # available_classes is None, keep the canonical name.
         return _resolve_workflow_node_classes(workflow, available_classes)
     if (train_type or 'zimage').lower() == 'flux2klein':
         workflow = load_workflow_local(str(WORKFLOW_FLUX2KLEIN_PATH))
@@ -1827,11 +1711,10 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
                            for m in get_flux2_klein_models()},
         )
         return _resolve_workflow_node_classes(workflow, available_classes)
-    # Troisième repli silencieux vers Z-Image de ce fichier, fermé pour la même
-    # raison que les deux autres : une famille sans voie repartait avec le
-    # WORKFLOW d'une autre, donc un graphe Z-Image chargé d'un LoRA Klein. Les
-    # dispatchers de bases refusent déjà en amont ; cette garde est là pour que
-    # l'ajout d'une famille ne puisse pas se glisser ici en silence.
+    # Close this file's third silent Z-Image fallback, for the same reason as
+    # the others: an unsupported family previously inherited another workflow,
+    # such as a Z-Image graph loading a Klein LoRA. Base dispatchers already
+    # reject this upstream; this guard prevents new families slipping through.
     if not can_generate_with(train_type):
         raise _no_generation_lane(train_type)
     workflow = load_workflow_local(str(WORKFLOW_ZTURBO_PATH))
@@ -1847,7 +1730,7 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
         width=width, height=height, batch_size=1,
         z_cfg=cfg, z_steps=steps,
         filename_prefix=fname,
-        # always-on inclus dans la whitelist (sinon inject_zimage_loras les filtrerait).
+        # Include always-on LoRAs in the allowlist or inject_zimage_loras would filter them out.
         allowed_loras=(set(allowed_loras) | {e['filename'] for e in extra_loras}) if extra_loras else allowed_loras,
     )
     return _resolve_workflow_node_classes(workflow, available_classes)
@@ -1948,21 +1831,20 @@ def _sanitize_gen_knobs(run_family, *, negative=None, sampler=None, scheduler=No
                         init_image=None, denoise=None, sampler_preset=None,
                         hires_scale=None, hires_denoise=None,
                         finish_sharpen=None, finish_grain=None) -> dict:
-    """Normalise + valide les réglages de génération GLOBAUX d'un run (parité Generate),
-    filtrés PAR FAMILLE (un sampler Krea n'a aucun sens en Z-Image). Renvoie un dict prêt
-    à la fois à persister sur LoraTestImage ET à passer à `_build_cell_workflow`. Chaque
-    valeur hors périmètre/whitelist retombe à None (le workflow garde alors son défaut).
+    """Normalize and validate a run's global generation settings (Generate parity).
+    Filter by family: a Krea sampler has no meaning in Z-Image. Return a dict
+    ready to persist on LoraTestImage and pass to `_build_cell_workflow`.
+    Out-of-scope or non-allowlisted values become None, keeping workflow defaults.
 
-    Encodages : `negative` vide → None ; `denoise` clampé
-    0.05..1.0 ; `resolution_tier` doit être dans RESOLUTION_TIERS."""
+    An empty `negative` becomes None; clamp `denoise` to 0.05..1.0;
+    `resolution_tier` must belong to RESOLUTION_TIERS."""
     fam = (run_family or 'zimage').lower()
     neg = ((negative or '').strip() or None) if fam == 'zimage' else None
     smp = sampler if (fam == 'krea' and sampler in KREA_ALLOWED_SAMPLERS) else None
-    # Preset du sampler maison. Whitelist SEPAREE de KREA_ALLOWED_SAMPLERS a
-    # dessein : les deux nourrissent le meme menu cote UI mais pas le meme endroit
-    # du graphe — un preset ecrit dans `sampler_name` serait un nom de sampler que
-    # ComfyUI ne connait pas, et le graphe serait refuse a la validation. Hors
-    # liste = None = KSampler standard.
+    # Custom sampler preset. Its allowlist is deliberately separate from
+    # KREA_ALLOWED_SAMPLERS: they share a UI menu but target different graph
+    # locations. Writing a preset into `sampler_name` would make ComfyUI reject
+    # an unknown sampler. Unknown presets become None, using standard KSampler.
     from ..utils.comfyui import KREA_SAMPLER_PRESETS
     smp_preset = (sampler_preset
                   if (fam == 'krea' and sampler_preset in KREA_SAMPLER_PRESETS)
@@ -1976,8 +1858,8 @@ def _sanitize_gen_knobs(run_family, *, negative=None, sampler=None, scheduler=No
         except (TypeError, ValueError):
             dta = None
     tier = resolution_tier if resolution_tier in RESOLUTION_TIERS else None
-    # Multiplicateur de résolution clampé [1.0, 1.9] (défaut 1.0). Ne s'applique qu'au
-    # chemin par palier ; sans palier (table fixe) il reste 1.0 et n'a aucun effet.
+    # Clamp the resolution multiplier to [1.0, 1.9], default 1.0. It applies
+    # only to tier-based resolution; the fixed table leaves it at 1.0, with no effect.
     from ..utils.resolution import clamp_multiplier
     mult = clamp_multiplier(resolution_multiplier if resolution_multiplier is not None else 1.0)
     den = None
@@ -2466,9 +2348,9 @@ def _preflight_run(user_id, run_family, checkpoint, bases, allowed, prompt, seed
 
 # --- Run lifecycle -----------------------------------------------------------
 def _batch_lora_axis(batch_loras, run_family) -> list:
-    """Valide la liste « ⚖ batch axis » (mêmes règles anti path-injection que les
-    always-on) et renvoie l'axe de test [None, {filename,strength}, …] - None =
-    la cellule de RÉFÉRENCE sans le LoRA. Dédupé, borné à 4 LoRA (coût GPU)."""
+    """Validate the batch axis with the same path-injection rules as always-on
+    LoRAs. Return [None, {filename,strength}, ...], where None is the reference
+    cell without the LoRA. Deduplicate and cap at four LoRAs to limit GPU cost."""
     perm_allowed = {c['filename'] for c in permanent_lora_candidates(run_family)}
     entries = []
     for e in (batch_loras or []):
@@ -2483,29 +2365,25 @@ def _batch_lora_axis(batch_loras, run_family) -> list:
     return [None] + entries[:4] if entries else [None]
 
 
-# 📝 Un lot de prompts reste UN run. Deux lancements de suite sont refusés par le
-# garde « a test run is already in progress » (et le GPU est sérialisé de toute
-# façon) : le lot est donc un AXE, comme les formats ou les cfg — une cellule par
-# prompt, mêmes checkpoints, mêmes réglages, même seed.
+# A prompt batch remains one run. Consecutive launches are rejected by
+# "a test run is already in progress", and GPU execution is serial anyway.
+# The batch is therefore an axis, like formats or cfg: one cell per prompt
+# with the same checkpoints, settings and seed.
 #
-# ⚠️ AUCUN PLAFOND, et c'est la règle de CE module (cf. l'en-tête et build_matrix :
-# « PAS de plafond sur le nombre de cellules : la file est sérielle et
-# l'utilisateur voit le compte + l'estimation de durée avant de lancer »). Une
-# première version de ce lot refusait au-delà de 24 prompts. Ce 24 était un
-# jugement, pas une mesure : rien ne casse à 33 — le corps de requête pèse
-# quelques kilo-octets contre 64 Mo autorisés, `prompt` est un TEXT sans
-# longueur, la file n'a pas de profondeur maximale et aucune vue de résultats ne
-# tronque. Le seul coût réel est le TEMPS GPU, et il se gouverne par un
-# avertissement chiffré avant le clic — pas par un refus sur un axe pris au
-# hasard parmi les six que le run multiplie.
+# There is no cell-count cap (see the module header and build_matrix): the
+# queue is serial and users see the count and duration estimate before launch.
+# An early version capped prompts at 24 without a measured reason. At 33,
+# the request is still only a few KB against a 64 MB limit; prompt is unbounded
+# TEXT, queue depth is unbounded, and result views do not truncate. GPU time
+# is the real cost, communicated numerically before launch rather than by
+# arbitrarily rejecting one of the six axes multiplied by the run.
 
 
 def _prompt_axis(prompts, fallback) -> list:
-    """L'axe 📝 prompt d'un run : la liste cochée, nettoyée et dédupliquée dans
-    l'ordre d'arrivée ; vide → `[fallback]`, c'est-à-dire EXACTEMENT le
-    comportement d'avant (un seul prompt, celui du champ). `fallback` peut être
-    None quand l'appelant laisse chaque cellule retomber sur le prompt d'identité
-    de son dataset (comparaison multi-datasets)."""
+    """Return the selected prompt axis, cleaned and deduplicated in input order.
+    An empty list becomes `[fallback]`, preserving the single prompt-field
+    behavior. `fallback` may be None when each cell should use its dataset's
+    identity prompt for a comparison across datasets."""
     seen, out = set(), []
     for p in (prompts or []):
         if not isinstance(p, str):
@@ -2517,30 +2395,28 @@ def _prompt_axis(prompts, fallback) -> list:
     return out or [fallback]
 
 
-# --- Rythme MESURÉ de la machine ---------------------------------------------
-# L'UI annonçait « ~12 s/image » en dur. C'est vrai sur une 4090 en Z-Image Turbo
-# et faux partout ailleurs : sur une carte lente, un balayage annoncé « 20 min »
-# en prend deux heures, et l'utilisateur ne l'apprend qu'en le vivant. Or la file
-# enregistre `started_at`/`completed_at` de chaque job depuis toujours — le vrai
-# chiffre était déjà là, personne ne le lisait.
-_PACE_SCAN_ROWS = 200      # lignes de file relues au plus (bornées, index sur completed_at)
-_PACE_SAMPLE_SIZE = 30     # échantillons retenus : assez pour une médiane stable
-_PACE_MIN_SAMPLES = 3      # en-dessous, on ne prétend rien et l'UI garde son défaut
-_PACE_MIN_SECONDS = 0.5    # garde-fou bas : une cellule « faite » en 0,1 s n'a rien rendu
-_PACE_MAX_SECONDS = 900.0  # garde-fou haut : une machine mise en veille pendant un job
-                           # signerait « 8 h par image » et ruinerait l'estimation
-DEFAULT_SECONDS_PER_IMAGE = 12.0   # le repli historique, quand il n'y a pas d'historique
+# --- Measured machine throughput -------------------------------------------
+# The UI formerly hardcoded "~12 s/image", accurate for Z-Image Turbo on a
+# 4090 but misleading on slower cards: a promised 20-minute sweep could take
+# two hours. The queue already records every job's started_at/completed_at;
+# use that existing evidence to estimate actual throughput.
+_PACE_SCAN_ROWS = 200      # maximum queue rows scanned, indexed by completed_at
+_PACE_SAMPLE_SIZE = 30     # enough retained samples for a stable median
+_PACE_MIN_SAMPLES = 3      # below this count, retain the UI default
+_PACE_MIN_SECONDS = 0.5    # lower guard: a cell finished in 0.1 s did not render
+_PACE_MAX_SECONDS = 900.0  # upper guard: exclude a machine sleeping during a job
+                           # to avoid an eight-hour image distorting the estimate
+DEFAULT_SECONDS_PER_IMAGE = 12.0   # historical fallback when no measurements exist
 
 
 def measured_seconds_per_image(family=None) -> float | None:
-    """La durée MÉDIANE d'une génération de test réellement observée ici.
+    """Return the median test-generation duration observed on this machine.
 
-    Médiane et non moyenne : un job resté coincé derrière un téléchargement de
-    modèle tirerait une moyenne vers le haut pour les cent runs suivants.
-    `family` restreint aux cellules de cette pipeline (une image Krea et une
-    Z-Image Turbo ne coûtent pas la même chose) ; sans assez d'échantillons on
-    renvoie None — l'appelant dit alors « ~ » avec son défaut plutôt que
-    d'inventer un chiffre précis à partir de deux mesures."""
+    Use the median rather than the mean: a job delayed by a model download
+    would inflate the mean for many later runs. `family` restricts samples to
+    that pipeline, since Krea and Z-Image Turbo have different costs. Return
+    None when there are too few samples, so the caller marks its default as
+    approximate instead of inventing precision from two measurements."""
     try:
         rows = (db.session.query(ImageGenerationQueue.started_at,
                                  ImageGenerationQueue.completed_at,
@@ -2561,7 +2437,7 @@ def measured_seconds_per_image(family=None) -> float | None:
                         _is_cell())
                 .order_by(ImageGenerationQueue.completed_at.desc())
                 .limit(_PACE_SCAN_ROWS).all())
-    except Exception:                      # base legacy sans l'une des colonnes
+    except Exception:                      # legacy database missing one of the columns
         logger.debug('pace: queue timings unreadable', exc_info=True)
         return None
     secs = []
@@ -2623,8 +2499,8 @@ def checkpoint_origins(checkpoints, explicit=None) -> dict:
 
 
 def _batch_lora_label(row):
-    """Nom lisible du LoRA « batch » d'une cellule (entrée batch:true de son JSON
-    extra_loras), ou None - badge de la grille/lightbox."""
+    """Return a cell's readable batch LoRA name, or None, for grid/lightbox badges.
+    Read the batch:true entry in its extra_loras JSON."""
     try:
         for e in json.loads(row.extra_loras or '[]'):
             if isinstance(e, dict) and e.get('batch'):
@@ -2635,21 +2511,18 @@ def _batch_lora_label(row):
 
 
 def _combined_lora_labels(row) -> list:
-    """Noms lisibles des LoRA EMPILÉS avec celui de la cellule (entrées
-    `combined:true` de son JSON extra_loras) — badge « + X » de la grille et de
-    la lightbox. Liste vide quand la cellule n'est pas une pile.
+    """Readable names of LoRAs stacked with the cell's LoRA (`combined:true`
+    extra_loras entries), used for the grid/lightbox "+ X" badge. Return an
+    empty list for a cell without a stack.
 
-    `filename`/`dataset_id`/`trigger` sont écrits par les runs lancés DEPUIS la vue
-    pile ; le JSON d'une cellule est figé à sa création, donc les runs plus anciens
-    n'ont que `label`/`weight` et ces clés valent None — la composition s'affiche
-    alors sans trigger au lieu de disparaître.
+    Runs launched from the stack view write `filename`/`dataset_id`/`trigger`.
+    Cell JSON is frozen at creation, so older runs have only `label`/`weight`;
+    missing keys become None and composition remains visible without a trigger.
 
-    `record_id`/`step` — la PROVENANCE de génération du membre, c'est-à-dire la
-    pastille du board dont il sort — suivent la même règle et la même raison :
-    écrits depuis le run qui les connaissait, absents (None) sur tout ce qui a été
-    lancé avant. Un membre sans origine n'est pas une erreur, c'est une pile plus
-    ancienne, et le lecteur DOIT pouvoir faire la différence entre « pas de
-    parent » et « parent inconnu » plutôt que d'en inventer un."""
+    `record_id`/`step` identify the member's source board checkpoint. They follow
+    the same rule: stored when known at launch, None on older runs. Missing
+    provenance is valid for an older stack. Readers must distinguish "no parent"
+    from "unknown parent" instead of inventing one."""
     out = []
     try:
         for e in json.loads(row.extra_loras or '[]'):
@@ -2668,12 +2541,12 @@ def _combined_lora_labels(row) -> list:
 
 
 def stack_of_row(row) -> list | None:
-    """Composition ORDONNÉE de la pile d'une cellule, ou None si ce n'en est pas une.
+    """Return a cell's ordered stack composition, or None when it has no stack.
 
-    Le LoRA de TÊTE est la cellule elle-même (son `checkpoint`, son poids = `strength` :
-    create_comparison_run réduit l'axe strengths au poids de tête en mode combine) ; les
-    suivants sont les entrées `combined:true`. Son trigger est relu du dataset — il n'est
-    pas figé dans le JSON, contrairement à ceux des LoRA empilés."""
+    The head LoRA is the cell itself (`checkpoint` and `strength`);
+    create_comparison_run reduces the strengths axis to the head weight in
+    combine mode. Subsequent members are `combined:true` entries. Read the head
+    trigger from its dataset: unlike stacked triggers, it is not frozen in JSON."""
     combined = _combined_lora_labels(row)
     if not combined:
         return None
@@ -2682,9 +2555,9 @@ def stack_of_row(row) -> list | None:
                       or _basename(row.checkpoint or '').rsplit('.', 1)[0]),
             'weight': row.strength, 'filename': row.checkpoint,
             'dataset_id': row.dataset_id,
-            # La tête porte SON origine depuis toujours, en colonnes : la cellule
-            # est déjà rattachée à une pastille. Reprise ici pour que les membres
-            # d'une pile se lisent tous de la même façon, tête comprise.
+            # The head's origin is already stored in columns linking it to a board
+            # checkpoint. Include it here so every stack member, including the head,
+            # uses the same representation.
             'record_id': row.record_id, 'step': row.step,
             'trigger': (getattr(ds, 'trigger_word', None) or None) if ds else None,
             'head': True}
@@ -2692,44 +2565,42 @@ def stack_of_row(row) -> list | None:
 
 
 def _stack_signature(members) -> str:
-    """Identité d'une pile INDÉPENDANTE de ses poids : ses fichiers, triés. Deux runs
-    de même signature sont deux variantes de poids de la MÊME pile — c'est ce qui
-    permet de les afficher côte à côte."""
+    """Identify a stack independently of weights by its sorted filenames.
+    Runs with the same signature are weight variants of the same stack and can
+    be shown side by side."""
     return '|'.join(sorted(str((m or {}).get('filename') or '') for m in (members or [])))
 
 
-# Fenêtre de scan des variantes : on ne remonte pas tout l'historique du dataset pour
-# retrouver les relances d'une pile. Un run de pile fait peu de cellules (1 × count ×
-# batch), donc quelques centaines de lignes couvrent largement une session de réglage.
+# Bound the variant scan instead of searching the dataset's entire history.
+# A stack run has few cells (1 x count x batch), so several hundred rows
+# comfortably cover a tuning session.
 _STACK_SCAN_ROWS = 600
 
 
 def _shared_cell(r) -> dict:
-    """Une cellule du Studio publiée d'abord comme TOUTE image de gallery.
+    """Serialize a Studio cell first as an ordinary gallery image.
 
-    Le serializer partagé (cloud_training.gallery_image) EST la parité : le
-    viewer du Studio lit les mêmes faits que la Gallery — prompt, seed,
-    checkpoint, LoRAs annexes, base, sampler, dérivation, pose caméra. Chaque
-    payload du Studio étale ses clés spécifiques PAR-DESSUS ce socle, jamais à
-    la place : trois blocs de cellules avaient dérivé en trois formes, et
-    c'est ce que l'utilisateur a vu (« des infos qu'on ne retrouve pas »).
-    Import paresseux — cloud_training importe déjà ce module à l'exécution."""
+    The shared cloud_training.gallery_image serializer provides parity: Studio
+    and Gallery read the same prompt, seed, checkpoint, extra LoRAs, base,
+    sampler, derivation and camera-pose facts. Studio-specific keys extend this
+    base rather than replace it. Three cell payloads previously diverged into
+    three shapes and displayed inconsistent information.
+    Import lazily because cloud_training already imports this module at runtime."""
     from . import cloud_training as ct
     cell = ct.gallery_image(r)
     if not r.filename:
-        cell['url'] = None   # pending/failed : pas de fichier, pas d'URL mensongère
+        cell['url'] = None   # pending/failed: no file, no misleading URL
     return cell
 
 
 def stack_variants(run_id, rows, limit=8) -> list:
-    """Les runs de la MÊME pile (mêmes LoRA, poids éventuellement différents), du plus
-    récent au plus ancien, run courant compris et marqué `active`.
+    """Return runs of the same stack (same LoRAs, possibly different weights),
+    newest first, including the current run marked `active`.
 
-    Sert la comparaison « et si je mettais 0.6 au deuxième ? » : chaque variante porte
-    son vecteur de poids, ses cellules (votables telles quelles : le vote est par id de
-    cellule) et son bilan de votes. Limité à `limit` variantes et à `_STACK_SCAN_ROWS`
-    lignes scannées — une pile relancée des dizaines de fois ne montre que les plus
-    récentes, et une variante dont les cellules débordent la fenêtre s'affiche tronquée."""
+    Each variant includes its weight vector, cells (voted on by cell ID), and
+    vote summary to compare alternative weights. Limit to `limit` variants and
+    `_STACK_SCAN_ROWS` scanned rows. Frequently rerun stacks show only recent
+    variants; a variant extending beyond the scan window has truncated cells."""
     members = stack_of_row(rows[0]) if rows else None
     if not members:
         return []
@@ -2739,12 +2610,10 @@ def stack_variants(run_id, rows, limit=8) -> list:
                .filter(LoraTestImage.dataset_id == head_ds,
                        LoraTestImage.extra_loras.isnot(None))
                .order_by(LoraTestImage.id.desc()).limit(_STACK_SCAN_ROWS).all())
-    # Regroupement par (run, VECTEUR DE POIDS) et non par run seul. Un run était
-    # forcément une combinaison unique jusqu'au balayage 🧬 ; depuis, UN run porte
-    # N combinaisons, et grouper par run seul les écraserait en une variante
-    # unique étiquetée avec les poids de sa première cellule — un mensonge sur
-    # l'image qu'on regarde. Avec un poids par LoRA le vecteur est constant sur
-    # tout le run, donc le regroupement est exactement celui d'avant.
+    # Group by (run, weight vector), not just run. Before blend sweeps each
+    # run had one combination; now one run may contain several. Grouping only
+    # by run would mislabel all images with the first cell's weights. With one
+    # weight per LoRA, the vector is constant and grouping remains unchanged.
     def _weight_vector(row):
         comp = stack_of_row(row)
         return tuple((m.get('filename'), m.get('weight')) for m in (comp or []))
@@ -2754,8 +2623,8 @@ def stack_variants(run_id, rows, limit=8) -> list:
         if not r.run_id:
             continue
         groups.setdefault((r.run_id, _weight_vector(r)), []).append(r)
-    # Le run courant ne dépend pas de la fenêtre de scan : ses combinaisons sont
-    # réinjectées telles quelles, chacune sous sa propre clé.
+    # The current run is independent of the scan window: reinsert each of its
+    # combinations under its own key.
     for r in rows:
         groups.setdefault((run_id, _weight_vector(r)), [])
         if r not in groups[(run_id, _weight_vector(r))]:
@@ -2763,14 +2632,12 @@ def stack_variants(run_id, rows, limit=8) -> list:
 
     out = []
     for (rid, _vector), grp in groups.items():
-        # `limit` ne doit JAMAIS évincer le run affiché : ses colonnes sont celles
-        # que l'utilisateur regarde — et un balayage en a plusieurs. Les autres
-        # s'arrêtent au plafond.
+        # `limit` must never evict the displayed run: its columns are what users
+        # are viewing, and a sweep can have several. Cap only the other variants.
         if len(out) >= limit and rid != run_id:
             continue
-        # Les cellules sans run_id (colonne ajoutée après coup sur des bases legacy)
-        # ne forment pas UN run : les agréger fabriquerait une variante fantôme dont
-        # les images viennent de générations sans rapport.
+        # Cells without run_id in legacy databases do not form one run. Grouping
+        # them would fabricate a phantom variant from unrelated generations.
         if not rid or not grp:
             continue
         cells = sorted(grp, key=lambda x: x.id)
@@ -2785,17 +2652,15 @@ def stack_variants(run_id, rows, limit=8) -> list:
             'likes': sum(1 for c in cells if c.rating == 1),
             'dislikes': sum(1 for c in cells if c.rating == -1),
             'done': sum(1 for c in cells if c.status == 'done' and c.filename),
-            # Superset du serializer PARTAGÉ (cloud_training.gallery_image) : le
-            # viewer du Studio lit désormais les mêmes faits que la Gallery
-            # (prompt, LoRAs, base, sampler…) — une cellule qui en sait moins
-            # qu'une image de gallery était le trou signalé. Les clés
-            # spécifiques du bloc restent par-dessus.
+            # Extend the shared cloud_training.gallery_image serializer so Studio
+            # shows the same prompt, LoRAs, base and sampler facts as Gallery. Keep
+            # block-specific keys layered on top of those shared image facts.
             'cells': [{**_shared_cell(c),
                        'label': _basename(c.checkpoint or '').rsplit('.', 1)[0],
                        'filename': c.filename, 'status': c.status,
                        'error': c.error if c.status == 'failed' else None} for c in cells],
         })
-    # Le run courant d'abord, le reste dans l'ordre de scan (récent → ancien).
+    # Current run first, then scan order from newest to oldest.
     out.sort(key=lambda v: not v['active'])
     return out
 
@@ -2826,7 +2691,7 @@ class StudioGenSettings:
     batch_loras: object = None
     negative: object = None
     sampler: object = None
-    # Preset du sampler maison (Krea). None = off = KSampler standard.
+    # Custom Krea sampler preset. None disables it and uses standard KSampler.
     sampler_preset: object = None
     scheduler: object = None
     weight_dtype: object = None
@@ -2846,8 +2711,8 @@ class StudioGenSettings:
     # text-to-image, there is no "before" image to match to.
     finish_sharpen: object = None
     finish_grain: object = None
-    # Case « Trigger word » : False = ne pas préfixer le trigger word du dataset
-    # au prompt. None/True = comportement historique (injection au montage).
+    # Trigger word checkbox: False prevents prefixing the dataset trigger.
+    # None/True preserves the historical injection during graph construction.
     inject_trigger: object = None
 
     @classmethod
@@ -2887,21 +2752,20 @@ class StudioGenSettings:
 
 def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
                family=None, origins=None, prompts=None) -> dict:
-    """Validate + materialize the grid and enqueue every cell.
+    """Validate and materialize the grid, then enqueue every cell.
 
-    `prompts` (📝 lot) est un AXE : chaque configuration est rendue une fois par
-    prompt coché dans l'historique. Absent/vide → un seul prompt, `prompt`, comme
-    avant.
+    `prompts` is an axis: render each configuration once per checked history
+    prompt. Missing/empty means a single `prompt`, preserving previous behavior.
 
-    A filename that is not in this dataset's trigger-matched pool is a GUEST
-    checkpoint (a LoRA trained elsewhere, sitting in models/loras). It becomes
-    its own cell — same prompt, same seed, same strength axis — not an extra
-    stacked on every cell. Guests are fail-closed (unsafe name / missing file)
-    and capped at MAX_GUEST_CHECKPOINTS.
+    A filename outside this dataset's trigger-matched pool is a guest checkpoint
+    (a LoRA trained elsewhere in models/loras). It gets its own cell with the
+    same prompt, seed and strength axis, rather than being stacked on every
+    cell. Guests fail closed on unsafe names or missing files and are capped
+    at MAX_GUEST_CHECKPOINTS.
 
-    Each cell's row and its queue job land in ONE commit (`_persist_and_enqueue_cell`);
-    an enqueue failure marks that row 'failed' and re-raises - already-enqueued cells
-    keep their rows AND their jobs. Returns
+    Each cell row and queue job land in one commit (`_persist_and_enqueue_cell`).
+    An enqueue failure marks that row 'failed' and re-raises; previously enqueued
+    cells retain their rows and jobs. Return
     {'created', 'seed', 'count', 'run_id', 'ids'}."""
     # One object at the door; the body below is verbatim from the flat-
     # signature era, so it reads the same locals it always has.
@@ -2931,8 +2795,8 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     hires_denoise = settings.hires_denoise
     finish_sharpen = settings.finish_sharpen
     finish_grain = settings.finish_grain
-    # Case « Trigger word » (décochée → False) : le prompt part alors tel quel,
-    # sans le trigger du dataset — persisté par cellule pour un resume fidèle.
+    # Unchecked Trigger word means False: send the prompt without the dataset
+    # trigger. Persist per cell so resume reproduces that choice.
     inject_trigger = settings.inject_trigger is not False
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
@@ -2947,11 +2811,10 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
         raise ValueError('a test run is already in progress on this dataset - '
                          'wait for it to finish or cancel')
 
-    # La FAMILLE (pipeline) du run est dérivée des checkpoints sélectionnés : ils
-    # vivent tous dans le même dossier loras/<famille> (le frontend ne propose qu'une
-    # famille à la fois via le sélecteur). On ne peut pas mélanger ZIT/SDXL/Krea dans
-    # un run (bases + workflow différents). `family` sert de repli si les checkpoints
-    # n'ont pas de préfixe de dossier (anciens noms renommés).
+    # Derive the run family from selected checkpoints in one loras/<family>
+    # folder. The frontend selects one family at a time. A run cannot mix
+    # ZIT/SDXL/Krea because bases and workflows differ. Use `family` as fallback
+    # for legacy renamed checkpoints without a folder prefix.
     cps_in = [c for c in (checkpoints or []) if isinstance(c, str) and c.strip()]
     if not cps_in:
         raise ValueError('at least one checkpoint is required')
@@ -2966,8 +2829,8 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     if guests:
         allowed |= _accept_guest_checkpoints(guests)
 
-    # LoRA « always-on » (style/utilitaire) appliqués à CHAQUE cellule (hors batch).
-    # Validés contre les candidats de la famille (anti path-injection) + strength clamp.
+    # Apply always-on style/utility LoRAs to every cell, outside the batch axis.
+    # Validate against family candidates to prevent path injection; clamp strength.
     perm_allowed = {c['filename'] for c in permanent_lora_candidates(run_family)}
     extra_loras = []
     for e in (permanent_loras or []):
@@ -2979,11 +2842,11 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
         except (TypeError, ValueError):
             st = 1.0
         extra_loras.append({'filename': fn, 'strength': st})
-    # Axe « ⚖ batch » : chaque config tourne une fois SANS puis une fois AVEC
-    # chaque LoRA coché batch (les always-on ci-dessus s'appliquent partout).
+    # Batch axis: render each configuration once without, then once with each
+    # checked batch LoRA. Always-on LoRAs above apply to every cell.
     batch_axis = _batch_lora_axis(batch_loras, run_family)
 
-    # Réglages de génération GLOBAUX du run (parité Generate), validés + gatés par famille.
+    # Global run generation settings (Generate parity), validated and gated by family.
     knobs = _sanitize_gen_knobs(
         run_family, negative=negative, sampler=sampler, scheduler=scheduler,
         sampler_preset=sampler_preset,
@@ -2996,35 +2859,33 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
 
     cells = build_matrix(checkpoints, strengths, aspects, cfgs, steps_list, steps2_list)
 
-    # Pool de bases selon la FAMILLE : SDXL → checkpoints SDXL (de Generate), Krea →
-    # base fixe (UNET du workflow, pas d'axe de base), Z-Image → modèles Z-Image.
+    # Base pool by family: SDXL uses Generate checkpoints, Krea uses the fixed
+    # workflow UNET without a base axis, and Z-Image uses Z-Image models.
     if run_family == 'sdxl':
         models = [m['filename'] for m in list_sdxl_base_models()]
         if not models:
             raise ValueError('no SDXL checkpoint available')
     elif run_family == 'krea':
-        # None en tête = UNET câblé du workflow (défaut historique et repli) ; les
-        # checkpoints Krea locaux deviennent un axe de base optionnel comme ailleurs.
+        # Leading None keeps the workflow UNET as historical default/fallback.
+        # Local Krea checkpoints provide an optional base axis, like other families.
         models = [None] + get_krea_models()
     elif run_family == 'flux2klein':
-        # None en tête = l'UNET que la config élit (apply_klein_lora_test_settings
-        # le résout), les Klein locaux devenant un axe de base optionnel — même
-        # mécanique que Krea.
+        # Leading None uses the elected UNET resolved by apply_klein_lora_test_settings.
+        # Local Klein models form an optional base axis using the same mechanism as Krea.
         from ..utils.comfyui import get_flux2_klein_models
         models = [None] + [m['filename'] for m in get_flux2_klein_models()]
     elif not can_generate_with(run_family):
-        # AVANT le repli Z-Image, et c'est tout l'objet du correctif : une famille
-        # sans voie tombait ici en silence et repartait avec l'erreur d'une AUTRE
-        # famille (GitHub #53).
+        # Reject before the Z-Image fallback: unsupported families previously slipped
+        # through and returned another family's error (GitHub #53).
         raise _no_generation_lane(run_family)
     else:
         models = get_zimage_models()
         if not models:
             raise ValueError('no Z-Image model available')
-    # Modèle(s) de base - AXE de balayage optionnel (validés contre la whitelist).
-    # z_models (liste) prioritaire ; sinon z_model unique (rétrocompat) ; sinon le 1er.
-    # '' (entrée « Official » du picker Krea) ≡ None = défaut de la famille — mappé
-    # AVANT validation pour que « Official + alternative » reste un axe à 2 valeurs.
+    # Optional base-model sweep axis, validated against the allowlist.
+    # Prefer z_models (list), then legacy z_model (scalar), then the first base.
+    # Map '' (Krea's Official entry) to None before validation so Official plus
+    # an alternative remain a two-value axis.
     _req_models = list(z_models) if z_models else ([z_model] if z_model else [])
     _req_models = [None if m in ('', None) else m for m in _req_models]
     valid_models = [m for m in _req_models if m in models] or [models[0]]
@@ -3034,42 +2895,41 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     except (TypeError, ValueError):
         raise ValueError(f'invalid seed: {seed!r}')
 
-    # Nombre de générations par config (batch) : N seeds DISTINCTS, PARTAGÉS entre
-    # toutes les configs (comparaison équitable à seeds identiques). Borné 1..4.
+    # Generate N distinct seeds per configuration, shared across configurations
+    # for fair comparisons with identical seeds. Bound N to 1..4.
     try:
         count = max(1, min(int(count or 1), 4))
     except (TypeError, ValueError):
         count = 1
     _MAX = 2**31 - 1
-    seeds = [1 + ((seed + i - 1) % _MAX) for i in range(count)]  # distincts, dans [1, 2^31-1]
+    seeds = [1 + ((seed + i - 1) % _MAX) for i in range(count)]  # distinct values in [1, 2^31-1]
 
-    # Prompt custom optionnel ; sinon prompt d'identité par défaut — SANS le
-    # trigger quand la case est décochée (le repli doit suivre la décision,
-    # sinon la méta « no trigger » mentait sur le chemin du prompt vide).
+    # Use the optional custom prompt or default identity prompt, without the
+    # trigger when unchecked. The fallback must honor the same choice so empty
+    # prompts do not contradict the "no trigger" metadata.
     prompt = (prompt or '').strip() or identity_prompt(ds, with_trigger=inject_trigger)
-    # 📝 Lot de prompts : l'axe vaut [prompt] quand rien n'est coché → chemin
-    # strictement identique à avant. Le preflight et les journaux parlent du 1er.
+    # Prompt batch: no selection gives [prompt], preserving the previous path.
+    # Preflight and logging use the first prompt.
     prompt_axis = _prompt_axis(prompts, prompt)
     prompt = prompt_axis[0]
 
-    # Arch guard : la famille est dérivée du DOSSIER (family_of_lora) — un LoRA
-    # mal classé (ex. un Z-Image déployé dans loras/krea) passerait ce filtre et
-    # tournerait comme un no-op silencieux. On lit l'arch RÉELLE de chaque
-    # checkpoint sélectionné dans son en-tête AVANT toute ligne → 409 actionnable.
+    # Architecture guard: family_of_lora derives family from the folder, which
+    # could misclassify a Z-Image LoRA deployed under loras/krea and silently do
+    # nothing. Inspect every selected checkpoint's actual header architecture
+    # before creating rows, returning an actionable 409 on mismatch.
     _preflight_checkpoint_arch(run_family, cps_in)
-    # Preflight : le ComfyUI cible a-t-il RÉELLEMENT chaque modèle + custom node
-    # dont le workflow de la famille a besoin ? On construit le graphe représentatif
-    # (par base) et on le vérifie AVANT de créer la moindre ligne → un utilisateur
-    # frais reçoit un seul 409 actionnable au lieu d'une grille de tuiles muettes.
-    # (Krea/SDXL n'avaient AUCUN preflight ; seul Klein en avait un.)
+    # Preflight every model and custom node required on the target ComfyUI.
+    # Build a representative graph per base before creating rows. New installs
+    # receive one actionable 409 instead of a grid of silent failures.
+    # Previously only Klein had preflight; Krea and SDXL did not.
     _preflight_run(user_id, run_family, cells[0][0], valid_models, allowed,
                    prompt, seeds[0], dataset_id,
                    ds.trigger_word if inject_trigger else None,
                    sampler_preset=knobs['sampler_preset'])
 
-    # Classes du ComfyUI cible, lues UNE fois pour toute la grille : le builder s'en
-    # sert pour réécrire les nodes à variantes (NODE_CLASS_ALIASES) vers le nom réellement
-    # enregistré. None (probe échouée) = on garde les noms canoniques.
+    # Read target ComfyUI classes once for the grid. Builders resolve
+    # NODE_CLASS_ALIASES to actual registered names; None on a failed probe
+    # preserves canonical names.
     available_classes = _target_node_classes()
     # WHICH lineage checkpoint each selected LoRA is, stamped on every cell it
     # produces (see checkpoint_origins) — the canvas gallery reads these columns,
@@ -3090,15 +2950,15 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     ids = []
     for zm, cell in cell_plan:
         checkpoint, strength, cell_aspect, cell_cfg, cell_steps, cell_steps2 = cell
-        # Format/CFG/steps (1 et 2) testés comme axes à part entière (multi-sélection).
+        # Format/CFG/steps (passes 1 and 2) are full multi-select test axes.
         width, height = _aspect_dims(cell_aspect, run_family, knobs['resolution_tier'],
                                      knobs['resolution_multiplier'])
-        for batch_lora in batch_axis:  # AXE ⚖ batch : sans, puis avec chaque LoRA coché
+        for batch_lora in batch_axis:  # Batch axis: without, then with each selected LoRA
           row_extra = extra_loras + ([{**batch_lora, 'batch': True}] if batch_lora else [])
           wf_extra = extra_loras + ([batch_lora] if batch_lora else [])
           cell_extra_json = json.dumps(row_extra) if row_extra else None
-          for cell_prompt in prompt_axis:  # AXE 📝 lot : une passe par prompt coché
-           for cell_seed in seeds:  # N images par config (seeds différents), bande dans la cellule
+          for cell_prompt in prompt_axis:  # Prompt batch axis: one pass per selected prompt
+           for cell_seed in seeds:  # N images per configuration with different seeds, displayed as a cell strip
             img = LoraTestImage(dataset_id=dataset_id, checkpoint=checkpoint,
                                 strength=strength, seed=cell_seed, run_seed=seed,
                                 run_id=run_id,
@@ -3116,8 +2976,8 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
                                 hires_denoise=knobs['hires_denoise'],
                                 finish_sharpen=knobs['finish_sharpen'],
                                 finish_grain=knobs['finish_grain'],
-                                # NULL quand la case est cochée (défaut) : la ligne reste
-                                # octet pour octet celle d'avant la colonne.
+                                # Use NULL when checked (the default), preserving the row's original
+                                # values from before this column existed.
                                 inject_trigger=None if inject_trigger else False,
                                 record_id=origin_of.get(checkpoint, (None, None))[0],
                                 step=origin_of.get(checkpoint, (None, None))[1])
@@ -3139,24 +2999,23 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
                                                            if inject_trigger else None),
                                              available_classes=available_classes))
             ids.append(img.id)
-    logger.info(f"lora-test: run {run_id} dataset {dataset_id} -> {len(ids)} cellule(s) "
-                f"({len(valid_models)} modèle(s), {len(prompt_axis)} prompt(s)), "
+    logger.info(f"lora-test: run {run_id} dataset {dataset_id} -> {len(ids)} cell(s) "
+                f"({len(valid_models)} model(s), {len(prompt_axis)} prompt(s)), "
                 f"base seed {seed} ×{count}")
     return {'created': len(ids), 'seed': seed, 'count': count,
             'run_id': run_id, 'ids': ids}
 
 
-# 🧬 Plafond d'un poids de blend (pile combinée) — la borne haute de la plage
-# commune ci-dessus, pas un second nombre. Le poids de tête d'une combinaison
-# traverse build_matrix : un plafond de blend au-dessus du sien ferait échouer
-# le run au lieu de le clamper. Miroir navigateur : `COMBINE_MAX_WEIGHT` dans
-# frontend/src/components/dataset/studio/loraStack.js.
+# A combined-stack weight uses the shared range's upper bound above.
+# The head weight passes through build_matrix; a higher blend cap would
+# fail the run instead of clamping it. Browser counterpart: COMBINE_MAX_WEIGHT
+# in frontend/src/components/dataset/studio/loraStack.js.
 COMBINE_MAX_WEIGHT = MAX_LORA_STRENGTH
 
 
 def _combine_weight(sel) -> float:
-    """Poids d'un LoRA dans une pile combinée : 0..COMBINE_MAX_WEIGHT, arrondi au
-    centième, 1.0 par défaut/valeur illisible."""
+    """A combined-stack LoRA weight: 0..COMBINE_MAX_WEIGHT, rounded to two decimals.
+    Default to 1.0 for missing or unreadable values."""
     try:
         return max(0.0, min(COMBINE_MAX_WEIGHT,
                             round(float((sel or {}).get('weight', 1.0)), 2)))
@@ -3165,13 +3024,13 @@ def _combine_weight(sel) -> float:
 
 
 def _combine_weights(sel) -> list:
-    """Les poids que CE LoRA balaye dans la pile : la liste `weights` si elle est
-    fournie (cases de poids du panneau 🧬 Blend), sinon le scalaire `weight`.
+    """Weights swept for this LoRA: the `weights` list when supplied (Blend panel
+    weight checkboxes), otherwise the scalar `weight`.
 
-    Toujours non vide, clampée 0..COMBINE_MAX_WEIGHT, arrondie au centième, dédupliquée en gardant
-    l'ordre reçu. Une sélection qui ne parle que de `weight` (client d'avant le
-    balayage, ou repli d'un frontend neuf sur un backend ancien) rend donc
-    exactement une valeur — le balayage est ADDITIF, il ne réinterprète rien."""
+    Always nonempty, clamped to 0..COMBINE_MAX_WEIGHT, rounded to two decimals,
+    and deduplicated in input order. A selection providing only `weight` (an
+    older client or a newer frontend falling back to an older backend) returns
+    exactly one value. Sweeping is additive and preserves existing semantics."""
     raw = (sel or {}).get('weights')
     if not isinstance(raw, (list, tuple)) or not raw:
         return [_combine_weight(sel)]
@@ -3187,10 +3046,9 @@ def _combine_weights(sel) -> list:
 
 
 def _cmp_resolve_run_family(selections):
-    """Les refus d'entrée d'un run de comparaison, déplacés tels quels
-    (2026-08-23) : sélection vide, GPU occupé, run déjà actif, familles
-    mélangées — puis la famille du run et la liste des bases qu'elle
-    autorise. Retourne (run_type, models)."""
+    """Validate comparison-run inputs, extracted unchanged on 2026-08-23.
+    Reject empty selections, busy GPU, an active run or mixed families, then
+    resolve the run family and allowed bases. Return (run_type, models)."""
     if not selections:
         raise ValueError('no LoRA selected')
     reason = gpu_busy_reason()
@@ -3198,14 +3056,14 @@ def _cmp_resolve_run_family(selections):
         raise GpuBusyError(reason)
     if _active_run_count():
         raise ValueError('a test run is already in progress - wait for it to finish or cancel')
-    # La FAMILLE du run est dérivée du DOSSIER des checkpoints (family_of_lora), PAS du
-    # scalaire `ds.train_type` (un dataset est multi-famille). Un run = une seule famille
-    # (bases + workflow différents). On résout la base AVANT la boucle, selon la famille.
+    # Derive family from checkpoint folders (family_of_lora), not ds.train_type:
+    # a dataset can train multiple families. A run uses one family because bases
+    # and workflows differ. Resolve its base before entering the loop.
     fams = {family_of_lora(str(sel.get('checkpoint') or '')) for sel in (selections or [])}
     fams.discard(None)
     if len(fams) > 1:
-        # Nommer les familles en cause : « ZIT/SDXL/Krea » ne disait pas LESQUELLES
-        # étaient cochées, et en mode combine c'est l'erreur la plus probable.
+        # Name the selected families in errors. A generic ZIT/SDXL/Krea message
+        # hid which choices conflicted, especially in combine mode.
         named = ' + '.join(_MODE_LABEL_BY_FAMILY.get(f, f) for f in sorted(fams))
         raise ValueError(
             f'a test run cannot mix LoRA families ({named}) — they need different '
@@ -3216,14 +3074,14 @@ def _cmp_resolve_run_family(selections):
         if not models:
             raise ValueError('no SDXL checkpoint available')
     elif run_type == 'krea':
-        # None en tête = UNET câblé (node 20), repli des runs sans base explicite ;
-        # les checkpoints Krea locaux sont désormais sélectionnables.
+        # Leading None uses the workflow UNET (node 20) for runs without an explicit
+        # base; local Krea checkpoints are also selectable.
         models = [None] + get_krea_models()
     elif run_type == 'flux2klein':
         from ..utils.comfyui import get_flux2_klein_models
         models = [None] + [m['filename'] for m in get_flux2_klein_models()]
     elif not can_generate_with(run_type):
-        raise _no_generation_lane(run_type)      # cf. create_run, même raison
+        raise _no_generation_lane(run_type)      # See create_run for the same rationale.
     else:
         models = get_zimage_models()
         if not models:
@@ -3233,13 +3091,13 @@ def _cmp_resolve_run_family(selections):
 
 def _cmp_seed_and_prompts(models, z_model, z_models, seed, count, prompt,
                           prompts):
-    """Les axes seed / base / prompt, déplacés tels quels : bases valides
-    demandées (liste prioritaire, scalaire en rétrocompat), seed fourni ou
-    tiré, count borné, la suite de seeds, et le lot de prompts. Retourne
-    (valid_models, seed, count, seeds, prompt_axis)."""
-    # Modèle(s) de base — AXE de balayage, exactement comme dans `create_run` :
-    # le Canvas offre « BASE MODEL (MULTI) » et n'en lançait qu'UN, en silence.
-    # z_models (liste) prioritaire ; sinon z_model unique (rétrocompat) ; sinon le 1er.
+    """Resolve the seed/base/prompt axes, extracted unchanged.
+    Validate requested bases (list preferred, scalar for backward compatibility),
+    choose the supplied or random seed, bound count, and derive the seed sequence
+    and prompt batch. Return (valid_models, seed, count, seeds, prompt_axis)."""
+    # Base models form a sweep axis exactly as in create_run. Canvas's
+    # BASE MODEL (MULTI) previously launched only one silently. Prefer z_models,
+    # then legacy scalar z_model, then the first available base.
     _req_models = list(z_models) if z_models else ([z_model] if z_model else [])
     _req_models = [None if m in ('', None) else m for m in _req_models]
     valid_models = [m for m in _req_models if m in models] or [models[0]]
@@ -3254,22 +3112,21 @@ def _cmp_seed_and_prompts(models, z_model, z_models, seed, count, prompt,
     _MAX = 2**31 - 1
     seeds = [1 + ((seed + i - 1) % _MAX) for i in range(count)]
     common_prompt = (prompt or '').strip() or None
-    # 📝 Lot de prompts (une passe par prompt coché). Rien de coché → [common_prompt],
-    # donc [None] quand aucun prompt commun n'est fourni : chaque cellule retombe
-    # sur le prompt d'identité de SON dataset, exactement comme avant.
+    # Prompt batch: one pass per checked prompt. No selection gives
+    # [common_prompt], or [None] if absent, so each cell uses its own dataset's
+    # identity prompt as before.
     prompt_axis = _prompt_axis(prompts, common_prompt)
     return valid_models, seed, count, seeds, prompt_axis
 
 
 def _cmp_collect_extra_loras(run_type, permanent_loras, external_loras):
-    """Les LoRA empilés sur chaque cellule, déplacés tels quels : les
-    always-on validés contre le pool de la famille (skip silencieux), puis
-    les externes du Canvas en fail-closed (garde anti-traversal AVANT toute
-    résolution, introuvable = erreur dure, cap à 16). Retourne
-    (extra_loras, externals) — la liste des externes seule sert encore au
-    preflight d'architecture."""
-    # LoRA « always-on » (style/utilitaire) validés contre la famille (anti path-injection),
-    # appliqués à CHAQUE cellule - même mécanique que create_run.
+    """Collect LoRAs stacked on every cell, extracted unchanged.
+    Validate always-on entries against the family pool (silently skip invalid
+    entries), then validate Canvas externals fail-closed: reject traversal before
+    resolution, fail on missing files, and cap at 16. Return
+    (extra_loras, externals); only externals feed the architecture preflight."""
+    # Validate always-on style/utility LoRAs against the family to prevent path
+    # injection, then apply to every cell, just as in create_run.
     perm_allowed = {c['filename'] for c in permanent_lora_candidates(run_type)}
     extra_loras = []
     for e in (permanent_loras or []):
@@ -3319,13 +3176,12 @@ def _cmp_cell_knobs(run_type, batch_loras,
                     resolution_multiplier, init_image, denoise,
                     sampler_preset=None, hires_scale=None, hires_denoise=None,
                     finish_sharpen=None, finish_grain=None):
-    """Les réglages portés par chaque cellule, déplacés tels quels : l'axe
-    ⚖ batch et les réglages globaux validés et gatés par famille.
-    Retourne (batch_axis, knobs)."""
-    # Axe « ⚖ batch » : chaque config tourne une fois SANS puis une fois AVEC
-    # chaque LoRA coché batch (même mécanique que create_run).
+    """Resolve cell settings, extracted unchanged: the batch axis and global
+    settings validated and gated by family. Return (batch_axis, knobs)."""
+    # Batch axis: render each configuration without, then with each checked
+    # batch LoRA, using the same mechanism as create_run.
     batch_axis = _batch_lora_axis(batch_loras, run_type)
-    # Réglages de génération GLOBAUX (parité Generate), validés + gatés par famille.
+    # Global generation settings (Generate parity), validated and gated by family.
     knobs = _sanitize_gen_knobs(
         run_type, negative=negative, sampler=sampler, scheduler=scheduler,
         sampler_preset=sampler_preset,
@@ -3340,21 +3196,19 @@ def _cmp_cell_knobs(run_type, batch_loras,
 
 def _cmp_preflight(user_id, run_type, selections, externals, valid_models,
                    prompt_axis, seeds, inject_trigger=True, sampler_preset=None):
-    """Les preflights du run, déplacés tels quels : l'arch réelle de chaque
-    checkpoint (externes compris) contre la famille, puis le workflow de la
-    famille essayé sur la première sélection valable — un seul 409
-    actionnable AVANT toute ligne. Retourne la closure mémoïsée
-    ``_dataset_and_checkpoints`` que la pile et la boucle de cellules
-    réutilisent (un dataset = UN scan de LoRA pour tout l'appel)."""
-    # Arch guard (même contrat que create_run) : l'arch RÉELLE de chaque
-    # checkpoint sélectionné, lue dans son en-tête, doit correspondre à la famille
-    # du run — sinon ComfyUI le droppe en silence (grille no-op). Vérifié AVANT
-    # toute ligne → 409 actionnable.
+    """Run preflights, extracted unchanged: compare every checkpoint's actual
+    architecture (including externals) with the family, then try the family
+    workflow on the first valid selection. Raise one actionable 409 before
+    creating any rows. Return the memoized `_dataset_and_checkpoints` closure
+    shared by the stack and cell loop: one LoRA scan per dataset per call."""
+    # Architecture guard, as in create_run: each selected checkpoint's header
+    # must match the run family. Otherwise ComfyUI silently drops it, yielding
+    # a no-op grid. Check before creating any rows for an actionable 409.
     _preflight_checkpoint_arch(
         run_type,
         [s.get('checkpoint') for s in selections if s.get('checkpoint')]
         + [x['filename'] for x in externals])
-    # Un dataset = UN scan de LoRA. `list_test_checkpoints` walks the family's whole
+    # One LoRA scan per dataset. `list_test_checkpoints` walks the family's whole
     # LoRA folder (and stats every match): its result only depends on (dataset, family),
     # so a 24-cell grid over 8 checkpoints of the same dataset re-scanned that folder 9
     # times for one identical answer. Memoised for the duration of THIS call only — the
@@ -3369,9 +3223,9 @@ def _cmp_preflight(user_id, run_type, selections, externals, valid_models,
             _ckpt_memo[ds_id] = (_ds, _allowed)
         return _ckpt_memo[ds_id]
 
-    # Preflight (même contrat que create_run) : le ComfyUI cible peut-il vraiment
-    # exécuter le workflow de cette famille ? On vérifie sur la 1re sélection valable
-    # (le run est mono-famille) AVANT de créer les lignes → un seul 409 actionnable.
+    # Preflight, as in create_run: verify that target ComfyUI can execute this
+    # family's workflow using the first valid selection. The run has one family;
+    # check before creating rows to return one actionable 409.
     for _sel in selections:
         _pf_ds, _pf_allowed = _dataset_and_checkpoints(_sel.get('dataset_id'))
         if not _pf_ds:
@@ -3390,32 +3244,28 @@ def _cmp_preflight(user_id, run_type, selections, externals, valid_models,
 
 def _cmp_expand_stack(combine, selections, origin_of,
                       _dataset_and_checkpoints):
-    """Le mode PILE, déplacé tel quel : membres revalidés contre les
-    checkpoints déployés de LEUR dataset, provenance stampée, triggers
-    collectés, produit cartésien des poids, et la sélection réduite au LoRA
-    de tête. Retourne (combine, selections, stack_triggers, combos,
-    members) — en comparaison simple, les valeurs passent inchangées."""
-    # --- Mode PILE (combine) ---------------------------------------------------
-    # En comparaison, chaque sélection produit ses PROPRES cellules (un LoRA seul par
-    # image). En combine, la sélection décrit UNE pile : le 1er LoRA reste le
-    # « testé » (il porte la colonne de la grille et le dataset dont le prompt par
-    # défaut est tiré), les suivants sont chaînés dans le MÊME graphe via le canal
-    # `extra_loras` — celui des always-on, déjà câblé pour les trois familles
-    # (inject_zimage_loras / inject_krea_loras / inject_sdxl_loras). Chaque
-    # secondaire est revalidé contre les checkpoints réellement déployés de SON
-    # dataset : la whitelist des extras est permissive côté montage, l'anti
-    # path-injection se joue donc ici.
+    """Expand stack mode, extracted unchanged: revalidate members against their
+    own dataset's deployed checkpoints, stamp provenance, collect triggers,
+    expand the Cartesian product of weights, and reduce selections to the head
+    LoRA. Return (combine, selections, stack_triggers, combos, members).
+    In ordinary comparison mode, pass values through unchanged."""
+    # --- Stack mode (combine) --------------------------------------------------
+    # Comparison gives each selection its own cells, one LoRA alone per image.
+    # Combine describes one stack: the first LoRA remains the tested head, owning
+    # the grid column and dataset used for the default prompt. Chain subsequent
+    # members in the same graph through extra_loras, already supported by the
+    # Z-Image, Krea and SDXL injectors. Revalidate each member against its own
+    # dataset's deployed checkpoints: graph assembly accepts permissive extras,
+    # so path-injection protection belongs here.
     #
-    # 🧬 BALAYAGE : chaque sélection peut porter PLUSIEURS poids (`weights`), et le
-    # run rend alors le PRODUIT CARTÉSIEN des combinaisons — une configuration
-    # chacune, dans le MÊME run. Un seul poids par LoRA (le cas d'avant, et celui
-    # d'un client qui n'envoie que `weight`) donne un produit d'un élément : le
-    # chemin est donc strictement le même qu'avant pour tout ce qui existait.
-    # Le poids du LoRA de TÊTE reste porté par `LoraTestImage.strength` et ceux des
-    # membres par le JSON `extra_loras` — donc chaque cellule sait déjà dire de
-    # quelle combinaison elle est, sans une colonne de plus.
+    # Each selection may supply multiple `weights`; render their Cartesian
+    # product as configurations within the same run. A single weight per LoRA,
+    # including legacy clients sending only `weight`, gives one combination
+    # and preserves previous behavior. LoraTestImage.strength stores the head
+    # weight and extra_loras JSON stores member weights, so each cell already
+    # identifies its combination without another database column.
     combine = bool(combine) and len(selections) > 1
-    # [(stack_extra, stack_row)] par combinaison, alignés sur `combos`.
+    # [(stack_extra, stack_row)] per combination, aligned with combos.
     stack_triggers = []
     combos = [None]
     members = []
@@ -3427,13 +3277,11 @@ def _cmp_expand_stack(combine, selections, origin_of,
             fn = sel.get('checkpoint')
             if fn not in _allowed_i:
                 raise ValueError(f'unknown checkpoint for {_ds_i.name}: {fn}')
-            # 🧬 PROVENANCE DE GÉNÉRATION : d'où vient CE membre sur le board.
-            # `origin_of` a déjà résolu l'origine de tous les checkpoints
-            # sélectionnés, membres compris, juste au-dessus — c'est le moment
-            # où l'information est la plus sûre (l'appelant vient de cliquer la
-            # pastille, ou le tag de déploiement est encore celui d'aujourd'hui).
-            # Sans elle, une pile ne sait dire de quelle pastille elle descend
-            # que pour son LoRA de TÊTE, et un blend est par nature multi-parents.
+            # Generation provenance identifies this member's source board checkpoint.
+            # origin_of has already resolved every selected checkpoint, including
+            # members, while the clicked source or current deployment tag is known.
+            # Without this, only the head's parent would be known even though a blend
+            # has several parents.
             _origin_i = origin_of.get(fn, (None, None))
             members.append({'filename': fn, 'weights': _combine_weights(sel),
                             'dataset_id': _ds_i.id,
@@ -3441,8 +3289,8 @@ def _cmp_expand_stack(combine, selections, origin_of,
                             'trigger': getattr(_ds_i, 'trigger_word', None) or None})
             if getattr(_ds_i, 'trigger_word', None):
                 stack_triggers.append(_ds_i.trigger_word)
-        # Une combinaison = (poids de tête, poids du membre 1, …). Le dernier LoRA
-        # varie le plus vite, comme dans le panneau qui l'annonce.
+        # Each combination is (head weight, member 1 weight, ...). The last LoRA
+        # varies fastest, matching the panel's displayed order.
         head_weights = _combine_weights(selections[0])
         combos = [tuple(c) for c in itertools.product(
             head_weights, *[m['weights'] for m in members])]
@@ -3452,25 +3300,23 @@ def _cmp_expand_stack(combine, selections, origin_of,
 
 def _cmp_build_cell_plan(valid_models, selections, combos, strengths,
                          aspects, cfgs, steps_list, steps2_list, run_type):
-    """Le plan de cellules, déplacé tel quel : run_id, produit base-major
-    des axes (bases × sélections × combinaisons × matrice), puis la
-    partition stable Krea qui sert les contrôles LoRA-off d'abord.
-    Retourne (run_id, cell_plan)."""
+    """Build the cell plan, extracted unchanged: run_id and the base-major
+    product of bases x selections x combinations x matrix, followed by Krea's
+    stable partition placing LoRA-off controls first. Return (run_id, cell_plan)."""
     run_id = uuid.uuid4().hex
     # Materialize the original selection-major plan, then stable-partition it
     # once for Krea. Zero tested-LoRA-off controls across *all* selected
     # checkpoints therefore finish before the first non-zero tested-LoRA cell,
     # while each group's checkpoint-major and strength order stays unchanged.
     cell_plan = []
-    # Base-major, comme `create_run` : un balayage à une seule base produit
-    # EXACTEMENT le plan d'avant, et à plusieurs les bases se lisent l'une
-    # après l'autre au lieu de s'entrelacer.
+    # Base-major order, as in create_run: one base preserves the original plan;
+    # multiple bases appear consecutively instead of interleaving.
     for zm in valid_models:
         for sel in selections:
             checkpoint = sel.get('checkpoint')
             for combo in combos:
-                # En pile, l'axe strengths n'a plus de sens (chaque LoRA porte son
-                # poids) : il vaut le poids de TÊTE de la combinaison courante.
+                # Stacks give each LoRA its own weight, so replace the strengths axis
+                # with this combination's head weight.
                 combo_strengths = [combo[0]] if combo is not None else strengths
                 for cell in build_matrix([checkpoint], combo_strengths, aspects, cfgs,
                                          steps_list, steps2_list):
@@ -3485,23 +3331,21 @@ def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
                        run_id, extra_loras, origin_of,
                        combine, stack_triggers, available_classes,
                        inject_trigger=True):
-    """La matérialisation du plan, déplacée telle quelle : pour chaque
-    cellule planifiée, la pile persistée avec son identité, les dimensions
-    de l'aspect, les axes batch/prompt/seed, la ligne LoraTestImage et la
-    mise en file avec son constructeur de workflow (base liée par défaut,
-    jamais capturée tard). Retourne les ids créés."""
+    """Materialize the plan, extracted unchanged. For each planned cell, persist
+    the identified stack, aspect dimensions, batch/prompt/seed axes and
+    LoraTestImage row, then enqueue its workflow builder with the base bound
+    as a default rather than captured late. Return the created IDs."""
     ids = []
     for sel, cell, combo, zm in cell_plan:
-        # Les poids des MEMBRES de cette combinaison. `stack_extra` (monté dans le
-        # graphe) garde le format des always-on ; seule la copie PERSISTÉE porte
-        # l'identité du membre, pour que la vue pile puisse redonner son dataset et
-        # son trigger sans re-deviner.
+        # Member weights for this combination. Graph-facing stack_extra keeps the
+        # always-on format; only the persisted copy carries member identity so the
+        # stack view can recover its dataset and trigger without guessing.
         stack_extra, stack_row = [], []
         for i, m in enumerate(members):
             entry = {'filename': m['filename'], 'strength': combo[i + 1]}
             stack_extra.append(entry)
-            # Seule la copie PERSISTÉE porte l'origine : `stack_extra` garde le
-            # format des always-on, que le constructeur de workflow attend.
+            # Only the persisted copy carries provenance; stack_extra retains the
+            # always-on format expected by the workflow builder.
             stack_row.append({**entry, 'combined': True,
                               'dataset_id': m['dataset_id'], 'trigger': m['trigger'],
                               'record_id': m['record_id'], 'step': m['step']})
@@ -3514,11 +3358,11 @@ def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
         cp, strength, cell_aspect, cell_cfg, cell_steps, cell_steps2 = cell
         width, height = _aspect_dims(cell_aspect, run_type, knobs['resolution_tier'],
                                      knobs['resolution_multiplier'])
-        for batch_lora in batch_axis:  # AXE ⚖ batch : sans, puis avec chaque LoRA coché
+        for batch_lora in batch_axis:  # Batch axis: without, then with each selected LoRA
           row_extra = extra_loras + stack_row + ([{**batch_lora, 'batch': True}] if batch_lora else [])
           wf_extra = extra_loras + stack_extra + ([batch_lora] if batch_lora else [])
           cell_extra_json = json.dumps(row_extra) if row_extra else None
-          for axis_prompt in prompt_axis:  # AXE 📝 lot : une passe par prompt coché
+          for axis_prompt in prompt_axis:  # Prompt batch axis: one pass per selected prompt
            cell_prompt = axis_prompt or identity_prompt(ds, with_trigger=inject_trigger)
            for cell_seed in seeds:
             img = LoraTestImage(dataset_id=ds.id, checkpoint=cp, strength=strength,
@@ -3542,9 +3386,8 @@ def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
                                 step=origin_of.get(cp, (None, None))[1])
             _persist_and_enqueue_cell(
                 img, user_id, ds.id, cell_prompt,
-                # `zm` est lié PAR DÉFAUT, pas capturé : le graphe est construit
-                # après coup, et une capture tardive donnerait à toutes les
-                # cellules la base de la DERNIÈRE — un balayage qui ment.
+                # Bind `zm` as a default, not a late capture: graphs are built later,
+                # and late binding would give every cell the last cell's base.
                 lambda _zm=zm: _build_cell_workflow(user_id, cp, strength, cell_prompt,
                                      cell_seed, _zm, allowed, width=width,
                                      height=height, cfg=cell_cfg, steps=cell_steps,
@@ -3556,9 +3399,9 @@ def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
                                      detail_amount=knobs['detail_amount'],
                                      hires_scale=knobs['hires_scale'],
                                      hires_denoise=knobs['hires_denoise'],
-                                     # Pile combinée : TOUS les triggers de la pile,
-                                     # celui du LoRA de tête en premier. Case
-                                     # « Trigger word » décochée → aucun, pile comprise.
+                                     # Combined stack: all triggers, head first.
+                                     # An unchecked Trigger word box disables
+                                     # all triggers, including stacked ones.
                                      trigger_word=(([ds.trigger_word] + stack_triggers
                                                     if combine else ds.trigger_word)
                                                    if inject_trigger else None),
@@ -3569,32 +3412,29 @@ def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
 
 def create_comparison_run(user_id, selections, strengths, settings=None, *,
                           combine=None, prompts=None, external_loras=None) -> dict:
-    """Lance UN run de comparaison sur plusieurs LoRA. `selections` =
-    [{dataset_id, checkpoint}] — chaque entrée peut aussi porter `record_id`/`step`
-    (le LoRA Canvas les connaît : ce sont l'identité de la pastille cliquée), ce qui
-    est alors stampé tel quel sur les cellules ; sinon l'origine est relue du tag de
-    déploiement (cf. checkpoint_origins). Toutes les cellules partagent un run_id + le seed
-    (équité). Le prompt : `prompt` commun si fourni, sinon l'identity_prompt du
-    dataset de CHAQUE cellule (chaque LoRA a son trigger). 1 selection => run mono-LoRA.
+    """Launch one comparison run across LoRAs. `selections` contains
+    [{dataset_id, checkpoint}]. Entries may carry `record_id`/`step`, which the
+    LoRA Canvas knows from the selected checkpoint. Stamp these unchanged on
+    cells, or read origin from the deployment tag (see checkpoint_origins).
+    All cells share run_id and seed for fairness. Use the shared `prompt` when
+    provided, otherwise each cell's dataset identity_prompt with its own trigger.
+    One selection produces a single-LoRA run.
 
-    Parité Generate (2026-07-01) : always-on LoRA, steps2 SDXL et les
-    réglages globaux (négatif/sampler/scheduler/precision/detail/tier) sont
-    partagés par TOUTES les cellules du run (gatés + validés par famille via _sanitize_gen_knobs).
+    Generate parity (2026-07-01): all cells share always-on LoRAs, SDXL steps2
+    and global negative/sampler/scheduler/precision/detail/tier settings, gated
+    and validated by family through _sanitize_gen_knobs.
 
-    `combine=True` (≥2 sélections) bascule du mode COMPARAISON (1 cellule par LoRA,
-    chacun seul) au mode PILE : les LoRA sélectionnés sont chargés ENSEMBLE dans la
-    MÊME génération, chacun au `weight` porté par sa sélection, et les triggers des
-    datasets correspondants sont TOUS injectés dans le prompt. L'axe `strengths`
-    n'a alors plus de sens (chaque LoRA a son poids) : il est remplacé par le poids
-    du 1er LoRA de la pile. La règle « un run = une seule famille » vaut aussi ici —
-    combiner un LoRA Krea et un LoRA SDXL est impossible (bases et workflows
-    différents), et c'est refusé avec un message nommant les familles.
+    `combine=True` with at least two selections switches from comparison
+    (one LoRA alone per cell) to a stack: load selected LoRAs together with
+    each selection's `weight` and inject all dataset triggers. Replace the
+    `strengths` axis with the head LoRA's weight, since each member has its own
+    weight. A run still uses one family: mixing Krea and SDXL is rejected with
+    a message naming the incompatible families and their bases/workflows.
 
-    `external_loras` (Canvas plugin nodes) : `[{filename, strength}]` de N'IMPORTE
-    QUEL fichier models/loras, stacké sur CHAQUE cellule via le même canal
-    `extra_loras` que les always-on — mais sans restriction au pool de la famille :
-    un nom introuvable est une erreur dure (jamais un skip silencieux), et l'arch
-    preflight le couvre comme un checkpoint normal."""
+    `external_loras` (Canvas plugin nodes) accepts [{filename, strength}] from
+    any models/loras file and stacks them on every cell through `extra_loras`,
+    without restricting them to the family pool. Missing files are hard errors,
+    never silent skips; architecture preflight covers them like checkpoints."""
     # Same door as create_run: one object in, the verbatim body below keeps
     # reading the locals it always has.
     settings = settings or StudioGenSettings()
@@ -3623,7 +3463,7 @@ def create_comparison_run(user_id, selections, strengths, settings=None, *,
     hires_denoise = settings.hires_denoise
     finish_sharpen = settings.finish_sharpen
     finish_grain = settings.finish_grain
-    # Case « Trigger word » — même contrat que create_run (False = prompt brut).
+    # Trigger word checkbox follows create_run: False means the raw prompt.
     inject_trigger = settings.inject_trigger is not False
     run_type, models = _cmp_resolve_run_family(selections)
     valid_models, seed, count, seeds, prompt_axis = _cmp_seed_and_prompts(
@@ -3643,12 +3483,11 @@ def create_comparison_run(user_id, selections, strengths, settings=None, *,
         prompt_axis, seeds, inject_trigger=inject_trigger,
         sampler_preset=knobs['sampler_preset'])
 
-    # Classes du ComfyUI cible, lues UNE fois pour tout le run (cf. create_run) →
-    # réécriture des nodes à variantes (NODE_CLASS_ALIASES) vers le nom réellement enregistré.
+    # Read target ComfyUI classes once per run (see create_run) and resolve
+    # NODE_CLASS_ALIASES to the actual registered names.
     available_classes = _target_node_classes()
-    # Origine (run + step) de chaque LoRA sélectionné : explicite quand l'appelant
-    # la connaît (canvas), sinon relue du tag de déploiement. Une seule résolution
-    # par nom de fichier distinct.
+    # Resolve each selected LoRA's origin (run and step) from explicit Canvas
+    # input or its deployment tag. Resolve once per distinct filename.
     origin_of = checkpoint_origins(
         [s.get('checkpoint') for s in selections if s.get('checkpoint')],
         {s['checkpoint']: s for s in selections
@@ -3667,12 +3506,11 @@ def create_comparison_run(user_id, selections, strengths, settings=None, *,
         run_type, batch_axis, prompt_axis, seeds, seed, run_id,
         extra_loras, origin_of, combine, stack_triggers,
         available_classes, inject_trigger=inject_trigger)
-    # `len(members)`, pas `len(stack_extra)` : celui-ci vit maintenant DANS la boucle
-    # et vaudrait la dernière combinaison — ou n'existerait pas du tout sur un plan
-    # vide. Le nombre de combinaisons est journalisé : c'est le premier chiffre
-    # qu'on cherche quand un balayage rend plus d'images que prévu.
+    # Use len(members), not len(stack_extra), which now lives inside the loop
+    # and would represent the last combination or be absent for an empty plan.
+    # Log the combination count to explain unexpectedly large image totals.
     logger.info(f"lora-test: {'combined' if combine else 'comparison'} run {run_id} -> "
-                f"{len(ids)} cellule(s), {len(selections) + len(members)} LoRA, "
+                f"{len(ids)} cell(s), {len(selections) + len(members)} LoRA, "
                 f"{len(combos) if combine else 1} combinaison(s), "
                 f"{len(prompt_axis)} prompt(s), seed {seed}")
     return {'created': len(ids), 'seed': seed, 'count': count, 'run_id': run_id, 'ids': ids}
@@ -3816,12 +3654,11 @@ def confirm_unknown_comfyui_restart(user_id, *, dataset_id=None, run_id=None,
 
 
 def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
-    """Reprend un run stoppé : ré-enfile toutes les cellules 'cancelled'/'failed'
-    avec LEURS réglages stockés (même prompt/seed/modèle/format/strength). C'est
-    le « relancer l'ancien run avec le même prompt » demandé.
+    """Resume a stopped run by re-enqueuing all 'cancelled'/'failed' cells with
+    their stored prompt/seed/model/format/strength settings.
 
-    Cible : si `run_id` est fourni, ré-enfile ce run ; sinon, comportement
-    historique par `dataset_id`."""
+    When `run_id` is provided, target that run; otherwise retain the historical
+    `dataset_id` scope."""
     if run_id is not None:
         if not _run_owned(user_id, run_id):
             raise ValueError('run not found')
@@ -3845,13 +3682,12 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
                 .filter(LoraTestImage.status.in_(['cancelled', 'failed'])).all())
     if not rows:
         raise ValueError('no cell to resume')
-    # Le run_id peut couvrir plusieurs datasets (run multi-LoRA) → on résout le
-    # dataset PAR cellule, avec un cache. La FAMILLE de chaque cellule est déduite du
-    # dossier de son checkpoint (sdxl/krea/z image) - pas du train_type du dataset, qui
-    # peut différer quand le même dataset a été entraîné sous plusieurs pipelines. La
-    # whitelist est donc cachée par (dataset, famille).
+    # A run_id can span datasets. Resolve and cache each cell's dataset, and
+    # derive family from its checkpoint folder rather than dataset train_type,
+    # which can differ for a dataset trained with several pipelines. Cache the
+    # allowlist by (dataset, family).
     ds_cache, allowed_cache = {}, {}
-    _sdxl_bases = None  # liste des bases SDXL, calculée à la demande (cache)
+    _sdxl_bases = None  # SDXL base list, lazily computed and cached
 
     def _ds(did):
         if did not in ds_cache:
@@ -3864,55 +3700,54 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
             d = _ds(did)
             allowed_cache[key] = {c['filename'] for c in list_test_checkpoints(d, fam)} if d else set()
         return allowed_cache[key]
-    # Classes du ComfyUI cible, lues UNE fois pour tout le resume → réécriture des nodes
-    # à variantes (NODE_CLASS_ALIASES) vers le nom réellement enregistré (cf. create_run).
+    # Read target ComfyUI classes once for resume and resolve NODE_CLASS_ALIASES
+    # to actual registered names, as in create_run.
     available_classes = _target_node_classes()
     n = 0
     for img in rows:
         cell_ds = _ds(img.dataset_id)
-        # Famille = dossier du checkpoint (repli train_type) → whitelist + base + dims + workflow.
+        # Checkpoint folder (train_type fallback) determines family, allowlist, base, dimensions and workflow.
         cell_family = (family_of_lora(img.checkpoint)
                        or getattr(cell_ds, 'train_type', None) or 'zimage').lower()
         allowed = _allowed(img.dataset_id, cell_family)
         if not cell_ds or img.checkpoint not in allowed:
-            continue  # dataset/checkpoint disparu → on saute
-        # Pool de bases selon la famille de CETTE cellule (SDXL → bases SDXL ; Krea →
-        # base fixe ; sinon Z-Image), sinon un resume SDXL retomberait sur une base Z-Image.
+            continue  # skip a missing dataset/checkpoint
+        # Use this cell's family base pool: SDXL bases, fixed Krea base, otherwise
+        # Z-Image. Otherwise an SDXL resume could fall back to a Z-Image base.
         if cell_family == 'sdxl':
             if _sdxl_bases is None:
                 _sdxl_bases = [m['filename'] for m in list_sdxl_base_models()]
             cell_models = _sdxl_bases
         elif cell_family == 'krea':
-            # None en tête : les cellules legacy (z_model NULL) et celles dont la
-            # base locale a disparu du disque retombent sur le UNET câblé, jamais
-            # sur un modèle arbitraire.
+            # Leading None ensures legacy z_model=NULL cells, or cells whose local
+            # base has disappeared, fall back to the workflow UNET, never an arbitrary
+            # model.
             cell_models = [None] + get_krea_models()
         else:
             cell_models = get_zimage_models()
         z_model = (img.z_model if (img.z_model and img.z_model in cell_models)
                    else (cell_models[0] if cell_models else None))
         aspect = img.aspect if img.aspect in TEST_ASPECTS else DEFAULT_ASPECT
-        # Palier + multiplicateur de résolution persistés → mêmes dims qu'au 1er run
-        # (sinon table fixe / multiplicateur 1.0 sur les cellules legacy sans la colonne).
+        # Persisted resolution tier and multiplier reproduce initial dimensions.
+        # Legacy cells without the column use the fixed table and multiplier 1.0.
         width, height = _aspect_dims(aspect, cell_family, getattr(img, 'resolution_tier', None),
                                      getattr(img, 'resolution_multiplier', None) or 1.0)
         prompt = ((img.prompt or '').strip()
                   or identity_prompt(cell_ds,
                                      with_trigger=getattr(img, 'inject_trigger', None) is not False))
         seed = img.seed or random.randint(1, 2**31 - 1)
-        # LoRA always-on stockés sur la cellule → réappliqués à l'identique au resume.
+        # Reapply each cell's stored always-on LoRAs unchanged on resume.
         try:
             cell_extra = json.loads(img.extra_loras) if img.extra_loras else None
         except (json.JSONDecodeError, TypeError):
             cell_extra = None
-        # Pile 🧬 : les triggers des MEMBRES vivent dans la copie persistée
-        # (entrées `combined`) — relus ici pour que le prompt du resume soit
-        # celui du lancement (ils étaient perdus : seul le trigger de tête
-        # repartait, cf. l'enfilement qui passe [tête] + stack_triggers).
+        # Read stacked member triggers from persisted combined entries so resume
+        # uses the launch prompt. Previously only the head trigger survived;
+        # enqueue uses [head] + stack_triggers.
         _stack_trigs = [e.get('trigger') for e in (cell_extra or [])
                         if isinstance(e, dict) and e.get('combined') and e.get('trigger')]
         try:
-            # Tous les réglages globaux (parité Generate) relus depuis la cellule → resume fidèle.
+            # Read all global settings from the cell for faithful Generate-parity resume.
             workflow = _build_cell_workflow(user_id, img.checkpoint, img.strength,
                                             prompt, seed, z_model, allowed,
                                             width=width, height=height,
@@ -3931,9 +3766,9 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
                                             # the setting, exactly as at its first run.
                                             hires_scale=getattr(img, 'hires_scale', None),
                                             hires_denoise=getattr(img, 'hires_denoise', None),
-                                            # Case « Trigger word » décochée au lancement
-                                            # (colonne False) → le resume reste fidèle ;
-                                            # sinon tête + triggers de pile, comme à l'enfilement.
+                                            # Preserve an unchecked Trigger word choice
+                                            # (False column) on resume; otherwise use
+                                            # head and stack triggers as at enqueue.
                                             trigger_word=(None
                                                           if getattr(img, 'inject_trigger', None) is False
                                                           else ([getattr(cell_ds, 'trigger_word', None)]
@@ -3959,8 +3794,8 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
 
 # --- Completion linking (called from job_queue) --------------------------------
 def _cleanup_output_file(filename, failed):
-    """Supprime de OUTPUT_DIR un fichier de sortie orphelin (complétion d'un job
-    dont la ligne n'est plus valable) - best-effort."""
+    """Best-effort removal of an orphaned OUTPUT_DIR file from a completed job
+    whose row is no longer valid."""
     if failed or not filename:
         return
     out_dir = _comfy_output_dir()
@@ -4075,13 +3910,13 @@ def link_completed_test_image(job_id, filename, failed=False, reason=None):
         img = LoraTestImage.query.filter_by(job_id=job_id).first()
     if img is None:
         logger.warning(f"lora-test link: no LoraTestImage row for job {job_id}")
-        _cleanup_output_file(filename, failed)  # job sans ligne (annulé/repris) → orphelin
+        _cleanup_output_file(filename, failed)  # job without a valid row (cancelled/resumed): orphaned output
         return
-    # Ne finaliser que les cellules ENCORE en attente : une complétion tardive d'un
-    # job dont la ligne a été annulée/reprise (nouveau job_id, statut ≠ pending) ne
-    # doit pas écraser le bon run - on jette son fichier au lieu de le déplacer.
+    # Finalize only still-pending cells. A late completion from a cancelled or
+    # resumed row (new job_id or nonpending status) must not overwrite the valid
+    # run. Discard its output file instead of moving it.
     if img.status != 'pending':
-        logger.info(f"lora-test link: ligne {img.id} déjà {img.status} pour job {job_id} - ignoré")
+        logger.info(f"lora-test link: row {img.id} already {img.status} for job {job_id} - skipped")
         _cleanup_output_file(filename, failed)
         return
     if failed:
@@ -4584,26 +4419,25 @@ def _model_label(z_model):
     return _basename(z_model).rsplit('.', 1)[0] if z_model else None
 
 
-# En deçà de ce nombre de votes, un score est statistiquement fragile → drapeau
-# « échantillon faible » dans l'UI (le tri reste Wilson, qui pénalise déjà les
-# petits échantillons ; ce flag ne sert qu'à AVERTIR l'œil).
+# Below this vote count, flag a statistically fragile sample in the UI.
+# Wilson sorting already penalizes small samples; the flag simply makes
+# that uncertainty visible.
 LOW_CONFIDENCE_MIN = 3
 
 
 def cell_scores(dataset_id, family=None) -> list[dict]:
-    """Score par CONFIG = (checkpoint, strength, format, modèle, cfg, steps),
-    agrégé sur toutes les images de cette config (cross-runs). Le modèle fait
-    partie de la clé : deux modèles sur la même case ne fusionnent plus.
+    """Score each configuration (checkpoint, strength, format, model, cfg, steps)
+    across all its images and runs. Model belongs to the key, so results from
+    different models do not merge into one cell.
 
-    `family` (optionnel) restreint aux cellules de cette pipeline - déduite du
-    dossier du checkpoint - pour que scores/best ne mélangent pas ZIT/SDXL/Krea d'un
-    même dataset entraîné sous plusieurs familles. Un checkpoint sans préfixe de
-    dossier (ancien nom) compte comme 'zimage'.
+    Optional `family` restricts cells to the pipeline inferred from checkpoint
+    folders, keeping ZIT/SDXL/Krea results separate for a multi-family dataset.
+    Legacy checkpoints without a folder prefix count as 'zimage'.
 
-    `score` (👍−👎) reste exposé pour l'affichage, mais le TRI se fait sur `rank`
-    = borne basse de Wilson sur le taux de 👍 (taux × confiance) - pas sur le
-    compte brut, qui biaisait vers les configs simplement plus testées. Tri
-    best-first : rank ↓, nb de votes ↓ (confiance), strength ↑ (anti-overfit)."""
+    Expose net likes-minus-dislikes as `score`, but sort by `rank`: the Wilson
+    lower bound of the like rate combines rate and confidence, avoiding bias
+    toward configurations with more tests. Best-first order is rank descending,
+    vote count descending (confidence), strength ascending (anti-overfitting)."""
     rows = _cells().filter_by(dataset_id=dataset_id).all()
     # Failed cells produced no image and can't be judged — exclude them so a broken
     # config doesn't inflate the 'images' denominator or otherwise pollute the
@@ -4630,17 +4464,17 @@ def cell_scores(dataset_id, family=None) -> list[dict]:
     for e in agg.values():
         e['score'] = e['likes'] - e['dislikes']
         e['rank'] = round(_wilson_lower_bound(e['likes'], e['voted']), 4)
-        # Taux d'approbation (likes/votés) - None si rien voté (pas de 0/0 trompeur).
+        # Approval rate (likes/voted): None without votes to avoid a misleading 0/0.
         e['like_rate'] = round(e['likes'] / e['voted'], 4) if e['voted'] else None
-        # Confiance : drapeau quand l'échantillon de votes est trop mince.
+        # Flag a vote sample too small for confidence.
         e['low_confidence'] = e['voted'] < LOW_CONFIDENCE_MIN
     return sorted(agg.values(),
                   key=lambda e: (-e['rank'], -e['voted'], e['strength']))
 
 
 def model_net_scores(dataset_id) -> dict:
-    """Sentiment net par modèle (👍−👎 sur toutes ses images) - exposé pour
-    l'affichage. Le gate de best_cell, lui, utilise le TAUX (voir _model_like_rates)."""
+    """Net sentiment per model (likes minus dislikes across its images), exposed
+    for display. best_cell uses the rate instead (see _model_like_rates)."""
     rows = _cells().filter_by(dataset_id=dataset_id).all()
     net = {}
     for r in rows:
@@ -4652,8 +4486,9 @@ def model_net_scores(dataset_id) -> dict:
 
 
 def _model_like_rates(scores) -> dict:
-    """Taux de 👍 par modèle (likes/voted) agrégé sur ses configs - sert à
-    écarter un modèle globalement mal noté. {model: rate|None} (None = 0 vote)."""
+    """Like rate per model (likes/voted), aggregated across its configurations,
+    for evaluating overall model ratings. Return {model: rate|None}; None means
+    no votes."""
     acc = {}
     for e in scores:
         likes, voted = acc.get(e['z_model'], (0, 0))
@@ -4662,12 +4497,12 @@ def _model_like_rates(scores) -> dict:
 
 
 def model_comparison(dataset_id, scores=None) -> list[dict]:
-    """Agrégat de votes PAR modèle de base (z_model), pour comparer les bases
-    ÉQUITABLEMENT. Classé par taux (Wilson lower bound), PAS par compte brut - qui
-    favorise mécaniquement le modèle le plus testé (biais de volume). Chaque entrée
-    porte images/voted pour rendre l'échantillon visible + low_confidence.
+    """Aggregate votes per base model (z_model) for fair comparisons.
+    Rank by rate (Wilson lower bound), not raw totals, which favor models tested
+    more often. Each entry exposes images/voted and low_confidence to make the
+    sample size visible.
 
-    `scores` partageable (cf. best_cell) pour éviter de re-scanner la table."""
+    Accept shared `scores` (see best_cell) to avoid rescanning the table."""
     scores = cell_scores(dataset_id) if scores is None else scores
     acc = {}
     for e in scores:
@@ -4696,12 +4531,11 @@ def model_comparison(dataset_id, scores=None) -> list[dict]:
 
 
 def checkpoint_model_breakdown(dataset_id, scores=None) -> list[dict]:
-    """Par (checkpoint, z_model) : nb d'images générées / votées + taux de 👍.
-    C'est le « nombre de générées par modèle, par LoRA » - le dénominateur qui
-    montre où l'échantillon est mince (ex. Lola testé 12× sur bigLove vs 3× sur
-    l'officiel). Trié par label de checkpoint puis taux décroissant.
+    """For each (checkpoint, z_model), return generated/voted counts and like rate.
+    These denominators expose thin samples when one LoRA has been tested more
+    on one base than another. Sort by checkpoint label, then descending rate.
 
-    `scores` partageable (cf. best_cell)."""
+    Accept shared `scores` (see best_cell)."""
     scores = cell_scores(dataset_id) if scores is None else scores
     known = _known_checkpoints(db.session.get(FaceDataset, dataset_id))
     acc = {}
@@ -4727,17 +4561,19 @@ def checkpoint_model_breakdown(dataset_id, scores=None) -> list[dict]:
 
 
 def best_cell(dataset_id, scores=None) -> dict | None:
-    """Config recommandée d'après les votes :
-      1. candidats = configs nettes positives (👍 > 👎) ;
-      2. tri par `rank` Wilson ↓ (taux × confiance) - le MÉRITE de la config prime ;
-      3. départages : nb de votes ↓ (confiance), puis taux de 👍 GLOBAL du modèle ↓
-         (à config équivalente, on préfère le modèle mieux noté), puis strength ↑.
-    Le sentiment du modèle est un DÉPARTAGE, pas un filtre : une config nettement
-    mieux notée n'est jamais écartée parce que son modèle est moyen ailleurs (sinon
-    le sweep par-case n'aurait aucun sens). Retourne None tant que rien n'est aimé.
+    """Recommend a configuration from votes.
 
-    `scores` peut être passé (déjà calculé) pour éviter de re-scanner la table -
-    studio_payload partage un seul cell_scores entre best_cell/best_preset/best_per_checkpoint."""
+    1. Candidates have positive net sentiment (likes > dislikes).
+    2. Rank by descending Wilson `rank` (rate x confidence).
+    3. Break ties by descending vote count, descending global model like rate,
+       then ascending strength.
+
+    Model sentiment is a tiebreaker, not a filter: a clearly better configuration
+    is never excluded merely because its model performs moderately elsewhere.
+    Return None until a configuration is liked.
+
+    Accept precomputed `scores` to avoid rescanning the table. studio_payload
+    shares one cell_scores result across best_cell/best_preset/best_per_checkpoint."""
     scores = cell_scores(dataset_id) if scores is None else scores
     candidates = [e for e in scores if e['likes'] > e['dislikes']]
     if not candidates:
@@ -4746,15 +4582,15 @@ def best_cell(dataset_id, scores=None) -> dict | None:
 
     def model_pref(m):
         r = rates.get(m)
-        return r if r is not None else 0.5  # modèle sans vote = neutre
+        return r if r is not None else 0.5  # a model without votes is neutral
     candidates.sort(key=lambda e: (-e['rank'], -e['voted'],
                                    -model_pref(e['z_model']), e['strength']))
     return candidates[0]
 
 
 def best_preset(dataset_id, scores=None) -> dict | None:
-    """La config recommandée (best_cell, modèle inclus) enrichie d'une image
-    représentative (prompt/seed/filename) de CETTE config exacte."""
+    """The recommended configuration (best_cell, including model), enriched with
+    a representative image's prompt/seed/filename from that exact configuration."""
     bc = best_cell(dataset_id, scores=scores)
     if not bc:
         return None
@@ -4776,12 +4612,12 @@ def best_preset(dataset_id, scores=None) -> dict | None:
 
 
 def best_per_checkpoint(dataset_id, scores=None) -> list[dict]:
-    """Meilleur réglage PAR checkpoint (les votes varient beaucoup d'un modèle à
-    l'autre - un best global ne suffit pas). Pour chaque checkpoint ayant ≥1 config
-    nette positive (👍>👎), retourne sa config la mieux notée (MÊME tri Wilson que
-    best_cell), enrichie d'une image représentative. Trié par rank décroissant.
+    """Return the best setting per checkpoint, since votes vary across models.
+    For each checkpoint with at least one net-positive configuration, select
+    its best configuration using best_cell's Wilson ordering and attach a
+    representative image. Sort by descending rank.
 
-    `scores` partageable (cf. best_cell) pour éviter de re-scanner la table."""
+    Accept shared `scores` (see best_cell) to avoid rescanning the table."""
     scores = cell_scores(dataset_id) if scores is None else scores
     candidates = [e for e in scores if e['likes'] > e['dislikes']]
     if not candidates:
@@ -4794,7 +4630,7 @@ def best_per_checkpoint(dataset_id, scores=None) -> list[dict]:
     candidates.sort(key=lambda e: (-e['rank'], -e['voted'],
                                    -model_pref(e['z_model']), e['strength']))
     best_by_cp = {}
-    for e in candidates:  # déjà triés → le 1er vu par checkpoint = le meilleur
+    for e in candidates:  # already sorted: the first entry per checkpoint is best
         best_by_cp.setdefault(e['checkpoint'], e)
     out = []
     for bc in best_by_cp.values():
@@ -4816,9 +4652,9 @@ def best_per_checkpoint(dataset_id, scores=None) -> list[dict]:
 
 
 def _best_map(ds) -> dict:
-    """best_settings persistés en map {famille: réglage}. RÉTRO-COMPAT : un ancien
-    format PLAT (un seul réglage, repérable à sa clé top-level `lora_filename`) est
-    rattaché au train_type du dataset. Retourne {} si vide/illisible."""
+    """Read best_settings as a {family: settings} map. For backward compatibility,
+    attach a legacy flat object (identified by top-level `lora_filename`) to the
+    dataset's train_type. Return {} for empty or unreadable values."""
     if not ds.best_settings:
         return {}
     try:
@@ -4833,7 +4669,7 @@ def _best_map(ds) -> dict:
 
 
 def _best_for_family(ds, family) -> dict | None:
-    """Réglage mémorisé pour CETTE famille (None si aucun)."""
+    """Return the saved setting for this family, or None."""
     return _best_map(ds).get((family or 'zimage').lower())
 
 
@@ -4856,9 +4692,9 @@ def best_settings_lora_filenames(ds) -> list[str]:
         fn = setting.get('lora_filename')
         if fn and fn not in out:
             out.append(str(fn))
-        # Une pile épinglée épingle TOUS ses LoRA : supprimer le second membre casse
-        # le réglage gagnant aussi sûrement que supprimer celui de tête, le garde-fou
-        # de suppression doit donc les voir tous.
+        # Pinning a stack pins every member. Deleting the second LoRA breaks the
+        # winning setting just as deleting the head would, so deletion guards must
+        # check all members.
         for member in setting.get('stack') or []:
             mfn = member.get('lora_filename') if isinstance(member, dict) else None
             if mfn and mfn not in out:
@@ -4869,11 +4705,12 @@ def best_settings_lora_filenames(ds) -> list[str]:
 def set_best_settings(user_id, dataset_id, checkpoint, strength,
                       z_model=None, cfg=None, steps=None, steps2=None, aspect=None,
                       stack=None) -> dict:
-    """Persiste la config gagnante COMPLÈTE - checkpoint, strength, modèle/cfg/steps(1+2)/
-    format. Mémorisé PAR FAMILLE (un même dataset a un meilleur réglage distinct en ZIT,
-    SDXL, Krea) : la famille est déduite du dossier du checkpoint. Le checkpoint doit
-    appartenir à la whitelist de SA famille ; le modèle, s'il est fourni, est validé
-    contre les bases du bon type (Krea = base fixe → modèle ignoré). Retourne le réglage."""
+    """Persist the full winning checkpoint, strength, model, cfg, steps(1+2), and
+    format configuration. Save by family, inferred from the checkpoint folder,
+    so one dataset can retain distinct ZIT, SDXL and Krea settings. The checkpoint
+    must belong to its family's allowlist; validate a supplied model against
+    bases of the matching type (a fixed Krea base ignores the model). Return
+    the saved setting."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -4887,17 +4724,17 @@ def set_best_settings(user_id, dataset_id, checkpoint, strength,
         raise ValueError(f'invalid strength: {strength!r}')
     if not 0.05 <= strength <= 4.0:
         raise ValueError(f'strength out of range: {strength}')
-    # Whitelist de bases selon la FAMILLE (SDXL → bases SDXL ; Krea → UNET locaux
-    # scannés ; sinon Z-Image), sinon une base d'une autre famille était jetée.
+    # Allow bases by family: SDXL bases, scanned local Krea UNETs, otherwise
+    # Z-Image. This prevents rejecting a valid base from another family.
     if family == 'sdxl':
         allowed_bases = {m['filename'] for m in list_sdxl_base_models()}
     elif family == 'krea':
         allowed_bases = set(get_krea_models())
     else:
         allowed_bases = set(get_zimage_models())
-    z_model = z_model or None  # '' (entrée « Official » Krea) ≡ défaut → NULL
+    z_model = z_model or None  # '' (Krea Official entry) means the default: NULL
     if z_model and z_model not in allowed_bases:
-        z_model = None  # modèle inconnu → on ne l'enregistre pas (au lieu de mentir)
+        z_model = None  # do not persist an unknown model
     try:
         cfg = round(float(cfg), 2) if cfg is not None else None
     except (TypeError, ValueError):
@@ -4911,13 +4748,11 @@ def set_best_settings(user_id, dataset_id, checkpoint, strength,
     except (TypeError, ValueError):
         steps2 = None
     aspect = aspect if aspect in TEST_ASPECTS else None
-    # PILE (🧬 combine) : le réglage gagnant d'une pile, ce sont SES poids — pas un
-    # checkpoint isolé. Le LoRA de tête reste dans `lora_filename`/`strength`, donc
-    # tous les lecteurs existants (pin ★ du Canvas, « ★ Appliquer », garde-fou de
-    # suppression, badge du workspace) continuent de fonctionner sans rien savoir des
-    # piles ; les membres empilés s'ajoutent à côté, dans `stack`. Chaque membre est
-    # revalidé contre les checkpoints déployés de SON dataset (anti path-injection :
-    # le corps de la requête est de la donnée, pas une source de chemins).
+    # A stack's winning setting includes all its weights. Keep the head in
+    # lora_filename/strength so existing Canvas pins, Apply actions, deletion
+    # guards and workspace badges keep working. Add other members in `stack`.
+    # Revalidate each member against its own dataset's deployed checkpoints:
+    # request data must never become a source of arbitrary paths.
     stack_out = []
     for member in (stack or []):
         if not isinstance(member, dict):
@@ -4943,8 +4778,8 @@ def set_best_settings(user_id, dataset_id, checkpoint, strength,
         'aspect': aspect,
         'family': family,
         'decided_at': naive_utcnow().isoformat(),
-        # Absent (et non `[]`) quand ce n'est pas une pile : un réglage mono-LoRA
-        # d'avant cette vue et un réglage mono-LoRA d'aujourd'hui restent identiques.
+        # Omit the key rather than writing [] for a single LoRA, preserving the
+        # same shape for older and current single-LoRA settings.
         **({'stack': stack_out} if stack_out else {}),
     }
     best_map = _best_map(ds)
@@ -4955,8 +4790,8 @@ def set_best_settings(user_id, dataset_id, checkpoint, strength,
 
 
 def clear_best_settings(user_id, dataset_id, family=None) -> bool:
-    """Efface le réglage mémorisé. `family` → n'efface que cette famille (les autres
-    survivent) ; absent → efface tout. Idempotent (pas d'erreur s'il n'y a rien)."""
+    """Clear saved settings. With `family`, clear only that family; otherwise
+    clear all. Idempotent when no setting exists."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -4970,15 +4805,15 @@ def clear_best_settings(user_id, dataset_id, family=None) -> bool:
     return True
 
 
-# --- Scoring facial objectif (« best epoch » auto - méthode jandordoe) --------
+# --- Objective facial scoring (automatic best epoch) -----------------------
 def score_faces(user_id, dataset_id, family=None) -> dict:
-    """Score InsightFace (antelopev2, subprocess CPU - ne touche PAS le GPU) de
-    chaque cellule TERMINÉE de la famille vs la RÉFÉRENCE du dataset. Persiste
-    face_score/face_state par cellule, puis renvoie le classement par checkpoint.
+    """Score each completed family cell against the dataset reference using
+    InsightFace (antelopev2 in a CPU subprocess, without touching the GPU).
+    Persist face_score/face_state per cell, then return checkpoint rankings.
 
-    C'est l'automatisation de la méthode jandordoe : générer les checkpoints à
-    seed fixe (le Studio le fait déjà), puis choisir l'epoch au MEILLEUR score
-    facial mesuré au lieu du dernier. Idempotent : rescorer écrase les scores."""
+    Automate objective epoch selection: render checkpoints with a fixed seed
+    (as Studio already does), then choose the best measured face score instead
+    of the latest epoch. Idempotent: rescoring overwrites existing scores."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -5007,8 +4842,8 @@ def score_faces(user_id, dataset_id, family=None) -> dict:
     if not by_path:
         return {'scored': 0, 'total': 0, 'scoring_error': None, 'ranking': []}
     from .face_similarity import score_dataset_faces
-    # scoring_error ({kind, detail} | None) remonte jusqu'au toast : un scorer
-    # cassé doit dire POURQUOI, pas « done — 0/14 » en vert (user-reported).
+    # Expose scoring_error ({kind, detail} | None) in the toast. A broken
+    # scorer must explain why instead of showing a successful "done - 0/14".
     results, scoring_error = score_dataset_faces(ref_path, list(by_path.keys()))
     scored = 0
     for p, r in by_path.items():
@@ -5020,15 +4855,15 @@ def score_faces(user_id, dataset_id, family=None) -> dict:
         scored += 1
     db.session.commit()
     logger.info(f"lora-test: score-faces dataset {dataset_id} ({eff}) -> "
-                f"{scored}/{len(by_path)} cellule(s) scorée(s)")
+                f"{scored}/{len(by_path)} cell(s) scored")
     return {'scored': scored, 'total': len(by_path), 'scoring_error': scoring_error,
             'ranking': face_ranking(dataset_id, eff)}
 
 
 def face_ranking(dataset_id, family) -> list:
-    """Classement des checkpoints par similarité faciale MOYENNE (cellules déjà
-    scorées, famille donnée). [{checkpoint, label, avg, n}] trié meilleur d'abord -
-    le front marque le 1er comme « 🏆 best epoch »."""
+    """Rank checkpoints by mean facial similarity for previously scored cells in
+    the given family. Return [{checkpoint, label, avg, n}], best first; the
+    frontend marks the first as the best epoch."""
     rows = (_cells().filter_by(dataset_id=dataset_id)
             .filter(LoraTestImage.face_score.isnot(None)).all())
     rows = _filter_rows_by_family(rows, family)
@@ -5096,18 +4931,18 @@ def delete_prompt(user_id, dataset_id, prompt) -> int:
                 fds._restore_from_trash(destination, original)
             raise
     n = len(rows)
-    logger.info(f"lora-test: prompt supprimé sur dataset {dataset_id} -> {n} cellule(s)")
+    logger.info(f"lora-test: prompt deleted from dataset {dataset_id} -> {n} cell(s)")
     return n
 
 # --- Payload (poll) ------------------------------------------------------------
 def studio_payload(user_id, dataset_id, family=None) -> dict | None:
-    """Everything the studio panel needs in one poll, SCOPÉ à une FAMILLE (pipeline).
+    """Everything the Studio panel needs in one poll, scoped to one family.
 
-    `family` = ZIT/SDXL/Krea sélectionnée par l'utilisateur ; résolue à la famille
-    effective (parmi celles réellement présentes pour ce dataset). Checkpoints, grille,
-    scores, best et bases sont tous restreints à cette famille - un même dataset
-    entraîné sous plusieurs pipelines n'en mélange plus les résultats. `available_families`
-    liste les familles présentes (pour le sélecteur) ; `family` renvoie l'effective."""
+    Resolve the user's selected ZIT/SDXL/Krea `family` to an available family
+    for this dataset. Scope checkpoints, grid, scores, best settings and bases
+    to it, keeping results separate when a dataset trains with multiple
+    pipelines. `available_families` lists selector choices; `family` returns
+    the resolved family."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         return None
@@ -5115,29 +4950,28 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
     eff = _resolve_family(ds, family, fams)
     rows_all = (_cells().filter_by(dataset_id=dataset_id)
                 .order_by(LoraTestImage.id.asc()).all())
-    # Grille = cellules de la famille effective (famille déduite du checkpoint,
-    # les guests sans dossier héritant du run).
+    # Grid cells use the resolved family, inferred from checkpoints; guests
+    # without folders inherit the run family.
     rows = _filter_rows_by_family(rows_all, eff)
     activity = _queue_activity(rows_all)
     best = _best_for_family(ds, eff)
     known = _known_checkpoints(ds, eff)
-    # Pool de bases selon la FAMILLE effective : SDXL → checkpoints SDXL (forme
-    # {value,label}) ; Krea → base fixe (UNET du workflow, aucun sélecteur) ; sinon
-    # modèles Z-Image. `train_type` = famille effective (le front adapte picker + handoff).
+    # Base pool for the resolved family: SDXL checkpoints as {value,label},
+    # fixed Krea workflow UNET without a selector, otherwise Z-Image models.
+    # train_type is the resolved family used by frontend pickers and handoff.
     base_note = None
-    # Repli CFG/steps de la famille. Krea l'ajuste sur la base RÉELLEMENT élue :
-    # une base non distillée élue par défaut avec les chiffres Turbo (cfg 1 /
-    # 8 steps) rend une esquisse floue lue comme « l'entraînement a raté ».
+    # Family CFG/steps fallback. Krea adjusts to the actual elected base:
+    # Turbo settings (cfg 1, eight steps) on a non-distilled default produce
+    # blurry sketches that users could mistake for failed training.
     default_cfg, default_steps = DEFAULT_CFG, DEFAULT_STEPS
     if eff == 'sdxl':
         z_models = [{'value': m['filename'], 'label': m['label']}
                     for m in list_sdxl_base_models()]
     elif eff == 'krea':
-        # Bases Krea locales ALTERNATIVES au défaut élu. L'entrée de tête (value
-        # vide) reste le défaut ; son libellé dit QUEL fichier c'est quand ce n'est
-        # pas celui que Setup installe. Aucune alternative sur disque → liste vide,
-        # le front cache le sélecteur (comportement historique) — mais `base_note`,
-        # lui, sort quand même : c'est justement cette install-là qui doit le lire.
+        # Local Krea alternatives exclude the elected default. The leading empty
+        # value still means default, with a label naming a non-Setup file when used.
+        # No local alternatives means an empty list and hidden selector, as before.
+        # Still expose base_note: that installation particularly needs the warning.
         _krea_entry = krea_default_base_entry()
         base_note = _krea_entry['note']
         if _krea_entry['source']:
@@ -5155,15 +4989,14 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         'trigger_word': ds.trigger_word,
         'train_type': eff,
         'family': eff,
-        # Familles entraînées de ce dataset (sélecteur) : [{family,label,count}].
+        # Trained families for the dataset selector: [{family,label,count}].
         'available_families': fams,
-        # LoRA « always-on » disponibles pour cette famille (style/utilitaire, hors batch).
+        # Always-on style/utility LoRAs available for this family, outside the batch axis.
         'permanent_loras': permanent_lora_candidates(eff),
         'prompt': identity_prompt(ds),
         'z_models': z_models,
-        # Ce que le défaut de base a d'anormal, quand il en a (Krea : le fichier
-        # que Setup installe n'est pas là / celui élu porte autre chose que des
-        # poids). None le reste du temps — le front n'affiche rien.
+        # Explain an unusual default base, such as a missing Setup Krea file or
+        # an elected file without weights. Otherwise None hides the frontend note.
         'base_note': base_note,
         'aspects': list(TEST_ASPECTS.keys()),
         'default_aspect': DEFAULT_ASPECT,
@@ -5174,20 +5007,18 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         # Turbo's cfg 1 / 8 steps. `default_cfg`/`default_steps` stay the fallback for
         # every base not listed here, so an older frontend behaves exactly as before.
         'model_defaults': studio_model_defaults(eff, z_models),
-        # 2e passe (detail daemon) : exposée UNIQUEMENT pour SDXL (le workflow HQ a deux
-        # passes). NULL sinon → le frontend ne montre pas le 2e picker de steps.
+        # Expose the second detail-daemon pass only for SDXL's two-pass HQ workflow.
+        # Otherwise NULL hides the frontend's second steps picker.
         'steps2_choices': (STEPS_CHOICES if eff == 'sdxl' else None),
         'default_steps2': (DEFAULT_STEPS if eff == 'sdxl' else None),
         'max_images': MAX_TEST_IMAGES,
-        # Le rythme RÉEL de cette machine sur cette pipeline (médiane observée),
-        # ou null quand l'historique est trop court : l'estimation de durée du
-        # panneau cesse d'être « ~12 s/image » sur toutes les cartes du monde.
+        # Observed median throughput for this machine and pipeline, or null when
+        # history is too short. This replaces a universal "~12 s/image" estimate.
         'seconds_per_image': measured_seconds_per_image(eff),
-        # Superset du serializer PARTAGÉ (cloud_training.gallery_image) — voir
-        # stack_variants : mêmes faits que la Gallery, plus les clés que seule
-        # cette grille lit. `run_id` : la colonne a toujours été écrite
-        # (`create_run`) mais n'était pas servie → la grille devinait un run
-        # depuis run_seed+prompt, et un batch de N prompts semblait N runs.
+        # Extend the shared cloud_training.gallery_image serializer (see
+        # stack_variants), retaining Gallery facts plus grid-specific keys. run_id
+        # was always stored by create_run but previously omitted here, making the
+        # grid infer runs from run_seed+prompt and display N prompts as N runs.
         'cells': [{**_shared_cell(r),
                    'label': _checkpoint_display_label(r.checkpoint, known),
                    'filename': r.filename, 'run_seed': r.run_seed,
@@ -5203,25 +5034,25 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
                    'error': r.error if r.status == 'failed' else None,
                    'face_state': r.face_state}
                   for r in rows],
-        # cell_scores scanne la table une fois (filtré famille) → partagé entre
-        # best_cell/best_preset/best_per_checkpoint (sinon 4 scans identiques).
+        # Share one family-filtered cell_scores table scan across best_cell,
+        # best_preset and best_per_checkpoint instead of four identical scans.
         'scores': (_scores := cell_scores(dataset_id, family=eff)),
         'best_cell': best_cell(dataset_id, scores=_scores),
         'best_preset': best_preset(dataset_id, scores=_scores),
         'best_per_model': best_per_checkpoint(dataset_id, scores=_scores),
-        # Comparaison équitable des bases (par z_model) + détail par (checkpoint, base).
+        # Fair base comparisons by z_model, plus checkpoint/base breakdowns.
         'model_comparison': model_comparison(dataset_id, scores=_scores),
         'checkpoint_breakdown': checkpoint_model_breakdown(dataset_id, scores=_scores),
-        # Classement facial objectif des checkpoints (« best epoch », cellules scorées).
+        # Objective facial checkpoint ranking from scored cells (best epoch).
         'face_ranking': face_ranking(dataset_id, eff),
         'pending': activity['pending'],
         'queued': activity['queued'],
         'generating': activity['generating'],
         'running': activity['running'],
-        # Cellules stoppées/échouées reprenables - global (resume opère sur tout le dataset).
+        # Resumable stopped/failed cells across the dataset.
         'resumable': sum(1 for r in rows_all if r.status in ('cancelled', 'failed')),
-        # Prompts récents distincts (family-agnostiques) pour recharger/relancer un
-        # run - GLOBAUX à l'utilisateur (tous datasets), plus cloisonnés par dataset.
+        # Distinct recent prompts for reloading/rerunning: global to the user
+        # across all datasets and families.
         'recent_prompts': user_recent_prompts(ds.user_id),
         'gpu_busy': gpu_busy_reason(),
         'comfyui_recovery': _unknown_submit_recovery(rows, activity),
@@ -5231,8 +5062,8 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
 
 
 def lora_net_scores(run_id) -> list[dict]:
-    """Classement PAR-LoRA d'un run : agrège les votes des cellules par dataset_id
-    (= un LoRA). Trié par score net (likes - dislikes) puis likes, décroissant."""
+    """Rank LoRAs within a run by aggregating cell votes per dataset_id (one LoRA).
+    Sort by descending net score (likes minus dislikes), then descending likes."""
     rows = _cells().filter_by(run_id=run_id).filter(
         LoraTestImage.filename.isnot(None)).all()
     agg = {}
@@ -5253,8 +5084,8 @@ def lora_net_scores(run_id) -> list[dict]:
 
 
 def studio_payload_run(user_id, run_id) -> dict | None:
-    """Payload d'un run (mono ou multi-LoRA). Requêté par run_id + ajoute le
-    classement par-LoRA et la liste des LoRA présents."""
+    """Payload for one single- or multi-LoRA run, queried by run_id and enriched
+    with per-LoRA rankings and the list of participating LoRAs."""
     rows = (_cells().filter_by(run_id=run_id)
             .order_by(LoraTestImage.id.asc()).all())
     if not rows:
@@ -5273,8 +5104,8 @@ def studio_payload_run(user_id, run_id) -> dict | None:
         'run_id': run_id,
         'loras': [{'dataset_id': d, 'lora_label': _lbl(d), 'dataset_name': _name(d)}
                   for d in sorted(ds_ids)],
-        # Superset du serializer PARTAGÉ (cloud_training.gallery_image) — même
-        # doctrine que studio_payload ci-dessus.
+        # Extend the shared cloud_training.gallery_image serializer, using the
+        # same contract as studio_payload above.
         'cells': [{**_shared_cell(r),
                    'label': _basename(r.checkpoint).rsplit('.', 1)[0],
                    'filename': r.filename, 'run_seed': r.run_seed, 'status': r.status,
@@ -5285,10 +5116,10 @@ def studio_payload_run(user_id, run_id) -> dict | None:
                    'combined_loras': _combined_lora_labels(r),
                    'error': r.error if r.status == 'failed' else None} for r in rows],
         'lora_ranking': lora_net_scores(run_id),
-        # Run PILE (🧬 combine) : sa composition (chaque LoRA, son poids, son trigger)
-        # et les autres relances de la même pile. Le classement par-LoRA ci-dessus est
-        # alors trompeur (une pile n'a qu'un LoRA « testé ») : le front montre la
-        # composition à sa place. `stack` vaut None sur un run de comparaison.
+        # Stack run composition (each LoRA, weight and trigger), plus other runs
+        # of the same stack. Per-LoRA rankings would mislead because a stack has
+        # only one tested head; the frontend shows composition instead.
+        # `stack` is None for a comparison run.
         'stack': (_stack := stack_of_row(rows[0])),
         'stack_variants': stack_variants(run_id, rows) if _stack else [],
         'pending': activity['pending'],
@@ -5303,16 +5134,15 @@ def studio_payload_run(user_id, run_id) -> dict | None:
 
 
 def _recent_prompts(rows, limit=None) -> list[dict]:
-    """Prompts distincts utilisés (récent→ancien) AVEC une vignette : une image 👍
-    générée avec ce prompt (à défaut, la plus récente terminée), + le nombre d'images.
-    Permet de voir ce que fait chaque prompt dans le menu. `thumb_dataset_id` porte
-    le dataset de la vignette (nécessaire quand les rows couvrent PLUSIEURS datasets).
-    `limit=None` (défaut) = tous les prompts distincts trouvés dans `rows` — le
-    plafond arbitraire (10) a été retiré à la demande de l'utilisateur ; la seule
-    borne restante est le scan des 1500 dernières cellules dans user_recent_prompts.
-    Retour: [{prompt, thumbnail(filename|None), thumb_dataset_id, thumb_rating, count}]."""
-    seen = {}  # prompt -> dict (ordre d'insertion = récent→ancien)
-    for r in sorted(rows, key=lambda x: -x.id):  # plus récent d'abord
+    """Distinct used prompts, newest first, with thumbnails and image counts.
+    Prefer a liked image generated with the prompt, otherwise the latest
+    completed image. `thumb_dataset_id` identifies the thumbnail's dataset when
+    rows span several datasets. `limit=None` returns all distinct prompts in
+    `rows`; the arbitrary limit of ten was removed at the user's request.
+    Only user_recent_prompts' scan of the latest 1500 cells remains bounded.
+    Return [{prompt, thumbnail(filename|None), thumb_dataset_id, thumb_rating, count}]."""
+    seen = {}  # prompt -> dict, inserted newest to oldest
+    for r in sorted(rows, key=lambda x: -x.id):  # newest first
         p = (r.prompt or '').strip()
         if not p:
             continue
@@ -5324,23 +5154,22 @@ def _recent_prompts(rows, limit=None) -> list[dict]:
         e = seen[p]
         if r.filename:
             e['count'] += 1
-            if r.rating == 1 and e['thumb_rating'] != 1:      # préférer un 👍 (le + récent)
+            if r.rating == 1 and e['thumb_rating'] != 1:      # prefer the most recent liked image
                 e['thumbnail'], e['thumb_rating'] = r.filename, 1
                 e['thumb_dataset_id'] = r.dataset_id
-            elif e['thumbnail'] is None:                       # sinon la 1re terminée vue (= + récente)
+            elif e['thumbnail'] is None:                       # otherwise use the first completed image seen (the most recent)
                 e['thumbnail'], e['thumb_rating'] = r.filename, (r.rating or 0)
                 e['thumb_dataset_id'] = r.dataset_id
     return list(seen.values())
 
 
 def user_recent_prompts(user_id, limit=None) -> list[dict]:
-    """Prompts de test récents de l'UTILISATEUR, TOUS datasets confondus (demande
-    2026-07-03 : la mémoire des prompts/presets ne doit plus être cloisonnée par
-    dataset - un prompt réglé sur Emma doit se recharger sur Adele). `limit=None`
-    (défaut) = tous les prompts distincts trouvés (le plafond de 10 a été retiré à
-    la demande de l'utilisateur). La seule borne restante est le scan des 1500
-    dernières cellules (perf) ; chaque entrée porte `thumb_dataset_id` pour que
-    le front construise l'URL de vignette du BON dataset."""
+    """The user's recent test prompts across all datasets, as requested on
+    2026-07-03: prompt/preset history is shared across datasets.
+    `limit=None` returns all distinct prompts; the limit of ten was removed
+    at the user's request. Scan at most the latest 1500 cells for performance.
+    Each entry includes `thumb_dataset_id` so the frontend builds the correct
+    dataset thumbnail URL."""
     ds_ids = [d.id for d in FaceDataset.query.filter_by(user_id=str(user_id)).all()]
     if not ds_ids:
         return []
@@ -5350,8 +5179,8 @@ def user_recent_prompts(user_id, limit=None) -> list[dict]:
 
 
 def delete_prompt_everywhere(user_id, prompt) -> int:
-    """Supprime un prompt récent (et ses cellules/images de test) sur TOUS les
-    datasets de l'utilisateur - pendant « suppression » de la liste globale."""
+    """Delete a recent prompt and its test cells/images across all the user's
+    datasets, matching deletion from the global history list."""
     p = (prompt or '').strip()
     if not p:
         return 0

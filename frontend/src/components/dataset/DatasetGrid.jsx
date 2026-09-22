@@ -37,12 +37,10 @@ const AUTO_TRIAGE_HELP = [
   'After an Apply, move the slider and Re-apply to re-sort everything it triaged this session at the new threshold.',
 ];
 
-// Thumbnail size (S/M/L): 3 crans plutôt qu'un slider (fragile à la souris, pas
-// de granularité utile ici). Persisté en préférence GLOBALE (pas par dataset —
-// même pattern que `datasetGenerator`) : c'est un réglage d'affichage, pas une
-// donnée du dataset. M = comportement historique (grid-cols-2/3/4) inchangé.
-// L réduit les colonnes pour de vraies grandes tuiles (juger une composition
-// verticale/horizontale avant crop) ; S en ajoute pour un survol dense.
+// Thumbnail size (S/M/L): three steps avoid a fiddly slider with no useful extra granularity.
+// Persist as a GLOBAL preference, not per dataset, like datasetGenerator: this controls display,
+// not dataset data. M keeps the existing grid-cols-2/3/4 layout. L reduces columns for large tiles
+// to judge portrait/landscape composition before cropping; S adds columns for dense browsing.
 const TILE_SIZE_KEY = 'datasetGridTileSize';
 const TILE_SIZE_COLS = {
   S: 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-6',

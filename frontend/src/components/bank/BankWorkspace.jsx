@@ -119,8 +119,8 @@ import { watermarkEngineStatus } from '../../utils/watermarkEngine.js'
 
 const PAGE_SIZE = 120
 /* The Curate row's five buttons, one style. They were the same gray text-xs as
-   every utility control, and asked for from live use ("agrandir — ce sont des
-   features principales"): the semantic curation is what the Bank is FOR once
+   every utility control, and live feedback asked to enlarge these primary
+   features: semantic curation is what the Bank is FOR once
    triage is done, and it dressed as a footnote. Same accent family as
    ▶ Review one by one, one size up. */
 const CURATE_BTN = 'rounded-md border border-indigo-400/60 bg-indigo-500/20 '
@@ -504,8 +504,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     }
     const t = setInterval(tick, 2000)
     return () => { dropped = true; clearInterval(t) }
-    // Les TRANCHES de activity, jamais l'objet : son identite change a
-    // chaque poll et relancerait l'intervalle toutes les 2 s.
+    // Depend on activity FIELDS, never the object: polling changes its identity and would restart
+    // the interval every 2 seconds.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, bankId, refreshPayload, refreshImages, toast,
       payload?.activity?.error, payload?.activity?.cancelled,

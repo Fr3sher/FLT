@@ -268,7 +268,7 @@ export function useDataset() {
     const goHome = () => setCurrentId(null);
     window.addEventListener('lds:home', goHome);
     return () => window.removeEventListener('lds:home', goHome);
-  }, [setCurrentId]);   // useCallback stable : toujours mount-only en pratique
+  }, [setCurrentId]);   // Stable useCallback: effectively runs only on mount.
 
   // Mirror in-flight dataset generations into the global JobsContext so the
   // floating jobs dock shows (and can cancel) them like other generations.
@@ -459,9 +459,8 @@ export function useDataset() {
     await refresh();
   }), [wrap, currentId, refresh, toast]);
 
-  // Références ADDITIONNELLES (Nano Banana multi-références). Pas de fenêtre GPU
-  // côté backend (normalisation WEBP simple) mais on garde wrap() pour l'anti-
-  // double-clic pendant l'upload.
+  // ADDITIONAL references (Nano Banana multi-reference). Simple WEBP normalization
+  // needs no backend GPU window; keep wrap() to prevent double-clicks during upload.
   const addExtraRef = useCallback((file) => wrap(async () => {
     const fd = new FormData(); fd.append('file', file);
     const d = await postJson(`/api/dataset/${currentId}/ref/extra`, fd, true);
@@ -538,15 +537,14 @@ export function useDataset() {
     await refresh();
   }), [wrap, currentId, refresh, toast]);
 
-  // Concept only : télécharge les images scannées SÉLECTIONNÉES ({url,title}[])
-  // directement dans le dataset (route /scrape-import). Le serveur borne chaque
-  // requête (SCRAPE_IMPORT_MAX = 60, téléchargement synchrone) — on découpe donc la
-  // sélection en lots envoyés EN SÉQUENCE, avec un toast de progression par lot :
-  // « Select all » sur un gros scan s'importe en un clic au lieu d'un rejet 400.
-  // La dédup perceptuelle est côté dataset, donc les doublons inter-lots sont
-  // attrapés. Retourne {ok} pour que le panneau vide sa sélection sur succès.
+  // Concept only: download SELECTED scanned images ({url,title}[]) directly into
+  // the dataset through /scrape-import. Each synchronous request is limited to
+  // SCRAPE_IMPORT_MAX = 60: send batches SEQUENTIALLY with a progress toast each.
+  // This lets Select all import a large scan in one action without a 400 response.
+  // Dataset-level perceptual deduplication also catches duplicates across batches.
+  // Return {ok} so the panel clears the selection on success.
   const scrapeImport = useCallback((items, { rescueSmall = false } = {}) => wrap(async () => {
-    const BATCH = 60;                       // = svc.SCRAPE_IMPORT_MAX côté serveur
+    const BATCH = 60;                       // = server-side svc.SCRAPE_IMPORT_MAX
     let imported = 0;
     let rescueQueued = 0;
     let rescueFailed = 0;
@@ -695,9 +693,9 @@ export function useDataset() {
   }, currentId), [wrap, currentId, refresh, toast,
                    beginCaptioningRun, finishCaptioningRun]);
 
-  // Re-caption FORCÉ : ré-écrit TOUTES les captions des gardées (après changement de
-  // prompt). Handler séparé de `caption` car onClick passe l'event en argument — un
-  // `force` positionnel sur `caption` serait toujours truthy.
+  // FORCED re-caption overwrites ALL kept-image captions after a prompt change.
+  // Separate from caption: onClick supplies an event, so a positional force
+  // argument on caption would always be truthy.
   const recaption = useCallback((mode) => wrap(async () => {
     const run = beginCaptioningRun(currentId);
     try {
@@ -730,11 +728,11 @@ export function useDataset() {
     }
   }, [currentId, refresh, toast]);
 
-  // Re-caption ciblé : ré-écrit la caption d'un sous-ensemble d'images gardées (une
-  // ligne fuyante, ou « toutes les fuyantes ») avec le MÊME moteur/mode/contexte que le
-  // lot. Volontairement HORS `wrap` : le spinner reste sur la/les ligne(s) concernée(s)
-  // (recaptioningIds), le reste du panneau reste utilisable. Sérialisé côté serveur par
-  // la fenêtre vision GPU (503 si un autre passage tourne). Retourne le résultat parsé.
+  // Targeted re-caption rewrites selected kept images (one leaking caption, or
+  // all leaking captions) with the SAME engine/mode/context as the batch.
+  // Deliberately outside wrap: only affected rows show a spinner (recaptioningIds),
+  // leaving the panel usable. The backend vision GPU window serializes requests
+  // (503 if another pass is running). Return the parsed result.
   const recaptionImages = useCallback(async (ids, mode) => {
     const list = (ids || []).map((v) => Number(v)).filter((v) => Number.isInteger(v));
     const fresh = list.filter((id) => !recaptioningRef.current.has(id));
@@ -767,15 +765,15 @@ export function useDataset() {
     }
   }, [currentId, refresh, toast]);
 
-  // Analyse de ressemblance faciale (InsightFace antelopev2, CPU — ~1-2 min, pas de
-  // pause ComfyUI). Persiste face_score/face_state -> badges sur la grille.
+  // Face similarity analysis (InsightFace antelopev2, CPU, about 1-2 minutes,
+  // without pausing ComfyUI). Persist face_score/face_state for grid badges.
   const analyzeFaces = useCallback(() => wrap(async () => {
     const run = beginLocalActivityRun('analyze', currentId);
     try {
       const d = await postJson(`/api/dataset/${run.datasetId}/analyze-faces`);
       if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
-      // Un scorer cassé disait « 0 analyzed » en VERT : le backend remonte
-      // maintenant scoring_error {kind, detail} — dire POURQUOI.
+      // A broken scorer used to show a green "0 analyzed". The backend now returns
+      // scoring_error {kind, detail}; explain the failure.
       if (d.scoring_error) {
         toast.error(faceScoringErrorMessage(d.scoring_error));
         return;
@@ -1410,20 +1408,19 @@ export function useDataset() {
         train_type: opts.trainType || 'zimage',
         training_mode: normalizeTrainingMode(opts.trainingMode),
         allow_caption_mismatch: !!opts.allowCaptionMismatch,
-        // Images sans caption : plus un mur — confirm « train anyway » dans
-        // TrainingPanel (marqueur UNCAPTIONED:), même flux que le mismatch.
+        // Missing captions allow a "train anyway" confirmation in TrainingPanel
+        // (UNCAPTIONED: marker), using the same flow as a caption mismatch.
         allow_uncaptioned: !!opts.allowUncaptioned,
         // Style caption quality (trigger-only / identical captions) may be
         // explicitly confirmed after the server explains the risk.
         allow_caption_quality: !!opts.allowCaptionQuality,
-        // Custom-weights arch sniff non concluant → confirm « train anyway »
-        // (marqueur CUSTOM_WEIGHTS_UNVERIFIED:), même flux confirmable.
+        // Inconclusive custom-weight architecture detection allows "train anyway"
+        // (CUSTOM_WEIGHTS_UNVERIFIED: marker), using the same confirmation flow.
         allow_unverified_weights: !!opts.allowUnverifiedWeights,
-        // « Continue anyway » du panneau de préparation : lève le garde-fou plancher
-        // d'images (garde-fou qualité) — jamais une impossibilité physique.
+        // "Continue anyway" overrides the preparation panel image-count quality
+        // threshold; it never overrides a physical constraint.
         allow_not_ready: !!opts.allowNotReady,
-        // Overrides SDXL uniquement (le backend refuse 400 hors SDXL) — envoyés
-        // seulement pour SDXL pour ne pas déclencher ce refus sur les autres.
+        // Send SDXL overrides only for SDXL: the backend rejects other families with 400.
         ...(opts.trainType === 'sdxl'
           ? { vae_path: opts.vaePath || '', te_path: opts.tePath || '' } : {}),
         // Masked training (background at 10 %) — a persisted DATASET setting now,
@@ -1431,17 +1428,17 @@ export function useDataset() {
         // the server reads the dataset (a browser that never loaded the settings
         // must not overwrite a stored OFF with an optimistic default).
         ...(typeof opts.masked === 'boolean' ? { masked: opts.masked } : {}),
-        // Cible de steps absolue (plafond choisi dans TrainingPanel) — omise si
-        // vide → le backend calcule la valeur adaptative (recommended_steps).
+        // Absolute step target chosen in TrainingPanel. Omit when empty so the
+        // backend computes the adaptive value (recommended_steps).
         ...(opts.steps ? { steps: opts.steps } : {}),
-        // fresh : écarte le run existant (archivé) → repart de zéro au lieu de
-        // reprendre le dernier checkpoint (choix Resume/Fresh du TrainingPanel).
+        // fresh archives the existing run and starts over instead of resuming its
+        // latest checkpoint (TrainingPanel Resume/Fresh choice).
         ...(opts.fresh ? { fresh: true } : {}) });
-    // L'entraînement tourne en CLI headless (pas l'UI ai-toolkit) → on N'OUVRE PAS
-    // localhost:8675 (lien mort). La progression se suit ici (checkpoints + statut).
+    // Training uses the headless CLI, not the ai-toolkit UI. Do not open the dead
+    // localhost:8675 link; progress is displayed here through checkpoints and status.
     if (d.ok) toast.success(`Training started (${d.steps || '?'} steps) — ComfyUI paused, follow the checkpoints here`);
-    // Les refus confirmables (mismatch caption↔type, images sans caption) sont
-    // gérés par un confirm dans TrainingPanel — pas un toast d'erreur.
+    // TrainingPanel handles confirmable refusals (caption/type mismatch or missing
+    // captions) through confirmation dialogs rather than error toasts.
     else if (!String(d.error || '').includes('MISMATCH_CAPTION')
              && !String(d.error || '').includes('UNCAPTIONED')
              && !String(d.error || '').includes('CAPTION_QUALITY')) {
@@ -1454,7 +1451,7 @@ export function useDataset() {
     return d;
   }, [currentId, toast]);
 
-  // Bases entraînables + base/variante choisies + statut de conversion.
+  // Trainable bases, selected base/variant, and conversion status.
   const trainBaseInfo = useCallback(async () => {
     const r = await fetch(`/api/dataset/${currentId}/train/base-info`, { credentials: 'include' });
     return r.ok ? await r.json() : null;
@@ -1503,8 +1500,8 @@ export function useDataset() {
     return saved;
   }, [currentId, fetchList, refresh, toast]);
 
-  // Persiste un patch de réglages avancés ai-toolkit (rank / resolution /
-  // save_every). Renvoie les réglages effectifs, ou null en cas d'échec.
+  // Persist an advanced ai-toolkit settings patch (rank/resolution/save_every).
+  // Return the effective settings, or null on failure.
   const setTrainSettings = useCallback(async (patch) => {
     const d = await postJson(`/api/dataset/${currentId}/train/settings`, patch);
     if (d.ok) return d.train_settings;
@@ -1512,7 +1509,7 @@ export function useDataset() {
     return null;
   }, [currentId, toast]);
 
-  // Lance la conversion d'un merge ComfyUI -> diffusers (thread arrière-plan).
+  // Start ComfyUI merge-to-diffusers conversion in a background thread.
   const prepareBase = useCallback(async (baseModel) => {
     const d = await postJson(`/api/dataset/${currentId}/train/prepare-base`, { base_model: baseModel });
     if (d.ok) toast.success(d.status === 'done' ? 'Base already ready' : 'Base conversion started…');
@@ -1528,9 +1525,8 @@ export function useDataset() {
     else toast.error(d.error || 'Unexpected error');
   }, [toast]);
 
-  // baseModel/variant ciblent le run de la base SÉLECTIONNÉE (undefined → base
-  // persistée). Pas de window.open : l'entraînement est headless (CLI), l'ancien
-  // lien localhost:8675 était mort (« Ce site est inaccessible »).
+  // baseModel/variant target the SELECTED base run (undefined uses the stored base).
+  // Training is headless CLI: do not open the old, unreachable localhost:8675 link.
   const continueTraining = useCallback(async (extraSteps = 1000, baseModel, variant, trainType, opts = {}) => {
     const body = {
       extra_steps: extraSteps,
@@ -1566,14 +1562,12 @@ export function useDataset() {
     return d;
   }, [currentId, toast]);
 
-  // ☁ The CLOUD lane of the same ▶ Continue gesture: the chosen LOCAL checkpoint is
-  // seeded onto a FRESH pod (the backend's resume_ckpt_path seam) instead of resuming
-  // on this machine. Same payload as continueTraining — one dialog, two lanes — and
-  // the same interactive-refusal contract, so TrainingPanel's confirm+retry helper
-  // drives either lane without a second code path.
-  // trainType = famille sélectionnée dans le menu LORA TYPE (Z-Image / SDXL / Krea).
-  // Transmise à l'API pour que checkpoints + liste « IN COMFYUI » suivent le menu et
-  // pas le train_type persisté du dataset (sinon LoRA Krea affichés sur la page Z-Image).
+  // Cloud Continue seeds the chosen LOCAL checkpoint onto a FRESH pod through
+  // resume_ckpt_path instead of resuming locally. It shares continueTraining
+  // payloads and confirmation/retry handling with the local lane.
+  // trainType is the family selected in LORA TYPE (Z-Image/SDXL/Krea). Pass it
+  // so checkpoints and IN COMFYUI follow this menu, not the stored dataset
+  // train_type; otherwise Krea LoRAs could appear on the Z-Image page.
   const listCheckpoints = useCallback(async (baseModel, trainType, variant) => {
     const p = new URLSearchParams(trainingRunSelection(baseModel, trainType, variant));
     const qs = p.toString() ? `?${p.toString()}` : '';
@@ -1597,7 +1591,7 @@ export function useDataset() {
     }
   }, [currentId, toast]);
 
-  // Supprime un checkpoint du dossier loras de la famille dans ComfyUI (libère de l'espace).
+  // Delete a checkpoint from the family LoRA folder in ComfyUI to free disk space.
   const deleteCheckpoint = useCallback(async (filename, trainType, variant) => {
     const body = { filename, ...trainingRunSelection(undefined, trainType, variant) };
     const d = await postJson(`/api/dataset/${currentId}/train/checkpoint/delete`, body);

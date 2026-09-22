@@ -1,10 +1,8 @@
 // react-frontend/src/components/dataset/studio/ResultTile.jsx
 /**
- * Une vignette (image + 👍/👎) pour UNE génération (un seed). En batch, plusieurs
- * tuiles sont affichées côte à côte dans la même cellule (bande). Extrait 1:1 du
- * `renderTile` de l'ancien LoraTestStudio (behavior-preserving).
- *
- * La clé `key={cell.id}` est posée par le PARENT (ResultCell) lors du `.map`.
+ * One image/vote tile for a single generation seed. Batch seeds appear side by side in a cell.
+ * Extracted unchanged from old LoraTestStudio renderTile. Parent ResultCell assigns key={cell.id}
+ * during map.
  */
 export default function ResultTile({ cell, row, strength, variant, datasetId, onRate, onOpen, fmt }) {
   const isGenerating = cell.queue_status === 'generating';
@@ -69,8 +67,10 @@ export default function ResultTile({ cell, row, strength, variant, datasetId, on
             className="w-20 h-28 object-cover rounded-md border border-border" />
         </button>
       )}
-      {/* Score facial objectif (InsightFace vs référence) — mêmes seuils que le
-          Dataset Maker : ≥0.50 vert, ≥0.45 orange, sinon rouge. */}
+      {/*
+       * Objective face score from InsightFace against reference. Match Dataset Maker thresholds:
+       * at least 0.50 green, 0.45 orange, otherwise red.
+       */}
       {cell.face_score != null && (
         <span title={`Face similarity vs the dataset reference: ${cell.face_score.toFixed(3)}`}
           className={`px-1 py-px rounded border text-[0.5625rem] font-semibold tabular-nums ${cell.face_score >= 0.50
@@ -81,19 +81,22 @@ export default function ResultTile({ cell, row, strength, variant, datasetId, on
           🎯 {cell.face_score.toFixed(2)}
         </span>
       )}
-      {/* Badge de l'axe ⚖ batch : distingue la cellule AVEC le LoRA testé de sa
-          jumelle sans (même config, même seed). */}
+      {/*
+       * Batch comparison-axis badge distinguishes the cell WITH the tested LoRA from its no-LoRA
+       * twin using the same configuration and seed.
+       */}
       {cell.batch_lora && (
         <span className="max-w-[5rem] truncate px-1 py-px rounded border border-amber-400/50 bg-amber-400/15 text-amber-300 text-[0.5625rem] font-semibold"
           title={`Batch axis: with ${cell.batch_lora}`}>
           + {cell.batch_lora}
         </span>
       )}
-      {/* Pile combinée : les LoRA chargés EN PLUS de celui de la colonne, avec leur
-          poids — sans ce badge une image de pile serait indiscernable d'un run solo.
-          Depuis le balayage 🧬, un même run contient PLUSIEURS combinaisons : la
-          tuile doit donc dire LAQUELLE elle est, poids de tête compris. Sans ça,
-          neuf images d'un balayage sont neuf tuiles identiques au badge près. */}
+      {/*
+       * Combined-stack badge shows LoRAs loaded IN ADDITION to the column's LoRA and their
+       * weights, distinguishing stacks from solo runs. Weight sweeps contain MULTIPLE combinations
+       * per run, so identify the exact combination including the leading weight; otherwise nine
+       * sweep tiles look identical in their badges.
+       */}
       {Array.isArray(cell.combined_loras) && cell.combined_loras.length > 0 && (
         <span className="max-w-[5rem] truncate px-1 py-px rounded border border-sky-400/50 bg-sky-400/15 text-sky-300 text-[0.5625rem] font-semibold tabular-nums"
           title={`Blend: ${[fmt(cell.strength), ...cell.combined_loras.map((e) => `${e.label} @ ${e.weight}`)].join(' × ')}`}>

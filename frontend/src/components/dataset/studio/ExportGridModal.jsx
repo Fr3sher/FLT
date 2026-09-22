@@ -94,10 +94,11 @@ export default function ExportGridModal({ open, onClose, datasetId, family, run,
     }
   }
 
-  /* Portaillée : montée sous un ancêtre qui ouvre un contexte d'empilement
-     (`lg:sticky` de l'aside du Studio, ou le `transform` du canvas), un
-     z-index posé ici est PLAFONNÉ par cet ancêtre et un `overflow-auto`
-     le découpe. Voir studioModalsArePortaled.contract.test.js. */
+  /*
+   * Portal required: the Studio aside's lg:sticky or Canvas transform creates a parent stacking
+   * context that caps inner z-index, while overflow-auto clips content. See
+   * studioModalsArePortaled.contract.test.js.
+   */
   return createPortal(
     <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4"
       role="dialog" aria-modal="true" aria-label="Export grid" ref={ref}

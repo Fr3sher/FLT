@@ -1,26 +1,13 @@
 // react-frontend/src/components/dataset/studio/StudioShell.jsx
 /**
- * Coquille du Studio de test : LoraPicker partagé en haut, puis bascule selon le
- * nombre de LoRA cochés (spec validée « 1 LoRA → réglage comme aujourd'hui ;
- * ≥2 LoRA → comparaison ») :
- *
- *   - ≥2 LoRA  → <ComparisonStudio> : run_id + grille colonnes=LoRA × lignes=strength
- *                + « 🏆 Classement LoRA ».
- *   - 1 LoRA   → <LegacyDatasetStudio datasetId={…}> : le studio RICHE d'origine
- *                (RunSetupPanel, ResultsArea, BestPerModelList, ModelComparison,
- *                best_settings/★ Appliquer→generate, presets, stats par checkpoint).
- *   - 0 LoRA   → même studio legacy si un dataset est pré-sélectionné (URL), sinon
- *                une invite à cocher un LoRA.
- *
- * Le picker reste visible dans tous les modes → ajouter un 2e LoRA bascule en
- * comparaison, en retirer un revient au studio riche. Chaque branche est un
- * composant distinct : ses hooks (useLoraTestStudio vs useStudioRun) sont appelés
- * inconditionnellement dans son propre sous-arbre (règle des hooks respectée), et
- * remonter/démonter au changement de branche réinitialise proprement son état.
- *
- * Rétrocompat : la route legacy /dataset/studio/:id fournit `preselectDataset` →
- * 0 LoRA coché initialement mais dataset pré-sélectionné → branche legacy → studio
- * riche identique à avant (et le LoRA est pré-coché dans le picker).
+ * Test Studio shell keeps LoraPicker visible and switches by selection count. Two or more LoRAs
+ * use ComparisonStudio with run_id, LoRA-column/strength-row grid and rankings. One uses
+ * LegacyDatasetStudio with the selected dataset and its full setup/results/best settings/base
+ * comparisons/presets/checkpoint statistics. Zero uses legacy Studio for a URL-preselected
+ * dataset, otherwise asks for a selection. Adding/removing a second LoRA changes branches.
+ * Separate components call their own hooks unconditionally and remount to reset state cleanly.
+ * Legacy /dataset/studio/:id supplies preselectDataset, immediately preserving the old full Studio
+ * while the picker preselects that LoRA.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { FlaskConical } from 'lucide-react';
@@ -31,31 +18,27 @@ import ComparisonStudio from './ComparisonStudio';
 
 export default function StudioShell({ preselectDataset = null, preselectFamily = null,
   preselectBase = null, datasetId = null }) {
-  // `datasetId` legacy est un alias de preselectDataset.
+  // Legacy datasetId is an alias of preselectDataset.
   const preselect = preselectDataset ?? datasetId;
 
   const [selection, setSelection] = useState([]);
   const onSelectionChange = useCallback((sel) => setSelection(sel), []);
 
-  // train_type du run = celui du 1er LoRA coché (null si rien coché).
+  // Run train_type comes from the first selected LoRA, or null with no selection.
   const runType = selection.length > 0 ? (selection[0].train_type || 'zimage') : null;
 
-  // Liste des bases correspondant au train_type courant.
-  // Fetch à chaque changement de runType via /api/studio/base-models?type=…
+  // Base list for current train_type; fetch /api/studio/base-models?type=... whenever runType
+  // changes.
   const [baseModels, setBaseModels] = useState([]);
-  // Échelles CFG/steps de la famille, servies par le MÊME appel (clé `axes`).
-  // Sans elles, la branche comparaison/blend n'avait aucun axe de rendu à
-  // proposer — c'est ce qui la privait du réglage des steps (bug signalé).
+  // The SAME response supplies family CFG/steps choices under axes. Without them, comparison/blend
+  // had no render-axis controls, causing the reported missing-steps setting.
   const [axes, setAxes] = useState(null);
-  // CFG/steps PAR BASE, servis par le même appel. Sans eux la branche
-  // comparaison lançait une base non distillée (Z-Image Base, un modèle complet
-  // Krea 2 Raw) avec les chiffres de la Turbo — cfg 1 / 8 steps — qui rendent une
-  // esquisse floue lue comme « l'entraînement a raté ». Le studio mono-LoRA les
-  // recevait déjà par son propre payload ; c'est la même source.
+  // The same call supplies PER-BASE CFG/steps defaults. Without them, comparison used Turbo's CFG
+  // 1 / 8 steps on undistilled Z-Image Base or full Krea 2 Raw, yielding blurry sketches mistaken
+  // for failed training. Single-LoRA Studio already received this same source through its payload.
   const [modelDefaults, setModelDefaults] = useState(null);
-  // Ce que le défaut de base a d'anormal, quand il en a. Servi par le même appel,
-  // et présent MÊME quand `models` est vide — c'est l'install sans alternative qui
-  // en a le plus besoin.
+  // The same response reports unusual default-base conditions even when models is empty;
+  // installations without alternatives need this most.
   const [baseNote, setBaseNote] = useState(null);
   useEffect(() => {
     if (!runType) { setBaseModels([]); setAxes(null); setModelDefaults(null); setBaseNote(null); return; }
@@ -76,11 +59,11 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
   }, [runType]);
 
   const comparison = selection.length >= 2;
-  // Branche 1-LoRA : le dataset = le LoRA coché ; à 0 coché on retombe sur le
-  // dataset pré-sélectionné (URL) s'il existe, sinon rien (invite).
+  // Single-LoRA branch uses its dataset. With no selection, fall back to the URL-preselected
+  // dataset, or show the selection prompt.
   const soloDatasetId = selection.length === 1 ? selection[0].dataset_id : preselect;
-  // Famille de la LIGNE cochée → le studio solo s'ouvre sur la bonne pipeline
-  // (ex. cocher « Lola [KREA] » ouvre Krea, pas le train_type par défaut du dataset).
+  // Use the selected ROW's family so solo Studio opens the intended pipeline, such as Krea,
+  // instead of the dataset's default train_type.
   const soloFamily = selection.length === 1 ? selection[0].family : preselectFamily;
 
   return (
@@ -90,15 +73,16 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
         <h1 className="text-content font-bold flex items-center gap-2"><FlaskConical aria-hidden="true" className="h-4 w-4" />Test Studio<HelpBadge topic="page-studio" /></h1>
         {comparison && (
           <span className="px-2 py-0.5 rounded-lg border border-amber-400/40 bg-amber-400/10 text-amber-200 text-[0.6875rem] font-semibold">
-            {/* Neutre : le mode réel (⚖ Compare / 🧬 Blend) est choisi et affiché
-                juste en dessous par LoraStackPanel — annoncer « Comparing » ici
-                mentirait dès que la pile est active. */}
+            {/*
+             * Neutral wording: LoraStackPanel below chooses and displays Compare/Blend. Saying
+             * Comparing here would be false during Blend.
+             */}
             {selection.length} LoRAs checked
           </span>
         )}
       </header>
 
-      {/* Ancre de la barre de raccourcis du bas (StudioActionBar → 🧬 LoRAs). */}
+      {/* Anchor for the bottom StudioActionBar's LoRAs shortcut. */}
       <div id="st-loras" className="scroll-mt-16">
         <LoraPicker preselectDataset={preselect} preselectFamily={preselectFamily}
           onSelectionChange={onSelectionChange} />
@@ -108,8 +92,8 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
         <ComparisonStudio selection={selection} baseModels={baseModels} axes={axes}
           modelDefaults={modelDefaults} runType={runType} baseNote={baseNote} />
       ) : soloDatasetId ? (
-        // `key` force un remontage propre quand on change de LoRA solo OU de famille
-        // (reset des hooks/état du studio riche — sinon on garderait la grille du précédent).
+        // key forces a clean remount when the solo LoRA OR family changes, resetting full-Studio
+        // hooks/state instead of retaining the previous grid.
         <LegacyDatasetStudio key={`${soloDatasetId}:${soloFamily ?? 'default'}`}
           datasetId={String(soloDatasetId)} initialFamily={soloFamily}
           initialBase={preselectBase} />

@@ -68,33 +68,30 @@ class ComfyUIService:
     # ---------------- PID (DEPRECATED) ----------------
     # ---------------- Lifecycle ----------------
     def start_comfyui(self) -> Tuple[bool, str]:
-        """
-        Vérifie si ComfyUI est accessible.
-        Ne lance plus de processus (gestion externe).
-        """
+        """Check whether externally managed ComfyUI is reachable; do not launch processes."""
         self.parse_api_address()
         if self.check_connection():
             return True, "Running (External)"
 
-        logger.warning("⚠️ ComfyUI n'est pas accessible, mais le démarrage automatique est désactivé.")
+        logger.warning("⚠️ ComfyUI is unreachable, and automatic startup is disabled.")
         return False, "ComfyUI not running (External management required)"
 
     def ensure_comfyui_running(self) -> Tuple[bool, str]:
-        """Vérifie simplement la connexion."""
+        """Check the connection only."""
         self.parse_api_address()
         if self.check_connection():
             return True, "Running"
         return False, "ComfyUI not running (Please start external supervisor)"
 
-    # ✅ API publique unifiée utilisée par queue_manager
+    # Unified public API used by queue_manager.
     def stop_comfyui_process(self):
-        """Arrêt désactivé."""
-        logger.warning("⚠️ stop_comfyui_process ignoré.")
+        """Process stopping is disabled."""
+        logger.warning("⚠️ stop_comfyui_process ignored.")
         return True
 
     def start_comfyui_process(self):
-        """Démarrage désactivé."""
-        logger.warning("⚠️ start_comfyui_process ignoré.")
+        """Process startup is disabled."""
+        logger.warning("⚠️ start_comfyui_process ignored.")
         return self.check_connection()
 
 

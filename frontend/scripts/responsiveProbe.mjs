@@ -398,10 +398,9 @@ const PAGES = {
          shares its classes with the Gallery grid the state above measures. */
       { name: 'video-clip',
         open: ['[data-testid="studio-lane-video"]', '[data-testid="video-source-clip"]'] },
-      /* 🌐 Le navigateur Civitai. Sa rangée d'actions par carte est passée de deux
-         boutons à trois avec le 📝 lot de prompts, dans une colonne qui fait ~250 px
-         à 360 px de large — exactement la forme qui déborde. Aucun état ne l'ouvrait,
-         donc aucune mesure ne l'a jamais vue. */
+      /* Civitai browser: prompt batches added a third action to each card's row,
+         in a roughly 250px column at 360px viewport width, a likely overflow point.
+         No previous probe state opened it, so the row was never measured. */
       { name: 'civitai', open: ['button:has-text("🌐 Civitai")'] },
     ],
   },

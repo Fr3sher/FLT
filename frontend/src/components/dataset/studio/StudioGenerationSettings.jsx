@@ -1,31 +1,16 @@
 // react-frontend/src/components/dataset/studio/StudioGenerationSettings.jsx
 /**
- * StudioGenerationSettings — bloc PARTAGÉ de réglages de génération GLOBAUX du run,
- * inséré dans les DEUX asides du Studio (comparaison ≥2 LoRA ET studio riche 1 LoRA).
- * Parité avec la page Generate, SANS le prompt builder. Tout est un réglage GLOBAL
- * par run (la matrice de test reste LoRA × strength ; les axes aspect/cfg/steps
- * restent gérés ailleurs — on ne les duplique pas ici).
- *
- * Sections (via <StudioSection>), conditionnées à la famille (`family`) :
- *   • FORMAT   (toutes)      → <ResolutionSelector> → resolution_tier (fast|standard|hq|max)
- *   • SAMPLING (krea)        → sampler + scheduler (whitelist backend, '' = Auto)
- *   • DETAIL   (sdxl)        → detail_amount (DetailDaemon, 0–1)
- *   • ENGINE   (krea)        → precision, finition,
- *                              + pile LoRA « always-on » (permanent_loras)
- *   • NEGATIVE (zimage)      → negative (textarea)
- *
- * Composant AUTONOME : garde son propre état, le persiste en localStorage (namespacé
- * par `storagePrefix`), et remonte vers le parent un objet `settings` NORMALISÉ
- * (snake_case = contrat des routes /run) via `onChange`. Les champs vides sont OMIS
- * (le backend garde alors ses défauts) ; chaque champ est gaté PAR FAMILLE côté serveur.
- *
- * Props :
- *   family          'zimage'|'sdxl'|'krea'
- *   storagePrefix   préfixe des clés localStorage (namespace par contexte/famille)
- *   permanentLoras  (optionnel) candidats always-on [{filename,label|displayName,triggerWord}]
- *                   — fourni par le studio riche (payload d.permanent_loras). Absent en
- *                   comparaison → on dérive la liste depuis /api/index_config (krea_loras).
- *   onChange        (settings) => void  (idéalement un setState stable du parent)
+ * StudioGenerationSettings shares GLOBAL run settings between multi-LoRA comparison and full
+ * single-LoRA Studio, matching Generate without its prompt builder. The matrix remains
+ * LoRA/strength; aspect/CFG/steps axes are handled elsewhere. Family-gated StudioSections offer:
+ * FORMAT for all through ResolutionSelector/resolution_tier; SAMPLING for Krea with allowed
+ * sampler/scheduler and empty Auto; DETAIL for SDXL with DetailDaemon 0-1; ENGINE for Krea with
+ * precision, finishing and permanent_loras; NEGATIVE for Z-Image. This independent component owns
+ * state, persists by storagePrefix, and emits normalized snake_case /run settings via onChange.
+ * Omit empty fields to retain backend defaults; server also gates by family. Props: family,
+ * storagePrefix, optional permanentLoras candidates [{filename,label|displayName,triggerWord}],
+ * and stable onChange. Single-LoRA Studio supplies scoped candidates; comparison derives them from
+ * /api/index_config krea_loras when absent.
  */
 import { useEffect, useMemo, useState } from 'react';
 import ResolutionSelector from '../../shared/ResolutionSelector';
@@ -40,8 +25,8 @@ import {
   hiresDefaultLabel, hiresIsOn, hiresPayload, normaliseHiresDefaults,
 } from '../../../utils/studioFinishKnobs';
 
-// Repli si /api/index_config n'est pas encore chargé (doit refléter la whitelist
-// backend KREA_ALLOWED_* — la liste réelle vient de config.krea_samplers/schedulers).
+// Fallback until /api/index_config loads must mirror backend KREA_ALLOWED_* lists; authoritative
+// values come from config.krea_samplers/schedulers.
 const KREA_SAMPLERS_FALLBACK = ['er_sde', 'euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_2m_sde', 'dpmpp_sde', 'res_multistep', 'deis', 'ddim', 'uni_pc'];
 const KREA_SCHEDULERS_FALLBACK = ['simple', 'sgm_uniform', 'beta', 'normal', 'ddim_uniform', 'kl_optimal', 'linear_quadratic'];
 
@@ -65,9 +50,9 @@ const resolveKreaWeightDtype = (versionedValue, legacyValue) => (
       : KREA_DEFAULT_WEIGHT_DTYPE)
 );
 // KREA_WEIGHT_DTYPE_HELPERS_END
-
-// Formats du Studio (whitelist backend TEST_ASPECTS) + le nom de ratio attendu
-// par <ResolutionSelector> pour afficher les VRAIES dimensions générées.
+//
+// Studio aspects mirror backend TEST_ASPECTS, with the ratio name ResolutionSelector needs to
+// display ACTUAL generated dimensions.
 const STUDIO_ASPECTS = [
   { key: '9:16', label: 'Tall', ratio: 'tall' },
   { key: '3:4', label: 'Portrait', ratio: 'portrait' },
@@ -83,8 +68,8 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
   const isSdxl = family === 'sdxl';
   const isKrea = family === 'krea';
 
-  // Helpers localStorage namespacés (init paresseuse + persistance des VALEURS ;
-  // LockableSlider ne persiste que son verrou, pas la valeur → on s'en charge).
+  // Namespaced localStorage helpers provide lazy initialization and VALUE persistence.
+  // LockableSlider persists only its lock, so values are handled here.
   const k = (name) => `${storagePrefix}_${name}`;
   const load = (name, fallback, parse = (v) => v) => {
     try { const v = localStorage.getItem(k(name)); return v === null ? fallback : parse(v); }
@@ -92,15 +77,14 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
   };
   const save = (name, value) => { try { localStorage.setItem(k(name), String(value)); } catch { /* private mode */ } };
 
-  // --- État (persisté, namespacé par storagePrefix) ---------------------------
+  // State persisted under storagePrefix.
   const [resolutionTier, setResolutionTierS] = useState(() => load('tier', 'standard'));
-  // Multiplicateur de résolution (1.0–1.9) appliqué au palier choisi. Défaut 1.0 =
-  // taille du palier inchangée (rétrocompatible). Clampé au chargement + à l'écriture.
+  // Resolution multiplier 1.0-1.9 applies to the selected tier. Default 1.0 preserves tier
+  // dimensions for compatibility. Clamp on read and write.
   const [resolutionMultiplier, setResolutionMultiplierS] = useState(
     () => load('resmult', 1.0, parseFloat));
-  // Format du run (mode comparaison uniquement — dans le studio riche, le ratio
-  // est un AXE de la matrice via AxisPickers). Défaut = 9:16, le DEFAULT_ASPECT
-  // que le backend appliquait déjà en silence quand rien n'était envoyé.
+  // Run aspect for comparison only; full Studio uses it as a matrix AXIS through AxisPickers.
+  // Default 9:16 matches backend DEFAULT_ASPECT previously applied when omitted.
   const [aspect, setAspectS] = useState(() => load('aspect', '9:16'));
   const [negative, setNegativeS] = useState(() => load('negative', ''));
   const [detailAmount, setDetailAmountS] = useState(() => load('detail', 0.21, parseFloat));
@@ -110,22 +94,19 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
     load('wdt_v2', null),
     load('wdt', null),
   ));
-  // Hi-res fix (2e passe Krea) et finition, PAR RUN. `hiresScale` '' = laisser
-  // le défaut Settings (nommé dans le menu) ; '1' = off pour ce run ; sinon le
-  // facteur, en chaîne comme le <select> le rend. Les deux passes de finition
-  // partent à 0 = off : une cellule Studio n'a pas de défaut Settings à suivre.
-  // Les trois formes de fil sont décidées dans utils/studioFinishKnobs.js.
+  // PER-RUN Krea hi-res second pass and finishing. Empty hiresScale defers to the Settings default
+  // named in the menu; string 1 disables it for this run; other strings carry the factor from
+  // select. Both finishing passes default to 0/off because Studio cells have no Settings default
+  // for them. utils/studioFinishKnobs.js defines the three wire forms.
   const [hiresScale, setHiresScaleS] = useState(() => load('hiresScale', ''));
-  // null = "never touched here" : le curseur AFFICHE le défaut Settings et le
-  // payload n'envoie PAS hires_denoise, donc le rewrite du réglage s'applique.
-  // Un 0.5 en dur ici écrasait silencieusement un krea_hires.denoise à 0.7 tout
-  // en affichant « Settings default (1.5×, rewrite 0.7) » dans le menu.
+  // null means never edited here: display the Settings default and OMIT hires_denoise so its
+  // rewrite setting applies. Hardcoded 0.5 previously overrode krea_hires.denoise=0.7 while the
+  // menu still claimed the Settings default was 1.5x with rewrite 0.7.
   const [hiresDenoise, setHiresDenoiseS] = useState(() => load('hiresDenoise', null, parseFloat));
   const [finishSharpen, setFinishSharpenS] = useState(() => load('finSharpen', 0, parseFloat));
   const [finishGrain, setFinishGrainS] = useState(() => load('finGrain', 0, parseFloat));
-  const [permStack, setPermStack] = useState([]);   // remonté par ZImageLoraConfig
-
-  // Setters qui persistent en même temps (miroir du pattern RunSetupPanel/SettingsPanel).
+  const [permStack, setPermStack] = useState([]);   // Reported by ZImageLoraConfig.
+  // Setters persist values as they update, matching RunSetupPanel/SettingsPanel.
   const setResolutionTier = (v) => { setResolutionTierS(v); save('tier', v); };
   const setResolutionMultiplier = (v) => {
     const m = Math.max(1.0, Math.min(1.9, Number(v) || 1.0));
@@ -142,8 +123,8 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
   const setFinishSharpen = (v) => { setFinishSharpenS(v); save('finSharpen', v); };
   const setFinishGrain = (v) => { setFinishGrainS(v); save('finGrain', v); };
 
-  // --- Config Krea (sampler/scheduler + candidats LoRA always-on) --------------
-  // Fetch uniquement en Krea (les autres familles n'ont besoin de rien de /config).
+  // Krea configuration: sampler/scheduler and always-on LoRA candidates.
+  // Fetch only for Krea; other families need nothing from /config.
   const [config, setConfig] = useState(null);
   useEffect(() => {
     if (!isKrea) return undefined;
@@ -151,28 +132,26 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
     fetch('/api/index_config', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (!cancelled && d) setConfig(d); })
-      .catch(() => { /* fallback whitelist en dur ci-dessous */ });
+      .catch(() => { /* Use the fallback allowlist below. */ });
     return () => { cancelled = true; };
   }, [isKrea]);
 
   const kreaSamplers = config?.krea_samplers?.length ? config.krea_samplers : KREA_SAMPLERS_FALLBACK;
   const kreaSchedulers = config?.krea_schedulers?.length ? config.krea_schedulers : KREA_SCHEDULERS_FALLBACK;
-  // Presets du sampler maison. Servis par /api/index_config comme les deux listes
-  // ci-dessus ; le repli couvre le seul cas où le serveur est trop ancien pour les
-  // connaître — et lui offrir ceux qu'il connaît est alors exactement juste.
+  // Custom sampler presets come from /api/index_config like the lists above. Fallback handles only
+  // older servers without this field, offering exactly the presets those servers know.
   const kreaSamplerPresets = config?.krea_sampler_presets?.length
     ? config.krea_sampler_presets : KREA_SAMPLER_PRESETS_FALLBACK;
-  // Le défaut Settings du hi-res fix, en nombres, pour que l'option « défaut »
-  // du menu DISE ce qu'elle vaut. Mémoïsé : cet objet est une dépendance de
-  // l'effet qui remonte `settings`, et un objet neuf à chaque rendu relancerait
-  // l'effet → setState du parent → rendu → objet neuf : la boucle. Repli = off
-  // (un serveur trop ancien pour l'envoyer n'ajoute jamais la passe).
+  // Numeric Settings hi-res defaults let the menu state its actual values. Memoize: this object is
+  // a dependency of the settings-reporting effect, and a fresh object would trigger parent
+  // setState, rerender and another fresh object indefinitely. Fall back to off because older
+  // servers never add this pass.
   const hiresDefaults = useMemo(
     () => normaliseHiresDefaults(config?.krea_hires_defaults), [config]);
 
-  // Candidats LoRA « always-on » : liste fournie par le studio riche (family-scopée,
-  // payload) sinon dérivée de config.krea_loras (on écarte les `lora_*` = perso entraînés,
-  // qui sont un AXE de test, pas un always-on — miroir de permanent_lora_candidates backend).
+  // Always-on LoRA candidates come from the full Studio's family-scoped payload, otherwise
+  // config.krea_loras. Exclude lora_* trained characters because they are a test AXIS, mirroring
+  // backend permanent_lora_candidates.
   const permCandidates = useMemo(() => {
     if (!isKrea) return [];
     if (permanentLoras != null) {
@@ -185,14 +164,14 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
       .map((l) => ({ filename: l.filename, displayName: l.displayName || basename(l.filename), triggerWord: l.triggerWord }));
   }, [isKrea, permanentLoras, config]);
 
-  // --- Remontée du `settings` normalisé (snake_case = contrat /run) ------------
-  // On OMET les vides (le backend garde ses défauts). `onChange` doit être stable
-  // (setState du parent) — sinon boucle ; deps incluent onChange par prudence.
+  // Emit normalized snake_case /run settings, OMITTING empty values to preserve backend defaults.
+  // onChange should be stable, such as parent setState, to avoid loops; include it in dependencies
+  // defensively.
   useEffect(() => {
     const s = { resolution_tier: resolutionTier, resolution_multiplier: resolutionMultiplier };
-    // Format global du run (comparaison) : axe à 1 seule valeur côté matrice.
-    // JAMAIS émis en studio riche (aspectPicker=false) — là, le ratio est un axe
-    // de test choisi via AxisPickers et l'écraser ici casserait la matrice.
+    // Comparison's global aspect becomes a one-value matrix axis. NEVER emit it in full Studio
+    // with aspectPicker=false, where AxisPickers owns the test axis; overriding it here would
+    // break the matrix.
     if (aspectPicker && aspect) s.aspects = [aspect];
     if (isZ) {
       const neg = negative.trim();
@@ -202,21 +181,19 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
       s.detail_amount = detailAmount;
     }
     if (isKrea) {
-      // UN choix, DEUX champs : un preset écrit dans `sampler` serait un nom de
-      // sampler inconnu de ComfyUI et le graphe entier serait refusé. Voir
-      // utils/kreaSamplerChoice.js.
+      // ONE choice maps to TWO fields. Putting a preset name into sampler would give ComfyUI an
+      // unknown sampler and reject the whole graph. See utils/kreaSamplerChoice.js.
       const samplerChoice = splitSamplerChoice(sampler);
       if (samplerChoice.sampler) s.sampler = samplerChoice.sampler;
       if (samplerChoice.sampler_preset) s.sampler_preset = samplerChoice.sampler_preset;
       if (scheduler) s.scheduler = scheduler;
       s.weight_dtype = weightDtype;
-      // Hi-res fix + finition : trois formes de fil pour le premier (différé /
-      // off explicite / valeur), clés OMISES quand off pour la seconde — décidé
-      // dans utils/studioFinishKnobs.js, pas ici, pour que node --test le voie.
+      // Hi-res fix uses three wire forms: deferred, explicitly off or a value. Finishing omits off
+      // keys. Keep these rules in utils/studioFinishKnobs.js so node --test can exercise them.
       Object.assign(s, hiresPayload({ scale: hiresScale, denoise: hiresDenoise }, hiresDefaults));
       Object.assign(s, finishPayload({ sharpen: finishSharpen, grain: finishGrain }));
-      // Pile always-on scindée : ☑ batch → AXE de test (cellules avec/sans, géré
-      // serveur), sinon appliqué à CHAQUE cellule comme avant.
+      // Split always-on stack: batch-checked LoRAs become server-managed with/without test AXES;
+      // others apply to EVERY cell as before.
       const alwaysOn = permStack.filter((e) => !e.batch)
         .map(({ filename, strength }) => ({ filename, strength }));
       const batched = permStack.filter((e) => e.batch)
@@ -231,8 +208,10 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
 
   return (
     <div className="flex flex-col gap-2">
-      {/* FORMAT (toutes familles) — SIZE du run + (comparaison) le RATIO. Dans le
-          studio riche le ratio reste un axe de test (AxisPickers) → pas de picker ici. */}
+      {/*
+       * FORMAT for all families: run SIZE, plus comparison's RATIO. Full Studio keeps ratio as an
+       * AxisPickers test axis, so no picker here.
+       */}
       <StudioSection title="Format" storageKey={k('sec_format')} anchorId="st-format">
         {aspectPicker && (
           <>
@@ -302,9 +281,11 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
             </label>
           </div>
 
-          {/* HI-RES FIX — 2e passe Krea (LatentUpscaleBy + KSampler, nœuds du cœur).
-              '' = le défaut Settings, NOMMÉ dans l'option ; '1' = off pour ce run,
-              qui bat un défaut Settings à 1.5 ; sinon le facteur du run. */}
+          {/*
+           * HI-RES FIX: Krea second pass uses core LatentUpscaleBy and KSampler nodes. Empty
+           * follows the Settings default named in the option; string 1 disables the pass even if
+           * Settings says 1.5; otherwise use the run factor.
+           */}
           <div className="mt-2 pt-2 border-t border-white/10 flex flex-col gap-2">
             <label className="flex flex-col gap-1 text-[0.6875rem] text-content-muted uppercase tracking-wide">
               Hi-res fix (second pass)
@@ -344,7 +325,7 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
         </StudioSection>
       )}
 
-      {/* DETAIL (sdxl) — intensité DetailDaemon (distincte du steps pass 2 = axe). */}
+      {/* SDXL DETAIL controls DetailDaemon intensity, separate from the second-pass steps axis. */}
       {isSdxl && (
         <StudioSection title="Detail" storageKey={k('sec_detail')} anchorId="st-detail">
           <LockableSlider
@@ -363,9 +344,9 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
       {/* ENGINE (krea) — precision + finition + LoRA always-on. */}
       {isKrea && (
         <StudioSection title="Engine" storageKey={k('sec_engine')} anchorId="st-engine">
-          {/* Précision du loader, finition, LoRA always-on. */}
+          {/* Loader precision, finishing and always-on LoRAs. */}
           <div className="flex flex-col gap-2.5">
-            {/* Précision du loader (node 20 weight_dtype). */}
+            {/* Loader precision: node 20 weight_dtype. */}
             <label className="flex flex-col gap-1 text-[0.6875rem] text-content-muted uppercase tracking-wide mt-1">
               Precision
               <select
@@ -385,10 +366,11 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
             </span>
           </div>
 
-          {/* FINITION — côté app, sur la cellule rendue (utils/photo_finish) :
-              sharpen + grain. Pas de ColorMatch ici : une cellule Studio est du
-              txt2img, il n'y a pas d'image « d'avant » à laquelle se recaler.
-              0 = off, clé omise du payload (NULL sur la ligne). */}
+          {/*
+           * FINISHING applies app-side to rendered cells through utils/photo_finish: sharpening
+           * and grain. No ColorMatch because Studio txt2img has no before image to match. Zero
+           * disables the pass, omits its payload key and stores NULL.
+           */}
           <div className="mt-2 pt-2 border-t border-white/10 flex flex-col gap-2.5">
             <span className="text-[0.6875rem] text-content-muted uppercase tracking-wide">
               Finishing (after render)
@@ -419,8 +401,10 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
             </span>
           </div>
 
-          {/* LoRA « always-on » (style/utilitaire) : appliqués à CHAQUE cellule (pas un
-              axe de test). ZImageLoraConfig se persiste seul et remonte la pile activée. */}
+          {/*
+           * Always-on style/utility LoRAs apply to EVERY cell rather than a test axis.
+           * ZImageLoraConfig persists itself and reports the enabled stack.
+           */}
           {permCandidates.length > 0 && (
             <div className="mt-2 pt-2 border-t border-white/10">
               <ZImageLoraConfig
@@ -437,7 +421,7 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
         </StudioSection>
       )}
 
-      {/* NEGATIVE (zimage) — prompt négatif global du run. */}
+      {/* Z-Image NEGATIVE: global run negative prompt. */}
       {isZ && (
         <StudioSection title="Negative" storageKey={k('sec_negative')} defaultOpen={false} anchorId="st-negative">
           <label className="flex flex-col gap-1">

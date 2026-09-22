@@ -741,7 +741,7 @@ def create_bank(user_id, name, folder):
     image file. Instant (no decode) — scoring is the separate scan pass.
     Returns (bank, added). ValueError on a missing folder / too many files."""
     name = (name or '').strip()
-    # Windows «Copier en tant que chemin» pastes the path quoted — unquote so
+    # Windows "Copy as path" pastes the path quoted — unquote so
     # the direct paste works first try (same nicety as the dataset folder import).
     folder = (folder or '').strip().strip('"\'')
     if not name:

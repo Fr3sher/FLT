@@ -1,19 +1,14 @@
-"""Conversion d'un checkpoint Z-Image ComfyUI (.safetensors single-file) vers le
-format diffusers attendu par ai-toolkit, pour entraîner un LoRA sur un merge
-custom.
+"""Convert single-file ComfyUI Z-Image checkpoints to ai-toolkit diffusers
+format for custom-merge LoRA training.
 
-S'appuie sur convert_comfy_zimage_to_diffusers.py (mapping OFFICIEL ComfyUI,
-gate validé : 0 clé manquante), lancé avec le python d'ai-toolkit (diffusers
-requis). Conversion lourde (~12 Go, quelques minutes) → faite une fois et mise
-en cache sous <aitoolkit dir>/converted/<name>/, en thread d'arrière-plan.
+Run convert_comfy_zimage_to_diffusers.py with ai-toolkit Python and
+diffusers, using the validated official ComfyUI mapping. Conversion
+writes about 12 GB over several minutes, once per cached base, in a
+background thread under <aitoolkit dir>/converted/<name>/.
 
-Lifted from the parent project's app/services/zimage_convert.py for LoRA
-Dataset Studio: the module-level CONVERTED_ROOT (hardcoded `F:\\AI\\aitoolkit\\
-converted`) and the COMFYUI_OUTPUT_DIR-derived models root become live
-`cfg`-backed accessors (no machine-specific default paths, per the plan's
-Global Constraints) -- the converted-cache root now lives under the
-configured ai-toolkit dir instead of a separate hardcoded drive.
-"""
+Ported from the parent application. Former machine-specific module
+constants are now live cfg-backed accessors, and converted cache data
+lives under the configured ai-toolkit directory."""
 from __future__ import annotations
 from ..timeout_settings import processing_timeout
 
@@ -33,8 +28,8 @@ from .lora_training import (_aitoolkit_dir, _hf_home, _venv_python,
 logger = logging.getLogger(__name__)
 
 _CONVERTER = str(cfg.BACKEND_DIR / 'infer' / 'convert_comfy_zimage_to_diffusers.py')
-_CONVERT_KEY = 'zimage_base_convert'  # system_state : statut de conversion en cours
-_convert_lock = threading.Lock()      # sérialise l'acquisition du verrou de conversion
+_CONVERT_KEY = 'zimage_base_convert'  # system_state: current conversion status
+_convert_lock = threading.Lock()      # Serialize acquisition of the conversion lock.
 
 
 def _converted_root():
@@ -42,48 +37,31 @@ def _converted_root():
 
 
 def _official_config() -> str | None:
-    """config.json du transformer Z-Image-Turbo officiel (cache HF d'ai-toolkit).
-    Présent dès qu'un entraînement officiel a tourné une fois."""
+    """Official Z-Image-Turbo transformer config.json in ai-toolkit's HF cache,
+    available after the first official-base training run."""
     g = glob.glob(os.path.join(str(_hf_home()), 'hub', 'models--Tongyi-MAI--Z-Image-Turbo',
                                'snapshots', '*', 'transformer', 'config.json'))
     return g[0] if g else None
 
 
 def _resolve_merge(z_model: str) -> str | None:
-    """Chemin absolu du .safetensors ComfyUI depuis une valeur z_model
-    (ex. 'z image\\bigLove_zt3.safetensors'). Anti path-traversal : refuse '..'
-    et les chemins absolus, et CONFINE la CIBLE sous models/ - un z_model forgé
-    ne peut pas sortir du dossier des modèles.
+    """Resolve an absolute local safetensors path from a ComfyUI z_model value.
+    Reject absolute input and traversal (..); lexically confine candidate
+    paths to model roots. Check commonpath before realpath so legitimate
+    Windows junctions across drives do not raise mismatched-drive errors.
+    Use realpath only for existence and the path returned to the worker.
 
-    Le confinement est vérifié LEXICALEMENT sur `cand` (construit sous root_real
-    à partir d'une valeur sans '..' ni chemin absolu) : il reste sur le même
-    disque, donc commonpath ne crashe jamais. On NE fait PAS commonpath sur le
-    realpath : celui-ci peut légitimement traverser un disque via une jonction
-    Windows (models/ symlinké vers un 2e DD, cas courant pour les gros modèles),
-    ce qui levait `ValueError: Paths don't have the same drive` et cassait la
-    conversion. realpath ne sert donc qu'à tester l'existence et à retourner le
-    chemin réel dont le sous-process a besoin.
-
-    Les racines fouillées sont celles de ComfyUI lui-même — ``<base>/models/{unet,
-    diffusion_models}`` PLUS toute racine ``diffusion_models`` déclarée dans
-    ``extra_model_paths.yaml`` — dans l'ordre de priorité de ComfyUI (``is_default``
-    d'abord). Avant ce correctif, un merge Z-Image rangé sous une racine yaml était
-    tout simplement inconvertible : présent sur le disque, chargé par ComfyUI tous
-    les jours, et « base model not found on disk » ici. `unet` et `diffusion_models`
-    ne sont plus deux dossiers en dur mais le MÊME type canonique côté ComfyUI
-    (folder_paths.map_legacy), ce que ``search_roots`` applique déjà.
-
-    Sans yaml, les racines sont exactement les deux dossiers historiques, dans le
-    même ordre : la résolution est inchangée au bit près."""
+    Search ComfyUI's models/unet and models/diffusion_models plus declared
+    extra_model_paths.yaml diffusion_models roots in ComfyUI priority order
+    (is_default first). search_roots maps legacy unet to the same canonical
+    type. Without YAML, preserve the original two roots and ordering exactly."""
     if not z_model or os.path.isabs(z_model) or '..' in z_model.replace('\\', '/'):
         return None
     if not cfg.comfyui_dir('models'):
         return None
-    # Chemin du SYSTÈME DE FICHIERS LOCAL, pas un widget ComfyUI : séparateur
-    # os.sep, jamais un backslash en dur. Sous Linux, `os.path.join(root, 'unet',
-    # 'z image\\x.safetensors')` n'échoue pas — il fabrique le nom d'un fichier
-    # unique contenant un backslash, donc introuvable, donc « conversion
-    # impossible » sans explication (famille du bug GitHub #21, 1Tomber).
+    # Use local filesystem separators, not literal ComfyUI widget backslashes.
+    # On Linux a backslash becomes part of one filename, yielding a missing
+    # model rather than a directory path (GitHub #21).
     rel = local_model_path(z_model)
     base = os.path.basename(rel)
     from . import comfy_model_paths
@@ -99,9 +77,8 @@ def _resolve_merge(z_model: str) -> str | None:
             real = os.path.realpath(cand)
             if os.path.isfile(real):
                 return real
-    # Second passage, insensible à la casse : la valeur stockée porte la casse du
-    # template ou du picker ('Z image\\'), le disque porte la sienne ('z image').
-    # Windows ne fait pas la différence, Linux (et tout entraînement cloud) si.
+    # Second pass ignores case: persisted picker/template casing can differ
+    # from disk. Windows tolerates that; Linux/cloud training does not.
     for root in roots:
         root_real = os.path.realpath(str(root))
         for want in (rel, os.path.join('z image', base)):
@@ -114,9 +91,9 @@ def _resolve_merge(z_model: str) -> str | None:
 
 
 def _safe_name(z_model: str) -> str:
-    """Nom du dossier de conversion dérivé du chemin COMPLET (sous-dossier inclus),
-    pas du seul basename - sinon deux merges homonymes dans des sous-dossiers
-    différents écraseraient la même conversion."""
+    """Derive the conversion directory name from the full relative path,
+    including subdirectories, so same-basename merges do not overwrite
+    each other's cached conversions."""
     rel = z_model.replace('\\', '/').rsplit('.', 1)[0]
     safe = ''.join(c if (c.isalnum() or c in '_-') else '_' for c in rel).strip('_')
     return safe or 'base'
@@ -133,8 +110,8 @@ def is_converted(z_model: str) -> bool:
 
 
 def convert(z_model: str) -> str:
-    """Convertit (BLOQUANT, plusieurs minutes). Retourne le dossier diffusers
-    racine (à passer en name_or_path). Lève ValueError si échec."""
+    """Blocking conversion, taking several minutes. Return the diffusers root
+    for name_or_path; raise ValueError on failure."""
     if is_converted(z_model):
         return converted_dir(z_model)
     merge = _resolve_merge(z_model)
@@ -146,7 +123,7 @@ def convert(z_model: str) -> str:
                          "a training on the official base (this downloads the model)")
     out = converted_dir(z_model)
     os.makedirs(out, exist_ok=True)
-    logger.info(f'conversion base {z_model} -> {out}')
+    logger.info(f'base conversion {z_model} -> {out}')
     proc = subprocess.run(infer_env.worker_argv(_venv_python(), _CONVERTER, merge,
                                                 official_config_path, '--save', out),
                           capture_output=True, text=True, timeout=processing_timeout(2400),
@@ -157,21 +134,21 @@ def convert(z_model: str) -> str:
     return out
 
 
-# --- Conversion en arrière-plan + statut (poll UI) ----------------------------
+# Background conversion and status for UI polling.
 def convert_status() -> dict:
     return queue_manager._get_system_state(_CONVERT_KEY, {}) or {}
 
 
 def start_convert_async(app, z_model: str) -> None:
-    """Lance la conversion dans un thread daemon ; statut suivi dans system_state
-    (running/done/error). Refuse si une conversion tourne déjà."""
+    """Start daemon-thread conversion, tracking running/done/error in
+    system_state. Reject if conversion is already running."""
     if not _resolve_merge(z_model):
         raise ValueError(f'base model not found: {z_model}')
-    # ~12 Go écrits : refuser tout de suite plutôt qu'un crash à 90 % qui laisse
-    # un dossier diffusers incomplet (is_converted=False mais 10 Go consommés).
+    # About 12 GB will be written: reject insufficient space before starting,
+    # rather than failing at 90% with an invalid cache consuming 10 GB.
     assert_free_disk(_converted_root(), MIN_FREE_GB_CONVERT, 'the base conversion (~12 GB)')
-    # Acquisition ATOMIQUE du verrou (check-then-set sous lock) : empêche deux
-    # conversions 12 Go concurrentes (double-clic / 2 datasets en même temps).
+    # Atomic check-and-set under the lock prevents concurrent 12 GB
+    # conversions from double clicks or simultaneous datasets.
     with _convert_lock:
         if convert_status().get('status') == 'running':
             raise ValueError('a conversion is already in progress')
@@ -184,11 +161,11 @@ def start_convert_async(app, z_model: str) -> None:
                 convert(z_model)
                 queue_manager._set_system_state(
                     _CONVERT_KEY, {'z_model': z_model, 'status': 'done'}, ttl_seconds=3600)
-                logger.info(f'conversion base terminée : {z_model}')
+                logger.info(f'base conversion completed: {z_model}')
             except Exception as e:
                 queue_manager._set_system_state(
                     _CONVERT_KEY, {'z_model': z_model, 'status': 'error', 'error': str(e)},
                     ttl_seconds=3600)
-                logger.error(f'conversion base échouée ({z_model}) : {e}')
+                logger.error(f'base conversion failed ({z_model}) : {e}')
 
     threading.Thread(target=_run, daemon=True).start()

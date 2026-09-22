@@ -1,7 +1,6 @@
-"""Picazor scan() : distinguer un résultat vide LÉGITIME (listing/profil sans
-média, page HTML chargée sans incident) d'un vrai échec de parsing (finding #3).
-
-Tout est mocké (`_request_html`) : aucun appel réseau / curl_cffi."""
+"""Picazor scan distinguishes legitimate empty listings/profiles whose HTML loaded
+successfully from real parsing failures. Mock _request_html; no network or
+curl_cffi calls."""
 
 import pytest
 
@@ -35,9 +34,9 @@ def test_an_empty_profile_is_a_result_not_an_error(monkeypatch):
 
 
 def test_a_detail_page_with_no_extractable_media_stays_a_real_failure(monkeypatch):
-    """La page de détail décrit toujours un média précis — l'absence de match
-    régex signale un layout changé (échec de parsing), pas une page vide.
-    Volontairement PAS convertie en kind='empty' (cf. rapport)."""
+    """A detail page always describes specific media. No regex match means a changed
+    layout and parsing failure, not an empty page; never classify it as
+    kind=empty."""
     monkeypatch.setattr(picazor, '_request_html', lambda url: ('<html>layout changed</html>', None))
     validation = SimpleNamespace(original_url='https://picazor.com/fr/someone/42',
                                  value='someone', url_type=None)

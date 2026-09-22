@@ -1,6 +1,6 @@
-// Sélecteur des checkpoints à tester (cases à cocher multi-sélection).
-// Mine = this dataset's trigger-matched epochs. Theirs = guest files from
-// models/loras, compared as their own cells (same prompt/seed), not stacked.
+// Checkpoint picker with multiple checkboxes. Mine contains this dataset's trigger-matched epochs.
+// Theirs contains guest files from models/loras, compared as separate cells with the same
+// prompt/seed, not stacked.
 import { useState } from 'react';
 import { HelpBadge } from '../../../help/HelpMode';
 import KleinLoraCombobox, { useKleinGenerationLoras } from '../../settings/KleinLoraCombobox';

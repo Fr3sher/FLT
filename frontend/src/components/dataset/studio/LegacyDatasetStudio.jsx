@@ -1,15 +1,11 @@
 // react-frontend/src/components/dataset/studio/LegacyDatasetStudio.jsx
 /**
- * Studio de test RICHE per-dataset (mono-LoRA) — le studio d'origine, intact :
- * rail de réglages (RunSetupPanel), grilles de résultats (ResultsArea), meilleur
- * réglage temps réel (BestPresetCard) + persisté (BestSettingsBanner), meilleur
- * réglage par modèle (BestPerModelList), comparaison des bases (ModelComparison),
- * vote rapide (QuickVoteModal) et lightbox (StudioResultViewer).
- *
- * Extrait 1:1 du corps de l'ancien StudioShell (avant la réécriture multi-LoRA) :
- * c'est la branche « 1 LoRA coché » de StudioShell. Reçoit `datasetId` (le
- * dataset_id du LoRA coché) — tout le reste (axes, presets, ★ Appliquer→generate)
- * est piloté par useLoraTestStudio/useStudioForm comme avant.
+ * Full per-dataset single-LoRA Test Studio, preserving the original: RunSetupPanel, ResultsArea,
+ * live BestPresetCard, persisted BestSettingsBanner, BestPerModelList, ModelComparison,
+ * QuickVoteModal and StudioResultViewer. Extracted unchanged from the old StudioShell before
+ * multi-LoRA support. This is StudioShell's one-selected-LoRA branch, receiving that LoRA's
+ * datasetId; useLoraTestStudio/useStudioForm still manage axes, presets and applying settings to
+ * Generate.
  */
 import { useEffect, useState } from 'react';
 import { useLoraTestStudio } from '../../../hooks/useLoraTestStudio';
@@ -29,12 +25,12 @@ import StudioResultViewer from './StudioResultViewer';
 
 export default function LegacyDatasetStudio({ datasetId, initialFamily = null,
   initialBase = null }) {
-  // Famille (pipeline) sélectionnée : null = défaut résolu côté serveur. `initialFamily`
-  // = la famille de la LIGNE cochée dans le picker (ex. « Lola [KREA] » → ouvre sur krea).
-  // Changer de famille REMONTE le corps du studio (key) → hook + formulaire repartent
-  // propres pour la nouvelle pipeline (pas de checkpoints/réglages de l'autre qui traînent).
+  // Selected family/pipeline: null lets the server resolve the default. initialFamily comes from
+  // the selected picker ROW, such as a KREA entry opening krea. Changing family REMOUNTS the
+  // Studio body via key, resetting hooks and form so another pipeline's checkpoints/settings
+  // cannot linger.
   const [family, setFamily] = useState(initialFamily);
-  useEffect(() => { setFamily(initialFamily); }, [datasetId, initialFamily]);  // reset au changement de ligne
+  useEffect(() => { setFamily(initialFamily); }, [datasetId, initialFamily]);  // Reset on row changes.
   return (
     <StudioBody key={`${datasetId}:${family ?? 'default'}`}
       datasetId={datasetId} family={family} onFamilyChange={setFamily}
@@ -49,15 +45,14 @@ function StudioBody({ datasetId, family, onFamilyChange, initialBase = null }) {
     { preselectBase: initialBase });
   const vote = useQuickVote(studio.rate);
   const [lbImg, setLbImg] = useState(null);
-  // Set navigable ORDONNÉ figé à l'ouverture (fourni par ResultsArea, cf. flipOrder).
-  // On garde un instantané plutôt que le live : le set de feuilletage reste stable
-  // pendant qu'on compare (le polling ne le réordonne pas sous les doigts).
+  // Ordered lightbox set is frozen on opening from ResultsArea (see flipOrder). Keep a snapshot
+  // instead of live data so polling cannot reorder images during comparison.
   const [lbItems, setLbItems] = useState([]);
   const openLightbox = (cell, items) => { setLbImg(cell); setLbItems(items || []); };
 
-  // La lightbox délègue le vote ici ; on met à jour l'image affichée ET l'instantané
-  // du set pour que le bouton 👍/👎 reflète l'état immédiatement, même en revenant
-  // sur une image déjà notée pendant le feuilletage (comme l'ancien setLbImg local).
+  // Lightbox delegates votes here. Update both the displayed image and navigation snapshot so vote
+  // controls reflect changes immediately, including when returning to an image, matching the old
+  // local setLbImg behavior.
   const rateLightbox = (id, nv) => {
     studio.rate(id, nv);
     setLbImg((p) => (p && p.id === id ? { ...p, rating: nv } : p));
@@ -96,8 +91,10 @@ function StudioBody({ datasetId, family, onFamilyChange, initialBase = null }) {
           <RunSetupPanel d={d} studio={studio} form={form} datasetId={datasetId} />
         </aside>
         <main id="st-results" className="flex flex-col gap-3 min-w-0 scroll-mt-16">
-          {/* « Best epoch » OBJECTIF : classement InsightFace des checkpoints
-              (complète le best_preset issu des votes 👍/👎 juste en dessous). */}
+          {/*
+           * OBJECTIVE best epoch: InsightFace checkpoint ranking complements the vote-based
+           * best_preset directly below.
+           */}
           <FaceRankingPanel ranking={d.face_ranking} onScore={studio.scoreFaces}
             scoring={studio.scoring}
             hasCells={(d.cells || []).some((c) => c.status === 'done')} />

@@ -928,7 +928,7 @@ exposes the sending server's network address to the receiving service; LDS does
 not add an IP address or location to the event properties. Loss of connectivity
 does not block your work.
 
-**Conservation:** PostHog's free plan lists **one year** of event retention.
+**Retention:** PostHog's free plan lists **one year** of event retention.
 The provider is rolling enforcement out by project; while it is not enforced,
 older events remain stored. LDS therefore does not guarantee an automatic
 deletion date. See [PostHog's retention policy](https://posthog.com/docs/data/events-retention).

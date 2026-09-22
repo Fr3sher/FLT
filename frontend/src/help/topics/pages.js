@@ -468,8 +468,8 @@ export const PAGE_TOPICS = [
      'own row', 'checkpoints to test', 'add their lora', 'compare with other loras',
      'other loras', 'accordion'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
-  // Le lot vit dans le composant d'historique, monté par le Studio de test ET par
-  // le panneau « Generate from the board » : un seul sujet d'aide pour les deux.
+  // The history component serves both Test Studio and Generate from the board;
+  // use one help topic for both batch interfaces.
   action('studio-prompt-batch', '📝 Batch: run several saved prompts in one launch',
     ['studio', 'test studio', 'canvas', 'generate from the board', 'prompt', 'prompts',
      'recent prompts', 'saved prompts', 'prompt history', 'batch', 'batch of prompts',
@@ -479,14 +479,14 @@ export const PAGE_TOPICS = [
      'one image per prompt', 'n selected', 'clear selection', 'untick',
      'civitai prompts in the batch', 'batch civitai prompts', 'civitai batch',
      'how many images will this make', 'too many prompts', 'at most 24 prompts',
-     // Ce que quelqu'un tape après avoir été refusé par le plafond qui a existé
-     // une journée — et ce qu'il cherche maintenant : le coût, pas la limite.
+     // Search terms for users who encountered the former one-day limit and now
+     // want to understand cost rather than a cap.
      'prompt limit', 'maximum prompts', 'why was my batch refused', 'no limit',
      'how long will this take', 'estimated time', 'duration', 'at your current pace',
      'this run will queue', 'confirmation before a long run', 'seconds per image'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
-  // 📚 La bande d'historique et sa fenêtre sont UN composant, monté par le Studio
-  // de test ET par « Generate from the board » : un seul sujet d'aide pour les deux.
+  // The history strip and dialog form ONE shared component in Test Studio and
+  // Generate from the board; both use the same help topic.
   action('studio-saved-prompts', '📚 Saved prompts: find one again among hundreds',
     ['studio', 'test studio', 'canvas', 'generate from the board', 'prompt', 'prompts',
      'saved prompts', 'recent prompts', 'prompt history', 'browse prompts',
@@ -497,9 +497,8 @@ export const PAGE_TOPICS = [
      'cannot see the thumbnails', 'browse all prompts', 'never run', 'no image yet',
      'full prompt', 'show the whole prompt', 'expand the prompt'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
-  // 🌐 Un seul composant (bouton + navigateur) monté par les TROIS surfaces de
-  // génération — Studio du dataset, comparaison multi-LoRA, « Generate from the
-  // board » : un seul sujet d'aide pour les trois.
+  // ONE prompt-browser component serves all THREE generation surfaces: dataset
+  // Studio, multi-LoRA comparison, and Generate from the board. Share one topic.
   action('studio-civitai-browser', '🌐 Civitai: browse top images and reuse their prompts',
     ['studio', 'test studio', 'canvas', 'generate from the board', 'civitai',
      'civitai prompts', 'top images', 'browse civitai', 'prompt ideas',
@@ -510,13 +509,12 @@ export const PAGE_TOPICS = [
      'batch', 'add to batch', 'tick several civitai prompts', 'run several civitai prompts',
      'civitai prompts in one run', 'in batch'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
-  // 📤 One dialog, two doors (the checkpoint popover on the ◉ Canvas / run
-  // graph, and the shared image viewer everywhere it opens): one topic.
+  // One dialog, two entry points: the Canvas/run-graph checkpoint popover and
+  // the shared image viewer. Keep one help topic.
 
-  // 🎬 Les scènes vivent dans le même rail que le lot d'historique, monté par le
-  // Studio de test ET par « Generate from the board » : un seul sujet pour les deux.
-  // Les DEUX sources (banque et dataset) partagent ce sujet : c'est le même
-  // panneau et le même contrat — deux entrées d'aide diraient qu'il y en a deux.
+  // Scenes share the history-batch rail in Test Studio and Generate from the
+  // board. Bank and dataset sources also share the same panel and contract,
+  // so they must share this topic rather than appear to be separate features.
   action('studio-scene-prompts', '🎬 Scenes: run a bank’s or a dataset’s captions in order',
     ['studio', 'test studio', 'canvas', 'generate from the board', 'scene', 'scenes',
      'scenes from a bank', 'bank captions', 'import captions', 'captions from a bank',
@@ -526,15 +524,13 @@ export const PAGE_TOPICS = [
      'one pass per scene', 'run captions in order', 'choose a bank',
      'no scenes loaded', 'scene skipped', 'image without a caption',
      'caption pass', 'thumbnail of the page', 'which page',
-     // Le champ ✏️ par scène : ce qu'on tape pour le trouver, et ce qu'on
-     // se demande une fois trouvé (où le texte atterrit dans le prompt).
+     // Search terms for the per-scene edit field and where its text enters the prompt.
      'custom prompt', 'custom prompt per scene', 'add to a scene',
      'extra prompt', 'append to the caption', 'add text to a caption',
      'edit a scene prompt', 'change one scene', 'modifiers per scene',
      'per scene text', 'scene input', 'where does the custom text go',
-     // Ce que quelqu'un tape quand la source qu'il veut rejouer est son dataset
-     // — et ce qu'il cherchait avant que le dataset soit offert : un moyen de ne
-     // PAS réexporter son dataset vers une banque pour atteindre ce panneau.
+     // Search terms for replaying dataset images directly without exporting them
+     // to a bank merely to reach this panel.
      'scenes from a dataset', 'dataset captions', 'captions from a dataset',
      'use my dataset captions', 'run my dataset captions', 'choose a dataset',
      'replay my dataset', 'my own captions', 'only banks?', 'no dataset in the list',

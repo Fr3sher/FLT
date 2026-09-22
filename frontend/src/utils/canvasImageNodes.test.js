@@ -207,12 +207,10 @@ test('slideBelow drops past what is taken and carries the real footprint', () =>
   assert.equal(moved.w, 1600, 'a strip is not shrunk to one picture on the way');
 });
 
-/* Une écriture de board REFUSÉE ne doit plus être avalée.
-
-   `save_canvas_image_nodes` répond 200 avec `saved: 0` quand elle écarte une
-   ligne (géométrie inutilisable, image d'un autre dataset). Le front jetait la
-   réponse : l'image s'affichait, le serveur ne la gardait pas, et elle
-   disparaissait au rechargement sans qu'un mot ait été dit. */
+/* Do not silently swallow a REFUSED board write. save_canvas_image_nodes
+   returns 200 with saved: 0 when rejecting a row (invalid geometry or an image
+   from another dataset). Previously the frontend ignored the response, showing
+   an image that disappeared on refresh because the server had not saved it. */
 
 test('a write the server kept entirely says nothing', () => {
   assert.equal(pinWriteShortfall([{ image_id: 1 }], { saved: 1, total: 4 }), null);
@@ -227,11 +225,11 @@ test('a REFUSED row is named, with what it means for the board', () => {
 });
 
 test('an answer that does not count stays silent rather than crying wolf', () => {
-  // Un backend plus ancien ne publie pas `saved` : l'absence de compte n'est pas
-  // une preuve de refus, et une alerte fausse coûte plus cher que le silence.
+  // Older backends omit saved. A missing count does not prove rejection;
+  // avoid raising a false warning.
   assert.equal(pinWriteShortfall([{ image_id: 1 }], {}), null);
   assert.equal(pinWriteShortfall([{ image_id: 1 }], null), null);
   assert.equal(pinWriteShortfall([{ image_id: 1 }], { saved: 'nope' }), null);
-  // Rien d'envoyé, rien à dire.
+  // Nothing sent, nothing to report.
   assert.equal(pinWriteShortfall([], { saved: 0 }), null);
 });

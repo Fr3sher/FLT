@@ -1,21 +1,16 @@
-"""Route /api/scrape/scan : traitement des erreurs de scan() par `kind`.
-
-La règle gouvernante de la vague scraper : un bloc ne doit jamais paraître
-vide, un résultat vide ne doit jamais paraître en échec. Ce module vérifie
-qu'elle est honorée UNE seule fois, ici — le seul endroit qui voit TOUTES les
-sources gdl-backed, pas juste UniversalSource.
-
-Tout est mocké au niveau de `registry.resolve` : aucun appel réseau ni
-process gallery-dl."""
+"""The /api/scrape/scan route classifies scan errors by kind. A blocked source must
+never look empty; legitimate emptiness must never look like failure. Verify this
+centrally for ALL gallery-dl sources, not only UniversalSource. Mock
+registry.resolve; no network or gallery-dl process."""
 import pytest
 from lds_scrape.sources import gdl, registry
 from lds_scrape.sources.base import Match, Source, Capabilities, ResultList
 
 
 class _FakeSource(Source):
-    """Source jetable dont scan() renvoie exactement ce que le test lui donne."""
+    """Disposable source whose scan returns exactly the result supplied by the test."""
     name = 'fake'
-    priority = 1000       # avant toutes les vraies sources
+    priority = 1000       # Before all real sources.
     capabilities = Capabilities()
     paginated = True
     category = 'image'
@@ -48,10 +43,9 @@ def _use_fake_source(monkeypatch, **kw):
 
 @pytest.mark.plugins('scrape')
 def test_scan_empty_kind_is_200_with_zero_items(client, monkeypatch):
-    """kind='empty' : gallery-dl (ou équivalent) a tourné sans incident et n'a
-    rien trouvé — un scan vide réussi. La route doit répondre 200/count=0,
-    jamais 502 : c'est exactement le cas que les 502 anonymes cachaient pour
-    onze des quatorze sources avant cette vague."""
+    """kind=empty means the scraper completed successfully without media.
+    Return200/count=0, never502; generic502 responses previously hid this case for
+    eleven of fourteen sources."""
     _use_fake_source(monkeypatch, items=None,
                      err=gdl.GdlError('gallery-dl: no media found.', 'empty'))
 
@@ -67,10 +61,9 @@ def test_scan_empty_kind_is_200_with_zero_items(client, monkeypatch):
 
 @pytest.mark.plugins('scrape')
 def test_scan_auth_kind_still_answers_502_with_its_message(client, monkeypatch):
-    """Un vrai blocage (auth/429/DDoS-Guard) ne doit JAMAIS se déguiser en
-    résultat vide : seul kind='empty' bascule vers 200, tout le reste garde le
-    502 et son message d'origine — cette moitié de la règle ne doit pas
-    s'affaiblir en corrigeant l'autre."""
+    """Authentication,429 and DDoS-Guard failures must NEVER masquerade as empty
+    results. Only kind=empty becomes200; other failures retain502 and their
+    original message."""
     _use_fake_source(monkeypatch, items=None,
                      err=gdl.GdlError('gallery-dl: auth (429).', 'auth'))
 
@@ -84,8 +77,8 @@ def test_scan_auth_kind_still_answers_502_with_its_message(client, monkeypatch):
 
 @pytest.mark.plugins('scrape')
 def test_scan_toolerror_kind_still_answers_502(client, monkeypatch):
-    """Même garantie pour 'toolerror' (pas seulement 'auth') : n'importe quel
-    kind autre que 'empty' reste un échec HTTP explicite."""
+    """Apply the same guarantee to toolerror: every kind other than empty remains an
+    explicit HTTP failure."""
     _use_fake_source(monkeypatch, items=None,
                      err=gdl.GdlError('gallery-dl: unreadable response.', 'toolerror'))
 
@@ -97,13 +90,9 @@ def test_scan_toolerror_kind_still_answers_502(client, monkeypatch):
 
 @pytest.mark.plugins('scrape')
 def test_scan_surfaces_partial_when_the_time_budget_cut_the_listing_short(client, monkeypatch):
-    """`enumerate()` peut renvoyer un `ResultList` (app/scrape/sources/base.py)
-    avec `partial=True` (budget de temps épuisé en cours de récursion
-    d'albums, items présents mais incomplets, cf. gdl.py). Avant cette vague,
-    `partial` s'arrêtait au logger.info de universal.py : la route ne
-    l'exposait nulle part, donc l'UI ne pouvait jamais dire à l'utilisateur
-    qu'un résultat COMPLET-en-apparence était en réalité tronqué
-    (finding #2)."""
+    """enumerate may return ResultList with partial=True after an album-recursion
+    timeout. Previously universal.py only logged this and the route omitted it,
+    preventing the UI from disclosing incomplete results."""
     truncated = ResultList([
         {'url': 'https://fake.example.test/a.jpg', 'title': '', 'thumbnail': None,
          'type': 'image', 'platform': 'fake'}])
@@ -122,9 +111,8 @@ def test_scan_surfaces_partial_when_the_time_budget_cut_the_listing_short(client
 
 @pytest.mark.plugins('scrape')
 def test_scan_partial_defaults_to_false_for_ordinary_sources(client, monkeypatch):
-    """Une source non gdl-backed (liste ordinaire, pas de `ResultList`) ne doit
-    jamais faire lever `partial` par accident — `getattr` doit retomber sur False
-    plutôt que planter ou renvoyer une valeur truthy inattendue."""
+    """A non-gallery-dl source returning an ordinary list must default partial to
+    False, without an exception or unexpected truthy value."""
     _use_fake_source(monkeypatch, items=[{'url': 'https://fake.example.test/a.jpg',
                                           'title': '', 'thumbnail': None,
                                           'type': 'image', 'platform': 'fake'}], err=None)
@@ -138,9 +126,8 @@ def test_scan_partial_defaults_to_false_for_ordinary_sources(client, monkeypatch
 
 @pytest.mark.plugins('scrape')
 def test_scan_a_plain_string_error_without_kind_still_answers_502(client, monkeypatch):
-    """Une erreur qui n'est PAS une GdlError (str nu, pas de `.kind`) doit
-    rester un 502 — `getattr(err, 'kind', None)` renvoie None, jamais 'empty'
-    par accident sur un message sans provenance connue."""
+    """A plain string error without GdlError.kind stays502. getattr(err, kind, None)
+    must not invent an empty classification."""
     _use_fake_source(monkeypatch, items=None, err="Fake: something broke.")
 
     r = client.post('/api/scrape/scan',

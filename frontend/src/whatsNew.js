@@ -97,6 +97,12 @@ export const WHATS_NEW = [
     blurb: 'LDS checks your configured ComfyUI server and ai-toolkit folder immediately, while optional tools finish their checks in the background. Training and Studio become visible as soon as their tools are found, and checking ComfyUI no longer downloads its entire generation history.',
   },
   {
+    id: '2026-09-22-zzzzzzz-english-diagnostics',
+    date: '2026-09-22',
+    title: 'Read consistent English diagnostics throughout LDS',
+    blurb: 'Remaining French messages are now in English, including scraping and training diagnostics and public plugin messages.',
+  },
+  {
     id: '2026-09-22-zzzzzz-private-lds-plugin-updates',
     date: '2026-09-22',
     title: 'Receive updates for your private LDS plugins',

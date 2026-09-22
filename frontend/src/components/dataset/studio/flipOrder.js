@@ -1,16 +1,10 @@
 // react-frontend/src/components/dataset/studio/flipOrder.js
 /**
- * Ordre de navigation de la lightbox de résultats. But utilisateur explicite :
- * feuilleter d'un strength à l'autre POUR LE MÊME RENDU (même image, seed identique)
- * sans fermer la lightbox → les variantes de strength d'un même rendu doivent être
- * ADJACENTES dans la navigation.
- *
- * `keyOf(cell)` renvoie le tuple de tri avec la STRENGTH EN DERNIER : on regroupe
- * donc par « identité du rendu » (tout sauf la strength), et à identité égale on
- * ordonne par strength croissante. Deux images voisines ne diffèrent alors que par
- * la strength — exactement le balayage que l'utilisateur veut. On ne garde que les
- * cellules affichables (générées + fichier présent), les seules que la lightbox
- * sait ouvrir.
+ * Results lightbox navigation fulfills the request to compare strengths of the SAME rendering with
+ * identical seed without closing the viewer. Strength variants must be ADJACENT. keyOf(cell)
+ * returns a sort tuple with STRENGTH LAST: group by all other rendering attributes, then ascending
+ * strength. Neighboring images therefore differ only in strength. Keep only displayable cells with
+ * generated, existing files that the lightbox can open.
  */
 function cmpTuple(a, b) {
   const n = Math.max(a.length, b.length);

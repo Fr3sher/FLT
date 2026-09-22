@@ -1,13 +1,9 @@
-"""Scrape DIRECT → dataset CONCEPT (scrape_import_urls).
-
-Flux AUTONOME : les images scannées sélectionnées sont téléchargées directement
-dans le dataset. Vérifie : filtres qualité (côté court ≥768, ratio ≤3:1), dedup
-dHash intra-batch ET vs images existantes, mapping des raisons de download, et la
-route (concept-only, cap, compteurs skipped). Le download réseau est monkeypatché.
-
-Porté de l'app source, adapté à notre extraction mono-utilisateur : LOCAL_USER,
-racine d'images via la fixture `app`, route sous app.routes.datasets.
-"""
+"""Direct scraping into CONCEPT datasets through scrape_import_urls. Selected scanned
+images download directly into the dataset. Verify quality filters (short side at
+least 768, ratio at most 3:1), dHash deduplication within the batch and against
+existing images, download-reason mapping, and route constraints (concept-only,
+cap, skipped counts). Network downloads are mocked. Uses LOCAL_USER, the app
+fixture image root, and app.routes.datasets."""
 
 import pytest
 
@@ -29,9 +25,9 @@ from app.config import LOCAL_USER
 
 
 def _img_bytes(w=1280, h=960, fmt='JPEG', grad=None):
-    """grad='ltr'|'rtl' → gradient horizontal BASSE FRÉQUENCE. Indispensable pour
-    les tests dHash : un motif fin se fait moyenner par le resize 9×8 en aplat
-    uniforme → collisions. Un gradient survit au downscale (ltr→0, rtl→1)."""
+    """grad=ltr|rtl creates a LOW-FREQUENCY horizontal gradient. Fine patterns become
+    uniform after dHash resizing to 9x8 and collide; gradients survive downscaling
+    (ltr=0, rtl=1)."""
     if grad:
         ramp = list(range(0, 256, 32))
         if grad == 'rtl':
@@ -67,8 +63,8 @@ def _pexels_item(photo_id='123'):
 
 
 def _fake_downloader(by_url):
-    """Retourne un _download_scrape_item bouchonné depuis {url: bytes|None}.
-    None → échec réseau ('errors')."""
+    """Return a stub _download_scrape_item from {url: bytes|None}. None represents a
+    network failure counted under errors."""
     def _dl(item):
         data = by_url.get(item['url'])
         return ('ok', data) if data is not None else ('errors', None)
@@ -193,11 +189,11 @@ def test_scrape_import_filters(app):
     with app.app_context():
         c = _concept()
         by_url = {
-            'http://x/low.jpg': _img_bytes(700, 500),          # côté court < 768
+            'http://x/low.jpg': _img_bytes(700, 500),          # Short side below 768.
             'http://x/wide.jpg': _img_bytes(3000, 800),        # ratio 3.75
             'http://x/dup1.jpg': _img_bytes(grad='ltr'),
             'http://x/dup2.jpg': _img_bytes(grad='ltr', fmt='PNG'),
-            'http://x/dead.jpg': None,                          # échec réseau
+            'http://x/dead.jpg': None,                          # Network failure.
         }
         urls = ['low', 'wide', 'dup1', 'dup2', 'dead']
         items = [_item(f'http://x/{u}.jpg') for u in urls]
@@ -212,7 +208,7 @@ def test_scrape_import_dedup_vs_existing(app):
     with app.app_context():
         c = _concept()
         data = _img_bytes(grad='ltr')
-        ids, _ = svc.import_images(LOCAL_USER, c.id, [data], crop=False)  # déjà présente (master préservé)
+        ids, _ = svc.import_images(LOCAL_USER, c.id, [data], crop=False)  # Already present; master preserved.
         assert len(ids) == 1
         with patch.object(svc, '_download_scrape_item', _fake_downloader({'http://x/again.jpg': data})):
             res = svc.scrape_import_urls(LOCAL_USER, c.id, [_item('http://x/again.jpg')])
@@ -511,7 +507,7 @@ def test_backup_restores_all_small_rescue_pair_states_and_remaps_parents(app):
 # --- Downloader (SSRF + type) ------------------------------------------------
 def test_download_scrape_item_rejects_private_host(app):
     with app.app_context():
-        # _validate_public_http_url doit refuser un host qui résout en IP privée.
+        # _validate_public_http_url must reject a host resolving to a private IP.
         reason, data = svc._download_scrape_item({'url': 'http://127.0.0.1/a.jpg'})
         assert reason == 'errors' and data is None
 

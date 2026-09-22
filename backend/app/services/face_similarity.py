@@ -1,8 +1,8 @@
-"""Scoring de ressemblance faciale via InsightFace antelopev2, en SUBPROCESS dans un
-interprete DEDIE (insightface absent du venv Flask). Meme pattern que
-app/services/joycaption.py. CPU par DEFAUT -> ne touche pas le GPU/ComfyUI ;
-GPU seulement si face_scoring.device l'autorise ET que CUDA existe vraiment, et
-alors DANS la fenetre GPU exclusive."""
+"""InsightFace antelopev2 face-similarity scoring in a dedicated
+subprocess interpreter, outside Flask's venv, like joycaption.py.
+CPU by default leaves GPU/ComfyUI alone. GPU requires both permitted
+face_scoring.device configuration and available CUDA, inside the
+exclusive GPU window."""
 from __future__ import annotations
 import json
 import logging
@@ -18,7 +18,7 @@ from .infer_stream import run_infer_script, stderr_tail as _tail
 
 logger = logging.getLogger(__name__)
 
-# face_score_infer.py vit dans backend/infer/ (pas app/services/).
+# face_score_infer.py lives in backend/infer, not app/services.
 _SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'face_score_infer.py')
 
 # The scorer already announces every image it finishes on stderr — nobody read
@@ -39,8 +39,7 @@ def is_available() -> bool:
 
 
 def _stderr_tail(lines) -> str:
-    """Derniere ligne non vide de stderr — pour un crash Python c'est la ligne
-    `SomeError: ...` du traceback, exactement ce qu'un humain veut lire."""
+    """Last nonempty stderr line, normally SomeError: ... for Python crashes: the useful traceback message."""
     return _tail(lines)
 
 
@@ -58,39 +57,34 @@ def _run_scorer(python, payload, timeout, on_progress):
     return run_infer_script(python, _SCRIPT, payload, timeout, _on_line)
 
 
-# Budget temps par image, en secondes. antelopev2 sur CPU tourne autour de
-# 0.3-1 s/image selon la taille ; 3 s laisse de la marge sur une machine lente
-# sans jamais bloquer une session entiere. Le forfait couvre le chargement du
-# modele (le plus gros cout fixe du subprocess).
+# Per-image budget in seconds. CPU antelopev2 takes about 0.3-1 second
+# per image; three seconds allows slower machines without hanging the
+# whole session. The fixed allowance covers subprocess model loading.
 _TIMEOUT_PER_IMAGE_S = 3
 _TIMEOUT_FLOOR_S = 900
 
 
 def default_timeout(n_images: int) -> int:
-    """Budget d'un run de scoring, en secondes. Le timeout etait un forfait de
-    900 s dimensionne pour le seul set GARDE ; depuis que la passe couvre aussi
-    la pile de triage (les variations generees non encore ✓/✕), un gros dataset
-    peut depasser ce forfait — et un timeout ne rend AUCUN resultat partiel, donc
-    la passe entiere serait perdue. Le budget suit donc le nombre d'images."""
+    """Scoring-run timeout in seconds. The old fixed 900 seconds covered
+    kept images only; adding the triage pile can exceed it on large sets.
+    Timeout loses all partial results, so scale the budget with image count."""
     return max(_TIMEOUT_FLOOR_S,
                120 + _TIMEOUT_PER_IMAGE_S * max(0, int(n_images or 0)))
 
 
 def score_dataset_faces(ref_path, image_paths, timeout: int | None = None,
                         on_progress=None):
-    """Retourne ({path: {state, sim?, det, bbox_frac, yaw, zoomed}}, error|None).
+    """Return ({path: {state, sim?, det, bbox_frac, yaw, zoomed}}, error|None).
 
-    `on_progress(done, total)` — optionnel — est appelé à chaque image finie par
-    le scorer, depuis un thread de lecture (donc PAS dans un contexte Flask :
-    n'y touchez qu'à de l'état en mémoire, comme dataset_activity). Sans lui la
-    passe reste exactement ce qu'elle était.
+    Optional on_progress(done,total) runs after each image from a reader
+    thread, outside Flask context. Touch only in-memory state such as
+    dataset_activity there. Without it, behavior is unchanged.
 
-    `error` est None quand le scorer a tourne, sinon {'kind', 'detail'} :
-    'unavailable' (extras ML absents), 'failed' (subprocess/JSON casse — detail
-    = derniere ligne du traceback), 'ref_unusable' (la reference n'a pas de
-    visage exploitable), 'gpu_busy' (voie GPU demandee, carte prise). Les echecs restent NON-fatals ({} + error) mais
-    doivent etre VISIBLES : les avaler en {} muet transformait un scorer casse
-    en « Face scoring done — 0/14 » avec toast vert (user-reported)."""
+    error is None after successful scoring, otherwise kind/detail:
+    unavailable for missing ML extras, failed for subprocess/JSON failure
+    with traceback detail, ref_unusable for a bad reference, or gpu_busy.
+    Failures remain nonfatal empty results plus visible error; silently
+    swallowing them previously produced misleading green zero-scored toasts."""
     image_paths = [p for p in (image_paths or []) if p and os.path.isfile(p)]
     if not ref_path or not os.path.isfile(ref_path) or not image_paths:
         return {}, None
@@ -135,10 +129,10 @@ def score_dataset_faces(ref_path, image_paths, timeout: int | None = None,
                     'detail': f'the GPU is busy ({e}) - retry when it frees up, '
                               f'or set face_scoring.device to cpu'}
     except OSError as e:
-        logger.warning('face_similarity: subprocess echec : %s', e)
+        logger.warning('face_similarity: subprocess failed: %s', e)
         return {}, {'kind': 'failed', 'detail': str(e)}
     if timed_out:
-        logger.warning('face_similarity: timeout apres %ss', timeout)
+        logger.warning('face_similarity: timeout after %ss', timeout)
         return {}, {'kind': 'failed',
                     'detail': f'face scoring timed out after {timeout}s '
                               f'({len(image_paths)} image(s))'}
@@ -146,14 +140,14 @@ def score_dataset_faces(ref_path, image_paths, timeout: int | None = None,
                  if ln.strip().startswith('{')), '')
     if not line:
         tail = _stderr_tail(stderr_lines)
-        logger.warning('face_similarity: pas de JSON (rc=%s) stderr=%s',
+        logger.warning('face_similarity: no JSON (rc=%s) stderr=%s',
                        returncode, ' | '.join(stderr_lines))
         return {}, {'kind': 'failed',
                     'detail': tail or f'scorer produced no output (rc={returncode})'}
     try:
         data = json.loads(line)
     except json.JSONDecodeError as e:
-        logger.warning('face_similarity: JSON illisible : %s', e)
+        logger.warning('face_similarity: unreadable JSON: %s', e)
         return {}, {'kind': 'failed', 'detail': f'unreadable scorer output: {e}'}
     if not data.get('ref_ok'):
         logger.warning('face_similarity: ref inutilisable : %s', data.get('error'))

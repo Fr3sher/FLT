@@ -1,20 +1,13 @@
 // react-frontend/src/components/dataset/studio/StudioPreflightBanner.jsx
 /**
- * Bandeau « le pipeline de test ne peut pas tourner » — affiché quand le lancement
- * d'une grille Studio renvoie un 409 `studio_missing` (P0-a). Même esprit que le
- * message Klein « place X ici », mais itemisé : chaque fichier modèle manquant avec
- * son chemin relatif attendu (models/vae/…) et chaque custom node absent du ComfyUI
- * cible. Sans ça, un utilisateur frais lançait une grille dont chaque tuile échouait
- * en silence. Dismissable (le prochain lancement le réémet si le manque persiste).
- *
- * `missing` = { family, files: [{path, kind}], nodes: [class_type],
- *   node_packs: [{class_type, pack, url, search}] } | null. `node_packs` names the
- *   ComfyUI-Manager pack (+ search term & link) for each recognised missing node, so
- *   the user knows WHAT to install instead of reverse-mapping a raw class_type.
- * `archMismatch` = { family, detected, checkpoint } | null — a selected checkpoint
- * whose REAL architecture (read from its header) isn't this Studio's family, so
- * ComfyUI would silently drop it and every tile would render as if the LoRA were
- * off. A distinct, higher-priority stop than a missing asset.
+ * Pipeline-cannot-run banner appears on launch 409 studio_missing (P0-a). List each missing model
+ * with its expected relative path and each missing custom node, preventing new installations from
+ * launching grids whose tiles all fail silently. Dismissible; another launch repeats it if still
+ * unresolved. missing contains family, files [{path,kind}], nodes [class_type], and optional
+ * node_packs [{class_type,pack,url,search}] identifying ComfyUI-Manager packages instead of
+ * leaving users to interpret class names. archMismatch contains family, detected and checkpoint
+ * when header-detected architecture conflicts with the Studio family. ComfyUI would otherwise
+ * ignore that LoRA and render every tile without it. This is a separate, higher-priority blocker.
  */
 const FAMILY_LABELS = { zimage: 'Z-Image', sdxl: 'SDXL', krea: 'Krea 2 Turbo',
   flux: 'FLUX.1', flux2klein: 'FLUX.2 Klein' };
@@ -75,10 +68,11 @@ export default function StudioPreflightBanner({ missing, archMismatch, onDismiss
                   <code className="text-red-100 text-[0.6875rem] break-all">{f.path}</code>
                   <span className="text-red-200/60 text-[0.625rem]">({f.kind})</span>
                 </span>
-                {/* `hint` = ce que le résolveur a réellement cherché (noms acceptés,
-                    racines balayées). Sans lui, le chemin affiché se lit comme « ce
-                    nom exact est obligatoire », alors qu'une douzaine d'orthographes
-                    passent. (bobba84, GitHub #18) */}
+                {/*
+                 * hint reports what the resolver actually searched: accepted names and scanned
+                 * roots. Without it, the shown path falsely implies one exact filename is
+                 * mandatory despite multiple accepted spellings. (bobba84, GitHub #18)
+                 */}
                 {f.hint && (
                   <span className="text-red-200/60 text-[0.625rem] leading-snug">{f.hint}</span>
                 )}

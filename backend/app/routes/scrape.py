@@ -66,40 +66,25 @@ def scrape_scan():
     match.page = page
     match.include_albums = bool(data.get('include_albums'))
     items, err = match.source.scan(match)
-    # `partial` (cf. gdl.enumerate / base.ResultList) : le budget de temps global a
-    # coupé la récursion d'albums avant d'avoir tout exploré — les items présents
-    # restent valides, il en manque potentiellement. Lu directement sur `items` :
-    # `ResultList` (contrat de source public, app/scrape/sources/base.py — PAS un
-    # détail gallery-dl) porte l'attribut sur le retour qu'`enumerate()` produit,
-    # que la source le renvoie tel quel (universal.py, gdl_source.py, erome.py,
-    # image_sites.py, civitai.py, sexcom.py — TOUTES les sources gdl-backed) sans
-    # avoir besoin de le relayer explicitement. redgifs.py et instagram.py ne sont
-    # PAS gdl-backed (ports autonomes) mais réutilisent le même `ResultList` pour
-    # signaler leurs propres troncatures (page RedGifs refusée après une page
-    # réussie, itération Instagram interrompue en cours de route) — même
-    # convention, aucun changement ici. Reddit (reddit.py) est elle aussi
-    # gdl-backed en apparence seulement — port autonome — mais renvoie désormais
-    # un `ResultList` portant `partial` (budget d'appels listing épuisé). Seule
-    # une source qui n'implémente réellement aucune notion de troncature
-    # (Pexels…) renvoie une liste ordinaire → `getattr` retombe alors sur False.
+    # Read partial from the public ResultList contract. Album recursion
+    # may stop at its time budget with valid but incomplete items; all
+    # gallery-dl sources return that wrapper without explicit forwarding.
+    # Independent RedGifs/Instagram sources reuse it for rejected pages or
+    # interrupted iteration, and Reddit for listing-call exhaustion. Sources
+    # without truncation semantics, such as Pexels, return ordinary lists
+    # and getattr defaults to False.
     partial = bool(getattr(items, 'partial', False))
     if err and getattr(err, 'kind', None) != 'empty':
         return jsonify({'error': err, 'platform': result.platform.value,
                         'url_type': result.url_type.value}), 502
     if err:
-        # kind='empty' : gallery-dl (ou un moteur équivalent) a tourné sans
-        # incident et n'a juste rien trouvé — un scan vide réussi, pas une panne
-        # (cf. docstring de GdlError, app/scrape/sources/gdl.py). La règle
-        # gouvernante de cette vague — un bloc ne doit jamais paraître vide, un
-        # résultat vide ne doit jamais paraître en échec — se vérifie ICI, au
-        # seul endroit qui voit TOUTES les sources gdl-backed (gdl_source.py,
-        # erome.py, image_sites.py, civitai.py, sexcom.py, universal.py) : avant
-        # cette vérif, seule UniversalSource honorait la règle, les autres
-        # transformaient un « rien ici » légitime en toast d'échec (502).
+        # kind=empty means the engine completed successfully without media.
+        # Enforce this at the shared route for every source: blocking must not
+        # look empty, and a valid empty result must not become a 502 error.
+        # Previously only UniversalSource honored this distinction.
         items = []
-    # Une source peut être généralement paginable tout en résolvant certaines
-    # URLs unitaires. scan() peut alors poser un override sur Match, sans que la
-    # route connaisse la plateforme concernée.
+    # A generally paginated source may resolve individual URLs. scan can
+    # override pagination on Match without platform-specific route logic.
     paginated = getattr(match, 'paginated', None)
     if paginated is None:
         paginated = getattr(match.source, 'paginated', False)

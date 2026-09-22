@@ -1,14 +1,10 @@
-"""Dataset de type CONCEPT (LoRA de concept, ≠ personnage).
-
-Vérifie l'inversion de logique : `kind='concept'` persisté, import SANS head-crop
-et aspect PRÉSERVÉ (pas de bandes noires), captioner qui GARDE l'identité (prompt
-dédié + cleaner no-op), badge caption_leak neutralisé, et route d'import qui
-n'ouvre PAS la fenêtre GPU exclusive (aucune passe vision pour un import brut).
-
-Porté de l'app source, adapté à notre extraction mono-utilisateur : LOCAL_USER
-(pas de fixture admin_user), racine d'images via la fixture `app` (LDS_DATA_DIR),
-et vision_ollama importé LOCALEMENT par caption_images → on patche à la source.
-"""
+"""CONCEPT datasets reverse character-captioning logic. Verify persisted
+kind=concept, import without head crop while preserving aspect ratio,
+identity-preserving captioning through a dedicated prompt and no-op cleaner, a
+disabled caption_leak badge, and import without an exclusive GPU window. Adapted
+to the single-user host: LOCAL_USER instead of admin_user, app fixture image root
+through LDS_DATA_DIR, and patch vision_ollama at its source because caption_images
+imports it locally."""
 import io
 
 from PIL import Image
@@ -32,11 +28,11 @@ def _png(w=800, h=400):
     return b.getvalue()
 
 
-# --- 1) Modèle / CRUD --------------------------------------------------------
+# 1) Model / CRUD.
 def test_normalize_kind_and_is_concept():
     assert svc.normalize_kind('concept') == 'concept'
     assert svc.normalize_kind('CONCEPT') == 'concept'
-    # tout le reste -> None (character, stocké NULL)
+    # Everything else becomes None (character, stored as NULL).
     assert svc.normalize_kind('character') is None
     assert svc.normalize_kind(None) is None
     assert svc.normalize_kind('') is None
@@ -46,7 +42,7 @@ def test_normalize_kind_and_is_concept():
 def test_create_dataset_persists_concept(app):
     with app.app_context():
         c = svc.create_dataset(LOCAL_USER, 'CIM', 'cim_act', kind='concept', concept_desc=CONCEPT_DESC)
-        p = svc.create_dataset(LOCAL_USER, 'Emma', 'zchar_emma')  # défaut
+        p = svc.create_dataset(LOCAL_USER, 'Emma', 'zchar_emma')  # Default.
         assert db.session.get(FaceDataset, c.id).kind == 'concept'
         assert db.session.get(FaceDataset, c.id).concept_desc == CONCEPT_DESC
         assert db.session.get(FaceDataset, p.id).kind is None
@@ -56,25 +52,26 @@ def test_create_dataset_persists_concept(app):
 
 
 def test_create_concept_requires_desc(app):
-    """Le concept_desc est ce que la caption OMET → sans lui, la logique inversée n'a rien
-    à lier au trigger. create_dataset refuse (ValueError → 400 côté route)."""
+    """concept_desc defines what captions OMIT. Without it the reversed logic cannot
+    bind the concept to the trigger; create_dataset raises ValueError, surfaced as
+    HTTP 400."""
     import pytest
     with app.app_context():
         with pytest.raises(ValueError):
             svc.create_dataset(LOCAL_USER, 'CIM', 'cim_act', kind='concept')
         with pytest.raises(ValueError):
             svc.create_dataset(LOCAL_USER, 'CIM', 'cim_act', kind='concept', concept_desc='   ')
-        # un character sans desc reste parfaitement valide
+        # A character without a description remains valid.
         p = svc.create_dataset(LOCAL_USER, 'Emma', 'z')
         assert p.concept_desc is None
 
 
-# --- 2) Payload : kind exposé + badge caption_leak neutralisé ----------------
+# 2) Payload exposes kind and disables the caption_leak badge for concepts.
 def test_payload_exposes_kind_and_zeros_leak_badge(app):
     with app.app_context():
         c = svc.create_dataset(LOCAL_USER, 'CIM', 'cim_act', kind='concept', concept_desc=CONCEPT_DESC)
-        # une caption GARDÉE qui mentionne l'identité (hair) → « fuite » côté perso,
-        # mais VOULUE côté concept : le badge doit rester à 0.
+        # A KEPT caption mentioning identity (hair) leaks for characters but is INTENDED
+        # for concepts: the badge remains zero.
         db.session.add(FaceDatasetImage(dataset_id=c.id, source='import', status='keep',
                                         filename='x.webp', caption='long brown hair, blue eyes'))
         db.session.commit()
@@ -87,10 +84,10 @@ def test_payload_exposes_kind_and_zeros_leak_badge(app):
         p = svc.create_dataset(LOCAL_USER, 'Emma', 'z')
         payload_p = svc.dataset_payload(LOCAL_USER, p.id)
         assert payload_p['kind'] == 'character'
-        assert payload_p['concept_desc'] == ''  # character → jamais de concept_desc
-
-
-# --- 3) Import service : concept garde le ratio, character pade en carré ------
+        assert payload_p['concept_desc'] == ''  # Characters never have concept_desc.
+        #
+        # 3) Import preserves concept aspect ratio; character imports formerly used
+        # square padding.
 def test_import_concept_keeps_aspect(app):
     with app.app_context():
         c = svc.create_dataset(LOCAL_USER, 'CIM', 'cim_act', kind='concept', concept_desc=CONCEPT_DESC)
@@ -98,22 +95,21 @@ def test_import_concept_keeps_aspect(app):
         assert failed == 0 and len(ids) == 1
         img = db.session.get(FaceDatasetImage, ids[0])
         w, h = Image.open(svc._img_path(img)).size
-        # ratio PRÉSERVÉ (paysage 2:1) → jamais carré, pas de letterbox.
+        # PRESERVE the 2:1 landscape ratio: no square output or letterboxing.
         assert w > h and w <= 1024
 
 
 def test_import_character_no_crop_keeps_aspect(app):
-    """Un import personnage SANS head-crop préserve le ratio (plus de carré padé :
-    les bandes noires étaient apprises par le LoRA et tout import devenait carré)."""
+    """Character import WITHOUT head crop preserves aspect ratio. Square padding
+    taught the LoRA black bars and made every import square."""
     with app.app_context():
         p = svc.create_dataset(LOCAL_USER, 'Emma', 'z')  # character
         ids, _ = svc.import_images(LOCAL_USER, p.id, [_png(800, 400)], crop=False)
         img = db.session.get(FaceDatasetImage, ids[0])
         w, h = Image.open(svc._img_path(img)).size
-        assert (w, h) == (800, 400)  # ratio d'origine, pas de padding
-
-
-# --- 4) Route d'import concept : PAS de fenêtre GPU exclusive -----------------
+        assert (w, h) == (800, 400)  # Original ratio, no padding.
+        #
+        # 4) Concept import route does not acquire the exclusive GPU window.
 def test_import_route_concept_skips_gpu_window(client, monkeypatch):
     import app.routes.datasets as dr
     did = client.post('/api/dataset/create',
@@ -128,7 +124,7 @@ def test_import_route_concept_skips_gpu_window(client, monkeypatch):
         return [1], 0
 
     def boom(*a, **k):
-        raise AssertionError('la fenêtre GPU exclusive ne doit PAS être ouverte pour un import concept')
+        raise AssertionError('concept imports must not acquire the exclusive GPU window')
 
     monkeypatch.setattr(dr.svc, 'import_images', fake_import)
     monkeypatch.setattr(dr, 'gpu_exclusive_vision_window', boom)
@@ -139,13 +135,13 @@ def test_import_route_concept_skips_gpu_window(client, monkeypatch):
     assert captured['crop'] is False
 
 
-# --- 5) Captioner concept : prompt dédié ({concept} rempli) + identité CONSERVÉE ------
+# 5) Concept captioner uses its dedicated prompt with {concept} and PRESERVES identity.
 def test_caption_concept_uses_concept_prompt_and_keeps_identity(app, monkeypatch):
     from app.services import vision_ollama
     with app.app_context():
         save_config({'captioning': {'backend': 'ollama'}})  # force Ollama, saute JoyCaption
         c = svc.create_dataset(LOCAL_USER, 'CIM', 'cim_act', kind='concept', concept_desc=CONCEPT_DESC)
-        # image gardée sans caption, fichier réel sur disque
+        # Kept image without a caption, backed by a real file.
         ids, _ = svc.import_images(LOCAL_USER, c.id, [_png(512, 512)], crop=False)
         img = db.session.get(FaceDatasetImage, ids[0])
 
@@ -153,9 +149,9 @@ def test_caption_concept_uses_concept_prompt_and_keeps_identity(app, monkeypatch
 
         def fake_describe(image_bytes, prompt, **kwargs):
             prompts.append(prompt)
-            # une caption qui DÉCRIT l'identité (hair) — doit survivre au no-op cleaner.
-            # Aucun mot de CONCEPT_DESC (ice/cream/cone/licked) n'y figure → la garantie
-            # d'omission est un no-op, elle ne relance donc pas describe.
+            # A caption DESCRIBING identity (hair) must survive the no-op cleaner. It
+            # contains none of CONCEPT_DESC (ice/cream/cone/licked), so omission
+            # enforcement is a no-op and does not retry describe.
             return 'close-up, a woman with long brown hair and blue eyes, soft light'
 
         monkeypatch.setattr(vision_ollama, 'describe_image_ollama', fake_describe)
@@ -163,16 +159,16 @@ def test_caption_concept_uses_concept_prompt_and_keeps_identity(app, monkeypatch
         n = svc.caption_images(LOCAL_USER, c.id)
 
         assert n == 1
-        # Le prompt de caption est le prompt CONCEPT avec {concept} RÉELLEMENT injecté.
+        # The caption prompt is the CONCEPT prompt with the actual concept substituted.
         expected = CAPTION_PROMPT_CONCEPT.format(concept=CONCEPT_DESC)
         assert expected in prompts
-        assert CONCEPT_DESC in expected  # placeholder bien substitué
+        assert CONCEPT_DESC in expected  # Placeholder substituted correctly.
         db.session.refresh(img)
-        # l'identité est CONSERVÉE (cleaner no-op) — pas de suppression de « hair ».
+        # Identity is PRESERVED by the no-op cleaner: hair is not removed.
         assert 'hair' in (img.caption or '')
 
 
-# --- update_dataset_settings (édition post-création) -------------------------
+# update_dataset_settings: editing after creation.
 def test_update_settings_name_and_trigger(app):
     with app.app_context():
         d = svc.create_dataset(LOCAL_USER, 'Old', 'oldtrig')
@@ -189,19 +185,19 @@ def test_update_settings_empty_trigger_rejected(app):
         with pytest.raises(ValueError):
             svc.update_dataset_settings(LOCAL_USER, d.id, trigger_word='   ')
         db.session.refresh(d)
-        assert d.trigger_word == 'trig'   # inchangé
+        assert d.trigger_word == 'trig'   # Unchanged.
 
 
 def test_update_settings_concept_desc_resets_avoidlist_cache(app):
     with app.app_context():
         d = svc.create_dataset(LOCAL_USER, 'C', 'cact', kind='concept', concept_desc=CONCEPT_DESC)
-        d.concept_terms = '["ice", "cream", "cone"]'   # cache LLM simulé
+        d.concept_terms = '["ice", "cream", "cone"]'   # Simulated LLM cache.
         db.session.commit()
         res = svc.update_dataset_settings(LOCAL_USER, d.id, concept_desc='a mirror selfie')
         assert res['concept_desc_changed'] is True
         db.session.refresh(d)
         assert d.concept_desc == 'a mirror selfie'
-        assert d.concept_terms is None   # cache invalidé → régénéré au prochain caption
+        assert d.concept_terms is None   # Cache invalidated: regenerated on the next caption pass.
 
 
 def test_update_settings_same_concept_desc_keeps_cache(app):
@@ -212,7 +208,7 @@ def test_update_settings_same_concept_desc_keeps_cache(app):
         res = svc.update_dataset_settings(LOCAL_USER, d.id, concept_desc=CONCEPT_DESC)
         assert res['concept_desc_changed'] is False
         db.session.refresh(d)
-        assert d.concept_terms == '["ice"]'   # inchangé → pas de re-génération inutile
+        assert d.concept_terms == '["ice"]'   # Unchanged: no unnecessary regeneration.
 
 
 def test_update_settings_concept_desc_ignored_on_character(app):
@@ -221,7 +217,7 @@ def test_update_settings_concept_desc_ignored_on_character(app):
         res = svc.update_dataset_settings(LOCAL_USER, d.id, concept_desc='whatever')
         assert res['concept_desc_changed'] is False
         db.session.refresh(d)
-        assert d.concept_desc is None   # un personnage n'a pas de concept_desc
+        assert d.concept_desc is None   # A character has no concept_desc.
 
 
 def test_update_settings_missing_dataset_returns_none(app):

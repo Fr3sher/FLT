@@ -1,4 +1,4 @@
-"""Source Pexels via l'API officielle — aucun appel réseau réel."""
+"""Pexels source using the official API, without real network calls."""
 
 import pytest
 
@@ -192,7 +192,7 @@ def test_localized_resource_routes_map_to_fixed_api_endpoints(
 def test_search_decodes_query_maps_attribution_and_uses_raw_auth(monkeypatch):
     response = _Response(payload={
         'photos': [_photo(), {'id': 999, 'src': {}}],
-        # État uniquement : le client ne doit jamais suivre cette URL.
+        # State only: the client must never follow this URL.
         'next_page': 'https://evil.example/steal-authorization',
     })
     calls = _mock_get(monkeypatch, response)

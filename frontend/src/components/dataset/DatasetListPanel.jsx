@@ -307,22 +307,22 @@ function DatasetRow({ d, onOpen, onDelete, onExportZip, onExportBackup, showPrev
 function NewDatasetForm({ onCreate, onClose }) {
   const [name, setName] = useState('');
   const [trigger, setTrigger] = useState('');
-  // Nature du dataset : personnage (identité liée au trigger) vs concept (un acte/effet
-  // récurrent lié au trigger — import brut, captions inversées, pas de référence/visage).
+  // Dataset kind: character (identity bound to the trigger) or concept (recurring action/effect
+  // bound to the trigger, with raw import, inverse captions and no reference/face tools).
   const [kind, setKind] = useState('character');
-  // Modèle cible choisi à la création : pilote le format de caption (SDXL→booru, sinon
-  // prose) DÈS le départ et le regroupement du menu. Reste modifiable dans le panneau
-  // d'entraînement. Défaut Z-Image (le type par défaut de l'app).
+  // The target model selected at creation sets the caption format immediately (SDXL = booru,
+  // otherwise prose) and the menu group. It remains editable in the training panel. Default:
+  // Z-Image, the app's default type.
   const [trainType, setTrainType] = useState('zimage');
-  // Concept only : ce que le captioneur doit OMETTRE de chaque caption pour que le concept
-  // se lie au trigger (l'inverse d'un LoRA de personnage). Obligatoire pour un concept.
+  // Concept only: what the captioner must OMIT from every caption so the concept binds to the
+  // trigger, the inverse of a character LoRA. Required for concepts.
   const [conceptDesc, setConceptDesc] = useState('');
-  // Character only : fidélité visage seul (défaut) ou visage + corps (les marques
-  // corporelles sont bannies des captions et la composition cible plus de corps).
+  // Character only: face fidelity (default) or face + body. Body mode excludes body markings from
+  // captions and targets more body shots.
   const [fidelity, setFidelity] = useState('face');
   const concept = kind === 'concept';
-  // Style : esthétique globale absorbée par le LoRA — captions de contenu pur
-  // obligatoires, aucun trigger d'activation, pas de fidélité visage.
+  // Style: the LoRA absorbs a global aesthetic, requiring content-only captions, no activation
+  // trigger and no face fidelity.
   const style = kind === 'style';
   // Mirrors the server rule EXACTLY (POST /api/dataset/create): name is always
   // required; trigger_word is required for character/concept (it's the token
@@ -342,9 +342,11 @@ function NewDatasetForm({ onCreate, onClose }) {
             className="rounded px-1.5 text-content-subtle hover:text-content"><X aria-hidden="true" className="h-4 w-4" /></button>
         )}
       </div>
-      {/* Nature : personnage (défaut) vs concept. Choisir « Concept » adapte tout le
-          reste — import brut aspect conservé, captions qui gardent l'identité, pas de
-          photo de référence ni de générateur de variations. */}
+      {/*
+       * Kind: character (default) or concept. Concept adapts the rest: raw import preserves aspect
+       * ratio, captions retain identity, and reference photos and the variation generator are
+       * hidden.
+       */}
       <div className="flex gap-1.5">
         {[['character', User, 'Character', 'A person/face — identity binds to the trigger'],
           ['concept', Lightbulb, 'Concept', 'A recurring act/effect — the concept binds to the trigger'],
@@ -384,9 +386,11 @@ function NewDatasetForm({ onCreate, onClose }) {
           </label>
         )}
       </div>
-      {/* Modèle cible : fixe le format de caption PAR DÉFAUT (SDXL→tags booru,
-          anima→hybride: les deux acceptées, sinon prose) et la section du menu.
-          Modifiable ensuite dans le panneau d'entraînement. */}
+      {/*
+       * The target model sets the DEFAULT caption format (SDXL = booru tags; anima = hybrid,
+       * accepting either; otherwise prose) and the menu section. Editable later in the training
+       * panel.
+       */}
       <label className="flex flex-col gap-1 text-[0.6875rem] text-content-muted">
         Target model <span className="text-content-subtle normal-case">— sets the caption style &amp; groups the menu (changeable later)</span>
         <select value={trainType} onChange={(e) => setTrainType(e.target.value)}
@@ -399,9 +403,10 @@ function NewDatasetForm({ onCreate, onClose }) {
           <option value="anima">Anima (prose or booru tags)</option>
         </select>
       </label>
-      {/* Fidélité (personnage) : visage seul (défaut) vs visage + corps. En mode corps,
-          les marques corporelles permanentes sont bannies des captions (elles se lient
-          au trigger) et la composition cible plus de bustes/corps. */}
+      {/*
+       * Character fidelity: face only (default) or face + body. Body mode excludes permanent body
+       * markings from captions so they bind to the trigger, and targets more bust/body shots.
+       */}
       {!concept && !style && (
         <div className="flex flex-col gap-1 text-[0.6875rem] text-content-muted">
           <span>Fidelity <span className="text-content-subtle normal-case">— what the LoRA must reproduce (changeable later)</span></span>
@@ -420,8 +425,10 @@ function NewDatasetForm({ onCreate, onClose }) {
           </div>
         </div>
       )}
-      {/* Concept description : ce que la caption OMET (l'acte récurrent). Alimente le
-          {concept} des prompts caption/raffinage/ban-list. Décrire l'ACTE, pas le sujet. */}
+      {/*
+       * Concept description: the recurring action OMITTED from captions. Fills {concept} in
+       * caption/refinement/ban-list prompts. Describe the ACTION, not the subject.
+       */}
       {concept && (
         <label className="flex flex-col gap-1 text-[0.6875rem] text-content-muted">
           What is the recurring concept? <span className="text-fuchsia-300">(required — it will be omitted from every caption)</span>
@@ -505,8 +512,10 @@ export default function DatasetListPanel({
           row 2 (below, non-empty library only) = search + filters + size. */}
       <div>
         <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-content-subtle">library</p>
-        {/* relative z-30 : sans stacking-context propre, le z-20 du panneau du
-            menu « 💾 Backup » resterait piégé sous les tuiles plus bas. */}
+        {/*
+         * relative z-30 creates a stacking context; otherwise the Backup menu panel's z-20 would
+         * remain trapped below the tiles.
+         */}
         <div className="relative z-30 mt-1 flex flex-wrap items-center gap-2">
           <h1 className="text-xl font-semibold text-content flex items-center gap-2">Datasets<HelpBadge topic="page-datasets" /></h1>
           {!empty && <span className="text-sm text-content-subtle">{datasets.length}</span>}

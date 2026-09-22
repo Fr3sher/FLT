@@ -1,37 +1,14 @@
 /**
- * Toute modale du Studio se PORTAILLE — sinon elle est plafonnée et découpée.
- *
- * ── Le bug qui a produit ce fichier (mesuré à l'écran le 2026-09-02) ─────────
- * Les 👍/👎 des cellules de résultat se peignaient PAR-DESSUS les prompts du
- * navigateur 🌐 Civitai, modale ouverte. Ce n'était pas un z-index trop bas : la
- * modale portait déjà `z-[9999]`.
- *
- * `StudioRunSetup` est monté dans l'`<aside lg:sticky lg:top-16
- * lg:overflow-auto>` de `ComparisonStudio`. Deux conséquences, toutes deux
- * invisibles depuis le composant :
- *   · `position: sticky` OUVRE un contexte d'empilement. Un z-index posé dedans
- *     est plafonné PAR l'aside : il ne peut pas passer au-dessus de la grille de
- *     résultats, qui est la SŒUR de l'aside et vient après elle dans le DOM.
- *     Monter le nombre ne change rien — 9999 dans un contexte qui vaut 0 reste
- *     sous un frère qui vaut 1.
- *   · `overflow-auto` DÉCOUPE en plus l'enfant au cadre de l'aside.
- * `createPortal(…, document.body)` sort du contexte fautif. C'est le seul fix.
- *
- * ── Pourquoi un test de SOURCE pour un bug de RENDU ─────────────────────────
- * Parce que rien d'autre ne l'attrape :
- *   · un test de source lit des classes, il ne compose pas de calques ;
- *   · le harnais SSR (`renderToStaticMarkup`) exécute le composant mais n'a
- *     AUCUN layout — il ne peut pas voir un empilement ;
- *   · la sonde responsive n'attrape pas celui-ci non plus : un `data-probe-layer`
- *     est explicitement « apparié avec rien » dans le contrôle de chevauchement,
- *     donc marquer la modale comme couche la SORT du contrôle. Sa mesure verte
- *     sur cet écran est correcte et ne dit rien de ce bug.
- * Il reste donc la capture d'écran — et cette règle, qui empêche la prochaine
- * modale de ce dossier de rentrer dans le même piège sans que personne ne
- * repasse par un navigateur.
- *
- * La liste s'ÉNUMÈRE : tout `.jsx` du dossier qui peint un plein-écran
- * (`fixed inset-0`) est tenu de se portailler, sans qu'on l'inscrive nulle part.
+ * Every Studio modal must use a PORTAL to avoid stacking limits and clipping. On 2026-09-02,
+ * result votes painted ABOVE Civitai prompts despite modal z-[9999]. StudioRunSetup lives inside
+ * ComparisonStudio's sticky, scrollable aside: sticky creates a parent stacking context below the
+ * later sibling results grid, while overflow-auto clips children. Raising child z-index cannot
+ * escape; createPortal to document.body can. This SOURCE test guards a rendering rule, not visual
+ * output. Source tests inspect classes, SSR has no layout, and responsive overlap probes
+ * intentionally exclude data-probe-layer from pairs, so none can detect this stacking defect.
+ * Screenshots verify it visually; this contract prevents future modals from repeating it.
+ * Automatically enumerate every JSX component here rendering fixed inset-0 and require a portal
+ * without manual registration.
  */
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -39,14 +16,11 @@ import test from 'node:test';
 
 const HERE = new URL('./', import.meta.url);
 
-/** [{ file, source }] de chaque composant qui peint un plein-écran, dans ce
- *  dossier ET SES SOUS-DOSSIERS.
- *
- *  La récursion n'est pas une élégance : la première version lisait le dossier À
- *  PLAT, et `video/MotionModelDialog.jsx` — une modale plein-écran, montée par le
- *  Video Test Studio — lui était donc invisible. Une garde qui s'arrête à un
- *  niveau de profondeur laisse à la prochaine arborescence le soin de la
- *  contourner sans le faire exprès. */
+/**
+ * Return {file, source} for full-screen components in this directory AND SUBDIRECTORIES. Recursion
+ * is essential: the original flat scan missed video/MotionModelDialog.jsx in Video Test Studio. A
+ * depth-limited guard can be bypassed accidentally by later directory organization.
+ */
 function fullScreenOverlays(dir = HERE, prefix = '') {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -70,50 +44,49 @@ function studioFullScreenOverlays() {
     ...fullScreenOverlays(new URL('../../../../../bundled/video/frontend/studio/', HERE))];
 }
 
-test('la liste des modales du Studio n’est pas vide — sinon la garde ne garde rien', () => {
+test('the Studio modal inventory is nonempty so the guard actually checks something', () => {
   const found = studioFullScreenOverlays();
   assert.ok(found.length >= 2,
-    `attendu au moins 2 plein-écrans dans ce dossier, trouvé ${found.length} `
-    + '— le motif de détection a dû changer, la garde ne prouve plus rien');
+    `expected at least 2 full-screen overlays in this directory, found ${found.length} `
+    + '— the detection pattern may have changed, leaving the guard ineffective');
 });
 
-test('l’énumération DESCEND vraiment dans les sous-dossiers', () => {
-  /* L'épingle qui manquait, et son histoire : la première version lisait le
-     dossier à plat, donc `video/MotionModelDialog.jsx` lui échappait. Une fois
-     ce fichier portaillé, RETIRER la récursion ne fait plus rougir le test
-     ci-dessous — il verrait juste moins de fichiers, tous conformes. La règle
-     serait alors gardée par rien, et le prochain sous-dossier repartirait
-     invisible.
-     On exige donc que l'énumération RAPPORTE au moins un fichier venu d'un
-     sous-dossier : un compte n'est une preuve que s'il est EXERCÉ. */
+test('the inventory actually DESCENDS into subdirectories', () => {
+  /*
+   * Pin recursive coverage itself. The original flat scan missed video/MotionModelDialog.jsx. Once
+   * that file was portaled, removing recursion would still pass by checking fewer
+   * already-compliant files, leaving future subdirectories unguarded. Require at least one
+   * enumerated file from a subdirectory: coverage counts prove something only when exercised.
+   */
   const found = studioFullScreenOverlays();
   const nested = found.filter(({ file }) => file.includes('/'));
   assert.ok(nested.length >= 1,
-    'aucun plein-écran trouvé sous un sous-dossier : la récursion est morte, '
-    + `et ${found.length} fichier(s) à plat ne prouvent rien de l'arborescence`);
+    'no full-screen overlays found in subdirectories: recursion is broken, '
+    + `and ${found.length} top-level file(s) prove nothing about nested coverage`);
   assert.ok(nested.some(({ file }) => file.endsWith('MotionModelDialog.jsx')),
-    'video/MotionModelDialog.jsx n’est plus vu par l’énumération — '
-    + `vus : ${nested.map((f) => f.file).join(', ') || 'aucun'}`);
+    'video/MotionModelDialog.jsx is no longer included in the inventory — '
+    + `found: ${nested.map((f) => f.file).join(', ') || 'none'}`);
 });
 
-test('CHAQUE modale plein-écran du Studio est portaillée sur document.body', () => {
+test('EVERY full-screen Studio modal is portaled to document.body', () => {
   const offenders = studioFullScreenOverlays()
     .filter(({ source }) => !(/from 'react-dom'/.test(source)
       && /createPortal\(/.test(source)
       && /document\.body/.test(source)));
   assert.deepEqual(offenders.map((o) => o.file), [],
-    'Ces modales du Studio ne sont pas portaillées. Montées sous l’`<aside '
-    + 'lg:sticky lg:overflow-auto>` de ComparisonStudio, leur z-index est '
-    + 'plafonné par le contexte d’empilement du sticky et leur boîte est '
-    + 'découpée par l’overflow — la page se peint par-dessus. '
-    + 'Fix : `return createPortal(<div …>, document.body)`, comme '
-    + 'CaptionEditorDialog. Aucun z-index ne répare ça de l’intérieur.');
+    'These Studio modals are not portaled. Mounted under ComparisonStudio’s '
+    + '`<aside lg:sticky lg:overflow-auto>`, their z-index is capped by the '
+    + 'sticky stacking context and their boxes are clipped by overflow, '
+    + 'allowing the page to paint over them. '
+    + 'Fix: `return createPortal(<div …>, document.body)`, as in '
+    + 'CaptionEditorDialog. No inner z-index can escape the parent context.');
 });
 
-test('l’aside qui piège l’empilement est toujours celui décrit ci-dessus', () => {
-  /* Si ce panneau perd son `sticky`/`overflow`, la raison d’être du portail
-     change — et quelqu’un doit le relire plutôt que de trouver un commentaire
-     qui parle d’un CSS disparu. Épingler la cause, pas seulement le remède. */
+test('the aside causing the stacking trap still matches the description above', () => {
+  /*
+   * If the panel loses sticky/overflow, the portal's rationale changes and deserves review instead
+   * of leaving a stale CSS comment. Pin the cause as well as the remedy.
+   */
   const owner = readFileSync(new URL('./ComparisonStudio.jsx', HERE), 'utf8').replace(/\r\n/g, '\n');
   assert.match(owner, /<aside className="[^"]*lg:sticky[^"]*lg:overflow-auto/);
 });

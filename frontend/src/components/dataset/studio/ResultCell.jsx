@@ -1,19 +1,17 @@
 // react-frontend/src/components/dataset/studio/ResultCell.jsx
 /**
- * Une cellule de grille (checkpoint × strength) pour une variante (format/cfg/steps).
- * Bande de N tuiles (les seeds du batch) + score agrégé PAR CONFIG affiché UNE fois
- * + ★ sur la meilleure config. Extrait 1:1 du `renderCell` de l'ancien LoraTestStudio
- * (behavior-preserving) : même logique de clé `ckey`, même calcul `score`/`isBest`.
- *
- * Contrat souple (le calcul `list`/`score`/`isBest` est fait ICI, comme `renderCell`).
+ * One checkpoint/strength grid cell for a format/CFG/steps variant: a strip of seed tiles, one
+ * aggregated score PER CONFIG and a star for the best configuration. Extracted unchanged from old
+ * LoraTestStudio renderCell, preserving ckey and score/isBest calculations. list, score and isBest
+ * remain computed HERE.
  */
 import ResultTile from './ResultTile';
 import { cellKeyFor } from './resultKeys';
 
 export default function ResultCell({ row, strength, variant, cellList, scoreMap, best, datasetId, onRate, onOpen, fmt }) {
-  // La MÊME fonction que celle qui a indexé `cellList` (cf. resultKeys) : la clé
-  // était écrite à la main des deux côtés, et un axe ajouté d'un seul côté ne
-  // produit pas d'erreur — juste des cases vides. Le contrat est testé.
+  // Use the SAME function that indexed cellList (see resultKeys). Duplicated manual keys
+  // previously let one-sided axis additions produce empty cells without errors. The contract is
+  // tested.
   const key = cellKeyFor(row.filename, strength, variant);
   const list = cellList.get(key);
   if (!list || !list.length) {
@@ -33,7 +31,7 @@ export default function ResultCell({ row, strength, variant, cellList, scoreMap,
             datasetId={datasetId} onRate={onRate} onOpen={onOpen} fmt={fmt} />
         ))}
       </div>
-      {/* Score agrégé PAR CONFIG (toutes seeds/runs confondus) + confiance. */}
+      {/* Aggregated score PER CONFIG across all seeds/runs, plus confidence. */}
       <div className="flex items-center justify-end gap-1 mt-0.5">
         <span className="text-content-muted text-[0.6875rem] tabular-nums"
           title={score ? `+${score.likes} / −${score.dislikes} on ${score.images} image(s)` : ''}>

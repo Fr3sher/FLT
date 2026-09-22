@@ -1,11 +1,9 @@
-"""JoyCaption Beta One — captioning de dataset LoRA via subprocess.
+"""JoyCaption Beta One LoRA dataset captioning through a subprocess.
 
-Le modèle (Llava 8B NF4) tourne dans le PYTHON DU VENV ai-toolkit (torch+transformers
-+bitsandbytes), pas le Python de Flask — même pattern que la conversion zimage. On
-caption tout le dataset en UN seul chargement de modèle (batch), sinon recharger le
-8B par image serait inexploitable. Non-fatal : en cas d'indispo/échec, retourne {} et
-le caller (`face_dataset_service.caption_images`) retombe sur Qwen3-VL (ou honore le
-backend choisi dans les réglages)."""
+Run Llava 8B NF4 in ai-toolkit's torch/transformers/bitsandbytes venv,
+not Flask's Python. Load once for the entire batch rather than per
+image. Missing/failed inference is nonfatal and returns {}; the caller
+falls back to Qwen3-VL or honors the explicitly selected backend."""
 from __future__ import annotations
 from ..timeout_settings import processing_timeout
 
@@ -22,7 +20,7 @@ from . import infer_env
 
 logger = logging.getLogger(__name__)
 
-# joycaption_infer.py vit dans backend/infer/ (pas app/services/).
+# joycaption_infer.py lives in backend/infer, not app/services.
 _SCRIPT = cfg.BACKEND_DIR / 'infer' / 'joycaption_infer.py'
 
 
@@ -62,39 +60,33 @@ def caption_images_joycaption(paths, prompt: str | None = None,
                               max_tokens: int = 300, timeout: int = 1800,
                               activity_token=None, should_cancel=None,
                               errors_out=None) -> dict:
-    """Caption une LISTE d'images en un seul chargement de modèle.
-    Retourne {chemin: caption}. Vide si indispo/échec (non-fatal).
+    """Caption an image list with one model load. Return {path: caption},
+    or {} for nonfatal unavailability/failure.
 
-    Le stderr du subprocess est STREAMÉ ligne-à-ligne vers le log de l'app EN DIRECT
-    (thread lecteur) : au PREMIER run le modèle 8B NF4 (~7 Go) se télécharge depuis
-    Hugging Face, et sans ce flux l'app semblait gelée (issue #6 — l'utilisateur croyait
-    que rien ne se passait). Chargement du modèle, progression du download et erreurs
-    apparaissent désormais au fil de l'eau. ``activity_token`` (optionnel) reflète en plus
-    les jalons dans l'indicateur d'activité du dataset.
+    Stream subprocess stderr line by line into app logs via a reader thread.
+    The first run downloads about 7 GB from Hugging Face; without visible
+    loading/download/error progress the app appeared frozen (issue #6).
+    Optional activity_token also updates persistent dataset activity.
 
-    ``should_cancel`` (optionnel) : polled at each image BOUNDARY for a graceful Stop.
-    stdout is streamed per image, so each caption already delivered is KEPT; when the flag
-    trips, the subprocess is killed (no half-decoded image is interrupted) and the captions
-    gathered so far are returned — the SAME "keep what's written, stop the rest" contract as
-    the Ollama loop. Without it the whole batch was uninterruptible: Stop flipped the UI to
-    "Stopping…" while JoyCaption kept captioning every image to the end.
-
-    ``errors_out`` (optional dict): filled with {path: reason} for every image the
-    worker REFUSED. A per-image failure never aborts the batch, so without this
-    channel those images left no trace anywhere the user could reach — the run
-    simply reported fewer captions than images and the reason stayed in the log."""
+    Poll should_cancel at image boundaries. Stream each caption immediately
+    and retain completed work; on cancellation terminate the worker between
+    images and return collected captions. This matches Ollama's stop-rest/
+    keep-written contract rather than letting an entire batch continue
+    after the UI says Stopping.
+    Optional errors_out maps refused image paths to reasons. Per-image
+    failures do not abort the batch, but their explanations must be
+    available beyond server logs."""
     paths = [p for p in (paths or []) if p and os.path.isfile(p)]
     if not paths or not is_available():
         return {}
     payload = json.dumps({'images': paths, 'prompt': prompt, 'max_tokens': max_tokens})
     venv_python = str(cfg.aitoolkit_path('venv_python'))
     script = str(_SCRIPT)
-    # HF_HOME = même cache que l'entraînement (modèle déjà téléchargé là).
-    # The image INPUT budget rides down too: the worker's own guard runs in another
-    # interpreter and would otherwise enforce the old fixed 16 Mi-pixels / 8192 px,
-    # refusing every DSLR/phone master this install imported under the configured
-    # (default 64 Mi-pixels / 16384 px) budget. The worker downsizes to 384² for the
-    # vision tower anyway, so the accepted image is never held at full size for long.
+    # HF_HOME shares the training cache. Also pass the image input budget
+    # to the separate worker interpreter: otherwise its old 16 Mi-pixel/8192
+    # limits reject DSLR/phone originals accepted under the configured
+    # (default 64 Mi-pixel/16384) budget. Vision downsizes to 384 square
+    # anyway, so full-size images are held only briefly.
     from .input_budget import infer_worker_env
     env = infer_env.worker_env(venv_python,
                                HF_HOME=str(cfg.aitoolkit_path('hf_home')),
@@ -212,10 +204,10 @@ def caption_images_joycaption(paths, prompt: str | None = None,
     if errors_out is not None:
         errors_out.update(errors)
     if errors:
-        logger.info('joycaption: %d erreur(s) image : %s',
+        logger.info('joycaption: %d image error(s): %s',
                     len(errors), list(errors.values())[:3])
     if not result and not cancelled['flag'] and not errors:
-        logger.warning('joycaption: pas de captions (rc=%s) stderr=%s',
+        logger.warning('joycaption: no captions (rc=%s) stderr=%s',
                        proc.returncode, ' | '.join(list(stderr_tail)[-6:]))
     logger.info('joycaption: batch %s (%d/%d captioned, elapsed=%.1fs)',
                 'stopped' if cancelled['flag'] else 'finished',

@@ -1,15 +1,9 @@
-"""Scans de listings à galeries (PornPics catégorie/tag/recherche) : covers par
-défaut, albums complets sur option.
-
-Un scan mot-clé/catégorie remonte par défaut LA VIGNETTE que la page affiche pour
-chaque galerie — l'image choisie par le site comme représentative du mot-clé
-(jamais la 1re de l'album : _009_, _113_… observé en réel) — via le parse
-HTML/AJAX du listing, sans gallery-dl. Le flag `include_albums` (case « Scan
-full albums » de l'UI, transmis par /scan) rétablit la plongée intégrale
-gallery-dl. Si le parse covers échoue (layout changé), repli gallery-dl borné à
-1 image/album. L'URL directe d'une galerie (/galleries/...) n'est pas concernée.
-
-Tout est mocké — aucun appel réseau ni process gallery-dl."""
+"""Gallery listings (PornPics category/tag/search) use covers by default and full
+albums optionally. Parse the actual HTML/AJAX listing thumbnail selected by the
+site, not the first album image, without gallery-dl. include_albums from Scan full
+albums restores complete gallery-dl traversal. If cover parsing fails after a
+layout change, fall back to one image per album. Direct /galleries/ URLs are
+unaffected. Everything is mocked: no network or gallery-dl process."""
 import time
 
 import pytest
@@ -20,8 +14,8 @@ from lds_scrape.sources.image_sites import PornpicsSource, _covers_scan, _full_s
 
 
 def _mock_gdl_runs(monkeypatch):
-    """_run_simulate factice : une « catégorie » de 2 albums, 5 images chacun.
-    Retourne la liste des appels (url + image_range) pour inspection."""
+    """Fake _run_simulate: a category with two albums of five images. Return calls
+    (URL and image_range) for inspection."""
     calls = []
 
     def fake(url, max_items, cookies, extra_opts, image_range=None):
@@ -41,8 +35,8 @@ def test_enumerate_per_album_1_returns_one_cover_per_album(monkeypatch):
     assert err is None
     assert [it['url'] for it in items] == ['https://x/album1/img1.jpg',
                                            'https://x/album2/img1.jpg']
-    # La simulation de chaque album est elle-même bornée (--range 1-1) : gallery-dl
-    # ne doit pas énumérer tout l'album pour n'en garder qu'une image.
+    # Limit each album simulation with --range1-1; do not enumerate a full album just to
+    # retain one image.
     assert [c['image_range'] for c in calls[1:]] == ['1-1', '1-1']
 
 
@@ -50,17 +44,15 @@ def test_enumerate_without_per_album_dives_full_albums(monkeypatch):
     _mock_gdl_runs(monkeypatch)
     items, err = gdl.enumerate('https://x/category/')
     assert err is None
-    assert len(items) == 10          # 2 albums × 5 images : comportement historique
-
-
-# --- Provenance des items (from_albums) — debt "Load more" muet -------------- #
+    assert len(items) == 10          # Historical behavior: two albums with five images each.
+    #
+    # Item provenance (from_albums) prevents a silent Load more action.
 
 def test_enumerate_flags_album_sourced_items_so_callers_can_disable_pagination(monkeypatch):
-    """Ces items viennent EXCLUSIVEMENT de la récursion d'albums (type 6), bornée
-    en NOMBRE d'albums (max_albums) — jamais par un offset de page. Un appelant
-    qui annoncerait la pagination dessus (UniversalSource) enverrait « Charger
-    plus » vers une fenêtre --range que cette récursion ignore complètement :
-    silence total. `enumerate()` doit donc porter ce signal sur son retour."""
+    """These items come exclusively from type6 album recursion limited by ALBUM COUNT
+    (max_albums), never a page offset. Advertising pagination would send Load more
+    into an ignored --range window. enumerate must expose from_albums so callers
+    avoid that silent failure."""
     _mock_gdl_runs(monkeypatch)
     items, err = gdl.enumerate('https://x/category/')
     assert err is None
@@ -68,8 +60,8 @@ def test_enumerate_flags_album_sourced_items_so_callers_can_disable_pagination(m
 
 
 def test_enumerate_does_not_flag_top_level_media_as_album_sourced(monkeypatch):
-    """Des médias TOP-LEVEL (type 3, pas de récursion) restent normalement
-    paginables via image_range — pas de signal from_albums dessus."""
+    """Top-level type3 media without recursion remains pageable through image_range
+    and has no from_albums signal."""
     def fake(url, max_items, cookies, extra_opts, image_range=None):
         return [[3, f'{url}img1.jpg', {'extension': 'jpg'}]], None
     monkeypatch.setattr(gdl, '_run_simulate', fake)
@@ -80,55 +72,49 @@ def test_enumerate_does_not_flag_top_level_media_as_album_sourced(monkeypatch):
     assert getattr(items, 'from_albums', False) is False
 
 
-# --- Budget de temps global (deadline) — debt requête Flask ~9 min ----------- #
+# Global time budget (deadline) prevents Flask requests lasting about nine minutes.
 
 def test_enumerate_stops_the_album_recursion_once_the_deadline_has_passed(monkeypatch):
-    """Un deadline déjà expiré (posé directement, sans horloge réelle à faire
-    avancer) doit couper la récursion d'albums AVANT le 1er sous-process
-    gallery-dl d'album et rendre un résultat vide LÉGITIME (kind='empty',
-    même convention que « aucun média trouvé ») — jamais une erreur pour un
-    budget épuisé, cf. gdl.enumerate docstring."""
+    """An already expired deadline stops album recursion BEFORE the first album
+    subprocess. Return the documented kind=empty outcome for a spent budget rather
+    than a tool error; no real clock needs to advance."""
     calls = _mock_gdl_runs(monkeypatch)
 
     items, err = gdl.enumerate('https://x/category/', per_album=1,
-                               deadline=time.monotonic() - 1)   # déjà expiré
+                               deadline=time.monotonic() - 1)   # Already expired.
 
     assert items is None
     assert getattr(err, 'kind', None) == 'empty'
-    # Le scan top-level (1 appel, trouve les 2 albums) part toujours ; la
-    # récursion, elle, s'arrête avant le 1er album — deadline déjà dépassé.
+    # The top-level scan still discovers both albums, but the expired deadline stops
+    # recursion before the first album.
     assert len(calls) == 1
 
 
 def test_enumerate_applies_a_default_deadline_when_the_caller_passes_none(monkeypatch):
-    """Finding #4 : `gdl.enumerate()` doit borner le temps même quand l'appelant
-    (image_sites.py, civitai.py, fapello.py, erome.py, sexcom.py — toutes les
-    sources gdl-backed SAUF universal.py avant cette vague) ne passe pas
-    `deadline` explicitement. Sans ce défaut, ces sources pouvaient lancer
-    1 + max_albums sous-process gallery-dl à GDL_TIMEOUT chacun DANS une requête
-    Flask synchrone (~9 min pire cas) — la protection n'existait que pour
-    l'appelant qui avait pensé à la demander."""
+    """gdl.enumerate must apply a time budget even when callers omit deadline.
+    Previously only universal.py supplied one; other gallery-dl sources could run
+    1+max_albums subprocesses at GDL_TIMEOUT each inside a synchronous Flask
+    request, approaching nine minutes."""
     calls = _mock_gdl_runs(monkeypatch)
     base = 1_000_000.0
-    clock = iter([base,                                            # calcul du deadline par défaut
+    clock = iter([base,                                            # Compute the default deadline.
                   base + gdl.DEFAULT_SCAN_BUDGET_SECONDS + 1])      # boucle : avant album1
     monkeypatch.setattr(gdl.time, 'monotonic', lambda: next(clock))
 
-    items, err = gdl.enumerate('https://x/category/', per_album=1)   # PAS de deadline
+    items, err = gdl.enumerate('https://x/category/', per_album=1)   # No deadline.
 
     assert items is None
     assert getattr(err, 'kind', None) == 'empty'
-    assert len(calls) == 1     # top-level seulement ; la récursion n'a jamais démarré
+    assert len(calls) == 1     # Top-level only; recursion never started.
 
 
 def test_enumerate_deadline_checked_between_albums_lets_the_first_one_through(monkeypatch):
-    """Le budget est vérifié en DÉBUT de boucle, jamais pendant un sous-process
-    déjà lancé (cf. docstring `enumerate`) : une horloge fictive qui ne dépasse
-    le deadline qu'APRÈS le 1er album laisse ce 1er album aboutir et coupe
-    seulement le 2e — résultat partiel, pas vide."""
+    """Check the budget at each loop start, never during an active subprocess. A fake
+    clock expiring after album1 lets that album finish and prevents album2,
+    yielding a partial rather than empty result."""
     calls = _mock_gdl_runs(monkeypatch)
-    clock = iter([0.0,    # boucle : avant album1 (deadline pas atteint)
-                  2.0])   # boucle : avant album2 (deadline dépassé)
+    clock = iter([0.0,    # Before album1: deadline not reached.
+                  2.0])   # Before album2: deadline exceeded.
     monkeypatch.setattr(gdl.time, 'monotonic', lambda: next(clock))
 
     items, err = gdl.enumerate('https://x/category/', per_album=1, deadline=1.0)
@@ -136,17 +122,14 @@ def test_enumerate_deadline_checked_between_albums_lets_the_first_one_through(mo
     assert err is None
     assert [it['url'] for it in items] == ['https://x/album1/img1.jpg']
     assert getattr(items, 'partial', False) is True
-    assert len(calls) == 2      # scan top-level (trouve les albums) + album1 seul
+    assert len(calls) == 2      # Top-level scan discovers albums, then reads only album1.
 
 
 def test_enumerate_reports_a_blocked_album_scan_even_when_the_budget_also_expired(monkeypatch):
-    """RÉGRESSION (finding #1) : le 1er album renvoie une erreur auth (page
-    BLOQUÉE), et le budget de temps expire avant que le 2e album ne soit tenté.
-    Avant cette vague, la vérif `timed_out` passait AVANT `album_errors` : le
-    kind='empty' du budget épuisé écrasait l'erreur auth déjà collectée, et un
-    scan activement bloqué se faisait passer pour une page vide (200/count=0)
-    au lieu de remonter le message de l'extracteur en 502. L'erreur auth DOIT
-    gagner, que le budget ait aussi expiré ou non."""
+    """Regression: album1 returns an authentication error and the budget expires
+    before album2. Checking timed_out before album_errors formerly replaced the
+    collected auth failure with kind=empty and200/count=0. The authentication
+    error and502 extractor message must win even when the deadline has expired."""
     calls = []
 
     def fake(url, max_items, cookies, extra_opts, image_range=None):
@@ -156,8 +139,8 @@ def test_enumerate_reports_a_blocked_album_scan_even_when_the_budget_also_expire
         return None, gdl.GdlError('gallery-dl: auth (429).', 'auth')
     monkeypatch.setattr(gdl, '_run_simulate', fake)
 
-    clock = iter([0.0,    # boucle : avant album1 (deadline pas atteint)
-                  2.0])   # boucle : avant album2 (deadline dépassé)
+    clock = iter([0.0,    # Before album1: deadline not reached.
+                  2.0])   # Before album2: deadline exceeded.
     monkeypatch.setattr(gdl.time, 'monotonic', lambda: next(clock))
 
     items, err = gdl.enumerate('https://x/category/', per_album=1, deadline=1.0)
@@ -165,13 +148,12 @@ def test_enumerate_reports_a_blocked_album_scan_even_when_the_budget_also_expire
     assert items is None
     assert getattr(err, 'kind', None) == 'auth'
     assert '429' in err
-    # top-level (trouve les 2 albums) + album1 (erreur) ; album2 jamais tenté
-    # (coupé par le deadline) — la vérif porte donc bien sur les DEUX conditions
-    # combinées, pas seulement sur album_errors seul.
+    # Top-level finds both albums, album1 fails, and the deadline prevents album2.
+    # Verify both conditions together, not album_errors alone.
     assert len(calls) == 2
 
 
-# --- Mode covers : parse des vignettes du listing -----------------------------
+# Cover mode parses listing thumbnails.
 _TILE_HTML = '''
 <li><a class="rel-link" href="/galleries/flexible-girl-123/">
   <img src="1px.png" data-src="https://cdni.pornpics.com/460/1/2/123/123_009_ab.jpg" alt="Flexible girl">
@@ -179,7 +161,7 @@ _TILE_HTML = '''
 <li><a class="rel-link" href="https://www.pornpics.com/galleries/splits-babe-456/">
   <img src='1px.png' data-src='https://cdni.pornpics.com/300/3/4/456/456_113_cd.jpg' alt='Splits babe'>
 </a></li>
-<li><a class="rel-link" href="/channels/whatever/">nav link sans data-src de tuile</a></li>
+<li><a class="rel-link" href="/channels/whatever/">navigation link without tile data-src</a></li>
 '''
 
 
@@ -194,8 +176,8 @@ def test_covers_page0_returns_the_listing_thumbnails(monkeypatch):
     monkeypatch.setattr(image_sites, '_listing_html', lambda url: _TILE_HTML)
     items, err = _covers_scan('https://www.pornpics.com/flexible/', 0)
     assert err is None
-    # la vignette VISIBLE (image _009_/_113_), pas la 1re image de l'album —
-    # et seulement les tuiles galerie (le lien /channels/ est ignoré)
+    # Use the VISIBLE thumbnail (_009_/_113_), not the first album image. Include
+    # gallery tiles only; ignore /channels/ links.
     assert [it['url'] for it in items] == [
         'https://cdni.pornpics.com/1280/1/2/123/123_009_ab.jpg',
         'https://cdni.pornpics.com/1280/3/4/456/456_113_cd.jpg']
@@ -222,7 +204,7 @@ def test_covers_scan_signals_fallback_never_raises(monkeypatch):
         raise RuntimeError('site down')
     monkeypatch.setattr(image_sites, '_listing_html', boom)
     assert _covers_scan('https://www.pornpics.com/flexible/', 0) == (None, None)
-    monkeypatch.setattr(image_sites, '_listing_html', lambda url: '<html>layout changé</html>')
+    monkeypatch.setattr(image_sites, '_listing_html', lambda url: '<html>changed layout</html>')
     assert _covers_scan('https://www.pornpics.com/flexible/', 0) == (None, None)
 
 
@@ -244,7 +226,7 @@ def test_pornpics_default_scan_serves_covers_without_gdl(_spies):
     m.page = 0
     items, err = PornpicsSource().scan(m)
     assert err is None and len(items) == 2
-    assert _spies['covers'] == 1 and _spies['enum'] is None   # gallery-dl jamais lancé
+    assert _spies['covers'] == 1 and _spies['enum'] is None   # gallery-dl never launched.
 
 
 def test_pornpics_include_albums_dives_via_gdl(_spies):
@@ -252,8 +234,8 @@ def test_pornpics_include_albums_dives_via_gdl(_spies):
     m.page = 0
     m.include_albums = True
     PornpicsSource().scan(m)
-    assert _spies['covers'] == 0                    # pas de parse covers
-    assert _spies['enum']['per_album'] is None      # plongée intégrale
+    assert _spies['covers'] == 0                    # No cover parsing.
+    assert _spies['enum']['per_album'] is None      # Scan complete albums.
 
 
 def test_pornpics_direct_gallery_url_bypasses_covers(_spies):
@@ -272,7 +254,7 @@ def test_pornpics_covers_failure_falls_back_to_bounded_gdl(monkeypatch, _spies):
     m.page = 0
     items, err = PornpicsSource().scan(m)
     assert err is None
-    assert _spies['enum']['per_album'] == 1         # repli borné : 1 image/album
+    assert _spies['enum']['per_album'] == 1         # Bounded fallback: one image per album.
 
 
 @pytest.mark.plugins('scrape')
@@ -292,4 +274,4 @@ def test_scan_route_passes_include_albums_to_match(client, monkeypatch):
     r = client.post('/api/scrape/scan',
                     json={'url': 'https://www.pornpics.com/flexible/'})
     assert r.status_code == 200
-    assert seen['include_albums'] is False       # défaut : covers seulement
+    assert seen['include_albums'] is False       # Default: covers only.

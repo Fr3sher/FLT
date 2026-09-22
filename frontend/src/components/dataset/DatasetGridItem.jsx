@@ -41,16 +41,16 @@ const STATUS_CLS = {
   failed: 'border-red-600',
 };
 
-// Seuils calibres antelopev2 (test3) — face_score brut persiste -> ajustables dans
-// Settings (face_scoring.green/orange) ; ces valeurs ne servent que de repli.
+// Calibrated antelopev2 thresholds (test3). Raw face_score is persisted, so
+// Settings can adjust face_scoring.green/orange; these are fallback values only.
 const DEFAULT_FACE_VALID = 0.50, DEFAULT_FACE_ORANGE = 0.45;
 const GREY_LABEL = { no_face: 'no face detected', low_det: 'low detection',
   too_small: 'face too small', extreme_pose: 'profile — not scored',
   unreadable: 'unreadable', error: 'error' };
 
-// Retourne {border, icon, cls, label} d'apres face_state/face_score, ou null si pas analysé.
-// La bordure encode la largeur ET le style (plein=jugé / pointillé=non-jugeable) pour
-// ne PAS dépendre de la couleur seule (WCAG 1.4.1).
+// Return {border, icon, cls, label} from face_state/face_score, or null if not analyzed. Border
+// width AND style convey status (solid = assessed, dotted = unassessable), so color is not the
+// only signal (WCAG 1.4.1).
 function faceBadge(img, thresholds) {
   if (img.face_state == null) return null;
   if (img.face_state !== 'scorable' || img.face_score == null) {

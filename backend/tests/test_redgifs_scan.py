@@ -1,8 +1,6 @@
-"""RedGifs scan() : un profil/niche légitimement sans vidéo est un résultat vide,
-pas un échec (finding #3 — la règle « empty est honoré partout » n'était payée
-que pour la famille gallery-dl ; RedGifs répondait 502 sur un profil vide).
-
-Tout est mocké (client RedGifs) : aucun appel réseau."""
+"""RedGifs scan treats a legitimately empty profile or niche as an empty result, not
+failure. This previously worked only for gallery-dl sources, while RedGifs
+returned502. Mock the RedGifs client; no network calls."""
 
 import pytest
 
@@ -52,8 +50,8 @@ def test_scan_still_returns_items_for_a_populated_profile(monkeypatch):
 
 
 def test_a_missing_single_video_stays_a_real_error_not_an_empty_result(monkeypatch):
-    """VIDEO (média unique) : l'échec du lookup reste une vraie erreur, pas un
-    « rien ici » — non touché par ce finding (cf. rapport)."""
+    """A failed VIDEO lookup remains a real single-media error, never an empty
+    result."""
     monkeypatch.setattr(redgifs.client, 'get_token', lambda: 'tok')
     monkeypatch.setattr(redgifs.client, 'get_single_video', lambda video_id: None)
     validation = SimpleNamespace(url_type=URLType.VIDEO, value='deadbeef')

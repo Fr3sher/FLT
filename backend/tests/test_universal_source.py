@@ -1,6 +1,5 @@
-"""Source universelle : garde SSRF, énumération générique, repli yt-dlp.
-
-Tout est mocké — aucun appel réseau ni process gallery-dl."""
+"""Universal source: SSRF guard, generic enumeration, yt-dlp fallback. All calls are
+mocked: no network or gallery-dl process."""
 
 import pytest
 
@@ -22,9 +21,9 @@ class _Proc:
 
 
 def test_unsupported_site_on_a_vetted_host_falls_back_to_ytdlp(monkeypatch, tmp_path):
-    """gallery-dl sans extracteur (exit 64) sur un hôte vetté DOIT basculer sur
-    yt-dlp. Historiquement faux : le kind était comparé à une phrase que personne
-    n'émettait, donc la bascule n'a jamais eu lieu."""
+    """gallery-dl exit64 (no extractor) on a vetted host MUST fall back to yt-dlp.
+    Previously kind was compared with a phrase no caller emitted, preventing the
+    fallback."""
     monkeypatch.setattr(gdl.subprocess, 'run',
                         lambda *a, **k: _Proc(returncode=64, stderr='Unsupported URL'))
     called = {}
@@ -47,7 +46,7 @@ def test_unsupported_site_on_an_unvetted_host_refuses_instead_of_fetching(
                         lambda *a, **k: _Proc(returncode=64, stderr='Unsupported URL'))
 
     def boom(url, dest_base):
-        raise AssertionError('yt-dlp ne doit PAS être appelé sur un hôte non vetté')
+        raise AssertionError('yt-dlp must not run for an unvetted host')
     monkeypatch.setattr(netfetch, 'download_via_ytdlp', boom)
 
     ok, filename, err = UniversalSource().download(
@@ -58,13 +57,13 @@ def test_unsupported_site_on_an_unvetted_host_refuses_instead_of_fetching(
 
 
 def test_auth_failure_is_reported_and_never_retried_via_ytdlp(monkeypatch, tmp_path):
-    """Exit 16 = mur d'authentification, PAS « site inconnu » : on remonte
-    l'erreur au lieu de retenter avec un autre outil."""
+    """Exit16 means an authentication wall, not an unknown site: report the failure
+    rather than trying another tool."""
     monkeypatch.setattr(gdl.subprocess, 'run',
                         lambda *a, **k: _Proc(returncode=16, stderr='login required'))
 
     def boom(url, dest_base):
-        raise AssertionError('yt-dlp ne doit PAS être appelé sur un échec auth')
+        raise AssertionError('yt-dlp must not run after an authentication failure')
     monkeypatch.setattr(netfetch, 'download_via_ytdlp', boom)
 
     ok, _filename, err = UniversalSource().download(
@@ -73,9 +72,9 @@ def test_auth_failure_is_reported_and_never_retried_via_ytdlp(monkeypatch, tmp_p
     assert ok is False and 'auth' in err
 
 
-# --- Garde SSRF : la source générique est la SEULE à accepter un hôte arbitraire,
-# et son scan lance désormais gallery-dl dessus. Les sources dédiées matchent des
-# hôtes nommés, une adresse privée ne les a jamais atteintes.
+# SSRF guard: the generic source alone accepts arbitrary hosts and launches gallery-dl
+# against them. Dedicated sources match named hosts, so private addresses cannot reach
+# them.
 def test_match_refuses_non_public_urls():
     src = UniversalSource()
     for url in ('http://127.0.0.1/gallery',
@@ -87,12 +86,10 @@ def test_match_refuses_non_public_urls():
 
 
 def test_match_still_accepts_a_public_http_url(monkeypatch):
-    # example.test (domaine de test RFC 2606, SANS enregistrement DNS réel) :
-    # on simule la résolution pour rester hermétique (aucun appel réseau) tout
-    # en exerçant la vraie branche de classification d'IP du garde SSRF.
-    # RFC 5737 (203.0.113.1, etc.) échoue ici : is_reserved → _ip_is_blocked
-    # le rejette correctement. Adresse publique ordinaire pour tester la branche
-    # accepte; ne cible ni ce poste ni le réseau (la garde cible les données perso).
+    # Use example.test with mocked DNS for an isolated test of real SSRF IP
+    # classification. RFC5737 reserved addresses are correctly rejected, so a synthetic
+    # ordinary public address exercises the accepted branch without contacting it or
+    # using a personal network address.
     monkeypatch.setattr(
         netfetch.socket, 'getaddrinfo',
         lambda *a, **k: [(netfetch.socket.AF_INET, netfetch.socket.SOCK_STREAM,
@@ -101,21 +98,17 @@ def test_match_still_accepts_a_public_http_url(monkeypatch):
 
 
 def test_classify_exit_none_is_not_silently_a_success():
-    """`subprocess.run` ne produit jamais `returncode=None`, mais un double de
-    test bâclé le peut. `if not returncode` (faussité Python) confondait ce cas
-    avec le code 0 (succès) — puis 'empty' au point d'appel (_run_simulate) : un
-    tool ayant planté sans code de sortie exploitable se serait fait passer
-    pour un scan vide réussi. L'égalité stricte à 0 exclut ce cas ; None reste
-    un échec explicite ('toolerror'), jamais un succès déguisé."""
+    """subprocess.run never returns returncode=None, but a poor test double may. A
+    falsiness check treated None as success0 and then an empty scan. Require
+    equality to0: an unusable exit code remains explicit toolerror, never
+    disguised success."""
     assert gdl.classify_exit(0) is None
     assert gdl.classify_exit(None) == 'toolerror'
 
 
 def test_enumerate_album_recursion_sentinel_carries_a_kind(monkeypatch):
-    """Quand TOUS les albums échouent via le sentinel type -1 (pas via une
-    exception/`_run_simulate` en erreur), l'erreur remontée par `enumerate()`
-    doit rester une GdlError utilisable par `getattr(err, 'kind', None)` — pas
-    un str nu redevenu invisible au branchement kind."""
+    """When all albums fail through the type-1 sentinel, enumerate must return
+    GdlError with readable kind, not a plain string that bypasses classification."""
 
     def fake_run_simulate(url, max_items, cookies, extra_opts, image_range=None):
         if 'category' in url:
@@ -130,8 +123,8 @@ def test_enumerate_album_recursion_sentinel_carries_a_kind(monkeypatch):
     assert getattr(err, 'kind', None) == 'toolerror'
 
 
-# --- Énumération générique -----------------------------------------------------
-from lds_scrape.sources.base import Match   # noqa: E402  (groupé avec ses tests)
+# Generic enumeration.
+from lds_scrape.sources.base import Match   # noqa: E402  (grouped with its tests)
 
 
 def _spy_enumerate(monkeypatch, items=None, err=None):
@@ -157,7 +150,7 @@ def test_scan_returns_every_image_of_the_page(monkeypatch):
 
     assert err is None and items == found
     assert seen['platform'] == 'generic'
-    assert seen['per_album'] == 1          # défaut : une cover par album
+    assert seen['per_album'] == 1          # Default: one cover per album.
     assert seen['image_range'] == '1-120'
 
 
@@ -171,7 +164,7 @@ def test_scan_dives_into_albums_only_when_asked(monkeypatch):
 
     UniversalSource().scan(m)
 
-    assert seen['per_album'] is None       # plongée intégrale
+    assert seen['per_album'] is None       # Scan complete albums.
 
 
 def test_scan_walks_the_listing_window_on_later_pages(monkeypatch):
@@ -187,8 +180,8 @@ def test_scan_walks_the_listing_window_on_later_pages(monkeypatch):
 
 
 def test_a_blocked_scan_is_an_error_never_an_empty_result(monkeypatch):
-    """429/auth/DDoS-Guard doivent remonter. Les faire passer pour « aucune image »
-    est exactement le bug qu'erome a payé."""
+    """Surface429, authentication and DDoS-Guard failures. Reporting them as no
+    images repeats the Erome regression."""
     _spy_enumerate(monkeypatch, err=gdl.GdlError('gallery-dl: auth (429).', 'auth'))
     m = Match(url='https://example.test/album/1')
     m.page = 0
@@ -200,14 +193,11 @@ def test_a_blocked_scan_is_an_error_never_an_empty_result(monkeypatch):
 
 
 def test_a_genuinely_empty_page_carries_its_kind_for_the_route_to_read(monkeypatch):
-    """kind='empty' = gallery-dl a tourné correctement et n'a rien trouvé (post
-    supprimé, album vide, mauvais type de page) — un scan vide réussi, pas un
-    échec. `scan()` ne le convertit plus lui-même en ([], None) : cette
-    conversion vit désormais UNE seule fois, au niveau de la route
-    (routes/scrape.py), qui voit TOUTES les sources gdl-backed — pas seulement
-    celle-ci. Refaire la conversion ici serait une duplication morte le jour où
-    cette source a cessé d'être la seule à honorer la règle. `scan()` doit donc
-    juste laisser passer une GdlError dont `.kind` reste lisible."""
+    """kind=empty means gallery-dl completed successfully without media (deleted
+    post, empty album or wrong page type). Forward GdlError with readable kind;
+    conversion to an empty200 response belongs only in routes/scrape.py, which
+    handles all gallery-dl sources. Duplicating it here would create divergent
+    rules."""
     _spy_enumerate(monkeypatch,
                    err=gdl.GdlError('gallery-dl: no media found.', 'empty'))
     m = Match(url='https://example.test/album/1')
@@ -220,8 +210,8 @@ def test_a_genuinely_empty_page_carries_its_kind_for_the_route_to_read(monkeypat
 
 
 def test_a_site_gallery_dl_does_not_know_still_yields_the_single_media(monkeypatch):
-    """Repli historique : 1 item vidéo, pour que les hôtes vettés atteignent
-    yt-dlp au téléchargement. Pas de pagination sur un item unique."""
+    """Legacy fallback returns one video item so vetted hosts reach yt-dlp during
+    download. A single item is not pageable."""
     _spy_enumerate(monkeypatch,
                    err=gdl.GdlError('gallery-dl: unsupported (no extractor).', 'unsupported'))
     m = Match(url='https://x.com/someone/status/1')
@@ -237,15 +227,10 @@ def test_a_site_gallery_dl_does_not_know_still_yields_the_single_media(monkeypat
 
 
 def test_exit_zero_with_no_stdout_is_classified_empty_not_unclassified(monkeypatch):
-    """gallery-dl peut sortir en code 0 (succès) sans rien écrire sur stdout —
-    une page valide sans média. `classify_exit(0)` renvoie None (pas un kind),
-    donc sans ce garde-fou le GdlError produit par `_run_simulate` porte
-    kind=None : il ne matche ni 'unsupported' ni 'empty' dans `scan()`, tombe
-    dans la branche générique « on remonte l'erreur », et un scan vide légitime
-    répond 502 'empty output' au lieu de 200/count=0 (cf.
-    `test_scan_empty_kind_is_200_with_zero_items` dans test_scrape_scan.py, qui
-    couvre ce même contrat au niveau de la route — le seul endroit qui le
-    convertit désormais)."""
+    """gallery-dl may exit0 without stdout for a valid page without media.
+    classify_exit(0) returns None, so _run_simulate must explicitly assign
+    kind=empty; otherwise scan treats it as a generic error and returns502 instead
+    of200/count=0. The route-level test covers the matching conversion contract."""
     monkeypatch.setattr(gdl.subprocess, 'run',
                         lambda *a, **k: _Proc(returncode=0, stdout='', stderr=''))
 

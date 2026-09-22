@@ -1,6 +1,6 @@
-// Constantes partagées du Studio de test LoRA.
-// 0 = base model (LoRA off) — a useful control column; low values sweep down to it.
-// Base row (always visible): 0 → 2.0, fine under 1.0, coarser above it.
+// Shared LoRA Test Studio constants. Zero means the base model with LoRA off, a useful control
+// column reached by low strengths. The always-visible base row spans 0-2.0, with fine steps below
+// 1.0 and coarser steps above.
 export const STRENGTH_CHOICES = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0];
 // Extended row, revealed behind « + » (progressive disclosure): above 2.0 you are
 // looking for the LoRA's over-cook / breaking point, so coarser steps up to the
@@ -14,5 +14,5 @@ export const STRENGTH_CHOICES_EXTENDED = [2.25, 2.5, 2.75, 3.0, 3.5, 4.0, 4.5, 5
 // bound in lora_test_studio.build_matrix ([MIN_LORA_STRENGTH, MAX_LORA_STRENGTH]).
 export const STRENGTH_CHOICES_NEGATIVE = [-2.0, -1.5, -1.0, -0.75, -0.5, -0.25];
 export const DEFAULT_STRENGTHS = [0.7, 0.85, 1.0];
-// Libellés des familles d'entraînement (= pipelines), pour le sélecteur de famille.
+// Training-family/pipeline labels for the family picker.
 export const FAMILY_LABELS = { zimage: 'Z-Image', sdxl: 'SDXL', krea: 'Krea 2' };

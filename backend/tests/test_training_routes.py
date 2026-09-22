@@ -86,14 +86,14 @@ def test_train_configured_forwards_kwargs(client, monkeypatch):
         'variant': 'turbo',
         'train_type': 'sdxl',
         'allow_caption_mismatch': True,
-        'allow_uncaptioned': False,   # absent du body → False (confirm non donné)
+        'allow_uncaptioned': False,   # Absent request field defaults to False: confirmation not given.
         'allow_caption_quality': True,
-        'allow_unverified_weights': False,   # custom-weights confirm non donné
-        'allow_not_ready': False,     # absent du body → False (case non cochée)
+        'allow_unverified_weights': False,   # Custom-weight confirmation not given.
+        'allow_not_ready': False,     # Absent request field defaults to False: box unchecked.
         'masked': False,
         'fresh': False,          # absent du body → False (resume historique)
     }
-    # fresh=true (choix « Start fresh » du panneau) traverse jusqu'au service.
+    # fresh=true from Start fresh reaches the service.
     client.post(f'/api/dataset/{ds_id}/train', json={'fresh': True})
     assert captured['fresh'] is True
 

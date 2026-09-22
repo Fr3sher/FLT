@@ -1,12 +1,12 @@
 /**
- * 🧬 Blend SWEEP — plusieurs poids cochés par LoRA → un lot de combinaisons.
+ * Blend SWEEP: multiple checked weights per LoRA produce a batch of combinations.
  *
- * Le curseur donnait un poids par LoRA, donc une pile = une image : comparer
- * « 0.8/0.6 » à « 0.6/0.8 » coûtait deux lancements. Les cases de poids en font
- * un balayage, et le produit cartésien part en un seul run.
+ * Sliders provided one weight per LoRA and one image per stack, so comparing
+ * 0.8/0.6 with 0.6/0.8 took two launches. Weight checkboxes turn this into a
+ * sweep, rendering the Cartesian product in one run.
  *
- * La logique est PURE et vit dans studio/loraStack.js — les DEUX surfaces
- * (Test Studio et ◉ LoRA Canvas) l'importent, donc elle est testée ici une fois.
+ * PURE logic lives in studio/loraStack.js, imported by BOTH Test Studio and
+ * LoRA Canvas, so test it once here.
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'

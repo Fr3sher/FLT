@@ -1,14 +1,8 @@
-"""A re-cut keeps every shot whose bounds did not move (2026-09-01).
-
-The maintainer's own question — "j'ai déjà des cuts de 1 s, si je réapplique
-avec un minimum de 5 s, ça ne va pas les enlever ?" — pointed at a real cost:
-raising the floor DID delete every clip of every re-cut file, triage, captions
-and measurements with them, so iterating on a threshold cost an afternoon of
-work. Lowering or raising a threshold selects a SUBSET of the same boundaries
-(shot_boundaries.apply_min_length: "strict SUBSET ... never a shifted
-version"), so a surviving shot has byte-identical bounds and everything
-measured about that span is still true of it.
-"""
+"""Re-cutting preserves every shot whose bounds remain identical (2026-09-01).
+Raising minimum length formerly deleted all clips, triage, captions and
+measurements, making threshold experiments costly. Changing the threshold selects
+a strict subset of existing shot boundaries, never shifted boundaries, so
+surviving spans retain valid measurements and saved work."""
 from app.extensions import db
 import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
 from lds_video.models import VideoBank, VideoClip, VideoSource

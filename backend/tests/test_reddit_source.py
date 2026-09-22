@@ -1,16 +1,9 @@
-"""Source Reddit (recherche par mot-clé via API OAuth).
-
-Reddit ayant verrouillé l'accès anonyme aux endpoints .json (mur anti-bot 403),
-la source parle à l'API OAuth authentifiée (jeton installed_client anonyme) et
-extrait les images du JSON des posts. Ces tests couvrent SANS RÉSEAU :
-  • _endpoint_for : mapping URL canonique → endpoint API (recherche/listing/post/direct)
-  • _items_from_post : extraction images (galerie / lien direct / preview / vide)
-  • _canonical_reddit_url : purge tracking, garde params de contenu, force www
-  • RedditSource.scan : extraction + dedup + pagination par curseur (API mockée)
-  • RedditSource.match : détection d'hôte
-
-Le réseau (jeton + _api_get) est monkeypatché — aucun appel réel à Reddit.
-"""
+"""Reddit keyword search through OAuth. Anonymous JSON endpoints are blocked, so the
+source uses an anonymous installed_client token and extracts images from post
+JSON. Test canonical URL-to-endpoint mapping, gallery/direct/preview/empty image
+extraction, tracking removal with content parameters preserved, forced www,
+deduplication, cursor pagination and host matching. Token requests and _api_get
+are mocked; no real Reddit calls."""
 
 import pytest
 
@@ -93,7 +86,7 @@ def test_items_from_textpost_yields_nothing():
     assert reddit._items_from_post({'title': 't', 'url': 'https://www.reddit.com/r/x/comments/1/'}) == []
 
 
-# --- _canonical_reddit_url (sans réseau : pas de /s/ ni redd.it) -------------
+# _canonical_reddit_url without network calls: no /s/ or redd.it links.
 def test_canonical_purges_tracking_keeps_content_params():
     out = reddit._canonical_reddit_url(
         'https://old.reddit.com/r/analog/top/?t=month&utm_source=share&share_id=abc')
@@ -115,7 +108,7 @@ def test_match_detects_reddit_hosts_only():
     assert url_validator.detect_platform('https://old.reddit.com/r/x') == Platform.REDDIT
 
 
-# --- RedditSource.scan (API mockée) -----------------------------------------
+# RedditSource.scan with a mocked API.
 def _listing(children, after=None):
     return {'data': {'after': after, 'children': [{'data': d} for d in children]}}
 
@@ -136,10 +129,9 @@ def test_scan_listing_extracts_and_dedups(monkeypatch):
 
 
 def test_scan_small_listing_consumed_on_first_page_hides_load_more(monkeypatch):
-    """Un listing dont le total d'items ne dépasse jamais _SCAN_MAX est ENTIÈREMENT
-    consommé dès la page 0 (le walk continue de batch en batch tant que le curseur
-    `after` reste vivant et que la limite n'est pas atteinte) — et `match.paginated`
-    est baissé à False pour cacher un « Load more » qui ne ramènerait rien."""
+    """A listing containing no more than _SCAN_MAX items is fully consumed on page
+    zero. Walk batches while after is live and the limit is not reached; set
+    match.paginated=False to hide a Load more action that cannot return anything."""
     monkeypatch.setattr(reddit, '_get_token', lambda: 'tok')
     pages = {
         None: _listing([_img_post('p0')], after='c1'),
@@ -166,8 +158,8 @@ def test_scan_pagination_past_end_returns_empty(monkeypatch):
 
 
 def _gallery_post(pid, n):
-    """Post galerie synthétique à `n` images, au schéma média_metadata/gallery_data
-    réel de Reddit (cf. test_items_from_gallery_respects_order_and_thumb)."""
+    """Synthetic gallery post with n images using Reddit media_metadata/gallery_data
+    structure; see the ordering and thumbnail test."""
     order = [f'{pid}_{i}' for i in range(n)]
     return {
         'title': pid, 'subreddit': 's', 'is_gallery': True,
@@ -178,18 +170,15 @@ def _gallery_post(pid, n):
 
 
 def test_scan_batch_cap_split_post_recovered_via_pagination(monkeypatch):
-    """LE défaut corrigé : un subreddit riche en galeries trippe le plafond _SCAN_MAX
-    (200) EN PLEIN MILIEU d'un post (post #23/30, images 3-9 coupées) et laisse 7
-    posts entiers (24-30) hors de la fournée courante. Avec l'ancien design (curseur
-    `after` du LISTING = seule unité de pagination), la page suivante avance ce
-    curseur — qui pointe déjà APRÈS toute la fournée courante puisqu'elle tenait dans
-    UN seul appel API — donc ces posts ne sont JAMAIS remontrés, sur aucune page.
-    Avec le skip par ITEM (_walk_items), la page suivante rejoue le même flux ordonné
-    et reprend exactement où le plafond a coupé : rien n'est perdu."""
+    """Regression: a gallery-heavy subreddit reaches _SCAN_MAX=200 halfway through
+    post23 of30, dropping remaining images and posts24-30. A listing-level after
+    cursor already points beyond the entire fetched batch, losing those items
+    forever. Item-level skipping in _walk_items replays the ordered stream and
+    resumes exactly at the cap without loss."""
     monkeypatch.setattr(reddit, '_get_token', lambda: 'tok')
     posts = [_gallery_post(f'p{i}', 9) for i in range(30)]   # 30 posts * 9 imgs = 270
     monkeypatch.setattr(reddit, '_api_get',
-                        lambda path, params, tok: _listing(posts, after=None))  # 1 seule fournée
+                        lambda path, params, tok: _listing(posts, after=None))  # A single batch.
 
     src = reddit.RedditSource()
     m0 = Match(url='https://www.reddit.com/r/x/'); m0.page = 0
@@ -212,9 +201,8 @@ def test_scan_batch_cap_split_post_recovered_via_pagination(monkeypatch):
 
 
 def test_scan_pagination_replay_crosses_listing_batches(monkeypatch):
-    """Le skip par item doit rejouer le listing depuis le DÉBUT, en traversant
-    plusieurs appels API réels (curseur `after`) si besoin, pas seulement le dernier
-    batch — vérifié via le nombre et l'ordre des curseurs demandés."""
+    """Item skipping must replay from the BEGINNING across multiple API calls when
+    needed, not just the final batch. Verify requested cursor count and order."""
     monkeypatch.setattr(reddit, '_get_token', lambda: 'tok')
     batch1 = [_gallery_post(f'a{i}', 9) for i in range(25)]   # 225 imgs, after='c1'
     batch2 = [_gallery_post(f'b{i}', 9) for i in range(5)]    # 45 imgs, after=None
@@ -240,17 +228,15 @@ def test_scan_pagination_replay_crosses_listing_batches(monkeypatch):
 
 
 def test_scan_listing_budget_exhausted_marks_partial(monkeypatch):
-    """Un listing pathologique (curseur qui ne se tarit jamais, très peu d'images par
-    post) ne doit jamais faire tourner _walk_items indéfiniment : passé
-    _MAX_LISTING_CALLS, le résultat est renvoyé tel quel mais marqué `partial` — la
-    règle gouvernante (rien de silencieux) appliquée au budget d'appels, pas
-    seulement au plafond d'items."""
+    """A pathological listing with a never-ending cursor and few images must stop
+    after _MAX_LISTING_CALLS. Return collected results as partial so reaching the
+    API-call budget is never silent."""
     monkeypatch.setattr(reddit, '_get_token', lambda: 'tok')
     calls = {'n': 0}
 
     def fake_get(path, params, tok):
         calls['n'] += 1
-        # 1 post texte (aucune image) par appel, curseur toujours vivant → jamais épuisé
+        # One text post without images per call; the cursor never expires.
         return _listing([{'title': 't', 'subreddit': 's'}], after=f'c{calls["n"]}')
     monkeypatch.setattr(reddit, '_api_get', fake_get)
 
@@ -260,13 +246,10 @@ def test_scan_listing_budget_exhausted_marks_partial(monkeypatch):
     assert items == []
     assert getattr(items, 'partial', False) is True
     assert calls['n'] == reddit._MAX_LISTING_CALLS
-    # Budget épuisé AVANT d'avoir rempli la page : une page plus profonde ferait
-    # un skip encore plus grand contre le même budget, donc ne peut jamais
-    # réussir non plus — le bouton « Load more » doit se taire (le bandeau
-    # `partial` reste l'endroit honnête). Sans ce garde-fou, `match.paginated`
-    # resterait à sa valeur par défaut (non-False) et la route rapporterait
-    # `paginated: True` pour toujours sur cette page profonde : 60 appels API
-    # pour 0 item à chaque clic, indéfiniment.
+    # Budget exhausted before filling the page. Deeper pages would require larger skips
+    # against the same budget and can never succeed either. Hide Load more and disclose
+    # partial results in the banner. Otherwise the route would keep reporting
+    # paginated=True, spending 60 API calls for zero items on every click.
     assert m.paginated is False
 
 
@@ -348,7 +331,7 @@ def test_scan_rate_limited_returns_actionable_message(monkeypatch):
 
 # --- client-id perso & invalidation du cache de jeton ------------------------
 def test_client_id_env_overrides_shared_default(monkeypatch):
-    monkeypatch.setattr(reddit, 'resolve_cookies', lambda key: None)   # pas de fichier admin local
+    monkeypatch.setattr(reddit, 'resolve_cookies', lambda key: None)   # No local admin file.
     monkeypatch.setenv('REDDIT_CLIENT_ID', 'my-own-id')
     assert reddit._client_id() == 'my-own-id'
     monkeypatch.delenv('REDDIT_CLIENT_ID')
@@ -356,10 +339,9 @@ def test_client_id_env_overrides_shared_default(monkeypatch):
 
 
 def test_get_token_remints_when_client_id_changes(monkeypatch):
-    """Un jeton en cache appartient au client-id qui l'a frappé — donc à SON quota.
-    Sauver son propre id dans Settings pose l'env sans restart : le cache doit le
-    voir et re-frapper un jeton, sinon on continue de rouler sur le quota partagé
-    (jusqu'à ~24 h) et le champ Settings a l'air cassé."""
+    """A cached token belongs to the client ID and quota that issued it. Saving a
+    personal ID in Settings changes the environment without restart; invalidate
+    and reissue the token rather than using the shared quota for up to 24 hours."""
     calls = []
 
     def fake_post(url, data=None, auth=None, headers=None, timeout=None):
@@ -373,5 +355,5 @@ def test_get_token_remints_when_client_id_changes(monkeypatch):
     assert reddit._get_token() == f'tok-{reddit._GDL_CLIENT_ID}'
     assert calls == [reddit._GDL_CLIENT_ID]                  # 2e appel servi par le cache
     monkeypatch.setenv('REDDIT_CLIENT_ID', 'my-own-id')
-    assert reddit._get_token() == 'tok-my-own-id'            # re-frappé avec le nouvel id
+    assert reddit._get_token() == 'tok-my-own-id'            # Token issued again with the new client ID.
     assert calls == [reddit._GDL_CLIENT_ID, 'my-own-id']

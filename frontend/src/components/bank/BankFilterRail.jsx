@@ -85,11 +85,12 @@ export default function BankFilterRail({
         )}
       </div>
 
-      {/* ── Status — FIRST, and dressed as what it is: the triage's main
-          gesture. These four were the same gray chips as every other facet,
-          lost mid-rail; asked for from live use ("plus visibles, mieux
-          placés"). Each carries its live count and its status colour, so the
-          split of the bank is readable before anything is clicked. */}
+      {/*
+       * Status comes FIRST as the main triage action. These four controls used to be gray chips
+       * lost among the other filters; live feedback asked for better visibility and placement.
+       * Each shows its count and status color so the bank's distribution is readable before
+       * clicking.
+       */}
       <div className="grid grid-cols-2 gap-1.5" role="group" aria-label="Filter by status">
         {[
           { id: null, label: 'All', n: statusCounts?.total,

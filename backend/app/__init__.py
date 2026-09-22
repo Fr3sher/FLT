@@ -294,9 +294,9 @@ _SCHEMA_ADDITIONS = (
     # name for anything else — an old database would hand you stale values.
     ('face_dataset_image', 'caption_short', 'TEXT'),
     ('face_dataset_image', 'fail_reason', 'TEXT'),
-    # Nature de l'échec ('refused' | 'empty' | 'error') pour compter les refus
-    # fournisseur séparément des pannes. Les lignes existantes restent NULL :
-    # elles gardent leur phrase, et les compteurs ne les rangent nulle part.
+    # Failure kind (refused/empty/error) separates provider refusals from
+    # actual failures. Existing rows remain NULL: retain their message
+    # without assigning them to a counter category.
     ('face_dataset_image', 'fail_kind', 'VARCHAR(16)'),
     ('face_dataset_image', 'parent_image_id', 'INTEGER'),
     ('face_dataset_image', 'derivation_kind', 'VARCHAR(32)'),

@@ -17,86 +17,64 @@ import ScenePromptsPanel from './ScenePromptsPanel';
 import { combinedPromptBatch } from './scenePrompts';
 import { heavyRunConfirm, heavyRunNotice, runCost } from './runCost';
 
-// Rail gauche « Setup du run » : pickers + seed/launch + bandeaux d'état.
-// Extraction behavior-preserving de LoraTestStudio.jsx :
-//   - bandeaux gpu_busy / pending (→ studio.cancel) / resumable (→ studio.resume)
-//   - le bloc {!d.pending && (...)} : checkpoints, strengths, prompt+récents,
-//     modèle/formats/cfg/steps, seed/🎲/🔒/×N + compteur, bouton 🚀 Lancer.
-// `d` = payload useLoraTestStudio ; `studio` = hook ; `form` = useStudioForm.
-// `datasetId` (optionnel) : requis seulement par RecentPrompts pour les vignettes
-//   (le payload `d` ne porte pas l'id du dataset → StudioShell le transmet). Voir
-//   note de déviation §contrat dans le rapport de livraison de la Task 1.A.
-//
-// ◉ LoRA Canvas — ce panneau est MONTÉ TEL QUEL par le canvas, qui ne diffère que
-// sur UN point : les checkpoints s'y choisissent en cliquant les pastilles des
-// nœuds (sur plusieurs datasets), pas dans le CheckpointPicker. D'où trois props
-// optionnelles, sans effet quand elles sont absentes :
-//   `checkpointSlot`        remplace le CheckpointPicker par le récapitulatif de
-//                           la sélection du board ;
-//   `launchBlocked`/`launchLabel` : le bouton dit CE QU'IL VA FAIRE (« Deploy 2
-//                           checkpoints, then generate ») ou POURQUOI il ne peut
-//                           pas (familles mélangées). Jamais un bouton mort muet.
-// Tout le reste — modèle, format, cfg, steps, steps2, seed, ×N, LoRA always-on,
-// négatif… — est le MÊME code, donc les deux écrans ne divergent pas.
-//   `showStrengths`/`cellTotal` : le mode 🧬 Blend du board charge tous les
-//                           checkpoints dans UNE image, chacun à son poids —
-//                           l'axe strengths n'a plus rien à balayer, et le
-//                           compteur ne doit plus le multiplier.
+// Left run-setup rail: pickers, seed/launch controls and status banners, extracted unchanged from
+// LoraTestStudio.jsx. Preserve gpu_busy, pending/cancel and resumable/resume banners and the
+// non-pending controls: checkpoints, strengths, prompt/history, model/aspect/CFG/steps,
+// seed/reroll/lock/batch/count and launch. d is useLoraTestStudio payload, studio its hook and
+// form useStudioForm. Optional datasetId is needed for RecentPrompts thumbnails because d lacks
+// it; StudioShell passes it. Canvas mounts this SAME panel, selecting checkpoints through board
+// nodes across datasets instead of CheckpointPicker. Optional checkpointSlot replaces that picker;
+// launchBlocked/launchLabel explain deployment or mixed-family blocks. Without props, behavior is
+// unchanged. All other generation settings stay shared. Canvas Blend supplies
+// showStrengths/cellTotal because all checkpoints form ONE weighted image, so strengths no longer
+// sweep or multiply the count.
 export default function RunSetupPanel({ d, studio, form, datasetId,
   checkpointSlot = null, launchBlocked = false, launchLabel = null, launchHint = null, actionBar = true,
   showStrengths = true, cellTotal = null, genStoragePrefix = null,
-  // 🔤 Contrôle optionnel de la case « Trigger word » par le PARENT (le canvas la
-  // partage avec son panneau 🧬 Blend, qui doit dire la vérité sur l'injection).
-  // Absent → le panneau tient l'état lui-même, comportement historique.
+  // Optional PARENT control of Trigger word lets Canvas share it with Blend text that must
+  // describe injection accurately. Without it, the panel owns state as before.
   injectTrigger: injectTriggerProp = null, onInjectTrigger: onInjectTriggerProp = null }) {
   const navigate = useNavigate();
-  // Réglages de génération GLOBAUX (parité Generate, hors prompt builder) remontés par
-  // StudioGenerationSettings : objet snake_case déjà prêt à fusionner dans le POST /run
-  // (source unique de vérité pour precision/format/detail/negative +
-  // pile LoRA « always-on »). Le composant est gaté PAR FAMILLE et se persiste seul.
+  // GLOBAL generation settings match Generate except for the prompt builder.
+  // StudioGenerationSettings supplies a snake_case object ready for POST /run: the single source
+  // for precision, format, detail, negative and always-on LoRAs. It gates by FAMILY and persists
+  // its own settings.
   const [genSettings, setGenSettings] = useState({});
-  // Manques de modèles/nodes remontés par un 409 `studio_missing` au lancement
-  // (P0-a) → bandeau actionnable listant les fichiers/nodes absents.
+  // Launch 409 studio_missing (P0-a) produces an actionable banner naming missing model files and
+  // nodes.
   const [preflight, setPreflight] = useState(null);
-  // 409 `studio_arch_mismatch` : un checkpoint sélectionné dont l'arch RÉELLE
-  // contredit la famille du Studio (déploiement mal classé) → bandeau distinct.
+  // 409 studio_arch_mismatch means a selected checkpoint's ACTUAL architecture conflicts with the
+  // Studio family, such as a misclassified deployment. Show a separate banner.
   const [archMismatch, setArchMismatch] = useState(null);
 
-  // 📝 LOT DE PROMPTS — les prompts cochés dans l'historique. Le lancement les
-  // rejoue TOUS en un seul run (le backend en fait un axe : le GPU est sérialisé
-  // et un second POST serait refusé par le garde « a test run is already in
-  // progress »). Rien de coché = zéro changement : le prompt du champ, seul.
-  //
-  // Délibérément NON persisté (contrairement au mode 🧬 du board) : une sélection
-  // de lot est l'intention d'UN lancement. Retrouver trois cases cochées après un
-  // rechargement multiplierait par trois un run qu'on croyait simple.
+  // PROMPT BATCH: replay ALL checked history prompts in one run as a backend axis. GPU execution
+  // is serial and another POST would be rejected as an already-running test. No checks preserves
+  // the single field prompt. Intentionally NOT persisted: a batch expresses one launch's intent,
+  // and restoring three checks after reload could silently triple a seemingly single run.
   const [batchPrompts, setBatchPrompts] = useState([]);
-  // La règle du lot vit dans promptBatch.js — pure, donc réellement testée, et
-  // partagée par les deux surfaces plutôt que réécrite dans chacune.
+  // Prompt-batch rules live in pure, tested promptBatch.js and are shared by both surfaces rather
+  // than reimplemented.
   const pickedPrompts = visibleBatch(batchPrompts, d.recent_prompts);
   const toggleBatchPrompt = (p) => setBatchPrompts((cur) => (
     cur.includes(p) ? cur.filter((v) => v !== p) : [...cur, p]));
-  // 🌐 Les prompts cochés dans le navigateur Civitai : des passes du même lot,
-  // sans passer par l'historique (ils y entreront au lancement). Même règle de
-  // non-persistance que le lot d'historique, même raison.
+  // Checked Civitai prompts are passes in the same batch without first entering history; launch
+  // adds them there. Do not persist them, for the same reason as history batch selections.
   const [civitaiPicks, setCivitaiPicks] = useState([]);
   const toggleCivitaiPick = (p) => setCivitaiPicks((cur) => (
     cur.includes(p) ? cur.filter((v) => v !== p) : [...cur, p]));
 
-  // 🎬 Scenes : les captions d'une banque OU d'un dataset DANS L'ORDRE, chaque
-  // scène cochée devenant une passe du même axe 📝. Non persisté, même raison que
-  // le lot d'historique ci-dessus. La règle vit dans scenePrompts.js (pur, testé).
+  // Scenes use captions from a bank OR dataset IN ORDER. Each checked scene adds a pass to the
+  // prompt axis. Do not persist, matching history batches. Rules live in pure, tested
+  // scenePrompts.js.
   const [sceneBatch, setSceneBatch] = useState({ source: null, scenes: [], picked: [], extras: {} });
   const allPickedPrompts = combinedPromptBatch(
     mergeBatches(pickedPrompts, civitaiPicks),
     sceneBatch.scenes, sceneBatch.picked, sceneBatch.extras);
 
-  // 🔤 Case « Trigger word » : préfixer (défaut, comportement historique) ou non le
-  // trigger du dataset au prompt monté. Préférence de navigateur PARTAGÉE entre les
-  // surfaces de lancement — lecture/écriture dans triggerPref (module pur : ce
-  // panneau ne touche pas au stockage lui-même, le contrat du lot de prompts
-  // l'interdit). Décochée → `inject_trigger: false` part dans le POST ; cochée →
-  // champ absent, corps octet pour octet celui d'avant.
+  // Trigger word optionally prefixes the dataset trigger; checked preserves the default. Share the
+  // browser preference across launch surfaces through pure triggerPref, never direct storage
+  // access in this panel, as required by the batch contract. Unchecked sends inject_trigger:false;
+  // checked omits the field, preserving the previous body byte-for-byte.
   const [ownInjectTrigger, setOwnInjectTrigger] = useState(readInjectTrigger);
   const injectTrigger = injectTriggerProp ?? ownInjectTrigger;
   const toggleInjectTrigger = onInjectTriggerProp ?? ((v) => {
@@ -104,42 +82,35 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
     writeInjectTrigger(v);
   });
 
-  // Le nombre de cellules RÉELLEMENT lancées. `cellTotal` n'est fourni que par un
-  // mode qui change la formule (🧬 Blend : une pile = une configuration) — sinon
-  // c'est le total du formulaire, inchangé.
-  // 📝 Chaque prompt coché est une passe de plus sur la MÊME grille : le compteur
-  // et le bouton doivent le dire avant le clic, pas la file d'attente après.
+  // Count cells ACTUALLY launched. cellTotal is supplied only when a mode changes the formula,
+  // such as Blend where one stack is one configuration; otherwise use the form total. Each checked
+  // prompt adds another pass over the SAME grid. Count and button must explain this before
+  // clicking, not only in the resulting queue.
   const promptMult = Math.max(1, allPickedPrompts.length);
   const cells = cellTotal != null ? cellTotal : form.total;
   const total = cells * promptMult;
   const canLaunch = total > 0 && !d.pending && !d.gpu_busy && !studio.launching
     && !launchBlocked;
   const launchText = batchLaunchText(launchLabel, allPickedPrompts);
-  // Axe ⚖ batch (Always-on LoRA cochés batch) : chaque config tourne SANS puis
-  // AVEC chaque LoRA coché → le compteur d'images/temps doit en tenir compte
-  // (le backend multiplie déjà les cellules par 1 + nb cochés).
+  // Always-on LoRA batch comparison generates each configuration WITHOUT then WITH each checked
+  // LoRA. Image/time estimates must include the backend's 1 + checked-count multiplier.
   const batchMult = 1 + ((genSettings.batch_loras || []).length);
-  // The canvas swaps `studio.launch` itself (see useCanvasStudio), so EVERY
-  // setting — genSettings included — travels through this one call site on both
-  // screens. Overriding the handler here instead would have quietly dropped the
-  // global generation settings from a canvas run.
-  // ⏱ Ce que ce lancement va vraiment coûter : toutes les passes, au rythme
-  // MESURÉ de la machine. Rien n'est refusé — au-delà du seuil on chiffre, et on
-  // pose UNE question.
+  // Canvas replaces studio.launch itself in useCanvasStudio, so EVERY setting including
+  // genSettings passes through this shared call site. Replacing the handler here would silently
+  // drop global settings from Canvas runs. Estimate ALL passes using this machine's MEASURED pace.
+  // Above the threshold, show cost and ask ONE question instead of rejecting the launch.
   const cost = runCost(total * batchMult * form.genCount, d.seconds_per_image);
 
   const onLaunch = async () => {
     if (cost.heavy && !window.confirm(heavyRunConfirm(cost))) return;
-    // 📝 `prompts` voyage dans le MÊME canal que les réglages globaux (les deux
-    // hooks étalent cet objet dans le corps du POST) — donc aucune signature à
-    // changer, et le lot arrive identiquement sur les deux routes. Absent quand
-    // rien n'est coché : le corps envoyé est alors octet pour octet celui d'avant.
+    // prompts travels through the SAME channel as global settings, which both hooks spread into
+    // POST bodies. No signature change is needed and both routes receive the same batch. Omit with
+    // no selection to keep the old body byte-for-byte.
     const base = launchSettings(genSettings, allPickedPrompts);
-    // Lot vide ⇒ `base` EST l'objet d'état genSettings (identité, épinglée par
-    // promptBatch.test.js) : ne JAMAIS écrire dedans — y graver la clé la
-    // rendait collante (un lancement décoché puis la case recochée continuait
-    // d'envoyer inject_trigger:false). Cochée = identité, corps octet pour
-    // octet celui d'avant ; décochée = copie qui porte le champ.
+    // With an empty batch, base IS the genSettings state object, an identity pinned by
+    // promptBatch.test.js. NEVER mutate it: writing inject_trigger:false there made the flag stick
+    // after rechecking. Checked returns the identical object and old body; unchecked returns a
+    // copy carrying the field.
     const settings = injectTrigger ? base : { ...base, inject_trigger: false };
     const res = await studio.launch(
       form.chosenCps, form.selSts, form.nextSeed(), form.effectivePrompt,
@@ -154,11 +125,11 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
 
   return (
     <>
-      {/* --- Preflight : modèles/nodes manquants (P0-a) + arch mismatch -- */}
+      {/* Preflight: missing models/nodes (P0-a) and architecture mismatch. */}
       <StudioPreflightBanner missing={preflight} archMismatch={archMismatch}
         onDismiss={() => { setPreflight(null); setArchMismatch(null); }} />
 
-      {/* --- Garde-fous ------------------------------------------------- */}
+      {/* Safeguards. */}
       {d.gpu_busy && !d.comfyui_recovery?.requires_comfyui_restart_confirmation && (
         <div className="m-0 flex flex-wrap items-center gap-2 rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-red-300 text-sm" role="status">
           <span>{d.gpu_busy}</span>
@@ -186,12 +157,12 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
           <button type="button" disabled={studio.confirmingComfyuiRestart || !studio.confirmComfyuiRestart}
             onClick={studio.confirmComfyuiRestart}
             className="ml-auto px-2.5 py-1 rounded-lg bg-gradient-primary text-gray-950 text-xs font-semibold disabled:opacity-40">
-            {studio.confirmingComfyuiRestart ? 'Confirming…' : '✓ J’ai redémarré ComfyUI'}
+            {studio.confirmingComfyuiRestart ? 'Confirming…' : '✓ I restarted ComfyUI'}
           </button>
         </div>
       )}
 
-      {/* --- Run en cours ------------------------------------------------ */}
+      {/* Active run. */}
       {d.pending > 0 && (
         <div className="flex items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 py-2" role="status">
           <span className="inline-block w-4 h-4 border-2 border-indigo-400/40 border-t-indigo-400 rounded-full animate-spin" aria-hidden />
@@ -205,7 +176,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
         </div>
       )}
 
-      {/* --- Run stoppé → reprenable ------------------------------------- */}
+      {/* Stopped run can be resumed. */}
       {!d.pending && d.resumable > 0 && (
         <div className="flex items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2" role="status">
           <span aria-hidden>⏸</span>
@@ -218,7 +189,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
         </div>
       )}
 
-      {/* --- Setup du run ------------------------------------------------ */}
+      {/* Run setup. */}
       {!d.pending && (
         <div id="st-setup" data-probe-panel="setup" className="flex flex-col gap-2 scroll-mt-16">
           {/* The ONE thing the canvas does differently: its checkpoints are the
@@ -255,9 +226,10 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
             onInjectTrigger={toggleInjectTrigger}
           />
 
-          {/* 🎬 Les captions d'une banque ou d'un dataset, dans l'ordre, comme
-              passes de prompt supplémentaires — juste sous le prompt qu'elles
-              prolongent. */}
+          {/*
+           * Ordered bank or dataset captions provide extra prompt passes, directly below the
+           * prompt they extend.
+           */}
           <ScenePromptsPanel value={sceneBatch} onChange={setSceneBatch} />
 
           <AxisPickers
@@ -284,9 +256,11 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
             fmt={fmt}
           />
 
-          {/* Réglages de génération globaux (parité Generate) : format/resolution, +
-              selon la famille sampling/detail/engine (precision+LoRA
-              always-on)/negative. Source unique de vérité, partagée avec la comparaison. */}
+          {/*
+           * Global generation settings match Generate: aspect/resolution and family-specific
+           * sampling, detail, engine precision/always-on LoRAs, and negative prompt. One source
+           * shared with comparison.
+           */}
           <StudioGenerationSettings
             family={d.family}
             // The canvas overrides the namespace: its runs are cross-dataset, so
@@ -325,8 +299,10 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
               {launchHint}
             </p>
           )}
-          {/* ⏱ Un long lancement est annoncé, pas interdit : le compte, la durée
-              au rythme mesuré, et le rappel qu'un Stop garde ce qui est fait. */}
+          {/*
+           * Announce long launches instead of forbidding them: show count, duration at measured
+           * pace, and remind users that Stop preserves completed work.
+           */}
           {cost.heavy && (
             <p data-testid="heavy-run-notice"
               className="m-0 rounded-lg border border-amber-400/40 bg-amber-500/10 px-2.5 py-1.5 text-[0.6875rem] text-amber-200"
@@ -337,11 +313,11 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
         </div>
       )}
 
-      {/* Barre de commande fixe : Run toujours visible + raccourcis de sections
-          (mêmes ancres que la comparaison ; le ratio reste l'axe Formats ici).
-          Retirée sur le canvas, où le panneau est déjà un tiroir à pied collant :
-          deux barres empilées au ras de l'écran, à 400 px, mangeaient la moitié
-          de la hauteur utile. */}
+      {/*
+       * Fixed command bar keeps Run visible with comparison's section anchors; aspect remains the
+       * Formats axis here. Omit on Canvas because its drawer already has a sticky footer: two
+       * stacked bars consumed half the usable height at 400 px.
+       */}
       {actionBar && (
       <StudioActionBar
         shortcuts={[

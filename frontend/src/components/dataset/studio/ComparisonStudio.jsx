@@ -1,16 +1,12 @@
 // react-frontend/src/components/dataset/studio/ComparisonStudio.jsx
 /**
- * Studio de COMPARAISON multi-LoRA (≥2 LoRA cochés). Branche « comparaison » de
- * StudioShell.
- *
- * Flux : règle un run (StudioRunSetup) sur la `selection` reçue → POST
- * /api/studio/run → useStudioRun(run_id) pilote l'affichage (poll + vote +
- * cancel/resume). Grille colonnes = LoRA × lignes = strength (LoraComparisonGrid),
- * panneau « 🏆 Classement LoRA » (data.lora_ranking). Vote rapide (file + swipe)
- * et lightbox réutilisent useQuickVote / QuickVoteModal / StudioResultViewer.
- *
- * Le LoraPicker reste dans StudioShell (partagé avec la branche 1-LoRA) ; ici on
- * reçoit la sélection figée et on pilote uniquement le run.
+ * Multi-LoRA COMPARISON Studio for at least two checked LoRAs, selected by StudioShell.
+ * StudioRunSetup configures the received selection, POST /api/studio/run launches, and
+ * useStudioRun(run_id) manages polling, votes, cancel and resume. LoraComparisonGrid uses LoRA
+ * columns and strength rows; data.lora_ranking feeds rankings. Quick voting and lightbox reuse
+ * useQuickVote, QuickVoteModal and StudioResultViewer. LoraPicker stays in StudioShell, shared
+ * with the single-LoRA branch; this component receives the fixed selection and manages only the
+ * run.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { postJson } from '../../../api/fetchClient';
@@ -45,7 +41,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   modelDefaults = null, runType = 'zimage', baseNote = null }) {
   const toast = useToast();
 
-  // --- Réglages du run (persistés : recharger la page ne les perd plus) --------
+  // Run settings are persisted so page reloads preserve them.
   const [strengths, setStrengths] = useState(() => {
     try {
       const v = JSON.parse(localStorage.getItem('studioComp_strengths') || 'null');
@@ -55,8 +51,8 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   const [prompt, setPrompt] = useState(() => {
     try { return localStorage.getItem('studioComp_prompt') || ''; } catch { return ''; }
   });
-  // 🔤 Case « Trigger word » — MÊME préférence que le panneau du Test Studio et
-  // le canvas (module partagé triggerPref) : décocher ici vaut partout.
+  // Trigger word checkbox shares the triggerPref preference with Test Studio and Canvas:
+  // unchecking here applies everywhere.
   const [injectTrigger, setInjectTrigger] = useState(readInjectTrigger);
   const toggleInjectTrigger = (v) => {
     setInjectTrigger(v);
@@ -64,33 +60,30 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   };
   const [seed, setSeed] = useState(() => rollSeed());
 
-  // 📝 LE LOT DE PROMPTS de cette surface. Il vit ICI et pas dans le panneau parce
-  // que c'est ce composant qui construit le corps du POST — même règle que
-  // RunSetupPanel sur les deux autres surfaces de lancement.
-  // Délibérément NON persisté : un lot est l'intention d'UN lancement ; le
-  // retrouver coché après un rechargement multiplierait un run qu'on croyait simple.
+  // This surface's PROMPT BATCH lives HERE because this component builds the POST body, matching
+  // RunSetupPanel on the other two launch surfaces. Intentionally NOT persisted: a batch expresses
+  // one launch's intent; restoring it after reload could multiply an apparently single run.
   const [historyBatch, setHistoryBatch] = useState([]);
   const [civitaiPicks, setCivitaiPicks] = useState([]);
   const toggleIn = (set) => (v) => set((cur) => (
     cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]));
-  // Dédoublonné : un prompt Civitai déjà lancé est DANS l'historique, donc
-  // cochable des deux côtés — deux cellules identiques seraient du GPU perdu.
+  // Deduplicate: a previously launched Civitai prompt is also in history and selectable from both
+  // lists. Identical cells waste GPU time.
   const pickedPrompts = mergeBatches(historyBatch, civitaiPicks);
-  // 'compare' (historique : un LoRA seul par cellule) ou 'combine' (pile : tous les
-  // LoRA cochés dans la MÊME image, chacun à son poids). Persisté comme le reste.
+  // compare means one LoRA per cell; combine stacks all selected LoRAs in the SAME image at their
+  // respective weights. Persist like other settings.
   const [mode, setMode] = useState(() => {
     try { return localStorage.getItem('studioComp_mode') === 'combine' ? 'combine' : 'compare'; }
     catch { return 'compare'; }
   });
-  // Poids par LoRA de la pile, indexés par `${dataset_id}:${checkpoint}` → un poids
-  // réglé survit au décochage d'un AUTRE LoRA.
+  // Stack weights keyed by dataset_id:checkpoint survive unchecking a DIFFERENT LoRA.
   const [stackWeights, setStackWeights] = useState(() => {
     try { return JSON.parse(localStorage.getItem('studioComp_weights') || '{}') || {}; }
     catch { return {}; }
   });
-  // Les poids COCHÉS par LoRA (balayage 🧬). Clé neuve : rien de ce qui est déjà
-  // stocké ne change de sens, et une install qui n'en a pas lit {} = aucune case
-  // cochée = les curseurs gouvernent, exactement comme avant.
+  // Checked weights per LoRA define the blend sweep. Use a NEW storage key so existing data
+  // retains its meaning. Missing data reads as {}, meaning no checks and slider-controlled
+  // weights, exactly as before.
   const [stackSets, setStackSets] = useState(() => {
     try { return JSON.parse(localStorage.getItem('studioComp_weightSets') || '{}') || {}; }
     catch { return {}; }
@@ -103,22 +96,19 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   const [count, setCount] = useState(() => {
     try { return Math.max(1, parseInt(localStorage.getItem('studioComp_count'), 10) || 1); } catch { return 1; }
   });
-  // 🎛 Axes de rendu — CFG, steps, et la 2e passe SDXL. Ils MANQUAIENT ici : cette
-  // branche ne pouvait pas régler les steps alors que le studio mono-LoRA et le
-  // panneau du canvas le pouvaient. Clés localStorage NEUVES : rien de ce qui est
-  // déjà stocké ne change de sens, et une install qui n'en a pas lit null =
-  // « le défaut de la famille », c'est-à-dire ce qu'elle lançait hier.
+  // Render axes: CFG, steps and SDXL's second pass. These were missing here although single-LoRA
+  // Studio and Canvas offered them. NEW localStorage keys preserve existing data semantics; absent
+  // keys read null, meaning the family's existing default.
   const readAxis = (key) => {
     try {
       const v = JSON.parse(localStorage.getItem(key) || 'null');
       return Array.isArray(v) && v.length ? v : null;
     } catch { return null; }
   };
-  // Modèle de base sélectionné : défaut = 1er de la liste fournie par le parent.
-  // Se réinitialise quand baseModels change (changement de runType).
-  // ⚠ DÉCLARÉ AVANT les axes : leurs défauts en dépendent (cf. `baseDefaults`
-  // plus bas), et une `const` lue avant sa déclaration est une ReferenceError au
-  // rendu — pas une valeur `undefined` qu'on rattraperait avec un `??`.
+  // Selected base defaults to the parent's first model and resets when baseModels changes with
+  // runType. Declare BEFORE axes because their defaults depend on it. Reading a const before
+  // declaration throws ReferenceError during rendering; it is not undefined that ?? can recover
+  // from.
   const [selectedBase, setSelectedBase] = useState('');
   useEffect(() => {
     setSelectedBase(baseModels.length > 0 ? baseModels[0].filename : '');
@@ -126,25 +116,20 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   const [selCfgs, setSelCfgs] = useState(() => readAxis('studioComp_cfgs'));
   const [selSteps, setSelSteps] = useState(() => readAxis('studioComp_steps'));
   const [selSteps2, setSelSteps2] = useState(() => readAxis('studioComp_steps2'));
-  // Le défaut d'un axe dépend de la BASE, pas seulement de la famille : une base
-  // non distillée (Z-Image Base, un modèle complet Krea 2 Raw) rend une esquisse
-  // floue avec le cfg 1 / 8 steps de la Turbo. Le studio mono-LoRA lisait déjà
-  // `model_defaults` ; cette branche ne le recevait pas et héritait donc des
-  // mauvais chiffres pour exactement les modèles qui coûtent le plus cher à
-  // tester. Un axe que l'utilisateur a touché (selCfgs non nul) n'est jamais
-  // réécrit — ici comme là-bas.
-  // `selectedBase` vaut '' quand la famille n'offre aucune alternative — et la clé
-  // '' du payload EST celle du défaut élu. L'ignorer renvoyait une base non
-  // distillée sur les chiffres Turbo (cfg 1 / 8 steps), l'esquisse floue de #18.
+  // Axis defaults depend on BASE as well as family: undistilled Z-Image Base or full Krea 2 Raw
+  // yields blurry sketches with Turbo's CFG 1 / 8 steps. Single-LoRA Studio already used
+  // model_defaults; comparison lacked them and used wrong defaults on expensive models. Never
+  // overwrite user-edited axes (non-null selCfgs). selectedBase is empty when no alternative
+  // exists, and the payload's empty key IS the selected default; ignoring it caused the blurry
+  // undistilled outputs in #18.
   const baseDefaults = (modelDefaults ? modelDefaults[selectedBase || ''] : null) || null;
   const defaultCfg = baseDefaults?.cfg ?? axes?.default_cfg;
   const defaultSteps = baseDefaults?.steps ?? axes?.default_steps;
   const effectiveCfgs = effectiveAxis(selCfgs, defaultCfg);
   const effectiveSteps = effectiveAxis(selSteps, defaultSteps);
-  // ⚠ La 2e passe appartient au workflow SDXL. Sans cette garde, une sélection
-  // laissée par un run SDXL suivrait l'utilisateur dans un run Z-Image (les
-  // réglages sont persistés, la famille change avec les cases cochées) et
-  // enverrait un axe que cette famille n'a pas. Famille sans 2e passe = axe vide.
+  // The second pass belongs to SDXL. Without this guard, persisted SDXL choices would follow users
+  // into Z-Image when selection changed family and send an unsupported axis. Families without a
+  // second pass use an empty axis.
   const effectiveSteps2 = axes?.steps2_choices
     ? effectiveAxis(selSteps2, axes.default_steps2) : [];
   useEffect(() => {
@@ -165,18 +150,18 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
     } catch { /* private mode */ }
   }, [strengths, prompt, count, mode, stackWeights, stackSets]);
   const [launching, setLaunching] = useState(false);
-  // 409 `studio_missing` au lancement (P0-a) → bandeau des modèles/nodes manquants.
+  // Launch 409 studio_missing (P0-a): show the missing models/nodes banner.
   const [preflight, setPreflight] = useState(null);
-  // 409 `studio_arch_mismatch` : checkpoint dont l'arch RÉELLE contredit la famille.
+  // 409 studio_arch_mismatch means the checkpoint's ACTUAL architecture conflicts with the family.
   const [archMismatch, setArchMismatch] = useState(null);
-  // Réglages de génération GLOBAUX (parité Generate) remontés par StudioGenerationSettings.
-  // Objet snake_case déjà prêt à fusionner dans le POST /run (voir launch()).
+  // GLOBAL generation settings, matching Generate, come from StudioGenerationSettings as a
+  // snake_case object ready to merge into POST /run (see launch()).
   const [genSettings, setGenSettings] = useState({});
   const toggleStrength = (s) =>
     setStrengths((cur) => (cur.includes(s) ? cur.filter((v) => v !== s) : [...cur, s].sort((a, b) => a - b)));
 
 
-  // --- Run piloté --------------------------------------------------------------
+  // Managed run.
   const [runId, setRunId] = useState(null);
   const run = useStudioRun(runId);
   const data = run.data;
@@ -191,10 +176,9 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
     setLbImg((p) => (p && p.id === id ? { ...p, rating: nv } : p));
   };
 
-  // Les cellules RÉELLEMENT à l'écran. Sur une pile ce sont celles de toutes les
-  // variantes de poids affichées, pas seulement celles du run ouvert : le vote rapide
-  // et la lightbox doivent porter sur ce que l'utilisateur voit, sinon « 3 à voter »
-  // en annonce 3 alors que 6 tuiles non votées sont sous ses yeux.
+  // Cells ACTUALLY visible: for stacks, all displayed weight variants, not only the open run.
+  // Quick voting and lightbox must match what users see, or a three-vote count could appear above
+  // six unvoted tiles.
   const displayedCells = useMemo(() => {
     const variantCells = (data?.stack_variants || []).flatMap((v) => v.cells || []);
     if (!variantCells.length) return cells;
@@ -211,11 +195,9 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
     [displayedCells],
   );
 
-  // Set navigable de la lightbox : les strengths d'un même rendu (même LoRA + même
-  // seed) adjacentes → LoRA (dataset_id) → aspect → seed → STRENGTH en dernier. Ici
-  // les cellules sont live (déjà dans ce composant) → on passe le set directement.
-  // `displayedCells` et non `cells` : sur une pile, ouvrir une image d'une AUTRE
-  // variante donnerait sinon une lightbox sans flèches (index -1 dans le set).
+  // Lightbox navigation keeps strengths of the same LoRA/seed adjacent: sort by dataset_id,
+  // aspect, seed, then STRENGTH last. Pass live cells directly. Use displayedCells rather than
+  // cells; otherwise another stack variant's image has index -1 and no navigation arrows.
   const navImages = useMemo(
     () => flipOrder(displayedCells,
       (c) => [c.dataset_id ?? 0, c.aspect || '', c.seed ?? 0, c.strength ?? 0]),
@@ -225,15 +207,14 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   const combine = mode === 'combine';
   const combineBlocked = combine ? combineBlocker(selection) : null;
 
-  // --- Vue PILE ---------------------------------------------------------------
-  // Décidée par le RUN AFFICHÉ, pas par la bascule Compare/Blend : on peut ouvrir
-  // une pile lancée hier alors que la bascule est repassée sur Compare, et l'inverse.
+  // STACK view follows the DISPLAYED RUN, not the Compare/Blend toggle: yesterday's stack can be
+  // opened while the toggle is on Compare, and vice versa.
   const shownStack = useMemo(() => stackMembers(data), [data]);
   const showStackView = isStackRun(data);
   const [savingBest, setSavingBest] = useState(false);
   const [bestSavedAt, setBestSavedAt] = useState(null);
-  // Changer de run efface la confirmation : « ★ Saved » sous une AUTRE pile que celle
-  // qu'on vient d'épingler serait un mensonge.
+  // Clear confirmation on run changes: Saved under a DIFFERENT stack would falsely describe the
+  // one just pinned.
   useEffect(() => { setBestSavedAt(null); }, [runId]);
 
   const saveStackBest = async ({ dataset_id: dsId, ...body }) => {
@@ -249,8 +230,8 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
     }
   };
 
-  // « Use these weights » : recharge les poids d'une variante dans les curseurs. Les
-  // clés sont celles de loraStack.stackKey, donc les sliders les relisent tels quels.
+  // Use these weights restores a variant's weights to sliders. Keys come from loraStack.stackKey
+  // and can be read directly by those sliders.
   const useVariantWeights = (map) => {
     if (!map || Object.keys(map).length === 0) {
       toast.error('This run did not record enough to reload its weights');
@@ -268,29 +249,28 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
     try {
       const body = {
         selections: buildSelectionsPayload(selection, { combine, weights: stackWeights, sets: stackSets }),
-        // En combine chaque LoRA porte son poids : l'axe strengths n'est plus envoyé
-        // (le backend le remplace par le poids du LoRA de tête).
+        // In combine mode every LoRA has its own weight, so omit the strengths axis; the backend
+        // substitutes the leading LoRA's weight.
         ...(combine ? { combine: true } : { strengths }),
         seed,
         count,
-        // Base du run : '' (entrée « Official », Krea) ou rien de coché → absent,
-        // le backend garde alors le défaut de la famille (UNET câblé / 1er modèle).
+        // Omit run base when it is empty (Krea's Official entry) or nothing is selected. The
+        // backend retains the family default: configured UNET or first model.
         z_model: selectedBase || undefined,
-        // Réglages globaux (resolution_tier, negative/sampler/detail/…),
-        // déjà gatés PAR FAMILLE côté backend — champs vides absents = défauts gardés.
+        // Global resolution_tier, negative, sampler, detail and other settings are already gated
+        // BY FAMILY on the backend. Omitted empty fields preserve defaults.
         ...genSettings,
-        // 🎛 CFG / steps / 2e passe, EN DERNIER : ce que l'utilisateur vient de
-        // régler dans le panneau gagne sur tout réglage global homonyme. La route
-        // les acceptait déjà et l'engine les balayait déjà — ce qui manquait était
-        // ce corps, qui ne les portait pas, et le panneau, qui ne les offrait pas.
+        // CFG, steps and second pass go LAST: current panel choices override same-named global
+        // settings. The route and engine already supported these axes; the missing pieces were the
+        // request body and panel controls.
         ...axisPayload({ cfgs: effectiveCfgs, steps: effectiveSteps, steps2: effectiveSteps2 }),
       };
       if (prompt.trim()) body.prompt = prompt.trim();
-      // 📝 L'axe lot. Rien de coché ⇒ clé absente : le corps reste octet pour
-      // octet celui d'avant cette feature.
+      // Prompt-batch axis: with nothing checked, omit the key so the request body stays
+      // byte-for-byte identical to the earlier behavior.
       if (pickedPrompts.length) body.prompts = [...pickedPrompts];
-      // Case « Trigger word » décochée → prompt envoyé tel quel. Absent quand
-      // cochée : le corps reste octet pour octet celui d'avant.
+      // Unchecking Trigger word sends the prompt unchanged. When checked, omit the field to
+      // preserve the previous request body byte-for-byte.
       if (!injectTrigger) body.inject_trigger = false;
       const dResp = await postJson('/api/studio/run', body);
       // Keep this defensive path even though apiFetch currently throws on
@@ -325,17 +305,21 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 items-start">
       <aside className="flex flex-col gap-3 lg:sticky lg:top-16 lg:max-h-[calc(100vh-7rem)] lg:overflow-auto">
-        {/* Ce que le défaut de base a d'anormal — affiché même sans sélecteur :
-            l'install qui n'a qu'une base est celle qui doit le lire. */}
+        {/*
+         * Explain unusual default-base conditions even without a picker: single-base installations
+         * still need this information.
+         */}
         {baseNote && (
           <p className="m-0 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2
                         text-[0.6875rem] leading-snug text-amber-300/80 break-words">
             {baseNote}
           </p>
         )}
-        {/* Picker de base — toutes familles. Krea : l'endpoint ne renvoie une liste
-            (défaut élu + alternatives) que si des UNET Krea locaux existent ; sinon
-            vide → le sélecteur reste caché (défaut élu appliqué au node 20). */}
+        {/*
+         * Base picker for all families. Krea returns a list of the selected default and
+         * alternatives only when local Krea UNETs exist. Otherwise hide the picker and apply the
+         * selected default to node 20.
+         */}
         {baseModels.length > 0 && (
           <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-3">
             <span className="text-content-muted text-[0.625rem] uppercase">
@@ -390,14 +374,17 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
             onToggleCivitaiPick={toggleIn(setCivitaiPicks)}
             onClearCivitaiPicks={() => setCivitaiPicks([])}
             pickedPrompts={pickedPrompts}
-            /* 🎛 Les axes de rendu, dans le panneau de réglage du run et pas dans
-               un bloc à part : c'est le même geste que choisir une strength. Le
-               MÊME composant que le studio mono-LoRA et le canvas — base et format
-               sont déjà réglés au-dessus ici, donc ces deux blocs restent muets. */
+            /*
+             * Render axes belong in run setup beside strength selection, using the SAME component
+             * as single-LoRA Studio and Canvas. Base and format are already selected above, so
+             * hide those two blocks here.
+             */
             axisSlot={axes ? (
-              /* defaultCfg/defaultSteps = ceux de la BASE choisie (repli sur la
-                 famille) : la puce marquée « défaut » doit désigner la valeur
-                 réellement lancée, sinon elle désigne celle qui rend flou. */
+              /*
+               * defaultCfg/defaultSteps belong to the selected BASE, falling back to family
+               * defaults. The default chip must mark the value actually launched, not the one
+               * producing blurry results.
+               */
               <AxisPickers
                 zModels={null} effectiveModels={[]} onToggleModel={() => {}}
                 aspects={null} effectiveAspects={[]} onToggleAspect={() => {}}
@@ -415,10 +402,11 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
             ) : null}
           />
         </div>
-        {/* Réglages de génération globaux (parité Generate, hors prompt builder).
-            key=runType → remonte proprement au changement de famille (état/localStorage
-            namespacés par famille). aspectPicker : en comparaison le ratio n'est pas
-            un axe → choix GLOBAL du format ici (envoyé comme axe à 1 valeur). */}
+        {/*
+         * Global generation settings match Generate except for the prompt builder. key=runType
+         * remounts cleanly on family changes; state and localStorage are family-specific.
+         * Comparison uses one GLOBAL aspect choice sent as a one-value axis through aspectPicker.
+         */}
         <StudioGenerationSettings
           key={runType}
           family={runType}
@@ -426,13 +414,15 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
           aspectPicker
           onChange={setGenSettings}
         />
-        {/* Une pile n'a qu'un LoRA « testé » : son classement par-LoRA n'a qu'une
-            ligne et n'apprend rien. À sa place, ce qui la définit — sa composition. */}
+        {/*
+         * A stack has only one tested LoRA, making a one-row LoRA ranking uninformative. Show its
+         * composition instead.
+         */}
         {showStackView ? (
           <StackCompositionPanel members={shownStack} onSaveBest={saveStackBest}
             saving={savingBest} savedAt={bestSavedAt}
-            // La vérité du RUN affiché, pas de la case : une seule cellule
-            // False suffit (toutes le sont sur un run décoché).
+            // Use the displayed RUN's actual state, not the checkbox: one False cell is
+            // sufficient; all cells are False when launched unchecked.
             injectTrigger={!cells.some((c) => c.inject_trigger === false)} />
         ) : (
           <LoraRankingPanel ranking={data?.lora_ranking} />
@@ -449,7 +439,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
             <button type="button" disabled={run.confirmingComfyuiRestart}
               onClick={run.confirmComfyuiRestart}
               className="ml-auto px-2.5 py-1 rounded-lg bg-gradient-primary text-gray-950 text-xs font-semibold disabled:opacity-40">
-              {run.confirmingComfyuiRestart ? 'Confirming…' : '✓ J’ai redémarré ComfyUI'}
+              {run.confirmingComfyuiRestart ? 'Confirming…' : '✓ I restarted ComfyUI'}
             </button>
           </div>
         )}
@@ -514,7 +504,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
           onRate={rateLightbox} onNavigate={setLbImg} onClose={() => setLbImg(null)} />
       )}
 
-      {/* Barre de commande fixe : Run toujours visible + raccourcis de sections. */}
+      {/* Fixed command bar keeps Run visible with section shortcuts. */}
       <StudioActionBar
         shortcuts={[
           { id: 'st-loras', emoji: '🧬', label: 'LoRAs' },

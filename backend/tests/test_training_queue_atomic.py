@@ -24,7 +24,7 @@ BLOCKED_PROBE = 0.1
 
 
 class _CoordinatedQueue:
-    """Force deux lecteurs à prendre le même snapshot sans verrou externe."""
+    """Force two readers to read the same snapshot without an external lock."""
 
     def __init__(self, items=()):
         self.items = [dict(item) for item in items]
@@ -40,9 +40,9 @@ class _CoordinatedQueue:
             snapshot = [dict(item) for item in self.items]
         if read_number == 1:
             self.first_read.set()
-            # Sans le verrou de production, le second lecteur entre et libère
-            # immédiatement celui-ci. Avec le correctif, il attend la fin de la
-            # transaction et ce court timeout crée deux snapshots successifs.
+            # Without the production lock, the second reader enters and releases this
+            # one immediately. With the fix it waits for the transaction; this short
+            # timeout creates sequential snapshots.
             self.second_read.wait(timeout=0.25)
         elif read_number == 2:
             self.second_read.set()
@@ -201,8 +201,8 @@ def test_advance_and_dequeue_share_the_same_queue_lock(monkeypatch):
     assert advance_entered.wait(timeout=LIVENESS)
     dequeue_thread.start()
 
-    # process_training_queue garde le verrou pendant _advance_training_queue :
-    # dequeue ne doit donc pas pouvoir lire/réécrire le même snapshot en parallèle.
+    # process_training_queue holds the lock during _advance_training_queue, preventing
+    # dequeue from concurrently reading or rewriting the same snapshot.
     dequeue_was_blocked = not dequeue_read.wait(timeout=BLOCKED_PROBE)
     release_advance.set()
     process_thread.join(timeout=LIVENESS)
@@ -254,8 +254,8 @@ def test_stop_and_dequeue_share_the_same_queue_lock(monkeypatch):
     dequeue_thread.start()
     assert dequeue_started.wait(timeout=LIVENESS)
 
-    # Stop garde le verrou pendant le clear et la transition des flags : une
-    # suppression concurrente ne doit lire la file qu'après cette transition.
+    # Stop holds the lock while clearing the queue and transitioning flags. Concurrent
+    # removal must read only after that transition.
     dequeue_was_blocked = not dequeue_read.wait(timeout=BLOCKED_PROBE)
     release_stop.set()
     stop_thread.join(timeout=LIVENESS)
@@ -609,8 +609,8 @@ def test_stop_holds_queue_lock_during_kill_before_watcher_advance(monkeypatch):
     watcher_thread.start()
     assert watcher_started.wait(timeout=LIVENESS)
 
-    # Même si le watcher considère déjà l'ancien PID comme mort, il ne peut pas
-    # avancer la file pendant que Stop est encore bloqué dans le kill.
+    # Even if the watcher considers the old PID dead, it cannot advance the queue while
+    # Stop remains blocked in kill.
     advance_was_blocked = not advance_entered.wait(timeout=BLOCKED_PROBE)
     release_kill.set()
     stop_thread.join(timeout=LIVENESS)

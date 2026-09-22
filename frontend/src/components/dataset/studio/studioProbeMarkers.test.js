@@ -81,19 +81,18 @@ test('the probe opens the VIDEO lane, and the tab whose grid lives deeper', () =
 });
 
 test('the probe opens the 🌐 Civitai browser, whose action row grew a third button', () => {
-  /* Le lot de prompts a fait passer la rangée d'actions d'une carte de deux
-     boutons à trois, dans une colonne qui fait ~250 px à 360 px de large à côté
-     de la vignette. Aucun état de sonde n'ouvrait cette modale : la rangée
-     n'avait donc jamais été mesurée à aucune taille. Les deux côtés sont
-     épinglés — un bouton renommé remettrait la surface hors de portée avec la
-     sonde toujours verte, ce qui est exactement le trou que ce fichier existe
-     pour fermer. */
+  /*
+   * Prompt batches expanded a card's action row from two buttons to three in a roughly 250px
+   * column at 360px viewport width beside its thumbnail. No probe state opened the dialog, so the
+   * row was never measured. Pin both access and markers: renaming the button could otherwise make
+   * the surface unreachable while the probe stayed green.
+   */
   const modal = read('./CivitaiBrowserModal.jsx');
   const button = read('./CivitaiBrowserButton.jsx');
-  // La modale couvre la page par design : layer (non budgétée), et un panneau
-  // nommé pour que la mesure de remplissage la voie.
+  // The modal intentionally covers the page: mark it as an unbudgeted layer and name its panel for
+  // fill measurements.
   assert.match(modal, /data-probe-layer data-probe-panel="civitai-browser"/);
-  // Le texte du bouton EST le sélecteur de la sonde.
+  // Button text IS the probe selector.
   assert.match(button, /🌐 Civitai/);
   assert.match(probe, /\{ name: 'civitai', open: \['button:has-text\("🌐 Civitai"\)'\] \}/);
 });

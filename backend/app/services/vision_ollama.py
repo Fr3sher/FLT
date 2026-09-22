@@ -230,10 +230,9 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
     that field is empty — and correct for the thinking variant). `num_ctx` defaults to 8192
     so a long answer (plus any thinking trace) fits in context.
 
-    `keep_alive` (défaut 0) : 0 décharge le modèle après CET appel (VRAM-safe,
-    bon pour les appels isolés) ; un batch (caption/classify de N images) doit
-    passer une durée (ex. '5m') pour garder le modèle chaud entre les images, PUIS
-    appeler unload_vision_model() en fin de batch pour rendre la VRAM à ComfyUI.
+    keep_alive defaults to 0, unloading the model after this call to release VRAM.
+    Batches should pass a duration such as 5m to keep it loaded between images,
+    then call unload_vision_model() at batch end to return VRAM to ComfyUI.
 
     `think` (None: not sent) is Ollama's top-level switch, as in
     generate_text_ollama. A HYBRID model honours it where the thinking

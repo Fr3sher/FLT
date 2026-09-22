@@ -1,23 +1,18 @@
 /**
- * Le panneau « Datasets » du ◉ LoRA Canvas n'existe plus : c'est une BARRE.
+ * The ◉ LoRA Canvas "Datasets" panel has been replaced with a BAR.
  *
- * Historique, parce qu'il explique ce que ce fichier garde encore. Le panneau
- * s'ouvrait déplié sur écran large ; sa liste de cases (une par dataset, plus
- * les modèles, les statuts, la recherche) poussait le board — ce qu'on vient
- * regarder — sous la ligne de flottaison. Le premier correctif l'a fait ouvrir
- * REPLIÉ. Mesuré ensuite sur une vraie bibliothèque de quatorze datasets en
- * 1280×720, déplié il faisait toujours 389 px, soit 54 % de l'écran, pour
- * quiconque l'avait laissé ouvert une fois — un pli qu'il faut refaire avant de
- * pouvoir travailler n'est pas une réponse. Il a donc été remplacé le
- * 08/08/2026 par une rangée de pastilles d'environ 40 px dont les contrôles
- * vivent dans des popovers.
+ * History explains the compatibility helpers retained here. The panel opened
+ * expanded on wide screens; its dataset, model, status and search controls
+ * pushed the board below the fold. It was first changed to start collapsed.
+ * However, an expanded panel with fourteen datasets still occupied 389 px
+ * (54% of a 1280×720 screen) for anyone who had left it open. On 2026-08-08,
+ * it was replaced with a roughly 40 px row of chips and popover controls.
  *
- * Ce qui est épinglé ici : les helpers `lds.canvasFilterOpen` restent EXPORTÉS
- * et corrects. Ils ne sont plus lus par le composant (une barre n'a pas de pli),
- * mais la clé est écrite dans de vrais navigateurs et la règle du repo est
- * qu'on ne renomme ni ne supprime un identifiant stocké sans chemin d'alias.
- * Le jour où quelque chose voudra à nouveau se souvenir d'un pli sur ce board,
- * il trouvera la clé intacte plutôt que d'en inventer une seconde.
+ * The `lds.canvasFilterOpen` helpers must remain exported and correct.
+ * The component no longer reads them, since a bar cannot collapse, but real
+ * browsers have stored this key. Repository policy requires an alias path
+ * before renaming or deleting a stored identifier. A future collapsible
+ * control can reuse this key instead of inventing another.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -30,7 +25,7 @@ import {
 const SOURCE = readFileSync(
   new URL("../../bundled/canvas/frontend/components/canvas/CanvasDatasetFilter.jsx", import.meta.url), 'utf8')
 
-/** Un localStorage de test, injectable comme le reste des helpers du canvas. */
+/** Injectable test localStorage, following the other canvas helpers. */
 const store = (initial = {}) => {
   const map = new Map(Object.entries(initial))
   return {
@@ -60,19 +55,19 @@ test('a junk or absent store never throws and reads as folded', () => {
   assert.equal(readCanvasFilterOpen(store({ [CANVAS_FILTER_OPEN_KEY]: 'yes' })), false)
   const hostile = { getItem() { throw new Error('private mode') } }
   assert.equal(readCanvasFilterOpen(hostile), false)
-  // …et écrire dans un store qui refuse ne casse pas le clic.
+  // A storage write failure must not break the click.
   assert.equal(writeCanvasFilterOpen({ setItem() { throw new Error('quota') } }, true), false)
 })
 
 test('the filter is a bar: no fold, and no viewport-width logic either', () => {
-  // Le pli n'est plus consulté — il n'y a plus de corps dépliable à cacher.
+  // The collapsed state is no longer read: there is no panel body to hide.
   assert.doesNotMatch(SOURCE, /readCanvasFilterOpen\(/)
   assert.doesNotMatch(SOURCE, /writeCanvasFilterOpen\(/)
-  // La largeur d'écran n'a jamais eu le droit de décider de cet état, et ne
-  // l'a toujours pas : un agrandissement de fenêtre rouvrait le panneau.
+  // Viewport width must not determine this state: resizing the window used
+  // to reopen the panel.
   assert.doesNotMatch(SOURCE, /matchMedia/)
   assert.doesNotMatch(SOURCE, /min-width: 640px/)
-  // Chaque contrôle vit dans une pastille à menu, pas dans un corps déplié.
+  // Each control lives in a menu chip rather than an expanded panel body.
   assert.match(SOURCE, /<CanvasFilterMenu label="Datasets"/)
   assert.match(SOURCE, /<CanvasFilterMenu label="Models"/)
   assert.match(SOURCE, /<CanvasFilterMenu label="Status"/)

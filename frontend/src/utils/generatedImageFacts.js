@@ -103,8 +103,8 @@ export function imageSettingFacts(img) {
   push('cfg', 'CFG', exact(img?.cfg));
   push('steps', 'Sampling steps', exact(img?.steps));
   push('aspect', 'Format', img?.aspect);
-  // Clé `combined_loras` INCHANGÉE (elle vient du backend et sert de clé de
-  // ligne) ; seul le libellé suit le renommage 🧬 Combine → 🧬 Blend.
+  // Keep combined_loras unchanged: it is a backend field and row key. Only the
+  // display label follows the Combine to Blend rename.
   push('combined_loras', 'Blended LoRAs',
     extraLoraSummary(img?.extra_loras, { only: 'combined' }));
   push('external_loras', 'External LoRAs',

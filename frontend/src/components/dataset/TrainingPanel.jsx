@@ -80,8 +80,8 @@ import {
   isFullTransformerEligible,
   normalizeTrainingMode,
 } from '../../utils/trainingMode.js';
-// Plancher dur / recommandé par famille — miroir de TRAIN_MIN_IMAGES côté serveur
-// (le preflight reste l'autorité ; ceci ne sert qu'à désactiver le bouton tôt).
+// Hard and recommended image minimums per family mirror server TRAIN_MIN_IMAGES. Preflight remains
+// authoritative; this only disables the button early.
 const TRAIN_MIN = { zimage: [12, 20], sdxl: [20, 30], krea: [15, 20], flux: [15, 20], flux2klein: [15, 20], anima: [15, 20] };
 // Slider mode: images are only a denoising substrate → mirror of
 // TRAIN_MIN_IMAGES_SLIDER server-side (the preflight stays authoritative).
@@ -131,18 +131,20 @@ function timeAgo(iso) {
 const GROUP_FAMILY_LABEL = { zimage: 'Z-Image', krea: 'Krea 2', sdxl: 'SDXL', flux: 'FLUX.1', flux2klein: 'FLUX.2 Klein', anima: 'Anima' };
 const groupFamLabel = (f) => GROUP_FAMILY_LABEL[f] || f || 'LoRA';
 
-/** Panneau d'entraînement LoRA : lance l'UI ai-toolkit (pause ComfyUI),
- * affiche l'état, liste les checkpoints et importe celui choisi.
- * Poll régulier : c'est ce poll qui fait avancer la file (fin du courant → suivant). */
+/**
+ * LoRA training panel: starts the ai-toolkit UI while pausing ComfyUI, shows status, lists
+ * checkpoints and imports the selected one. Regular polling advances the queue when the current
+ * run finishes.
+ */
 export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange,
                                         checkpointHost = null,
                                         navigationPanel = null,
                                         onNavigationStateChange,
                                         onPanelOpenChange,
-                                        // La section Training est-elle à l'écran ? Le panneau reste
-                                        // MONTÉ quand une autre section s'affiche (le poll de la file
-                                        // doit continuer), donc rien d'autre ne dit qu'on le regarde —
-                                        // et le barème de steps ne se rafraîchit que quand on le regarde.
+                                        // Is Training visible? The panel stays MOUNTED in other
+                                        // sections so queue polling continues. Visibility must be
+                                        // explicit because the step recipe refreshes only while
+                                        // Training is viewed.
                                         sectionVisible = true,
                                         // « Continue anyway » ack from the readiness pastille: a
                                         // bypassable quality blocker was acknowledged → relax the
@@ -213,10 +215,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   };
   const [checkpoints, setCheckpoints] = useState([]);
   const [ckLoaded, setCkLoaded] = useState(false);
-  // {registered, version, changed, diff} — provenance du dataset (registre).
+  // {registered, version, changed, diff}: dataset provenance from the registry.
   const [datasetState, setDatasetState] = useState(null);
-  // Saves cloud synchronisés en local (y compris ceux d'un run EN COURS) —
-  // liste séparée : le prompt Resume-or-Fresh ne raisonne que sur le local.
+  // Cloud saves synchronized locally, including those from an ACTIVE run. Keep a separate list:
+  // Resume-or-Fresh considers only local runs.
   const [cloudCkpts, setCloudCkpts] = useState([]);
   // Same saves GROUPED by source run (id/status/gpu/cost/timing) — the panel
   // renders one identity header per run so look-alike epoch sets are no longer
@@ -229,35 +231,34 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const [denseModels, setDenseModels] = useState([]);
   // {run_dir_bytes, cloud_staging_bytes, deployed_bytes, total_bytes}
   const [diskUsage, setDiskUsage] = useState(null);
-  // {steps, kind, n_images, rationale} renvoyé par /train/checkpoints — le POURQUOI
-  // du barème adaptatif, affiché avec le champ Steps (pédagogie, pas boîte noire).
+  // {steps, kind, n_images, rationale} from /train/checkpoints explains the adaptive recipe beside
+  // Steps, making its reasoning visible.
   const [stepsInfo, setStepsInfo] = useState(null);
-  // Miroir en ref : le calcul du délai de refetch lit le barème AFFICHÉ sans en
-  // faire une dépendance de l'effet — sinon chaque réponse relancerait l'effet.
+  // Mirror the DISPLAYED recipe in a ref for the refetch delay calculation without making it an
+  // effect dependency; otherwise every response would restart the effect.
   const stepsInfoRef = useRef(stepsInfo);
   stepsInfoRef.current = stepsInfo;
   const [imported, setImported] = useState([]);
   const [enqErr, setEnqErr] = useState(null);
-  // Base d'entraînement (officielle ou merge custom) + variante + conversion.
+  // Training base (official or custom merge), variant and conversion.
   const [baseInfo, setBaseInfo] = useState(null);
   const [base, setBase] = useState('');
-  // « Custom weights… » (local-only) : quand actif, `base` porte un chemin ABSOLU
-  // vers un .safetensors de la même architecture (krea/flux/flux2klein/sdxl).
+  // Custom weights (local only): when active, base holds an ABSOLUTE path to a .safetensors file
+  // of the same architecture (krea/flux/flux2klein/sdxl).
   const [customBase, setCustomBase] = useState(false);
-  // Overrides SDXL UNIQUEMENT : chemin VAE + chemin/te repo-id du text-encoder.
+  // SDXL-only overrides: VAE path and text-encoder path/repository ID.
   const [vaePath, setVaePath] = useState('');
   const [tePath, setTePath] = useState('');
   const [variant, setVariant] = useState('turbo');
-  // Type de LoRA : 'zimage' (défaut, encodeur Qwen3-4B) ou 'sdxl' (checkpoints ComfyUI).
+  // LoRA type: zimage by default (Qwen3-4B encoder), or sdxl (ComfyUI checkpoints).
   const [trainType, setTrainType] = useState('zimage');
   const [trainingMode, setTrainingMode] = useState(TRAINING_MODE_LORA);
   const [trainingModeBusy, setTrainingModeBusy] = useState(false);
   const [trainingModeError, setTrainingModeError] = useState('');
   const trainingModeRadioRefs = useRef({});
   const incompatibleModeFallbackRef = useRef('');
-  // Navigateur de résultats indépendant : changer la configuration du PROCHAIN
-  // entraînement ne doit jamais faire disparaître les checkpoints que l'utilisateur
-  // est en train de consulter dans la section dédiée.
+  // Independent results browser: changing the NEXT training configuration must never
+  // hide the checkpoints currently being viewed in the results section.
   const [checkpointTrainType, setCheckpointTrainType] = useState(() => savedCheckpointSelection(ds.data).family);
   const [checkpointBase, setCheckpointBase] = useState(() => savedCheckpointSelection(ds.data).base);
   const [checkpointVariant, setCheckpointVariant] = useState(() => savedCheckpointSelection(ds.data).variant);
@@ -274,9 +275,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     setCheckpointBase(saved.base);
     setCheckpointVariant(saved.variant);
   }, [ds.currentId, ds.data]);
-  // Réglages ai-toolkit avancés éditables (rank / resolution / save_every /
-  // sample_every / sample_prompts), chargés depuis base-info ; persistés par POST
-  // /train/settings via ds.setTrainSettings.
+  // Editable advanced ai-toolkit settings (rank, resolution, save_every, sample_every,
+  // sample_prompts) load from base-info and persist through POST /train/settings via
+  // ds.setTrainSettings.
   const [adv, setAdv] = useState(null);
   const {
     slider, setSlider, sliderBusy, sliderDraft, setSliderDraft, sliderOn,
@@ -285,8 +286,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     ds, postTrain, toastTrainError, base, trainType, variant,
     setBaseInfo, setAdv, setStepsInfo,
   });
-  // Textarea des prompts de preview : état local (édition libre), sauvé au blur —
-  // resynchronisé sur la valeur stockée canonique chaque fois que `adv` arrive/change.
+  // Preview-prompt textarea: local state allows free editing, saved on blur. Resynchronize to the
+  // canonical stored value whenever adv arrives or changes.
   const [samplePromptsText, setSamplePromptsText] = useState('');
   // Same protection for the Krea Differential Guidance decimal: a controlled
   // number input cannot be edited naturally if every partial keystroke writes
@@ -315,9 +316,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       setStatusLoaded(true);
     } catch { /* keep the last truthful status */ }
   };
-  // Poll toutes les 10 s : avance la file côté serveur + maj de l'UI. Skipped
-  // entirely while training is hidden (ai-toolkit not configured) — no point
-  // hitting endpoints the backend doesn't expose in that state.
+  // Poll every 10 seconds to advance the server queue and update the UI. Skip entirely while
+  // training is unavailable because ai-toolkit is not configured: those endpoints are not exposed
+  // then.
   useEffect(() => {
     setStatusLoaded(false);
     if (!caps.training_visible) return undefined;
@@ -362,7 +363,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     onPanelOpenChange?.(panelId, next);
   };
 
-  // Charge les bases + la base/variante du dataset au montage.
+  // Load available bases and the dataset's base/variant on mount.
   useEffect(() => {
     if (!ds.currentId) return undefined;
     let alive = true;
@@ -373,11 +374,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         setBaseInfo(info); setBase(info.base || '');
         setVaePath(info.vae_path || '');
         setTePath(info.te_path || '');
-        // Défaut family-aware : Krea sans variante persistée → Raw (reco officielle
-        // « train on Raw, validate on Turbo ») ; FLUX.2 Klein → 4B (voie locale) —
-        // y compris quand la variante PERSISTÉE vient d'une autre famille (un
-        // dataset ex-Krea porte 'base', qui n'est pas une taille Klein valide) ;
-        // les autres familles → Turbo.
+        // Family-aware defaults: Krea without a saved variant uses Raw, following the official
+        // train-on-Raw, validate-on-Turbo recommendation. FLUX.2 Klein uses 4B for local training,
+        // including when the SAVED variant belongs to another family: a former Krea dataset's base
+        // value is not a valid Klein size. Other families use Turbo.
         const fam = info.train_type || 'zimage';
         // A persisted absolute base the catalog does NOT offer is the
         // « Custom weights… » path → reopen that mode. One the catalog offers is
@@ -395,11 +395,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     });
     return () => { alive = false; };
   }, [ds.currentId, caps.training_visible]); // eslint-disable-line react-hooks/exhaustive-deps
-
-
-  // Pendant une conversion, poll le statut toutes les 4 s. Dépend de la fonction
-  // STABLE (useCallback sur currentId), pas de l'objet `ds` entier — sinon
-  // l'interval était recréé à chaque render et le timer 4 s n'aboutissait jamais.
+  //
+  // Poll conversion status every 4 seconds. Depend on the STABLE callback keyed by currentId, not
+  // the entire ds object: recreating the interval every render previously prevented the timer from
+  // firing.
   const getBaseInfo = ds.trainBaseInfo;
   useEffect(() => {
     if (!caps.training_visible || baseInfo?.convert?.status !== 'running') return undefined;
@@ -410,25 +409,25 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     return () => clearInterval(id);
   }, [baseInfo?.convert?.status, getBaseInfo, caps.training_visible]);
 
-  // Bases selon le type choisi (zimage : officiel + merges ; sdxl : checkpoints ComfyUI).
-  // Une famille non énumérée par le serveur repart VIDE (→ le placeholder
-  // family-aware plus bas), jamais avec le catalogue Z-Image.
+  // Bases depend on type: official bases and merges for zimage, ComfyUI checkpoints for sdxl. A
+  // family absent from the server list starts EMPTY and uses the family-aware placeholder, never
+  // the Z-Image catalog.
   const currentBases = basesForFamily(baseInfo, trainType);
-  // base_dir non configuré → les listers renvoient [] : distinguer « aucun modèle de
-  // cette famille » de « ComfyUI pas encore pointé » (le vrai motif sur un clone neuf).
-  // Défaut true tant que baseInfo n'est pas chargé, pour ne pas flasher la CTA au montage.
+  // Without base_dir, listers return []. Distinguish no models for this family from ComfyUI not
+  // yet configured, the usual reason on a fresh clone. Default true until baseInfo loads to avoid
+  // flashing the CTA on mount.
   const comfyConfigured = baseInfo?.comfyui_configured !== false;
   const isCustomBase = !!base;
-  // « Custom weights… » (local-only) : familles qui l'exposent + celles honorant
-  // VAE/TE (SDXL). base-info fait foi ; défauts avant chargement.
+  // Custom weights (local only): supported families and those honoring VAE/TE overrides (SDXL).
+  // base-info is authoritative; use defaults until it loads.
   const customFamilies = baseInfo?.custom_weights_families || DEFAULT_CUSTOM_FAMILIES;
   const customSupported = customFamilies.includes(trainType);
   const vaeTeFamilies = baseInfo?.vae_te_families || ['sdxl'];
   const vaeTeSupported = vaeTeFamilies.includes(trainType);
-  // Mode custom actif mais chemin vide → rien à entraîner (bloque le bouton).
+  // Custom mode with an empty path has nothing to train; disable the button.
   const customWeightsEmpty = customBase && customSupported && !String(base).trim();
-  // La conversion diffusers ne concerne QUE Z-Image (SDXL = single-file direct) ;
-  // le mode « Custom weights… » (chemin absolu direct) ne convertit jamais.
+  // Diffusers conversion applies ONLY to Z-Image; SDXL loads a single file directly.
+  // Custom weights with an absolute file path never use conversion.
   const needsConversion = trainType === 'zimage' && isCustomBase && !customBase;
   const baseConverted = needsConversion && !!(baseInfo?.converted?.[base]);
   const convertRunning = needsConversion && baseInfo?.convert?.status === 'running' && baseInfo?.convert?.z_model === base;
@@ -461,9 +460,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   }, [base, customBase]);
   const baseNote = baseSelectionNote(currentBases, base, typedBaseAdvisory);
   const baseNotTrainable = baseNote?.level === 'error';
-  // Bloque l'entraînement si la base custom Z-Image n'est pas encore convertie,
-  // si la base choisie ne peut pas être chargée du tout, ou si SDXL sans base
-  // choisie (SDXL exige un checkpoint).
+  // Block training when a custom Z-Image base needs conversion, the selected base cannot load, or
+  // SDXL has no base selected: SDXL requires a checkpoint.
   const baseBlocksTrain = (needsConversion && !baseConverted) || baseNotTrainable;
   // The button tooltips used to state one cause only ("convert the base"), which
   // would now be wrong half the time.
@@ -471,9 +469,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     ? 'This checkpoint cannot be loaded for training — pick the bf16/fp16 version of it'
     : 'Convert the custom base first';
   const sdxlNeedsBase = trainType === 'sdxl' && !base;
-  // Changement de type : réinitialise la base (les listes diffèrent ; SDXL → 1ère base réelle)
-  // et PERSISTE la famille (choisie à la création, modifiable ici) pour que le menu
-  // regroupé se ré-trie et que le format de caption suive.
+  // Changing type resets the base because lists differ (SDXL selects the first real base) and
+  // PERSISTS the family chosen at creation, so menu grouping and caption format follow it.
   const onTypeChange = async (t) => {
     if (!t || t === trainType || trainTypeBusy) return;
     setTrainingModeError('');
@@ -545,8 +542,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     // Switching family leaves custom-weights mode (the path is arch-specific).
     setCustomBase(false);
     setBase(nextBase);
-    // Z-Image → Turbo est le chemin sûr : base Turbo + adaptateur d'entraînement v2.
-    // Cela empêche une variante Krea/Klein persistée de survivre en silence au switch.
+    // Z-Image to Turbo is the safe path: Turbo base plus training adapter v2. Do not let a saved
+    // Krea/Klein variant silently survive the switch.
     setVariant(nextVariant);
     let saved;
     try {
@@ -597,8 +594,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     }
   };
 
-  // Réglages avancés effectifs (client-side pour que le défaut family-aware du rank
-  // suive un changement de type SANS re-fetch). `adv.rank` null = Auto.
+  // Effective advanced settings are computed client-side so the family-aware rank default follows
+  // type changes WITHOUT a refetch. Null adv.rank means Auto.
   const advRankChoice = adv?.rank ?? 'auto';
   const advDefaultRank = adv?.default_rank
     ?? ((trainType === 'zimage' || trainType === 'flux' || trainType === 'flux2klein') ? 16 : 32);
@@ -611,7 +608,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const advDropout = adv?.dropout ?? 0;
   const advDropoutChoices = adv?.dropout_choices ?? [0.05, 0.1, 0.15, 0.2, 0.3];
   const advTimestep = adv?.timestep_type ?? 'auto';
-  const advTimestepDefault = adv?.default_timestep_type ?? (trainType === 'krea' ? 'linear' : (trainType === 'flux2klein' || trainType === 'anima') ? 'weighted' : (trainType === 'zimage' || trainType === 'flux') ? 'sigmoid' : null);   // miroir de _DEFAULT_TIMESTEP
+  const advTimestepDefault = adv?.default_timestep_type ?? (trainType === 'krea' ? 'linear' : (trainType === 'flux2klein' || trainType === 'anima') ? 'weighted' : (trainType === 'zimage' || trainType === 'flux') ? 'sigmoid' : null);   // Mirrors _DEFAULT_TIMESTEP.
   const advTimestepSupported = adv ? adv.timestep_type_supported !== false : trainType !== 'sdxl';
   const advTimestepChoices = adv?.timestep_type_choices ?? ['sigmoid', 'linear', 'weighted', 'shift'];
   const advOptimizer = adv?.optimizer ?? 'adamw8bit';
@@ -911,8 +908,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       } catch { /* keep the visible error and current state if refresh also fails */ }
     })().finally(() => { if (alive) setTrainingModeBusy(false); });
     return () => { alive = false; };
-    // Deps = les ENTREES de la synchro. Lister trainingModeBusy (que l'effet
-    // pose) le ferait s'auto-relancer ; ds/toast sont stables en pratique.
+    // Dependencies are sync INPUTS. Including trainingModeBusy, which this effect
+    // sets, would restart itself; ds/toast are stable in practice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseInfo, fullMode, fullTransformerEligible, fullTransformerReason,
     trainType, variant, base, ds.setDatasetTrainingMode]);
@@ -1007,11 +1004,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       return true;
     } catch { return true; }
   };
-  // Des checkpoints existent déjà → cliquer Train demande Resume ou Fresh :
-  // ai-toolkit REPREND silencieusement le dernier checkpoint du run (les images
-  // supprimées du dataset restent apprises dans ses poids) — après un remaniement
-  // du dataset, l'utilisateur veut presque toujours repartir de zéro. Le choix
-  // résout une promesse : 'fresh' | 'resume' | null (annuler).
+  // If checkpoints exist, Train asks Resume or Fresh. ai-toolkit otherwise silently RESUMES the
+  // latest checkpoint, whose weights still encode images deleted from the dataset. After
+  // reorganizing a dataset, users usually need a fresh start. The choice resolves a promise with
+  // fresh, resume or null for cancellation.
   const [resumeAsk, setResumeAsk] = useState(null);   // {latest, final} | null
   const resumeResolver = useRef(null);
   const resolveResume = (v) => {
@@ -1084,9 +1080,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           return ds.continueTraining(
             payload.extraSteps, continueBase, continueVariant, continueType, opts);
         },
-        // maskedOpt, pas masked : tant que les reglages du dataset ne sont pas
-        // charges, le panneau n'envoie RIEN et le serveur lit la valeur stockee.
-        // Envoyer un defaut ici ecraserait un masquage desactive, sur un run paye.
+        // Use maskedOpt, not masked: until dataset settings load, send NOTHING
+        // and let the server read the stored value. Sending a default here would
+        // override disabled masking on a paid run.
         { masked: maskedOpt },
         (error) => confirmableRetryFlag(error, 'Continue anyway (force)'),
       );
@@ -1105,15 +1101,14 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant);
   };
   const askResumeOrFresh = async () => {
-    // Ne pas lire la liste affichée dans le navigateur de résultats : elle peut
-    // volontairement pointer vers une autre famille/base. Le backend fait foi
-    // pour la configuration d'entraînement actuellement sélectionnée.
+    // Do not use the results browser's displayed list: it may intentionally target another
+    // family/base. The backend is authoritative for the currently selected training configuration.
     let existing = [];
     try {
       const data = await ds.listCheckpoints(base, trainType, variant);
       existing = Array.isArray(data?.checkpoints) ? data.checkpoints : [];
-    } catch { /* le lancement normal garde le preflight serveur comme autorité */ }
-    if (!existing.length) return 'new';                        // pas de run → lancement normal
+    } catch { /* Normal launch keeps server preflight authoritative. */ }
+    if (!existing.length) return 'new';                        // No run: normal launch.
     const latest = Math.max(...existing.map((c) => c.step));
     const final = existing.some((c) => c.final);
     return new Promise((resolve) => {
@@ -1151,18 +1146,18 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // drops the masks and trains UNMASKED. Surface that instead of lying about it.
   // `=== false` (not `!caps.masks`) so we don't warn before caps have loaded.
   const maskedRembgMissing = masked && !isConceptual && !sliderOn && caps.masks === false;
-  // Plafond de steps CHOISI (vide → adaptatif). NON persisté à dessein : un cap
-  // oublié (ex. 2000) ne doit pas s'appliquer en douce au prochain dataset.
+  // User-selected step cap; empty means adaptive. Intentionally NOT persisted so a forgotten cap,
+  // such as 2000, cannot silently affect the next dataset.
   const [stepsOverride, setStepsOverride] = useState('');
-  // Cible envoyée au backend (Train / Add to queue / Schedule) : null = adaptatif ;
-  // sinon plancher à 500 (le backend re-clampe pareil). Non numérique → 500.
+  // Target sent for Train, Add to queue and Schedule: null means adaptive; otherwise clamp to at
+  // least 500, as the backend does. Non-numeric input becomes 500.
   const stepsN = stepsOverride.trim()
     ? Math.max(500, parseInt(stepsOverride, 10) || 500)
     : null;
 
   const enqueue = async () => {
     if (!(await preflightOk())) return;
-    // Mise en file AVEC la base/variante choisie (sinon le job reprend la base persistée).
+    // Queue WITH the selected base and variant; otherwise the job reuses the persisted base.
     let body = { base_model: base, variant, train_type: trainType, training_mode: trainingMode, masked: maskedOpt,
                  steps: stepsN,
                  ...(allowNotReady ? { allow_not_ready: true } : {}),
@@ -1184,14 +1179,13 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   };
   const queued = (status.queue || []).some((q) => q.dataset_id === ds.currentId);
 
-  // --- Entraînement PROGRAMMÉ (jour + heure) : entre en file avec une échéance ;
-  // à l'heure dite le ticker serveur le lance, ou le met en attente si un autre
-  // entraînement occupe déjà le GPU (jamais d'erreur). ---
+  // SCHEDULED training: queue with a date/time deadline. At that time the server ticker starts it,
+  // or leaves it waiting if another training run occupies the GPU; that is not an error.
   const [showSched, setShowSched] = useState(false);
   const [schedAt, setSchedAt] = useState('');
   const openSched = () => {
     if (!schedAt) {
-      // Défaut : dans 1 h, arrondi au quart d'heure (format datetime-local, heure locale).
+      // Default to one hour from now, rounded to the quarter hour in local datetime-local format.
       const t = new Date(Date.now() + 3600e3);
       t.setMinutes(Math.ceil(t.getMinutes() / 15) * 15, 0, 0);
       const p = (n) => String(n).padStart(2, '0');
@@ -1218,10 +1212,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     refreshStatus();
   };
 
-  // Les checkpoints sont propres au filtre du NAVIGATEUR DE RÉSULTATS
-  // (un run = dataset+famille+base+variante), indépendant du prochain entraînement.
-  // Garde-fou : si appelé avec autre chose qu'une string (ex. onClick passe un
-  // event), on retombe sur `base` au lieu d'envoyer [object Object] à l'API.
+  // Checkpoints follow the independent RESULTS BROWSER filter: a run is dataset + family + base +
+  // variant, separate from the next training setup. Non-string input, such as an onClick event,
+  // falls back to base instead of sending [object Object] to the API.
   const loadCheckpoints = async (forBase, forType, forVariant) => {
     const b = (typeof forBase === 'string') ? forBase : checkpointBase;
     const t = (typeof forType === 'string') ? forType : checkpointTrainType;
@@ -1231,8 +1224,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     if (requestId !== checkpointRequest.current) return;
     setCheckpoints(data.checkpoints || []);
     setImported(data.imported || []);
-    // Provenance : dernière version enregistrée du dataset vs son état ACTUEL
-    // (alerte « le dataset a changé depuis vN » + numéro de la prochaine version).
+    // Provenance compares the last saved dataset version with its CURRENT state, showing changes
+    // since vN and the next version number.
     setDatasetState(data.dataset_state || null);
     setCloudCkpts(data.cloud_checkpoints || []);
     // Prefer the per-run grouped payload; fall back to grouping the flat list
@@ -1332,13 +1325,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     return () => { checkpointRequest.current += 1; };
   }, [checkpointBase, checkpointTrainType, checkpointVariant, ds.currentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Le barème affiché dans Training suit uniquement la configuration Training,
-  // jamais le filtre indépendant du navigateur de résultats.
-  // keptCount EST une dépendance : le barème est calculé serveur à partir du
-  // nombre d'images gardées, et ce panneau ne se démonte jamais (sections
-  // masquées, pas démontées) — sans lui, curer puis revenir sur Train affichait
-  // encore la recette calculée pour l'ancien compte, jusqu'à ce qu'un réglage
-  // d'entraînement soit touché. Voir utils/stepsRecipeRefresh.js pour le quand.
+  // The displayed Training recipe follows only Training configuration, never the results
+  // browser's independent filter. keptCount IS a dependency: the server derives the recipe
+  // from kept images, and this panel is hidden rather than unmounted. Without it, returning
+  // after curation showed the old count's recipe until a training setting changed.
+  // See utils/stepsRecipeRefresh.js for timing.
   useEffect(() => {
     if (!caps.training_visible || !ds.currentId || !baseInfo) return undefined;
     const delay = stepsRecipeRefreshDelay(sectionVisible, stepsInfoRef.current, keptCount);
@@ -1448,11 +1439,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     checkpointVariant,
   });
 
-  // Steps are family + variant recipes owned by the backend. Never duplicate a
-  // formula here: doing so previously showed a Z-Image estimate while a Krea or
-  // Klein run used a different authoritative target.
-  // Libellé lisible de la base sélectionnée (pour étiqueter les checkpoints de CE run).
-  // Custom weights → basename du fichier (jamais le chemin complet dans le résumé).
+  // Step recipes belong to the backend and depend on family and variant. Never duplicate their
+  // formula here: that previously showed Z-Image estimates for Krea/Klein runs with different
+  // authoritative targets. Use a readable selected-base label on THIS run's checkpoints. For
+  // custom weights, show only the file basename, never its full path in the summary.
   const baseLabel = customBase && base
     ? `custom: ${baseName(base)}`
     : (currentBases.find((b) => b.value === base)?.label || (base || 'Official'));
@@ -1762,10 +1752,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           variant={status.current?.variant || variant} />
       )}
 
-      {/* --- Chemin essentiel : choisir le type de LoRA et lancer. Le reste
-           (base/variante, masked, plafond de steps, programmation) vit dans
-           « Advanced options » ci-dessous — replié par défaut, tout y reste
-           accessible en un clic. --- */}
+      {/*
+       * Essential path: choose the LoRA type and launch. Base/variant, masking, step cap and
+       * scheduling stay in Advanced options below, collapsed by default but one click away.
+       */}
       <div className="flex items-center gap-2 flex-wrap rounded-lg border border-border bg-surface px-3 py-2">
         <span className="text-content-muted text-[0.625rem] uppercase">Model family</span>
         <SettingsLink section="training" focus="training-default-family" className="order-last ml-auto">
@@ -1774,7 +1764,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         <select value={trainType} onChange={(e) => onTypeChange(e.target.value)}
           disabled={trainTypeBusy || presetBusy || trainingModeBusy}
           aria-label="Training model family"
-          title="Z-Image (prose, Qwen3 encoder) ~20 img · SDXL (ComfyUI checkpoints) ~30 img · Krea 2 (prose, base fixe Turbo) ~20 img · FLUX.1-dev (prose, gated HF, local-only) ~20 img · FLUX.2 Klein (prose, gated HF, 4B local / 9B cloud) ~20 img · Anima (prose OR booru tags — both native, Qwen LLM encoder, anime, public base, local-only) ~20 img"
+          title="Z-Image (prose, Qwen3 encoder) ~20 img · SDXL (ComfyUI checkpoints) ~30 img · Krea 2 (prose, fixed Turbo base) ~20 img · FLUX.1-dev (prose, gated HF, local-only) ~20 img · FLUX.2 Klein (prose, gated HF, 4B local / 9B cloud) ~20 img · Anima (prose OR booru tags — both native, Qwen LLM encoder, anime, public base, local-only) ~20 img"
           className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] disabled:opacity-50">
           <option value="zimage">Z-Image (~20 img)</option>
           <option value="sdxl">SDXL (~30 img)</option>
@@ -1811,9 +1801,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               : undefined}
           onClick={async () => {
             if (!(await preflightOk())) return;
-            // Run existant → Resume (continue le LoRA) ou Fresh (archive le run,
-            // repart de zéro). Le mismatch-retry re-passe fresh : le 1er appel a
-            // échoué AVANT l'archivage (assert_trainable), rien n'a été écarté.
+            // Existing run: Resume continues the LoRA; Fresh archives the run and starts over.
+            // Mismatch retry remains fresh because the first call failed in assert_trainable
+            // BEFORE archiving, so nothing was discarded.
             const mode = await askResumeOrFresh();
             if (!mode) return;
             // The old "Resume" button called /train and let ai-toolkit infer
@@ -1885,8 +1875,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             {queued ? '✓ Queued' : `➕ Add to queue (${baseLabel})`}
           </button>
         )}
-        {/* Résumé lisible de la config que le prochain run utilisera — les
-            réglages eux-mêmes vivent dans « Advanced options ». */}
+        {/*
+         * Readable summary of the next run's configuration; the editable settings live in Advanced
+         * options.
+         */}
         <span className="ml-auto text-content-subtle text-[0.625rem]"
           title="The configuration the next run will use — change it in Advanced options below">
           {fullMode ? (
@@ -1908,11 +1900,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         </p>
       )}
 
-      {/* --- Slider LoRA (Beta) : entraîne un LoRA BIPOLAIRE (±strength) depuis une
-           paire de prompts via le trainer `concept_slider` d'ai-toolkit. Les images
-           du dataset ne servent que de substrat de débruitage (captions ignorées).
-           Feature expérimentale assumée — le badge Beta et les notes par famille
-           disent exactement ce qui est prouvé et ce qui ne l'est pas. --- */}
+      {/*
+       * Slider LoRA (Beta): trains a BIPOLAR LoRA with positive/negative strength from a prompt
+       * pair using ai-toolkit's concept_slider trainer. Dataset images serve only as denoising
+       * inputs; captions are ignored. The Beta badge and per-family notes state what has and has
+       * not been validated.
+       */}
       {!fullMode && (<div id="ds-training-slider" className={`rounded-lg border px-3 py-2 flex flex-col gap-2 ${
         sliderOn ? 'border-purple-400/50 bg-purple-500/5' : 'border-border bg-surface'}`}>
         <div className="flex items-center gap-2 flex-wrap">
@@ -2030,8 +2023,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
 
       <div className="contents" ref={setCloudBudgetHost} />
 
-      {/* Pointeur visible quand le bouton Train est bloqué par un réglage qui
-          vit dans la section repliée — sinon la cause resterait cachée. */}
+      {/*
+       * Show a pointer when Train is blocked by a setting in the collapsed section, so its cause
+       * is not hidden.
+       */}
       {(baseBlocksTrain || sdxlNeedsBase) && (
         <p className="m-0 text-amber-300 text-[0.6875rem]">
           ⚠ {baseNotTrainable
@@ -2097,9 +2092,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             />
           </>) : (<>
           {/* LORA_ADVANCED_CONTROLS_START */}
-          {/* --- Presets : réglages nommés, ré-applicables et partageables en JSON.
-               Appliquer REMPLACE les réglages explicites du dataset ; les clés
-               inconnues d'un fichier importé sont ignorées (tolérance de version). --- */}
+          {/*
+           * Presets are named settings that can be reapplied and shared as JSON. Applying one
+           * REPLACES explicit dataset settings. Ignore unknown imported keys for version
+           * compatibility.
+           */}
           <div className="flex items-center gap-1.5 flex-wrap rounded-lg border border-border bg-app/40 px-2 py-1.5">
             <span className="text-content-muted text-[0.625rem] uppercase">Presets</span>
             <select value={presetSel} onChange={(e) => setPresetSel(e.target.value)}
@@ -2184,9 +2181,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               </span>
             )}
           </div>
-          {/* --- Base d'entraînement : officielle (recommandé) ou merge ComfyUI custom.
-               Affichée MÊME pendant un training en cours → choisir la base du job mis
-               en file (sinon « Mettre en file » réutilisait silencieusement la base persistée). --- */}
+          {/*
+           * Training base: official (recommended) or custom ComfyUI merge. Keep visible DURING
+           * training to choose the queued job's base; otherwise queueing silently reused the saved
+           * base.
+           */}
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-content-muted text-[0.625rem] uppercase">
@@ -2226,9 +2225,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                   <option value="deturbo">De-Turbo · no adapter</option>
                 </select>
               )}
-              {/* Krea 2 : reco officielle « train on Raw, validate on Turbo ». Le RAW
-                  (non distillé) est le checkpoint prévu pour le fine-tuning ; sa LoRA
-                  transfère vers Turbo à l'inférence. Turbo+adapter = alternative VRAM. */}
+              {/*
+               * Krea 2 officially recommends training on Raw and validating on Turbo. Undistilled
+               * RAW is the fine-tuning checkpoint; its LoRA transfers to Turbo at inference. Turbo
+               * plus adapter is the lower-VRAM alternative.
+               */}
               {trainType === 'krea' && (
                 <select value={variant} onChange={(e) => setVariant(e.target.value)}
                   disabled={trainingModeBusy}
@@ -2239,9 +2240,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                   <option value="turbo">Turbo (w/ adapter)</option>
                 </select>
               )}
-              {/* FLUX.2 Klein : deux TAILLES de base (pas une histoire de distillation
-                  comme Krea) — 4B = la voie locale 16-24 GB, 9B = 32-48 GB, pensé
-                  pour ☁️ Train in cloud. Les deux sont gated sur Hugging Face. */}
+              {/*
+               * FLUX.2 Klein has two base SIZES, unlike Krea's distillation variants: 4B fits the
+               * local 16-24 GB path; 9B needs 32-48 GB and targets cloud training. Both are gated
+               * on Hugging Face.
+               */}
               {trainType === 'flux2klein' && (
                 <select value={variant} onChange={(e) => setVariant(e.target.value)}
                   disabled={trainingModeBusy}
@@ -2301,9 +2304,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 )}
               </div>
             )}
-            {/* « Custom weights… » : chemin local vers un .safetensors de la MÊME
-                architecture. Local-only (le cloud refuse), TE/VAE restent officiels
-                (sauf les overrides SDXL séparés plus bas). Vérifié au lancement. */}
+            {/*
+             * Custom weights: a local .safetensors file with the SAME architecture. Local only;
+             * cloud rejects it. TE/VAE remain official except for the separate SDXL overrides
+             * below. Checked at launch.
+             */}
             {customBase && customSupported && (
               <div className="flex flex-col gap-1">
                 <input type="text" value={base} onChange={(e) => setBase(e.target.value)}
@@ -2321,11 +2326,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 </span>
               </div>
             )}
-            {/* flux2klein et anima n'ont QUE des bases officielles fixes (rien à
-                lister depuis ComfyUI) → le warning « bases can't be listed » n'y
-                apporte que du bruit. Krea EN A une depuis que les checkpoints
-                installés sont proposés : sans ComfyUI pointé, la liste se réduit
-                à la base officielle et le dire vaut mieux que la laisser vide. */}
+            {/*
+             * flux2klein and anima have only fixed official bases, so there is nothing to list
+             * from ComfyUI and a listing warning is noise. Krea also offers installed checkpoints:
+             * without ComfyUI configured, its list shrinks to the official base and should explain
+             * why.
+             */}
             {!comfyConfigured && trainType !== 'flux2klein' && trainType !== 'anima' && (
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-amber-300 text-[0.625rem]">
@@ -3156,8 +3162,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         </div>
       </div>}
 
-      {/* --- Résultats : checkpoints du run + LoRA déjà importés dans ComfyUI.
-           Repliés par défaut ; le résumé du summary donne les comptes sans ouvrir. */}
+      {/*
+       * Results: run checkpoints and LoRAs already imported into ComfyUI. Collapsed by default;
+       * the summary shows counts without opening.
+       */}
       <CheckpointPortal host={checkpointHost}>
       <details id="ds-training-checkpoints" data-probe-content="checkpoints" open={Boolean(checkpointHost) || checkpointsOpen}
         className="rounded-lg border border-border bg-surface open:pb-2.5 scroll-mt-20 [&_button]:min-h-10 lg:[&_button]:min-h-0 [&_summary]:min-h-10 lg:[&_summary]:min-h-0 [&_select]:min-h-10 lg:[&_select]:min-h-0 [&_input]:min-h-10 lg:[&_input]:min-h-0">
@@ -3211,9 +3219,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               Independent from the next Training configuration
             </span>
           </div>
-          {/* Provenance du dataset : version courante + alerte si le dataset a
-              changé depuis le dernier entraînement (les checkpoints listés ne
-              reflètent alors PLUS l'état actuel). */}
+          {/*
+           * Dataset provenance: current version and a warning if it changed since the last
+           * training run, because listed checkpoints no longer reflect the current state.
+           */}
           {datasetState?.registered && (datasetState.changed ? (
             <p className="m-0 rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-amber-200 text-[0.6875rem]">
               ⚠ The dataset has <b>changed since v{datasetState.version}</b>
@@ -3294,8 +3303,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 ☰ List
               </button>
             </div>
-            {/* Ouvre les dossiers dans l'explorateur du poste (app locale) :
-                loras = imports ComfyUI de la famille ; run = checkpoints bruts. */}
+            {/* Open folders in the local file manager: loras contains this family's
+                ComfyUI imports; run contains raw checkpoints. */}
             <button type="button"
               onClick={() => postTrain(`/api/dataset/${ds.currentId}/train/open-folder`,
                 { target: 'loras', ...trainingRunSelection(undefined, checkpointTrainType, checkpointVariant) })}
@@ -3697,8 +3706,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           onResolve={resolvePreflight} />
       ), document.body)}
 
-      {/* Resume ou Fresh : un run existe déjà pour ce (trigger, base). ai-toolkit
-          reprendrait silencieusement son dernier checkpoint — on demande. */}
+      {/*
+       * Resume or Fresh: a run already exists for this trigger/base. Ask instead of letting
+       * ai-toolkit silently resume its latest checkpoint.
+       */}
       {resumeAsk && (
         <div role="dialog" aria-modal="true" aria-label="Previous training run found"
           className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"

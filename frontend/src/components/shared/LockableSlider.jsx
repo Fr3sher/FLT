@@ -33,10 +33,9 @@ export default function LockableSlider({
   // component's own label row and worn elsewhere with somebody else's.
   const { locked, toggle, rangeProps } = useSliderLock(storageKey);
 
-  // Garde-fou : une valeur non numérique (ex. la string "None" issue d'un param
-  // stocké/restauré) sur un <input type="range"> déclenche le warning console
-  // « The specified value None cannot be parsed, or is out of range » à CHAQUE
-  // rendu. On retombe alors sur min (ou 0) → jamais "None" dans le DOM.
+  // Guard non-numeric restored values such as the string None: range inputs otherwise emit
+  // parse/out-of-range warnings on EVERY render. Fall back to min or zero, never putting None into
+  // the DOM.
   const parsed = typeof value === 'number' ? value : parseFloat(value);
   const safeValue = Number.isFinite(parsed) ? parsed : (Number(min) || 0);
 

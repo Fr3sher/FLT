@@ -905,8 +905,8 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       preset.selectedIds.forEach((id) => { const fr = framingById.get(id); if (fr) counts[fr] += 1; });
       return [preset.id, { counts, total: preset.selectedIds.length }];
     }));
-    // userShots, pas customShots : la map lit AUSSI les shots importes, et
-    // une dep sur la moitie de la source laissait leurs framings figes.
+    // Depend on userShots, not customShots: the map ALSO reads imported shots.
+    // Depending on only half the source left imported framings frozen.
   }, [catalog, nsfwCatalog, userShots, customPresets]);
 
   const toggle = (id) => setSelected((s) => {

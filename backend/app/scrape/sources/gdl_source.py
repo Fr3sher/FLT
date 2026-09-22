@@ -1,8 +1,7 @@
 # app/scrape/sources/gdl_source.py
-"""Base paramétrable des sources gérées par gallery-dl (P4). Une nouvelle source =
-sous-classe ~10 lignes : platform_enum + name/priority/capabilities + gdl_opts +
-cookies_key. match() = host (via validators.detect_platform) ; scan/download
-délèguent au moteur gdl.py."""
+"""Configurable gallery-dl source base. A new source needs a short subclass
+with platform_enum, name/priority/capabilities, gdl_opts and cookies_key.
+match uses validators.detect_platform; scan/download delegate to gdl.py."""
 import os
 
 from .base import Source, Match
@@ -10,8 +9,9 @@ from . import gdl
 
 
 def resolve_cookies(key):
-    """Chemin du cookies.txt d'une plateforme, ou None. Dossier admin HORS repo :
-    $SCRAPE_COOKIES_DIR sinon <COMFYUI_OUTPUT_DIR>/../scrape_cookies. Jamais committé."""
+    """Platform cookies.txt path, or None. Admin directory outside the repo:
+    SCRAPE_COOKIES_DIR, otherwise <COMFYUI_OUTPUT_DIR>/../scrape_cookies.
+    Never committed."""
     if not key:
         return None
     base = os.environ.get('SCRAPE_COOKIES_DIR')
@@ -26,8 +26,8 @@ def resolve_cookies(key):
 
 
 class GalleryDlSource(Source):
-    """Source gallery-dl générique. Les sous-classes définissent :
-       platform_enum, name, priority, capabilities, gdl_opts (list|None), cookies_key (str|None)."""
+    """Generic gallery-dl source. Subclasses define platform_enum, name,
+    priority, capabilities, gdl_opts (list|None) and cookies_key (str|None)."""
     platform_enum = None
     gdl_opts = None
     cookies_key = None

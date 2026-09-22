@@ -15,6 +15,9 @@ any file.
 - No real names, usernames, machine paths (`C:\Users\...`), IPs or tokens in
   code, comments, commits, or test fixtures. Diagnostic output must stay
   paste-safe (path redaction helpers exist — reuse them).
+- The approved public PostHog ingestion token may be distributed only in
+  `backend/app/usage_statistics_config.json`. It grants event ingestion, not
+  account administration or data access. Personal/admin keys remain forbidden.
 - Never write to GitHub (comments, reviews, releases) through a personally
   authenticated `gh`. Reads are fine.
 - `backend/tests/test_no_personal_data.py` enforces the two rules above.
@@ -36,8 +39,8 @@ read-only and no longer maintained; fixes and contributions target `v2`.
 like: targeted tests, the tree-wide invariants, both linters and the frontend
 suite — and that is the whole gate. **No full backend suite on nightly.** It is
 six minutes, it was being paid several times an evening, and during a fast
-development phase it cost more than the confidence it bought (maintainer's call,
-2026-08-31: "arrête avec les suites complètes en développement").
+development phase it cost more than the confidence it bought (the maintainer
+requested an end to full suites during development on 2026-08-31).
 
 **`v2` is what the world runs, and it is where the full suite is paid — once.**
 Maintainer's policy, 2026-09-05: ship visual improvements and fixes to existing

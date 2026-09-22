@@ -9,45 +9,40 @@ import {
 const rollSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 /**
- * État de formulaire du Studio de test LoRA + dérivations (valeurs « effective »)
- * + toggles. Extrait 1:1 de l'ancien LoraTestStudio.jsx.
- *
- * Les sélections sont PERSISTÉES dans localStorage par dataset : un refresh de la
- * page retrouve les derniers paramètres (checkpoints, strengths, prompt, modèle,
- * formats/cfg/steps, verrou seed, gén/config). Clé namespacée `studioForm_v1_<id>`.
- *
- * `d` = payload de useLoraTestStudio (peut être null au 1er render).
- * `datasetId` = id du dataset (namespace de persistance).
+ * LoRA Test Studio form state, derived effective values, and toggles.
+ * Extracted unchanged from the original LoraTestStudio.jsx.
+ * Selections persist per dataset in localStorage (studioForm_v1_<id>):
+ * checkpoints, strengths, prompt, model, formats/cfg/steps, seed lock,
+ * generation settings. Refresh restores the last configuration.
+ * d is the useLoraTestStudio payload (possibly null on initial render).
+ * datasetId is the persistence namespace.
  */
-/* `pinnedCheckpoints` (optionnel) : la liste de checkpoints est IMPOSÉE par
-   l'appelant au lieu d'être cochée dans le picker. C'est la seule chose que le
-   ◉ LoRA Canvas fait autrement que le Studio de test — là-bas les checkpoints se
-   choisissent en cliquant les pastilles des nœuds, éventuellement sur plusieurs
-   datasets. Tout le reste (modèle, format, cfg, steps, seed, ×N, réglages
-   globaux) passe par exactement ce hook et exactement ce composant, donc les
-   deux écrans ne peuvent pas diverger. */
+/* Optional pinnedCheckpoints supplies the selection from the caller instead
+   of the picker. LoRA Canvas alone differs here: clicking node chips can select
+   checkpoints across datasets. Model, format, cfg, steps, seed, count and global
+   settings use this same hook and component, keeping both screens consistent. */
 export function useStudioForm(d, datasetId, family = null,
   { pinnedCheckpoints = null, preselectBase = null } = {}) {
-  // Persistance namespacée par dataset ET par famille : chaque pipeline (ZIT/SDXL/Krea)
-  // garde ses propres axes (checkpoints/strengths/modèle…). Le composant studio est
-  // remonté quand la famille change → ce hook re-lit la bonne clé au montage.
+  // Persist separately by dataset AND family: ZIT/SDXL/Krea each retains its own
+  // checkpoints, strengths and models. Changing family remounts the studio, so
+  // this hook reads the correct key on mount.
   const [persistKey] = useState(() => `studioForm_v1_${datasetId || 'x'}_${family || 'default'}`);
-  // Lecture unique au montage (lazy) — restaure les derniers paramètres.
+  // Lazy read once on mount to restore the last settings.
   const [initial] = useState(() => {
     try { return JSON.parse(localStorage.getItem(`studioForm_v1_${datasetId || 'x'}_${family || 'default'}`)) || {}; }
     catch { return {}; }
   });
 
-  const [selCps, setSelCps] = useState(initial.selCps ?? null);              // null = tous cochés
-  // Guest files (not in this dataset's pool). Independent of selCps: null
-  // selCps still means "all of mine" without silently ticking every guest.
+  const [selCps, setSelCps] = useState(initial.selCps ?? null);              // null = all selected
+  // Guest files are separate from the dataset pool.
+  // null selCps still means "all of mine", without selecting every guest.
   const [guestCps, setGuestCps] = useState(() => normalizeGuestCheckpoints(initial.guestCps));
   const [selGuests, setSelGuests] = useState(initial.selGuests ?? null);
   const [selSts, setSelSts] = useState(initial.selSts ?? DEFAULT_STRENGTHS);
   const [seed, setSeed] = useState(() => initial.seed ?? rollSeed());
   const [seedLocked, setSeedLocked] = useState(initial.seedLocked ?? false);
   const [genCount, setGenCount] = useState(initial.genCount ?? 1);
-  const [promptText, setPromptText] = useState(initial.promptText ?? null);  // null = suit d.prompt
+  const [promptText, setPromptText] = useState(initial.promptText ?? null);  // null = follow d.prompt
   const [selModels, setSelModels] = useState(initial.selModels ?? null);
   const [selAspects, setSelAspects] = useState(initial.selAspects ?? null);
   const [selCfgs, setSelCfgs] = useState(initial.selCfgs ?? null);
@@ -81,41 +76,40 @@ export function useStudioForm(d, datasetId, family = null,
     setSelSteps(null);
   }, [preselectBase, d?.z_models]);
 
-  // Persiste les sélections à chaque changement (refresh-safe, par dataset).
+  // Persist every selection change per dataset so it survives refresh.
   useEffect(() => {
     try {
       localStorage.setItem(persistKey, JSON.stringify({
         selCps, guestCps, selGuests, selSts, seed, seedLocked, genCount, promptText,
         selModels, selAspects, selCfgs, selSteps, selSteps2,
       }));
-    } catch { /* quota / private mode — la persistance est best-effort */ }
+    } catch { /* quota / private mode: persistence is best-effort */ }
   }, [persistKey, selCps, guestCps, selGuests, selSts, seed, seedLocked, genCount, promptText, selModels, selAspects, selCfgs, selSteps, selSteps2]);
 
   const checkpoints = d?.checkpoints || [];
   const allFns = checkpoints.map((c) => c.filename);
-  // Filtre les checkpoints persistés qui n'existent plus (dataset modifié depuis).
-  // Checkpoints imposés (canvas) → ils sont la sélection, telle quelle. Ne PAS
-  // les filtrer sur `allFns` : ils viennent de plusieurs datasets, alors que
-  // `d.checkpoints` est la liste d'un seul. Guests are a second list: null
-  // selCps still means "all of mine", never "all guests too".
+  // Filter saved checkpoints that no longer exist after a dataset change.
+  // Canvas pinned checkpoints are the exact selection: do NOT filter by allFns
+  // because they span datasets while d.checkpoints covers only one. Guests are
+  // a separate list: null selCps means all of mine, never all guests too.
   const chosenCps = chosenCheckpoints({
     mineFns: allFns, selCps, guests: guestCps, selGuests, pinned: pinnedCheckpoints,
   });
   const effectivePrompt = promptText ?? (d?.prompt || '');
-  // Défaut = 1re entrée de la liste — y compris « Official » (value '' , Krea) pour
-  // que la puce par défaut apparaisse pressée ; le backend mappe '' → défaut câblé.
+  // Default to the first entry, including Krea Official (value empty string),
+  // so the default chip appears selected; the backend maps it to its wired default.
   const effectiveModels = selModels ?? (d?.z_models?.length ? [d.z_models[0].value] : []);
   const effectiveAspects = selAspects ?? (d?.default_aspect ? [d.default_aspect] : ['9:16']);
-  // CFG/steps par MODÈLE DE BASE (bobba84, GitHub #18) : Z-Image Base n'est pas
-  // distillé et ne doit pas hériter des réglages Turbo (cfg 1, 8 steps), qui ruinent
-  // son rendu. `selCfgs`/`selSteps` non nuls = l'utilisateur a choisi → jamais
-  // réécrit ; le défaut par modèle ne s'applique qu'à l'axe encore intact.
+  // Base-model CFG/steps (bobba84, GitHub #18): undistilled Z-Image Base must not
+  // inherit Turbo settings (cfg 1, 8 steps), which ruin its output. Non-null
+  // selCfgs/selSteps reflect user choices and are never overwritten. Per-model
+  // defaults apply only to untouched axes.
   const modelDefaultCfg = defaultCfgFor(d, effectiveModels);
   const modelDefaultSteps = defaultStepsFor(d, effectiveModels);
   const effectiveCfgs = selCfgs ?? [modelDefaultCfg];
   const effectiveSteps = selSteps ?? [modelDefaultSteps];
-  // Pass 2 (detail daemon) : SDXL uniquement. Z-Image → default_steps2 null → axe vide
-  // (×1 dans le compteur, pas envoyé au backend).
+  // Detail daemon pass 2 is SDXL-only. Z-Image default_steps2 is null: empty axis
+  // (counted as x1, omitted from the backend payload).
   const effectiveSteps2 = selSteps2 ?? (d?.default_steps2 != null ? [d.default_steps2] : []);
   // Everything the axes multiply EXCEPT the checkpoints and the strength sweep.
   // 🧬 Blend collapses those two into one configuration (each LoRA carries its own
@@ -159,7 +153,7 @@ export function useStudioForm(d, datasetId, family = null,
     });
   const toggleSt = (s) =>
     setSelSts((cur) => (cur.includes(s) ? cur.filter((v) => v !== s) : [...cur, s].sort((a, b) => a - b)));
-  // Toggle qui garde au moins une valeur (formats/cfg/steps).
+  // Toggle while retaining at least one value (formats/cfg/steps).
   const _toggleKeep = (setter, getEff) => (v) =>
     setter((cur) => {
       const base = cur ?? getEff();
@@ -175,7 +169,7 @@ export function useStudioForm(d, datasetId, family = null,
   const toggleCfg = _toggleKeep(setSelCfgs, () => effectiveCfgs);
   const toggleStep = _toggleKeep(setSelSteps, () => effectiveSteps);
   const toggleStep2 = _toggleKeep(setSelSteps2, () => effectiveSteps2);
-  // Modèles = chaînes (pas de tri numérique) ; garde au moins un modèle sélectionné.
+  // Models are strings, not numbers; keep at least one model selected.
   const toggleModel = (m) =>
     setSelModels((cur) => {
       const base = cur ?? effectiveModels;
@@ -183,7 +177,7 @@ export function useStudioForm(d, datasetId, family = null,
       return next.length ? next : base;
     });
 
-  // Seed auto à chaque lancement sauf verrou. Renvoie la seed à utiliser.
+  // Generate a seed for each launch unless locked; return the seed to use.
   const nextSeed = () => {
     const s = seedLocked ? seed : rollSeed();
     if (!seedLocked) setSeed(s);
@@ -193,7 +187,7 @@ export function useStudioForm(d, datasetId, family = null,
   return {
     selSts, seed, seedLocked, genCount, promptText, selModels,
     chosenCps, effectivePrompt, effectiveModels, effectiveAspects, effectiveCfgs, effectiveSteps, effectiveSteps2, total, axisTotal,
-    // Défauts DU MODÈLE sélectionné (pour l'étiquette « default … » des pickers).
+    // Selected MODEL defaults for the picker default-value labels.
     modelDefaultCfg, modelDefaultSteps,
     mixedModelDefaults: mixedModelDefaults(d, effectiveModels),
     guestCps,

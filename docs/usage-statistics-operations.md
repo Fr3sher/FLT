@@ -22,10 +22,11 @@ Network receivers see the connection's IP even though LDS does not include an
 IP address in event properties and requests that GeoIP enrichment be disabled.
 Do not describe persistent random IDs as fully anonymous data.
 
-`backend/app/usage_statistics_config.json` ships with an empty `project_token`:
-the consent banner is hidden and collection cannot be enabled in this state.
-For a local integration trial, set `LDS_USAGE_PROJECT_TOKEN` to the project's
-**public ingestion token**, then start the isolated development installation.
+`backend/app/usage_statistics_config.json` contains the approved **public ingestion
+token** for the LDS EU project. This connects the optional consent flow without
+requiring users to configure a service. Clearing `project_token` hides the consent
+banner and prevents collection from being enabled. For a local integration trial,
+set `LDS_USAGE_PROJECT_TOKEN` and start the isolated development installation.
 Never use a personal/admin API key in LDS. The collector host is fixed to the
 EU ingestion endpoint; application requests cannot override it.
 

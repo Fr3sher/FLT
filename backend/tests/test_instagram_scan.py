@@ -1,9 +1,6 @@
-"""Instagram scan() : un profil légitimement sans publication est un résultat
-vide, pas un échec ; un post unique qui refuse de se convertir en item reste
-un vrai échec (finding #3 — verdicts différents pour deux formes de "aucun
-média", cf. rapport).
-
-Tout est mocké (`_build_loader`, `instaloader.Profile`/`Post`) : aucun réseau."""
+"""Instagram scan distinguishes a legitimately empty profile from a real single-post
+extraction failure. A post that exists but cannot become an item is not an empty
+result. Mock _build_loader and instaloader.Profile/Post: no network access."""
 
 import pytest
 
@@ -24,8 +21,8 @@ class _FakeEmptyProfile:
 
 
 class _FakeCarouselPostThatFailsToParse:
-    """Carrousel dont l'extraction des slides échoue entièrement — aucun item
-    récupérable, MAIS le post existe bel et bien (chargement réussi)."""
+    """Carousel whose slide extraction entirely fails: no recoverable items, although
+    the post exists and loaded successfully."""
     shortcode = 'xyz789'
     typename = 'GraphSidecar'
 
@@ -34,22 +31,22 @@ class _FakeCarouselPostThatFailsToParse:
 
 
 class _FakeThrottledPost:
-    """Ne devrait jamais être converti : le générateur du profil dort avant de
-    le céder, assez longtemps pour dépasser `PROFILE_SCAN_TIMEOUT`."""
+    """Never converted: the profile generator sleeps beyond PROFILE_SCAN_TIMEOUT
+    before yielding it."""
     shortcode = 'never-reached'
 
 
 class _FakeThrottledProfile:
-    """Simule le rate-controller RÉEL d'instaloader, qui DORT au lieu de lever
-    (cf. module docstring / `PROFILE_SCAN_TIMEOUT`) — le test monkeypatche
-    `PROFILE_SCAN_TIMEOUT` à une valeur minuscule pour ne pas dormir 60s réelles."""
+    """Simulate the real instaloader rate controller, which SLEEPS rather than
+    raising. Set PROFILE_SCAN_TIMEOUT very low so the test does not wait a real 60
+    seconds."""
     def get_posts(self):
         time.sleep(0.05)
         yield _FakeThrottledPost()
 
 
 class _FakeSimplePost:
-    """Post unique (pas carrousel) qui se convertit sans problème."""
+    """A single non-carousel post that converts successfully."""
     def __init__(self, shortcode):
         self.shortcode = shortcode
         self.typename = 'GraphImage'
@@ -58,8 +55,8 @@ class _FakeSimplePost:
 
 
 class _FakeProfileRateLimitedMidIteration:
-    """Un post cède avec succès, puis l'itération paginée lève (rate-limit en
-    cours de route) — le cas le plus courant : des items utiles sont déjà là."""
+    """Yield one post, then fail during pagination due to rate limiting; useful items
+    have already been collected."""
     def get_posts(self):
         yield _FakeSimplePost('collected1')
         raise ConnectionError('429 Too Many Requests')
@@ -103,8 +100,8 @@ class _FakeProfileWithOneBigCarousel:
 
 
 class _FakeProfileWhereEveryPostFailsConversion:
-    """Deux posts vus, aucun ne survit à la conversion (ex. changement de mise
-    en page côté Instagram) — pas la même chose qu'un profil sans publication."""
+    """Two posts are observed but neither converts, for example after an Instagram
+    layout change. This differs from a profile with no posts."""
     def get_posts(self):
         return iter([_FakeCarouselPostThatFailsToParse(),
                      _FakeCarouselPostThatFailsToParse()])

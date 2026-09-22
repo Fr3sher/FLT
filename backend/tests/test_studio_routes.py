@@ -415,8 +415,9 @@ def test_recent_prompts_has_no_ten_prompt_cap():
 
 
 def test_studio_base_models_krea_type_returns_empty_list(client):
-    # Aucun UNET Krea ALTERNATIF sur disque (env de test nu) → liste vide, le
-    # front cache le sélecteur (le UNET câblé du workflow reste le seul choix).
+    # No alternative Krea UNETs exist in the empty test environment. Return an empty
+    # list so the frontend hides the picker; the wired workflow UNET remains the sole
+    # choice.
     resp = client.get('/api/studio/base-models?type=krea')
     assert resp.status_code == 200
     # `models` is asserted on its own: the response also carries the family's
@@ -426,8 +427,8 @@ def test_studio_base_models_krea_type_returns_empty_list(client):
 
 
 def test_studio_base_models_krea_lists_official_then_alternatives(client, monkeypatch):
-    """Des UNET Krea locaux existent → « Official » (filename vide = défaut câblé)
-    en tête, puis les alternatives, labels sans extension."""
+    """When local Krea UNETs exist, list Official first (empty filename selects the
+    wired default), then alternatives with extension-free labels."""
     from app.services import lora_test_studio as lts
     monkeypatch.setattr(lts, 'krea_alt_base_models',
                         lambda: ['krea\\my_custom_krea.safetensors'])

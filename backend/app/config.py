@@ -331,16 +331,14 @@ DEFAULTS = {
         # "[Errno 28] No space left on device". Floored in code like that
         # lane's, so a config frozen before this key existed cannot undercut it.
         'video_disk_gb': 120,
-        # min_vram_gb est PAR FAMILLE (pas par variante) : pour flux2klein on prend
-        # 32 — le 9B (32-48 GB) est la voie cloud principale de cette famille, et un
-        # pod 32 GB entraîne aussi le 4B sans problème (l'inverse serait faux).
-        # 'video' covers the whole video-dataset lane, whose pods run with
-        # low_vram OFF (paying cloud prices for the PCIe shuttle is the thing
-        # the lane exists to avoid) — so the weights are RESIDENT: MiniMax H3's
-        # pruned int8 transformer alone is ~21 GB with a ~16 GB nvfp4 text
-        # encoder beside it, and Wan 2.2 A14B holds two experts. The 24 GB
-        # fallback that applied before this entry existed rented pods that
-        # could only OOM after the money was spent.
+        # min_vram_gb is per family, not variant. flux2klein uses 32: its 9B
+        # model (32-48 GB) is the main cloud option, and a 32 GB pod also trains
+        # 4B successfully; the reverse is not true.
+        # video covers the entire video-dataset lane with low_vram OFF, avoiding
+        # paid PCIe shuttling. Weights therefore remain resident: MiniMax H3's
+        # pruned int8 transformer is about 21 GB plus a 16 GB nvfp4 text encoder,
+        # and Wan 2.2 A14B holds two experts. The previous 24 GB fallback rented
+        # pods that could only run out of memory after payment.
         'min_vram_gb': {'zimage': 24, 'sdxl': 16, 'krea': 24, 'flux2klein': 32,
                         'video': 48},
         # Compute capability floor, per family, as vast reports it: 750 Turing,

@@ -214,8 +214,8 @@ export function comfyuiLauncherState(step, configPersisted, liveDirValid = false
 }
 
 // What "continue without ComfyUI" costs vs keeps — shown in the skip-confirmation
-// panel BEFORE the user commits. Sourced from the real capability gates (n'invente
-// rien): studio_visible / engines.klein / watermark_klein key on ComfyUI being
+// panel BEFORE the user commits. Sourced from the real capability gates without
+// assumptions: studio_visible / engines.klein / watermark_klein key on ComfyUI being
 // reachable with its models; the training base listers and the LoRA preset picker
 // resolve from comfyui.base_dir. Everything under KEPT is independent of ComfyUI.
 export const COMFYUI_SKIP_LOST = [

@@ -37,32 +37,27 @@ function StepChoices({ choices, selected, onToggle, label, amber = false }) {
   );
 }
 
-// Axes optionnels du balayage : modèle Z-Image (select), formats / CFG / steps (multi-toggles).
-// Extrait behavior-preserving de LoraTestStudio.jsx (blocs modèle/formats/CFG/steps).
-// Chaque bloc conserve sa garde de rendu d'origine :
-//   - modèle : z_models tableau de longueur > 1
-//   - formats : aspects tableau de longueur > 1
-//   - CFG : cfgChoices est un tableau
-//   - steps : stepsChoices est un tableau
+// Optional sweep axes: Z-Image model picker and format/CFG/steps toggles, extracted unchanged from
+// LoraTestStudio.jsx. Preserve the original render guards: model needs z_models.length > 1,
+// formats need aspects.length > 1, and CFG/steps require their respective choices arrays.
 export default function AxisPickers({
   zModels, effectiveModels, onToggleModel,
   aspects, effectiveAspects, onToggleAspect,
   cfgChoices, effectiveCfgs, onToggleCfg, defaultCfg,
   stepsChoices, effectiveSteps, onToggleStep, defaultSteps,
-  // Les bases sélectionnées n'ont PAS les mêmes défauts (ex. un Z-Image Turbo et un
-  // Z-Image Base dans le même balayage) : une seule paire CFG/steps ne peut pas
-  // convenir aux deux, on le DIT au lieu de faire semblant. (bobba84, GitHub #18)
+  // Selected bases can have DIFFERENT defaults, such as Z-Image Turbo and Base in one sweep. One
+  // CFG/steps pair cannot suit both; explain that instead of pretending otherwise. (bobba84,
+  // GitHub #18)
   mixedDefaults = false,
-  // Ce que le DÉFAUT de base a d'anormal (Krea : le fichier que Setup installe
-  // n'est pas là, celui élu porte autre chose que des poids). Rendu HORS de la
-  // garde `zModels.length > 1` : l'install qui n'a qu'une seule base est
-  // précisément celle qui n'a pas de sélecteur et qui doit quand même le lire.
+  // Explain an unusual default base: for Krea, the Setup-installed file may be absent or the
+  // selected file may contain non-weight data. Render OUTSIDE zModels.length > 1 because a
+  // single-base installation has no picker but still needs the warning.
   baseNote = null,
-  // SDXL uniquement : 2e passe (detail daemon). Absent (null) pour Z-Image.
+  // SDXL only: second pass (detail daemon). Absent (null) for Z-Image.
   steps2Choices, effectiveSteps2, onToggleStep2, defaultSteps2,
   fmt,
 }) {
-  // En SDXL (2 passes), le 1er picker devient « pass 1 (classic) » ; sinon « Steps ».
+  // With SDXL's two passes, label the first picker pass 1 (classic); otherwise Steps.
   const hasPass2 = Array.isArray(steps2Choices);
   return (
     <>
@@ -74,8 +69,10 @@ export default function AxisPickers({
 
       {Array.isArray(zModels) && zModels.length > 1 && (
         <div className="flex flex-col gap-1">
-          {/* Libellé générique : la liste vient du payload PAR FAMILLE (Z-Image,
-              checkpoints SDXL, ou « Official + UNET Krea locaux »). */}
+          {/*
+           * Generic label: each FAMILY supplies its own list (Z-Image, SDXL checkpoints, or
+           * official/local Krea UNETs).
+           */}
           <span className="text-content-muted text-[0.625rem] uppercase">Base model (multi)</span>
           <div className="flex gap-2 flex-wrap">
             {zModels.map((m) => (
@@ -143,8 +140,10 @@ export default function AxisPickers({
           label={`${hasPass2 ? 'Steps · pass 1 — classic (multi)' : 'Steps (multi)'} — default ${defaultSteps ?? 8}`} />
       )}
 
-      {/* SDXL : 2e passe (detail daemon, node 57 du workflow HQ). Affichée seulement
-          quand le backend la propose (steps2Choices non-null = dataset SDXL). */}
+      {/*
+       * SDXL second pass: detail daemon, node 57 in the HQ workflow. Show only when the backend
+       * offers it: non-null steps2Choices means an SDXL dataset.
+       */}
       {hasPass2 && (
         <StepChoices key={`steps2-${defaultSteps2}`} choices={steps2Choices}
           selected={effectiveSteps2} onToggle={onToggleStep2} amber

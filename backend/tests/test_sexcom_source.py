@@ -1,11 +1,8 @@
-"""Source Sex.com (pinboard : 1 pin = 1 image, pas d'albums).
-
-La recherche mot-clé (/pics?search=…, /en/pics?search=…, /search/pics?query=…,
-/pics/<tag>) passe par l'API JSON du site — même principe que les covers
-PornPics : l'image remontée EST celle qui matche le mot-clé, 1 requête par page.
-Pins/boards/users sont délégués à gallery-dl avec une fenêtre --range courte.
-
-Tout est mocké — aucun appel réseau ni process gallery-dl."""
+"""Sex.com pinboard source: one pin per image, without albums. Keyword searches
+(/pics?search=, /en/pics?search=, /search/pics?query=, /pics/<tag>) use the site
+JSON API, returning the actual keyword-matching images in one request per page.
+Pins, boards and users delegate to gallery-dl with a short --range window. All
+calls are mocked; no network or gallery-dl process."""
 
 import pytest
 
@@ -39,13 +36,12 @@ def test_gif_and_video_searches_are_refused_clearly():
 
 
 def test_pin_board_and_user_urls_go_to_gallery_dl():
-    assert _search_params_for('https://www.sex.com/en/pics/12345') is None   # pin (id numérique)
+    assert _search_params_for('https://www.sex.com/en/pics/12345') is None   # Pin with a numeric ID.
     assert _search_params_for('https://www.sex.com/pin/12345/') is None
     assert _search_params_for('https://www.sex.com/user/someone/board-name/') is None
-    assert _search_params_for('https://www.sex.com/pics') is None            # listing sans mot-clé
-
-
-# --- scan : API mockée ---------------------------------------------------------
+    assert _search_params_for('https://www.sex.com/pics') is None            # Listing without a keyword.
+    #
+    # Scan with a mocked API.
 def _api_payload(n, pages=3):
     return {'data': [{'id': i, 'uri': f'/images/pinporn/2024/01/0{i}/{i}.jpg',
                       'title': f'pin {i}'} for i in range(1, n + 1)],
@@ -101,10 +97,10 @@ def test_scan_pin_url_delegates_to_gdl_with_window(monkeypatch):
     m.page = 1
     items, err = SexcomSource().scan(m)
     assert err is None and len(items) == 1
-    assert seen['image_range'] == '13-24'         # fenêtre de 12 par page
-
-# NB : sexcom.gdl est le MÊME module que lds_scrape.sources.gdl — le monkeypatch
-# ci-dessus suffit ; l'import en tête ne sert qu'à documenter la dépendance.
+    assert seen['image_range'] == '13-24'         # Twelve items per page.
+    #
+    # sexcom.gdl and lds_scrape.sources.gdl are the SAME module, so the earlier
+    # monkeypatch is sufficient; the top-level import only documents this dependency.
 _ = gdl
 
 

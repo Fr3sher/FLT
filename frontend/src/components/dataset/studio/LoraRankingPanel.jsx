@@ -1,11 +1,8 @@
 // react-frontend/src/components/dataset/studio/LoraRankingPanel.jsx
 /**
- * Panneau « 🏆 Classement LoRA » : alimenté par `data.lora_ranking` (déjà trié
- * côté backend). Affiche, par LoRA, likes/dislikes/net/score Wilson. Repliable,
- * style calqué sur BestPerModelList (bg-surface-raised, header uppercase).
- *
- * a11y : la position est donnée par un numéro de rang (pas par la couleur seule) ;
- * le delta net porte un signe explicite (+/−).
+ * LoRA ranking panel uses backend-sorted data.lora_ranking to show likes, dislikes, net and Wilson
+ * score per LoRA. Collapsible, matching BestPerModelList's bg-surface-raised and uppercase header.
+ * Accessibility: explicit rank numbers rather than color alone, and signed net deltas.
  */
 import { useState } from 'react';
 

@@ -149,12 +149,11 @@ def dataset_train(dataset_id):
             'training_mode': mode,
         }), 400
     try:
-        # steps optionnel : None → adaptatif. base_model='' → officiel ; sinon merge
-        # (doit être converti d'abord). variant règle l'adapter de de-distillation.
-        # base_model peut être un chemin ABSOLU (« Custom weights… », local-only).
-        # vae_path/te_path = overrides SDXL uniquement (le service refuse en 400
-        # pour toute autre famille). Présence-conditionnelle : absent → le service
-        # garde la valeur persistée (sentinelle _PERSISTED), jamais un reset muet.
+        # Optional steps: None means adaptive. Empty base_model means official;
+        # otherwise a merge requiring conversion. variant sets de-distillation.
+        # base_model can be an absolute local custom-weights path. VAE/TE overrides
+        # are SDXL-only (other families return 400). Forward only present fields;
+        # missing fields retain persisted values through _PERSISTED, never reset.
         kw = {}
         if 'vae_path' in d:
             kw['vae_path'] = d.get('vae_path')
@@ -170,14 +169,14 @@ def dataset_train(dataset_id):
                                  allow_uncaptioned=bool(d.get('allow_uncaptioned')),
                                  allow_caption_quality=bool(d.get('allow_caption_quality')),
                                  allow_unverified_weights=bool(d.get('allow_unverified_weights')),
-                                 # « Continue anyway » du panneau de préparation : lève le
-                                 # garde-fou plancher d'images (jamais une impossibilité physique).
+                                 # Continue anyway bypasses the minimum-image quality warning, never
+                                 # a physical impossibility.
                                  allow_not_ready=bool(d.get('allow_not_ready')),
                                  # Absent = read the dataset's stored setting
                                  # (persisted; it used to be a browser-only value).
                                  masked=d.get('masked'),
-                                 # fresh=True : écarte le run existant (archivé, pas
-                                 # détruit) → repart de zéro au lieu de l'auto-resume.
+                                 # fresh=True archives the existing run without deleting it, then
+                                 # starts from scratch rather than auto-resuming.
                                  fresh=bool(d.get('fresh')), **kw)
     except Exception as e:
         return _map_error(e)
@@ -197,7 +196,7 @@ def dataset_train_continue(dataset_id):
     # artifact decides the continuation mode; today's dataset selector (or a
     # stale client body) cannot reinterpret those weights as a dense model.
     mode = 'lora'
-    # base_model/variant = base sélectionnée (absente → base persistée du run).
+    # Selected base_model/variant; absent means the run's persisted base.
     kw = {'extra_steps': d.get('extra_steps', 1000)}
     if 'base_model' in d:
         kw['base_model'] = d.get('base_model')
@@ -205,8 +204,8 @@ def dataset_train_continue(dataset_id):
         kw['variant'] = d.get('variant')
     if d.get('train_type'):
         kw['train_type'] = d.get('train_type')
-    # from_step = reprise depuis un checkpoint précis (défaut = dernier). overrides =
-    # réglages sûrs (le service refuse toute clé hors liste → 400).
+    # from_step chooses a checkpoint (latest by default). overrides contains
+    # safe settings only; the service rejects unknown keys with 400.
     if d.get('from_step') is not None:
         kw['from_step'] = d.get('from_step')
     if 'expected_record_id' in d:
@@ -235,12 +234,11 @@ def dataset_train_continue(dataset_id):
 
 @bp.get('/dataset/train/status')
 def dataset_train_status():
-    # Le poll doit toujours répondre 200 (jamais d'erreur) : sans ai-toolkit
-    # configuré, on renvoie juste 'indisponible' au lieu d'un 409 qui casserait
-    # le polling UI.
+    # Polling always returns 200. Missing ai-toolkit configuration yields
+    # unavailable instead of a 409 that would break UI polling.
     if not capabilities.probe_aitoolkit()['ok']:
         return jsonify({'available': False})
-    # Le poll fait avancer la file : fin du training courant → lancement du suivant.
+    # Polling advances the queue: current training ends → start the next one.
     try:
         lt.process_training_queue()
     except Exception:
@@ -266,7 +264,7 @@ def dataset_train_enqueue(dataset_id):
     if mode == 'full_transformer':
         return jsonify({'error': 'full_transformer training is cloud-only and cannot be queued locally',
                         'training_mode': mode}), 400
-    # base_model/variant = base CHOISIE pour le job en file (absente → persistée).
+    # base_model/variant select the queued job's base; absent uses persisted values.
     kw = {'extra_steps': d.get('extra_steps'), 'masked': d.get('masked')}
     if has_training_mode:
         kw['training_mode'] = mode
@@ -291,7 +289,7 @@ def dataset_train_enqueue(dataset_id):
         kw['vae_path'] = d.get('vae_path')
     if 'te_path' in d:
         kw['te_path'] = d.get('te_path')
-    # steps = cible absolue choisie côté UI (None → adaptatif). Forwarding conditionnel.
+    # steps is the UI's absolute target, or None for adaptive. Forward conditionally.
     if d.get('steps') is not None:
         kw['steps'] = d.get('steps')
     try:
@@ -303,10 +301,9 @@ def dataset_train_enqueue(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/train/schedule')
 def dataset_train_schedule(dataset_id):
-    """Programme un entraînement (jour + heure locale). Contrairement à SRC, une
-    échéance déjà PASSÉE est refusée (400) plutôt que dégradée en « dû
-    immédiatement » : un `at` dans le passé est presque toujours une saisie
-    erronée côté UI, pas une intention de lancer tout de suite."""
+    """Schedule training for a local date/time. Unlike the source app, reject
+    past deadlines with 400 rather than treating them as immediately due: a
+    past at value usually indicates mistaken input, not intent to start now."""
     gate = _require_aitoolkit()
     if gate:
         return gate
@@ -371,7 +368,7 @@ def dataset_train_dequeue(dataset_id):
     gate = _require_aitoolkit()
     if gate:
         return gate
-    # Ownership : on ne retire de la file que SES propres datasets (anti-IDOR).
+    # Ownership: remove only the current user's datasets from the queue (anti-IDOR).
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     n = lt.dequeue_training(dataset_id)
@@ -380,7 +377,7 @@ def dataset_train_dequeue(dataset_id):
 
 @bp.post('/dataset/train/stop')
 def dataset_train_stop():
-    # Single-user app : pas de vérif d'ownership sur l'entraînement en cours.
+    # Single-user app: no ownership check on the active training run.
     gate = _require_aitoolkit()
     if gate:
         return gate
@@ -435,10 +432,9 @@ def dataset_train_checkpoints(dataset_id):
     local_ok = capabilities.probe()['aitoolkit']['valid']
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
-    # base_model = base sélectionnée dans le dropdown (param absent → base persistée).
+    # base_model selects the dropdown base; absent means persisted base.
     bm = request.args.get('base_model')
-    # train_type = famille sélectionnée dans le menu LORA TYPE (param absent →
-    # famille persistée).
+    # train_type selects the LORA TYPE family; absent means persisted family.
     fam = request.args.get('train_type') or None
     variant = request.args.get('variant') or None
     kw = {} if bm is None else {'base_model': bm}
@@ -969,8 +965,8 @@ def train_base_file_advisory():
 
 @bp.get('/dataset/<int:dataset_id>/train/base-info')
 def dataset_train_base_info(dataset_id):
-    """Bases entraînables (officielle + merges Z-Image), base/variante choisies du
-    dataset, et statut de conversion - pour le sélecteur du TrainingPanel."""
+    """Trainable bases, selected dataset base/variant and conversion status
+    for TrainingPanel's selector."""
     gate = _require_aitoolkit()
     if gate and not capabilities.probe().get('cloud_training'):
         return gate
@@ -982,37 +978,33 @@ def dataset_train_base_info(dataset_id):
     for m in get_zimage_models():
         bases.append({'value': m, 'label': m.replace('\\', '/').split('/')[-1].rsplit('.', 1)[0]})
         converted[m] = zc.is_converted(m)
-    # Bases SDXL = checkpoints ComfyUI existants (single-file, pas de conversion).
-    # get_checkpoint_models() renvoie des DICTS {name, civitai_url, score} (pas des
-    # strings comme get_zimage_models) → extraire 'name'.
+    # SDXL bases are existing single-file ComfyUI checkpoints, without
+    # conversion. get_checkpoint_models returns {name,civitai_url,score}
+    # dictionaries rather than get_zimage_models strings; extract name.
     sdxl_bases = []
     for c in (get_checkpoint_models() or []):
         name = c['name'] if isinstance(c, dict) else c
         sdxl_bases.append({'value': name,
                            'label': name.replace('\\', '/').split('/')[-1].rsplit('.', 1)[0]})
-    # Krea 2 : la base officielle (le choix Raw/Turbo se fait via le sélecteur
-    # `variant`, pas ici → label neutre) PUIS tout checkpoint Krea 2 installé sur
-    # cette machine — un modèle que l'utilisateur vient d'entraîner, un build
-    # communautaire. Même scanner que le Studio (get_krea_models), pas un
-    # cinquième : leur divergence a déjà produit un bug.
+    # Krea 2: official base first, then locally installed checkpoints,
+    # including trained/community models. Raw/Turbo is selected by variant,
+    # so use a neutral label. Reuse Studio's get_krea_models scanner;
+    # divergent scanners have already caused a bug.
     krea_bases = [{'value': '', 'label': 'Official - Krea 2'}] + _krea_installed_bases()
-    # Flux : base officielle fixe (FLUX.1-dev, gated HF) — pas de checkpoint custom ni
-    # de conversion. Entrée explicite pour que l'UI n'aille PAS retomber sur les bases
-    # Z-Image (fallback `bases_by_type[type] || bases`) quand la famille est Flux.
+    # Flux has one fixed gated FLUX.1-dev base, without custom checkpoints
+    # or conversion. An explicit entry prevents UI fallback to Z-Image bases.
     flux_bases = [{'value': '', 'label': 'Official - FLUX.1-dev'}]
-    # FLUX.2 Klein : bases officielles fixes (gated HF) — le choix 4B/9B se fait via
-    # le sélecteur `variant` (comme Raw/Turbo pour Krea), pas ici → label neutre.
+    # FLUX.2 Klein has fixed gated official bases. 4B/9B is chosen by variant,
+    # like Raw/Turbo for Krea; keep this label neutral.
     flux2klein_bases = [{'value': '', 'label': 'Official - FLUX.2 Klein'}]
-    # Anima : une seule base officielle publique, pas de checkpoint custom. Sans
-    # cette entrée le panneau retombait sur les bases Z-Image et annonçait
-    # « Official - Z-Image-Turbo » sous la famille Anima — jusque dans la ligne de
-    # résumé du bouton Train (le repli côté panneau est mort depuis, cf.
-    # trainingFamilyScope.js ; l'entrée reste la source de vérité).
+    # Anima has one public official base without custom checkpoints. This
+    # entry prevents misleading Z-Image labels and remains the source of
+    # truth after the old panel fallback was removed (trainingFamilyScope.js).
     anima_bases = [{'value': '', 'label': f'Official - {lt.ANIMA_BASE_LABEL}'}]
-    # Les listers de bases (get_checkpoint_models / get_zimage_models) résolvent le
-    # dossier des modèles depuis comfyui.base_dir → vides tant qu'il n'est pas
-    # configuré. On expose ce fait pour que l'UI dise « configure ComfyUI dans Setup »
-    # au lieu d'un « No checkpoint found » aveugle (le vrai motif sur un clone neuf).
+    # Base scanners resolve model directories through comfyui.base_dir and
+    # return empty until configured. Expose that fact so a new clone asks
+    # users to configure ComfyUI in Setup rather than merely saying no
+    # checkpoints were found.
     models_dir = None
     try:
         models_dir = cfg.comfyui_dir('models')
@@ -1031,16 +1023,14 @@ def dataset_train_base_info(dataset_id):
                     # Present ONLY when the persisted base belongs to another
                     # family: the note the panel shows so the change isn't silent.
                     'base_family_mismatch': _base_mismatch,
-                    # « Custom weights… » (local-only) : chemin custom persisté +
-                    # overrides SDXL (VAE/TE). Le sélecteur les ressème ; la
-                    # whitelist par famille est ré-appliquée au lancement (400).
+                    # Local custom weights: persisted custom path plus SDXL VAE/TE overrides.
+                    # Restore them in the selector; enforce the family allowlist again at launch.
                     'vae_path': ds.train_vae_path or '',
                     'te_path': ds.train_te_path or '',
                     'custom_weights_families': list(lt.CUSTOM_WEIGHTS_FAMILIES),
                     'vae_te_families': list(lt.VAE_TE_OVERRIDE_FAMILIES),
-                    # Défaut family-aware : Krea → Raw (reco officielle), FLUX.2 Klein
-                    # → 4B, sinon Turbo. Déféré au service (_default_variant_for) pour
-                    # que l'UI et le lancement (_krea_is_raw/_flux2klein_is_9b) s'accordent.
+                    # Family defaults: Krea Raw (official recommendation), FLUX.2 Klein 4B,
+                    # otherwise Turbo. Delegate to _default_variant_for so UI and launch agree.
                     'variant': ds.train_variant or lt._default_variant_for(ds.train_type or 'zimage'),
                     'converted': converted,
                     'convert': zc.convert_status(),
@@ -1050,12 +1040,11 @@ def dataset_train_base_info(dataset_id):
                     'training_mode': lt.training_mode(ds),
                     'comfyui_configured': comfyui_configured,
                     'models_dir': str(models_dir) if models_dir else '',
-                    # Réglages avancés effectifs (persistés ∪ défauts family-aware) pour
-                    # la famille courante : rank/alpha/resolution/save_every → le panneau
-                    # « Advanced options » les affiche et laisse les éditer.
+                    # Effective advanced settings combine persisted values and family defaults:
+                    # rank/alpha/resolution/save_every for display/editing in Advanced options.
                     'train_settings': lt.effective_train_settings(ds),
-                    # Slider LoRA mode (Beta) : état + prompts persistés + knobs résolus
-                    # (colonne dédiée train_slider — jamais écrasé par un preset).
+                    # Slider LoRA mode (Beta): state, persisted prompts and resolved settings
+                    # in dedicated train_slider, never overwritten by a preset.
                     'slider': lt.effective_slider_settings(ds),
                     # Can this machine actually train Anima? The arch is an ai-toolkit
                     # EXTENSION, so an older checkout simply doesn't have it (the launch
@@ -1065,9 +1054,8 @@ def dataset_train_base_info(dataset_id):
                     # The panel uses it to stay quiet instead of recommending Anima to
                     # someone who cannot run it.
                     'anima_supported': lt._aitoolkit_supports_anima(),
-                    # Une entrée par famille de TRAIN_TYPES, sans exception : c'est
-                    # ce que le panneau lit pour peupler son sélecteur de base
-                    # (test_every_family_gets_its_own_base_list).
+                    # One base-list entry for every TRAIN_TYPES family, without exception.
+                    # The panel populates its selector from this (covered by contract tests).
                     'bases_by_type': {'zimage': bases, 'sdxl': sdxl_bases,
                                       'krea': krea_bases, 'flux': flux_bases,
                                       'flux2klein': flux2klein_bases,
@@ -1076,8 +1064,8 @@ def dataset_train_base_info(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/train/settings')
 def dataset_train_settings(dataset_id):
-    """Persiste un patch de réglages avancés {rank?, resolution?, save_every?} sur le
-    dataset (validé + borné côté service). Renvoie les réglages effectifs résultants."""
+    """Persist advanced {rank?, resolution?, save_every?} settings on the dataset,
+    validated and bounded by the service. Return resulting effective settings."""
     gate = _require_aitoolkit()
     if gate and not capabilities.probe().get('cloud_training'):
         return gate
@@ -1100,9 +1088,9 @@ def dataset_train_settings(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/train/slider')
 def dataset_train_slider(dataset_id):
-    """Slider LoRA mode (Beta) : persiste un patch {enabled?, positive?, negative?,
-    target_class?, anchor?, guidance?, anchor_strength?} (validé côté service,
-    colonne dédiée train_slider). Renvoie l'état slider effectif."""
+    """Persist Slider LoRA (Beta) patch {enabled?, positive?, negative?,
+    target_class?, anchor?, guidance?, anchor_strength?}, service-validated
+    in train_slider. Return effective slider state."""
     gate = _require_aitoolkit()
     if gate:
         return gate
@@ -1229,9 +1217,9 @@ _STYLE_BUILTIN_PRESETS = [
                        'timesteps and 250-step probes.',
         'settings': _style_preset_settings(32, 32, timestep_type='weighted'),
     },
-    # Corrected from 32/16: the concept research recommends FULL alpha for
-    # style ("Alpha = dim, recommandé style") — half-strength stays a
-    # character-recipe trick. SDXL is ddpm: no flow-match timestep weighting.
+    # Corrected from 32/16: concept research recommends full alpha for style
+    # (alpha=dim). Half-strength remains a character-recipe choice. SDXL uses
+    # DDPM, without flow-match timestep weighting.
     {
         'id': 'builtin-style-sdxl',
         'name': 'SDXL · Style',
@@ -1604,8 +1592,8 @@ def dataset_train_preset_apply(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/train/prepare-base')
 def dataset_train_prepare_base(dataset_id):
-    """Convertit un merge ComfyUI en diffusers (thread d'arrière-plan) pour
-    pouvoir entraîner dessus. Statut via /train/base-info (convert)."""
+    """Convert a ComfyUI merge to diffusers in a background thread for training.
+    Status is available in /train/base-info under convert."""
     gate = _require_aitoolkit()
     if gate:
         return gate
@@ -1614,8 +1602,8 @@ def dataset_train_prepare_base(dataset_id):
     bm = (request.get_json(silent=True) or {}).get('base_model', '')
     if not bm:
         return jsonify({'error': 'base model required'}), 400
-    # Whitelist stricte : seul un modèle Z-Image réellement listé est convertible
-    # (anti path-traversal - l'entrée transporte un chemin jusqu'à un subprocess).
+    # Strict allowlist: only a listed Z-Image model is convertible. Prevent
+    # path traversal because the input carries a path into a subprocess.
     if bm not in get_zimage_models():
         return jsonify({'error': 'unknown base model'}), 400
     if zc.is_converted(bm):
@@ -1629,10 +1617,10 @@ def dataset_train_prepare_base(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/train/open-folder')
 def dataset_train_open_folder(dataset_id):
-    """Ouvre un dossier dans l'explorateur du poste (app locale) : target 'loras'
-    (import ComfyUI de la famille), 'run' (checkpoints du run) ou 'dataset'
-    (images + captions .txt du dataset — pas de dépendance ai-toolkit).
-    Chemins résolus serveur — le body ne transporte jamais de chemin."""
+    """Open a server-resolved folder in the local file explorer: loras for
+    the family's ComfyUI import, run for checkpoints, or dataset for images
+    and caption sidecars without needing ai-toolkit. Request bodies never
+    carry filesystem paths."""
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     d = request.get_json(silent=True) or {}
@@ -1877,8 +1865,8 @@ def dataset_train_import(dataset_id):
         return jsonify({'error': 'not found'}), 404
     body = request.get_json(silent=True) or {}
     fn = body.get('filename', '')
-    # base_model = base du run d'où vient le checkpoint (absente → base persistée) ;
-    # train_type = famille sélectionnée (absente → persistée) → même run + même dossier.
+    # base_model identifies the checkpoint's source run and train_type the
+    # selected family; absent fields use persisted values for the same run/folder.
     kw = {} if 'base_model' not in body else {'base_model': body.get('base_model')}
     fam = body.get('train_type') or None
     if fam:
@@ -2335,8 +2323,8 @@ def dataset_train_retry():
 
 
 def dataset_train_cloud_retry():
-    """↻ Retry d'un run en erreur (page Cloud) : relance avec les paramètres
-    exacts du run raté — pod frais, mêmes garde-fous que tout launch."""
+    """Retry a failed cloud run using its exact parameters on a fresh pod
+    with the normal launch safeguards."""
     gate = _require_cloud()
     if gate:
         return gate
@@ -2349,11 +2337,10 @@ def dataset_train_cloud_retry():
 
 
 def dataset_train_cloud_continue():
-    """▶ Continue d'un run cloud TERMINÉ (page Runs) : reprend depuis un checkpoint
-    harvesté (from_step, défaut = dernier) et vise step_de_reprise + extra_steps —
-    pod frais, mêmes garde-fous que tout launch ; le monitor dépose le checkpoint
-    sur le pod avant de démarrer (auto-resume ai-toolkit). overrides = réglages sûrs
-    (le service refuse toute autre clé → 400)."""
+    """Continue a terminal cloud run from a harvested checkpoint, latest by
+    default, targeting resume_step+extra_steps. Use a fresh pod and normal
+    launch guards. Monitor stages the checkpoint before ai-toolkit auto-resume.
+    overrides accepts safe settings only; other keys return 400."""
     gate = _require_cloud()
     if gate:
         return gate
@@ -2468,11 +2455,10 @@ def dataset_train_cloud_fetch_local():
 
 
 def dataset_train_cloud_continue_local(dataset_id):
-    """▶ Continue d'un checkpoint LOCAL dans le CLOUD (voie « Cloud » de la modale
-    Continue, côté dataset) : le fichier du run local est semé sur un pod frais
-    (resume_ckpt_path) et le job vise step_de_reprise + extra_steps. Mêmes
-    garde-fous que tout launch cloud (clé vast.ai, budget, limite de runs actifs,
-    unicité par famille) — c'est un launch_cloud_training normal."""
+    """Continue a local checkpoint in the cloud from the dataset dialog.
+    Stage resume_ckpt_path on a fresh pod and target resume_step+extra_steps.
+    Use ordinary cloud launch guards: vast.ai key, budget, active-run limit
+    and uniqueness by family."""
     gate = _require_cloud()
     if gate:
         return gate
@@ -2945,8 +2931,8 @@ def train_canvas_generate():
         res = ct.canvas_generate(
             LOCAL_USER, d.get('selections') or [],
             d.get('strengths') or [1.0],
-            # Réglages partagés (mêmes clés wire que le Studio) ; 📝 Lot : une
-            # passe par prompt coché. ◉ La base est un AXE (z_models).
+            # Shared settings use the Studio wire keys; one pass per selected prompt.
+            # The base is an axis (z_models).
             StudioGenSettings.from_payload(d),
             prompts=d.get('prompts'),
             external_loras=d.get('external_loras'), combine=d.get('combine'))

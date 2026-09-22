@@ -287,8 +287,8 @@ def dataset_set_ref(dataset_id):
     if not f or not f.filename:
         return jsonify({'error': 'no file'}), 400
     raw = f.read()
-    # Garde-fou qualité : une référence basse résolution dégrade TOUTES les
-    # variations générées (l'anchor identité part de là). On avertit, sans bloquer.
+    # Quality warning: a low-resolution reference degrades all generated
+    # variations because it anchors identity. Warn without blocking.
     low_res_warning = None
     try:
         from PIL import Image as PILImage
@@ -300,10 +300,10 @@ def dataset_set_ref(dataset_id):
                     'generated variations will inherit the softness. A sharper photo gives a better LoRA.')
     except Exception:
         pass
-    # Auto head-crop OPT-IN (form field crop='1') : par défaut on fait un carré
-    # centré PIL pur — instantané, pas de passe vision, pas de pause ComfyUI —
-    # et l'utilisateur ajuste avec ✂ Crop (l'éditeur lit l'original plein cadre).
-    # Même UX que l'import de photos ; « Reset to auto » reste le chemin vision explicite.
+    # Automatic head cropping is opt-in (crop=1). Default to an instant
+    # PIL-only centered square without vision or pausing ComfyUI. Users adjust
+    # it with Crop from the full-frame original. Match photo-import UX;
+    # Reset to auto remains the explicit vision path.
     want_auto = request.form.get('crop', '0') == '1'
     try:
         if want_auto:
@@ -954,12 +954,12 @@ def dataset_import(dataset_id):
         return jsonify({'error': 'no files'}), 400
     if len(files) > svc.IMPORT_MAX_FILES:
         return jsonify({'error': f'max {svc.IMPORT_MAX_FILES} images per import'}), 400
-    # Head-crop OPTIONNEL (form field crop='0' → OFF) : un plan buste/corps importé
-    # doit pouvoir rester tel quel — le crop tête carré systématique transformait
-    # tout import en gros plan. Dataset CONCEPT ou STYLE : jamais de head-crop
-    # (l'invariant n'est pas un visage ; un style vit autant dans les décors).
-    # Sans crop → import BRUT (ratio préservé) → aucune passe vision → PAS de
-    # fenêtre GPU exclusive (on ne stoppe pas ComfyUI pour rien).
+    # Optional head crop (crop=0 disables it): imported bust/body shots must
+    # keep their framing rather than always becoming square close-ups.
+    # Concept/style datasets never head-crop because identity is not the
+    # invariant and style also lives in backgrounds. Without cropping,
+    # preserve aspect ratio and skip vision/GPU exclusivity; do not pause
+    # ComfyUI unnecessarily.
     stats = {}
     want_crop = (not svc.is_conceptual(ds)) and request.form.get('crop', '1') != '0'
     if not want_crop:
@@ -969,8 +969,8 @@ def dataset_import(dataset_id):
                         'duplicates': stats.get('duplicates', 0),
                         'small': stats.get('small', 0)})
     try:
-        # batch (head-crop vision par image) : heartbeat de la fenêtre = ComfyUI arrêté
-        # tout le batch ; le TTL n'est qu'un filet anti-crash.
+        # Batch head-crop vision: keep the window heartbeat active and ComfyUI
+        # paused throughout the batch. TTL is only a crash safeguard.
         with gpu_exclusive_vision_window(flag_ttl=600):
             ids, failed = svc.import_images(LOCAL_USER, dataset_id, files, crop=True,  # auto head-crop
                                             dedupe=True, stats=stats)
@@ -1066,7 +1066,7 @@ def dataset_caption(dataset_id):
     if image_ids is not None and not isinstance(image_ids, list):
         return jsonify({'error': "'image_ids' must be a list"}), 400
     force = bool(data.get('force')) or image_ids is not None
-    mode = data.get('mode')  # 'prose' | 'booru' | None (None → auto selon train_type)
+    mode = data.get('mode')  # 'prose' | 'booru' | None (None → auto based on train_type)
     # Who WROTE these captions. The default backend ('auto') chains JoyCaption and the
     # Ollama vision model — two engines with visibly different styles — and the app
     # never said which one produced what. Counted where each caption is stored, so it
@@ -1186,7 +1186,7 @@ def dataset_image_caption_preview(dataset_id, image_id):
 
 @bp.post('/dataset/<int:dataset_id>/analyze-faces')
 def dataset_analyze_faces(dataset_id):
-    # CPU (onnxruntime CPU-only) -> PAS de fenêtre GPU exclusive, ComfyUI non stoppé.
+    # CPU-only onnxruntime: no exclusive GPU window or ComfyUI stop.
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     try:
@@ -2310,8 +2310,8 @@ def dataset_image_thumb(dataset_id, filename):
 @bp.get('/dataset/<int:dataset_id>/lora-test/status')
 def lora_test_status(dataset_id):
     """Poll payload: testable checkpoints, grid cells, scores, best cell,
-    pending count and the persisted best_settings. `?family=` scope la pipeline
-    (ZIT/SDXL/Krea) ; absent → famille effective par défaut du dataset."""
+    pending count and persisted best_settings. family scopes the pipeline
+    (ZIT/SDXL/Krea); absent means the dataset's effective default family."""
     payload = lts.studio_payload(LOCAL_USER, dataset_id, family=request.args.get('family'))
     return (jsonify(payload), 200) if payload else (jsonify({'error': 'not found'}), 404)
 
@@ -2328,9 +2328,8 @@ def lora_test_run(dataset_id):
     try:
         res = lts.create_run(LOCAL_USER, dataset_id,
                              d.get('checkpoints') or [], d.get('strengths') or [],
-                             # Réglages partagés (parité Generate) : un objet, lu
-                             # avec les mêmes clés wire qu'avant. 📝 Lot : une
-                             # passe par prompt coché — absent → le prompt seul.
+                             # Shared settings match Generate in one object with the same wire keys.
+                             # Prompt batches run once per selected prompt; absent means a single prompt.
                              lts.StudioGenSettings.from_payload(d),
                              family=d.get('family'), prompts=d.get('prompts'))
     except Exception as e:
@@ -2403,7 +2402,7 @@ def lora_test_best(dataset_id):
                                      z_model=d.get('z_model'), cfg=d.get('cfg'),
                                      steps=d.get('steps'), steps2=d.get('steps2'),
                                      aspect=d.get('aspect'),
-                                     # 🧬 pile : les LoRA empilés AVEC celui de tête.
+                                     # Stacked LoRAs accompany the leading LoRA.
                                      stack=d.get('stack'))
     except ValueError as e:
         return jsonify({'ok': False, 'error': str(e)}), 400
@@ -2412,8 +2411,8 @@ def lora_test_best(dataset_id):
 
 @bp.delete('/dataset/<int:dataset_id>/lora-test/best')
 def lora_test_best_clear(dataset_id):
-    """Supprime le réglage mémorisé du dataset. `?family=` → n'efface que cette
-    pipeline (les autres familles gardent leur meilleur réglage) ; absent → tout."""
+    """Delete saved dataset settings. family deletes only that pipeline's
+    best settings; absent means every family."""
     try:
         lts.clear_best_settings(LOCAL_USER, dataset_id, family=request.args.get('family'))
     except ValueError as e:
@@ -2423,7 +2422,7 @@ def lora_test_best_clear(dataset_id):
 
 @bp.delete('/dataset/<int:dataset_id>/lora-test/prompt')
 def lora_test_prompt_delete(dataset_id):
-    """Supprime un prompt récent (et ses cellules/images de test)."""
+    """Delete a recent prompt and its test cells/images."""
     d = request.get_json(silent=True) or {}
     try:
         n = lts.delete_prompt(LOCAL_USER, dataset_id, d.get('prompt', ''))
@@ -2434,8 +2433,8 @@ def lora_test_prompt_delete(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/lora-test/score-faces')
 def lora_test_score_faces(dataset_id):
-    """Score facial objectif des cellules du Studio (InsightFace, subprocess CPU
-    — pas de fenêtre GPU) vs la référence du dataset → « best epoch » auto."""
+    """Objective Studio face scoring against the dataset reference using
+    InsightFace in a CPU subprocess, without a GPU window, for best epoch."""
     d = request.get_json(silent=True) or {}
     try:
         res = lts.score_faces(LOCAL_USER, dataset_id, family=d.get('family'))

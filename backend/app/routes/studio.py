@@ -66,10 +66,9 @@ def _family_axes(kind):
         'steps_choices': lts.STEPS_CHOICES, 'default_steps': lts.DEFAULT_STEPS,
         'steps2_choices': lts.STEPS_CHOICES if kind == 'sdxl' else None,
         'default_steps2': lts.DEFAULT_STEPS if kind == 'sdxl' else None,
-        # Rythme mesuré de la machine (médiane observée) — même clé et même
-        # source que le payload par dataset, pour que les deux branches du Studio
-        # n'annoncent jamais deux durées pour un seul lancement. null = pas assez
-        # d'historique, l'UI garde son « ~ » et son défaut.
+        # Measured machine speed (observed median), with the same key/source
+        # as the dataset payload so both Studio modes estimate the same run
+        # consistently. NULL means insufficient history; UI keeps its estimate.
         'seconds_per_image': lts.measured_seconds_per_image(kind),
     }
 
@@ -102,16 +101,14 @@ def studio_base_models():
         return jsonify({'models': models, 'axes': axes,
                         'model_defaults': _base_defaults(kind, models)})
     if kind == 'krea':
-        # Bases Krea locales ALTERNATIVES au défaut ÉLU (cf. lts.krea_default_base).
-        # L'entrée de tête (filename vide → base_model absent → défaut élu) reste le
-        # défaut ; `base_note` dit quel fichier c'est quand ce n'est pas celui que
-        # Setup installe. La note est publiée MÊME sans alternative : c'est
-        # précisément l'install où l'utilisateur n'a rien d'autre qui doit le lire.
+        # Local Krea alternatives exclude the elected default (krea_default_base).
+        # The first empty-filename entry still selects that default. base_note
+        # identifies a default different from Setup's file, even when there are
+        # no alternatives: those users particularly need the explanation.
         entry = lts.krea_default_base_entry()
-        # Les chiffres du défaut sont ceux du fichier RÉELLEMENT élu : sans ça une
-        # base non distillée élue par défaut repartait sur cfg 1 / 8 steps — la
-        # même esquisse floue que le correctif #18 avait déjà réglée ailleurs. La
-        # clé '' est publiée pour l'écran qui la lit sans sélecteur.
+        # Defaults come from the actually elected file. Otherwise a non-distilled
+        # default inherited CFG 1/eight steps and blurry results, repeating #18.
+        # Publish the empty key for surfaces without a selector.
         base_defaults = None
         if entry['source']:
             base_defaults = lts.krea_model_defaults(entry['source'])
@@ -140,14 +137,14 @@ def studio_checkpoints():
 
 @bp.get('/recent-prompts')
 def studio_recent_prompts():
-    """Prompts de test récents GLOBAUX (tous datasets) — alimente le menu
-    « Recent prompts » du mode comparaison ET du studio riche."""
+    """Global recent test prompts across datasets, feeding Recent prompts
+    in comparison mode and the full Studio."""
     return jsonify({'ok': True, 'prompts': lts.user_recent_prompts(LOCAL_USER)})
 
 
 @bp.post('/recent-prompts/delete')
 def studio_recent_prompts_delete():
-    """Supprime un prompt récent (+ cellules/images) sur TOUS les datasets."""
+    """Delete a recent prompt and associated cells/images across all datasets."""
     d = request.get_json(silent=True) or {}
     return jsonify({'ok': True,
                     'deleted': lts.delete_prompt_everywhere(LOCAL_USER, d.get('prompt'))})
@@ -329,14 +326,12 @@ def studio_run():
     try:
         res = lts.create_comparison_run(
             LOCAL_USER, d.get('selections') or [], d.get('strengths') or [],
-            # Réglages partagés (parité Generate) : un objet, mêmes clés wire.
+            # Shared Generate settings: one object, identical wire keys.
             lts.StudioGenSettings.from_payload(d),
-            # 📝 Lot : une passe par prompt coché. `create_comparison_run` accepte
-            # l'argument depuis toujours — c'est CETTE route qui ne le transmettait
-            # pas, et l'axe était donc inatteignable sur la seule surface de
-            # comparaison, alors que les deux autres routes de lancement
-            # (datasets.studio_run, training.canvas_generate) le passent. Absent du
-            # corps ⇒ None ⇒ comportement d'avant, à l'identique.
+            # Prompt batch: one pass per checked prompt. create_comparison_run
+            # already accepted this argument, but this route failed to forward it,
+            # unlike dataset and canvas launch routes. Absent body field remains
+            # None, preserving previous single-prompt behavior.
             prompts=d.get('prompts'),
             external_loras=d.get('external_loras'), combine=d.get('combine'))
     except Exception as e:
