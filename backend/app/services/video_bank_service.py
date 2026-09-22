@@ -33,6 +33,7 @@ refuse a click on an unrelated image bank, with a message naming a pass the user
 cannot see. Hence ``job_key()`` — the registry itself is happily reused.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import hashlib
 import json
@@ -3854,7 +3855,7 @@ def _stream_video_to_disk(url, dest_path) -> str:
     from urllib.parse import urlparse
     host = urlparse(url).hostname or ''
     try:
-        r = cf_requests.get(url, impersonate='chrome', timeout=_SCRAPE_VIDEO_TIMEOUT,
+        r = cf_requests.get(url, impersonate='chrome', timeout=network_timeout(_SCRAPE_VIDEO_TIMEOUT),
                             stream=True, allow_redirects=False,
                             headers={'Referer': f'https://{host}/',
                                      'Accept': 'video/*,*/*'})
@@ -3878,13 +3879,14 @@ def _stream_video_to_disk(url, dest_path) -> str:
         # a server trickling one byte per second holds this thread (and the
         # bank's lease) open indefinitely. The wall clock below is the actual
         # 180 s promise the constant's comment makes.
-        deadline = time.monotonic() + _SCRAPE_VIDEO_TIMEOUT
+        download_timeout = network_timeout(_SCRAPE_VIDEO_TIMEOUT)
+        deadline = time.monotonic() + download_timeout
         written = 0
         with open(dest_path, 'wb') as fh:
             for chunk in r.iter_content(_SCRAPE_VIDEO_CHUNK):
                 if time.monotonic() > deadline:
                     logger.warning('video bank scrape: host %s exceeded the '
-                                   '%ss wall clock', host, _SCRAPE_VIDEO_TIMEOUT)
+                                   '%ss wall clock', host, download_timeout)
                     return 'errors'
                 if not chunk:
                     continue

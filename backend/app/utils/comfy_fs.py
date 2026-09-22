@@ -29,6 +29,7 @@ Every message is PASTE-SAFE: paths run through `redact_user_paths`, because thes
 strings are written to be dropped into a public help thread.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import logging
 import ntpath
@@ -226,7 +227,7 @@ def comfyui_sees_input(name) -> bool | None:
     try:
         r = requests.head(urljoin(api.rstrip('/') + '/', 'view'),
                           params={'filename': base, 'type': 'input'},
-                          timeout=VISIBILITY_TIMEOUT, allow_redirects=False)
+                          timeout=network_timeout(VISIBILITY_TIMEOUT), allow_redirects=False)
     except Exception:                    # unreachable, DNS, proxy, TLS — anything
         return None
     status = getattr(r, 'status_code', None)
@@ -253,7 +254,7 @@ def _comfy_folder_note() -> str:
     if not api:
         return ''
     try:
-        r = requests.get(f'{api.rstrip("/")}/system_stats', timeout=VISIBILITY_TIMEOUT)
+        r = requests.get(f'{api.rstrip("/")}/system_stats', timeout=network_timeout(VISIBILITY_TIMEOUT))
         if r.status_code != 200:
             return ''
         argv = ((r.json() or {}).get('system') or {}).get('argv')

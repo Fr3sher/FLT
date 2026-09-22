@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-zz-processing-network-timeouts',
+    date: '2026-09-22',
+    title: 'Give repairs and slow hardware more time',
+    blurb: 'Settings → Local tools → Time limits now controls the five-minute Klein repair limit, Bank upscaling waits, and processing and network timeout multipliers. All defaults stay the same. Longer repair limits also reach the generation worker.',
+    to: '/settings/local-tools?focus=klein-repair-timeout',
+  },
+  {
     id: '2026-09-22-z-plugin-manager-cards',
     date: '2026-09-22',
     title: 'Find your way around installed plugins',

@@ -44,7 +44,7 @@ export const ENGINES_GROUPS = [
     blurb: 'Identity prompts and local generation instructions per subject type.' },
 ]
 
-/** 🖥️ Local tools — three tools, three long cards; the group is the tool. */
+/** Local tools and their shared processing/network budgets. */
 export const LOCAL_TOOLS_GROUPS = [
   { id: 'comfyui', title: 'ComfyUI', icon: Puzzle,
     blurb: 'The local generation backend — API URL, install folder, model paths.' },
@@ -55,6 +55,8 @@ export const LOCAL_TOOLS_GROUPS = [
     blurb: 'Ollama or LM Studio — captions, descriptions, framing, prompt help.' },
   { id: 'aitoolkit', title: 'ai-toolkit', icon: Dumbbell,
     blurb: 'The local trainer — install folder and its Python.' },
+  { id: 'timeouts', title: 'Time limits', icon: SlidersHorizontal,
+    blurb: 'Repair, processing and network waits for slow or busy hardware.' },
 ]
 
 /** ✍️ Captioning & quality. */

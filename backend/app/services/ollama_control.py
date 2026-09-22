@@ -13,6 +13,7 @@ through an explicit user click on the Start button (POST /api/ollama/start), so
 the app can never silently spawn a server behind the user's back.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout, processing_timeout
 
 import json
 import logging
@@ -108,6 +109,7 @@ def start_ollama(*, wait_timeout: float = _READY_TIMEOUT,
         logger.warning('ollama start: launch failed: %s', e)
         return {'ok': False, 'reachable': False, 'error': f'could not launch Ollama: {e}'}
 
+    wait_timeout = processing_timeout(wait_timeout)
     deadline = time.monotonic() + wait_timeout
     while time.monotonic() < deadline:
         if _reachable(url):
@@ -234,7 +236,7 @@ def _run_pull(model: str):
         # daemon died mid-transfer — with no read timeout at all that thread, and
         # the pull state it owns, hung until the app was restarted.
         resp = requests.post(f'{url}/api/pull', json={'name': model, 'stream': True},
-                             stream=True, timeout=(10, 300))
+                             stream=True, timeout=network_timeout((10, 300)))
         if resp.status_code >= 400:
             _finish_pull('error', error=f'Ollama rejected the pull (HTTP {resp.status_code})')
             return

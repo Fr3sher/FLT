@@ -55,6 +55,8 @@ from PIL import Image, ImageOps
 from sqlalchemy import and_, case, func, or_, text
 
 from .. import config as cfg
+from ..generation_limits import improve_timeout_seconds
+from ..timeout_settings import processing_timeout
 from ..extensions import db
 from ..models import (BankDupDistinct, BankImage, FaceDataset, FaceDatasetImage,
                       ImageBank)
@@ -8951,7 +8953,7 @@ def _await_queue_job(job_id, timeout, *, should_cancel=None):
     while True:
         db.session.rollback()
         row = ImageGenerationQueue.query.filter_by(job_id=job_id).first()
-        if row is not None and row.status in ('completed', 'failed', 'cancelled'):
+        if row is not None and row.status in ('completed', 'failed', 'cancelled', 'stalled', 'cancel_requested'):
             return row.status, row.result_filename, row.error_message
         if should_cancel is not None and should_cancel():
             return 'cancelled', None, None
@@ -9134,6 +9136,13 @@ def _improve_job(bank_id, engine, statuses=None, ids=None):
                 # GPU round-trip runs: the poll below reads across threads, and a
                 # held SQLite lock is how a long pass starves everything else.
                 db.session.commit()
+                timeout = improve_timeout_seconds()
+                timeout_metadata = {}
+                # Preserve the original 15-minute worker limit at defaults;
+                # explicitly changed improve budgets must reach that worker.
+                if (timeout != _IMPROVE_TIMEOUT_SECONDS
+                        or processing_timeout(_IMPROVE_TIMEOUT_SECONDS) != _IMPROVE_TIMEOUT_SECONDS):
+                    timeout_metadata['processing_timeout_seconds'] = 0 if math.isinf(timeout) else timeout
                 try:
                     job_id = fds._enqueue_improve(
                         engine, user_id=bank.user_id, source=row,
@@ -9141,7 +9150,7 @@ def _improve_job(bank_id, engine, statuses=None, ids=None):
                         label=None, dataset=None,
                         extra_metadata={'is_bank_improve': True,
                                         'bank_id': bank_id,
-                                        'bank_image_id': row.id})
+                                        'bank_image_id': row.id, **timeout_metadata})
                 except Exception as exc:
                     logger.warning('bank improve: image %s could not be queued: %s',
                                    rid, exc)
@@ -9149,7 +9158,7 @@ def _improve_job(bank_id, engine, statuses=None, ids=None):
                     bank_jobs.bump(job)
                     continue
                 status, filename, err = _await_queue_job(
-                    job_id, _IMPROVE_TIMEOUT_SECONDS,
+                    job_id, timeout,
                     should_cancel=lambda: bank_jobs.cancelled(job))
                 if status != 'completed':
                     if status != 'cancelled':

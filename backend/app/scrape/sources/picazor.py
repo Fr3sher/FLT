@@ -17,6 +17,7 @@ API publique (contrat des sources de scraping) :
     download(url, dest_path) -> (ok, final_filename, error)
 Aucune des deux ne lève : toute exception est capturée et convertie en message.
 """
+from ...timeout_settings import network_timeout
 import logging
 import math
 import os
@@ -137,7 +138,7 @@ def _request_html(url: str):
 
     try:
         response = cf_requests.get(
-            url, headers=_HEADERS, impersonate="chrome", timeout=HTTP_TIMEOUT
+            url, headers=_HEADERS, impersonate="chrome", timeout=network_timeout(HTTP_TIMEOUT)
         )
     except Exception as e:  # réseau, TLS, timeout...
         logger.warning("Picazor: échec requête %s: %s", url, e)
@@ -427,7 +428,7 @@ def download(url, dest_path):
         try:
             response = cf_requests.get(
                 resolved_url, headers=_HEADERS, impersonate="chrome",
-                timeout=DOWNLOAD_TIMEOUT, stream=True,
+                timeout=network_timeout(DOWNLOAD_TIMEOUT), stream=True,
             )
         except Exception as e:
             logger.warning("Picazor download: échec requête %s: %s", resolved_url, e)

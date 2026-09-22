@@ -4,6 +4,7 @@ This is the same upstream used by the portable launcher. No system installer,
 PATH changes, administrator rights, or packages installed into the host Python.
 The GitHub asset digest is mandatory; an unverified archive is never executed.
 """
+from ..timeout_settings import network_timeout, processing_timeout
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
@@ -83,7 +84,7 @@ def _valid_python(python):
             [str(python), '-I', '-c',
              'import sys,ssl,venv,ensurepip; '
              'sys.exit(0 if sys.version_info[:2] == (3,12) else 1)'],
-            capture_output=True, timeout=20,
+            capture_output=True, timeout=processing_timeout(20),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -91,7 +92,7 @@ def _valid_python(python):
 
 
 def _asset(triple):
-    with requests.get(_RELEASE_API, headers=_HEADERS, timeout=(15, 45)) as response:
+    with requests.get(_RELEASE_API, headers=_HEADERS, timeout=network_timeout((15, 45))) as response:
         response.raise_for_status()
         release = response.json()
     pattern = re.compile(
@@ -115,7 +116,7 @@ def _download(asset, destination):
     digest = hashlib.sha256()
     size = 0
     with requests.get(asset['browser_download_url'], headers=_HEADERS,
-                      timeout=(15, 60), stream=True) as response:
+                      timeout=network_timeout((15, 60)), stream=True) as response:
         response.raise_for_status()
         final = urlsplit(response.url)
         if final.scheme != 'https' or final.hostname not in (

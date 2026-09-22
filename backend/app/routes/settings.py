@@ -1,4 +1,5 @@
 """Settings API: config/secrets CRUD + capability probes."""
+from ..timeout_settings import network_timeout
 import os
 import sys
 
@@ -659,7 +660,7 @@ def update_check():
         out['current_sha'] = sha
     try:
         r = requests.get(f'https://api.github.com/repos/{repo}/releases/latest',
-                         timeout=6, headers={'Accept': 'application/vnd.github+json'})
+                         timeout=network_timeout(6), headers={'Accept': 'application/vnd.github+json'})
         if r.status_code == 200:
             j = r.json()
             latest = (j.get('tag_name') or '').lstrip('vV').strip()

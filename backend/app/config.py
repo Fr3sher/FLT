@@ -105,7 +105,13 @@ DEFAULTS = {
                 'local_queue_limit': 1000,
                 # Per submitted ComfyUI prompt. Zero removes the elapsed-time
                 # deadline; cancellation and worker-health checks still apply.
-                'generation_timeout_minutes': 15},
+                'generation_timeout_minutes': 15,
+                'repair_timeout_minutes': 5,
+                'improve_timeout_minutes': 30},
+    # Factors preserve each operation's existing budget (including batch-size
+    # allowances). They apply at execution/transport boundaries, not to polling
+    # intervals, retry counts or the grace period after an explicit Stop.
+    'timeouts': {'processing_multiplier': 1.0, 'network_multiplier': 1.0},
     'ollama': {'url': 'http://127.0.0.1:11434', 'vision_model': 'huihui_ai/qwen3-vl-abliterated:8b-instruct',  # -instruct, NOT ':8b' (=thinking): see get_vision_model()
                # How many vision calls a bank pass keeps in flight. 4 is the
                # measured knee; see services/vision_pool.py for the numbers.

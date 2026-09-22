@@ -485,10 +485,12 @@ def _poll_outputs(prompt_id, timeout=None):
     """
     from .utils.comfyui import ComfyHistoryHealth, get_comfyui_history_probe
     from .generation_limits import generation_timeout_seconds
+    from .timeout_settings import network_timeout
 
     if timeout is None:
         timeout = generation_timeout_seconds()
     deadline = time.monotonic() + timeout
+    unhealthy_grace = network_timeout(COMFYUI_UNHEALTHY_GRACE_SECONDS)
     unhealthy_since = None
     cancel_event = _cancel_event(prompt_id)
     try:
@@ -509,7 +511,7 @@ def _poll_outputs(prompt_id, timeout=None):
                 # A shorter test/override timeout does not make an unhealthy
                 # history trustworthy. Either threshold means the remote state
                 # is unconfirmed and must be durably paused, never failed.
-                if (now - unhealthy_since >= COMFYUI_UNHEALTHY_GRACE_SECONDS
+                if (now - unhealthy_since >= unhealthy_grace
                         or now >= deadline):
                     return None, _pause_unconfirmed_comfyui_prompt(
                         prompt_id, probe.detail or 'ComfyUI history unhealthy')
@@ -1460,7 +1462,11 @@ class JobQueueManager:
         else:
             try:
                 from .generation_limits import generation_timeout_seconds
-                filename, failed = _poll_outputs(prompt_id, generation_timeout_seconds())
+                try:
+                    timeout_metadata = json.loads(job.job_metadata or '{}')
+                except (TypeError, ValueError):
+                    timeout_metadata = None
+                filename, failed = _poll_outputs(prompt_id, generation_timeout_seconds(timeout_metadata))
             except Exception as exc:
                 logger.exception('job_queue: poll for job %s failed', job.job_id)
                 # A thrown poll has no trustworthy remote terminal observation.

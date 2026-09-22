@@ -164,6 +164,15 @@ export const SETTINGS_FIELD_TOPICS = [
 
 
   // local-tools
+  setting('comfyui.repair_timeout_minutes', 'local-tools', 'klein-repair-timeout',
+    'Klein repair and watermark cleaning time limit',
+    ['klein', 'repair', 'brush', 'clean', 'timeout', 'five minutes', 'slow hardware']),
+  setting('comfyui.improve_timeout_minutes', 'local-tools', 'bank-improve-timeout',
+    'Bank upscale and improve wait', ['bank', 'upscale', 'improve', 'timeout']),
+  setting('timeouts.processing_multiplier', 'local-tools', 'processing-timeout-multiplier',
+    'Processing timeout multiplier', ['timeout', 'captioning', 'analysis', 'model loading', 'hardware load']),
+  setting('timeouts.network_multiplier', 'local-tools', 'network-timeout-multiplier',
+    'Network timeout multiplier', ['timeout', 'network', 'connection', 'download', 'service health']),
   setting('comfyui.api_url', 'local-tools', 'comfyui-api-url', 'ComfyUI API URL',
     ['comfyui', 'api', 'url', 'klein', 'studio', 'local']),
   setting('comfyui.base_dir', 'local-tools', 'comfyui-base-dir', 'ComfyUI install directory',

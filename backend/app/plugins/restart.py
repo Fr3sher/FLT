@@ -6,6 +6,7 @@ window in which a background scheduler could start work before the exit. A
 failed safety check or failed scheduling releases everything immediately.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import errno
 import logging
@@ -189,7 +190,7 @@ def _require_comfy_idle():
         # Windows may take about two seconds to report a refused loopback
         # connection. A shorter budget turns that proof of absence into an
         # unknown timeout and blocks an explicitly skipped local ComfyUI.
-        response = requests.get(f'{url}/queue', timeout=(3, 2), allow_redirects=False)
+        response = requests.get(f'{url}/queue', timeout=network_timeout((3, 2)), allow_redirects=False)
         data = response.json() if response.status_code == 200 else None
     except requests.ConnectionError as exc:
         # A user who explicitly skipped a local, uninstalled ComfyUI must still

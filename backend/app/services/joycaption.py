@@ -7,6 +7,7 @@ caption tout le dataset en UN seul chargement de modèle (batch), sinon recharge
 le caller (`face_dataset_service.caption_images`) retombe sur Qwen3-VL (ou honore le
 backend choisi dans les réglages)."""
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 
 import collections
 import json
@@ -187,7 +188,7 @@ def caption_images_joycaption(paths, prompt: str | None = None,
     except OSError:
         pass
     try:
-        proc.wait(timeout=timeout)
+        proc.wait(timeout=processing_timeout(timeout))
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()

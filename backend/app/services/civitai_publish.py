@@ -59,6 +59,7 @@ Uploads take minutes on a home uplink, so both flows run as background jobs
 the tests drive, with the network replaced through `_transport`.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import json
 import logging
@@ -182,7 +183,7 @@ def _transport(method, url, headers=None, data=None, json_body=None, timeout=_TI
     raises CivitaiPublishError('network')."""
     try:
         resp = requests.request(method, url, headers=headers, data=data,
-                                json=json_body, timeout=timeout)
+                                json=json_body, timeout=network_timeout(timeout))
     except requests.RequestException as e:
         raise CivitaiPublishError(
             'network', 'Civitai did not answer - check your connection and try again.') from e

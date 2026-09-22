@@ -5,6 +5,7 @@ bearer auth on /api/* except /api/img/ and /api/files/ (public, path-restricted)
 job_config is stored verbatim and executed by the pod's worker, so the config
 built by lora_training.build_job_config() is submitted as-is (with cloud
 overrides applied by the orchestrator)."""
+from ..timeout_settings import network_timeout
 import logging
 import os
 import posixpath
@@ -136,7 +137,7 @@ class RemoteAiToolkit:
         headers = kwargs.pop('headers', {})
         headers.setdefault('Authorization', f'Bearer {self.token}')
         return requests.request(method, f'{self.base_url}{path}',
-                                headers=headers, timeout=timeout, **kwargs)
+                                headers=headers, timeout=network_timeout(timeout), **kwargs)
 
     def _json(self, method, path, **kwargs):
         r = self._request(method, path, **kwargs)

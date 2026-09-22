@@ -4,6 +4,7 @@
 Sans dépendance vers `routes`/`download_service` → importable par les deux
 (pas de cycle). Voir routes.py pour le contexte sécurité (admin-only, SSRF).
 """
+from ..timeout_settings import network_timeout
 import sys
 import socket
 import ipaddress
@@ -181,7 +182,7 @@ def _download_with_ytdlp(url, dest_template):
         '--no-part',
         '--no-continue',
         '--max-filesize', str(MAX_DRIVER_BYTES),
-        '--socket-timeout', str(SOCKET_TIMEOUT),
+        '--socket-timeout', str(network_timeout(SOCKET_TIMEOUT)),
         *fmt_args,
         '-o', dest_template,
         '--', url,
@@ -193,7 +194,7 @@ def _download_with_ytdlp(url, dest_template):
             cmd,
             capture_output=True,
             text=True,
-            timeout=DOWNLOAD_TIMEOUT,
+            timeout=network_timeout(DOWNLOAD_TIMEOUT),
             cwd=quarantine,   # cwd isolé : un fichier planté (ffmpeg.exe…) n'atterrit pas dans COMFYUI_OUTPUT_DIR
         )
     except subprocess.TimeoutExpired:
@@ -337,7 +338,7 @@ def fetch_hardened_bytes(url, *, allowed_types, max_bytes, require_image_magic=F
         return False, None, None, 'no_curl'
     host = urlparse(url).hostname or ''
     try:
-        r = cf_requests.get(url, impersonate='chrome', timeout=20, stream=True,
+        r = cf_requests.get(url, impersonate='chrome', timeout=network_timeout(20), stream=True,
                             allow_redirects=False,
                             headers={'Referer': f'https://{host}/', 'Accept': '*/*'})
     except Exception as e:

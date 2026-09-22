@@ -22,6 +22,7 @@ Dataset Studio, config-driven and slimmed:
     `invalidate_model_caches`, `get_model_folder_paths`, `unload_ollama_model`.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import errno
 import glob
@@ -556,7 +557,7 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
         # try timed out the same way).
         response = requests.post(
             urljoin(api_addr, "/prompt"), json=payload, headers=headers,
-            timeout=(10, 120), allow_redirects=False)
+            timeout=network_timeout((10, 120)), allow_redirects=False)
         response.raise_for_status()
         status = getattr(response, 'status_code', None)
         if type(status) is not int or not 200 <= status < 300:
@@ -613,7 +614,7 @@ def get_comfyui_history_probe(prompt_id, worker_url=None) -> ComfyHistoryProbe:
     api_addr = worker_url or api_address()
     try:
         response = requests.get(
-            urljoin(api_addr, f'/history/{prompt_id}'), timeout=5, allow_redirects=False)
+            urljoin(api_addr, f'/history/{prompt_id}'), timeout=network_timeout(5), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         if type(status) is not int:
             return ComfyHistoryProbe(ComfyHistoryHealth.UNHEALTHY,
@@ -690,7 +691,7 @@ def comfyui_prompt_is_absent(prompt_id, worker_url=None):
     try:
         api_addr = worker_url or api_address()
         response = requests.get(
-            urljoin(api_addr, '/queue'), timeout=3, allow_redirects=False)
+            urljoin(api_addr, '/queue'), timeout=network_timeout(3), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         if type(status) is not int or not 200 <= status < 300:
             return None
@@ -727,7 +728,7 @@ def cancel_comfyui_prompt_state(prompt_id, client_id, worker_url=None) -> ComfyP
 
     try:
         response = requests.get(
-            urljoin(api_addr, '/queue'), timeout=3, allow_redirects=False)
+            urljoin(api_addr, '/queue'), timeout=network_timeout(3), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         if type(status) is not int or not 200 <= status < 300:
             return ComfyPromptState.UNKNOWN
@@ -744,7 +745,7 @@ def cancel_comfyui_prompt_state(prompt_id, client_id, worker_url=None) -> ComfyP
             return ComfyPromptState.UNKNOWN
         if any(exact(entry) for entry in pending):
             response = requests.post(
-                urljoin(api_addr, '/queue'), json={'delete': [prompt_id]}, timeout=3,
+                urljoin(api_addr, '/queue'), json={'delete': [prompt_id]}, timeout=network_timeout(3),
                 allow_redirects=False)
             status = getattr(response, 'status_code', None)
             return (ComfyPromptState.DELETED if type(status) is int and 200 <= status < 300
@@ -777,7 +778,7 @@ def _running_entries(worker_url=None):
     # repo measured 3-second /queue timeouts two in a row while the render
     # was alive (ComfyQueueVerdict). Asking to stop that render is the one
     # read that must survive it.
-    response = requests.get(urljoin(api_addr, '/queue'), timeout=(3, 10), allow_redirects=False)
+    response = requests.get(urljoin(api_addr, '/queue'), timeout=network_timeout((3, 10)), allow_redirects=False)
     status = getattr(response, 'status_code', None)
     if type(status) is not int or not 200 <= status < 300:
         return None
@@ -836,7 +837,7 @@ def interrupt_own_prompt(prompt_id, client_id, worker_url=None) -> str:
         # older build ignores the body and stops what runs, which the GET
         # just verified is ours.
         response = requests.post(urljoin(api_addr, '/interrupt'), json={'prompt_id': str(prompt_id)},
-                                 timeout=(3, 10), allow_redirects=False)
+                                 timeout=network_timeout((3, 10)), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         return 'interrupted' if type(status) is int and 200 <= status < 300 else 'unknown'
     except requests.RequestException as exc:
@@ -863,7 +864,7 @@ def fetch_output_image_bytes(filename, subfolder='', timeout=30):
     try:
         qs = urlencode({'filename': filename, 'subfolder': subfolder or '', 'type': 'output'})
         url = urljoin(api_address(), f"/view?{qs}")
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(url, timeout=network_timeout(timeout))
         response.raise_for_status()
         return response.content
     except Exception as e:
@@ -1161,7 +1162,7 @@ def _fetch_object_info(timeout=None, force=False):
     read_budget = int(timeout) if timeout else object_info_timeout()
     try:
         resp = requests.get(urljoin(addr, '/object_info'),
-                            timeout=(_OBJECT_INFO_CONNECT_TIMEOUT, read_budget))
+                            timeout=network_timeout((_OBJECT_INFO_CONNECT_TIMEOUT, read_budget)))
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -1535,7 +1536,7 @@ def free_comfyui_vram(worker_url=None, timeout=10) -> ComfyVramFreeVerdict:
         response = requests.post(
             f'{api_addr}/free',
             json={'unload_models': True, 'free_memory': True},
-            timeout=timeout,
+            timeout=network_timeout(timeout),
             allow_redirects=False,
         )
     except (requests.RequestException, OSError) as exc:
@@ -2887,7 +2888,7 @@ def check_ollama_running(host="127.0.0.1", port=11434):
     """Checks if Ollama is running by connecting to its port."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(1)
+            s.settimeout(network_timeout(1))
             return s.connect_ex((host, port)) == 0
     except Exception as e:
         logger.error(f"Error checking Ollama status: {e}")
@@ -2937,7 +2938,7 @@ def fetch_node_info(class_type, timeout=10, worker_url=None):
     if not api or not class_type:
         return None
     try:
-        r = requests.get(f'{api}/object_info/{class_type}', timeout=timeout)
+        r = requests.get(f'{api}/object_info/{class_type}', timeout=network_timeout(timeout))
         if r.status_code != 200:
             return None
         data = r.json() or {}

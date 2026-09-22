@@ -50,6 +50,7 @@ own and never read these keys — see ``setup_installer._bank_semantic_install_p
 and ``test_setup_installer.py``. That separation is the whole reason it is safe
 to point the semantic engine at someone's ai-toolkit venv.
 """
+from ..timeout_settings import processing_timeout
 import json
 import os
 import subprocess
@@ -211,7 +212,7 @@ def _run_probe(python: str):
         proc = subprocess.run(
             infer_env.worker_argv(python, '-c', _PROBE_CODE),
             capture_output=True, text=True,
-            encoding='utf-8', errors='replace', timeout=PROBE_TIMEOUT,
+            encoding='utf-8', errors='replace', timeout=processing_timeout(PROBE_TIMEOUT),
             env=infer_env.worker_env(python),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except Exception:      # noqa: BLE001 — OSError, TimeoutExpired, anything

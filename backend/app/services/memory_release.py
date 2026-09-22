@@ -25,6 +25,7 @@ acknowledges the request and unloads on its own loop a moment later, so the
 reading is taken after a short settle and the numbers are the OS's.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import gc
 import logging
@@ -63,7 +64,7 @@ def comfyui_queue_busy():
         api_addr = (api_address() or '').rstrip('/')
         if not api_addr:
             return None
-        resp = requests.get(f'{api_addr}/queue', timeout=(2, 4), allow_redirects=False)
+        resp = requests.get(f'{api_addr}/queue', timeout=network_timeout((2, 4)), allow_redirects=False)
         if resp.status_code != 200:
             return None
         queue = resp.json()

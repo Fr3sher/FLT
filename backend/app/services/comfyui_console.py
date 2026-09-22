@@ -16,6 +16,7 @@ for a couple of seconds and shared, because the queue dock, the banner and the
 clip card all ask at once. Read-only by construction; it never posts anything.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import logging
 import re
@@ -199,7 +200,7 @@ def _running_prompt(api_url):
     queued behind another would be the other one's, read as ours.
     """
     try:
-        response = requests.get(api_url.rstrip('/') + '/queue', timeout=_TIMEOUT,
+        response = requests.get(api_url.rstrip('/') + '/queue', timeout=network_timeout(_TIMEOUT),
                                 allow_redirects=False)
         if not 200 <= response.status_code < 300:
             return None
@@ -220,7 +221,7 @@ def _running_prompt(api_url):
 def _read(api_url) -> dict:
     url = api_url.rstrip('/') + _RAW_LOGS_PATH
     try:
-        response = requests.get(url, timeout=_TIMEOUT, allow_redirects=False)
+        response = requests.get(url, timeout=network_timeout(_TIMEOUT), allow_redirects=False)
     except requests.ReadTimeout:
         return {'available': False, 'reason': 'ComfyUI is slow to answer right now.'}
     except requests.RequestException:

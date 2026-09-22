@@ -5,6 +5,7 @@ same isolation as Bank workers, so DLL/import failures are not hidden by a
 different launch environment. A successful synthetic check is not a full
 CLIP/SigLIP model validation.
 """
+from ..timeout_settings import processing_timeout
 from contextlib import nullcontext
 import json
 import subprocess
@@ -100,7 +101,7 @@ def check(path='', profile=None):
             proc = subprocess.run(
                 infer_env.worker_argv(target, '-c', _CHECK_CODE, device),
                 env=infer_env.worker_env(target), capture_output=True,
-                text=True, encoding='utf-8', errors='replace', timeout=CHECK_TIMEOUT,
+                text=True, encoding='utf-8', errors='replace', timeout=processing_timeout(CHECK_TIMEOUT),
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except GpuBusyError:
         result.update(status='busy', detail='The GPU is in use or could not be reserved safely. Retry after the current work finishes.')

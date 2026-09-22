@@ -5,6 +5,7 @@ ad-hoc d'erome, avec la correction du sentinel d'erreur type -1 (auth/429/DDoS-
 Guard étaient silencieusement lus comme « aucun média »).
 
 Sécurité : --ignore-config, shell=False, args en liste, jamais --exec."""
+from ...timeout_settings import network_timeout
 import json
 import os
 import subprocess
@@ -136,7 +137,7 @@ def _run_simulate(url, max_items, cookies, extra_opts, image_range=None):
     cmd += ['--', url]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=GDL_TIMEOUT, shell=False)
+                              timeout=network_timeout(GDL_TIMEOUT), shell=False)
     except subprocess.TimeoutExpired:
         return None, GdlError(f"gallery-dl: timed out ({GDL_TIMEOUT}s).", 'network')
     except Exception as e:
@@ -229,7 +230,7 @@ def enumerate(url, *, platform='generic', max_items=DEFAULT_MAX_ITEMS,
     les items déjà collectés (`partial=True` sur le résultat) plutôt qu'une erreur
     — un scan tronqué reste plus utile qu'un 502 après plusieurs minutes."""
     if deadline is None:
-        deadline = time.monotonic() + DEFAULT_SCAN_BUDGET_SECONDS
+        deadline = time.monotonic() + network_timeout(DEFAULT_SCAN_BUDGET_SECONDS)
     try:
         entries, err = _run_simulate(url, max_items, cookies, extra_opts,
                                      image_range=image_range)
@@ -351,7 +352,7 @@ def download(url, dest_dir, filename, *, cookies=None, extra_opts=None):
         os.makedirs(dest_dir, exist_ok=True)
         before = set(os.listdir(dest_dir))
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=DOWNLOAD_TIMEOUT, shell=False)
+                              timeout=network_timeout(DOWNLOAD_TIMEOUT), shell=False)
     except subprocess.TimeoutExpired:
         # NB : un éventuel fichier partiel n'est pas nettoyé ici (hors périmètre).
         return False, None, GdlError("gallery-dl: download timed out.", 'network')

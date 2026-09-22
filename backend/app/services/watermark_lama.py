@@ -8,6 +8,7 @@ l'image reste identique. Sert la V1 de la correction automatique des watermarks 
 bbox HORS bande de bord mais d'aire <= 10% sont repeintes ici (les bbox de bord sont
 croppees en PIL pur, sans ce module)."""
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 import json
 import logging
 import math
@@ -54,7 +55,7 @@ def _cuda_available() -> bool:
             infer_env.worker_argv(
                 python, '-c',
                 'import torch; print("1" if torch.cuda.is_available() else "0")'),
-            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=20,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=processing_timeout(20),
             env=infer_env.worker_env(python),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
@@ -95,7 +96,7 @@ def _run_lama_payload(payload, timeout: int = 300) -> tuple[bool, dict | None]:
         proc = subprocess.run(infer_env.worker_argv(_lama_python(), _SCRIPT),
                               input=payload_json,
                               capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=timeout,
+                              errors='replace', timeout=processing_timeout(timeout),
                               env=infer_env.worker_env(_lama_python()),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (subprocess.TimeoutExpired, OSError) as e:
@@ -172,7 +173,7 @@ def inpaint_batch(jobs, *, device: str, timeout: int = 900) -> dict:
         proc = subprocess.run(infer_env.worker_argv(lama_python(), _SCRIPT),
                               input=payload_json,
                               capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=timeout,
+                              errors='replace', timeout=processing_timeout(timeout),
                               env=infer_env.worker_env(lama_python()),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (subprocess.TimeoutExpired, OSError) as e:

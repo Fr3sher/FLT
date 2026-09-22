@@ -1,5 +1,6 @@
 """Local acquisition client. Installation credentials never cross the browser API."""
 from __future__ import annotations
+from ...timeout_settings import network_timeout
 
 import base64
 import hashlib
@@ -101,7 +102,7 @@ class CommerceClient:
         session.trust_env = False  # Neither .netrc nor environment proxies supply credentials.
         try:
             response = session.request(method, self.origin + path, json=data, headers=headers,
-                                       timeout=(10, 30), stream=True, allow_redirects=False)
+                                       timeout=network_timeout((10, 30)), stream=True, allow_redirects=False)
             if response.status_code not in {200, 201}:
                 response.close()
                 raise StoreError('The commerce service refused the request or is unavailable. Installed plugins continue to work.')

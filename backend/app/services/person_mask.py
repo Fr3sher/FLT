@@ -6,6 +6,7 @@ Sert le MASKED TRAINING (méthode jandordoe) : un masque par image d'entraîneme
 le fond pondéré à mask_min_value (0.1) côté ai-toolkit → l'identité se lie au
 sujet, pas au décor."""
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 import json
 import logging
 import os
@@ -43,7 +44,7 @@ def generate_person_masks(image_paths, out_dir, timeout: int = 1200) -> dict:
         proc = subprocess.run(infer_env.worker_argv(_mask_python(), _SCRIPT),
                               input=payload,
                               capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=timeout,
+                              errors='replace', timeout=processing_timeout(timeout),
                               env=infer_env.worker_env(_mask_python()),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (subprocess.TimeoutExpired, OSError) as e:

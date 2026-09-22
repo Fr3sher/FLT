@@ -25,6 +25,7 @@ puis passe par le pipeline /scan habituel (aucune route dédiée).
 Sécurité : seuls des hôtes reddit sont contactés (jeton + API) ; les images sont
 téléchargées par le flux d'import durci (fetch_hardened_bytes, anti-SSRF, magic-bytes).
 """
+from ...timeout_settings import network_timeout
 import logging
 import os
 import time
@@ -117,7 +118,7 @@ def _canonical_reddit_url(url: str) -> str:
         return url
     if is_shortener or '/s/' in p.path:
         try:
-            r = requests.get(url, headers={'User-Agent': _UA}, timeout=10,
+            r = requests.get(url, headers={'User-Agent': _UA}, timeout=network_timeout(10),
                              allow_redirects=True)
             tgt = urlparse(r.url)
             if _is_reddit_host((tgt.hostname or '').lower()):  # anti-redirection exotique
@@ -291,7 +292,7 @@ def _get_token():
             _TOKEN_URL,
             data={'grant_type': 'https://oauth.reddit.com/grants/installed_client',
                   'device_id': 'DO_NOT_TRACK_THIS_DEVICE'},
-            auth=(cid, ''), headers={'User-Agent': _UA}, timeout=15)
+            auth=(cid, ''), headers={'User-Agent': _UA}, timeout=network_timeout(15))
         r.raise_for_status()
         j = r.json()
     except (requests.RequestException, ValueError) as e:
@@ -334,7 +335,7 @@ def _api_get(api_path: str, params: dict, token: str) -> dict:
     def _do(tok):
         return requests.get(_API_BASE + api_path, params=params,
                             headers={'User-Agent': _UA, 'Authorization': f'Bearer {tok}'},
-                            timeout=_HTTP_TIMEOUT)
+                            timeout=network_timeout(_HTTP_TIMEOUT))
     r = _do(token)
     if r.status_code == 401:
         _token_cache['exp'] = 0.0            # force refresh

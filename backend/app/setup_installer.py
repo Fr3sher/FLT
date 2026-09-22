@@ -33,6 +33,7 @@ one venv fail 6/6 with WinError 2 / Errno 13). Each pip run also retries once on
 transient file-lock error (an antivirus holding a fresh file). Model downloads and the
 ollama pull don't touch a venv, so they stay parallel.
 """
+from .timeout_settings import network_timeout, processing_timeout
 import contextlib
 import importlib
 import json
@@ -1436,7 +1437,7 @@ def _pip_version(python, *, isolated_env=None):
         cmd = ([python, '-I', '-m', 'pip', '--isolated', '--version'] if isolated_env is not None
                else [python, '-m', 'pip', '--version'])
         proc = subprocess.run(cmd, env=isolated_env,
-                              capture_output=True, text=True, timeout=30,
+                              capture_output=True, text=True, timeout=processing_timeout(30),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (OSError, subprocess.SubprocessError):
         return None
@@ -1517,7 +1518,7 @@ def _python_minor(exe: str):
     try:
         proc = subprocess.run(
             [exe, '-I', '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=processing_timeout(15),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (OSError, subprocess.SubprocessError):
         return None
@@ -1540,7 +1541,7 @@ def _base_python_candidates() -> list:
                 try:
                     p = subprocess.run([launcher, f'-{tag}', '-c',
                                         'import sys; print(sys.executable)'],
-                                       capture_output=True, text=True, timeout=15,
+                                       capture_output=True, text=True, timeout=processing_timeout(15),
                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                     exe = (p.stdout or '').strip()
                     if p.returncode == 0 and exe:
@@ -1957,7 +1958,7 @@ def _onnxruntime_provided(python) -> bool:
         return False
     try:
         proc = subprocess.run([python, '-c', 'import onnxruntime'],
-                              capture_output=True, timeout=_ONNXRUNTIME_PROBE_TIMEOUT,
+                              capture_output=True, timeout=processing_timeout(_ONNXRUNTIME_PROBE_TIMEOUT),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         return True    # slow import == a real runtime is loading; do not overwrite it
@@ -2028,7 +2029,7 @@ def _verify_capability_import(action, python, *, log_action=None) -> bool:
         proc = subprocess.run(infer_env.worker_argv(python, '-c', expr),
                               capture_output=True, text=True,
                               encoding='utf-8', errors='replace',
-                              timeout=_WARM_IMPORT_TIMEOUT,
+                              timeout=processing_timeout(_WARM_IMPORT_TIMEOUT),
                               env=infer_env.worker_env(python),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
@@ -2441,7 +2442,7 @@ def _clone_node_pack(action, spec, dest) -> bool:
     try:
         proc = subprocess.run([git, 'clone', '--depth', '1', spec['repo'], dest],
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, timeout=_GIT_CLONE_TIMEOUT_S)
+                              text=True, timeout=network_timeout(_GIT_CLONE_TIMEOUT_S))
     except (OSError, subprocess.SubprocessError) as e:
         _append(action, f'git clone failed ({e}) — falling back to a ZIP download')
         return False
@@ -2466,7 +2467,7 @@ def _zip_node_pack(action, spec, dest) -> bool:
     tmp_dir = tempfile.mkdtemp(prefix='.lds_nodepack_', dir=parent)
     archive = os.path.join(tmp_dir, 'pack.zip')
     try:
-        with requests.get(spec['zip'], stream=True, timeout=_ZIP_TIMEOUT,
+        with requests.get(spec['zip'], stream=True, timeout=network_timeout(_ZIP_TIMEOUT),
                           allow_redirects=True) as resp:
             if resp.status_code >= 400:
                 _append(action, f'HTTP {resp.status_code} downloading the ZIP')
@@ -2703,7 +2704,7 @@ def _run_ollama_model(action) -> int:
             json={'model': model, 'stream': True},
             stream=True,
             allow_redirects=False,
-            timeout=(_OLLAMA_CONNECT_TIMEOUT, _OLLAMA_READ_TIMEOUT),
+            timeout=network_timeout((_OLLAMA_CONNECT_TIMEOUT, _OLLAMA_READ_TIMEOUT)),
         )
         run = _runs.get(action)
         if run is not None:
@@ -2857,7 +2858,7 @@ def _verify_shot_detect_import(action, python) -> bool:
                               infer_env.worker_argv(
                                   python, '-c', 'import torch, transnetv2_pytorch, av'),
                               capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
+                              errors='replace', timeout=processing_timeout(_WARM_IMPORT_TIMEOUT),
                               env=infer_env.worker_env(python),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
@@ -3212,7 +3213,7 @@ def _managed_env_valid(python):
         result = subprocess.run(
             [python, '-I', '-c', 'import sys,json,pip; '
              'print(json.dumps([list(sys.version_info[:2]),sys.prefix,sys.base_prefix]))'],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, timeout=processing_timeout(20),
             env=managed_python.subprocess_env(),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         version, prefix, base = json.loads(result.stdout)
@@ -3408,7 +3409,7 @@ def _fetch_companions(action, spec, companions) -> int:
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             _append(action, f"downloading {comp['url']}")
             _append(action, f'-> {dest}')
-            with requests.get(comp['url'], stream=True, timeout=(10, 120),
+            with requests.get(comp['url'], stream=True, timeout=network_timeout((10, 120)),
                               headers=headers, allow_redirects=True) as resp:
                 if resp.status_code in (401, 403):
                     _log_denied(action, resp.status_code,
@@ -3518,7 +3519,7 @@ def _run_primary_download(action) -> int:
     _append(action, f'-> {dest}')
     part = dest + '.part'
     try:
-        with requests.get(spec['url'], stream=True, timeout=(10, 120),
+        with requests.get(spec['url'], stream=True, timeout=network_timeout((10, 120)),
                           headers=headers, allow_redirects=True) as resp:
             if resp.status_code in (401, 403):
                 if spec.get('gated') or spec.get('license_url'):

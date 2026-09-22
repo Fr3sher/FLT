@@ -47,8 +47,10 @@ def test_slow_generation_can_finish_past_the_old_fifteen_minute_deadline(app, mo
 
 
 @pytest.mark.parametrize('unhealthy', [False, True])
-def test_no_time_limit_keeps_cancellation_and_worker_health_protection(app, monkeypatch, unhealthy):
-    cfg.save_config({'comfyui': {'generation_timeout_minutes': 0}})
+@pytest.mark.parametrize('network_factor', [1, 3])
+def test_no_time_limit_keeps_cancellation_and_worker_health_protection(app, monkeypatch, unhealthy, network_factor):
+    cfg.save_config({'comfyui': {'generation_timeout_minutes': 0},
+                     'timeouts': {'network_multiplier': network_factor}})
     clock = [0]
     cancelled = [False]
     monkeypatch.setattr(job_queue.time, 'monotonic', lambda: clock[0])
@@ -71,4 +73,5 @@ def test_no_time_limit_keeps_cancellation_and_worker_health_protection(app, monk
         db.session.commit()
         assert job_queue._poll_outputs('slow') == (None, job_queue.POLL_STALLED if unhealthy else True)
         if unhealthy:
+            assert clock[0] == (job_queue.COMFYUI_UNHEALTHY_GRACE_SECONDS + 1) * network_factor
             assert job_queue.queue_manager.get_comfyui_stalled_barrier()['prompt_id'] == 'slow'

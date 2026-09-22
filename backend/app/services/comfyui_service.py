@@ -18,6 +18,7 @@ submitted with no timeout at all. The one live submission path is
 error contract job_queue relies on — a second, unbounded door into /prompt was
 only ever a trap for the next caller.
 """
+from ..timeout_settings import network_timeout
 
 import os
 import socket
@@ -56,10 +57,10 @@ class ComfyUIService:
     def check_connection(self) -> bool:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(2)
+                s.settimeout(network_timeout(2))
                 if s.connect_ex((self.api_host, self.api_port)) != 0:
                     return False
-            r = requests.get(urljoin(cfg.get('comfyui.api_url'), "/history"), timeout=3)
+            r = requests.get(urljoin(cfg.get('comfyui.api_url'), "/history"), timeout=network_timeout(3))
             return r.status_code in (200, 404)
         except (socket.error, requests.RequestException, ConnectionError, OSError):
             return False

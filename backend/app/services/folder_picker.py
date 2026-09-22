@@ -17,6 +17,7 @@ reach it:
     list for the roots view. Backs the in-app folder browser used from the LAN /
     tablet / Linux, where a server-side native dialog makes no sense.
 """
+from ..timeout_settings import processing_timeout
 import logging
 import os
 import shutil
@@ -329,7 +330,7 @@ def open_native_folder_dialog(initial=None):
         proc = subprocess.run(
             [exe, '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass',
              '-File', tmp.name],
-            env=env, capture_output=True, timeout=NATIVE_DIALOG_TIMEOUT)
+            env=env, capture_output=True, timeout=processing_timeout(NATIVE_DIALOG_TIMEOUT))
     except subprocess.TimeoutExpired as e:
         raise NativePickerUnavailable('the folder dialog timed out') from e
     except OSError as e:  # PowerShell vanished between the which() and the run

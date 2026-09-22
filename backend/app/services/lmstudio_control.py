@@ -33,6 +33,7 @@ so the app can never
 silently start a server behind the user's back.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout, processing_timeout
 
 import logging
 import os
@@ -124,7 +125,7 @@ def _reachable(url: str, timeout: float = 2.0) -> bool:
     make the Start button report failure for a server it started perfectly.
     """
     try:
-        requests.get(f'{url}/api/v0/models', timeout=timeout)
+        requests.get(f'{url}/api/v0/models', timeout=network_timeout(timeout))
         return True
     except requests.RequestException:
         return False
@@ -175,7 +176,7 @@ def start_server(*, wait_timeout: float = _READY_TIMEOUT,
     # is the user's decision to make in LM Studio, never a side effect of a button
     # labelled Start.
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_CLI_TIMEOUT,
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=processing_timeout(_CLI_TIMEOUT),
                               stdin=subprocess.DEVNULL, check=False,
                               # Windows: no console window flashes on a click.
                               creationflags=0x08000000 if os.name == 'nt' else 0)
@@ -199,6 +200,7 @@ def start_server(*, wait_timeout: float = _READY_TIMEOUT,
 
     # Exit 0 is NOT the answer. The rule this repo already applies to installs
     # applies here: never claim success without re-running the probe.
+    wait_timeout = processing_timeout(wait_timeout)
     deadline = time.monotonic() + wait_timeout
     while time.monotonic() < deadline:
         if _reachable(url):

@@ -71,6 +71,7 @@ github.com/Merserk/dlss5-visual-enhancer). Measurements behind the constants
 and the dial choices were taken on an RTX 4090, September 2026.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout, processing_timeout
 
 import glob
 import hashlib
@@ -348,7 +349,7 @@ def clip_dimensions(path) -> tuple[int, int] | None:
         out = subprocess.run([ffprobe, '-v', 'error', '-select_streams', 'v:0',
                               '-show_entries', 'stream=width,height', '-of', 'json', str(path)],
                              capture_output=True, text=True, encoding='utf-8', errors='replace',
-                             timeout=30)
+                             timeout=processing_timeout(30))
         stream = (json.loads(out.stdout or '{}').get('streams') or [{}])[0]
         return int(stream['width']), int(stream['height'])
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
@@ -507,7 +508,7 @@ def build_comparison(left, right, *, left_label, right_label, ffmpeg=None,
         try:
             proc = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
                                   errors='replace',
-                                  timeout=timeout_s or COMPARISON_TIMEOUT_S)
+                                  timeout=processing_timeout(timeout_s or COMPARISON_TIMEOUT_S))
         except subprocess.TimeoutExpired:
             raise NeuralRenderError('building the comparison took too long and was stopped')
         except OSError as exc:
@@ -569,6 +570,7 @@ def render_video(src, dst, params, *, on_progress=None, cancel=None, timeout_s=N
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
                             text=True, encoding='utf-8', errors='replace',
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    timeout_s = processing_timeout(timeout_s)
     started = time.time()
     result = None
     error = None
@@ -630,7 +632,7 @@ def install_bridge(log=None, fetch=None) -> int:
         if fetch is None:
             import urllib.request
             req = urllib.request.Request(rel['url'], headers={'User-Agent': 'lora-dataset-studio'})
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=network_timeout(120)) as resp:
                 data = resp.read()
         else:
             data = fetch(rel['url'])

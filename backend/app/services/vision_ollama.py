@@ -8,6 +8,7 @@ the classify/caption passes of the face-dataset service can reuse it without
 duplicating the Qwen3-VL quirks.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import base64
 import logging
@@ -178,7 +179,7 @@ def describe_frames_ollama(frames, prompt, *,
         if think is not None:          # the top-level switch, as in generate_text_ollama
             payload['think'] = bool(think)
         _admit_local_ollama(url, model_name, keep_alive=keep_alive)
-        resp = requests.post(f'{url}/api/generate', json=payload, timeout=timeout)
+        resp = requests.post(f'{url}/api/generate', json=payload, timeout=network_timeout(timeout, processing=True))
         resp.raise_for_status()
         data = resp.json()
         caption = (data.get('response') or '').strip()
@@ -273,7 +274,7 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
         if think is not None:
             payload['think'] = bool(think)
         _admit_local_ollama(url, model_name, keep_alive=keep_alive)
-        resp = requests.post(f'{url}/api/generate', json=payload, timeout=timeout)
+        resp = requests.post(f'{url}/api/generate', json=payload, timeout=network_timeout(timeout, processing=True))
         resp.raise_for_status()
         data = resp.json()
         caption = (data.get('response') or '').strip()
@@ -405,7 +406,7 @@ def generate_text_ollama(prompt: str, *,
         if stop:
             payload['options']['stop'] = list(stop)
         _admit_local_ollama(url, model_name, keep_alive=keep_alive)
-        resp = requests.post(f'{url}/api/generate', json=payload, timeout=timeout)
+        resp = requests.post(f'{url}/api/generate', json=payload, timeout=network_timeout(timeout, processing=True))
         resp.raise_for_status()
         data = resp.json()
         caption = (data.get('response') or '').strip()
@@ -469,7 +470,7 @@ def unload_vision_model(*, ollama_url: str | None = None, model: str | None = No
     payload = {'model': model or get_vision_model(), 'keep_alive': 0}
     for attempt in (1, 2):
         try:
-            response = requests.post(f'{url}/api/generate', json=payload, timeout=(10, 30))
+            response = requests.post(f'{url}/api/generate', json=payload, timeout=network_timeout((10, 30)))
             status = getattr(response, 'status_code', None)
             if type(status) is int and 200 <= status < 300:
                 from .vision_keepalive import forget_lease

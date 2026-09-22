@@ -5,6 +5,7 @@ an uploaded ZIP. Each root/origin pair has its own rollback-protected metadata
 cache. Expiration can stop new downloads, never the installed application.
 """
 from __future__ import annotations
+from ...timeout_settings import network_timeout
 
 import hashlib
 import ipaddress
@@ -119,7 +120,7 @@ class _Fetcher(FetcherInterface):
             # Public metadata/archives must never inherit NETRC credentials,
             # authenticated proxies, cookies or custom CA settings from the host.
             session.trust_env = False
-            with session.get(url, headers=headers, stream=True, timeout=(10, 30), allow_redirects=False) as response:
+            with session.get(url, headers=headers, stream=True, timeout=network_timeout((10, 30)), allow_redirects=False) as response:
                 if response.status_code != 200:
                     raise DownloadHTTPError('The store download failed.', response.status_code)
                 for chunk in response.iter_content(chunk_size=65536):

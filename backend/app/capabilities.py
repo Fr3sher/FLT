@@ -5,6 +5,7 @@ feature gating elsewhere in the app. `_http_ok` is the single network seam —
 every reachability probe goes through it so tests can patch one symbol.
 `_import_ok` is the equivalent seam for the slow subprocess import-probes.
 """
+from .timeout_settings import network_timeout, processing_timeout
 import copy
 import json
 import logging
@@ -106,7 +107,7 @@ def _http_ok(url, timeout=3, reason=None, *, readiness=False) -> bool:
         request_options = {'allow_redirects': False, 'stream': True}
     resp = None
     try:
-        resp = requests.get(url, timeout=effective_timeout, **request_options)
+        resp = requests.get(url, timeout=network_timeout(effective_timeout), **request_options)
         return resp.status_code < 500
     except Exception as e:
         if isinstance(reason, dict):
@@ -139,7 +140,7 @@ def _import_ok(python, module_expr: str, timeout=_IMPORT_TIMEOUT):
                   else [python])
         isolated = infer_env.NO_USER_SITE_FLAG in prefix[1:]
         result = subprocess.run(
-            [*prefix, '-c', module_expr], capture_output=True, timeout=timeout,
+            [*prefix, '-c', module_expr], capture_output=True, timeout=processing_timeout(timeout),
             env=infer_env.worker_env(prefix[0]) if isolated else None)
         return result.returncode == 0
     except subprocess.TimeoutExpired:
@@ -403,7 +404,7 @@ def _ollama_tags(url, timeout=3) -> list:
     vision_model=no). Blanks are dropped and order is preserved. Network seam
     (patched in tests)."""
     try:
-        resp = requests.get(f'{url}/api/tags', timeout=timeout)
+        resp = requests.get(f'{url}/api/tags', timeout=network_timeout(timeout))
         if resp.status_code >= 400:
             return []
         out, seen = [], set()
@@ -643,7 +644,7 @@ def comfyui_runtime(timeout=3) -> dict:
         return {}
     out = {}
     try:
-        r = requests.get(f'{api}/system_stats', timeout=timeout)
+        r = requests.get(f'{api}/system_stats', timeout=network_timeout(timeout))
         if r.status_code == 200:
             j = r.json() or {}
             sysinfo = j.get('system') or {}
@@ -663,7 +664,7 @@ def comfyui_runtime(timeout=3) -> dict:
     except Exception:
         pass
     try:
-        r = requests.get(f'{api}/queue', timeout=timeout)
+        r = requests.get(f'{api}/queue', timeout=network_timeout(timeout))
         if r.status_code == 200:
             j = r.json() or {}
             out['queue_running'] = len(j.get('queue_running') or [])
@@ -903,7 +904,7 @@ def probe_vast() -> dict:
         return {'ok': False, 'detail': 'API key missing'}
     try:
         r = requests.get(f'{VAST_API_BASE}/users/current/',
-                         headers={'Authorization': f'Bearer {key}'}, timeout=8)
+                         headers={'Authorization': f'Bearer {key}'}, timeout=network_timeout(8))
         if r.status_code == 200:
             email = (r.json() or {}).get('email') or 'account'
             return {'ok': True, 'detail': f'connected as {email}'}
@@ -1573,7 +1574,7 @@ def gpu_vram_gb():
     try:
         proc = subprocess.run(
             ['nvidia-smi', '--query-gpu=memory.total', '--format=csv,noheader,nounits'],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=processing_timeout(5),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if proc.returncode == 0:
             first = (proc.stdout or '').strip().splitlines()
@@ -1719,7 +1720,7 @@ def gpu_compute_capability():
     try:
         proc = subprocess.run(
             ['nvidia-smi', '--query-gpu=compute_cap', '--format=csv,noheader'],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=processing_timeout(5),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if proc.returncode == 0:
             lines = (proc.stdout or '').strip().splitlines()
@@ -1739,7 +1740,7 @@ def _torch_probe(python: str, timeout=90, cwd=None):
     finds the same `.env` that `run.py` loads before training."""
     try:
         proc = subprocess.run([python, '-c', _TORCH_PROBE_CODE],
-                              capture_output=True, text=True, timeout=timeout, cwd=cwd,
+                              capture_output=True, text=True, timeout=processing_timeout(timeout), cwd=cwd,
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except Exception:
         return None
@@ -2060,7 +2061,7 @@ def detect_comfyui_folders(timeout=3) -> dict:
     if not api:
         return {}
     try:
-        r = requests.get(f'{api}/system_stats', timeout=timeout)
+        r = requests.get(f'{api}/system_stats', timeout=network_timeout(timeout))
         if r.status_code != 200:
             return {}
         return parse_comfy_argv_dirs(((r.json() or {}).get('system') or {}).get('argv'))

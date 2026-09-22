@@ -7,6 +7,7 @@ adding one is a minor change, removing or renaming one bumps
 unpromised.
 """
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 
 import logging
 import subprocess
@@ -484,7 +485,7 @@ class PluginContext:
             raise ValueError(f'plugin {self.id}: {script!r} is not inside the plugin directory')
         with environment.use(record) as python:
             return subprocess.run([python, '-s', str(script_path), *map(str, args)], capture_output=True,
-                                  text=True, timeout=timeout, env=environment.subprocess_env())
+                                  text=True, timeout=processing_timeout(timeout), env=environment.subprocess_env())
 
     # --- secrets / fetch ---------------------------------------------------------------
     def secret(self, name: str):

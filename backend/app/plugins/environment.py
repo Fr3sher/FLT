@@ -5,6 +5,7 @@ the user placed there. A success receipt is written only after the interpreter
 and the installed dependency graph have both been checked.
 """
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 
 import hashlib
 import json
@@ -268,7 +269,7 @@ def _verify_interpreter(python, env_dir):
     from ..setup_installer import _VENV_PY_MIN, _VENV_PY_MAX
     probe = subprocess.run([python, '-I', '-c',
                             'import json,sys; print(json.dumps([sys.prefix,sys.base_prefix,list(sys.version_info[:2])]))'],
-                           capture_output=True, text=True, timeout=30, env=subprocess_env())
+                           capture_output=True, text=True, timeout=processing_timeout(30), env=subprocess_env())
     try:
         prefix, base, version = json.loads(probe.stdout)
         valid = probe.returncode == 0 and Path(prefix).resolve() == env_dir.resolve() and prefix != base
@@ -306,7 +307,7 @@ def _check_cpu_package(name, version):
 
 def _check_existing_packages(python):
     result = subprocess.run([python, '-I', '-m', 'pip', '--isolated', 'list', '--format=json'],
-                            capture_output=True, text=True, timeout=60, env=subprocess_env())
+                            capture_output=True, text=True, timeout=processing_timeout(60), env=subprocess_env())
     if result.returncode != 0:
         raise EnvironmentError('The installed package inventory could not be checked. Repair the plugin environment.')
     for package in json.loads(result.stdout):

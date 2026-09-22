@@ -24,6 +24,7 @@ an image already seen. Continuation is exact even when a page is left half
 scanned: the response's ``next_cursor``/``next_skip`` name the first listing
 item NOT yet consumed, and the caches make the re-walk to that point free.
 """
+from ..timeout_settings import network_timeout
 import json
 import logging
 import threading
@@ -104,7 +105,7 @@ def _http_get_json(url, key=None):
     if key:
         headers['Authorization'] = f'Bearer {key}'
     try:
-        resp = requests.get(url, headers=headers, timeout=_TIMEOUT)
+        resp = requests.get(url, headers=headers, timeout=network_timeout(_TIMEOUT))
     except requests.RequestException as e:
         raise RuntimeError('Civitai did not answer - check your connection '
                            'and try again.') from e

@@ -7,6 +7,7 @@ ComfyUI workflow may load its own models.  Remote Ollama endpoints do not share
 this machine's GPU and are deliberately never probed or unloaded here.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import errno
 import ipaddress
@@ -599,7 +600,7 @@ def _probe_ollama(endpoint):
     failure — it simply leaves the claim to be judged on its own freshness.
     """
     try:
-        response = requests.get(f'{endpoint}/api/ps', timeout=(3, 5), allow_redirects=False)
+        response = requests.get(f'{endpoint}/api/ps', timeout=network_timeout((3, 5)), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         if type(status) is not int or not 200 <= status < 300:
             return 'unknown', set(), {}
@@ -650,7 +651,7 @@ def _post_unload(endpoint, model) -> bool:
     try:
         response = requests.post(f'{endpoint}/api/generate',
                                  json={'model': model, 'keep_alive': 0},
-                                 timeout=(10, 30), allow_redirects=False)
+                                 timeout=network_timeout((10, 30)), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         return type(status) is int and 200 <= status < 300
     except Exception as exc:

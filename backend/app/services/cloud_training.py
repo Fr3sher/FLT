@@ -10,6 +10,7 @@ failure keeps the pod recoverable until its direct Hugging Face delivery and
 licence metadata are verified; only then may completion destroy it. The local
 training path is untouched: a cloud run never sets 'training_in_progress', so
 local generation/captioning stay available."""
+from ..timeout_settings import network_timeout
 import json
 from ..utils.timestamps import naive_utcnow
 import logging
@@ -347,7 +348,7 @@ def _assert_official_base_reachable(repo_id, token, timeout=8):
         f'https://huggingface.co/api/models/{repo_id}/tree/main',
         headers={'Authorization': f'Bearer {token}'} if token else {})
     try:
-        urllib.request.urlopen(req, timeout=timeout).read(1)
+        urllib.request.urlopen(req, timeout=network_timeout(timeout)).read(1)
     except urllib.error.HTTPError as e:
         if e.code not in (401, 403):
             return                          # 404 / 5xx: not our call to make
@@ -380,7 +381,7 @@ def _assert_dense_custom_base_readable(repo_id, token, timeout=8):
         f'https://huggingface.co/api/models/{repo_id}/tree/main',
         headers={'Authorization': f'Bearer {token}'} if token else {})
     try:
-        urllib.request.urlopen(req, timeout=timeout).read(1)
+        urllib.request.urlopen(req, timeout=network_timeout(timeout)).read(1)
     except urllib.error.HTTPError as e:
         if e.code not in (401, 403):
             return

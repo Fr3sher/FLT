@@ -20,6 +20,7 @@ fail cryptically (a clone user has git by definition, so this only bites an
 unusual setup).
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout, processing_timeout
 
 import os
 import shutil
@@ -124,7 +125,7 @@ def _git(root, *args, timeout=_GIT_TIMEOUT):
     if not git:
         raise FileNotFoundError('git')
     return subprocess.run([git, '-C', str(root), *args],
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, timeout=processing_timeout(timeout))
 
 
 def current_sha(root=None):
@@ -334,7 +335,7 @@ def latest_release(repo=None, timeout=6) -> dict:
     repo = repo or _cfg_get('updates.repo') or 'perfectgf/lora-dataset-studio'
     try:
         r = requests.get(f'https://api.github.com/repos/{repo}/releases/latest',
-                         timeout=timeout, headers={'Accept': 'application/vnd.github+json'})
+                         timeout=network_timeout(timeout), headers={'Accept': 'application/vnd.github+json'})
     except requests.RequestException:
         return {'reason': 'offline or GitHub unreachable'}
     if r.status_code != 200:
@@ -540,7 +541,7 @@ def _download_file(url, dest, timeout=300, on_progress=None) -> None:
     `on_progress(downloaded, total)` fires per chunk; total is the Content-Length
     when the server sends one, else 0 (unknown — the UI shows an indeterminate bar)."""
     import requests
-    with requests.get(url, stream=True, timeout=timeout) as r:
+    with requests.get(url, stream=True, timeout=network_timeout(timeout)) as r:
         r.raise_for_status()
         total = int(r.headers.get('Content-Length') or 0)
         downloaded = 0

@@ -7,6 +7,7 @@ The caller must re-probe those classes after its separately controlled restart.
 Managed node upgrades are deliberately refused until their migration is defined.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout, processing_timeout
 
 from configparser import ConfigParser, Error as ConfigError
 from dataclasses import asdict, replace
@@ -83,7 +84,7 @@ def _target():
 def _run(python, args):
     try:
         result = subprocess.run([str(python), '-I', *args], capture_output=True,
-                                text=True, timeout=300, env=subprocess_env())
+                                text=True, timeout=processing_timeout(300), env=subprocess_env())
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise NodeInstallError('The ComfyUI Python operation could not finish. Its installation was not marked prepared.') from exc
     # Child output can contain credentials, repository URLs or personal paths.
@@ -340,7 +341,7 @@ def _download(recipe, archive):
     hasher, size = hashlib.sha256(), 0
     started = monotonic()
     try:
-        with requests.get(recipe.url, stream=True, allow_redirects=False, timeout=(10, 30),
+        with requests.get(recipe.url, stream=True, allow_redirects=False, timeout=network_timeout((10, 30)),
                           headers={'Accept-Encoding': 'identity'}) as response:
             if response.status_code != 200:
                 raise NodeInstallError('The pinned node archive was not available without a redirect.')

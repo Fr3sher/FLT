@@ -15,6 +15,7 @@ Global Constraints) -- the converted-cache root now lives under the
 configured ai-toolkit dir instead of a separate hardcoded drive.
 """
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 
 import glob
 import logging
@@ -148,7 +149,7 @@ def convert(z_model: str) -> str:
     logger.info(f'conversion base {z_model} -> {out}')
     proc = subprocess.run(infer_env.worker_argv(_venv_python(), _CONVERTER, merge,
                                                 official_config_path, '--save', out),
-                          capture_output=True, text=True, timeout=2400,
+                          capture_output=True, text=True, timeout=processing_timeout(2400),
                           env=infer_env.worker_env(_venv_python()))
     if not is_converted(z_model):
         tail = (proc.stdout or '')[-600:] + ' | ' + (proc.stderr or '')[-600:]

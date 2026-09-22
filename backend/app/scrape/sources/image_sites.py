@@ -24,6 +24,7 @@ curl_cffi absent), repli silencieux sur gallery-dl borné à 1 image/album.
 NB historique : Realbooru + ImageFap retirés (sites de mauvaise qualité / risque
 sécu, demande utilisateur 2026-06-27) ; Motherless retiré avant (DNS injoignable).
 """
+from ...timeout_settings import network_timeout
 import logging
 import re
 from urllib.parse import urlparse
@@ -87,7 +88,7 @@ def _full_size(thumb_url):
 def _listing_html(url):
     """HTML de la page listing (seam de test). Lève en cas d'échec réseau/HTTP."""
     from curl_cffi import requests as cf_requests
-    r = cf_requests.get(url, impersonate='chrome', timeout=20)
+    r = cf_requests.get(url, impersonate='chrome', timeout=network_timeout(20))
     r.raise_for_status()
     return r.text
 
@@ -97,7 +98,7 @@ def _listing_json(url, offset):
     répond PAS en JSON (d'où le HTML pour la page 0). Lève en cas d'échec."""
     from curl_cffi import requests as cf_requests
     r = cf_requests.get(url, params={'limit': _COVERS_PER_PAGE, 'offset': offset},
-                        impersonate='chrome', timeout=20,
+                        impersonate='chrome', timeout=network_timeout(20),
                         headers={'Accept': 'application/json, text/javascript, */*; q=0.01',
                                  'Referer': url,
                                  'X-Requested-With': 'XMLHttpRequest'})

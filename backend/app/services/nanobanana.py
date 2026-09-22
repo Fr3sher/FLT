@@ -68,6 +68,7 @@ above. `None` is now unreachable on this engine and only survives as the shared
 signature. The API key never appears in a message or a log line.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 import base64
 import logging
 import os
@@ -301,7 +302,7 @@ def generate_variation(ref_bytes: bytes | list[bytes], prompt: str, model: str |
         try:
             r = requests.post(_API.format(model=mdl),
                               headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                              json=payload, timeout=(10, 180))
+                              json=payload, timeout=network_timeout((10, 180), processing=True))
         except requests.RequestException as e:
             raise NanoBananaError(f'could not reach Gemini: {e}')
         if r.status_code == 400 and i == 0:

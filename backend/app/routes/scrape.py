@@ -12,6 +12,7 @@ user-supplied URLs.
 Actually pulling the chosen images INTO a dataset is a separate, autonomous path
 (`POST /api/dataset/<id>/scrape-import` in routes/datasets.py → svc.scrape_import_urls).
 """
+from ..timeout_settings import network_timeout
 from urllib.parse import urlparse
 
 from flask import Blueprint, request, jsonify, Response
@@ -142,7 +143,7 @@ def scrape_thumb():
     try:
         # allow_redirects=False: only the ALREADY-validated host is fetched. A 3xx
         # toward an internal IP would bypass the upstream SSRF guard (TOCTOU/redirect).
-        r = cf_requests.get(url, impersonate='chrome', timeout=20, stream=True,
+        r = cf_requests.get(url, impersonate='chrome', timeout=network_timeout(20), stream=True,
                             allow_redirects=False,
                             headers={'Referer': f'https://{host}/', 'Accept': 'image/*,*/*'})
     except Exception:

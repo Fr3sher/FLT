@@ -8,6 +8,7 @@ Routes Pexels prises en charge : recherche (y compris ``/en-us/search/`` et
 ``/fr-fr/chercher/``), collection accessible avec la clé et photo unique.
 L'API officielle n'expose pas les profils publics ``/@user``.
 """
+from ...timeout_settings import network_timeout
 import os
 from urllib.parse import parse_qsl, quote, urlsplit
 
@@ -94,7 +95,7 @@ def _request_json(endpoint, params, key, *, not_found=None):
             endpoint,
             headers={'Authorization': key},
             params=params,
-            timeout=_HTTP_TIMEOUT,
+            timeout=network_timeout(_HTTP_TIMEOUT),
             allow_redirects=False,
         )
     except requests.Timeout:

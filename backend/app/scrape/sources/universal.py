@@ -85,7 +85,7 @@ class UniversalSource(Source):
             url, platform='generic', max_items=MAX_ITEMS,
             per_album=None if getattr(match, 'include_albums', False) else 1,
             image_range=f'{page * MAX_ITEMS + 1}-{(page + 1) * MAX_ITEMS}',
-            deadline=time.monotonic() + SCAN_BUDGET_SECONDS)
+            deadline=time.monotonic() + gdl.network_timeout(SCAN_BUDGET_SECONDS))
         if items:
             if getattr(items, 'from_albums', False):
                 # Ces items viennent de la récursion d'albums de gdl.enumerate,

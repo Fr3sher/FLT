@@ -8,6 +8,7 @@ RedGifs) via /api/scrape/download — on renvoie donc l'URL `watch/<id>`.
 
 Hôtes contactés : api.redgifs.com (fixe, public) → pas de risque SSRF.
 """
+from ...timeout_settings import network_timeout
 import logging
 import threading
 
@@ -66,7 +67,7 @@ class RedGifsClient:
             if self._token:
                 return self._token
         try:
-            r = self._session.get(REDGIFS_AUTH_URL, headers=self._headers(auth=False), timeout=TIMEOUT)
+            r = self._session.get(REDGIFS_AUTH_URL, headers=self._headers(auth=False), timeout=network_timeout(TIMEOUT))
             r.raise_for_status()
             token = (r.json() or {}).get('token')
         except Exception as e:
@@ -84,7 +85,7 @@ class RedGifsClient:
 
     def _get(self, url, video_id=None):
         """GET authentifié → JSON. Lève requests.HTTPError sur statut != 2xx."""
-        r = self._session.get(url, headers=self._headers(video_id=video_id), timeout=TIMEOUT)
+        r = self._session.get(url, headers=self._headers(video_id=video_id), timeout=network_timeout(TIMEOUT))
         r.raise_for_status()
         return r.json()
 

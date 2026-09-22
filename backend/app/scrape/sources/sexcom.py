@@ -18,6 +18,7 @@ celle qui matche le mot-clé) :
 GIFs/vidéos : hors périmètre (l'import dataset ne prend que les photos raster) —
 les URLs /gifs et /videos renvoient un message clair plutôt qu'un scan vide.
 """
+from ...timeout_settings import network_timeout
 import logging
 from urllib.parse import parse_qsl, urlparse
 
@@ -87,7 +88,7 @@ def _search_json(params, page):
     """Fournée JSON de l'API recherche (seam de test). Lève en cas d'échec."""
     from curl_cffi import requests as cf_requests
     r = cf_requests.get(_API_URL, params={**params, 'page': page, 'limit': _PER_PAGE},
-                        impersonate='chrome', timeout=20,
+                        impersonate='chrome', timeout=network_timeout(20),
                         headers={'Accept': 'application/json',
                                  'Referer': 'https://www.sex.com/'})
     r.raise_for_status()

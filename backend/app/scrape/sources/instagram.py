@@ -137,7 +137,8 @@ def _build_loader():
     )
     # Timeout HTTP court pour éviter qu'un scan ne pende indéfiniment.
     try:
-        loader.context._session.timeout = SESSION_TIMEOUT
+        from ...timeout_settings import network_timeout
+        loader.context._session.timeout = network_timeout(SESSION_TIMEOUT)
     except (AttributeError, TypeError) as e:  # pragma: no cover
         logger.debug("Config timeout session échouée : %s", e)
 
@@ -257,6 +258,8 @@ def _scan_profile(loader, username):
     posts_failed = 0
     timed_out = False
     capped = False
+    from ...timeout_settings import network_timeout
+    scan_timeout = network_timeout(PROFILE_SCAN_TIMEOUT)
     started = time.time()
     try:
         for post in profile.get_posts():
@@ -269,9 +272,9 @@ def _scan_profile(loader, username):
                 # EXACTEMENT SCAN_LIMIT publications.
                 capped = True
                 break
-            if time.time() - started > PROFILE_SCAN_TIMEOUT:
+            if time.time() - started > scan_timeout:
                 logger.warning("Timeout scan profil %s (%ds), %d items.",
-                               username, PROFILE_SCAN_TIMEOUT, len(items))
+                               username, scan_timeout, len(items))
                 timed_out = True
                 break
             posts_seen += 1
@@ -324,7 +327,7 @@ def _scan_profile(loader, username):
             # « le profil n'a rien publié » — avant cette correction ce chemin
             # retombait dans le kind='empty' juste en dessous.
             return None, (f"Instagram profile scan timed out after "
-                          f"{PROFILE_SCAN_TIMEOUT}s ({posts_seen} post(s) checked, "
+                          f"{scan_timeout}s ({posts_seen} post(s) checked, "
                           f"no media collected): {username}.")
         if posts_failed:
             # Des posts ont été vus mais AUCUN n'a survécu à la conversion

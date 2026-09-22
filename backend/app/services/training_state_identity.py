@@ -5,6 +5,7 @@ Flask application.  This module builds that document from the same job config
 and frozen dataset snapshot that LDS records for the launch.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout, processing_timeout
 
 import copy
 import json
@@ -156,7 +157,7 @@ def _resolve_hf_commit(repo_id: str, *, token=None) -> str:
     token = _hf_token_value(token)
     try:
         info = HfApi(token=token).model_info(
-            repo_id, timeout=15, files_metadata=False)
+            repo_id, timeout=network_timeout(15), files_metadata=False)
     except Exception as exc:
         raise TrainingStateIdentityError(
             f'could not resolve an immutable revision for {repo_id}') from exc
@@ -190,7 +191,7 @@ def _materialize_hf_snapshot(
             cache_dir=str(cache_root),
             token=token,
             allow_patterns=allow_patterns,
-            etag_timeout=15,
+            etag_timeout=network_timeout(15),
         )
     except Exception as exc:
         raise TrainingStateIdentityError(
@@ -222,7 +223,7 @@ def _materialize_hf_file(
             revision=commit,
             cache_dir=str(cache_dir),
             token=_hf_token_value(token),
-            etag_timeout=15,
+            etag_timeout=network_timeout(15),
         )
     except Exception as exc:
         raise TrainingStateIdentityError(
@@ -500,7 +501,7 @@ def _runtime_fingerprint(python_path) -> dict:
             [str(python), '-c', _RUNTIME_PROBE],
             capture_output=True,
             text=True,
-            timeout=90,
+            timeout=processing_timeout(90),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

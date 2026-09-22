@@ -10,6 +10,7 @@ import {
 import ResetToDefault from './ResetToDefault'
 import LmStudioDownload from './LmStudioDownload'
 import { defaultValueAt } from './settingDefaults.js'
+import TimeoutSettings from './TimeoutSettings'
 
 /* HF token is for gated TRAINING bases (Krea 2 / FLUX.1 / FLUX.2 Klein) and reading
    your private custom-base repos — it lives with the ComfyUI card because that's
@@ -341,7 +342,7 @@ export default function LocalToolsSection(props) {
   // Summary + collapsible groups, one per tool — same shells as Image engines
   // (SettingsGroupsView), and the ?focus= reveal opens a collapsed group on
   // its own, so every deep-link and search result keeps landing.
-  const [comfyGroup, ollamaGroup, aitkGroup] = LOCAL_TOOLS_GROUPS
+  const [comfyGroup, ollamaGroup, aitkGroup, timeoutGroup] = LOCAL_TOOLS_GROUPS
   const groupProps = useSettingsGroupProps('local-tools')
   return (
     <div className="space-y-4">
@@ -702,6 +703,9 @@ export default function LocalToolsSection(props) {
           </div>
         </details>
       </Card>
+      </SettingsGroup>
+      <SettingsGroup {...groupProps(timeoutGroup)}>
+        <TimeoutSettings config={config} configDefaults={configDefaults} setField={setField} />
       </SettingsGroup>
     </div>
   )
