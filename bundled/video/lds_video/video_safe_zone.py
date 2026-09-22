@@ -66,10 +66,7 @@ is wanted: one says "this shot is stamped", the other says "cropping it costs yo
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
-import re
 import shutil
 import tempfile
 
@@ -86,7 +83,6 @@ from lds_video.video_pass_scaffold import store_pass_result
 
 logger = logging.getLogger(__name__)
 
-_SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'video_text_infer.py')
 
 # Long side of the extracted frames — the constant somebody will find in six
 # months and wonder about, so here is the arithmetic that chose it.
@@ -127,14 +123,6 @@ CHUNK = 40
 # would be indistinguishable from a real subtitle.
 TEXT_SCORE_MIN = 0.5
 
-# Budget for one child, per frame, plus a floor that covers the cold import on a
-# machine whose antivirus is scanning the ONNX models. Same shape as the face
-# scorer's: a flat forfeit sized for a small chunk turns a slow machine's whole
-# run into nothing, because a timeout returns no partial result.
-_TIMEOUT_PER_FRAME_S = 6
-_TIMEOUT_FLOOR_S = 300
-
-
 def text_score_min() -> float:
     """The stored Sensitivity (text_scan.score_min) both image lanes read —
     the OCR confidence a line must carry to become a repaint zone. Owned here,
@@ -148,7 +136,6 @@ def text_score_min() -> float:
         return TEXT_SCORE_MIN
     return min(0.95, max(0.05, value))
 
-_PROGRESS_RE = re.compile(r'\[text\] (\d+)/(\d+)')
 
 # The key that says this pass has been here. Named once: `pending_clips` uses its
 # ABSENCE as the resume test and `verdicts()` reads the numbers beside it, so a
@@ -249,91 +236,10 @@ def read_text_boxes(frames, *, timeout=None, should_stop=None, on_progress=None,
     exists because a chunk is 40 shots and ~75 s of OCR: without it the bar sits
     still for a minute and a quarter at a time, which reads as a hang.
     """
-    from lds_sdk.video_host.infer_stream import run_infer_script
-    from lds_sdk.video_host.infer_stream import stderr_tail
-    if not frames:
-        return {}
-    python = cfg.get('video_text.python') or _default_python()
-    budget = timeout or max(_TIMEOUT_FLOOR_S,
-                            120 + _TIMEOUT_PER_FRAME_S * len(frames))
-    cancel_path, ask_stop, cleanup = _stop_plumbing()
-    # `score_min` overrides the floor per call — the image lanes' Sensitivity
-    # slider travels through here. None (every existing caller, the video pass
-    # included) keeps TEXT_SCORE_MIN byte for byte; the clamp keeps a
-    # hand-edited config from turning the floor into "flag every texture" (0)
-    # or "flag nothing" (1).
-    floor = TEXT_SCORE_MIN if score_min is None else \
-        min(0.95, max(0.05, float(score_min)))
-    payload = json.dumps({'frames': frames, 'score_min': floor,
-                          'cancel_file': cancel_path}) + '\n'
-
-    def _on_line(line):
-        match = _PROGRESS_RE.search(line)
-        if match and on_progress:
-            on_progress(int(match.group(1)), int(match.group(2)))
-
-    try:
-        stdout, stderr_lines, rc, timed_out = run_infer_script(
-            python, _SCRIPT, payload, budget, on_line=_on_line,
-            should_stop=should_stop, on_stop=ask_stop)
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError(f'could not start the text reader: '
-                           f'{type(e).__name__}: {e}') from None
-    finally:
-        cleanup()
-    # Last line STARTING with '{' rather than blindly the last line — the same
-    # scan video_aesthetic.score_frames does, and for the same reason: a stray
-    # warning printed after the payload must not turn a successful run into
-    # "no result".
-    data = {}
-    for text in reversed((stdout or '').strip().splitlines()):
-        if text.lstrip().startswith('{'):
-            try:
-                data = json.loads(text)
-            except ValueError:
-                data = {}
-            break
-    if not data:
-        # rc AND the child's own last stderr line. A worker that died before
-        # emitting JSON (an onnxruntime DLL that would not load, an OOM, a wrong
-        # `video_text.python`) leaves nothing else to act on, and a generic
-        # sentence with no trace anywhere is not actionable by anyone. Same
-        # convention as the look score and the ffmpeg drivers.
-        logger.warning('safe zone: no JSON from the text reader (rc=%s, timed_out=%s) '
-                       'stderr=%s', rc, timed_out, stderr_tail(stderr_lines))
-        raise RuntimeError('the text reader produced no result — check the '
-                           'burned-in text extra in Setup')
-    if not data.get('ok'):
-        raise RuntimeError(str(data.get('error') or 'unknown text-reader error'))
-    return {key: [list(b) for b in (boxes or [])]
-            for key, boxes in (data.get('boxes') or {}).items()}
-
-
-def _default_python():
-    import sys
-    return sys.executable
-
-
-def _stop_plumbing():
-    """(sentinel path, ask, cleanup) — the house mechanism, same as face_mask's.
-
-    The file is created only when a stop is actually ASKED: an existing file IS
-    the request, so creating it up front would cancel the pass before it began,
-    and a leftover one would silently cancel the next. Allocated even with no
-    Stop button, because `run_infer_script`'s timeout watchdog sends the same
-    request — a child that cannot be asked can only be killed, and a kill throws
-    away every box it has read so far."""
-    tmp = tempfile.mkdtemp(prefix='lds-vsz-')
-    path = os.path.join(tmp, 'stop')
-
-    def ask():
-        try:
-            with open(path, 'w', encoding='utf-8') as fh:
-                fh.write('stop')
-        except OSError:
-            logger.warning('safe zone: could not write the stop sentinel')
-
-    return path, ask, (lambda: shutil.rmtree(tmp, ignore_errors=True))
+    from lds_sdk.video_vision import read_text_boxes as host_read_text_boxes
+    return host_read_text_boxes(
+        frames, timeout=timeout, should_stop=should_stop,
+        on_progress=on_progress, score_min=score_min)
 
 
 # --- the pass ---------------------------------------------------------------------

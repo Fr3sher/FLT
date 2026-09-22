@@ -57,7 +57,7 @@ from __future__ import annotations
 import json
 import logging
 
-from lds_sdk.video_host.config import DEFAULTS
+from lds_sdk.video_host.config import duplicate_threshold_default
 from lds_video.models import db
 from lds_video.models import VideoClip
 from lds_video import video_metrics
@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 # Inherited from the image lane's measured cut — see the module docstring. Read
 # off the config defaults rather than retyped, so the two lanes cannot drift into
 # two different meanings of "near-identical".
-DEFAULT_THRESHOLD = DEFAULTS['bank']['semantic_dup_threshold']
+DEFAULT_THRESHOLD = duplicate_threshold_default()
 
 # Rows of the frame matrix compared at once. Bounds the peak allocation of the
 # similarity block independently of the bank's size — the same knob, and the same

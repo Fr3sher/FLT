@@ -24,10 +24,10 @@ from lds_sdk.video_host.gpu import gpu_exclusive_vision_window
 from lds_sdk.video_host import studio as lts
 from lds_sdk import dlss5 as _nr
 from lds_video import video_test_studio as vts
-from lds_sdk.video_host.http import _map_error
+from lds_sdk.video_host.http import map_error as _map_error
 from lds_sdk.video_host.http import require_comfyui as _require_comfyui
 from lds_sdk.video_host.http import require_no_stalled_comfyui as _require_no_stalled_comfyui
-from lds_sdk.video_host.http import _studio_missing_response
+from lds_sdk.video_host.http import studio_missing_response as _studio_missing_response
 
 logger = logging.getLogger(__name__)
 
@@ -700,7 +700,7 @@ def video_studio_generate():
                                  'labels are set aside — describe what you want to '
                                  'see move.'}), 400
     lora = data.get('lora') or None
-    if lora and lts.unsafe_lora_name(lora):
+    if lora and lts.is_unsafe_external_lora_name(lora):
         # The same guard the image studio applies to a LoRA name: this string
         # reaches a loader that resolves it under the loras roots, and a rooted
         # or `..`-bearing name is the one shape that walks out of them.

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 from lds_sdk.video_host import config as cfg
 from lds_sdk import workers as infer_env
 from lds_sdk.video_host.clip_text_encoder import TextEncodeError
-from lds_sdk.video_host.clip_text_encoder import _readline_with_timeout
+from lds_sdk.video_host.clip_text_encoder import readline_with_timeout as _readline_with_timeout
 
 _SCRIPT = str(Path(__file__).resolve().parents[1] / 'infer' / 'video_caption_infer.py')
 
