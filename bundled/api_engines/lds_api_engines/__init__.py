@@ -24,7 +24,7 @@ manifest's ``owns.config_keys_in_shared_sections``.
 """
 from . import probes
 
-__version__ = '1.0.5'
+__version__ = '1.0.6'
 
 
 def _nanobanana_generate():

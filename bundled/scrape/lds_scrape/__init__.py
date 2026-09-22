@@ -12,7 +12,7 @@ The scan routes keep their historical URLs under `/api/` (a plugin may register
 any prefix under `/api/`, the access-token gate stands there); the panels that
 call them are this plugin's frontend contribution.
 """
-__version__ = '1.0.7'
+__version__ = '1.0.8'
 
 
 def register(ctx):
