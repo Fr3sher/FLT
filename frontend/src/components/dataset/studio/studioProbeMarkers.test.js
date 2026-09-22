@@ -111,7 +111,7 @@ test('the probe opens the ✨ neural render dialog, and the dialog outranks the 
      stacking contest against the bar, and it really caps its own height. Break
      any link and this fails instead of the phone. */
   const history = read("../../../../../bundled/video/frontend/studio/video/VideoClipHistory.jsx");
-  const dialog = read("../../../../../bundled/video/frontend/videobank/NeuralRenderDialog.jsx");
+  const dialog = read("../../../../../bundled/dlss5/frontend/NeuralRenderDialog.jsx");
   assert.match(history, /title="Re-render this clip with DLSS 5 Neural Rendering/);
   assert.match(probe, /'button\[title\*="DLSS 5 Neural"\]'/);
 

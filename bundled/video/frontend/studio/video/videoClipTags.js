@@ -5,7 +5,7 @@
  * carries icons of its own, so here the emoji go and each fact stands alone —
  * ordered by how much it changed the render: base first, LoRA and strength,
  * then the accelerators, then the numbers that make a run repeatable. */
-import { neuralRenderTags } from '../../videobank/neuralRenderParams.js';
+import { neuralRenderTags } from '../../videobank/neuralRenderMetadata.js';
 import { accelLabel, clipAccel } from './videoStudioApi.js';
 
 export function clipTags(clip) {

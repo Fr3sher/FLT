@@ -8,7 +8,8 @@ from tests.test_public_sdk_integration import activate, host, no_external_runtim
 PRODUCT_ACTIONS = {
     'seedvr2': ('seedvr2_model', 'seedvr2_vae'),
     'camera_angles': ('camera_model', 'camera_lora', 'camera_speed_lora', 'camera_text_encoder'),
-    'video': ('video', 'shot_detect', 'dlss5nr_bridge', 'h3_base', 'h3_video_vae'),
+    'video': ('video', 'shot_detect', 'h3_base', 'h3_video_vae'),
+    'dlss5': ('dlss5nr_bridge',),
     'scrape': ('scrape_extras',),
 }
 

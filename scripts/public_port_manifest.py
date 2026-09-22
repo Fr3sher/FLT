@@ -29,7 +29,7 @@ OID = re.compile(r'(?:[0-9a-f]{40}|[0-9a-f]{64})\Z')
 SHA256 = re.compile(r'[0-9a-f]{64}\Z')
 PUBLIC_PRODUCTS = frozenset({
     'api_engines', 'camera_angles', 'canvas', 'civitai_publish', 'cloud_training',
-    'hf_publish', 'image_upscale', 'live', 'model_tools', 'resource_monitor',
+    'dlss5', 'hf_publish', 'image_upscale', 'live', 'model_tools', 'resource_monitor',
     'scrape', 'seedvr2', 'video',
 })
 ARCHIVE_SUFFIXES = ('.ldsplugin', '.zip', '.whl', '.tar', '.gz', '.bz2', '.xz',
@@ -378,11 +378,15 @@ def load_manifest(repo, path, expected_sha256, review_sha256, git):
                 require(not parts[-1].casefold().endswith(ARCHIVE_SUFFIXES),
                         'Distribution archives cannot receive source-port exceptions.')
             require(provenance['kind'] in ('unchanged', 'reviewed_port', 'generated',
-                                           'reviewed_infrastructure'))
+                                           'reviewed_infrastructure', 'reviewed_product_release'))
+            if provenance['kind'] == 'reviewed_product_release':
+                # Explicit source publication, still pinned to exact reviewed
+                # files and history. It grants no permission to other products.
+                require(parts[1] == 'dlss5' and 'resource' not in provenance)
             digest(provenance['evidence_sha256'])
             sources = provenance['sources']
             require(type(sources) is list)
-            if provenance['kind'] == 'reviewed_infrastructure' or 'resource' in provenance:
+            if provenance['kind'] in ('reviewed_infrastructure', 'reviewed_product_release') or 'resource' in provenance:
                 # Explicitly reviewed new infrastructure / externally sourced
                 # generated assets must not fabricate a source blob from main.
                 require(not sources)

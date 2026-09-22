@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { syncActions, sidesFor } from './videoSync.js'
-import { isAbort, saveUrlAsFile } from '@lds/plugin-sdk/files'
+import { syncActions, sidesFor } from './videoSync'
+import { isAbort, saveUrlAsFile } from '@lds/plugin-sdk/files';
 
 /** ⇔ The original and its neural render, side by side and in step.
  *

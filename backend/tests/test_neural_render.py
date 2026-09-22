@@ -15,9 +15,10 @@ import zipfile
 
 import pytest
 
-from lds_video import neural_render as nr
+from lds_dlss5 import neural_render as nr
+from lds_video import neural_render_media as media
 
-pytestmark = pytest.mark.plugins('video')
+pytestmark = pytest.mark.plugins('video', 'dlss5')
 
 
 # ── dials ───────────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ def test_temporal_width_floor_is_the_measured_one_in_both_halves():
     src = (Path(nr.__file__).resolve().parents[1] / 'infer' / 'dlss5nr_infer.py').read_text(encoding='utf-8')
     m = re.search(r'^TEMPORAL_MIN_WIDTH = (\d+)', src, re.M)
     assert m and int(m.group(1)) == nr.TEMPORAL_MIN_WIDTH
-    js = (nr.cfg.BACKEND_DIR.parent / 'bundled' / 'video' / 'frontend' / 'videobank'
+    js = (Path(nr.__file__).resolve().parents[1] / 'frontend'
           / 'neuralRenderParams.js').read_text(encoding='utf-8')
     m = re.search(r'export const TEMPORAL_MIN_WIDTH = (\d+)', js)
     assert m and int(m.group(1)) == nr.TEMPORAL_MIN_WIDTH
@@ -109,7 +110,7 @@ def test_status_names_what_is_missing_in_words(tmp_path):
 def test_a_render_process_without_numpy_is_named_and_sent_to_setup(tmp_path):
     st = nr.status(_runtime(tmp_path), os_name='nt', driver={'ngx': True, 'nvof': True}, worker_ok=False, ffmpeg_ok=True)
     assert not st['ready'] and not st['worker']
-    assert any('numpy' in m and 'Setup' in m for m in st['missing'])
+    assert any('DLSS 5 Python engine' in m and 'Settings' in m for m in st['missing'])
 
 
 def test_a_forwarder_under_the_models_name_is_called_out(tmp_path):
@@ -167,7 +168,7 @@ def test_the_install_action_is_wired_and_opt_in(app, monkeypatch):
         assert 'dlss5nr_bridge' not in setup_installer.INSTALL_ACTIONS
         assert setup_installer.known_action('dlss5nr_bridge')
         action = setup_installer.plugin_action_spec('dlss5nr_bridge')
-        assert action['plugin'] == 'video'
+        assert action['plugin'] == 'dlss5'
         log = lambda line: None
         assert action['run'](log) == 0 and calls == [log]
         assert setup_installer._action_needed('dlss5nr_bridge', {}) is False
@@ -250,8 +251,8 @@ def test_render_replaces_the_clip_keeps_the_original_and_never_stacks(app, tmp_p
     calls = _stub_render(monkeypatch)
     _run_job_inline(monkeypatch)
     with app.app_context():
-        assert nr.rendered_clip_ids(LOCAL_USER, ds_id) == []
-        res = nr.start_dataset_render(app, LOCAL_USER, ds_id, [ids[0]], {'tone': 0})
+        assert media.rendered_clip_ids(LOCAL_USER, ds_id) == []
+        res = media.start_dataset_render(app, LOCAL_USER, ds_id, [ids[0]], {'tone': 0})
         assert res['queued'] == 1 and res['params']['tone'] == 0.0
         # The file the trainer reads IS the render; the caption did not move.
         assert (out / 'clip_0001.mp4').read_bytes().startswith(b'RENDERED from ORIGINAL clip_0001')
@@ -260,11 +261,11 @@ def test_render_replaces_the_clip_keeps_the_original_and_never_stacks(app, tmp_p
         # The original sits OUTSIDE the dataset folder — nothing new in the flat folder.
         assert sorted(p.name for p in out.iterdir()) == ['clip_0001.mp4', 'clip_0001.txt',
                                                          'clip_0002.mp4', 'clip_0002.txt']
-        backup = nr.backup_dir(ds_id) / 'clip_0001.mp4'
+        backup = media.backup_dir(ds_id) / 'clip_0001.mp4'
         assert backup.read_bytes() == b'ORIGINAL clip_0001.mp4'
-        assert nr.rendered_clip_ids(LOCAL_USER, ds_id) == [ids[0]]
+        assert media.rendered_clip_ids(LOCAL_USER, ds_id) == [ids[0]]
         # A second render reads the ORIGINAL again (the backup), never the render.
-        nr.start_dataset_render(app, LOCAL_USER, ds_id, [ids[0]], {'tone': 2})
+        media.start_dataset_render(app, LOCAL_USER, ds_id, [ids[0]], {'tone': 2})
         assert calls[-1][0] == str(backup)
         assert (out / 'clip_0001.mp4').read_bytes() == b'RENDERED from ORIGINAL clip_0001.mp4'
         assert backup.read_bytes() == b'ORIGINAL clip_0001.mp4'
@@ -276,14 +277,14 @@ def test_restore_puts_the_original_back_and_forgets_the_render(app, tmp_path, mo
     _stub_render(monkeypatch)
     _run_job_inline(monkeypatch)
     with app.app_context():
-        nr.start_dataset_render(app, LOCAL_USER, ds_id, [], {})     # empty ids = every clip
-        assert sorted(nr.rendered_clip_ids(LOCAL_USER, ds_id)) == sorted(ids)
-        assert nr.restore_dataset_clips(LOCAL_USER, ds_id, [ids[1]]) == {'restored': 1}
+        media.start_dataset_render(app, LOCAL_USER, ds_id, [], {})     # empty ids = every clip
+        assert sorted(media.rendered_clip_ids(LOCAL_USER, ds_id)) == sorted(ids)
+        assert media.restore_dataset_clips(LOCAL_USER, ds_id, [ids[1]]) == {'restored': 1}
         assert (out / 'clip_0002.mp4').read_bytes() == b'ORIGINAL clip_0002.mp4'
-        assert not (nr.backup_dir(ds_id) / 'clip_0002.mp4').exists()
-        assert nr.rendered_clip_ids(LOCAL_USER, ds_id) == [ids[0]]
-        assert nr.restore_dataset_clips(LOCAL_USER, ds_id, []) == {'restored': 1}
-        assert nr.rendered_clip_ids(LOCAL_USER, ds_id) == []
+        assert not (media.backup_dir(ds_id) / 'clip_0002.mp4').exists()
+        assert media.rendered_clip_ids(LOCAL_USER, ds_id) == [ids[0]]
+        assert media.restore_dataset_clips(LOCAL_USER, ds_id, []) == {'restored': 1}
+        assert media.rendered_clip_ids(LOCAL_USER, ds_id) == []
 
 
 def test_a_failed_clip_leaves_the_original_in_place_and_is_reported(app, tmp_path, monkeypatch):
@@ -299,7 +300,7 @@ def test_a_failed_clip_leaves_the_original_in_place_and_is_reported(app, tmp_pat
         from app.services import bank_jobs
         seen = {}
         monkeypatch.setattr(bank_jobs, 'fail', lambda job, msg: seen.setdefault('msg', msg))
-        nr.start_dataset_render(app, LOCAL_USER, ds_id, [ids[0]], {})
+        media.start_dataset_render(app, LOCAL_USER, ds_id, [ids[0]], {})
         assert (out / 'clip_0001.mp4').read_bytes() == b'ORIGINAL clip_0001.mp4'
         assert 'refused the frame' in seen['msg']
         assert not list(out.glob('.nr-*'))          # no half-written file left behind
@@ -312,7 +313,7 @@ def test_the_pass_refuses_when_the_lane_is_not_set_up(app, tmp_path, monkeypatch
         'ready': False, 'missing': ['your own copy of nvngx_dlssnr.dll, placed in X'], 'driver_nvof': True})
     with app.app_context():
         with pytest.raises(nr.NeuralRenderError, match='nvngx_dlssnr.dll'):
-            nr.start_dataset_render(app, LOCAL_USER, ds_id, ids, {})
+            media.start_dataset_render(app, LOCAL_USER, ds_id, ids, {})
 
 
 # ── routes ──────────────────────────────────────────────────────────────────
@@ -338,7 +339,7 @@ def test_dataset_routes(app, client, tmp_path, monkeypatch):
     assert r.status_code == 400 and 'tone' in r.get_json()['error']
 
 
-def test_the_capability_payload_carries_the_lane(app, monkeypatch):
+def test_the_capability_payload_carries_the_lane(plugin_app_factory, monkeypatch):
     """Setup and both verbs receive the complete Neural status, including why
     the lane is unavailable, regardless of how the probes are scheduled."""
     from app import capabilities
@@ -350,6 +351,7 @@ def test_the_capability_payload_carries_the_lane(app, monkeypatch):
     monkeypatch.setattr(capabilities, 'gpu_vram_gb', lambda: None)
     monkeypatch.setattr(capabilities.ffmpeg_tools, 'ffmpeg_ready',
                         lambda: {'ok': False, 'reason': 'not installed'})
+    app = plugin_app_factory(enabled=('video', 'dlss5'))
     with app.app_context():
         payload = capabilities.probe(force=True)
     assert payload['dlss5nr'] == status
@@ -386,7 +388,7 @@ def test_a_missing_ffmpeg_is_named_and_sent_to_setup(tmp_path):
     st = nr.status(_runtime(tmp_path), os_name='nt', driver={'ngx': True, 'nvof': True},
                    worker_ok=True, ffmpeg_ok=False)
     assert not st['ready'] and not st['ffmpeg']
-    assert any('ffmpeg' in m and 'Setup' in m for m in st['missing'])
+    assert any('DLSS 5 video encoder' in m and 'Settings' in m for m in st['missing'])
 
 
 def test_the_childs_last_words_survive_os_exit():
@@ -435,7 +437,7 @@ def test_backups_leave_with_their_clips_and_with_the_dataset(app, client, tmp_pa
     _run_job_inline(monkeypatch)
     r = client.post(f'/api/video-dataset/{ds_id}/neural-render', json={'ids': []})
     assert r.status_code == 200
-    root = nr.backup_dir(ds_id)
+    root = media.backup_dir(ds_id)
     # Each kept original travels with the record of the dials that replaced it.
     assert sorted(p.name for p in root.iterdir()) == ['clip_0001.mp4', 'clip_0001.mp4.nr.json',
                                                       'clip_0002.mp4', 'clip_0002.mp4.nr.json']
@@ -464,7 +466,8 @@ def test_the_original_of_a_rendered_clip_is_served_and_absent_otherwise(app, cli
 
 # ── the levers the model does not expose ────────────────────────────────────
 
-def test_strength_passes_and_scale_are_validated_and_carried():
+def test_strength_passes_and_scale_are_validated_and_carried(monkeypatch):
+    monkeypatch.setattr(nr, 'worker_python', lambda: 'python')
     p = nr.normalize_params({'strength': 2.5, 'passes': '3', 'scale': 2})
     assert (p['strength'], p['passes'], p['scale']) == (2.5, 3, 2)
     for bad in ({'strength': 3.5}, {'strength': -1}, {'passes': 0}, {'passes': 4}, {'scale': 3}, {'scale': 'x'}):
@@ -518,5 +521,5 @@ def test_a_dataset_render_keeps_its_dials_beside_the_original(app, client, tmp_p
     assert rec['strength'] == 1.5 and rec['temporal'] == 'off' and rec['temporal_used'] is False
     assert str(ids[1]) not in state['rendered_params']
     assert client.post(f'/api/video-dataset/{ds_id}/neural-render/restore', json={'ids': [ids[0]]}).status_code == 200
-    assert not nr.sidecar_path(ds_id, 'clip_0001.mp4').exists()
+    assert not media.sidecar_path(ds_id, 'clip_0001.mp4').exists()
     assert client.get(f'/api/video-dataset/{ds_id}/neural-render').get_json()['rendered_params'] == {}

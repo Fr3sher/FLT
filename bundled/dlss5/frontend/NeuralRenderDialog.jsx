@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import {
   NR_DEFAULTS, NR_PRESETS, TEMPORAL_MODES, STRENGTH_MAX, PASSES_MAX, normalizeNrParams, presetFor,
   temporalOutcome, nrRefusal, costMultiplier,
-} from './neuralRenderParams.js'
-import { HelpBadge } from '@lds/plugin-sdk'
+} from './neuralRenderParams'
+import { HelpBadge } from '@lds/plugin-sdk';
 
 /** ✨ Neural render (DLSS 5) — the dials, asked ONCE, before a render.
  *

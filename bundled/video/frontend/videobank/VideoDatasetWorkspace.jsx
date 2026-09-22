@@ -1,3 +1,4 @@
+import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Clapperboard, Copy, Folder } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
@@ -11,7 +12,6 @@ import VideoCheckpointManager from './VideoCheckpointManager.jsx'
 import { videoPreflightUrl } from './videoCloudLaunch.js'
 import VideoDatasetGrid from './VideoDatasetGrid.jsx'
 import VideoDatasetLightbox from './VideoDatasetLightbox.jsx'
-import NeuralRenderDialog from './NeuralRenderDialog.jsx'
 import {
   videoDatasetClipCaptionUrl, videoDatasetClipOriginalUrl, videoDatasetNeuralRenderCancelUrl,
   videoDatasetNeuralRenderRestoreUrl,
@@ -223,6 +223,7 @@ export default function VideoDatasetWorkspace({ ds, items, refresh, onBack }) {
   }, [selected, items, ds.id, refresh, toast])
 
   const readNr = useCallback(async () => {
+    if (!hasContributions('video.neural-render-dialog', 'dataset')) return null
     try {
       const d = await apiFetch(videoDatasetNeuralRenderUrl(ds.id))
       setNr(d)
@@ -580,11 +581,11 @@ export default function VideoDatasetWorkspace({ ds, items, refresh, onBack }) {
                     happens to the clips and refuses, in words, on a machine
                     without the model. Never hidden: a user without an NVIDIA
                     card still reads what this button would have done. */}
-                <button type="button" onClick={() => setNrOpen(selected)} disabled={nrRunning}
+                {hasContributions('video.neural-render-dialog', 'dataset') && <button type="button" onClick={() => setNrOpen(selected)} disabled={nrRunning}
                   title={nr?.status && !nr.status.ready ? 'Neural rendering is not set up on this machine — open the dialog to see what is missing' : 'Re-render the selected clips with DLSS 5 Neural Rendering (originals kept)'}
                   className="min-h-10 rounded border border-border bg-surface-raised px-2 py-1 text-[0.6875rem] font-semibold text-content hover:bg-surface disabled:opacity-50 lg:min-h-0">
                   ✨ Neural render
-                </button>
+                </button>}
                 {selectedRendered.length > 0 && !nrRunning && (
                   <button type="button" onClick={() => restoreNr(selectedRendered)}
                     className="min-h-10 rounded border border-border bg-surface-raised px-2 py-1 text-[0.6875rem] text-content-muted hover:text-content lg:min-h-0">
@@ -728,7 +729,7 @@ export default function VideoDatasetWorkspace({ ds, items, refresh, onBack }) {
       )}
 
       {nrOpen && (
-        <NeuralRenderDialog status={nr?.status} busy={nrBusy}
+        <PluginSlot slot="video.neural-render-dialog" surface="dataset" status={nr?.status} busy={nrBusy}
           width={ds.width || null}
           subject={`${nrOpen.length || counts.total} clip${(nrOpen.length || counts.total) === 1 ? '' : 's'} of this set.`}
           consequence="Each clip is re-rendered in place and the original is kept — 🩹 Restore brings it back at any time."

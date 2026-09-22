@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   NR_DEFAULTS, NR_PRESETS, TEMPORAL_MIN_WIDTH, normalizeNrParams, presetFor,
   temporalOutcome, nrRefusal, costMultiplier, neuralRenderTags,
-} from '../frontend/videobank/neuralRenderParams.js'
+} from '../frontend/neuralRenderParams.js'
 
 test('a render is remembered by its pushes, its mode and its cost', () => {
   assert.deepEqual(neuralRenderTags(null), [])

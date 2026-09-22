@@ -536,7 +536,7 @@ test('installCatalog gates the vision model on a reachable, named Ollama', () =>
   assert.match(noName.ollama_model.hint, /model name/);
 });
 
-test('the Video lane\'s three doors are rows of their own: ready, waiting, or missing with a door', () => {
+test('Video and Live expose their own preparation rows; DLSS has its own settings', () => {
   const row = (caps, label) => deriveCapabilitySummary(caps).find((s) => s.label === label);
   const DLSS = 'DLSS 5 neural rendering';
   const SMOOTH = 'Smooth (frame interpolation)';
@@ -544,16 +544,15 @@ test('the Video lane\'s three doors are rows of their own: ready, waiting, or mi
   // Everything there.
   const on = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: true,
     video_studio_options: { vfi: { available: true } } }, dlss5nr: { ready: true }, video_encode: true, live: { ready: true, encoder: true, missing: [] } };
-  for (const l of [DLSS, SMOOTH, LIVE]) assert.equal(row(on, l).ok, true, l);
-  // ComfyUI down with the weights on disk: Smooth and Live wait (their
-  // verdict needs the process), DLSS does not — it has a worker of its own.
+  for (const l of [SMOOTH, LIVE]) assert.equal(row(on, l).ok, true, l);
+  assert.equal(row(on, DLSS), undefined);
+  // ComfyUI down with the weights on disk: Smooth and Live wait.
   const off = { comfyui: { dir_valid: true, reachable: false, video_studio_missing: [] },
     dlss5nr: { ready: false }, video_encode: true, live: { ready: false, encoder: true, missing: [] } };
   assert.equal(row(off, SMOOTH).pending, true);
   assert.match(row(off, SMOOTH).note, /launch ComfyUI/);
   assert.equal(row(off, LIVE).pending, true);
-  assert.equal(row(off, DLSS).pending, undefined);
-  assert.equal(row(off, DLSS).ok, false);
+  assert.equal(row(off, DLSS), undefined);
   // ComfyUI up, packs missing: Smooth is plainly missing, its door the video
   // install card (which lists the packs) — never "waiting".
   const noPacks = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: true,

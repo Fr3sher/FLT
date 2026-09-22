@@ -63,11 +63,6 @@ def video_studio_sage():
 
 
 
-def dlss5nr():
-    # ✨ A FILE probe, on purpose: the bridge's real init loads a 165 MB model onto
-    # a D3D12 device — not something a poll of the Setup screen may do.
-    from . import neural_render
-    return neural_render.status()
 
 
 def video_host_ready():
@@ -110,9 +105,8 @@ PROBES = {
     'comfyui.video_studio_ready': video_studio_ready,
     'comfyui.video_studio_options': video_studio_options,
     'comfyui.video_studio_sage': video_studio_sage,
-    'dlss5nr': dlss5nr,
 }
 
 _EMPTY_PROBES = {'video_detail': '', 'comfyui.video_studio_missing': [],
-                 'comfyui.video_studio_options': {}, 'comfyui.video_studio_sage': {}, 'dlss5nr': {}}
+                 'comfyui.video_studio_options': {}, 'comfyui.video_studio_sage': {}}
 PROBES = {key: _when_enabled(fn, _EMPTY_PROBES.get(key, False)) for key, fn in PROBES.items()}

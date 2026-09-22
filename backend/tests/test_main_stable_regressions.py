@@ -124,14 +124,15 @@ def test_recorded_aspect_matches_the_canvas_choice(client, queue_capture, mode, 
     assert clip.get('aspect') == expected
 
 
-@pytest.mark.plugins('video')
+@pytest.mark.plugins('video', 'dlss5')
 @pytest.mark.parametrize('operation', ['vfi', 'neural-render'])
 @pytest.mark.parametrize('accel', ['parasyte', 'dareties'])
 def test_derived_clips_keep_existing_acceleration_and_canvas(
         app, client, monkeypatch, queue_capture, operation, accel):
     from app.extensions import db
     from lds_video.models import VideoTestClip
-    from lds_video import neural_render as nr, video_test_studio as vts
+    from lds_video import neural_render_media as nr, video_test_studio as vts
+    from lds_dlss5 import neural_render as engine
     response = client.post('/api/video-studio/generate', json={
         'mode': 't2v', 'prompt': 'A person turns.', 'aspect': 'portrait', 'accel': accel})
     assert response.status_code == 200, response.get_json()
@@ -142,13 +143,13 @@ def test_derived_clips_keep_existing_acceleration_and_canvas(
         source.filename = 'source.mp4'
         (vts.clips_dir() / source.filename).write_bytes(b'test video')
         db.session.commit()
-    monkeypatch.setattr(nr, 'status', lambda: {'ready': True, 'missing': []})
+    monkeypatch.setattr(engine, 'status', lambda: {'ready': True, 'missing': []})
 
     def render(source, destination, params):
         Path(destination).write_bytes(b'test derived video')
         return {'frames': 56, 'mode_note': 'test'}
 
-    monkeypatch.setattr(nr, 'render_video', render)
+    monkeypatch.setattr(engine, 'render_video', render)
     try:
         derived = client.post(f'/api/video-studio/clip/{ident}/{operation}', json={})
         assert derived.status_code == 200, derived.get_json()

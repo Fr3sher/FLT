@@ -5,6 +5,29 @@ help and runtime assets travel together. The host provides the plugin API,
 shared UI runtime, installation workers and lifecycle. Installable archives
 contain the built browser interface and the plugin's own Python package.
 
+## Shared source layout
+
+Public first-party plugin sources live together under `bundled/<plugin-id>/`,
+including [DLSS 5 Neural Rendering](../../bundled/dlss5/README.md). Each plugin
+uses the same package contract:
+
+| Path | Purpose |
+| --- | --- |
+| `plugin.json` | Identity, compatibility, permissions and owned capabilities |
+| `lds_<plugin-id>/` | Python package with `register(ctx)` |
+| `frontend/` | Screens, settings, help and contributions through the frontend SDK |
+| `package.json` | Frontend entry point and declared dependencies |
+| `lds-package.json` | Python packaging declarations when needed |
+| `requirements-*.txt`, `infer/`, `resources/` | Plugin-owned dependencies, workers and assets when needed |
+| `tests/`, `README.md`, `LICENSE` | Verification, usage and license |
+
+Each plugin owns its preparation and persistent data and works without a
+mandatory dependency on another LDS plugin. Optional integrations use the
+documented SDK. The source directory does not auto-install or enable a plugin:
+normal installations use the reviewed packages offered through Plugins.
+
+## Authoring contract
+
 - [Package format and compatibility](package-format.md)
 - [Build, validate and package](packaging-guide.md)
 - [JSON Schema for editors](plugin.schema.json)

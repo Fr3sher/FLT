@@ -1,7 +1,7 @@
+import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui'
 import { useEffect, useRef, useState } from 'react'
 import { videoDatasetClipComparisonUrl, videoDatasetClipMediaUrl } from './videoBankApi.js'
-import SideBySideVideo from './SideBySideVideo.jsx'
-import { neuralRenderTags } from './neuralRenderParams.js'
+import { neuralRenderTags } from './neuralRenderMetadata.js'
 import { clipDurationS, isStillFile, lightboxKeyAction } from './videoDatasetClips.js'
 import { clipLabel } from './videoClipFragment.js'
 
@@ -137,7 +137,7 @@ export default function VideoDatasetLightbox({
               className="min-h-10 rounded-md border border-white/20 px-2 py-1 text-white hover:bg-white/10 disabled:opacity-30 lg:min-h-0">
               Next →
             </button>
-            {compareSrc && !still && (
+            {compareSrc && !still && hasContributions('video.neural-compare', 'dataset') && (
               <button type="button" onClick={() => setComparing(true)}
                 title="Play the kept original next to this neural render, in step"
                 className="min-h-10 rounded-md border border-white/20 px-2 py-1 text-white hover:bg-white/10 lg:min-h-0">
@@ -168,7 +168,7 @@ export default function VideoDatasetLightbox({
         </label>
       </div>
       {comparing && compareSrc && (
-        <SideBySideVideo originalSrc={compareSrc} renderSrc={src} title={clip.filename}
+        <PluginSlot slot="video.neural-compare" surface="dataset" originalSrc={compareSrc} renderSrc={src} title={clip.filename}
           exportHref={videoDatasetClipComparisonUrl(datasetId, clip.id)}
           onClose={() => setComparing(false)} />
       )}

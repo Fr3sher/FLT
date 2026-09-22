@@ -22,10 +22,11 @@ export const NEURAL_RENDER_TOPICS = [
      'in step', 'synchronised playback', 'synchronized playback', 'export', 'export comparison',
      'export the comparison', 'save the comparison', 'download comparison', 'side by side file',
      'one video', 'share the before after', 'send the comparison', 'post it', 'labelled video',
+     'open folder', 'video folder', 'saved videos', 'find rendered video',
      'strength', 'detail strength',
      'not striking', 'too subtle', 'more effect', 'stronger', 'passes', 'two passes', 'render at 2x',
      '2x', 'zoom 1:1', 'one to one', 'real size', 'pixels'],
-    '/datasets', 'using-the-app', 'neural-render-for-video-clips'),
+    '/dlss5', 'using-the-app', 'neural-render-for-video-clips'),
   // The install, in Setup: the bridge is a button, the model is a folder.
   setupStep('setup-dlss5-install', 'install', 'Install DLSS 5 Neural Rendering',
     ['install dlss 5', 'dlss 5 bridge', 'neural rendering bridge', 'dlss5nr_bridge',
@@ -34,3 +35,11 @@ export const NEURAL_RENDER_TOPICS = [
      'pinned release', 'ComfyUI-DLSS5-NR', 'nvidia driver', 'ngx', 'optical flow',
      'nvofapi64', 'windows only', 'no linux', 'no docker', 'rtx 50', 'rtx 40']),
 ];
+
+for (const topic of NEURAL_RENDER_TOPICS) {
+  const route = topic.app?.route
+  if (route?.startsWith('/settings/') || route?.startsWith('/setup')) {
+    topic.app = { ...topic.app, route: '/plugins/dlss5/settings',
+      ...(route.startsWith('/settings/') ? { legacyRoute: route } : {}) }
+  }
+}

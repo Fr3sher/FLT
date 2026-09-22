@@ -85,7 +85,7 @@ def test_video_probe_preserves_main_piecewise_readiness_and_python_choices(host,
 def test_video_off_skips_all_previously_registered_probes(host, monkeypatch):
     loaded = activate(host, {'video'})
     from app import capabilities, config
-    from lds_video import neural_render, probes, video_test_studio
+    from lds_video import probes, video_test_studio
 
     def forbidden(*args, **kwargs):
         pytest.fail('OFF Video invoked a capability, model or runtime probe')
@@ -93,14 +93,13 @@ def test_video_off_skips_all_previously_registered_probes(host, monkeypatch):
     monkeypatch.setattr(capabilities, 'probe_video', forbidden)
     monkeypatch.setattr(probes, '_comfy', forbidden)
     monkeypatch.setattr(video_test_studio, 'missing_weights', forbidden)
-    monkeypatch.setattr(neural_render, 'status', forbidden)
     config.save_config({'plugins': {'enabled': {'video': False}}})
     with host[0].app_context():
         payload = {key: fn() for key, (owner, fn) in loaded.probes.items() if owner == 'video'}
     assert payload == {'video': False, 'video_detail': '', 'video_decode': False,
                        'video_detect': False, 'video_encode': False, 'video_host_ready': False,
                        'comfyui.video_studio_missing': [], 'comfyui.video_studio_ready': False,
-                       'comfyui.video_studio_options': {}, 'comfyui.video_studio_sage': {}, 'dlss5nr': {}}
+                       'comfyui.video_studio_options': {}, 'comfyui.video_studio_sage': {}}
 
 
 @pytest.mark.parametrize('missing', [None, 'curl_cffi', 'gallery_dl', 'bs4', 'cloudscraper', 'instaloader', 'ddgs', 'yt_dlp'])

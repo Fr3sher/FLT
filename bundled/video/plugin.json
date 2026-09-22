@@ -9,7 +9,7 @@
     "id": "lds",
     "name": "LDS"
   },
-  "description": "Video Bank, clip curation, video training sets, local and cloud training, and the local H3 Test Studio with manual continuation, interpolation and DLSS 5. Live is a separate plugin.",
+  "description": "Video Bank, clip curation, video training sets, local and cloud training, and the local H3 Test Studio with manual continuation and interpolation.",
   "requires": [],
   "python_package": "lds_video",
   "frontend": "frontend/index.js",
@@ -19,7 +19,6 @@
       "video",
       "video_host",
       "shot_detect",
-      "dlss5nr_bridge",
       "h3_base",
       "h3_text_encoder",
       "h3_video_vae",
@@ -39,8 +38,7 @@
       "comfyui.video_studio_missing",
       "comfyui.video_studio_ready",
       "comfyui.video_studio_options",
-      "comfyui.video_studio_sage",
-      "dlss5nr"
+      "comfyui.video_studio_sage"
     ],
     "engines": [],
     "config_sections": [
@@ -92,9 +90,7 @@
       "video-dataset-studio",
       "video-train-local",
       "video-promote-target",
-      "setup-video-studio",
-      "video-neural-render",
-      "setup-dlss5-install"
+      "setup-video-studio"
     ],
     "tables": [
       "video_bank",
@@ -112,11 +108,9 @@
       "2026-09-03-video-run-graph-and-previews",
       "2026-09-03-video-smooth-rate",
       "2026-09-03-video-quick-prompts",
-      "2026-09-03-compare-export",
       "2026-09-03-video-studio-render-time",
       "2026-09-02-video-studio-start-frame-batch",
       "2026-09-02-video-studio-fast-disk",
-      "2026-09-02-video-neural-render",
       "2026-09-02-video-studio-preview-size",
       "2026-09-02-video-studio-active-state-painted",
       "2026-09-02-video-studio-dataset-clip-posters",
@@ -226,7 +220,7 @@
   },
   "compatibility": {
     "lds": ">=2026.9.4",
-    "api": ">=1.16,<2",
+    "api": ">=1.21,<2",
     "python": ">=3.10,<4",
     "os": [
       "windows",
@@ -250,7 +244,6 @@
       "using-the-app#describe-your-shots-and-search-what-happens-in-them",
       "using-the-app#video-training-sets-and-the-two-things-to-check-before-you-cut-one",
       "using-the-app#work-on-a-video-training-set",
-      "using-the-app#neural-render-for-video-clips",
       "using-the-app#test-a-video-lora-before-you-trust-it",
       "using-the-app#continue-a-clip-from-its-last-frame",
       "using-the-app#smooth-pick-the-rate-before-it-runs"

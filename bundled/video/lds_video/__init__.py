@@ -22,7 +22,7 @@ def _keep_inputs(keep):
     return set(keep) | set(not_kept)
 
 def register(ctx):
-    from . import downloads, neural_render, probes
+    from . import downloads, probes
     from .routes import video_bank, video_datasets, video_studio
 
     ctx.register_install_action('video', label='Prepare video decoding and analysis',
@@ -42,8 +42,6 @@ def register(ctx):
     ctx.register_hook('job_queue.unlinked_results', _unlinked_results)
     for key, fn in probes.PROBES.items():
         ctx.register_probe(key, fn)
-    ctx.register_install_action('dlss5nr_bridge', label='DLSS 5 neural rendering bridge',
-                                run=lambda log: neural_render.install_bridge(log=log))
     for key, spec in downloads.H3_DOWNLOADS.items():
         ctx.register_model_download(
             key, url=spec['url'], dest=spec['dest'], min_free_gb=spec['min_free_gb'],

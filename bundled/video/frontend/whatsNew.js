@@ -87,20 +87,6 @@ export const WHATS_NEW = [
     to: '/studio?lane=video',
   },
   {
-    id: '2026-09-03-compare-export',
-    date: '2026-09-03',
-    title: 'Save a before/after comparison as one video',
-    blurb:
-      'The ⇔ comparison has an ⬇ Export button: the original and its neural '
-      + 'render are encoded into ONE mp4, side by side and labelled, so a '
-      + 'before/after can be shown to somebody who does not have the app — on a '
-      + 'rendered clip of a training set and on a render in the Test Studio '
-      + 'alike. The exported file starts with no metadata at all, because a '
-      + 'clip out of the studio carries the whole generation workflow — prompts '
-      + 'and folder paths included — in a tag nothing displays.',
-    to: '/studio?lane=video',
-  },
-  {
     id: '2026-09-03-video-studio-render-time',
     date: '2026-09-03',
     title: 'Every clip in the Video Test Studio says how long it took to render',
@@ -140,21 +126,6 @@ export const WHATS_NEW = [
       + 'Studio says so and names the flag to add — or the one to drop, when a '
       + 'launcher still switches the dynamic loader off.',
     to: '/studio?lane=video',
-  },
-  {
-    id: '2026-09-02-video-neural-render',
-    date: '2026-09-02',
-    title: 'Re-render video clips with DLSS 5 Neural Rendering',
-    blurb:
-      'A Neural render button on the clips of a video dataset and on the finished '
-      + 'clips of the Test Studio runs the NVIDIA DLSS 5 model over them: skin, hair '
-      + 'and fabric gain structure the source only implied. In a dataset the render '
-      + 'replaces the clip and the original is kept (Restore); in the studio it is a '
-      + 'new clip to compare. A ⇔ Compare button plays the original and the render '
-      + 'side by side, in step, with a 1:1 zoom. Strength, passes and a 2× working size '
-      + 'push the effect well past the model\'s default. Windows + NVIDIA only; Setup '
-      + 'installs the bridge, you bring the model file.',
-    to: '/datasets',
   },
   {
     id: '2026-09-02-video-studio-preview-size',

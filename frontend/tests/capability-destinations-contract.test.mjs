@@ -60,9 +60,9 @@ const RIGS = [
 test('every capability row carries a destination, in every rig', () => {
   for (const [name, caps] of RIGS) {
     const rows = deriveCapabilitySummary(caps)
-    // The fixed public fixture exposes 12 core capabilities and 15 product rows.
+    // The fixed public fixture exposes 12 core capabilities and 14 product rows.
     // Missing requirements stay counted; absent products are checked separately.
-    assert.equal(rows.length, 27, `${name}: expected core and active public product capabilities`)
+    assert.equal(rows.length, 26, `${name}: expected core and active public product capabilities`)
     for (const row of rows) {
       const dest = capabilityDestination(row)
       assert.ok(dest, `${name}: "${row.label}" has no destination`)

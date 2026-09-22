@@ -2,7 +2,6 @@ export const VIDEO_INSTALL_LABELS = {
   "video": "Video decoding (Video bank)",
   "shot_detect": "Shot detection (Video bank)",
   "video_text": "Burned-in text (Video bank)",
-  "dlss5nr_bridge": "DLSS 5 neural rendering bridge",
   "h3_base": "Video model (MiniMax H3)",
   "h3_text_encoder": "Video prompt encoder (Qwen3-VL)",
   "h3_video_vae": "Video decoder (VAE)",

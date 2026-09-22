@@ -10,7 +10,7 @@ test('Video has its own routes and Studio while Live remains independent', () =>
   assert.deepEqual(manifest.requires, [])
   assert.deepEqual(descriptor.routes.map(r => r.path), ['/video-bank', '/video-dataset/:id'])
   assert.deepEqual(descriptor.slots['studio.tab'].map(s => s.id), ['video'])
-  assert.equal(descriptor.slots['setup.card'].length, 2)
+  assert.deepEqual(descriptor.slots['setup.card'].map(card => card.id), ['video-studio'])
 })
 
 test('every help topic belongs to Video; global Canvas and Live topics are absent', () => {
@@ -18,7 +18,7 @@ test('every help topic belongs to Video; global Canvas and Live topics are absen
   assert.equal(new Set(ids).size, ids.length)
   assert.deepEqual([...ids].sort(), [...manifest.owns.help_topics].sort())
   assert.ok(ids.includes('setup-video-studio'))
-  assert.ok(ids.includes('setup-dlss5-install'))
+  assert.ok(!ids.includes('setup-dlss5-install'))
   assert.ok(ids.every(id => !/canvas|live|battle|reference-model|auto-continue/.test(id)))
 })
 

@@ -7,9 +7,10 @@ absolute paths included, and this file is built to be handed to other people.
 """
 import pytest
 
-from lds_video import neural_render as nr
+from lds_dlss5 import neural_render as nr
+from lds_video import neural_render_media as media
 
-pytestmark = pytest.mark.plugins('video')
+pytestmark = pytest.mark.plugins('video', 'dlss5')
 
 
 def argv(**kw):
@@ -128,7 +129,7 @@ def test_the_studio_route_refuses_a_clip_that_is_not_a_render(app, client, tmp_p
 def test_the_dataset_route_refuses_a_clip_that_plays_its_original(client, monkeypatch):
     """Same 404 and the same reason as the /original route it sits beside: no
     backup means the clip on disk IS the original."""
-    monkeypatch.setattr(nr, 'original_clip_path', lambda *a, **k: None)
+    monkeypatch.setattr(media, 'original_clip_path', lambda *a, **k: None)
     res = client.get('/api/video-dataset/1/clip/1/comparison')
     assert res.status_code == 404 and 'nothing to compare' in res.get_json()['error']
 
@@ -170,7 +171,7 @@ def test_the_gate_is_released_even_when_ffmpeg_fails(tmp_path, monkeypatch):
 def test_busy_and_too_large_are_their_own_answers(client, monkeypatch):
     """429 with a Retry-After, and 413 — not a flat 400 that reads as "your
     request was wrong" for two conditions that are neither."""
-    monkeypatch.setattr(nr, 'original_clip_path', lambda *a, **k: 'orig.mp4')
+    monkeypatch.setattr(media, 'original_clip_path', lambda *a, **k: 'orig.mp4')
     from lds_video import video_bank_service as svc
     monkeypatch.setattr(svc, 'dataset_clip_media_path', lambda *a, **k: 'render.mp4')
 

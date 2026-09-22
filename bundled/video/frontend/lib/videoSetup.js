@@ -23,7 +23,6 @@ export function videoSetupRows(caps) {
     { label: 'Shot detection', what: 'Split longer videos into shots for dataset review.', ok: !!c.video_detect, topic: 'setup-quality' },
     { label: 'Clip encoding', what: 'Export selected video segments as training clips.', ok: !!c.video_encode, topic: 'setup-quality' },
     { label: 'Smooth (frame interpolation)', what: 'Add intermediate frames to make generated motion smoother.', ok: smoothReady, topic: 'setup-video-studio', ...(!smoothReady ? waiting : {}) },
-    { label: 'DLSS 5 neural rendering', what: 'Re-render a finished clip with the installed DLSS model.', ok: !!c.dlss5nr?.ready, topic: 'setup-dlss5-install' },
   ]
 }
 export function videoInstallCatalog(caps) {

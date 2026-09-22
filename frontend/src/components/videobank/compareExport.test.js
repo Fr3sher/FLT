@@ -24,14 +24,14 @@ test('both hosts of the comparison hand it an export URL', () => {
     ['the dataset lightbox', lightbox, 'videoDatasetClipComparisonUrl'],
     ['the video test studio', studio, 'clipComparisonUrl'],
   ]) {
-    const tag = src.slice(src.indexOf('<SideBySideVideo'))
+    const tag = src.slice(src.indexOf('<PluginSlot slot="video.neural-compare"'))
     assert.match(tag.slice(0, 400), /exportHref=/, `${name} passes no exportHref`)
     assert.ok(src.includes(builder), `${name} does not import ${builder}`)
   }
 })
 
 test('the button only exists when a host offers the URL, and says it is working', () => {
-  const src = read("../../../../bundled/video/frontend/videobank/SideBySideVideo.jsx")
+  const src = read("../../../../bundled/dlss5/frontend/SideBySideVideo.jsx")
   assert.match(src, /\{exportHref && \(/)      // no prop, no button
   assert.match(src, /exporting \? 'Building…' : '⬇ Export'/)
   assert.match(src, /disabled=\{exporting\}/)  // one click, not five

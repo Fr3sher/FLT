@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { apiFetch, postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
-import { HelpBadge } from '@lds/plugin-sdk'
+import { apiFetch, postJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
+import { HelpBadge } from '@lds/plugin-sdk';
 
 const POLL_MS = 1200
 const ACTION = 'dlss5nr_bridge'
@@ -91,7 +91,7 @@ export default function Dlss5InstallCard({ caps, onDone }) {
     <section className="rounded-xl border border-border bg-surface p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
         <h3 className="text-base font-semibold text-content">
-          DLSS 5 Neural Rendering — optional, video clips
+          2. Prepare the DLSS bridge and model
           <HelpBadge topic="setup-dlss5-install" className="ml-2" />
         </h3>
         {st.ready && <span className="text-xs font-semibold text-emerald-400">ready</span>}
@@ -104,7 +104,7 @@ export default function Dlss5InstallCard({ caps, onDone }) {
       <ul className="mt-3 flex flex-col gap-1">
         <Row ok={st.os_ok}>Windows {st.os_ok ? '' : '— the model is a Direct3D 12 library and runs nowhere else (no Linux, no Docker)'}</Row>
         <Row ok={st.driver_ngx}>NVIDIA display driver {st.driver_ngx ? '' : '— its NGX runtime was not found on this machine'}</Row>
-        <Row ok={st.worker}>Video extra in the app&apos;s interpreter (numpy for the render process){st.worker ? '' : ' — install it from the list below'}</Row>
+        <Row ok={st.worker}>DLSS Python engine and video encoder{st.worker ? '' : ' — prepare the engine above'}</Row>
         <Row ok={st.bridge}>Neural rendering bridge v{st.bridge_version} (MIT, from {st.bridge_url?.replace('https://', '')})</Row>
         <Row ok={st.model}>
           Your <code className="rounded bg-surface-raised px-1 font-mono text-xs">{st.model_file}</code>

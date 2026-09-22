@@ -13,18 +13,16 @@ import { GUIDE } from './guide.js'
 //   - `studio.tab` — the 🎬 Video tab of the Test Studio.
 //   - `datasets.section` — the "Video training sets" list under the image
 //     datasets on the Datasets page.
-//   - `setup.card` — the Video Test Studio and DLSS 5 one-click install cards.
+//   - `setup.card` — the Video Test Studio install card.
 //   - `setup.step` — the lane's capability rows and install-menu items, so the
 //     Setup screen counts the lane and can (re)install its pieces one by one.
-//   - the lane's help topics (the Video Bank, the datasets, the Studio, the
-// ✨ neural rendering).
+//   - the lane's help topics (the Video Bank, datasets and clip Studio).
 // No `lucide-react` import here (node resolves a bare package from the
 // importing file's folder, and bundled/ has no node_modules): the Studio tabs
 // name their icon, the core maps the name.
 import { VIDEO_INSTALL_LABELS } from './lib/videoInstallLabels.js'
 import { WHATS_NEW } from './whatsNew.js'
 import { VIDEO_LANE_TOPICS } from './help/videoLane.js'
-import { NEURAL_RENDER_TOPICS } from './help/neuralRender.js'
 import { VIDEO_ML_CARDS, videoInstallCatalog, videoSetupRows } from './lib/videoSetup.js'
 
 export default {
@@ -51,14 +49,13 @@ export default {
     ],
     'setup.card': [
       { id: 'video-studio', panel: () => import('./setup/VideoStudioInstallCard.jsx') },
-      { id: 'dlss5', panel: () => import('./setup/Dlss5InstallCard.jsx') },
     ],
     'setup.step': [
       { id: 'video', labels: VIDEO_INSTALL_LABELS, rows: videoSetupRows, catalog: videoInstallCatalog, mlCards: VIDEO_ML_CARDS },
     ],
   },
   hosts: [],
-  help: [...VIDEO_LANE_TOPICS, ...NEURAL_RENDER_TOPICS],
+  help: VIDEO_LANE_TOPICS,
   whatsNew: WHATS_NEW,
   paritySkip: [],
 }

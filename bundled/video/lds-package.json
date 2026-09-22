@@ -1,7 +1,7 @@
 {
   "python_scripts": [
     "infer/_aesthetic_head.py", "infer/_harness.py", "infer/import_report.py", "infer/_caption_fields.py",
-    "infer/dlss5nr_infer.py", "infer/shot_detect_infer.py", "infer/video_aesthetic_infer.py",
+    "infer/shot_detect_infer.py", "infer/video_aesthetic_infer.py",
     "infer/video_ai_check_infer.py", "infer/video_caption_infer.py"
   ],
   "python_requirements": "requirements-workers.txt",

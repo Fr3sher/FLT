@@ -573,6 +573,34 @@ class PublicHistoryTests(unittest.TestCase):
         self.write('bundled/video/extra.py', 'UNREVIEWED_NEW_INFRASTRUCTURE = True\n')
         self.refused(tip=self.commit('unapproved later infrastructure'))
 
+    def test_dlss5_source_release_requires_exact_external_approval(self):
+        self.port_fixture()
+        self.write('bundled/dlss5/engine.py', 'APPROVED_PRODUCT_SOURCE = True\n')
+        self.tip = self.commit('synthetic source publication')
+        self.manifest = self.manifest_for(self.tip)
+        entry = next(item for item in self.manifest['commits'][0]['exceptions']
+                     if item['path'] == 'bundled/dlss5/engine.py')
+        entry['provenance'].update(kind='reviewed_product_release', sources=[])
+        self.assertTrue(self.approved()['allowed'])
+        self.assertFalse(self.inspect(private_source=self.private_source)['allowed'])
+        for kind in ('reviewed_port', 'generated'):
+            candidate = copy.deepcopy(self.manifest)
+            next(item for item in candidate['commits'][0]['exceptions']
+                 if item['path'] == 'bundled/dlss5/engine.py')['provenance']['kind'] = kind
+            self.refused(candidate)
+        self.write('bundled/dlss5/unreviewed.py', 'UNREVIEWED = True\n')
+        self.refused(tip=self.commit('unreviewed product change'))
+        for product in ('manga', 'creature_battle'):
+            candidate = copy.deepcopy(self.manifest)
+            candidate['products'].append(product)
+            self.refused(candidate)
+
+    def test_product_release_category_cannot_approve_other_products(self):
+        self.port_fixture()
+        self.manifest['commits'][0]['exceptions'][0]['provenance'].update(
+            kind='reviewed_product_release', sources=[])
+        self.refused()
+
     def test_exact_reviewed_port_and_unchanged_public_move_are_allowed(self):
         self.port_fixture(unchanged=True)
         self.assertFalse(self.inspect(private_source=self.private_source)['allowed'])

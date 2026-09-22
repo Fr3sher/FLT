@@ -13,7 +13,6 @@ to tell there are two services behind the app.
 
 No login — single local user (`cfg.LOCAL_USER`), like every other blueprint here.
 """
-import io
 import logging
 import os
 import uuid
@@ -23,7 +22,7 @@ from flask import Blueprint, jsonify, request, send_file
 from lds_sdk.video_host.config import LOCAL_USER
 from lds_sdk.video_host.gpu import gpu_exclusive_vision_window
 from lds_sdk.video_host import studio as lts
-from lds_video import neural_render as _nr
+from lds_sdk import dlss5 as _nr
 from lds_video import video_test_studio as vts
 from lds_sdk.video_host.http import _map_error
 from lds_sdk.video_host.http import require_comfyui as _require_comfyui
@@ -806,36 +805,6 @@ def video_studio_clip_media(clip_id):
     return send_file(path, mimetype='video/mp4', conditional=True, max_age=0)
 
 
-@bp.get('/clip/<int:clip_id>/comparison')
-def video_studio_clip_comparison(clip_id):
-    """⬇ A finished render and the clip it came from, as ONE mp4 side by side.
-
-    The dataset surface offers the same verb on its own rendered clips; the two
-    routes differ only in where the pair comes from (a backup beside the dataset
-    there, another row of the history here)."""
-    from lds_video.models import VideoTestClip
-    clip = VideoTestClip.query.filter_by(id=clip_id).first()
-    if clip is None or not clip.filename or not clip.nr_of:
-        return jsonify({'error': 'this clip is not a neural render — nothing to compare'}), 404
-    source = VideoTestClip.query.filter_by(id=clip.nr_of).first()
-    if source is None or not source.filename:
-        return jsonify({'error': 'the clip this render came from is gone'}), 404
-    clips = str(vts.clips_dir())
-    render_path = os.path.join(clips, os.path.basename(clip.filename))
-    source_path = os.path.join(clips, os.path.basename(source.filename))
-    try:
-        data = _nr.build_comparison(source_path, render_path, left_label='Original',
-                                    right_label='Neural render (DLSS 5)')
-    except _nr.ComparisonBusyError as exc:
-        res = jsonify({'error': str(exc)})
-        res.headers['Retry-After'] = '5'
-        return res, 429
-    except _nr.ComparisonTooLargeError as exc:
-        return jsonify({'error': str(exc)}), 413
-    except _nr.NeuralRenderError as exc:
-        return jsonify({'error': str(exc)}), 400
-    return send_file(io.BytesIO(data), mimetype='video/mp4', as_attachment=True,
-                     download_name=f'clip-{source.id}-vs-neural-{clip.id}.mp4', max_age=0)
 
 
 @bp.post('/clip/<int:clip_id>/rate')
@@ -884,21 +853,3 @@ def video_studio_delete(clip_id):
     db.session.delete(clip)
     db.session.commit()
     return jsonify({'ok': True})
-
-
-@bp.post('/clip/<int:clip_id>/neural-render')
-def video_studio_clip_neural_render(clip_id):
-    """✨ Re-render a finished clip through DLSS 5 Neural Rendering — as a new
-    clip, never an edit (the studio exists to compare). Body: the dials
-    (tone, structure, automask, temporal). The row appears at once in
-    ``pending`` and the list's own poll shows it land; a refusal (the model
-    is not set up, the clip is gone, a render of it is already running) is a
-    400 with the sentence to show."""
-    from flask import current_app
-    from lds_video import neural_render as nr
-    data = request.get_json(silent=True) or {}
-    try:
-        out = nr.start_studio_render(current_app._get_current_object(), LOCAL_USER, clip_id, data)
-    except nr.NeuralRenderError as exc:
-        return jsonify({'error': str(exc)}), 400
-    return jsonify({'ok': True, **out})

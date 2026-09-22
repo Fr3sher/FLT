@@ -1,3 +1,4 @@
+import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui'
 /**
  * 🎬 The Video Test Studio — the video lane's answer to "is this LoRA any good".
  *
@@ -43,8 +44,6 @@ import { appendQuickPrompt } from './videoPromptPresets.js';
 import MotionModelDialog from './MotionModelDialog.jsx';
 import SmoothDialog from './SmoothDialog.jsx';
 import VideoSourcePicker from './VideoSourcePicker.jsx';
-import NeuralRenderDialog from '../../videobank/NeuralRenderDialog.jsx';
-import SideBySideVideo from '../../videobank/SideBySideVideo.jsx';
 import { shortLoraName } from './videoLoraGroups.js';
 import { readPromptDraft, writePromptDraft } from './videoPromptDraft.js';
 import {
@@ -736,8 +735,8 @@ export default function VideoTestStudio() {
           Clips — newest first
         </h2>
         <VideoClipHistory clips={clips} onRate={rate} onDelete={remove} onReuse={reuse} onVfi={setVfiClip} vfiBusy={vfiBusy}
-          onNeuralRender={(clip) => setNrClip(clip)} nrBusy={nrBusy}
-          onCompare={(clip) => setCompareClip(clip)}
+          onNeuralRender={hasContributions('video.neural-render-dialog', 'studio') ? (clip) => setNrClip(clip) : null} nrBusy={nrBusy}
+          onCompare={hasContributions('video.neural-compare', 'studio') ? (clip) => setCompareClip(clip) : null}
           onJumpTo={jumpTo} onContinue={continueFrom} continueBusy={continueBusy}
           hasMore={hasMore} loadingMore={loadingMore} onLoadMore={loadMore} />
       </section>
@@ -756,7 +755,7 @@ export default function VideoTestStudio() {
           sentences come with the options payload, so the dialog can refuse
           in words on a machine without the model. */}
       {nrClip && (
-        <NeuralRenderDialog status={options?.neural_render} busy={nrBusy === nrClip.id}
+        <PluginSlot slot="video.neural-render-dialog" surface="studio" status={options?.neural_render} busy={nrBusy === nrClip.id}
           initial={nrClip.nr_params || null}
           subject={`Clip #${nrClip.id}${nrClip.seconds ? ` (${nrClip.seconds}s)` : ''}.`}
           consequence="The render is a NEW clip in this list; the original stays as it is."
@@ -766,7 +765,7 @@ export default function VideoTestStudio() {
       {/* ⇔ Source and render side by side, in step. The source is the row the
           render points at; if it was deleted, the left side says so. */}
       {compareClip && (
-        <SideBySideVideo originalSrc={clipVideoUrl(compareClip.nr_of)}
+        <PluginSlot slot="video.neural-compare" surface="studio" originalSrc={clipVideoUrl(compareClip.nr_of)}
           renderSrc={clipVideoUrl(compareClip.id)}
           title={`clip #${compareClip.nr_of} → neural render #${compareClip.id}`}
           exportHref={clipComparisonUrl(compareClip.id)}
