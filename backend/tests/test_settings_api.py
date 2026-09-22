@@ -711,6 +711,61 @@ def test_csrf_rejection_carries_fresh_cookie_and_allows_retry(csrf_client):
     assert r2.get_json()['config']['ollama']['url'] == 'http://x'
 
 
+def test_csrf_sessions_survive_other_local_instances(plugin_app_factory):
+    """One browser shares cookies across ports; each LDS must keep its session."""
+    from werkzeug.test import Client
+    from werkzeug.wrappers import Response
+
+    applications = {port: plugin_app_factory(config_object={'WTF_CSRF_ENABLED': True})
+                    for port in ('5051', '5052')}
+    applied = []
+    for port, application in applications.items():
+        def apply_fixture(port=port):
+            applied.append(port)
+            return {'ok': True, 'restarting': True}
+        # Exercise the real CSRF and admin guards without scheduling an exit.
+        application.view_functions['plugins.apply_changes'] = apply_fixture
+
+    def dispatch(env, start):
+        env['REMOTE_ADDR'] = '127.0.0.1'
+        return applications[env['SERVER_PORT']](env, start)
+
+    browser = Client(dispatch, Response)
+    first = 'http://localhost:5051'
+    second = 'http://localhost:5052'
+    token_a = browser.get('/api/csrf-token', base_url=first).json['csrf_token']
+    token_b = browser.get('/api/csrf-token', base_url=second).json['csrf_token']
+    browser.set_cookie('session', 'unrelated-local-flask-app')
+
+    assert browser.post('/api/plugins/apply', base_url=first, json={},
+                        headers={'X-CSRFToken': token_a}).status_code == 200
+    assert browser.post('/api/plugins/apply', base_url=second, json={},
+                        headers={'X-CSRFToken': token_b}).status_code == 200
+    # Neither missing nor cross-instance tokens gain permission to restart.
+    assert browser.post('/api/plugins/apply', base_url=first, json={}).status_code == 400
+    assert browser.post('/api/plugins/apply', base_url=first, json={},
+                        headers={'X-CSRFToken': token_b}).status_code == 400
+    assert applied == ['5051', '5052']
+
+    # Restarting the same installation retains its cookie name and session.
+    previous = applications['5051']
+    replacement = plugin_app_factory(config_object={
+        'WTF_CSRF_ENABLED': True, 'SECRET_KEY': previous.secret_key,
+    })
+    replacement.view_functions['plugins.apply_changes'] = previous.view_functions['plugins.apply_changes']
+    applications['5051'] = replacement
+    assert browser.post('/api/plugins/apply', base_url=first, json={},
+                        headers={'X-CSRFToken': token_a}).status_code == 200
+    assert applied == ['5051', '5052', '5051']
+
+
+def test_csrf_refresh_cannot_be_cached(csrf_client):
+    response = csrf_client.get('/api/csrf-token')
+    assert response.status_code == 200
+    assert response.cache_control.no_store
+    assert response.json['csrf_token']
+
+
 @pytest.fixture()
 def _reset_update_cache():
     from app.routes import settings as sroutes

@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-zzzzzzz-plugin-restart-session',
+    date: '2026-09-22',
+    title: 'Apply plugin changes without a session-token interruption',
+    blurb: 'Keeping another local app or LDS instance open no longer disrupts your session. Apply and restart automatically recovers the correct session token without asking you to refresh the page.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-22-zzzzzzz-fast-tool-detection',
     date: '2026-09-22',
     title: 'Find ComfyUI and ai-toolkit sooner after a restart',

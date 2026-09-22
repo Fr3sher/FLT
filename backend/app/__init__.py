@@ -2,6 +2,8 @@ import os
 import logging
 import mimetypes
 import sqlite3
+import hashlib
+import hmac
 import json
 from pathlib import Path
 from flask import (
@@ -690,6 +692,15 @@ def create_app(config_object=None):
         DATASET_ARCHIVE_SPOOL_MEMORY_BYTES=8 * 1024 * 1024,
     )
     app.config.update(config_object or {})
+    if 'SESSION_COOKIE_NAME' not in (config_object or {}):
+        # Cookies ignore ports. Other local Flask/LDS apps must not overwrite
+        # this install's signed session while a CSRF-protected request retries.
+        # The persistent key keeps the name stable across restarts without
+        # exposing a machine path or sharing a session with another install.
+        key = app.secret_key
+        scope = hmac.new(key.encode('utf-8') if isinstance(key, str) else key,
+                         b'lds-session-cookie', hashlib.sha256).hexdigest()[:16]
+        app.config['SESSION_COOKIE_NAME'] = f'lds_session_{scope}'
 
     # File logging (skipped under TESTING): every module logger flows into
     # data/app.log (rotating, 2 MB x 2) so the in-app log viewer — and a novice
@@ -823,7 +834,9 @@ def create_app(config_object=None):
     @app.get('/api/csrf-token')
     def csrf_token():
         from flask_wtf.csrf import generate_csrf
-        return jsonify({'csrf_token': generate_csrf()})
+        response = jsonify({'csrf_token': generate_csrf()})
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
     @app.get('/')
     def index():
