@@ -206,10 +206,10 @@ _pull = None            # None = never run this process
 _PULL_LOG_TAIL = 40     # status lines kept for the UI
 
 
-def list_models() -> dict:
+def list_models(*, url: str | None = None) -> dict:
     """Installed Ollama models for the model picker. {ok, reachable, models:[...]}.
     Never raises; an unreachable server returns reachable=False and an empty list."""
-    url = _url()
+    url = _url() if url is None else url
     if not _reachable(url):
         return {'ok': False, 'reachable': False, 'models': []}
     return {'ok': True, 'reachable': True, 'models': capabilities._ollama_tags(url)}

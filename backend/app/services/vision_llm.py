@@ -294,21 +294,23 @@ def ensure_ready(model: str | None = None) -> dict:
     return ollama_control.ensure_captioning_ready(model)
 
 
-def list_models() -> dict:
+def list_models(*, name: str | None = None, url: str | None = None) -> dict:
     """``{ok, reachable, models: [str]}`` — the shape the model pickers already read.
 
     Kept deliberately identical to what ``/api/ollama/models`` has always returned,
     so both surfaces' pickers (dataset AND bank) can switch endpoint without any
-    change to how they read the answer.
+    change to how they read the answer. Settings may inspect a different provider
+    or draft URL without changing the active configuration.
     """
-    if provider() == LMSTUDIO:
+    options = {'url': url} if url is not None else {}
+    if (name or provider()) == LMSTUDIO:
         from . import vision_lmstudio
-        listed = vision_lmstudio.list_models()
+        listed = vision_lmstudio.list_models(**options)
         return {'ok': listed['ok'], 'reachable': listed['reachable'],
                 'provider': LMSTUDIO,
                 'models': [m['id'] for m in listed['models']
                            if m['id'] and m.get('type') != 'embeddings']}
     from . import ollama_control
-    out = dict(ollama_control.list_models())
+    out = dict(ollama_control.list_models(**options))
     out['provider'] = OLLAMA
     return out

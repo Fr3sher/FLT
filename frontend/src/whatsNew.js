@@ -91,6 +91,13 @@ export const WHATS_NEW = [
     to: '/plugins',
   },
   {
+    id: '2026-09-22-zzz-local-llm-model-lists',
+    date: '2026-09-22',
+    title: 'Choose a detected Ollama or LM Studio model',
+    blurb: 'Settings now lists the models seen by each local server instead of asking you to type a name. Refresh after downloading a model. Your existing choice is preserved if the server is offline, and LM Studio still offers automatic selection.',
+    to: '/settings/local-tools?focus=ollama-vision-model',
+  },
+  {
     id: '2026-09-22-zz-unified-plugins',
     date: '2026-09-22',
     title: 'Discover and manage plugins in one place',

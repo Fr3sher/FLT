@@ -11,6 +11,7 @@ import ResetToDefault from './ResetToDefault'
 import LmStudioDownload from './LmStudioDownload'
 import { defaultValueAt } from './settingDefaults.js'
 import TimeoutSettings from './TimeoutSettings'
+import LocalLlmModelSelect from './LocalLlmModelSelect'
 
 /* HF token is for gated TRAINING bases (Krea 2 / FLUX.1 / FLUX.2 Klein) and reading
    your private custom-base repos — it lives with the ComfyUI card because that's
@@ -450,8 +451,8 @@ export default function LocalToolsSection(props) {
           <p className="mt-1 text-xs text-content-muted">
             Both cards below stay editable whichever you pick, so you can set the other one up
             and press Test before switching to it. Only the selected provider is used — and only
-            it is checked when the app refreshes its status, so nothing pays for a server you are
-            not running.
+            it is checked when the app refreshes its status. Each model list below reads its
+            own server, so you can prepare either provider before switching.
           </p>
         </div>
       </Card>
@@ -467,7 +468,7 @@ export default function LocalToolsSection(props) {
       >
         <OllamaStatus caps={caps} refreshCaps={refreshCaps} toast={toast} />
         <div className="flex items-end gap-3">
-          <div className="flex-1 space-y-4">
+          <div className="min-w-0 flex-1 space-y-4">
             <TextField
               id="ollama-url"
               label="Ollama URL"
@@ -475,12 +476,14 @@ export default function LocalToolsSection(props) {
               onChange={(v) => setField('ollama', 'url', v)}
               placeholder="http://127.0.0.1:11434"
             />
-            <TextField
+            <LocalLlmModelSelect
               id="ollama-vision-model"
               label="Ollama vision model"
+              provider="ollama"
+              url={config.ollama.url || ollamaDefault('url')}
+              refreshKey={caps?.ollama?.reachable}
               value={config.ollama.vision_model}
               onChange={(v) => setField('ollama', 'vision_model', v)}
-              placeholder="huihui_ai/qwen3-vl-abliterated:8b-instruct"
             />
             <TestResult result={testResults.ollama} />
           </div>
@@ -546,12 +549,12 @@ export default function LocalToolsSection(props) {
       <Card
         title={provider === 'lmstudio' ? 'LM Studio — in use'
           : 'LM Studio — not in use (Test still works)'}
-        help="A local model server with a graphical app. Unlike Ollama it cannot be started from here, and it only serves a model that is already loaded."
+        help="A local model server with a graphical app. Choose a detected model, or keep automatic selection."
       >
         <LmStudioStatus caps={caps} active={provider === 'lmstudio'}
           refreshCaps={refreshCaps} toast={toast} />
         <div className="flex items-end gap-3">
-          <div className="flex-1 space-y-4">
+          <div className="min-w-0 flex-1 space-y-4">
             <TextField
               id="lmstudio-url"
               label="LM Studio URL"
@@ -565,13 +568,14 @@ export default function LocalToolsSection(props) {
                   + 'sure its server is reachable from Docker.'
                 : "The server root. LM Studio's Developer tab shows it with /v1 on the end — either form is accepted."}
             />
-            <TextField
+            <LocalLlmModelSelect
               id="lmstudio-vision-model"
               label="LM Studio model"
+              provider="lmstudio"
+              url={(config.lmstudio || {}).url || lmstudioDefault('url')}
+              refreshKey={caps?.lmstudio?.reachable}
               value={(config.lmstudio || {}).vision_model || ''}
               onChange={(v) => setField('lmstudio', 'vision_model', v)}
-              placeholder="leave empty to use whatever is loaded"
-              help="Left empty, the app uses whichever model LM Studio has loaded — usually what you want, since it only serves a loaded one."
             />
             {/* ⏬ The missing half of the Ollama pull, asked for in those words.
                 The job runs inside LM Studio itself, so it survives navigation
