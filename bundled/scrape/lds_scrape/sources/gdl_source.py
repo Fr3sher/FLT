@@ -1,8 +1,9 @@
 # app/scrape/sources/gdl_source.py
-"""Base paramétrable des sources gérées par gallery-dl (P4). Une nouvelle source =
-sous-classe ~10 lignes : platform_enum + name/priority/capabilities + gdl_opts +
-cookies_key. match() = host (via validators.detect_platform) ; scan/download
-délèguent au moteur gdl.py."""
+"""Configurable base for gallery-dl sources.
+
+A small subclass supplies platform_enum, name, priority, capabilities, gdl_opts
+and cookies_key. match() detects the host through validators.detect_platform;
+scan() and download() delegate to gdl.py."""
 import os
 
 from .base import Source, Match
@@ -14,8 +15,8 @@ from lds_sdk.credentials import resolve_credential_file as resolve_cookies  # no
 
 
 class GalleryDlSource(Source):
-    """Source gallery-dl générique. Les sous-classes définissent :
-       platform_enum, name, priority, capabilities, gdl_opts (list|None), cookies_key (str|None)."""
+    """Generic gallery-dl source. Subclasses define platform_enum, name, priority,
+    capabilities, gdl_opts (list|None), and cookies_key (str|None)."""
     platform_enum = None
     gdl_opts = None
     cookies_key = None

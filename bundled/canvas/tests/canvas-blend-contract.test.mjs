@@ -36,9 +36,9 @@ test('the board imports the Test Studio stack module instead of copying it', () 
   assert.match(UTIL, /from '@lds\/plugin-sdk\/canvas'/)
   assert.match(UTIL, /combineBlocker/)
   assert.match(UTIL, /stackWeight/)
-  // Le curseur ET les cases d'un LoRA sont UN composant partagé par les deux
-  // surfaces (BlendWeightRow) : deux copies du même contrôle, ce serait deux
-  // occasions de diverger sur « aucune case cochée = le curseur gouverne ».
+  // A LoRA's slider AND checkboxes are one component shared by both surfaces
+  // (BlendWeightRow), keeping the "no checkbox selected = slider governs"
+  // rule consistent.
   assert.match(BLEND, /import \{ BlendWeightRow \} from '@lds\/plugin-sdk\/canvas'/)
   assert.match(ROW, /from '\.\/loraStack'/)
   assert.match(ROW, /BLEND_WEIGHT_CHIPS/)
@@ -72,8 +72,8 @@ test('the launch really switches the request, and the deploy still runs first', 
   assert.match(HOOK, /blend && canvasRunSelections\(picks\)\.length > 1/)
   assert.match(HOOK, /\.\.\.\(blending \? \{ combine: true \} : \{ strengths \}\)/)
   assert.match(HOOK, /canvasRunSelections\(picks, \{[\s\S]{0,80}blend: blending, weights/)
-  // …et les cases de poids voyagent avec les curseurs, sinon le board annonce
-  // neuf images et en lance une.
+  // Selected weights travel with the sliders; otherwise the board could
+  // promise nine images while launching one.
   assert.match(HOOK, /sets: sets \|\| \{\}/)
   // The deploy gate is upstream of the payload: a blend can never load a subset
   // of the checkpoints it announced.
@@ -86,11 +86,11 @@ test('a blend announces ONE configuration, not one per pick and strength', () =>
   // The strength sweep has nothing left to sweep, so it leaves the panel AND the
   // counter — a panel promising six images while queueing one is the bug here.
   assert.match(PANEL, /showStrengths=\{!blend\}/)
-  // …et depuis le balayage, `configCount` combinaisons plutôt qu'une.
+  // Sweeps render `configCount` combinations rather than one.
   assert.match(PANEL, /cellTotal=\{blend \? form\.axisTotal \* configCount : null\}/)
   assert.match(PANEL, /const configCount = blend \? canvasBlendConfigCount/)
-  // `cells` = ce que la grille rend pour UN prompt ; le lot 📝 le multiplie
-  // ensuite (cf. prompt-batch-contract), il ne le remplace pas.
+  // `cells` is the grid output for ONE prompt; the 📝 batch then multiplies it
+  // (see prompt-batch-contract) rather than replacing it.
   assert.match(SETUP, /const cells = cellTotal != null \? cellTotal : form\.total/)
   assert.match(SETUP, /const total = cells \* promptMult/)
   assert.match(SETUP, /total=\{total \* batchMult\}/)

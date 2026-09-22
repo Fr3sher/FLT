@@ -31,9 +31,9 @@ import { runNumber } from '@lds/plugin-sdk/canvas';
 export default function CanvasBlendPanel({
   selection, mode, onMode, weights, onWeight, blocker = null, familyReason = null,
   sets = {}, onToggleChip = null, count = 1, secondsPerImage = null,
-  // 🔤 État de la case « Trigger word » du panneau de lancement voisin : la
-  // promesse « Added to the front of your prompt » doit se taire quand elle
-  // est décochée (rien ne sera préfixé).
+  // 🔤 State of the adjacent launch panel's "Trigger word" checkbox: hide
+  // "Added to the front of your prompt" when unchecked, since nothing will
+  // be prepended.
   injectTrigger = true,
 }) {
   const blend = mode === 'blend';

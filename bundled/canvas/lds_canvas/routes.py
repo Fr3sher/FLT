@@ -64,8 +64,8 @@ def train_canvas_generate():
         res = host.generate_checkpoint_comparison(
             LOCAL_USER, d.get('selections') or [],
             d.get('strengths') or [1.0],
-            # Réglages partagés (mêmes clés wire que le Studio) ; 📝 Lot : une
-            # passe par prompt coché. ◉ La base est un AXE (z_models).
+            # Shared settings use the Studio's wire keys; 📝 batches run once
+            # per selected prompt. ◉ The base model is an AXIS (z_models).
             StudioGenSettings.from_payload(d),
             prompts=d.get('prompts'),
             external_loras=d.get('external_loras'), combine=d.get('combine'))

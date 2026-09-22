@@ -1,16 +1,16 @@
-"""Model-file tools that are pure file-in / file-out work on this machine â€”
+"""Model-file tools that are pure file-in / file-out work on this machine —
 the routes of the bundled ``model_tools`` plugin.
 
 No ai-toolkit gate, no ComfyUI gate, no cloud: merging a LoRA into a base reads
 two files and writes a third; quantizing a model reads one and writes its fp8
 twin. Neither needs a GPU or a training environment, so gating them on either
-would refuse the one user who most needs them â€” someone who trained on a rented
+would refuse the one user who most needs them — someone who trained on a rented
 machine and only has the weights.
 
-The URLs are the ones the screens already call (``/api/tools/lora-mergeâ€¦``,
-``/api/tools/fp8-quantizeâ€¦``): the faÃ§ade registers this blueprint under the
+The URLs are the ones the screens already call (``/api/tools/lora-merge…``,
+``/api/tools/fp8-quantize…``): the facade registers this blueprint under the
 core's ``/api`` prefix. With the plugin off they answer 404 like any absent
-route; the one-click fp8 delivery (``/api/tools/fp8-deliverâ€¦``, the dense
+route; the one-click fp8 delivery (``/api/tools/fp8-deliver…``, the dense
 lane's) belongs to ``cloud_training`` and binds this plugin's converter on
 first use.
 """
@@ -39,7 +39,7 @@ def tools_lora_merge_plan():
 
     Always 200: the panel disables its button and shows the reason, instead of
     letting the user commit to a 26 GB write and meeting the refusal afterwards.
-    Every condition the run needs is decided here â€” see ``lora_merge_job.plan``.
+    Every condition the run needs is decided here — see ``lora_merge_job.plan``.
     """
     from . import lora_merge_job
     d = request.get_json(silent=True) or {}
@@ -60,7 +60,7 @@ def tools_lora_merge_start():
             destination=d.get('destination'),
             destination_dir=d.get('destination_dir'),
             overwrite=bool(d.get('overwrite')))
-    except Exception as e:                     # noqa: BLE001 â€” mapped, not swallowed
+    except Exception as e:                     # noqa: BLE001 — mapped, not swallowed
         return _map_error(e)
     return jsonify({'ok': True, **info, 'status': lora_merge_job.status()})
 
@@ -109,7 +109,7 @@ def tools_fp8_quantize_start():
         info = fp8_quantize.start_async(current_app._get_current_object(),
                                         d.get('path'),
                                         overwrite=bool(d.get('overwrite')))
-    except Exception as e:                     # noqa: BLE001 â€” mapped, not swallowed
+    except Exception as e:                     # noqa: BLE001 — mapped, not swallowed
         return _map_error(e)
     return jsonify({'ok': True, **info, 'status': fp8_quantize.status()})
 

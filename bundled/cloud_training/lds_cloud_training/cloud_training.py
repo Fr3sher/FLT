@@ -1304,12 +1304,12 @@ def _video_lane(run):
     return cloud_video_training
 
 def retry_cloud_run(user_id, run_id) -> dict:
-    """Relance un run TERMINÉ EN ERREUR avec les paramètres exacts persistés au
-    lancement d'origine (train_params) — le bouton ↻ Retry de la page Cloud.
-    C'est un VRAI launch_cloud_training (pod frais, mêmes garde-fous : limite
-    de runs actifs, budget, unicité par famille), pas une réanimation du pod
-    mort. Les confirmations ne sont rejouées que si le lancement d'origine les
-    avait explicitement enregistrées."""
+    """Restart a FAILED run with the exact parameters saved at its original
+    launch (train_params) — the Cloud page's ↻ Retry button.
+    This is a real launch_cloud_training call (fresh pod, usual safeguards:
+    active-run limit, budget, uniqueness per family), not a revival of the dead
+    pod. Confirmations are replayed only if the original launch explicitly
+    recorded them."""
     run = db.session.get(CloudTrainingRun, int(run_id))
     if not run:
         raise ValueError('unknown cloud run')
@@ -1693,22 +1693,22 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
                        overrides=None, resume_mode='weights_only',
                        state_bundle_id=None, transport=None,
                        allow_parallel_run=False, gpu_name=None) -> dict:
-    """Reprend un run cloud TERMINAL (done OU en échec) depuis un checkpoint
-    harvesté et vise step_de_reprise + extra_steps — le pendant cloud de
-    lora_training.continue_training. C'est un VRAI launch_cloud_training (pod
-    frais, mêmes garde-fous : limite de runs actifs, budget, unicité par
-    famille) avec les paramètres persistés du run source (variante/famille/
-    masked/GPU class, comme retry_cloud_run) ; son monitor, AVANT de démarrer le
-    job, dépose le checkpoint dans le save_root du job sur le pod pour déclencher
-    l'auto-resume d'ai-toolkit.
+    """Resume a TERMINAL cloud run (done OR failed) from a harvested checkpoint,
+    targeting resume step + extra_steps — the cloud equivalent of
+    lora_training.continue_training. This is a real launch_cloud_training call
+    (fresh pod, usual safeguards: active-run limit, budget, uniqueness per
+    family) with the source run's saved parameters (variant/family/masked/GPU
+    class, as in retry_cloud_run). BEFORE starting the job, its monitor places
+    the checkpoint in the job's save_root on the pod to trigger ai-toolkit's
+    auto-resume.
 
-    ``from_step`` absent → dernier checkpoint (défaut). Fourni → CE step précis, y
-    compris un checkpoint plus ancien : le seed d'un checkpoint arbitraire sur un
-    pod NEUF est le même canal que le seed du dernier, et le staging du run source
-    n'est jamais touché — repartir d'un step inférieur est donc gratuit côté cloud.
-    ``overrides`` = mêmes réglages sûrs que le local (cadence/preview prompts),
-    fusionnés dans le snapshot du run (jamais dans le dataset). register_launch
-    reste un launch cloud normal — le resume est un détail d'exécution.
+    Omit ``from_step`` for the latest checkpoint (default), or supply the exact
+    step, including an older checkpoint. Seeding any checkpoint on a NEW pod
+    uses the same mechanism as seeding the latest one, without touching the
+    source run's staging — selecting an earlier step needs no extra cloud work.
+    ``overrides`` accepts the same safe settings as local training (cadence/
+    preview prompts), merged into the run snapshot, never the dataset.
+    register_launch remains a normal cloud launch; resuming is an execution detail.
     ``gpu_name`` selects the new pod's GPU class; absent, keep the source
     run's preference for compatibility with existing callers."""
     _require_cloud_weights_only(resume_mode, state_bundle_id)
@@ -2179,9 +2179,9 @@ def _lct_resolve_and_refuse(user_id, dataset_id, train_type, base_model,
     if fam == 'sdxl':
         raise ValueError('SDXL training needs a local base checkpoint — '
                          'cloud training supports Z-Image, Krea and FLUX.2 Klein')
-    # flux2klein n'est PAS bloqué (contrairement à flux) : ses bases sont des repos
-    # HF officiels que le pod télécharge lui-même — le 9B (32-48 GB VRAM) est même
-    # la voie cloud principale de la famille.
+    # flux2klein is NOT blocked (unlike flux): its bases are official HF repos
+    # downloaded by the pod itself. The 9B (32-48 GB VRAM) is actually the
+    # family's main cloud option.
     if fam == 'flux':
         raise ValueError('FLUX.1 training is local-only for now — '
                          'cloud training supports Z-Image, Krea and FLUX.2 Klein')
@@ -6849,7 +6849,7 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
     if fam == 'sdxl':
         raise ValueError('SDXL training needs a local base checkpoint — '
                          'cloud training supports Z-Image, Krea and FLUX.2 Klein')
-    # flux2klein passe (cf. launch_cloud_training) — seul flux reste local-only.
+    # flux2klein is allowed (see launch_cloud_training); only flux remains local-only.
     if fam == 'flux':
         raise ValueError('FLUX.1 training is local-only for now — '
                          'cloud training supports Z-Image, Krea and FLUX.2 Klein')

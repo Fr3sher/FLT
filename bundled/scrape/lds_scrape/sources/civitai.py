@@ -1,19 +1,17 @@
 # app/scrape/sources/civitai.py
-r"""Source Civitai (civitai.com / civitai.red) — listings d'images par tag/recherche.
+"""Civitai source (civitai.com / civitai.red): image listings by tag or search.
 
-Ex. : https://civitai.red/images?tags=5169 , https://civitai.com/images?tags=N
+Examples: https://civitai.red/images?tags=5169, https://civitai.com/images?tags=N
 
-gallery-dl 1.32.3 gère NATIVEMENT les deux domaines (BASE_PATTERN `civitai\.(?:red|com)`)
-et route `/images?...` vers `CivitaiImagesExtractor` (parse la query `tags=`, types=image).
-Les images sont des médias DIRECTS (Message.Url, type 3, `image-b2.civitai.com/.../orig`)
-→ bornées par `--range` (image-range). La pagination « Charger plus » est donc une FENÊTRE
-d'image-range (page 0 = 1-100, page 1 = 101-200, …), ≠ pornpics qui empile des galeries
-(`--chapter-range`).
+gallery-dl 1.32.3 natively supports both domains and sends /images?... to
+CivitaiImagesExtractor, which parses tags and uses types=image. Images are
+direct media (Message.Url, type 3, image-b2.civitai.com/.../orig), bounded by
+--range. "Load more" therefore uses image-range windows: page 0 is 1-100,
+page 1 is 101-200, unlike PornPics' gallery queues and --chapter-range.
 
-NSFW : l'API tRPC renvoie `browsingLevel` 31 (tous niveaux) par défaut, MAIS le serveur
-exige une `api-key` (Bearer) pour réellement servir le contenu adulte. L'app lançant
-gallery-dl avec `--ignore-config`, on passe la clé en `-o api-key=<token>` (cf. gdl_opts).
-"""
+The tRPC API defaults to browsingLevel 31 (all levels), but serving adult
+content requires a Bearer api-key. Since the app uses --ignore-config,
+gdl_opts supplies the key through -o api-key=<token>."""
 import os
 
 from ..validators import Platform
@@ -28,9 +26,9 @@ from . import registry
 from lds_sdk.credentials import civitai_api_key  # noqa: F401 — re-export
 
 
-# Contenu public-via-API, images + vidéos, polis (gros listings). Download EN DIRECT
-# (curl_cffi durci) : les médias renvoyés par le scan sont des URLs CDN directes SANS
-# extension (image-b2.civitai.com/.../original) que gallery-dl REFUSE (cf. download()).
+# Public API content, images and videos, with polite limits for large listings.
+# Download directly using hardened curl_cffi: scan results are extensionless CDN
+# URLs that gallery-dl rejects (image-b2.civitai.com/.../original).
 _CIVITAI_CAPS = Capabilities(
     can_enumerate_profile=True,
     polite=True,
@@ -38,9 +36,9 @@ _CIVITAI_CAPS = Capabilities(
     own_downloader=True,
 )
 
-# Content-types servis par le CDN Civitai (image-b2.civitai.com) : image/* + video/*
-# (Civitai héberge aussi des animations). Sert l'allowlist du fetch durci ET le mapping
-# d'extension (les URLs CDN finissent par /original, sans extension de fichier).
+# Content types served by Civitai's CDN include images and videos/animations.
+# Use them for the hardened fetch allowlist and extension mapping, since CDN
+# URLs end with /original rather than a file extension.
 _CIVITAI_MEDIA_TYPES = frozenset({
     'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'image/avif',
     'video/mp4', 'video/webm', 'video/quicktime',
@@ -63,8 +61,8 @@ _FETCH_REASON_MSG = {
 
 
 def _ext_for(content_type, url):
-    """Extension de fichier depuis le content-type (repli : extension d'URL, sinon .png).
-    Civitai sert majoritairement du PNG → défaut raisonnable si tout échoue."""
+    """Derive an extension from content type, falling back to the URL or .png.
+    Civitai predominantly serves PNG, making it a reasonable final default."""
     ct = (content_type or '').split(';', 1)[0].strip().lower()
     if ct in _CT_EXT:
         return _CT_EXT[ct]
@@ -81,29 +79,27 @@ class CivitaiSource(GalleryDlSource):
     priority = 100
     capabilities = _CIVITAI_CAPS
     paginated = True
-    page_size = 100   # images par fournée « Charger plus » (l'API tRPC pagine ~100/page)
-    category = 'image'  # images IA → ouvert aux non-admins
+    page_size = 100   # images per "Load more" batch (tRPC pages contain about 100)
+    category = 'image'  # AI images: available to non-admins
 
     @property
     def gdl_opts(self):
-        # api-key (Bearer) pour le NSFW au SCAN uniquement. Absente → SFW. Le download
-        # ne passe PAS par gallery-dl (cf. download()) : la clé n'y sert pas (le CDN
-        # image-b2.civitai.com sert le média sans auth une fois l'URL connue).
+        # Use the Bearer api-key for adult content during scans only; no key means SFW.
+        # Downloads bypass gallery-dl and need no key: the CDN serves known media URLs
+        # without authentication.
         key = civitai_api_key()
         return ['-o', f'api-key={key}'] if key else None
 
     def download(self, url, dest_base):
-        """Télécharge le média Civitai EN DIRECT (fetch durci), PAS via gallery-dl.
+        """Download Civitai media directly with a hardened fetch.
 
-        Le scan renvoie des URLs CDN DIRECTES sans extension
-        (`image-b2.civitai.com/.../original`). gallery-dl les REFUSE
-        (« Unsupported URL », exit 64) : son extracteur civitai ne matche que les
-        pages civitai.com, et le fallback directlink exige une URL terminée par une
-        extension de fichier. On télécharge donc en direct via `fetch_hardened_bytes`
-        (anti-SSRF, allow_redirects=False, content-type vérifié), l'extension venant
-        du content-type. `download_service._finalize` revalide ensuite par magic-bytes
-        + applique la garde image-only non-admin + l'antivirus → un non-admin ne
-        récupère jamais une vidéo, quelle que soit l'extension produite ici."""
+        Scan results are extensionless CDN URLs (image-b2.civitai.com/.../original).
+        gallery-dl rejects them with "Unsupported URL" (exit 64): its Civitai extractor
+        accepts site pages, while its directlink fallback requires a file extension.
+        fetch_hardened_bytes provides SSRF protection, disables redirects and checks
+        content type, which determines the extension. download_service._finalize then
+        checks magic bytes, applies the non-admin image-only restriction and scans
+        for viruses. Non-admins cannot receive video regardless of the extension."""
         from lds_sdk.netfetch import MAX_DRIVER_BYTES, fetch_hardened_bytes
         ok, data, ctype, reason = fetch_hardened_bytes(
             url, allowed_types=_CIVITAI_MEDIA_TYPES, max_bytes=MAX_DRIVER_BYTES)
@@ -120,9 +116,9 @@ class CivitaiSource(GalleryDlSource):
         return True, filename, None
 
     def scan(self, match):
-        # Fenêtre d'images de la page demandée (match.page, 0-based, posé par /scan).
-        # Images directes (type 3) → `image_range` borne le flux (le défaut gdl 120
-        # plafonnerait, et il faut une fenêtre DÉCALÉE pour « Charger plus »).
+        # Select the requested image window (zero-based match.page, set by /scan).
+        # Direct type-3 media use image_range to bound the stream; the default cap of
+        # 120 would truncate results, and "Load more" requires an offset window.
         page = max(0, getattr(match, 'page', 0) or 0)
         start = page * self.page_size + 1
         end = (page + 1) * self.page_size

@@ -2,7 +2,7 @@
   "id": "scrape",
   "bundled": true,
   "name": "Web scraping",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "api": 1,
   "description": "Search Reddit, Pexels or the open web by keyword, or scan a gallery URL, and import the pictures or clips you pick into a dataset, an image bank or a video bank.",
   "requires": [],

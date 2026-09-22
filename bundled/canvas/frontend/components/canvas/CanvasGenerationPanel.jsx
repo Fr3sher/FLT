@@ -111,8 +111,8 @@ function CanvasCheckpointRecap({ selection, onToggle, onClear }) {
    stored under an existing name changes meaning. */
 const MODE_KEY = 'canvasStack_mode';
 const WEIGHTS_KEY = 'canvasStack_weights';
-// Les poids COCHÉS (balayage 🧬). Clé neuve : une install qui n'en a pas lit {},
-// c'est-à-dire aucune case cochée, c'est-à-dire les curseurs — comme avant.
+// Selected weights (🧬 sweep). A missing key reads as {}, meaning no selected
+// checkboxes: the sliders govern, preserving the previous behavior.
 const SETS_KEY = 'canvasStack_weightSets';
 const readMode = () => {
   try { return localStorage.getItem(MODE_KEY) === 'blend' ? 'blend' : 'compare'; }
@@ -147,10 +147,10 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
     const list = Array.isArray(cur[k]) ? cur[k] : [];
     return { ...cur, [k]: list.includes(w) ? list.filter((v) => v !== w) : [...list, w] };
   });
-  // 🔤 Case « Trigger word » — tenue ICI (et non dans RunSetupPanel) parce que le
-  // panneau 🧬 Blend au-dessus annonce les triggers ajoutés au prompt : les deux
-  // doivent lire le même état, sinon le blend promet une injection que la case
-  // décochée annule. Même préférence partagée (triggerPref) que le Studio.
+  // 🔤 Keep "Trigger word" HERE rather than in RunSetupPanel: the 🧬 Blend
+  // panel above announces the triggers added to the prompt. Both must read
+  // the same state so an unchecked box cannot contradict the blend's promise.
+  // This uses the Studio's shared preference (triggerPref).
   const [injectTrigger, setInjectTrigger] = useState(readInjectTrigger);
   const toggleInjectTrigger = (v) => { setInjectTrigger(v); writeInjectTrigger(v); };
 
@@ -260,9 +260,9 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
               // count must stop multiplying by it — or the panel would announce
               // six images and queue one.
               showStrengths={!blend}
-              // 🧬 Un balayage rend `configCount` configurations, pas une :
-              // le compteur du bouton doit les multiplier, ou il annonce une
-              // image là où la file en recevra neuf.
+              // 🧬 A sweep renders `configCount` configurations: the button
+              // count must include this multiplier or it could promise one
+              // image while the queue receives nine.
               cellTotal={blend ? form.axisTotal * configCount : null}
               genStoragePrefix={`studioGen_canvas_${family || 'default'}`}
               injectTrigger={injectTrigger}

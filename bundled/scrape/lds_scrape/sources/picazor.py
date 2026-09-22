@@ -1,22 +1,18 @@
 # app/scrape/sources/picazor.py
-"""Scraper Picazor — énumération + téléchargement direct (curl_cffi).
+"""Picazor scraper: enumeration and direct curl_cffi downloads.
 
-Picazor est derrière Cloudflare : on requête avec curl_cffi en
-`impersonate='chrome'` pour franchir la protection JA3/TLS. Aucune dépendance
-HTML lourde (pas de bs4) — le parsing se fait par regex sur le HTML server-side.
+Use impersonate=chrome for the site's Cloudflare JA3/TLS checks. Parse
+server-rendered HTML with regex, without a heavy HTML dependency.
 
-Structure du site (reverse, vérifiée) :
-  - /fr/{creator}              -> page profil : grille des 24 médias récents
-  - /fr/{creator}/page/{N}     -> page N du listing (24 médias/page, anté-chrono)
-  - /fr/{creator}/{index}      -> page de DÉTAIL d'un média (PAS un listing)
-  - vignette 300px_{name}.mp4.jpg -> VIDÉO  /uploads/<path>/{name}.mp4
-  - vignette 300px_{name}.jpg     -> PHOTO  /uploads/<path>/{name}.jpg
+Verified site structure: /fr/{creator} lists 24 recent items;
+/fr/{creator}/page/{N} lists page N in reverse chronological order;
+/fr/{creator}/{index} is a single-media detail page.
+300px_{name}.mp4.jpg thumbnails map to /uploads/<path>/{name}.mp4;
+300px_{name}.jpg thumbnails map to /uploads/<path>/{name}.jpg.
 
-API publique (contrat des sources de scraping) :
-    scan(validation) -> (items, error)
-    download(url, dest_path) -> (ok, final_filename, error)
-Aucune des deux ne lève : toute exception est capturée et convertie en message.
-"""
+Public contract: scan(validation) -> (items, error);
+download(url, dest_path) -> (ok, final_filename, error).
+Neither raises: exceptions become messages."""
 import logging
 import math
 import os
@@ -30,28 +26,28 @@ from .gdl import GdlError
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
-# Constantes (autonomes — aucun import de config/settings)
+# Self-contained constants; no config/settings imports.
 # --------------------------------------------------------------------------- #
 BASE_URL = "https://picazor.com"
 ITEMS_PER_PAGE = 24
-# Relevé (le « 60 » bloquait alors que la pagination serveur /page/N en a bien plus).
-# Le scan est SYNCHRONE (1 requête Cloudflare par page) → MAX_PAGES borne le temps
-# (~1-2 s/page). Au-delà il faudrait une pagination asynchrone.
-MAX_ITEMS = 300          # borne dure sur le nombre d'items retournés par scan()
+# Raised from 60 because server-side /page/N contains many more items.
+# Scanning is synchronous, with one Cloudflare request per page, so
+# MAX_PAGES limits time (about 1-2 seconds/page). More needs async pagination.
+MAX_ITEMS = 300          # Hard cap on items returned by scan().
 MAX_PAGES = 14           # garde-fou pagination (14×24=336 ≥ 300 ; ~20-30 s pire cas)
-HTTP_TIMEOUT = 30        # secondes (requête HTML)
-DOWNLOAD_TIMEOUT = 300   # secondes (téléchargement média)
+HTTP_TIMEOUT = 30        # Seconds (HTML request).
+DOWNLOAD_TIMEOUT = 300   # Seconds (media download).
 CHUNK_SIZE = 8192
 
 PLATFORM = "picazor"
 
-# En-têtes de base ; curl_cffi gère l'empreinte TLS via impersonate='chrome'.
+# Base headers; curl_cffi handles TLS fingerprinting with impersonate=chrome.
 _HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
 }
 
-# Signaux d'un challenge / blocage Cloudflare dans une réponse HTML.
+# Signs of a Cloudflare challenge/block in HTML responses.
 _CLOUDFLARE_MARKERS = (
     "just a moment",
     "cf-browser-verification",
@@ -62,11 +58,11 @@ _CLOUDFLARE_MARKERS = (
     "__cf_chl",
 )
 
-# Vignette de listing : capture (chemin, nom, marqueur vidéo éventuel).
+# Listing thumbnail: capture path, name and optional video marker.
 _THUMB_RE = re.compile(r'"(/uploads/[^"]+?/)300px_([^"/]+?)(\.mp4)?\.jpg"')
-# Média plein format sur une page de détail.
+# Full-size media on a detail page.
 _DETAIL_VIDEO_RE = re.compile(r'"(/uploads/[^"]+?\.mp4)"')
-# Photo originale (jpg sans préfixe de taille NNNpx_).
+# Original photo, without an NNNpx_ size prefix.
 _DETAIL_PHOTO_RE = re.compile(r'"(/uploads/[^"]+?/)(?!\d+px[_-])([^"/]+?\.jpg)"')
 
 
@@ -74,7 +70,7 @@ _DETAIL_PHOTO_RE = re.compile(r'"(/uploads/[^"]+?/)(?!\d+px[_-])([^"/]+?\.jpg)"'
 # Helpers internes
 # --------------------------------------------------------------------------- #
 def _looks_like_cloudflare(html: str, status_code: int = 200) -> bool:
-    """Heuristique : la réponse est-elle un challenge / blocage Cloudflare ?"""
+    """Heuristically detect a Cloudflare challenge/block response."""
     if status_code in (403, 429, 503):
         return True
     head = (html or "")[:4000].lower()
@@ -82,18 +78,17 @@ def _looks_like_cloudflare(html: str, status_code: int = 200) -> bool:
 
 
 def _path_stem(upload_path: str) -> str:
-    """Nom de fichier sans extension depuis un chemin /uploads/..."""
+    """Filename without extension from an /uploads/... path."""
     filename = upload_path.rstrip("/").rsplit("/", 1)[-1]
     return filename.rsplit(".", 1)[0]
 
 
 def _parse_picazor_url(url: str) -> dict:
-    """Déduit le type d'URL Picazor depuis l'URL brute (langue/creator/index).
+    """Infer Picazor URL type from the raw language/creator/index path.
 
-    Retourne un dict {'type': 'profile'|'media'|'listing'|'unknown', ...}.
-    Plus précis que ValidationResult.value (qui n'expose pas l'index de détail).
-    """
-    # Page spéciale : /fr/videos/week, /fr/models/..., /fr/categories/...
+    Return {type: profile|media|listing|unknown, ...}. More precise than
+    ValidationResult.value, which does not expose the detail index."""
+    # Special pages: /fr/videos/week, /fr/models/..., /fr/categories/....
     m = re.search(r'picazor\.com/([^/]+)/(videos|models|categories)(?:/([^/?#]+))?', url)
     if m:
         return {"type": "listing", "category": m.group(2), "filter": m.group(3) or "", "url": url}
@@ -104,7 +99,7 @@ def _parse_picazor_url(url: str) -> dict:
         return {"type": "profile", "language": m.group(1), "creator": m.group(2),
                 "page": int(m.group(3)), "url": url}
 
-    # Page de détail d'un média : /fr/{creator}/{index}
+    # Single-media detail page: /fr/{creator}/{index}.
     m = re.search(r'picazor\.com/([^/]+)/([^/?#]+)/(\d+)', url)
     if m:
         return {"type": "media", "language": m.group(1), "creator": m.group(2),
@@ -120,11 +115,10 @@ def _parse_picazor_url(url: str) -> dict:
 
 
 def _request_html(url: str):
-    """Récupère le HTML d'une page Picazor via curl_cffi (impersonate=chrome).
+    """Fetch Picazor HTML with curl_cffi (impersonate=chrome).
 
-    Retourne (html, error). En cas de blocage Cloudflare / erreur : (None, msg).
-    Ne lève jamais.
-    """
+    Return (html, error), or (None, message) for Cloudflare blocking/errors.
+    Never raises."""
     from lds_sdk.netfetch import validate_public_url as _validate_public_http_url
     ok_url, ssrf_err = _validate_public_http_url(url)
     if not ok_url:
@@ -139,8 +133,8 @@ def _request_html(url: str):
         response = cf_requests.get(
             url, headers=_HEADERS, impersonate="chrome", timeout=HTTP_TIMEOUT
         )
-    except Exception as e:  # réseau, TLS, timeout...
-        logger.warning("Picazor: échec requête %s: %s", url, e)
+    except Exception as e:  # Network, TLS, timeout, etc.
+        logger.warning("Picazor: request failed %s: %s", url, e)
         return None, f"Picazor: request failed ({e})."
 
     status = getattr(response, "status_code", 0)
@@ -155,7 +149,7 @@ def _request_html(url: str):
 
 
 def _parse_listing(html: str, creator: str) -> list:
-    """Extrait les médias d'une page de listing via les vignettes 300px_."""
+    """Extract listing media through 300px_ thumbnails."""
     items = []
     seen = set()
 
@@ -181,7 +175,7 @@ def _parse_listing(html: str, creator: str) -> list:
 
 
 def _max_media_index(html: str, creator: str) -> int:
-    """Index max des liens /fr/{creator}/{i} = total approx. de médias."""
+    """Maximum /fr/{creator}/{i} link index approximates the media count."""
     indices = [
         int(m.group(1))
         for m in re.finditer(rf'href="/fr/{re.escape(creator)}/(\d+)"', html)
@@ -190,7 +184,7 @@ def _max_media_index(html: str, creator: str) -> int:
 
 
 def _parse_detail(html: str, creator: str) -> list:
-    """Extrait LE média d'une page de détail (vidéo prioritaire, sinon photo)."""
+    """Extract one detail-page media item, preferring video over photo."""
     m = _DETAIL_VIDEO_RE.search(html)
     if m:
         media_url = f"{BASE_URL}{m.group(1)}"
@@ -218,7 +212,7 @@ def _parse_detail(html: str, creator: str) -> list:
 
 
 def _ext_from_content_type(content_type: str, url: str) -> str:
-    """Extension de fichier déduite du content-type (fallback : URL)."""
+    """File extension from content type, falling back to the URL."""
     ct = (content_type or "").split(";", 1)[0].strip().lower()
     mapping = {
         "video/mp4": ".mp4",
@@ -232,30 +226,25 @@ def _ext_from_content_type(content_type: str, url: str) -> str:
     }
     if ct in mapping:
         return mapping[ct]
-    # Fallback : extension présente dans l'URL.
+    # Fallback: extension from URL.
     path = urlparse(url).path
     ext = os.path.splitext(path)[1].lower()
     if ext in (".mp4", ".webm", ".mov", ".jpg", ".jpeg", ".png", ".gif", ".webp"):
         return ".jpg" if ext == ".jpeg" else ext
-    return ".mp4"  # défaut raisonnable côté Picazor (majorité de vidéos)
+    return ".mp4"  # Reasonable Picazor default: most media are videos.
 
 
 # --------------------------------------------------------------------------- #
 # API publique
 # --------------------------------------------------------------------------- #
 def scan(validation):
-    """Énumère les médias d'une URL Picazor.
+    """Enumerate media from a Picazor URL.
 
-    `validation` = ValidationResult (is_valid, platform, url_type, value,
-    original_url). Gère PROFILE (listing paginé), VIDEO (page de détail),
-    LISTING (page globale).
-
-    Retourne (items, error) :
-      - items = list[dict] (≤ MAX_ITEMS) au schéma commun, ou None ;
-      - error = str | None.
-    Ne lève jamais : toute exception → (None, message). Dégradation gracieuse
-    si Cloudflare bloque → (None, "Picazor (Cloudflare) blocked access.").
-    """
+    validation is ValidationResult with is_valid/platform/url_type/value/
+    original_url. Supports PROFILE (paginated), VIDEO (detail) and LISTING
+    (global page). Return (items, error): a common-schema list of at most
+    MAX_ITEMS or None, and str|None error. Never raises; exceptions become
+    (None, message). Cloudflare blocking returns a clear access error."""
     try:
         url = getattr(validation, "original_url", None) or getattr(validation, "value", "")
         url_type = getattr(validation, "url_type", None)
@@ -264,21 +253,17 @@ def scan(validation):
         parsed = _parse_picazor_url(url)
         creator = parsed.get("creator") or getattr(validation, "value", "") or "picazor"
 
-        # --- Média unique (page de détail) --------------------------------- #
+        # Single media item (detail page).
         if url_type_name == "VIDEO" or parsed["type"] == "media":
             html, err = _request_html(url)
             if err:
                 return None, err
             items = _parse_detail(html, creator)
             if not items:
-                # PAS un résultat vide légitime (kind='empty') : une page de
-                # détail Picazor DÉCRIT toujours un média précis — si la requête a
-                # réussi (pas de blocage Cloudflare, pas de HTTP >=400, cf. `err`
-                # ci-dessus) mais qu'aucune des deux regex (_DETAIL_VIDEO_RE /
-                # _DETAIL_PHOTO_RE) ne matche, c'est que le layout du site a
-                # changé et que le parsing a échoué à extraire un média qui EST
-                # là — un vrai échec outil, pas « rien ici » (cf. finding #3 :
-                # ne jamais convertir un échec réel en résultat vide).
+                # A detail page describes a specific media item. If HTTP succeeded but
+                # neither video nor photo regex matches, site layout changed and parsing
+                # failed to extract existing content. This is a tool error, never a
+                # legitimate empty result.
                 return None, "Picazor: no media found on the detail page."
             return items[:MAX_ITEMS], None
 
@@ -289,25 +274,20 @@ def scan(validation):
                 return None, err
             items = _parse_listing(html, creator)
             if not items:
-                # Listing chargé sans incident mais aucune vignette 300px_ trouvée :
-                # une catégorie/un filtre légitimement vide (contenu récent, filtre
-                # de niche) est bien plus probable qu'un layout changé pour CE
-                # gabarit (contrairement à la page de détail ci-dessus, où la
-                # présence d'UN média précis est garantie). Résultat vide
-                # légitime, même convention que gdl.GdlError kind='empty'.
+                # Successful listing with no 300px_ thumbnails: an empty category/filter
+                # is more likely than a changed layout here, unlike detail pages that
+                # guarantee one item. Return a legitimate empty result, like GdlError empty.
                 return None, GdlError("Picazor: no media found in this listing.", 'empty')
             if len(items) > MAX_ITEMS:
-                # Cas limite mais sans ambiguïté (contrairement au profil paginé
-                # ci-dessous) : la page a livré PLUS d'items que MAX_ITEMS en un
-                # seul parse, on sait avec certitude qu'on en jette — pas une
-                # supposition sur « aurait-il pu y en avoir plus », la preuve est
-                # déjà dans la liste avant la troncature `[:MAX_ITEMS]`.
+                # Unambiguous truncation: this single parse produced more than MAX_ITEMS.
+                # The pre-slice list proves items are discarded, unlike uncertainty
+                # about later pages of a profile.
                 result = ResultList(items[:MAX_ITEMS])
                 result.partial = True
                 return result, None
             return items[:MAX_ITEMS], None
 
-        # --- Profil paginé (cas par défaut : PROFILE) ---------------------- #
+        # Paginated profile (default PROFILE case).
         start_page = parsed.get("page", 1)
         all_items = []
         seen = set()
@@ -320,15 +300,10 @@ def scan(validation):
             page_url = f"{BASE_URL}/fr/{creator}" + (f"/page/{page}" if page > 1 else "")
             html, err = _request_html(page_url)
             if err:
-                # Si on a déjà des items, on dégrade gracieusement sans planter —
-                # mais le résultat n'est plus le profil ENTIER, juste ce qu'on a
-                # pu lire avant que Cloudflare/le réseau ne coupe une page
-                # suivante : PARTIEL (`interrupted`), pas complet. Même
-                # convention que redgifs.py/instagram.py (base.ResultList,
-                # cf. finding #3/#2 de la vague précédente) — avant cette
-                # correction ce chemin renvoyait `all_items[:MAX_ITEMS], None`,
-                # une liste ordinaire sans signal de troncature, présentant une
-                # récolte coupée par une panne mi-pagination comme complète.
+                # Preserve collected items if a later Cloudflare/network request fails,
+                # but mark them interrupted/partial rather than presenting a complete
+                # profile. Use base.ResultList like RedGifs/Instagram; a plain sliced
+                # list would silently hide pagination truncation.
                 if all_items:
                     interrupted = True
                     break
@@ -351,31 +326,24 @@ def scan(validation):
                     break
 
             if len(all_items) >= MAX_ITEMS:
-                # Plafond MAX_ITEMS atteint : on ne peut pas distinguer « le
-                # profil a EXACTEMENT MAX_ITEMS médias » de « il en restait plus
-                # après » (les pages suivantes ne sont jamais regardées). On
-                # choisit le côté honnête : marquer PARTIEL même si ça peut être
-                # un faux positif rare — un vrai plafond caché par erreur est pire
-                # qu'une bannière « peut-être plus » de trop.
+                # At MAX_ITEMS, we cannot tell whether the profile ends exactly here
+                # or later pages remain. Mark partial conservatively: an occasional
+                # extra warning is preferable to hiding a real limit.
                 capped = True
                 break
             page += 1
             if page > total_pages:
                 break
         else:
-            # La boucle a épuisé ses MAX_PAGES itérations sans qu'aucun `break`
-            # n'ait déclaré ni la fin naturelle (page > total_pages) ni le
-            # plafond MAX_ITEMS : on sait alors que `page <= total_pages`
-            # (sinon on aurait `break`), donc des pages restent au-delà du
-            # garde-fou temps MAX_PAGES — troncature silencieuse avant cette
-            # correction (cf. commentaire MAX_PAGES en tête de module).
+            # MAX_PAGES exhausted without a natural-end or MAX_ITEMS break. Since
+            # page has not passed total_pages, pages remain beyond the time guard.
+            # Report truncation rather than silently returning a complete result.
             capped = True
 
         if not all_items:
-            # Toutes les pages parcourues (ou la 1re a échoué SANS items déjà
-            # collectés, cf. la sortie anticipée `return None, err` plus haut dans
-            # la boucle) sans un seul média : profil légitimement vide, même
-            # convention que gdl.GdlError kind='empty'.
+            # All pages exhausted without media: a legitimate empty profile, like
+            # GdlError empty. Failure on the first page before any items was already
+            # handled by the early return above.
             return None, GdlError("Picazor: no media found for this profile.", 'empty')
         if interrupted or capped:
             result = ResultList(all_items[:MAX_ITEMS])
@@ -384,20 +352,17 @@ def scan(validation):
         return all_items[:MAX_ITEMS], None
 
     except Exception as e:  # garde-fou ultime — ne jamais lever
-        logger.exception("Picazor scan: erreur inattendue")
+        logger.exception("Picazor scan: unexpected error")
         return None, f"Picazor: unexpected error ({e})."
 
 
 def download(url, dest_path):
-    """Télécharge un média Picazor (vidéo ou image) en direct via curl_cffi.
+    """Download Picazor video/image directly through curl_cffi.
 
-    `url` = URL du média (mp4/jpg) OU page de détail à résoudre d'abord.
-    `dest_path` = chemin de sortie SANS extension imposée (l'extension est
-    ajustée selon le content-type). Écriture atomique .tmp -> final.
-
-    Retourne (ok: bool, final_filename: str | None, error: str | None).
-    Ne lève jamais.
-    """
+    url is direct media or a detail page to resolve first. dest_path has
+    no imposed extension; derive it from content type. Write atomically
+    through .tmp -> final. Return (ok: bool, final_filename: str|None,
+    error: str|None). Never raises."""
     try:
         from curl_cffi import requests as cf_requests
     except ImportError:
@@ -406,7 +371,7 @@ def download(url, dest_path):
     try:
         dest_path = Path(dest_path)
 
-        # Si l'URL est une page de détail Picazor (pas un média direct), la résoudre.
+        # Resolve Picazor detail-page URLs before downloading media.
         resolved_url = url
         if "/uploads/" not in url and "picazor.com" in url.lower():
             parsed = _parse_picazor_url(url)
@@ -430,7 +395,7 @@ def download(url, dest_path):
                 timeout=DOWNLOAD_TIMEOUT, stream=True,
             )
         except Exception as e:
-            logger.warning("Picazor download: échec requête %s: %s", resolved_url, e)
+            logger.warning("Picazor download: request failed %s: %s", resolved_url, e)
             return False, None, f"Picazor: download failed ({e})."
 
         status = getattr(response, "status_code", 0)
@@ -447,7 +412,7 @@ def download(url, dest_path):
         if status >= 400:
             return False, None, f"Picazor: HTTP {status} response."
 
-        # Une réponse HTML n'est PAS un média (Cloudflare ou page d'erreur).
+        # An HTML response is not media (Cloudflare or an error page).
         if "text/html" in content_type.lower():
             return False, None, "Picazor: HTML response instead of media (access blocked?)."
 
@@ -474,7 +439,7 @@ def download(url, dest_path):
                 pass
             return False, None, f"Picazor: write error ({e})."
 
-        # Fichier vide = échec.
+        # An empty file is a failure.
         try:
             if not tmp_path.exists() or tmp_path.stat().st_size == 0:
                 tmp_path.unlink(missing_ok=True)
@@ -495,7 +460,7 @@ def download(url, dest_path):
         return True, final_path.name, None
 
     except Exception as e:  # garde-fou ultime — ne jamais lever
-        logger.exception("Picazor download: erreur inattendue")
+        logger.exception("Picazor download: unexpected error")
         return False, None, f"Picazor: unexpected error ({e})."
 
 
@@ -506,7 +471,7 @@ from . import registry
 class PicazorSource(Source):
     name = 'picazor'
     priority = 100
-    category = 'image'   # classé image (choix produit) → ouvert aux non-admins
+    category = 'image'   # Classified as image by product policy, so available to non-admins.
     capabilities = Capabilities(can_enumerate_profile=True,
                                 media_kinds=frozenset({'video', 'image'}),
                                 own_downloader=True)
@@ -516,10 +481,9 @@ class PicazorSource(Source):
         result = url_validator.validate_url(url)
         if result.is_valid and result.platform == Platform.PICAZOR:
             return Match(url=url, validation=result)
-        # URLs directes CDN (/uploads/...) : le validateur ne les reconnaît pas
-        # (pas de pattern /fr/{creator}/...) mais elles sont bien sur picazor.com
-        # et nécessitent notre downloader curl_cffi (même comportement que l'ancien
-        # dispatch host-based host.endswith('picazor.com')).
+        # Direct CDN /uploads/... URLs lack the validator's /fr/{creator}/...
+        # pattern but still belong to Picazor and need our curl_cffi downloader.
+        # Preserve the previous host-based dispatch behavior.
         if result.platform == Platform.PICAZOR:
             return Match(url=url, validation=None)
         return None

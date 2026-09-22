@@ -13,10 +13,10 @@ import { fullTransformerArtifactFiles } from "../lib/trainingModel.js";
 import { fullTransformerArtifactView } from "../lib/trainingModel.js";
 import { fullTransformerFp8Note } from "../lib/trainingModel.js";
 
-// « Custom weights… » : valeur-sentinelle de l'entrée du sélecteur de base qui
-// révèle le champ chemin. Les familles qui l'exposent + celles honorant VAE/TE
-// (miroir de CUSTOM_WEIGHTS_FAMILIES / VAE_TE_OVERRIDE_FAMILIES côté serveur ;
-// base-info les renvoie, ces défauts ne servent qu'avant son chargement).
+// "Custom weights…": sentinel value for the base picker entry that reveals
+// the path field. Families exposing it and those honoring VAE/TE overrides
+// mirror the server's CUSTOM_WEIGHTS_FAMILIES / VAE_TE_OVERRIDE_FAMILIES;
+// base-info returns these lists, so defaults only apply before it loads.
 export const CUSTOM_BASE_SENTINEL = '__custom_weights__';
 export const DEFAULT_CUSTOM_FAMILIES = ['sdxl', 'krea', 'flux', 'flux2klein'];
 

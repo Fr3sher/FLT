@@ -2,7 +2,7 @@
   "id": "model_tools",
   "bundled": true,
   "name": "Model tools",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "api": 1,
   "description": "Quantize a full-precision model to the fp8 file ComfyUI loads, and merge one or more LoRAs into a base checkpoint to get a complete model — pure file-in / file-out work on this machine, no GPU or training environment needed. Doors in the dataset's Checkpoints & LoRAs panel, on each delivered full model, under the full-model recipe, and in this plug-in’s settings.",
   "requires": [],

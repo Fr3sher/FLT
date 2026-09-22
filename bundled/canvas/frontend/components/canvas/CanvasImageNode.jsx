@@ -238,11 +238,10 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           then shorter than its tile, and `object-contain` answered with a dark
           band down each side — which is a border between two images, drawn by
           the very code that exists to remove it. */}
-      {/* Le libelle d'un membre flotte SUR l'image : une pastille, pas un
-          bandeau. Pleine largeur et quasi opaque (bg-app/80), il masquait le
-          haut de la photo des qu'on la survolait — un controle qui cache ce
-          qu'il decrit. Meme recette que les badges de la bibliotheque et de
-          la banque : bg-black/50 + backdrop-blur, texte blanc. */}
+      {/* Float the member label over the image as a chip. A full-width,
+          nearly opaque bg-app/80 banner used to hide the photo's top on hover.
+          Use the library and bank badge styling: bg-black/50, backdrop blur,
+          and white text. */}
       <header className={(member
         ? 'pointer-events-none absolute left-1 top-1 z-10 flex max-w-[calc(100%-0.5rem)] items-center gap-1 rounded border border-white/15 bg-black/50 px-1.5 py-px backdrop-blur-sm'
         : 'flex shrink-0 items-center gap-1 border-b border-border bg-app/70 px-1.5 py-0.5')

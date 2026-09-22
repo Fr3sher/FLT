@@ -2,7 +2,7 @@
   "id": "api_engines",
   "bundled": true,
   "name": "API image engines",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "api": 1,
   "description": "Generate dataset images with the cloud engines — Nano Banana (Gemini), ChatGPT (gpt-image, by API key or a ChatGPT subscription) and OpenRouter. Pay-per-image; each needs its own key in Plugins ▸ API image engines ▸ Settings.",
   "requires": [],

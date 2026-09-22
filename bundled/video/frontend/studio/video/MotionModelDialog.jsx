@@ -53,14 +53,14 @@ export default function MotionModelDialog({ onClose, onSaved }) {
 
   const models = state?.models || [];
 
-  /* PORTAILLÉE sur `document.body`, comme toute modale du Studio.
-     Aujourd'hui elle est montée en SŒUR de l'`<aside lg:sticky>` du lane vidéo
-     (VideoTestStudio) et non dedans, donc son `z-50` passe encore — mesuré. Le
-     portail est posé quand même : un `sticky` ou un `transform` sur un ancêtre,
-     ou trois lignes de déplacement du montage, la feraient basculer SANS qu'une
-     seule suite rougisse (c'est exactement ce qui est arrivé au navigateur
-     Civitai). La règle est tenue par studioModalsArePortaled.contract.test.js,
-     qui recense CE dossier et ses sous-dossiers. */
+  /* PORTALED to `document.body`, like every Studio modal.
+     It is currently mounted as a SIBLING of the video lane's `<aside lg:sticky>`
+     (VideoTestStudio), rather than inside it, so its `z-50` still works — measured.
+     Keep the portal anyway: `sticky` or `transform` on an ancestor, or moving
+     the mount by three lines, could break stacking WITHOUT a single test
+     failing (exactly what happened to the Civitai browser).
+     studioModalsArePortaled.contract.test.js enforces this rule by scanning
+     THIS directory and its subdirectories. */
   return createPortal(
     <div role="dialog" aria-modal="true" aria-label="Model that writes the motion"
       data-probe-layer

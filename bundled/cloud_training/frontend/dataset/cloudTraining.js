@@ -10,9 +10,9 @@ export function cloudDisabledReasonFor(form, cloudStatus = {}) {
   const limit = cloudStatus.limit || 1;
   const cloudTooFewImages = belowFloor;
   const cloudLimitReached = activeCount >= limit;
-  // Familles que la voie cloud ne sert pas — miroir des refus AVANT réservation
-  // côté serveur. Anima y manquait : au-dessus du plancher d'images le bouton
-  // s'activait et n'était refusé qu'après le clic.
+  // Families unsupported by cloud training — mirrors server refusals BEFORE
+  // reservation. Anima was missing: above the image minimum, the button became
+  // enabled and the request was rejected only after the click.
   const cloudFamilyBlock = cloudUnsupportedFamilyReason(trainType);
   return !caps.cloud_training
       ? 'Cloud training needs a vast.ai API key — add it in Settings'

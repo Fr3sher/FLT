@@ -254,7 +254,7 @@ function CloudRunsContent({ host }) {
   };
 
   const configured = data?.configured;
-  // useMemo: un [] neuf par rendu invalidait le useMemo plus bas a chaque frame.
+  // useMemo: a new [] on every render invalidated the useMemo below on each frame.
   const actives = useMemo(() => data?.actives || [], [data]);
   const limit = data?.limit || 1;
   const budget = data?.monthly_budget || 0;

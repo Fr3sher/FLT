@@ -1,23 +1,19 @@
 # app/scrape/sources/sexcom.py
-"""Source Sex.com — pinboard porno : chaque pin = UNE image (pas d'albums).
+"""Sex.com source: adult pinboards with one image per pin, no albums.
 
-Deux chemins de scan, sur le principe des covers PornPics (l'image remontée EST
-celle qui matche le mot-clé) :
+Scans have two paths; search results return the image matching the keyword:
 
-  • RECHERCHE / TAG (le cas principal) : /pics?search=<mot>, /en/pics?search=…,
-    /search/pics?query=…, /pics/<tag> — on interroge directement l'API JSON du
-    site (`/portal/api/pictures/search`, la même que l'infinite-scroll, 40
-    pins/page → paging.numberOfPages). Chaque pin = {uri, title} ; le média est
-    servi par le CDN (imagex1.sx.cdn.live + uri, vérifié accessible sans
-    cookie). 1 requête HTTP par page, zéro gallery-dl.
-  • PIN / BOARD / USER : /pin/<id>, /en/pics/<id>, /user/<x>/<board> — délégué à
-    gallery-dl (extracteur natif `sexcom`). Chaque pin coûte UNE requête page
-    chez gallery-dl → fenêtre de pagination courte (--range) pour rester sous le
-    timeout du scan.
+- SEARCH/TAG: /pics?search=<term>, /en/pics?search=..., /search/pics?query=...
+  and /pics/<tag> use /portal/api/pictures/search, the site's infinite-scroll
+  JSON API. It returns 40 pins per page and paging.numberOfPages. Each pin has
+  uri and title; imagex1.sx.cdn.live serves the media without cookies. One HTTP
+  request per page, no gallery-dl.
+- PIN/BOARD/USER: /pin/<id>, /en/pics/<id> and /user/<x>/<board> use gallery-dl's
+  native sexcom extractor. Each pin requires a page request, so use a short
+  --range window to stay within the scan timeout.
 
-GIFs/vidéos : hors périmètre (l'import dataset ne prend que les photos raster) —
-les URLs /gifs et /videos renvoient un message clair plutôt qu'un scan vide.
-"""
+GIFs and videos are outside raster-photo dataset imports. Their URLs receive
+an explanatory message rather than an empty scan."""
 import logging
 from urllib.parse import parse_qsl, urlparse
 
@@ -30,14 +26,14 @@ logger = logging.getLogger(__name__)
 
 _API_URL = 'https://www.sex.com/portal/api/pictures/search'
 _CDN_ROOT = 'https://imagex1.sx.cdn.live'
-_PER_PAGE = 40            # taille de page de l'API (celle du site)
-_GDL_WINDOW = 12          # pins par « page » via gallery-dl (1 requête/pin chez lui)
+_PER_PAGE = 40            # API page size used by the site
+_GDL_WINDOW = 12          # gallery-dl pins per page (one request per pin)
 
 _SEXCOM_CAPS = Capabilities(
     can_enumerate_profile=True,
     polite=True,
     media_kinds=frozenset({'image'}),
-    own_downloader=True,   # médias = URLs CDN directes (l'import les télécharge lui-même)
+    own_downloader=True,   # direct CDN media URLs; import downloads them itself
 )
 
 _MEDIA_TYPES = frozenset({'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'})
@@ -46,16 +42,15 @@ _CT_EXT = {'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png',
 
 
 def _search_params_for(url):
-    """Si `url` est une recherche/tag PHOTOS, retourne les params de l'API JSON
-    ({search, order, sexual-orientation}) ; sinon None (→ chemin gallery-dl).
-    'wrong-kind' est renvoyé pour les recherches gifs/videos (message clair).
-    PUR (testable sans réseau)."""
+    """Return photo search/tag JSON API parameters, otherwise None for gallery-dl.
+    The fields are search, order and sexual-orientation. Return 'wrong-kind' for
+    GIF/video searches so callers can explain the restriction. Pure; no network."""
     try:
         p = urlparse(url)
     except Exception:
         return None
     segs = [s for s in p.path.split('/') if s]
-    if segs and len(segs[0]) == 2 and segs[0].isalpha():   # préfixe de langue /en/
+    if segs and len(segs[0]) == 2 and segs[0].isalpha():   # language prefix such as /en/
         segs = segs[1:]
     q = dict(parse_qsl(p.query))
     if 'query' in q:                                       # /search/pics?query=…
@@ -72,19 +67,19 @@ def _search_params_for(url):
     if kind is None:
         return None
     if tag and tag.isdigit():
-        return None            # /pics/<id> = page de détail d'un pin → gallery-dl
+        return None            # /pics/<id> is a pin detail page; use gallery-dl
     if kind != 'pics':
-        return 'wrong-kind'    # gifs/vidéos : l'import dataset ne prend que des photos
+        return 'wrong-kind'    # dataset import accepts photos, not GIFs/videos
     search = (q.get('search') or tag.replace('-', ' ')).strip()
     if not search:
-        return None            # listing générique sans mot-clé → gallery-dl
+        return None            # generic listing without a keyword; use gallery-dl
     return {'search': search,
             'order': q.get('order') or 'likeCount',
             'sexual-orientation': q.get('sexual-orientation') or 'straight'}
 
 
 def _search_json(params, page):
-    """Fournée JSON de l'API recherche (seam de test). Lève en cas d'échec."""
+    """Fetch a JSON search API batch (test seam). Raises on failure."""
     from curl_cffi import requests as cf_requests
     r = cf_requests.get(_API_URL, params={**params, 'page': page, 'limit': _PER_PAGE},
                         impersonate='chrome', timeout=20,
@@ -115,8 +110,8 @@ class SexcomSource(Source):
                 return None, ('Sex.com: only PHOTO searches can be imported '
                               '(replace /gifs or /videos with /pics in the URL).')
             if params is None:
-                # Pin / board / user → gallery-dl (1 requête par pin chez lui →
-                # fenêtre courte pour rester sous le timeout du scan).
+                # Pins, boards and users use gallery-dl: one request per pin,
+                # with a short window to stay within the scan timeout.
                 start = page * _GDL_WINDOW + 1
                 return gdl.enumerate(match.url, platform=self.name,
                                      max_items=_GDL_WINDOW,
@@ -139,14 +134,14 @@ class SexcomSource(Source):
                               'title': (pin.get('title') or '').strip()[:200],
                               'thumbnail': url, 'type': 'image', 'platform': 'sexcom'})
             return items, None
-        except Exception as e:   # garde-fou : scan() ne lève jamais
+        except Exception as e:   # safety net: scan() never raises
             logger.warning('sexcom scan failed: %s', e)
             return None, f'Sex.com: scan failed ({e}).'
 
     def download(self, url, dest_base):
-        """Télécharge une image CDN en direct (fetch durci). NB : l'import concept
-        télécharge en réalité les URLs lui-même (_download_scrape_item) ; ce
-        download() honore le contrat Source pour tout autre appelant."""
+        """Download a CDN image directly with a hardened fetch.
+        Concept import downloads URLs itself through _download_scrape_item;
+        this method honors the Source contract for other callers."""
         import os
         from lds_sdk.netfetch import MAX_DRIVER_BYTES, fetch_hardened_bytes
         ok, data, ctype, reason = fetch_hardened_bytes(

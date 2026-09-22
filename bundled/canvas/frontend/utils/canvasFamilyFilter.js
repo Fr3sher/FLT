@@ -67,14 +67,12 @@ export function writeCanvasExtraFilters(store, value, key = CANVAS_EXTRA_FILTERS
   }
 }
 
-/* Le panneau « Datasets » est-il DÉPLIÉ ?
-   Replié par défaut, à toutes les largeurs : il s'ouvrait grand à chaque
-   chargement sur écran large, et sa liste de cases poussait le board — la chose
-   qu'on vient regarder — sous la ligne de flottaison. C'est un filtre, on ne le
-   consulte pas à chaque visite ; le bouton dit déjà ce qui est affiché (« 3 of
-   7 »), donc le replier ne cache aucune information.
-   Le choix de l'utilisateur, lui, SURVIT au rechargement (même contrat que les
-   autres préférences d'affichage du canvas, juste au-dessus). */
+/* Is the "Datasets" panel expanded?
+   Default to collapsed at every width: expanding on each wide-screen load
+   pushed the board below the fold. The button already reports what is shown
+   ("3 of 7"), so collapsing this occasional-use filter hides no information.
+   The user's choice survives reloads, following the same contract as the
+   other canvas display preferences above. */
 export const CANVAS_FILTER_OPEN_KEY = 'lds.canvasFilterOpen';
 
 export function readCanvasFilterOpen(store, key = CANVAS_FILTER_OPEN_KEY) {

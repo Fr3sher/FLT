@@ -1,30 +1,22 @@
 # app/scrape/sources/reddit.py
-"""Source Reddit — recherche par MOT-CLÉ + subreddits + posts, via l'API OAuth.
+"""Reddit source: keyword searches, subreddits and posts through OAuth.
 
-POURQUOI pas gallery-dl (comme les autres sources) : depuis le verrouillage de
-l'API Reddit (2023), les endpoints ANONYMES de navigation/recherche
-(`www.reddit.com/*.json`, `/search.json`) renvoient une page-mur anti-bot 403
-(« theme-beta »), et l'extracteur reddit de gallery-dl tombe sur le même mur. En
-revanche l'API OAUTHENTIFIÉE (`oauth.reddit.com`) répond normalement avec un jeton
-`installed_client` ANONYME — obtenable sans compte ni app enregistrée, avec le
-client-id public de gallery-dl. On parle donc directement à l'API OAuth ici, et on
-extrait les images du JSON des posts (galeries, liens directs i.redd.it, preview).
+Since Reddit's 2023 API restrictions, anonymous browsing/search JSON
+endpoints and gallery-dl's extractor encounter an anti-bot 403 page.
+oauth.reddit.com accepts an anonymous installed_client token using
+gallery-dl's public client ID, without an account or registered app.
+Query OAuth directly and extract gallery/direct i.redd.it/preview images
+from post JSON.
 
-Formes d'URL reconnues (routées par _endpoint_for) :
-  • recherche GLOBALE      : reddit.com/search/?q=<mot-clé>
-  • recherche SUBREDDIT     : reddit.com/r/<sub>/search/?q=<mot-clé>   (restrict_sr)
-  • listing subreddit       : reddit.com/r/<sub>[/<tri>]  (hot/top/new/rising…)
-  • posts d'un utilisateur  : reddit.com/user/<nom>
-  • post seul (galerie incl): reddit.com/r/<sub>/comments/<id>/…
-  • lien de partage mobile  : reddit.com/r/<sub>/s/<token>  (résolu par redirection)
-  • image directe           : i.redd.it/<id>.jpg  (→ item unique, tel quel)
+_endpoint_for accepts global /search/?q= searches, subreddit-scoped
+/r/<sub>/search/?q= searches with restrict_sr, /r/<sub>[/<sort>] listings,
+/user/<name> posts, /r/<sub>/comments/<id>/ posts including galleries,
+/r/<sub>/s/<token> mobile share redirects and direct i.redd.it images.
 
-Le mot-clé de l'UI est transformé côté frontend en une URL de recherche reddit,
-puis passe par le pipeline /scan habituel (aucune route dédiée).
-
-Sécurité : seuls des hôtes reddit sont contactés (jeton + API) ; les images sont
-téléchargées par le flux d'import durci (fetch_hardened_bytes, anti-SSRF, magic-bytes).
-"""
+The frontend turns keywords into Reddit search URLs for the ordinary
+/scan pipeline; no dedicated route is needed. Token/API requests contact
+Reddit hosts only. Image imports use hardened fetching, SSRF checks
+and magic-byte validation."""
 import logging
 import os
 import time
@@ -41,60 +33,52 @@ logger = logging.getLogger(__name__)
 
 _API_BASE = 'https://oauth.reddit.com'
 _TOKEN_URL = 'https://www.reddit.com/api/v1/access_token'
-# UA descriptif (les règles API Reddit demandent un UA unique et identifiable).
+# Descriptive User-Agent, as required by Reddit API rules.
 _UA = 'LoRA-Dataset-Studio/1.0 (+https://github.com/perfectgf/lora-dataset-studio)'
-# client-id public « installed_client » de gallery-dl : autorise un jeton ANONYME
-# (grant device_id) sans compte ni app enregistrée. Surchargé si l'utilisateur
-# fournit le sien — Settings → Scraping & sources (secret REDDIT_CLIENT_ID, posé
-# dans os.environ à la sauvegarde) ou <SCRAPE_COOKIES_DIR>/reddit_client_id.txt —
-# indispensable quand ce client-id partagé se fait rate-limiter (429).
+# gallery-dl's public installed_client ID enables anonymous device_id
+# grants without an account or registered app. Users can override it via
+# Settings > Scraping & sources (REDDIT_CLIENT_ID in os.environ) or
+# <SCRAPE_COOKIES_DIR>/reddit_client_id.txt when the shared ID is rate-limited.
 _GDL_CLIENT_ID = '6N9uN0krSDE-ig'
 
 _HTTP_TIMEOUT = 20
-_MAX_429_RETRY_WAIT = 4    # sur 429, on ne re-tente qu'UNE fois si le reset est proche
-_BATCH_POSTS = 30          # posts récupérés par appel listing (chaque post ≈ 1-N images)
-_SCAN_MAX = 200            # plafond d'items remontés par UNE page de scan (payload borné)
-# Borne dure sur le nombre d'appels listing séquentiels qu'un seul _walk_items()
-# peut faire (skip + collecte confondus). Sans ça, une page profonde sur un
-# subreddit à faible densité d'images (posts texte) pourrait déclencher des
-# centaines d'appels API rien que pour sauter les items déjà livrés par les
-# pages précédentes. Du même ordre que le pire cas de l'ancien design (page
-# MAX_SCAN_PAGE+1 = 51 appels séquentiels) : ne régresse pas le cas courant,
-# protège seulement le cas pathologique. Si atteinte avant d'avoir rempli la
-# page ou épuisé le listing, le résultat est marqué `partial` (jamais renvoyé
-# comme silencieusement complet).
-# (l'ancien design rejouait lui aussi le listing depuis `after=None` à chaque
-# page — `_fetch_listing` bouclait `for i in range(page + 1)` puis ne convertissait
-# que la dernière fournée — donc ce n'est pas une dette nouvelle : mesuré, le coût
-# par item est un match nul à faible densité d'images et strictement meilleur sur
-# les subreddits à galeries, où l'ancienne marche livrait 30 items là où celle-ci
-# en livre 200)
+_MAX_429_RETRY_WAIT = 4    # Retry 429 only once, and only when reset is near.
+_BATCH_POSTS = 30          # Posts per listing request; each post produces about 1-N images.
+_SCAN_MAX = 200            # Items per scan page, keeping payloads bounded.
+# Hard cap on sequential listing calls per _walk_items, including both
+# skipping and collection. Deep pages in text-heavy subreddits could
+# otherwise issue hundreds of requests just to skip already-delivered
+# items. Comparable to the old worst case of 51 calls, preserving common
+# cases while bounding pathological ones. Mark partial if the budget
+# expires before filling the page or exhausting the listing.
+#
+# The old design also replayed from after=None, so replay is not new
+# debt. Cost per item is similar for sparse images and better for gallery
+# subreddits, where this design returns 200 rather than 30 items.
 _MAX_LISTING_CALLS = 60
 _SORTS = frozenset({'hot', 'new', 'top', 'rising', 'controversial', 'best'})
 _IMG_EXT = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
 
-# Jeton mis en cache en mémoire du process (valable ~24 h ; on renouvelle avant expiry).
-# `cid` = client-id qui a frappé le jeton : si l'utilisateur change de client-id
-# (Settings → Scraping, effectif via os.environ sans restart), le jeton en cache
-# appartient encore à l'ANCIEN id — donc à son quota — et doit être re-frappé.
+# Process-memory token cache (about 24 hours, refreshed before expiry).
+# cid identifies the issuing client ID. Settings changes os.environ
+# without restart; a changed ID must mint a new token rather than
+# continue consuming the old client's quota.
 _token_cache = {'value': None, 'exp': 0.0, 'cid': None}
 
 _REDDIT_CAPS = Capabilities(
     can_enumerate_profile=True,
     polite=True,
     media_kinds=frozenset({'image'}),
-    own_downloader=True,   # download() dédié (fetch durci), cf. note : l'import concept
-)                          # télécharge en réalité les URLs directement (flux autonome).
+    own_downloader=True,   # Dedicated hardened downloader; concept imports actually
+)                          # download URLs directly through their separate import flow.
 
-# Content-types servis par les CDN d'images reddit (pour download()).
+# Content types served by Reddit image CDNs, used by download().
 _MEDIA_TYPES = frozenset({'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'})
 _CT_EXT = {'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png',
            'image/webp': '.webp', 'image/gif': '.gif'}
 
 
-# ---------------------------------------------------------------------------
-# Canonicalisation d'URL (résout /s/ et redd.it par redirection, purge le tracking)
-# ---------------------------------------------------------------------------
+# URL canonicalization: resolve /s/ and redd.it redirects, strip tracking.
 _DROP_PARAMS = ('share_id', 'correlation_id', 'ref', 'ref_source', 'rdt')
 
 
@@ -103,16 +87,16 @@ def _is_reddit_host(host: str) -> bool:
 
 
 def _canonical_reddit_url(url: str) -> str:
-    """Canonicalise une URL Reddit : résout les liens de partage /s/ et redd.it par
-    redirection HTTP (hôtes reddit UNIQUEMENT), force www.reddit.com, purge les
-    params de partage/tracking en gardant les params de contenu (?t=month, ?q=…).
-    URL non-reddit ou CDN direct (i./preview.redd.it) → inchangée. Ne lève jamais."""
+    """Canonicalize Reddit URLs: resolve /s/ and redd.it redirects on Reddit
+    hosts only, force www.reddit.com, strip sharing/tracking parameters
+    while keeping content parameters such as t=month and q. Leave non-Reddit
+    and direct CDN URLs unchanged. Never raises."""
     try:
         p = urlparse(url)
     except Exception:
         return url
     host = (p.hostname or '').lower()
-    is_shortener = host in ('redd.it', 'www.redd.it')   # PAS i./preview.redd.it (CDN)
+    is_shortener = host in ('redd.it', 'www.redd.it')   # Exclude i./preview.redd.it CDN URLs.
     if not (_is_reddit_host(host) or is_shortener):
         return url
     if is_shortener or '/s/' in p.path:
@@ -129,23 +113,19 @@ def _canonical_reddit_url(url: str) -> str:
     return urlunparse(('https', 'www.reddit.com', p.path, '', urlencode(keep), ''))
 
 
-# ---------------------------------------------------------------------------
-# URL reddit canonique → endpoint API OAuth (PUR, testable sans réseau)
-# ---------------------------------------------------------------------------
+# Canonical Reddit URL -> OAuth endpoint (pure, testable without networking).
 def _endpoint_for(url: str):
-    """Mappe une URL reddit canonique vers l'endpoint API à interroger.
-
-    Retourne un dict {api_path, params, kind} où kind ∈ {'listing','post','direct'},
-    ou None si la forme d'URL n'est pas reconnue. 'direct' porte en plus 'url' (image
-    CDN à remonter telle quelle)."""
+    """Map canonical Reddit URL to {api_path, params, kind}, with kind
+    listing/post/direct. Return None for unsupported shapes. Direct results
+    also carry the CDN URL to return unchanged."""
     try:
         p = urlparse(url)
     except Exception:
         return None
     host = (p.hostname or '').lower()
 
-    # Image CDN directe (i.redd.it / preview.redd.it) ou toute URL finissant par une
-    # extension image → item unique, sans appel API.
+    # Direct i.redd.it/preview.redd.it or image-extension URLs become one
+    # item without an API call.
     if host in ('i.redd.it', 'preview.redd.it', 'external-preview.redd.it') \
             or p.path.lower().endswith(_IMG_EXT):
         return {'api_path': None, 'params': {}, 'kind': 'direct', 'url': url}
@@ -160,7 +140,7 @@ def _endpoint_for(url: str):
             return {'api_path': f'/comments/{segs[i + 1]}',
                     'params': {'limit': 1, 'raw_json': 1}, 'kind': 'post'}
 
-    # Recherche : globale (/search) ou scopée subreddit (/r/<sub>/search).
+    # Global /search or subreddit-scoped /r/<sub>/search.
     is_global_search = segs and segs[-1] == 'search' and not (segs[0] == 'r')
     is_sub_search = len(segs) >= 3 and segs[0] == 'r' and segs[2] == 'search'
     if is_global_search or is_sub_search:
@@ -177,7 +157,7 @@ def _endpoint_for(url: str):
                     'params': {**params, 'restrict_sr': 1}, 'kind': 'listing'}
         return {'api_path': '/search', 'params': params, 'kind': 'listing'}
 
-    # Posts d'un utilisateur : /user/<nom> ou /u/<nom>.
+    # User posts: /user/<name> or /u/<name>.
     if len(segs) >= 2 and segs[0] in ('user', 'u'):
         return {'api_path': f'/user/{segs[1]}/submitted',
                 'params': {'sort': q.get('sort', 'top'), 't': q.get('t', 'all'),
@@ -193,13 +173,11 @@ def _endpoint_for(url: str):
     return None
 
 
-# ---------------------------------------------------------------------------
-# Extraction des images d'un post (PUR, testable avec des fixtures JSON)
-# ---------------------------------------------------------------------------
+# Extract post images (pure, testable with JSON fixtures).
 def _pick_preview(entries, url_key, size_key, fallback):
-    """Choisit une résolution de preview ~≥320px de large (grille légère), sinon la
-    plus grande dispo, sinon `fallback`. `entries` = liste de dicts (media_metadata
-    'p' → clés u/x/y ; preview 'resolutions' → clés url/width)."""
+    """Choose a preview at least about 320 pixels wide for a lightweight grid,
+    otherwise the largest available or fallback. entries uses media_metadata
+    p dictionaries (u/x/y) or preview resolutions (url/width)."""
     if isinstance(entries, list) and entries:
         for e in entries:
             if e.get(size_key, 0) >= 320 and e.get(url_key):
@@ -217,8 +195,8 @@ def _is_image_url(u: str) -> bool:
 
 
 def _items_from_post(p: dict) -> list:
-    """Extrait la/les image(s) directes d'un post (data dict) au schéma commun
-    {url, title, thumbnail, type, platform, subreddit}. Retourne [] si pas d'image."""
+    """Extract direct post images into {url, title, thumbnail, type, platform,
+    subreddit}. Return [] when the post has no images."""
     title = (p.get('title') or '')[:200]
     sub = p.get('subreddit') or ''
 
@@ -226,7 +204,7 @@ def _items_from_post(p: dict) -> list:
         return {'url': u, 'title': title, 'thumbnail': thumb or u,
                 'type': 'image', 'platform': 'reddit', 'subreddit': sub}
 
-    # 1. Galerie : gallery_data ordonne les media_id, media_metadata porte les URLs.
+    # 1. Galleries: gallery_data orders media IDs; media_metadata holds URLs.
     if p.get('is_gallery') and isinstance(p.get('media_metadata'), dict):
         gd = ((p.get('gallery_data') or {}).get('items')) or []
         order = [it.get('media_id') for it in gd if it.get('media_id')] \
@@ -249,7 +227,7 @@ def _items_from_post(p: dict) -> list:
     if _is_image_url(u):
         return [item(u, thumb or u)]
 
-    # 3. Repli : la preview reddit (couvre les liens externes qu'il a vignettés).
+    # 3. Fallback: Reddit preview, including thumbnails of external links.
     if prev:
         src = (prev[0].get('source') or {}).get('url')
         if src:
@@ -257,12 +235,10 @@ def _items_from_post(p: dict) -> list:
     return []
 
 
-# ---------------------------------------------------------------------------
-# API OAuth (jeton anonyme + GET authentifié)
-# ---------------------------------------------------------------------------
+# OAuth API: anonymous token plus authenticated GET.
 def _client_id() -> str:
-    """client-id Reddit : env (y compris Settings, qui écrit os.environ) > fichier
-    admin > client-id public de gallery-dl."""
+    """Reddit client ID precedence: environment (including Settings), admin
+    file, then gallery-dl's public client ID."""
     env = (os.environ.get('REDDIT_CLIENT_ID') or '').strip()
     if env:
         return env
@@ -278,10 +254,9 @@ def _client_id() -> str:
 
 
 def _get_token():
-    """Jeton OAuth anonyme (installed_client), mis en cache jusqu'à ~2 min avant expiry
-    — et re-frappé si le client-id a changé entre-temps (un jeton appartient au quota
-    du client-id qui l'a émis). Retourne le jeton ou None (échec réseau/auth). Ne lève
-    jamais."""
+    """Anonymous installed_client OAuth token, cached until about two minutes
+    before expiry. Mint again if the client ID changed because tokens use
+    the issuing client's quota. Return None on network/auth failure; never raises."""
     now = time.time()
     cid = _client_id()
     if _token_cache['value'] and now < _token_cache['exp'] and _token_cache['cid'] == cid:
@@ -306,16 +281,16 @@ def _get_token():
 
 
 class RedditRateLimited(Exception):
-    """429 Reddit : quota (~1000 req / 10 min, par IP+client) temporairement épuisé.
-    Porte le délai avant reset (secondes) si connu, pour un message actionnable."""
+    """Reddit 429: temporary quota exhaustion (about 1000 requests/10 minutes
+    per IP and client). Carries reset seconds if known for actionable errors."""
     def __init__(self, reset_seconds=None):
         self.reset_seconds = reset_seconds
         super().__init__('reddit rate limited')
 
 
 def _reset_seconds(resp):
-    """Secondes avant reset du quota : en-tête Retry-After sinon x-ratelimit-reset.
-    None si illisible."""
+    """Quota reset seconds from Retry-After, otherwise x-ratelimit-reset.
+    Return None if unreadable."""
     for key in ('retry-after', 'x-ratelimit-reset'):
         val = resp.headers.get(key)
         if val:
@@ -327,10 +302,10 @@ def _reset_seconds(resp):
 
 
 def _api_get(api_path: str, params: dict, token: str) -> dict:
-    """GET authentifié sur oauth.reddit.com. Lève requests.HTTPError/RequestException
-    (attrapé par scan). Renouvelle le jeton une fois sur 401 (jeton expiré en vol).
-    Sur 429 : une seule re-tentative si le reset est proche (≤ _MAX_429_RETRY_WAIT),
-    sinon lève RedditRateLimited (message actionnable côté scan)."""
+    """Authenticated GET to oauth.reddit.com. Raise HTTPError/RequestException,
+    caught by scan. Refresh once on 401 for an expired token; retry 429 once
+    only when reset is within _MAX_429_RETRY_WAIT. Otherwise raise
+    RedditRateLimited for an actionable scan error."""
     def _do(tok):
         return requests.get(_API_BASE + api_path, params=params,
                             headers={'User-Agent': _UA, 'Authorization': f'Bearer {tok}'},
@@ -359,9 +334,9 @@ class RedditSource(Source):
     name = 'reddit'
     priority = 100
     capabilities = _REDDIT_CAPS
-    # « Charger plus » : voir _walk_items — la page N reprend au N*_SCAN_MAX-ième
-    # item du listing rejoué depuis le début, jamais un simple curseur `after` figé
-    # sur une fournée de posts (cf. _MAX_LISTING_CALLS pour le budget par requête).
+    # Load more uses _walk_items: page N resumes at item N*_SCAN_MAX in the
+    # replayed listing, never a fixed after cursor tied to a post batch.
+    # _MAX_LISTING_CALLS bounds each request.
     paginated = True
     category = 'image'        # recherche d'images → ouvert aux non-admins
 
@@ -372,29 +347,20 @@ class RedditSource(Source):
         return None
 
     def _walk_items(self, ep, token, skip, limit):
-        """Marche le listing depuis le DÉBUT (curseur `after`, recherche/listing sont
-        paginés par curseur, pas par offset), convertit chaque post en items au fil de
-        l'eau et déduplique par URL sur le flux entier — puis saute les `skip` premiers
-        items (déjà livrés par les pages précédentes) avant d'en collecter jusqu'à
-        `limit`.
+        """Walk the cursor-paginated listing from the start, convert posts as they
+        arrive and deduplicate URLs across the full stream. Skip previously
+        delivered items, then collect at most limit.
 
-        POURQUOI un skip au niveau ITEM et pas au niveau post/batch : un post galerie
-        peut produire jusqu'à ~20 images, et une fournée de _BATCH_POSTS=30 posts peut
-        donc produire bien plus que `limit` items. Plafonner par POST (ancien design :
-        `page` = N-ième fournée de 30 posts, coupée en cours de route dès que `limit`
-        est atteint) perd irrémédiablement les posts restants de la fournée : la page
-        suivante avance le curseur `after` du LISTING, jamais ne revient dans la
-        fournée tronquée. Un skip par ITEM permet à la page suivante de reprendre
-        EXACTEMENT où le plafond a coupé — y compris au milieu d'une galerie — en
-        rejouant le même flux ordonné et en sautant ce qui a déjà été livré.
+        Skipping must happen per item, not post/batch: one gallery can contain
+        about 20 images and 30 posts can exceed the limit. The old post-batch
+        cap discarded the rest when the next page advanced after. Replaying
+        the ordered stream and skipping items resumes exactly where the cap
+        cut, even inside a gallery.
 
-        Retourne (items, exhausted, budget_hit) :
-          - exhausted=True  : le listing entier a été parcouru (plus de curseur après
-            le dernier batch) — inutile de proposer une page suivante.
-          - budget_hit=True : _MAX_LISTING_CALLS atteint avant d'avoir rempli `limit`
-            OU épuisé le listing — le résultat est valide mais potentiellement
-            incomplet pour CETTE page (jamais renvoyé comme silencieusement complet ;
-            cf. `ResultList.partial` posé par l'appelant)."""
+        Return (items, exhausted, budget_hit). exhausted means no cursor remains
+        after the last batch; no next page is useful. budget_hit means the call
+        cap was reached before limit or exhaustion; items are valid but this
+        page may be incomplete. The caller sets ResultList.partial."""
         after = None
         seen = set()
         skipped = 0
@@ -420,22 +386,18 @@ class RedditSource(Source):
                         continue
                     items.append(it)
                     if len(items) >= limit:
-                        # Retour dès `limit` atteint, SANS regarder si `after` tient
-                        # encore un curseur : une page qui tombe pile sur `limit`
-                        # items se voit donc marquée exhausted=False et laisse
-                        # « Load more » actif pour un clic qui reviendra bredouille.
-                        # Délibéré : l'inverse (masquer le bouton alors qu'il restait
-                        # des items) serait le sens qui compte, et l'éviter coûterait
-                        # un appel listing d'anticipation par page réussie — un clic
-                        # mort occasionnel est moins cher que ça.
+                        # Return at limit without checking after. A page ending exactly at the
+                        # limit can therefore leave Load more active for one empty request.
+                        # Deliberate: hiding remaining items would be worse, and avoiding that
+                        # requires an extra lookahead API call on every successful page.
                         return items, False, False
             if not after:
-                return items, True, False   # listing épuisé : rien de plus à charger
-        return items, False, True           # budget d'appels épuisé, page potentiellement incomplète
+                return items, True, False   # Listing exhausted: nothing more to load.
+        return items, False, True           # Call budget exhausted; page may be incomplete.
 
     def _fetch_post(self, ep, token):
-        """Récupère un post seul. L'endpoint /comments/<id> renvoie [postListing,
-        commentsListing] → on prend le 1er enfant du 1er listing."""
+        """Fetch one post: /comments/<id> returns [postListing, commentsListing].
+        Use the first child of the first listing."""
         data = _api_get(ep['api_path'], ep['params'], token)
         if isinstance(data, list) and data:
             return (data[0].get('data', {}) or {}).get('children', []) or []
@@ -470,27 +432,23 @@ class RedditSource(Source):
                             seen.add(it['url'])
                             items.append(it)
                             if len(items) >= _SCAN_MAX:
-                                # Un post seul reste borné par la limite de galerie de
-                                # Reddit (≤ 20 images) : très en-dessous de _SCAN_MAX,
-                                # donc en pratique jamais atteint ici. Le garde-fou
-                                # reste posé par cohérence de contrat (payload borné).
+                                # Single posts are bounded by Reddit's gallery limit of at most 20
+                                # images, well below _SCAN_MAX. Retain this guard for a consistent
+                                # bounded-payload contract.
                                 break
                 return items, None
 
-            # Listing (recherche/subreddit/user) : « page » indexe des TRANCHES
-            # d'items de _SCAN_MAX, pas des fournées de posts — cf. _walk_items pour
-            # le pourquoi (reprise exacte, y compris en plein milieu d'une galerie).
+            # Listing page indexes _SCAN_MAX-sized item windows, not post batches.
+            # _walk_items explains exact continuation, including within galleries.
             page = max(0, getattr(match, 'page', 0) or 0)
             items, exhausted, budget_hit = self._walk_items(ep, token, page * _SCAN_MAX, _SCAN_MAX)
             if exhausted:
-                match.paginated = False   # rien de plus à charger : cache « Load more »
+                match.paginated = False   # Nothing more to load: hide Load more.
             elif budget_hit and len(items) < _SCAN_MAX:
-                # Budget d'appels épuisé AVANT d'avoir rempli la page : une page
-                # plus profonde ferait un skip encore plus grand contre le MÊME
-                # budget, donc ne peut jamais réussir mieux — proposer « Load more »
-                # ici garantirait un clic mort (0 item, coût plein en appels API).
-                # `partial` reste posé : le bandeau reste honnête, seul le bouton
-                # se tait.
+                # Call budget expired before filling the page. A deeper page would
+                # skip more against the same budget and cannot do better, so Load more
+                # would guarantee an empty click at full API cost. Keep partial for
+                # the warning banner; hide only the button.
                 match.paginated = False
             result = ResultList(items)
             result.partial = budget_hit
@@ -501,15 +459,14 @@ class RedditSource(Source):
                           '~1000 requests / 10 min).' + wait)
         except requests.RequestException as e:
             return None, f'Reddit: network error ({e}).'
-        except Exception as e:   # garde-fou : scan() ne lève jamais
+        except Exception as e:   # Defensive guard: scan() never raises.
             logger.exception('reddit scan')
             return None, f'Reddit: unexpected error ({e}).'
 
     def download(self, url, dest_base):
-        """Télécharge une image reddit EN DIRECT (fetch durci). NB : le flux d'import
-        concept télécharge en réalité les URLs lui-même (_download_scrape_item) ; ce
-        download() n'est là que pour honorer le contrat Source si un autre appelant
-        l'emprunte."""
+        """Download a Reddit image directly with hardened fetch. Concept imports
+        actually fetch URLs themselves through _download_scrape_item; this
+        method honors the Source contract for other callers."""
         from lds_sdk.netfetch import MAX_DRIVER_BYTES, fetch_hardened_bytes
         ok, data, ctype, reason = fetch_hardened_bytes(
             url, allowed_types=_MEDIA_TYPES, max_bytes=MAX_DRIVER_BYTES)

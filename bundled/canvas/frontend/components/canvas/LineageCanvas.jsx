@@ -1229,8 +1229,8 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       }
     }
     frameRef.current?.classList.add('is-grabbing');
-    // localPoint lit des refs via frameRect() : identite neuve a chaque
-    // rendu, la lister recreerait ce handler en boucle pour rien.
+    // localPoint reads refs through frameRect() and changes identity on every
+    // render; listing it would needlessly recreate this handler each time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [beginDrag, beginImage, beginLane, fitLane, refreshRect, takeOverView]);
 
@@ -1344,7 +1344,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     const p = localPoint(e);
     applyView(panBy({ ...viewRef.current, tx: pan.current.tx, ty: pan.current.ty },
       p.x - pan.current.x, p.y - pan.current.y));
-    // Meme raison : localPoint est volontairement hors deps (refs vivantes).
+    // As above, deliberately omit localPoint from dependencies: it reads live refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyView]);
 

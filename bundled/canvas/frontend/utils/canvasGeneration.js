@@ -91,16 +91,16 @@ function canvasStackSelection(selection) {
     dataset_id: e.datasetId,
     checkpoint: `${e.recordId}:${e.step}`,
     family: e.family,
-    // Le nom que `blendComboLabel` mettra sur la cellule. Le Test Studio y met un
-    // nom de LoRA, le board y met sa lane et sa pastille — d'où le champ ici
-    // plutôt qu'un second fabricant d'étiquettes.
+    // The name `blendComboLabel` puts on the cell. Test Studio uses a LoRA name;
+    // the board uses its lane and chip. Passing the field here lets both reuse
+    // the same label builder.
     lora_label: `${e.datasetName || `Dataset ${e.datasetId}`} #${e.recordId}·${e.step}`,
   }));
 }
 
-/** Les poids COCHÉS d'une pastille (balayage 🧬), et ceux qu'elle balayera
- *  réellement — cases si elle en a, curseur sinon. La règle est celle du Test
- *  Studio, importée, pas réécrite. */
+/** A chip's selected weights (🧬 sweep), and the weights it will actually use:
+ *  selected checkboxes if any, otherwise the slider. Reuse the Test Studio
+ *  rule through an import. */
 export const canvasStackWeightSet = (sets, entry) =>
   stackWeightSet(sets, canvasStackSelection([entry])[0]);
 const canvasStackWeightList = (weights, sets, entry) =>
@@ -154,8 +154,8 @@ export function canvasRunSelections(selection, { blend = false, weights = {}, se
       record_id: e.recordId,
       step: e.step,
       ...(blend ? {
-        // Comme le Studio : `weight` scalaire EN PLUS de la liste, pour qu'un
-        // backend qui ignore encore le balayage rende une image sensée.
+        // As in Studio, send scalar `weight` alongside the list so a backend
+        // without sweep support can still render a sensible image.
         weight: canvasStackWeightList(weights, sets, e)[0],
         weights: canvasStackWeightList(weights, sets, e),
       } : {}) }));

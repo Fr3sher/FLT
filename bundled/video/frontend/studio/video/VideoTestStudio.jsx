@@ -11,7 +11,7 @@ import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui'
  * history: comparison happens in time (two players, same seed, one setting
  * changed) rather than in space.
  *
- * THE SHAPE OF THE SCREEN (redesign, 2026-08-31 — "respecte le thème général")
+ * THE SHAPE OF THE SCREEN (redesign, 2026-08-31 — "follow the overall theme")
  * A take sheet. On a wide screen the TAKE sits on the left — which LoRA, which
  * start frame, what moves — and the RENDER rail on the right stays in view
  * while you scroll: the dials and the Generate button, with a one-line readback

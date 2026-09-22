@@ -172,9 +172,9 @@ test('blending needs two picks of ONE family, and says which rule is in the way'
 test('a blend payload carries one weight per pick; Compare stays byte for byte what it was', () => {
   const sel = [pick(1, 10, 1000), pick(2, 20, 2000)];
   const weights = { [canvasStackKey(sel[0])]: 0.9, [canvasStackKey(sel[1])]: 0.55 };
-  // Depuis le balayage, chaque pastille porte sa LISTE de poids ; sans case
-  // cochee elle vaut un element (le curseur), et `weight` reste envoye pour un
-  // backend qui ignorerait encore le balayage.
+  // Each chip carries a LIST of sweep weights. With no checkbox selected it
+  // contains only the slider value; `weight` is still sent for backends that
+  // do not support sweeps.
   assert.deepEqual(canvasRunSelections(sel, { blend: true, weights }), [
     { dataset_id: 1, checkpoint: 'krea\\lora_x_1000.safetensors', record_id: 10, step: 1000, weight: 0.9, weights: [0.9] },
     { dataset_id: 2, checkpoint: 'krea\\lora_x_2000.safetensors', record_id: 20, step: 2000, weight: 0.55, weights: [0.55] },
@@ -198,10 +198,10 @@ test('the triggers a blend will inject are listed in pick order, de-duplicated',
   assert.deepEqual(canvasStackTriggers([]), []);
 });
 
-/* ◉ L'axe des BASES. Le panneau du board dit « BASE MODEL (MULTI) » et laissait
-   cocher plusieurs bases ; le lancement n'en envoyait qu'une (`zModels[0]`) et
-   jetait les autres sans un mot — trois bases cochées, une seule génération.
-   Ce qui est épinglé ici, c'est la VALEUR envoyée, pas la forme du code. */
+/* ◉ The BASE MODEL axis. The board's "BASE MODEL (MULTI)" panel allowed multiple
+   selections, but the launch sent only `zModels[0]` and silently dropped the
+   rest: three selected bases produced one generation. These checks cover the
+   value sent, independently of how the code is written. */
 
 test('every ticked base model is sent, not just the first', () => {
   assert.deepEqual(canvasBaseModelAxis(['base_one', 'base_two', 'base_three']), {
@@ -211,15 +211,15 @@ test('every ticked base model is sent, not just the first', () => {
 });
 
 test('nothing ticked stays the run it always was', () => {
-  // `z_model: null` est ce que la route lisait déjà — un backend plus ancien
-  // (ou plus récent) qui ignore `z_models` retrouve exactement l'ancien corps.
+  // `z_model: null` preserves the original payload for any backend that
+  // ignores `z_models`.
   assert.deepEqual(canvasBaseModelAxis([]), { z_model: null, z_models: [] });
   assert.deepEqual(canvasBaseModelAxis(null), { z_model: null, z_models: [] });
   assert.deepEqual(canvasBaseModelAxis(undefined), { z_model: null, z_models: [] });
 });
 
 test('the axis keeps the order it was ticked in, without duplicates', () => {
-  // L'ordre est la lecture : le balayage rend les bases dans cet ordre-là.
+  // Preserve selection order: the sweep renders the bases in this order.
   assert.deepEqual(canvasBaseModelAxis(['b', 'a', 'b']),
     { z_model: 'b', z_models: ['b', 'a'] });
 });

@@ -428,8 +428,8 @@ def cloud_hf_storage_delete_all_bases():
 
 @bp.post('/dataset/train/cloud/retry')
 def dataset_train_cloud_retry():
-    """↻ Retry d'un run en erreur (page Cloud) : relance avec les paramètres
-    exacts du run raté — pod frais, mêmes garde-fous que tout launch."""
+    """↻ Retry a failed run (Cloud page) with its exact original parameters:
+    a fresh pod, with the same safeguards as any launch."""
     gate = _require_cloud()
     if gate:
         return gate
@@ -442,11 +442,11 @@ def dataset_train_cloud_retry():
 
 @bp.post('/dataset/train/cloud/continue')
 def dataset_train_cloud_continue():
-    """▶ Continue d'un run cloud TERMINÉ (page Runs) : reprend depuis un checkpoint
-    harvesté (from_step, défaut = dernier) et vise step_de_reprise + extra_steps —
-    pod frais, mêmes garde-fous que tout launch ; le monitor dépose le checkpoint
-    sur le pod avant de démarrer (auto-resume ai-toolkit). overrides = réglages sûrs
-    (le service refuse toute autre clé → 400)."""
+    """▶ Continue a finished cloud run (Runs page) from a harvested checkpoint
+    (from_step, default = latest), targeting resume step + extra_steps.
+    Uses a fresh pod with the usual launch safeguards; the monitor places the
+    checkpoint on the pod before starting (ai-toolkit auto-resume). overrides
+    accepts safe settings only (the service rejects any other key with 400)."""
     gate = _require_cloud()
     if gate:
         return gate
@@ -515,11 +515,11 @@ def dataset_train_cloud_fetch_local():
 
 @bp.post('/dataset/<int:dataset_id>/train/cloud/continue-local')
 def dataset_train_cloud_continue_local(dataset_id):
-    """▶ Continue d'un checkpoint LOCAL dans le CLOUD (voie « Cloud » de la modale
-    Continue, côté dataset) : le fichier du run local est semé sur un pod frais
-    (resume_ckpt_path) et le job vise step_de_reprise + extra_steps. Mêmes
-    garde-fous que tout launch cloud (clé vast.ai, budget, limite de runs actifs,
-    unicité par famille) — c'est un launch_cloud_training normal."""
+    """▶ Continue a LOCAL checkpoint in the CLOUD (the dataset Continue dialog's
+    Cloud option): seed the local run's file on a fresh pod (resume_ckpt_path)
+    and target resume step + extra_steps. Uses the usual cloud launch safeguards
+    (vast.ai key, budget, active-run limit, uniqueness per family) through a
+    normal launch_cloud_training call."""
     gate = _require_cloud()
     if gate:
         return gate

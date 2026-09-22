@@ -267,11 +267,11 @@ def generate_variation(ref_bytes: bytes | list[bytes], prompt: str, model: str |
                        aspect_ratio: str = '1:1') -> bytes | None:
     """Reference photo(s) + variation prompt -> generated image bytes, or None.
 
-    `ref_bytes` : une image (bytes) ou une LISTE d'images de la même personne
-    (multi-références — gemini-3-pro-image accepte jusqu'à 14 images d'entrée et
-    s'appuie sur toutes pour la cohérence d'identité). La principale en premier.
-    `aspect_ratio` (ex. '1:1' visage, '3:4' buste/corps) évite de letterboxer les
-    plans corps. Tries with imageConfig first (Pro models); on a 400 retries once
+    `ref_bytes`: one image (bytes) or a LIST of images of the same person.
+    gemini-3-pro-image accepts up to 14 reference images and uses all of them
+    for identity consistency. Put the primary reference first.
+    `aspect_ratio` (e.g. '1:1' for faces, '3:4' for bust/body shots) avoids
+    letterboxing body shots. Tries imageConfig first (Pro models); on a 400 retries once
     with a slim payload for models that don't accept imageConfig.
 
     Every outcome that is not an image RAISES with the cause named: a filter

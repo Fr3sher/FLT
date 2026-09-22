@@ -1,13 +1,12 @@
-"""Source Pexels SFW via l'API REST officielle.
+"""Pexels SFW source using the official REST API.
 
-L'API web privée utilisée par l'extracteur gallery-dl Pexels répond de manière
-instable (HTTP 520 observé). Cette source emploie donc uniquement
-``https://api.pexels.com/v1`` avec la clé ``PEXELS_API_KEY`` de l'opérateur.
+The private web API used by gallery-dl's Pexels extractor is unreliable
+(observed HTTP 520 responses). Use only https://api.pexels.com/v1 with the
+operator's PEXELS_API_KEY.
 
-Routes Pexels prises en charge : recherche (y compris ``/en-us/search/`` et
-``/fr-fr/chercher/``), collection accessible avec la clé et photo unique.
-L'API officielle n'expose pas les profils publics ``/@user``.
-"""
+Supported public routes: search (including /en-us/search/ and /fr-fr/chercher/),
+collections accessible with the key, and individual photos. The official API
+does not expose public /@user profiles."""
 import os
 from urllib.parse import parse_qsl, quote, urlsplit
 
@@ -34,7 +33,7 @@ _PEXELS_CAPS = Capabilities(
 
 
 def pexels_api_key():
-    """Clé API officielle lue au runtime (effective sans redémarrage)."""
+    """Read the official API key at runtime so changes need no restart."""
     value = (os.environ.get('PEXELS_API_KEY') or '').strip()
     return value or None
 
@@ -52,11 +51,10 @@ def _is_https_url(value, allowed_hosts):
 
 
 def _photo_item(photo):
-    """Photo API valide -> schéma commun, sinon None.
+    """Convert a valid API photo to the shared schema, otherwise return None.
 
-    Les champs d'attribution sont obligatoires : une entrée incomplète ne doit
-    pas entrer dans la grille sans crédit Pexels/photographe exploitable.
-    """
+    Require attribution fields so incomplete entries cannot appear in the grid
+    without usable Pexels/photographer credit."""
     if not isinstance(photo, dict) or not isinstance(photo.get('src'), dict):
         return None
     src = photo['src']
@@ -88,7 +86,7 @@ def _photo_item(photo):
 
 
 def _request_json(endpoint, params, key, *, not_found=None):
-    """GET API borné -> (dict|None, erreur|None), sans jamais exposer la clé."""
+    """Make a bounded API GET; return (dict|None, error|None) without exposing the key."""
     try:
         response = requests.get(
             endpoint,
@@ -147,11 +145,10 @@ def _map_photo_list(data, key):
 
 
 def _orientation_from_query(query):
-    """Retourne une orientation allowlistée, None si absente, sentinelle si invalide.
+    """Return an allowed orientation, None if absent, or a sentinel if invalid.
 
-    Tous les autres paramètres publics sont volontairement ignorés : ils ne
-    doivent jamais devenir des paramètres arbitraires de l'API officielle.
-    """
+    Deliberately ignore all other public query parameters so they cannot become
+    arbitrary parameters to the official API."""
     try:
         pairs = parse_qsl(query, keep_blank_values=True, max_num_fields=20)
     except (TypeError, ValueError):
@@ -165,7 +162,7 @@ def _orientation_from_query(query):
 
 
 def _target_for(url, page):
-    """URL publique Pexels validée -> endpoint officiel, params, type de cible."""
+    """Map a validated public Pexels URL to its official endpoint, parameters and target type."""
     try:
         parsed = urlsplit(url)
         path = parsed.path
