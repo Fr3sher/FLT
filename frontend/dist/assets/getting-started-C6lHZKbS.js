@@ -171,6 +171,16 @@ To install several plugins, tick them in **Plugins**, choose **Review
 selected**, and confirm the shared plan. All selected packages are checked before
 any changes are staged; one LDS restart applies the whole selection.
 
+To update installed plugins, choose **Update all** and review the available
+updates together. **Update all and restart** downloads and verifies the complete
+selection, prepares one transaction and restarts LDS once. The page reloads when
+the new server is ready. Disabled plugins stay disabled; connected private
+catalogs keep their own signature checks. If your launcher requires a manual
+restart, LDS shows its restart instructions after preparing the updates. Active
+local work can postpone the restart; the prepared updates remain available to
+apply when it finishes. A retained cloud pod does not block a restart that keeps
+its plugin enabled.
+
 Each plugin's card offers **Install**, or its controls once installed: open the
 plugin, **Settings**, turn it on or off, and update it when available. **More
 actions** contains **Remove plugin**. Installed plugins remain listed even if
