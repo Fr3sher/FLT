@@ -2,7 +2,7 @@
   "id": "cloud_training",
   "bundled": true,
   "name": "Cloud training",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "api": 1,
   "description": "Train images and videos on rented GPUs, supervise runtime and recover checkpoints. Includes full-model delivery and Hub storage.",
   "requires": [],
