@@ -88,6 +88,7 @@ export default function useRunsHubContinue({ data, poll, cloud = null }) {
     dialog: target ? { target, where: target.source === 'cloud' ? 'cloud' : 'local',
       checkpoints: target.resume_checkpoints?.length ? target.resume_checkpoints : (target.resume_steps || []).map(step => ({ step })),
       initialFromStep: initialStep, lanes, transportPlan, busy, error, onResolve: submitContinue,
+      cloudGpuPicker: cloud?.gpuPicker?.(target),
       settings: { optimizer: target.settings?.optimizer, learning_rate: target.settings?.lr } } : null,
   }
 }

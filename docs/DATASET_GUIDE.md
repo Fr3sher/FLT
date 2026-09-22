@@ -513,6 +513,10 @@ dialog:
   reason**, never hidden. The same choice is offered by the **Runs** page's
   ▶ Continue, where the cloud reason is counted against *that run's* dataset —
   the page lists runs from all of them.
+- **Cloud GPU** — when continuing in the cloud, choose an available GPU model.
+  The list shows VRAM and live hourly prices under your configured price cap.
+  Use **Refresh offers** if availability changes. This choice applies to the
+  continuation, including when the original run used another card.
 
 You can also click a checkpoint pill in the **◉ Graph** and pick *▶ Continue from
 here*: the dialog opens already set on that step.

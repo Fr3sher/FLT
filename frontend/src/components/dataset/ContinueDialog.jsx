@@ -19,7 +19,7 @@
  * `lanes` lets the user choose it — a checkpoint is a file, so a run trained here
  * can be finished on a rented GPU and vice-versa; a mount that doesn't gets its
  * own `where` back and can ignore the field. */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { HelpBadge } from '../../help/HelpMode';
 import {
   defaultResumeMode,
@@ -59,6 +59,9 @@ export default function ContinueDialog({
   // before. Present (the dataset panel) → the user chooses where the continuation
   // RUNS, independently of where the source run trained; `where` seeds the default.
   lanes = null,
+  // Optional picker supplied by the cloud plugin; the host owns the selection
+  // so a refused launch keeps it alongside the other continuation choices.
+  cloudGpuPicker = null,
   // OPT-IN transport picker, for a FULL MODEL only: the backend's resume plan
   // ({ default_transport, options: [{transport, available, reason, bytes,
   // seconds, gpu_cost, rate_* }] }). Absent → no picker and the dialog behaves
@@ -93,6 +96,9 @@ export default function ContinueDialog({
   const [lane, setLane] = useState(() => resolveInitialLane(where, lanes));
   const laneState = (id) => (lanes ? (lanes[id] || {}) : {});
   const laneBlocked = !!lanes && laneState(lane).available === false;
+  const [gpuName, setGpuName] = useState(null);
+  const GpuPicker = cloudGpuPicker?.Component;
+  const gpuBlocked = lane === 'cloud' && !!GpuPicker && !gpuName;
   // HOW the checkpoint gets to the pod. Seeded from the backend's default, but
   // never onto a road it would immediately have to disable.
   const [transport, setTransport] = useState(() => initialTransport(transportPlan));
@@ -101,7 +107,8 @@ export default function ContinueDialog({
     ? transportBlockedReason(transportPlan, transport) : null;
   const blockedReason = submitBlockedReason({
     latest, laneBlocked, laneReason: laneState(lane).reason, lane })
-    || transportReason;
+    || transportReason
+    || (gpuBlocked ? 'Choose a cloud GPU before continuing.' : null);
   const selectedCheckpoint = useMemo(
     () => preferredCheckpointForStep(checkpoints, fromStep),
     [checkpoints, fromStep]);
@@ -178,6 +185,7 @@ export default function ContinueDialog({
   const isEarlier = fromStep < latest;
 
   const submit = () => {
+    if (busy || blockedReason || (resumeMode === 'full_state' && !fullStateAvailable)) return;
     const overrides = {};
     if (!trajectoryLocked && saveEvery !== inheritedSave) {
       overrides.save_every = Number(saveEvery);
@@ -209,6 +217,7 @@ export default function ContinueDialog({
       // Where it runs. Always sent; a caller that offers no picker gets `where`
       // back and can ignore it.
       lane,
+      gpuName: lane === 'cloud' ? gpuName : undefined,
       // Which road the 26 GB takes back to the pod. Undefined when no picker was
       // offered, so the backend keeps its own default (the Hugging Face copy).
       transport: transportPlan ? transport : undefined,
@@ -280,6 +289,12 @@ export default function ContinueDialog({
               </span>
             )}
           </div>
+        )}
+
+        {lane === 'cloud' && GpuPicker && (
+          <Suspense fallback={<span className="text-content-subtle text-[0.75rem]">Loading cloud GPU picker…</span>}>
+            <GpuPicker {...cloudGpuPicker.props} value={gpuName} onChange={setGpuName} busy={busy} />
+          </Suspense>
         )}
 
         {/* HOW the checkpoint reaches the pod — full models only.
@@ -579,7 +594,7 @@ export default function ContinueDialog({
           <button type="button" onClick={dismiss} disabled={busy}
             className="px-3 py-1.5 rounded-lg bg-surface text-content text-sm disabled:opacity-40">Cancel</button>
           <button type="button" onClick={submit}
-            disabled={busy || latest === 0 || laneBlocked
+            disabled={busy || latest === 0 || laneBlocked || gpuBlocked || !!transportReason
               || (resumeMode === 'full_state' && !fullStateAvailable)}
             title={laneBlocked ? laneState(lane).reason || undefined : undefined}
             className="ml-auto px-3 py-1.5 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">

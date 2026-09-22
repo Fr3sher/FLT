@@ -301,6 +301,33 @@ def test_continue_cloud_run_forwards_allow_parallel_run(ct, app, seeded_dataset,
         assert seen.get('allow_parallel_run') is False
 
 
+@pytest.mark.parametrize('selected_gpu, expected_gpu', [
+    ('RTX 5090', 'RTX 5090'), (None, 'RTX 4090'),
+])
+def test_continue_cloud_gpu_selection_overrides_only_the_new_run(
+        ct, app, seeded_dataset, monkeypatch, selected_gpu, expected_gpu):
+    with app.app_context():
+        run = ct.CloudTrainingRun(dataset_id=seeded_dataset, status='done',
+                                  job_name='resume-test', vast_label='resume-test',
+                                  train_params=json.dumps({
+                                      'steps': 500, 'train_type': 'zimage',
+                                      'variant': 'turbo', 'requested_gpu': 'RTX 4090',
+                                  }))
+        ct.db.session.add(run)
+        ct.db.session.commit()
+        saved_params = run.train_params
+        monkeypatch.setattr(ct, '_run_staging_checkpoints', lambda r: [
+            {'step': 500, 'filename': 'checkpoint.safetensors',
+             'path': 'checkpoint.safetensors', 'source': 'local'}])
+        seen = {}
+        monkeypatch.setattr(ct, 'launch_cloud_training',
+                            lambda *a, **kw: (seen.update(kw), {'run_id': 4242})[1])
+        ct.continue_cloud_run('local', run.id, gpu_name=selected_gpu)
+        assert seen['gpu_name'] == expected_gpu
+        assert seen['resume_step'] == 500
+        assert run.train_params == saved_params
+
+
 def test_continue_local_run_in_cloud_forwards_allow_parallel_run(
         ct, app, seeded_dataset, monkeypatch):
     """The dataset panel's Continue→Cloud lane is a normal cloud launch too:
@@ -339,20 +366,23 @@ def test_continue_routes_read_the_flag_from_the_request(
 
     def fake_continue_cloud(user_id, run_id, **kw):
         seen['cloud'] = kw.get('allow_parallel_run')
+        seen['cloud_gpu'] = kw.get('gpu_name')
         return {}
 
     def fake_continue_local(user_id, dataset_id, **kw):
         seen['local'] = kw.get('allow_parallel_run')
+        seen['local_gpu'] = kw.get('gpu_name')
         return {}
 
     monkeypatch.setattr(troutes.ct, 'continue_cloud_run', fake_continue_cloud)
     monkeypatch.setattr(troutes.ct, 'continue_local_run_in_cloud', fake_continue_local)
     client.post('/api/dataset/train/cloud/continue',
-                json={'run_id': 1, 'allow_parallel_run': True})
+                json={'run_id': 1, 'allow_parallel_run': True, 'gpu_name': 'RTX 5090'})
     client.post(f'/api/dataset/{seeded_dataset}/train/cloud/continue-local',
-                json={'extra_steps': 500, 'allow_parallel_run': True})
+                json={'extra_steps': 500, 'allow_parallel_run': True, 'gpu_name': 'RTX 5090'})
     assert seen.get('cloud') is True
     assert seen.get('local') is True
+    assert seen.get('cloud_gpu') == seen.get('local_gpu') == 'RTX 5090'
 
 
 def test_auto_retry_of_a_run_with_a_live_confirmed_sibling_still_launches(

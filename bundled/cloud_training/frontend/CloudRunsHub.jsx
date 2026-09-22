@@ -19,6 +19,7 @@ import { stopButtonLabel } from './lib/launchProgress.js';
 import { runSilenceWarning, stopOutcomeMessage } from './lib/runSilence.js';
 import CloudStopDialog from './shared/CloudStopDialog.jsx';
 import { runsHubContinueLanes } from './lib/continueLanes.js';
+import { continuationGpuPicker } from './dataset/continuationGpuPicker.js';
 import { vastUrl } from '@lds/plugin-sdk/links';
 import { VastLink } from '@lds/plugin-sdk/links';
 import { canRecheckFullTransformerDelivery, fullTransformerRecheckOutcome, isFullTransformerRun } from './lib/trainingModel.js';
@@ -42,6 +43,7 @@ function SilenceWarning({ run }) {
 /** Only the cloud transport is contributed. The shared core controller owns
  * the dialog and can continue a saved checkpoint locally with this absent. */
 export const cloudRunsContinuation = {
+  gpuPicker: continuationGpuPicker,
   availability(run, { data, caps }) {
     return runsHubContinueLanes(run, {
       aitoolkitValid: caps?.aitoolkit?.valid, localActive: data?.local_active,
@@ -56,6 +58,7 @@ export const cloudRunsContinuation = {
     const body = { extra_steps: payload.extraSteps,
       from_step: payload.fromStep, overrides: payload.overrides,
       resume_mode: payload.resumeMode || 'weights_only',
+      ...(payload.gpuName ? { gpu_name: payload.gpuName } : {}),
       ...(payload.transport ? { transport: payload.transport } : {}),
       ...(payload.stateBundleId ? { state_bundle_id: payload.stateBundleId } : {}),
     };

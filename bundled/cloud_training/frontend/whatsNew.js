@@ -1,4 +1,10 @@
 export const CLOUD_WHATS_NEW = [
+  {
+    id: '2026-09-22-cloud-continue-gpu-choice',
+    date: '2026-09-22',
+    title: 'Choose your GPU when continuing training in the cloud',
+    blurb: 'Continue training now lists available GPU models, VRAM and live hourly prices before starting. Pick a card when moving a local checkpoint to the cloud or continuing a previous cloud run, from Checkpoints or Runs.',
+  },
 {
     id: '2026-09-05-zz-vast-referral-link',
     date: '2026-09-05',

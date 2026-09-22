@@ -342,7 +342,7 @@ export const ACTION_TOPICS = [
   action('continue-training', 'Continue a training run',
     ['continue', 'resume', 'more steps', 'epoch', 'checkpoint', 'restart', 'undercook', 'overcook',
      'learning rate', 'lr', 'half', 'tenth', 'gentle finish', 'polish', 'timestep', 'cadence',
-     'lane', 'local', 'cloud', 'run it',
+     'lane', 'local', 'cloud', 'run it', 'gpu model', 'gpu selection', 'hourly price',
      // How a full model's 26 GB reaches the pod — the priced choice in this
      // same dialog. Searchable from the words a user would actually type when
      // they are staring at a GPU cost they did not expect.

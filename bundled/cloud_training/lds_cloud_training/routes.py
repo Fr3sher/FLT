@@ -459,6 +459,7 @@ def dataset_train_cloud_continue():
                                     resume_mode=d.get('resume_mode', 'weights_only'),
                                     state_bundle_id=d.get('state_bundle_id'),
                                     transport=d.get('transport'),
+                                    gpu_name=d.get('gpu_name'),
                                     allow_parallel_run=bool(d.get('allow_parallel_run')))
     except Exception as e:
         return _map_error(e)

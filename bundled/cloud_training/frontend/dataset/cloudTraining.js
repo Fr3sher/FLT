@@ -70,7 +70,7 @@ export const cloudContinueLane = {
       ...(opts.overrides ? { overrides: opts.overrides } : {}),
       resume_mode: opts.resumeMode || 'weights_only',
       ...(opts.stateBundleId ? { state_bundle_id: opts.stateBundleId } : {}),
-      ...(opts.gpuName ? { gpu_name: opts.gpuName } : {}),
+      ...((payload.gpuName || opts.gpuName) ? { gpu_name: payload.gpuName || opts.gpuName } : {}),
     };
     let d;
     try {

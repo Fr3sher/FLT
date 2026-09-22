@@ -3747,6 +3747,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           context={`${checkpointBaseLabel} · ${checkpointVariantDisplay}`}
           where={continueSource?.source || laneOfStep(continueInitialStep)}
           lanes={continueLanes}
+          cloudGpuPicker={pluginLanes.find((l) => l.id === 'cloud')?.gpuPicker?.({
+            dataset_id: ds.currentId,
+            train_type: continueSource?.train_type || checkpointTrainType,
+            variant: continueSource?.variant || checkpointVariant,
+            training_mode: continueSource?.training_mode || 'lora',
+          })}
           checkpoints={continueSource?.resume_checkpoints || checkpoints}
           bestStep={bestEpoch?.available ? bestEpoch.best_step : null}
           initialFromStep={continueInitialStep}

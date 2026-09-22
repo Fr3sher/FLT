@@ -1692,7 +1692,7 @@ def _require_cloud_weights_only(resume_mode='weights_only', state_bundle_id=None
 def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
                        overrides=None, resume_mode='weights_only',
                        state_bundle_id=None, transport=None,
-                       allow_parallel_run=False) -> dict:
+                       allow_parallel_run=False, gpu_name=None) -> dict:
     """Reprend un run cloud TERMINAL (done OU en échec) depuis un checkpoint
     harvesté et vise step_de_reprise + extra_steps — le pendant cloud de
     lora_training.continue_training. C'est un VRAI launch_cloud_training (pod
@@ -1708,7 +1708,9 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
     n'est jamais touché — repartir d'un step inférieur est donc gratuit côté cloud.
     ``overrides`` = mêmes réglages sûrs que le local (cadence/preview prompts),
     fusionnés dans le snapshot du run (jamais dans le dataset). register_launch
-    reste un launch cloud normal — le resume est un détail d'exécution."""
+    reste un launch cloud normal — le resume est un détail d'exécution.
+    ``gpu_name`` selects the new pod's GPU class; absent, keep the source
+    run's preference for compatibility with existing callers."""
     _require_cloud_weights_only(resume_mode, state_bundle_id)
     run = db.session.get(CloudTrainingRun, int(run_id))
     if not run:
@@ -1857,7 +1859,7 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
         masked=p.get('masked', True),
         training_mode=p.get('training_mode') or 'lora',
         **flags,
-        gpu_name=p.get('requested_gpu'),
+        gpu_name=gpu_name or p.get('requested_gpu'),
         resume_ckpt_path=(None if from_hub else chosen['path']),
         resume_hf=({'repo_id': chosen['repo_id'],
                     'filename': chosen['hf_filename']} if from_hub else None),
