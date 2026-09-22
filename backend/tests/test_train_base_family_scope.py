@@ -57,6 +57,20 @@ def style_ds(app):
 
 # --- 1) the scope itself -------------------------------------------------------
 
+def test_dataset_payload_includes_saved_results_filter_without_trainer(app, style_ds):
+    from app.services import face_dataset_service as svc
+    with app.app_context():
+        payload = svc.dataset_payload(LOCAL_USER, style_ds)
+        assert payload['train_type'] == 'zimage'
+        assert payload['train_base_model'] == ZIMAGE_MERGE
+        assert payload['train_variant'] == 'turbo'
+        svc.set_train_type(LOCAL_USER, style_ds, 'krea')
+        payload = svc.dataset_payload(LOCAL_USER, style_ds)
+        assert payload['train_type'] == 'krea'
+        assert payload['train_base_model'] == ''
+        assert payload['train_variant'] is None
+
+
 def test_switching_family_detaches_the_other_familys_base(app, style_ds):
     """RED before the fix: the Z-Image merge stayed on `train_base_model` after
     the family became Krea 2, and the panel's summary printed it."""

@@ -2,7 +2,7 @@
 plus checkpoint listing/import/delete and Z-Image base-conversion prep.
 
 No login - single local user (`cfg.LOCAL_USER`). Every route except
-`/dataset/train/status` is gated on `capabilities.probe()['aitoolkit']['valid']`
+`/dataset/train/status` is gated on the lightweight ai-toolkit presence probe
 (409 with a UI hint): `/train/status` must stay pollable even when
 ai-toolkit isn't configured, so it degrades to `{'available': False}` instead.
 """
@@ -74,7 +74,9 @@ class _CloseCallbackFile:
 
 def _require_aitoolkit():
     """None if ai-toolkit is usable, else the (body, status) 409 to return."""
-    if not capabilities.probe()['aitoolkit']['valid']:
+    # Presence is the same gate as the full snapshot, but must not wait for
+    # unrelated optional ML imports before Training can open after a restart.
+    if not capabilities.probe_aitoolkit()['ok']:
         return jsonify({'error': 'ai-toolkit is not configured',
                         'hint': 'Set its folder in Settings'}), 409
     return None
@@ -236,7 +238,7 @@ def dataset_train_status():
     # Le poll doit toujours répondre 200 (jamais d'erreur) : sans ai-toolkit
     # configuré, on renvoie juste 'indisponible' au lieu d'un 409 qui casserait
     # le polling UI.
-    if not capabilities.probe()['aitoolkit']['valid']:
+    if not capabilities.probe_aitoolkit()['ok']:
         return jsonify({'available': False})
     # Le poll fait avancer la file : fin du training courant → lancement du suivant.
     try:

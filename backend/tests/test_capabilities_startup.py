@@ -309,3 +309,77 @@ def test_clear_discards_late_ffmpeg_cache_even_when_another_probe_fails(monkeypa
         assert caps.probe() == {'video_encode': False, 'training_visible': False}
     assert caps.ffmpeg_tools._ready_cache is None
     assert caps._cache is None
+
+
+def test_startup_presence_answers_while_full_scan_is_still_blocked(app, tmp_path, monkeypatch):
+    started, release = Event(), Event()
+    root = tmp_path / 'trainer'
+    root.mkdir()
+    (root / 'run.py').touch()
+    python = root / 'python'
+    python.touch()
+    caps.cfg.save_config({'aitoolkit': {'dir': str(root), 'python': str(python)}})
+    urls = []
+
+    def reachable(url, **kwargs):
+        urls.append(url)
+        return True
+
+    def cold_optional_checks():
+        started.set()
+        assert release.wait(5)
+        return {'masks': True}
+
+    monkeypatch.setattr(caps, '_probe_uncached', cold_optional_checks)
+    monkeypatch.setattr(caps, '_http_ok', reachable)
+    monkeypatch.setattr('app.services.lora_training.process_training_queue', lambda: None)
+    monkeypatch.setattr('app.services.lora_training.training_status', lambda *a: {'in_progress': False})
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        full = executor.submit(in_app, app)
+        try:
+            assert started.wait(3)
+            # The new route must not take the full scan's lock, even on first boot.
+            early = executor.submit(lambda: app.test_client().get('/api/capabilities/startup'))
+            response = early.result(timeout=2)
+            assert response.status_code == 200
+            snapshot = response.get_json()
+            assert snapshot['comfyui']['reachable'] is True
+            assert snapshot['aitoolkit']['valid'] is True
+            assert snapshot['training_visible'] is True
+            assert snapshot['studio_visible'] is True
+            assert 'masks' not in snapshot and 'engines' not in snapshot
+            assert caps._cache is None and not full.done()
+            assert len(urls) == 1 and urls[0].endswith('/system_stats')
+            # Seeing the presence must also let the real local routes proceed;
+            # they cannot immediately queue behind the full scan again.
+            status = executor.submit(lambda: app.test_client().get('/api/dataset/train/status'))
+            assert status.result(timeout=2).get_json() == {'in_progress': False}
+            base_info = executor.submit(lambda: app.test_client().get('/api/dataset/999999/train/base-info'))
+            assert base_info.result(timeout=2).status_code == 404
+            assert not full.done()
+        finally:
+            release.set()
+        assert full.result(timeout=3)['masks'] is True
+
+
+@pytest.mark.parametrize('python_is_file', [False, True])
+def test_startup_does_not_mistake_checkout_without_interpreter_for_ready(
+        app, tmp_path, monkeypatch, python_is_file):
+    root = tmp_path / 'trainer'
+    root.mkdir()
+    (root / 'run.py').touch()
+    python = root / 'python'
+    if python_is_file:
+        python.touch()
+    else:
+        python.mkdir()
+    caps.cfg.save_config({'aitoolkit': {'dir': str(root), 'python': str(python)}})
+    monkeypatch.setattr(caps, '_scan_models', lambda: pytest.fail('startup scanned models'))
+    monkeypatch.setattr(caps, '_import_ok', lambda *a, **k: pytest.fail('startup imported ML'))
+    with app.app_context():
+        snapshot = caps.probe_startup()
+    assert snapshot['aitoolkit']['dir_valid'] is True
+    assert snapshot['aitoolkit']['valid'] is python_is_file
+    assert snapshot['training_visible'] is python_is_file
+    assert snapshot['comfyui']['reachable'] is False
+    assert snapshot['studio_visible'] is False

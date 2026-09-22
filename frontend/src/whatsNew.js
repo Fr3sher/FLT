@@ -84,11 +84,24 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-zzzzzzz-fast-tool-detection',
+    date: '2026-09-22',
+    title: 'Find ComfyUI and ai-toolkit sooner after a restart',
+    blurb: 'LDS checks your configured ComfyUI server and ai-toolkit folder immediately, while optional tools finish their checks in the background. Training and Studio become visible as soon as their tools are found, and checking ComfyUI no longer downloads its entire generation history.',
+  },
+  {
     id: '2026-09-22-zzzzzz-private-lds-plugin-updates',
     date: '2026-09-22',
     title: 'Receive updates for your private LDS plugins',
     blurb: 'Trusted private catalogs can now update previously installed LDS plugins alongside the public catalog. Keep using your usual launcher.',
     to: '/plugins',
+  },
+  {
+    id: '2026-09-22-zzzzzz-checkpoint-graph-refresh',
+    date: '2026-09-22',
+    title: 'Find your saved LoRAs without waiting for training setup',
+    blurb: 'Checkpoints load using the dataset’s saved family, base and variant while training tools are still being detected. Refresh checkpoints also reloads the visible graph, and an older response can no longer hide newer results.',
+    to: '/datasets?section=checkpoints',
   },
   {
     id: '2026-09-22-zzzzz-plugin-restart-without-comfyui',

@@ -318,7 +318,8 @@ def probe_comfyui() -> dict:
     surface (Test button, engine cards, the 409 on a blocked generation) can say
     the true one instead of the convenient one.
 
-    The verdict itself still rides on the cheap `/history` probe. When that one
+    The verdict itself rides on the small `/system_stats` probe, never the
+    complete generation history (which grows while ComfyUI stays running). When it
     can't tell us why (it is the patched seam in tests, and a 3 s budget is short
     enough to trip on a busy server), the LAST /object_info attempt is consulted:
     that probe knows the difference first-hand, because it is the one that spends
@@ -329,14 +330,14 @@ def probe_comfyui() -> dict:
                 'status': 'unconfigured',
                 'hint': 'Set the ComfyUI API URL in Settings ▸ Local tools.'}
     reason = {}
-    ok = _http_ok(f'{api_url}/history', reason=reason)
+    ok = _http_ok(f'{api_url}/system_stats', reason=reason)
     if ok:
         return {'ok': True, 'detail': api_url, 'status': 'ok', 'hint': ''}
     from .utils import comfyui as _cu
     health = _cu.object_info_health()
     why, waited = reason.get('why'), reason.get('waited', 3)
     if why != 'timeout' and health['status'] == 'timeout':
-        # /history gave up after 3 s while the heavy probe proved the server is
+        # The small probe gave up after 3 s while the heavy probe proved the server is
         # THERE and merely slow. Believe the probe that waited longer.
         why, waited = 'timeout', health['waited']
     status = 'slow' if why == 'timeout' else 'unreachable'
@@ -2404,6 +2405,38 @@ def _probe_comfy_models():
 def _probe_training_captioner():
     aitoolkit = probe_aitoolkit()
     return aitoolkit, probe_joycaption(aitoolkit)
+
+
+def probe_startup() -> dict:
+    """Publish tool presence before unrelated model and ML checks finish.
+
+    This is a partial UI snapshot, not a replacement for the full capability
+    gates. It uses the same checks as that snapshot, without taking its scan
+    lock, importing optional packages or enumerating ComfyUI models/nodes.
+    """
+    results = _parallel_probes({
+        'comfyui': probe_comfyui,
+        'aitoolkit': probe_aitoolkit,
+    })
+    comfy, aitoolkit = results['comfyui'], results['aitoolkit']
+    return {
+        'configured': cfg.is_configured(),
+        'comfyui': {
+            'reachable': comfy['ok'],
+            'status': comfy.get('status', 'ok' if comfy['ok'] else 'unreachable'),
+            'hint': comfy.get('hint', ''),
+            'api_url': cfg.get('comfyui.api_url') or '',
+        },
+        'aitoolkit': {
+            'configured': bool(cfg.get('aitoolkit.dir')),
+            'valid': aitoolkit['ok'],
+            'dir_valid': bool(aitoolkit.get('has_run')),
+            'python_candidates': list(aitoolkit.get('python_candidates') or []),
+            'has_manager': bool(aitoolkit.get('has_manager')),
+        },
+        'training_visible': aitoolkit['ok'],
+        'studio_visible': comfy['ok'],
+    }
 
 
 def _probe_active_lmstudio(_llm_provider):

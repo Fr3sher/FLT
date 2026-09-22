@@ -22,6 +22,7 @@ def _dataset(app, *, train_type='krea'):
 
 
 def _valid_training_capabilities(monkeypatch):
+    monkeypatch.setattr('app.capabilities.probe_aitoolkit', lambda: {'ok': True})
     monkeypatch.setattr(
         'app.routes.training.capabilities.probe',
         lambda: {'aitoolkit': {'valid': True}, 'cloud_training': True})

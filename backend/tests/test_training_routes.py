@@ -1,6 +1,6 @@
 """Training blueprint: ai-toolkit gating + kwargs forwarding to the service.
 
-Every test patches `app.capabilities.probe` so none of this ever touches a
+Every test patches the relevant `app.capabilities` probes so none of this touches a
 real HTTP/subprocess probe, and patches the `lora_training`/`zimage_convert`
 service functions it exercises so no test spawns a real subprocess.
 """
@@ -12,6 +12,7 @@ def _create(client, name='Lola', trigger='lola'):
 
 def _valid(monkeypatch, ok=True):
     monkeypatch.setattr('app.capabilities.probe', lambda *a, **k: {'aitoolkit': {'valid': ok}})
+    monkeypatch.setattr('app.capabilities.probe_aitoolkit', lambda: {'ok': ok})
 
 
 # --- Gating -------------------------------------------------------------------

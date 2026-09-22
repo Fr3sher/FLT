@@ -19,6 +19,7 @@ import {
   defaultCheckpointVariant,
   loraFolderLabel,
   normalizeCheckpointVariant,
+  savedCheckpointSelection,
   trainingRunSelection,
   trainFamilyLabel,
 } from '../../utils/checkpointBrowser';
@@ -190,6 +191,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // lineage is fetched when the graph view is showing and the browse filter/
   // dataset changes. {tree|loading|error} | null.
   const [datasetGraph, setDatasetGraph] = useState(null);
+  const datasetGraphRequest = useRef(0);
   // ⚙ Run details / ⇄ compare, opened straight FROM a checkpoint card. The
   // recipe panel and the two-run diff have always existed — one screen away,
   // in the Lineage graph — and "one screen away" is exactly where nobody
@@ -256,11 +258,22 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // Navigateur de résultats indépendant : changer la configuration du PROCHAIN
   // entraînement ne doit jamais faire disparaître les checkpoints que l'utilisateur
   // est en train de consulter dans la section dédiée.
-  const [checkpointTrainType, setCheckpointTrainType] = useState('zimage');
-  const [checkpointBase, setCheckpointBase] = useState('');
-  const [checkpointVariant, setCheckpointVariant] = useState('turbo');
-  const checkpointSelectionDataset = useRef(null);
+  const [checkpointTrainType, setCheckpointTrainType] = useState(() => savedCheckpointSelection(ds.data).family);
+  const [checkpointBase, setCheckpointBase] = useState(() => savedCheckpointSelection(ds.data).base);
+  const [checkpointVariant, setCheckpointVariant] = useState(() => savedCheckpointSelection(ds.data).variant);
+  const checkpointSelectionDataset = useRef(ds.data?.id === ds.currentId ? ds.currentId : null);
   const checkpointRequest = useRef(0);
+  // Seed once per dataset, independently of slow/failed trainer discovery.
+  // Later Training changes must not replace the user's results filter.
+  useEffect(() => {
+    if (!ds.currentId || ds.data?.id !== ds.currentId
+        || checkpointSelectionDataset.current === ds.currentId) return;
+    checkpointSelectionDataset.current = ds.currentId;
+    const saved = savedCheckpointSelection(ds.data);
+    setCheckpointTrainType(saved.family);
+    setCheckpointBase(saved.base);
+    setCheckpointVariant(saved.variant);
+  }, [ds.currentId, ds.data]);
   // Réglages ai-toolkit avancés éditables (rank / resolution / save_every /
   // sample_every / sample_prompts), chargés depuis base-info ; persistés par POST
   // /train/settings via ds.setTrainSettings.
@@ -376,14 +389,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         setVariant(safeVariant);
         setTrainType(info.train_type || 'zimage');
         setTrainingMode(normalizeTrainingMode(info.training_mode));
-        // Initialiser le navigateur une seule fois par dataset. Les refreshs de
-        // base-info (conversion, réglages) ne doivent pas écraser son filtre.
-        if (checkpointSelectionDataset.current !== ds.currentId) {
-          checkpointSelectionDataset.current = ds.currentId;
-          setCheckpointTrainType(fam);
-          setCheckpointBase(info.base || '');
-          setCheckpointVariant(safeVariant);
-        }
         setAdv(info.train_settings || null);
         setSlider(info.slider || null);
       }
@@ -1245,12 +1250,20 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // forest, scoped to the browse filter's family/variant so it matches the list.
   // Reuses the exact component the Runs hub draws (RunLineageGraph) — no copy.
   const loadDatasetGraph = async () => {
+    const requestId = ++datasetGraphRequest.current;
     setDatasetGraph({ loading: true });
     try {
-      setDatasetGraph({ tree: await fetchDatasetLineage() });
+      const tree = await fetchDatasetLineage();
+      if (requestId !== datasetGraphRequest.current) return;
+      setDatasetGraph({ tree });
     } catch {
+      if (requestId !== datasetGraphRequest.current) return;
       setDatasetGraph({ error: 'Could not load this dataset’s run graph.' });
     }
+  };
+  const refreshCheckpoints = () => {
+    loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant);
+    if (checkpointsView === 'graph') loadDatasetGraph();
   };
   // Bare fetch of the lineage tree (used by the initial load AND the child's
   // refetch after an inline import, so a freshly-deployed pill flips to testable).
@@ -1304,20 +1317,20 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // and reload it when the browse filter/dataset changes — so the graph is ready
   // without a manual click. The list view keeps its own loadCheckpoints effect.
   useEffect(() => {
-    if (!ds.currentId || !baseInfo) return;
+    if (!ds.currentId) return;
     if (checkpointsView !== 'graph' || !checkpointManagerOpen) return;
     loadDatasetGraph();
+    return () => { datasetGraphRequest.current += 1; };
   }, [checkpointsView, checkpointManagerOpen, checkpointBase, checkpointTrainType, // eslint-disable-line react-hooks/exhaustive-deps
-      checkpointVariant, ds.currentId, baseInfo, caps.training_visible]);
+      checkpointVariant, ds.currentId]);
 
-  // Recharge dès que le filtre de résultats change. On
-  // attend baseInfo pour charger directement la BONNE base persistée (pas de flash
-  // « Officiel » avant que la base du dataset soit appliquée).
+  // Results use the saved dataset selection; model discovery is not a prerequisite.
   useEffect(() => {
-    if (!ds.currentId || !baseInfo) return;
+    if (!ds.currentId) return;
     setCkLoaded(false);
     loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant);
-  }, [checkpointBase, checkpointTrainType, checkpointVariant, ds.currentId, baseInfo, caps.training_visible]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { checkpointRequest.current += 1; };
+  }, [checkpointBase, checkpointTrainType, checkpointVariant, ds.currentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Le barème affiché dans Training suit uniquement la configuration Training,
   // jamais le filtre indépendant du navigateur de résultats.
@@ -3251,10 +3264,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               checkpoint filter is on, so a merge's LoRA rows check against it. */}
           <PluginSlot slot="training.tool" surface="dataset" family={checkpointTrainType} />
           <div className="flex items-center gap-2 flex-wrap">
-            {/* () => … sinon React passe l'event en 1er arg → forBase = PointerEvent
-                → base_model=[object Object] → run inexistant → liste vide. */}
-            <button type="button" onClick={() => loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant)}
-              title="Reload the checkpoint list for this results filter"
+            {/* The handler reloads both views without passing the click event as a base. */}
+            <button type="button" onClick={refreshCheckpoints}
+              title="Reload checkpoints and the visible run graph for this results filter"
               className="px-3 py-1.5 rounded-lg bg-surface-raised border border-border text-content text-xs font-semibold">
               ↻ Refresh checkpoints
             </button>
@@ -3308,7 +3320,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               on the spot. Same component the Runs hub draws (no copy). */}
           {checkpointsView === 'graph' && (
             <div className="flex flex-col gap-2">
-              {datasetGraph?.loading && (
+              {(!datasetGraph || datasetGraph.loading) && (
                 <div className="flex items-center gap-2 text-content-subtle text-[0.75rem]">
                   <span aria-hidden className="h-3 w-3 animate-spin rounded-full border-2 border-border-strong border-t-indigo-400" />
                   Building the graph…

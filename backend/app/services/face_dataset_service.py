@@ -5393,6 +5393,9 @@ def dataset_payload(user_id, dataset_id):
     return {
         'id': ds.id, 'name': ds.name, 'trigger_word': ds.trigger_word,
         'train_type': (ds.train_type or 'zimage'),
+        # Results can load without waiting for trainer/model discovery.
+        'train_base_model': ds.train_base_model or '',
+        'train_variant': ds.train_variant,
         'kind': (ds.kind or 'character'),
         # WHAT the subject is (NULL/legacy -> 'human'); drives the generation
         # catalog + identity lock. Orthogonal to `kind`.

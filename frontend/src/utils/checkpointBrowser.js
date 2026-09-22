@@ -37,6 +37,16 @@ export function normalizeCheckpointVariant(trainType, variant) {
     : choices[0].value;
 }
 
+/** The saved selection is available with the dataset, before trainer/model probes. */
+export function savedCheckpointSelection(dataset) {
+  const family = dataset?.train_type || 'zimage';
+  return {
+    family,
+    base: dataset?.train_base_model || '',
+    variant: normalizeCheckpointVariant(family, dataset?.train_variant),
+  };
+}
+
 export function checkpointVariantLabel(trainType, variant) {
   const normalized = normalizeCheckpointVariant(trainType, variant);
   return checkpointVariantOptions(trainType).find((choice) => choice.value === normalized)?.label || normalized;

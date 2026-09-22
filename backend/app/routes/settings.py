@@ -364,6 +364,11 @@ def get_capabilities():
     return jsonify(capabilities.probe(force=force))
 
 
+@bp.get('/capabilities/startup')
+def get_startup_capabilities():
+    return jsonify(capabilities.probe_startup())
+
+
 @bp.get('/loras/list')
 def loras_list():
     """LoRAs on disk for the generation-LoRA preset picker, shared by the
