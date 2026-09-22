@@ -353,6 +353,7 @@ def test_import_route_accepts_cloud_run_id(app, client, monkeypatch, ds_with_ima
     from app.extensions import db
     from app.models import CloudTrainingRun
     ds_id, _ = ds_with_images
+    monkeypatch.setattr('app.capabilities.probe_aitoolkit', lambda: {'ok': True})
     monkeypatch.setattr('app.capabilities.probe',
                         lambda force=False: {'aitoolkit': {'valid': True},
                                              'cloud_training': True})

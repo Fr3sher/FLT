@@ -531,6 +531,8 @@ def test_dense_routes_never_import_or_serve_staging_weights_as_lora(
     monkeypatch.setattr(
         'app.routes.training.capabilities.probe',
         lambda: {'aitoolkit': {'valid': True}, 'cloud_training': True})
+    monkeypatch.setattr('app.routes.training.capabilities.probe_aitoolkit',
+                        lambda: {'ok': True})
     monkeypatch.setattr(
         ct.lt, 'import_checkpoint',
         lambda *a, **k: pytest.fail('dense staging file reached LoRA import'))
