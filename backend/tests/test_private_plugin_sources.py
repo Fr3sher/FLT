@@ -182,6 +182,42 @@ def test_first_party_only_source_filters_catalog_and_has_its_own_scope_identity(
     assert [(p['manifest']['id'], p['manifest']['official']) for p in plan['packages']] == [('manga', True)]
 
 
+def test_first_party_field_preserves_external_updates_and_canonical_permissions(private_source):
+    source = private_source
+    authorize_official_product(source)
+    expected = client.load_private_configs()[0]
+    expected_plan = service.preview_plan(None, [PID, 'manga'])
+    source.source.pop('official_ids')
+    source.source.update(plugin_ids=[PID], first_party_ids=['manga'])
+    source.path.write_text(json.dumps({'sources': [source.source]}), encoding='utf-8')
+    config = client.load_private_configs()[0]
+    assert config == expected
+    assert config.identity == expected.identity
+    assert config.external_ids == frozenset({PID})
+    for plugin_id in (PID, 'manga'):
+        assert client.config_for_plugins(plugin_id) == expected
+    assert parse_catalog(source.catalog, config) == parse_catalog(source.catalog, expected)
+    assert {p['id'] for p in service.browse()['products']} == {'camera_angles', PID, 'manga'}
+    assert service.preview_plan(None, [PID, 'manga']) == expected_plan
+
+
+@pytest.mark.parametrize('permissions', [
+    {'first_party_ids': 'manga'},
+    {'first_party_ids': [PID]},
+    {'first_party_ids': ['unreviewed']},
+    {'first_party_ids': ['camera_angles']},
+    {'first_party_ids': ['manga'], 'official_ids': ['manga']},
+    {'first_party_ids': ['manga'], 'plugin_ids': ['creature_battle']},
+], ids=['not-a-list', 'external-id', 'unknown-id', 'primary-takeover',
+        'ambiguous-permissions', 'nonexternal-base-scope'])
+def test_first_party_field_rejects_invalid_or_ambiguous_permissions(private_source, permissions):
+    source = private_source
+    source.source.update(permissions)
+    source.path.write_text(json.dumps({'sources': [source.source]}), encoding='utf-8')
+    with pytest.raises(StoreError, match='configuration'):
+        client.load_private_configs()
+
+
 @pytest.mark.parametrize('permissions', [
     {'plugin_ids': ['manga']},
     {'plugin_ids': ['camera_angles'], 'official_ids': ['camera_angles']},

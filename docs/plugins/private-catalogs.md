@@ -59,6 +59,22 @@ receipt and installation transaction. Existing projects retain their identifier
 and data. These sources load during normal startup/browsing; no alternate
 launcher or `LDS_STORE_CONFIG` override is needed.
 
+When preparing this configuration before updating an older client, leave its
+external `plugin_ids` unchanged and put the additional historical identifiers in
+`first_party_ids` instead:
+
+```json
+{
+  "plugin_ids": ["studio.depth"],
+  "first_party_ids": ["manga"]
+}
+```
+
+These fields belong in the same source object with its URLs and root path.
+Older clients ignore `first_party_ids` and retain the external plugin's updates;
+the updated core applies the same explicit first-party permissions described
+above. Do not combine `first_party_ids` and `official_ids` in one source.
+
 Use `store/tools/repository.py` to publish immutable package versions. Keep
 signing keys outside the served directory. Private sources and their packages
 do not belong in the public LDS checkout. The ordinary app updater continues

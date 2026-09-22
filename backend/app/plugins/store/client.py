@@ -139,6 +139,15 @@ def load_private_configs():
             raise ValueError('invalid sources')
         result, claimed = [], set()
         for source in sources:
+            if 'first_party_ids' in source:
+                external, official = source['plugin_ids'], source['first_party_ids']
+                if (not isinstance(external, list) or not isinstance(official, list)
+                        or any(not isinstance(pid, str) or not EXTERNAL_ID.fullmatch(pid) for pid in external)
+                        or 'official_ids' in source):
+                    raise ValueError('invalid first-party source permissions')
+                # Older clients keep their external scope and ignore this new
+                # field until the core update; no temporary catalog outage.
+                source = {**source, 'plugin_ids': external + official, 'official_ids': official}
             ids = source['plugin_ids']
             if (not isinstance(ids, list) or not 1 <= len(ids) <= 100
                     or any(not isinstance(pid, str) or not (EXTERNAL_ID.fullmatch(pid) or pid in OFFICIAL_IDS)

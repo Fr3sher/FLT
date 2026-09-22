@@ -15,7 +15,6 @@ OUTPUTS — a user must not discover that in a forum thread after building a set
 """
 import logging
 import mimetypes
-import os
 from flask import Blueprint, jsonify, request, send_file
 
 from lds_sdk.video_host.config import LOCAL_USER
