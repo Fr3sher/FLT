@@ -503,10 +503,10 @@ export default function SettingsPage({ plugin = null, groups = [] }) {
     <SettingsScopeContext value={plugin?.id || null}><div>
       {missingFocus === `${location.key}|${focusId}` && <p role="status" className="mb-4 rounded-lg border border-border p-3 text-sm">
         This setting is not available on this page. If it belongs to a plugin, open its settings from{' '}
-        <Link to="/plugins?tab=installed" className="text-primary underline">My plugins</Link>.
+        <Link to="/plugins?tab=installed" className="text-primary underline">Plugins</Link>.
       </p>}
       {plugin ? <div ref={panelRef} className="space-y-6" data-plugin-settings={plugin.id}>
-        <Link to="/plugins?tab=installed" className="inline-flex min-h-10 items-center text-sm text-primary hover:underline">← My plugins</Link>
+        <Link to="/plugins?tab=installed" className="inline-flex min-h-10 items-center text-sm text-primary hover:underline">← Plugins</Link>
         <SectionHeader eyebrow="Plugin settings" title={plugin.name || plugin.id}
           description="Changes are saved with this plugin. Your existing values are kept across updates and reinstallation." />
         <PluginSettingsGroups pluginId={plugin.id} groups={groups} {...sectionProps} />

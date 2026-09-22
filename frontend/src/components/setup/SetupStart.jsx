@@ -71,7 +71,7 @@ export default function SetupStart({ onTools, onRecheck, scanned = false, detect
   const productRows = journey?.plugin ? productReadiness(journey.plugin, caps, { withTargets: true }) : []
   const bootChanged = !!(current?.data?.boot_id && window.lds?.bootId && current.data.boot_id !== window.lds.bootId)
   const interfaceProblem = window.lds?.loadProblems?.some(item => item.plugin === journey?.plugin)
-    ? 'This plugin’s interface did not load. Reload LDS; if it still fails, repair the plugin from My plugins.' : ''
+    ? 'This plugin’s interface did not load. Reload LDS; if it still fails, repair the plugin from Plugins.' : ''
   const plan = deriveJourney(journey, { caps, runtime: runtimeReadiness, installed,
     catalog: current?.catalog, productRows, interfaceProblem })
   const checking = needsChecks && (!scanned || detecting || !current || (!known && !scanProblem))
@@ -195,7 +195,7 @@ export default function SetupStart({ onTools, onRecheck, scanned = false, detect
             <p className="text-sm text-content-muted">{plan.first.description}</p>
             <div className="flex flex-wrap gap-2">{plan.first.links.map(link => <button type="button" key={link.to}
               disabled={busy} className={PRIMARY} onClick={() => follow(link.to, true)}>{busy ? 'Opening…' : link.label}</button>)}</div>
-            {plan.first.links.length === 0 && <button type="button" className={SECONDARY} onClick={() => follow('/plugins?tab=installed', true)}>Open My plugins</button>}
+            {plan.first.links.length === 0 && <button type="button" className={SECONDARY} onClick={() => follow('/plugins?tab=installed', true)}>Open Plugins</button>}
           </section>}
         </>}
       </>}

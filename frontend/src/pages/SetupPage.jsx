@@ -1718,7 +1718,7 @@ export default function SetupPage() {
           <h1 className="mt-2 text-2xl font-bold text-content">Optional tools</h1>
           <p className="mt-2 text-sm text-content-muted">
             Choose a tool to configure or repair. None is required to use your LDS workspace.
-            Prepare installed plugins from their own settings in My plugins.
+            Prepare installed plugins from their own settings in Plugins.
           </p>
         </div>
 

@@ -7,7 +7,7 @@ export const SETUP_GOALS = [
   { id: 'dataset', title: 'Prepare a dataset', description: 'Import your images, organize them and edit captions. No extra download needed.', icon: 'images' },
   { id: 'captions', title: 'Automatically caption images', description: 'Let a local AI describe your images. We will help connect it and choose a vision model.', icon: 'captions' },
   { id: 'images', title: 'Generate images', description: 'Choose an image engine, then prepare only the tools and models it needs.', icon: 'generate' },
-  { id: 'plugins', title: 'Create videos & add tools', description: 'Choose a plugin from the Store, then follow its activation and preparation steps.', icon: 'plugins' },
+  { id: 'plugins', title: 'Create videos & add tools', description: 'Open Plugins to choose a plugin, then follow its activation and preparation steps.', icon: 'plugins' },
 ]
 
 const ID = /^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63})?$/
@@ -63,19 +63,19 @@ function pluginLifecycle(plugin, product, journey) {
   const rows = [
     row('package', 'Install ' + (product?.name || plugin?.name || 'the plugin'), !!plugin,
       plugin ? 'The package has been downloaded. Activation and its tools are checked separately.'
-        : 'Review the plugin, its requirements and any price in the Store, then confirm the installation plan.',
-      action('Review plugin in the Store', discoverPath)),
+        : 'Review the plugin, its requirements and any price in Plugins, then confirm the installation plan.',
+      action('Review plugin in Plugins', discoverPath)),
     row('activation', 'Activate the plugin', activationReady,
       activationReady ? 'The plugin is active in this running LDS session.'
-        : plugin?.pending_action ? 'A plugin change is waiting. Open My plugins and choose Apply and restart. Your setup plan stays saved in this browser.'
+        : plugin?.pending_action ? 'A plugin change is waiting. Open Plugins and choose Apply and restart. Your setup plan stays saved in this browser.'
           : !plugin ? 'LDS will need to restart once the plugin installation is prepared.'
-            : plugin.error || 'Open My plugins to turn on the plugin, apply changes or repair its installation.',
-      action(plugin?.pending_action ? 'Apply changes in My plugins' : 'Open My plugins', installedPath)),
+            : plugin.error || 'Open Plugins to turn on the plugin, apply changes or repair its installation.',
+      action(plugin?.pending_action ? 'Apply changes in Plugins' : 'Open Plugins', installedPath)),
   ]
   if (plugin?.environment) rows.push(row('environment', 'Prepare the plugin’s tools', plugin.environment.ready === true,
     plugin.environment.ready ? 'The plugin’s software dependencies are ready.'
       : plugin.environment.reason || 'Install the environment offered on the plugin’s card, then wait for its check to finish.',
-    action('Prepare tools in My plugins', installedPath)))
+    action('Prepare tools in Plugins', installedPath)))
   return rows
 }
 
@@ -159,7 +159,7 @@ export function deriveJourney(value, { caps = {}, runtime = null, installed = []
       }
     } else result.rows.push(row('function', 'Prepare the function you want to use', false,
       'After activation, choose a function. Its own checks will tell you which models or services are needed.',
-      action('Open My plugins', '/plugins?tab=installed')))
+      action('Open Plugins', '/plugins?tab=installed')))
     result.first = { title: 'Try your plugin', description: journey.capability
       ? 'Open the plugin and try ' + journey.capability + '. Other optional functions can be prepared later.'
       : 'Use the plugin’s own entry points to start your first task.',

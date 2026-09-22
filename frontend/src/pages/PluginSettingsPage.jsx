@@ -23,9 +23,9 @@ export default function PluginSettingsPage() {
   const loadProblem = window.lds?.loadProblems?.find(item => item.plugin === pluginId)
   const reason = result.error || (result.stale && 'LDS has restarted. Reload this page to use its current plugins.')
     || pluginSettingsAvailability(result.plugin)
-    || (loadProblem && 'This plugin’s interface did not load. Reload the page, or repair the plugin from My plugins.')
+    || (loadProblem && 'This plugin’s interface did not load. Reload the page, or repair the plugin from Plugins.')
   if (reason) return <div className="space-y-4" data-plugin-settings-unavailable={pluginId}>
-    <Link to="/plugins?tab=installed" className="inline-flex min-h-10 items-center text-sm text-primary hover:underline">← My plugins</Link>
+    <Link to="/plugins?tab=installed" className="inline-flex min-h-10 items-center text-sm text-primary hover:underline">← Plugins</Link>
     <h1 className="text-xl font-semibold">{result.plugin?.name || 'Plugin settings'}</h1>
     <p role={result.error ? 'alert' : 'status'} className="text-sm text-content-muted">{reason}</p>
     {result.error && <button type="button" onClick={() => setAttempt(value => value + 1)}

@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-zz-unified-plugins',
+    date: '2026-09-22',
+    title: 'Discover and manage plugins in one place',
+    blurb: 'Browse all plugins, filter installed tools or available updates, and open, configure or turn plugins on and off from the same cards. Plugins installed outside the store stay in the list, even when the catalog is offline.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-22-zz-processing-network-timeouts',
     date: '2026-09-22',
     title: 'Give repairs and slow hardware more time',

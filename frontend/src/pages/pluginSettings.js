@@ -50,10 +50,10 @@ export function settingsApiUrl(pluginId, path = '/api/settings') {
 }
 
 export function pluginSettingsAvailability(plugin) {
-  if (!plugin) return 'This plugin is not installed. Install it from the plugin store to access its settings.'
-  if (plugin.pending_action) return 'Apply the pending plugin changes in My plugins, then reopen these settings.'
-  if (!pluginDesired(plugin)) return 'Turn on this plugin in My plugins and apply the change to edit its settings. Its saved settings are kept.'
-  if (!pluginActive(plugin)) return plugin.error || 'This plugin is not active. Check its status in My plugins, then apply the change or repair its installation.'
+  if (!plugin) return 'This plugin is not installed. Install it from Plugins to access its settings.'
+  if (plugin.pending_action) return 'Apply the pending plugin changes in Plugins, then reopen these settings.'
+  if (!pluginDesired(plugin)) return 'Turn on this plugin in Plugins and apply the change to edit its settings. Its saved settings are kept.'
+  if (!pluginActive(plugin)) return plugin.error || 'This plugin is not active. Check its status in Plugins, then apply the change or repair its installation.'
   return ''
 }
 
