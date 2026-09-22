@@ -57,7 +57,7 @@ test('a slow old graph response cannot erase the latest results or replace them 
 
 test('results autoload is independent of the slow trainer/model catalog', () => {
   const effects = panel.slice(panel.indexOf('  // The manager is "open"'),
-    panel.indexOf('  // Le barème affiché'));
+    panel.indexOf('  // The displayed Training recipe'));
   assert.doesNotMatch(effects, /!baseInfo|caps\.training_visible/);
   assert.match(effects, /loadDatasetGraph\(\)/);
   assert.match(effects, /loadCheckpoints\(/);
