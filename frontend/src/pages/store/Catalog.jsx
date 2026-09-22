@@ -4,6 +4,7 @@ import PluginCard from './PluginCard.jsx';
 import { canSelectEntry, catalogEntries, matchesFilter } from './catalogModel.js';
 
 const BTN = 'min-h-10 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-surface-raised disabled:opacity-50';
+const UPDATE_BTN = 'min-h-10 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-semibold text-gray-950 hover:bg-primary-dark disabled:opacity-50';
 
 export default function Catalog({ catalog, installed, filter = 'all', onFilterChange, busy, onPlan, onUnlock,
   selectedId = '', onClearSelection, loading = false, onRetry, onToggle, onRemove, onInstalled, caps, capsKnown }) {
@@ -60,12 +61,12 @@ export default function Catalog({ catalog, installed, filter = 'all', onFilterCh
         const paid = release?.price?.kind === 'paid';
         const needsAdmin = catalog?.can_manage === false && !pending && !incompatible;
         const action = (reinstall = false) => <button type="button" role={reinstall ? 'menuitem' : undefined}
-          className={BTN + ' inline-flex items-center gap-2'}
+          className={(product?.update_available && !reinstall ? UPDATE_BTN : BTN) + ' inline-flex items-center gap-2'}
           disabled={busy || loading || pending || incompatible || catalog?.status !== 'ready' || (!catalog?.can_manage && !(needsAdmin && onUnlock))}
           onClick={() => needsAdmin ? onUnlock?.() : onPlan(id, manifest.version)}>
           {needsAdmin ? <LockKeyhole className="h-4 w-4" aria-hidden="true" />
             : paid && !plugin ? <ShoppingBag className="h-4 w-4" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
-          {needsAdmin ? 'Unlock installation' : pending ? 'Change pending' : reinstall ? 'Reinstall' : product?.update_available ? 'Review update' : paid ? 'Review purchase' : 'Install'}
+          {needsAdmin ? 'Unlock installation' : pending ? 'Change pending' : reinstall ? 'Reinstall' : product?.update_available ? 'Update' : paid ? 'Review purchase' : 'Install'}
         </button>;
         return <PluginCard key={id} plugin={plugin} release={release}
           mediaKey={`${manifest?.version}:${catalog?.checked_at || ''}`} updateAvailable={product?.update_available}

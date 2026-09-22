@@ -53,8 +53,11 @@ export default function PluginCard({ plugin, release, mediaKey, updateAvailable,
         </span>
       </header>
       <div className="flex flex-1 flex-col gap-3 px-4 py-4 sm:px-5">
+        {updateAvailable && release && <div className="rounded-lg border border-primary/40 bg-primary/10 p-3">
+          <p className="text-sm font-medium text-primary">Update available · {release.manifest.version}</p>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">{storeActions}</div>
+        </div>}
         {release && <Presentation key={mediaKey} release={release} />}
-        {updateAvailable && release && <p className="text-sm font-medium text-primary">Update available · {release.manifest.version}</p>}
         {pending && <p className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-content" data-plugin-pending>{pending}</p>}
         {release?.compatibility_issues?.length > 0 && <p className="text-sm text-amber-500">{release.compatibility_issues[0].message}</p>}
         {plugin.description && <p className="text-sm leading-relaxed text-content-muted">{plugin.description}</p>}
@@ -85,7 +88,7 @@ export default function PluginCard({ plugin, release, mediaKey, updateAvailable,
               </>}
             </HeaderMenu>}
           </div>}
-          {storeActions}
+          {!(updateAvailable && release) && storeActions}
         </div>
         {plugin.error && <p className="mt-1 text-xs text-amber-500">{plugin.error}</p>}
         {installed && pluginActive(plugin) && !capsKnown && <p className="text-xs text-content-muted">Checking configured components…</p>}

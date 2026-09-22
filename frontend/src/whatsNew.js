@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-zzzz-plugin-update-button',
+    date: '2026-09-22',
+    title: 'Spot plugin updates immediately',
+    blurb: 'An orange Update button now sits beside the available version at the top of each plugin card. Review the change before confirming installation.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-22-zzz-plugin-columns',
     date: '2026-09-22',
     title: 'See more plugins at a glance',
