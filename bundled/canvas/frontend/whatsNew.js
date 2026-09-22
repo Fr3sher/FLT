@@ -1,5 +1,12 @@
 export const WHATS_NEW = [
   {
+    "id": "2026-09-22-canvas-unpin-all",
+    "date": "2026-09-22",
+    "title": "Unpin every Canvas image in one click",
+    "blurb": "Use Unpin all beside Pinned to clear image pins across all datasets, including images hidden by filters. Your gallery images and their remembered positions are kept, so you can pin them again later.",
+    "to": "/canvas"
+  },
+  {
     "id": "2026-09-01-canvas-lanes-move-and-resize",
     "date": "2026-09-01",
     "title": "Move a dataset’s block on the Canvas, and give it the room it needs",

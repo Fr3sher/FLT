@@ -117,7 +117,8 @@ action('canvas-pinned-images', '📌 Pin an image onto the board',
     ['pin an image', 'pin to canvas', 'image on the canvas', 'put an image on the board',
      'compare two images side by side', 'move an image', 'resize an image',
      'close a pinned image', 'reopen a pinned image', 'my image came back',
-     'image position remembered', 'unpin', 'image node', 'image linked to checkpoint',
+     'image position remembered', 'unpin', 'unpin all', 'remove all pins',
+     'clear pinned images', 'image node', 'image linked to checkpoint',
      'my pinned image disappeared', 'pinned image after tidy up',
      // Free placement: the wall at the lane's corner is gone, and both halves
      // of that are things people look up — "why can I not drag it up there"

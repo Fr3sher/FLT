@@ -137,6 +137,8 @@ export default function CanvasPage() {
      changes shape -- a user updating into this version finds their cards
      exactly where they left them. */
   const [imageNodes, setImageNodes] = useState({});
+  const [unpinBusy, setUnpinBusy] = useState(false);
+  const imageWrites = useRef(new Set());
   const loadImageNodes = useCallback(() => apiFetch('/api/train/canvas/images')
     .then((d) => {
       const next = {};
@@ -163,22 +165,28 @@ export default function CanvasPage() {
 
   /* The write itself, extracted so the immediate path and the coalesced one
      below cannot drift into two different requests. */
-  const sendImageNodes = useCallback((datasetId, rows) => putJson(
-    `/api/dataset/${datasetId}/canvas/images`, {
-      // `image` is the client's own render payload; the server resolves it from
-      // the id and must not be handed a copy to trust.
-      nodes: rows.map(({ image, ...row }) => row),
-    })
-    // A row the SERVER refused (unusable geometry, an image from another lane)
-    // comes back as a 200 with a smaller `saved` count. Swallowing that is how
-    // a pin could appear, be dropped, and vanish on the next reload without a
-    // word — see utils/canvasImageNodes.pinWriteShortfall. A dropped NETWORK
-    // stays silent as before: that write heals on the next gesture.
-    .then((d) => {
-      const said = pinWriteShortfall(rows, d);
-      if (said) toast.error(said);
-    })
-    .catch(() => {}), [toast]);
+  const sendImageNodes = useCallback((datasetId, rows, strict = false) => {
+    const request = putJson(
+      `/api/dataset/${datasetId}/canvas/images`, {
+        // `image` is the client's own render payload; the server resolves it from
+        // the id and must not be handed a copy to trust.
+        nodes: rows.map(({ image, ...row }) => row),
+      })
+      // A row the SERVER refused (unusable geometry, an image from another lane)
+      // comes back as a 200 with a smaller `saved` count. Swallowing that is how
+      // a pin could appear, be dropped, and vanish on the next reload without a
+      // word — see utils/canvasImageNodes.pinWriteShortfall. A dropped NETWORK
+      // stays silent for gestures; bulk unpin must report a failed save.
+      .then((d) => {
+        const said = pinWriteShortfall(rows, d);
+        if (said && strict) throw new Error(said);
+        if (said) toast.error(said);
+      })
+      .catch((error) => { if (strict) throw error; })
+      .finally(() => imageWrites.current.delete(request));
+    imageWrites.current.add(request);
+    return request;
+  }, [toast]);
 
   /* The deferred half. `pending` is a dataset id → (image id → row) map, so a
      burst of thirty nudges of the same picture collapses to one row, and two
@@ -234,7 +242,7 @@ export default function CanvasPage() {
      with `keepalive`, exactly like the external-LoRA list: a nudge followed
      immediately by leaving the page must not be the write that vanishes. */
   const onSaveImageNodes = useCallback((datasetId, rows, opts = null) => {
-    setImageNodes((cur) => {
+    const apply = () => setImageNodes((cur) => {
       const lane = { ...(cur[datasetId] || {}) };
       for (const r of rows) {
         const prev = lane[r.image_id];
@@ -248,9 +256,46 @@ export default function CanvasPage() {
       }
       return { ...cur, [datasetId]: lane };
     });
+    if (opts?.strict) return sendImageNodes(datasetId, rows, true).then(apply);
+    apply();
     if (opts?.coalesce) { queueImageWrite(datasetId, rows); return; }
-    sendImageNodes(datasetId, rows);
+    return sendImageNodes(datasetId, rows);
   }, [queueImageWrite, sendImageNodes]);
+
+  // Use the whole saved board, including datasets and images hidden by filters.
+  // Closing keeps each image's geometry; its gallery file is never deleted.
+  const unpinBatches = useMemo(() => Object.entries(imageNodes)
+    .map(([datasetId, nodes]) => ({ datasetId, rows: visibleImageNodes(nodes).map((node) => ({
+      image_id: node.imageId, x: node.x, y: node.y, w: node.w, h: node.h,
+      visible: false, group_id: null, group_pos: null,
+    })) }))
+    .filter(({ rows }) => rows.length), [imageNodes]);
+  const pinnedCount = unpinBatches.reduce((count, { rows }) => count + rows.length, 0);
+  const onUnpinAll = useCallback(async () => {
+    if (unpinBusy || !unpinBatches.length) return;
+    setUnpinBusy(true);
+    try {
+      // Let pending moves land first, so a delayed nudge cannot re-pin an image.
+      flushImageWrites();
+      await Promise.allSettled([...imageWrites.current]);
+      let failed = false;
+      for (const { datasetId, rows } of unpinBatches) {
+        try {
+          await onSaveImageNodes(datasetId, rows, { strict: true });
+        } catch {
+          failed = true;
+        }
+      }
+      if (failed) {
+        await loadImageNodes();
+        toast.error('Some images could not be unpinned. Please try again.');
+      } else {
+        toast.success(`${pinnedCount} ${pinnedCount === 1 ? 'image unpinned' : 'images unpinned'}. Gallery images are kept.`);
+      }
+    } finally {
+      setUnpinBusy(false);
+    }
+  }, [unpinBusy, unpinBatches, pinnedCount, flushImageWrites, onSaveImageNodes, loadImageNodes, toast]);
 
   /* 🗑 Forget pinned nodes LOCALLY — no write at all, deliberately.
      Used after the picture itself has been deleted: its canvas_image_node row
@@ -568,6 +613,9 @@ export default function CanvasPage() {
               selectedStatuses={selectedStatuses}
               onToggleStatus={onToggleStatus}
               showPinned={extraFilters.showPinned}
+              pinnedCount={pinnedCount}
+              unpinBusy={unpinBusy}
+              onUnpinAll={onUnpinAll}
               onTogglePinned={() => persistExtraFilters({
               ...extraFilters, showPinned: !extraFilters.showPinned,
               })}

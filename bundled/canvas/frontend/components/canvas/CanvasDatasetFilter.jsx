@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Images, Search } from 'lucide-react';
+import { Images, PinOff, Search } from 'lucide-react';
 import { selectionSummary } from '../../utils/canvasSelection.js';
 import { familyLabel } from '../../utils/canvasFamilyFilter.js';
 import { statusLabel, matchesDatasetQuery } from '../../utils/canvasFilterBar.js';
@@ -46,6 +46,7 @@ export default function CanvasDatasetFilter({
   families, selectedFamilies, onToggleFamily, onAllFamilies, onNoFamilies,
   query, onQueryChange, statuses, selectedStatuses, onToggleStatus,
   showPinned, onTogglePinned, onResetFilters, visibleRuns,
+  pinnedCount = 0, unpinBusy = false, onUnpinAll,
 }) {
   /* The dataset popover's OWN search, which is not the board's.
      Two different questions that used to share one box: "show me only the runs
@@ -242,6 +243,16 @@ export default function CanvasDatasetFilter({
         <span className="hidden md:inline">Pinned</span>
         {!showPinned && <span className="font-normal">off</span>}
       </button>
+
+      {(pinnedCount > 0 || unpinBusy) && (
+        <button type="button" onClick={onUnpinAll} disabled={unpinBusy}
+          data-testid="canvas-unpin-all"
+          title={`Unpin all ${pinnedCount} images across every dataset, including those hidden by filters. Gallery images are kept.`}
+          className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border bg-app/60 px-2 text-[0.75rem] font-semibold text-content-muted hover:border-indigo-400/50 hover:text-content disabled:cursor-wait disabled:opacity-50 md:gap-1.5 md:px-2.5 lg:h-9">
+          <PinOff aria-hidden="true" className="h-3.5 w-3.5" />
+          {unpinBusy ? 'Unpinning…' : `Unpin all (${pinnedCount})`}
+        </button>
+      )}
 
       {/* ── The board search.
              From `lg` up it is exactly what it always was: a text field in the
