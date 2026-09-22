@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-23-studio-resume-feedback',
+    date: '2026-09-23',
+    title: 'A clear answer when Resume cannot start',
+    blurb: 'Canvas and Studio now show why a run could not resume and keep its saved settings ready to retry. Generation checks use a small ComfyUI status request and distinguish a slow server from an unreachable one.',
+  },
+  {
     id: '2026-09-22-zzzzzzz-plugin-restart-session',
     date: '2026-09-22',
     title: 'Apply plugin changes without a session-token interruption',

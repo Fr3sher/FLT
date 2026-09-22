@@ -70,11 +70,18 @@ export function useStudioRun(runId) {
 
   const resume = useCallback(async () => {
     if (!runId) return undefined;
-    const d = await postJson(`/api/studio/run/${runId}/resume`);
-    if (d.ok) toast.success(`${d.resumed} cell(s) restarted with their settings`);
-    else toast.error(d.error);
-    await refresh();
-    return d;
+    try {
+      const d = await postJson(`/api/studio/run/${runId}/resume`);
+      if (d.ok) toast.success(`${d.resumed} cell(s) restarted with their settings`);
+      else toast.error(d.error);
+      return d;
+    } catch (e) {
+      const message = e.message || 'Could not resume this run';
+      toast.error(message);
+      return { ok: false, error: message };
+    } finally {
+      await refresh();
+    }
   }, [runId, refresh, toast]);
 
   // A timed-out ComfyUI submit has no safe automatic retry. The backend accepts

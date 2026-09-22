@@ -43,6 +43,7 @@ class ComfyUIService:
         self.check_interval = 2
         self._startup_lock = threading.Lock()
         self._is_starting = False
+        self._connection_error = 'ComfyUI is not reachable. Check its server and API URL.'
 
     # ---------------- API ----------------
     def parse_api_address(self):
@@ -55,13 +56,19 @@ class ComfyUIService:
             self.api_port = 8188
 
     def check_connection(self) -> bool:
+        self._connection_error = 'ComfyUI is not reachable. Check its server and API URL.'
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(network_timeout(2))
                 if s.connect_ex((self.api_host, self.api_port)) != 0:
                     return False
-            r = requests.get(urljoin(cfg.get('comfyui.api_url'), "/history"), timeout=network_timeout(3))
+            r = requests.get(urljoin(cfg.get('comfyui.api_url'), "/system_stats"), timeout=network_timeout(3))
             return r.status_code in (200, 404)
+        except requests.exceptions.ReadTimeout:
+            self._connection_error = (
+                'ComfyUI is answering too slowly. Nothing was submitted; '
+                'retry when the server responds.')
+            return False
         except (socket.error, requests.RequestException, ConnectionError, OSError):
             return False
 
@@ -74,14 +81,14 @@ class ComfyUIService:
             return True, "Running (External)"
 
         logger.warning("⚠️ ComfyUI is unreachable, and automatic startup is disabled.")
-        return False, "ComfyUI not running (External management required)"
+        return False, self._connection_error
 
     def ensure_comfyui_running(self) -> Tuple[bool, str]:
         """Check the connection only."""
         self.parse_api_address()
         if self.check_connection():
             return True, "Running"
-        return False, "ComfyUI not running (Please start external supervisor)"
+        return False, self._connection_error
 
     # Unified public API used by queue_manager.
     def stop_comfyui_process(self):
