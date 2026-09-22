@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-zzzzz-plugin-restart-without-comfyui',
+    date: '2026-09-22',
+    title: 'Apply plugin changes even when ComfyUI is offline',
+    blurb: 'ComfyUI connection and queue checks now show a warning while LDS restarts. Tasks still running in LDS remain protected.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-22-private-plugin-updates',
     date: '2026-09-22',
     title: 'Update private plugins alongside your public plugins',

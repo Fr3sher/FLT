@@ -180,34 +180,36 @@ def _connection_refused(error):
     return False
 
 
-def _require_comfy_idle():
+def _comfy_restart_warning():
+    """ComfyUI is external to LDS; its queue is advisory for an LDS restart.
+
+    Work owned by LDS is protected by _lock_and_check_work, independently of
+    whether ComfyUI is reachable or has unrelated prompts in its queue.
+    """
     from .. import config as cfg
     url = str(cfg.get('comfyui.api_url') or '').rstrip('/')
+    unavailable = 'ComfyUI could not be reached or its queue could not be read. LDS will restart anyway.'
     try:
         parsed = urlsplit(url)
         if parsed.scheme not in ('http', 'https') or not parsed.hostname:
-            raise RestartBlocked('The ComfyUI address is invalid. Check it before applying plugin changes.')
+            return 'The ComfyUI address is invalid. LDS will restart anyway.'
         # Windows may take about two seconds to report a refused loopback
-        # connection. A shorter budget turns that proof of absence into an
-        # unknown timeout and blocks an explicitly skipped local ComfyUI.
+        # connection. Allow enough time to distinguish a stopped service.
         response = requests.get(f'{url}/queue', timeout=network_timeout((3, 2)), allow_redirects=False)
         data = response.json() if response.status_code == 200 else None
     except requests.ConnectionError as exc:
-        # A user who explicitly skipped a local, uninstalled ComfyUI must still
-        # be able to manage plugins. Only a refused loopback connection proves
-        # absence here: a timeout, remote host or malformed answer does not.
-        if (cfg.get('comfyui.setup_skipped') is True and not cfg.get('comfyui.base_dir')
-                and parsed.hostname in ('localhost', '127.0.0.1', '::1')
+        if (parsed.hostname in ('localhost', '127.0.0.1', '::1')
                 and _connection_refused(exc)):
-            return
-        raise RestartBlocked('ComfyUI did not confirm an empty queue. Check its connection before applying plugin changes.') from exc
-    except (requests.RequestException, ValueError) as exc:
-        raise RestartBlocked('ComfyUI did not confirm an empty queue. Check its connection before applying plugin changes.') from exc
+            return 'ComfyUI is not running. LDS will restart anyway.'
+        return unavailable
+    except (requests.RequestException, ValueError):
+        return unavailable
     if (not isinstance(data, dict) or not isinstance(data.get('queue_running'), list)
             or not isinstance(data.get('queue_pending'), list)):
-        raise RestartBlocked('ComfyUI did not confirm an empty queue. Check its connection before applying plugin changes.')
+        return unavailable
     if data['queue_running'] or data['queue_pending']:
-        raise RestartBlocked('ComfyUI is still running or queuing work. Let it finish before applying plugin changes.')
+        return 'ComfyUI has running or queued work. LDS will restart anyway.'
+    return None
 
 
 def apply_changes():
@@ -229,7 +231,9 @@ def apply_changes():
         if not state.get('pending_restart'):
             raise RestartBlocked('There are no plugin changes waiting to apply.')
         _lock_and_check_work(gate, registry)
-        _require_comfy_idle()
+        comfy_warning = _comfy_restart_warning()
+        if comfy_warning:
+            log.warning('%s', comfy_warning)
         # False means a previous request already scheduled this process's exit.
         # Keep admissions closed in either case; opening them would be unsafe.
         updater.schedule_restart(block_during_update=True)
@@ -248,7 +252,8 @@ def apply_changes():
         log.warning('Plugin restart safety checks or scheduling failed', exc_info=True)
         return jsonify(error='LDS could not verify a safe restart. No plugin changes were applied; try again after checking running work.',
                        code='restart_blocked', restart=restart), 409
-    response = jsonify(ok=True, restarting=True, boot_id=state['boot_id'], restart=restart)
+    response = jsonify(ok=True, restarting=True, boot_id=state['boot_id'], restart=restart,
+                       warnings=[comfy_warning] if comfy_warning else [])
     # Werkzeug calls close AFTER flushing the response. Keep the lock-owning
     # HTTP thread alive until exit, otherwise its identifier could be reused by
     # a fresh background thread and make a retained RLock appear reentrant.

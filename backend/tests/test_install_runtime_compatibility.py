@@ -68,8 +68,8 @@ def test_gpu_plugin_apply_checks_work_before_supervised_restart(client, app, mon
     from app.plugins import environment
 
     # These process-wide registries can contain fake jobs left by other test
-    # modules. This case owns an idle installation and varies only ComfyUI work.
-    monkeypatch.setattr(setup_installer, '_runs', {})
+    # modules. This case varies work owned by LDS, which must still block exit.
+    monkeypatch.setattr(setup_installer, '_runs', {'test': {'state': 'running'}} if busy else {})
     monkeypatch.setattr(setup_installer, '_pip_current', None)
     monkeypatch.setattr(setup_installer, '_pip_queue', [])
     monkeypatch.setattr(environment, '_RUNNING', {})
@@ -79,24 +79,90 @@ def test_gpu_plugin_apply_checks_work_before_supervised_restart(client, app, mon
         'pending_restart': True, 'boot_id': 'test-boot'})
     checked = []
 
-    def comfy_idle():
+    def comfy_warning():
         checked.append('comfy')
-        if busy:
-            raise restart.RestartBlocked('ComfyUI is still running or queuing work.')
+        return 'ComfyUI is not running. LDS will restart anyway.'
 
     def schedule(**kwargs):
         checked.append('restart')
         assert kwargs == {'block_during_update': True}
 
-    monkeypatch.setattr(restart, '_require_comfy_idle', comfy_idle)
+    monkeypatch.setattr(restart, '_comfy_restart_warning', comfy_warning)
     monkeypatch.setattr(updater, 'schedule_restart', schedule)
     gate = app.extensions['lds_plugin_restart_gate']
     try:
         response = client.post('/api/plugins/apply')
         assert response.status_code == (409 if busy else 200), response.get_json()
-        assert checked == (['comfy'] if busy else ['comfy', 'restart'])
+        assert checked == ([] if busy else ['comfy', 'restart'])
         if busy:
             assert response.get_json()['code'] == 'restart_blocked'
+        else:
+            assert response.get_json()['warnings']
     finally:
         gate.release()
         gate.finished.set()
+
+
+@pytest.mark.parametrize('comfy_state', [
+    'stopped', 'remote-offline', 'timeout', 'http-error', 'invalid-json',
+    'invalid-queue', 'invalid-url', 'running', 'pending', 'idle',
+])
+def test_external_comfyui_state_never_blocks_plugin_apply(client, app, monkeypatch, comfy_state):
+    import errno
+    from types import SimpleNamespace
+
+    import requests
+    from app import config, setup_installer
+    from app.plugins import environment, restart, routes
+
+    monkeypatch.setattr(setup_installer, '_runs', {})
+    monkeypatch.setattr(setup_installer, '_pip_current', None)
+    monkeypatch.setattr(setup_installer, '_pip_queue', [])
+    monkeypatch.setattr(environment, '_RUNNING', {})
+    monkeypatch.setenv('LDS_RUNTIME', '')
+    monkeypatch.setenv('LDS_RESTART_MODE', 'supervisor')
+    monkeypatch.setattr(routes, 'lifecycle_payload', lambda registry: {
+        'pending_restart': True, 'boot_id': 'test-boot'})
+    comfy_url = ('invalid' if comfy_state == 'invalid-url' else
+                 'http://comfy.invalid:8188' if comfy_state == 'remote-offline' else
+                 'http://127.0.0.1:8188')
+    # A stopped ComfyUI must work even if installation was never skipped.
+    config_get = config.get
+    overrides = {'comfyui.api_url': comfy_url, 'comfyui.setup_skipped': False}
+    monkeypatch.setattr(config, 'get', lambda key, *args, **kw:
+                        overrides[key] if key in overrides else config_get(key, *args, **kw))
+
+    def queue_response(url, **kwargs):
+        assert url.endswith('/queue')
+        assert kwargs['allow_redirects'] is False
+        if comfy_state in ('stopped', 'remote-offline'):
+            raise requests.ConnectionError(ConnectionRefusedError(errno.ECONNREFUSED, 'offline'))
+        if comfy_state == 'timeout':
+            raise requests.Timeout('unavailable')
+
+        def read_json():
+            if comfy_state == 'invalid-json':
+                raise ValueError('invalid response')
+            if comfy_state == 'invalid-queue':
+                return {'queue_running': None, 'queue_pending': []}
+            return {'queue_running': [['external-prompt']] if comfy_state == 'running' else [],
+                    'queue_pending': [['external-prompt']] if comfy_state == 'pending' else []}
+
+        return SimpleNamespace(status_code=503 if comfy_state == 'http-error' else 200, json=read_json)
+
+    monkeypatch.setattr(restart.requests, 'get', queue_response)
+    scheduled = []
+    monkeypatch.setattr(updater, 'schedule_restart', lambda **kw: scheduled.append(kw))
+    gate = app.extensions['lds_plugin_restart_gate']
+    try:
+        response = client.post('/api/plugins/apply')
+        payload = response.get_json()
+        assert response.status_code == 200, payload
+        assert payload['ok'] and payload['restarting']
+        assert scheduled == [{'block_during_update': True}]
+        assert bool(payload['warnings']) is (comfy_state != 'idle')
+        if comfy_state == 'stopped':
+            assert 'not running' in payload['warnings'][0]
+        assert gate.frozen, 'admissions must stay closed until the server exits'
+    finally:
+        gate.release()

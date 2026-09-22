@@ -26,6 +26,7 @@ export default function PluginsPage() {
   const [busy, setBusy] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState('');
+  const [applyWarning, setApplyWarning] = useState('');
   const [consent, setConsent] = useState(null);
   const { tab, filter } = catalogView(searchParams);
   const setTab = (nextTab) => setSearchParams(current => {
@@ -143,11 +144,13 @@ export default function PluginsPage() {
     setBusy(true);
     setApplying(true);
     setApplyError('');
+    setApplyWarning('');
     const controller = new AbortController();
     restartAbort.current = controller;
     try {
       const result = await mutation('/api/plugins/apply', {});
       if (!result.ok || !result.restarting) throw new Error(result.error || 'The restart could not be started.');
+      setApplyWarning((result.warnings || []).join(' '));
       await waitForPluginBoot(result.boot_id || data?.boot_id, { signal: controller.signal });
       window.location.reload();
     } catch (e) {
@@ -299,6 +302,7 @@ export default function PluginsPage() {
             {restart.can_apply && <button type="button" className={BTN_PRIMARY + ' shrink-0'} disabled={busy} onClick={apply}>Apply and restart</button>}
           </div>
           {!restart.can_apply && <p className="text-content-muted">{restart.how}</p>}
+          {applyWarning && <p role="status" className="text-amber-500">{applyWarning}</p>}
           {applyError && <p role="alert" className="text-amber-500">{applyError}</p>}
         </div>
       )}
