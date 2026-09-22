@@ -4,7 +4,7 @@
 
 **A complete, self-hosted training workflow in one browser tab:** source or generate a Character, Concept or Style dataset, curate it, caption it, clean watermarks, then train — a LoRA on five model families, locally or in the cloud, or a full Krea 2 model on a rented GPU — and compare checkpoints before export.
 
-The core and the 13 public plugins are available at no charge, with public source under the project's PolyForm Noncommercial license and no account required for the core. Optional usage statistics are off by default. Additional optional paid plugins may be offered later. API engines and rented GPUs are optional; local and manual workflows remain available.
+The core and the public plugins are available at no charge, with public source under the project's PolyForm Noncommercial license and no account required for the core. Optional usage statistics are off by default. Additional optional paid plugins may be offered later. API engines and rented GPUs are optional; local and manual workflows remain available.
 
 > **V2 is now the main LDS release.** Install from the default [`v2` branch](https://github.com/perfectgf/lora-dataset-studio/tree/v2) or the [latest release](https://github.com/perfectgf/lora-dataset-studio/releases/latest). Existing ZIP installations can use **Update & restart** to upgrade the core while keeping their datasets, media and history. Git installations still on `main` must first switch to `v2` as described below. Then install the optional features you use from **Plugins → Store** and review each plugin's settings before its first run.
 
@@ -382,7 +382,7 @@ Missing dependencies are shown in Setup/Settings and gated features stay unavail
 
 On first launch, **Setup** prepares the core. No plugin is needed to import and organise images. Afterwards, open **Plugins → Store**, select the features you want and install them together with one LDS restart. Each plugin has its own settings and preparation steps; required ComfyUI custom nodes are installed through that plugin's preparation flow.
 
-The Store offers **13 free public plugins**: API image engines, Camera angles, Canvas, Publish to Civitai, Cloud training, Publish to Hugging Face, Klein Improve, Live channels, Model tools, Resource monitor, Web scraping, SeedVR2 and Video lane. Their individual updates appear under each plugin.
+The Store offers **free public plugins** for generation, editing, training, publishing and other optional features. Each listing describes the plugin's capabilities and preparation requirements. Their individual updates appear under each plugin.
 
 ### Option 1 — release ZIP + start.bat (Windows)
 
@@ -510,7 +510,7 @@ Which of the two serves those features is a single setting (**Settings ▸ Local
 | Hugging Face | Gated weights and optional publishing | [Hugging Face tokens](https://huggingface.co/settings/tokens) |
 | vast.ai | Optional cloud training | [vast.ai console](https://cloud.vast.ai/?ref_id=683073) (referral link — disclosed below) |
 
-> **Affiliate disclosure.** The vast.ai links in this README, in the guides and in the app are referral links. If you create an account through one of them, vast.ai pays this project 3% of what you spend on their platform, for as long as your account lives. It costs you nothing extra — vast.ai's prices are the same either way — and it changes nothing in the app: the cloud lane was vast.ai-only before these links existed and still runs on your own API key, vast.ai bills you directly, and the app sends no data about you anywhere.
+> **Affiliate disclosure.** The vast.ai links in this README, in the guides and in the app are referral links. If you create an account through one of them, vast.ai pays this project 3% of what you spend on their platform, for as long as your account lives. It costs you nothing extra — vast.ai's prices are the same either way. Cloud training runs on your own API key, and vast.ai bills you directly. Optional usage statistics are separate from these referral links and remain off unless you choose to share them; see **What leaves this machine** below.
 
 Secrets saved in Settings live in the git-ignored `.env`, never in `config.json` or a commit. Full-model Krea 2 cloud runs use a separate `HF_CLOUD_TOKEN`; a narrowly scoped fine-grained token is recommended, while a global `role=write` token is accepted with a broad-access warning and read-only is rejected. Follow the [cloud-token instructions](docs/guide/settings-reference.md#cloud-training).
 
