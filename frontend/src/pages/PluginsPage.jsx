@@ -14,6 +14,7 @@ import { useCapabilities } from '../context/CapabilitiesContext';
 import { productReadiness } from '../plugins/readiness.js';
 import Library from './store/Library.jsx';
 import Administration from './store/Administration.jsx';
+import PluginAvatar from './store/PluginAvatar.jsx';
 
 // Store packages bring their screens, services and help together. The running
 // registry remains authoritative until a prepared transaction restarts LDS.
@@ -26,9 +27,9 @@ const STATE_LABEL = {
 };
 
 function stateClass(state) {
-  if (state === 'loaded') return 'text-emerald-500';
-  if (state === 'disabled') return 'text-content-muted';
-  return 'text-amber-500';
+  if (state === 'loaded') return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300';
+  if (state === 'disabled') return 'border-border bg-surface text-content-muted';
+  return 'border-amber-400/25 bg-amber-400/10 text-amber-300';
 }
 
 export function PluginRow({ plugin, restart, onToggle, onRemove, onInstalled, busy, caps, capsKnown = false }) {
@@ -39,28 +40,46 @@ export function PluginRow({ plugin, restart, onToggle, onRemove, onInstalled, bu
   const removing = plugin.pending_action === 'remove';
   const packagePending = ['install', 'update', 'remove'].includes(plugin.pending_action);
   const readiness = pluginActive(plugin) && capsKnown ? productReadiness(plugin.id, caps) : [];
+  const settingsPath = pluginSettingsPath(plugin.id);
+  const experience = pluginActive(plugin) ? plugin.package_contract?.experience : null;
   return (
-    <li id={'plugin-row-' + plugin.id} data-plugin-id={plugin.id} className="flex flex-col gap-2 border-t border-border py-3 first:border-t-0 md:flex-row md:items-start md:gap-4">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">{plugin.name}</span>
-          <span className="text-xs text-content-muted">{plugin.version}</span>
-          <span className="rounded border border-border px-1.5 py-0.5 text-[0.65rem] uppercase tracking-wide text-content-muted">
-            {plugin.official ? 'LDS' : plugin.bundled ? 'Included' : 'External'}
-          </span>
-          <span className={'text-xs font-medium ' + stateClass(plugin.state)}>{pluginActive(plugin) ? 'Active now' : STATE_LABEL[plugin.state] || plugin.state}</span>
-        </div>
-        {pending && <p className="mt-2 rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-sm text-content" data-plugin-pending>{pending}</p>}
-        {plugin.description && <p className="mt-1 text-sm text-content-muted">{plugin.description}</p>}
-        {pluginActive(plugin) && plugin.package_contract?.experience && <div className="mt-3 space-y-2">
-          <div className="flex flex-wrap gap-2">
-            {plugin.package_contract.experience.entrypoints.map(entry => <Link key={entry.path} to={entry.path} className={BTN}>{entry.label}</Link>)}
-            {plugin.package_contract.experience.setup && <Link to={plugin.package_contract.experience.setup.path} className={BTN}>
-              {plugin.package_contract.experience.setup.label}
-            </Link>}
+    <li id={'plugin-row-' + plugin.id} data-plugin-id={plugin.id} aria-labelledby={'plugin-title-' + plugin.id}
+      className="scroll-mt-6 overflow-hidden rounded-xl border border-border-strong bg-surface shadow-sm">
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border bg-surface-raised px-4 py-4 sm:px-5">
+        <div className="flex min-w-0 flex-1 basis-64 items-start gap-3">
+          <PluginAvatar id={plugin.id} name={plugin.name} />
+          <div className="min-w-0">
+            <h3 id={'plugin-title-' + plugin.id} className="break-words text-lg font-semibold leading-snug text-content">{plugin.name}</h3>
+            <p className="mt-1 text-xs text-content-muted">Version {plugin.version} · {plugin.official ? 'LDS' : plugin.bundled ? 'Included' : 'External'}</p>
           </div>
-          {plugin.package_contract.experience.setup_hint && <p className="text-sm text-content-muted">{plugin.package_contract.experience.setup_hint}</p>}
-        </div>}
+        </div>
+        <span className={'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ' + stateClass(pluginActive(plugin) ? 'loaded' : plugin.state)}>
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+          {pluginActive(plugin) ? 'Active now' : STATE_LABEL[plugin.state] || plugin.state}
+        </span>
+      </header>
+      <div className="space-y-3 px-4 py-4 sm:px-5">
+        {pending && <p className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-content" data-plugin-pending>{pending}</p>}
+        {plugin.description && <p className="text-sm leading-relaxed text-content-muted">{plugin.description}</p>}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {experience?.entrypoints?.length > 0 && <div className="flex flex-wrap gap-2">
+            {experience.entrypoints.map((entry, index) => <Link key={entry.path} to={entry.path}
+              className={index === 0 ? BTN + ' border-primary/40 text-primary hover:bg-primary/10' : BTN}>{entry.label}</Link>)}
+          </div>}
+          <div className="flex flex-wrap items-center gap-2">
+            <Link to={settingsPath} className={BTN} aria-label={`Settings for ${plugin.name}`}>Settings</Link>
+            {experience?.setup && experience.setup.path !== settingsPath && <Link to={experience.setup.path} className={BTN}>
+              {experience.setup.label}
+            </Link>}
+            {plugin.state !== 'misplaced' && plugin.state !== 'incompatible' && (
+              <button type="button" className={BTN} disabled={busy || removing}
+                onClick={() => onToggle(plugin, !desired)} aria-pressed={desired}
+                aria-label={`${plugin.pending_action === 'enable' || plugin.pending_action === 'disable' ? 'Undo change for' : desired ? 'Turn off' : 'Turn on'} ${plugin.name}`}>
+                {plugin.pending_action === 'enable' || plugin.pending_action === 'disable' ? 'Undo change' : desired ? 'Turn off' : 'Turn on'}
+              </button>
+            )}
+          </div>
+        </div>
         {plugin.error && <p className="mt-1 text-xs text-amber-500">{plugin.error}</p>}
         {pluginActive(plugin) && !capsKnown && <p className="text-xs text-content-muted">Checking configured components…</p>}
         {readiness.length > 0 && <details className="mt-2 text-sm" data-plugin-readiness>
@@ -78,10 +97,14 @@ export function PluginRow({ plugin, restart, onToggle, onRemove, onInstalled, bu
         {plugin.disabled_by && plugin.disabled_by.length > 0 && (
           <p className="mt-1 text-xs text-content-muted">Off because it needs: {plugin.disabled_by.join(', ')}</p>
         )}
-        {requires.length > 0 && <p className="mt-1 text-xs text-content-muted">Requires: {requires.join(', ')}</p>}
-        {plugin.permissions && plugin.permissions.length > 0 && (
-          <p className="mt-1 text-xs text-content-muted">Declares: {plugin.permissions.join(', ')}</p>
-        )}
+        {(experience?.setup_hint || requires.length > 0 || plugin.permissions?.length > 0) && <details className="text-sm">
+          <summary className="min-h-10 cursor-pointer py-2 font-medium">Details and requirements</summary>
+          <div className="space-y-2 rounded-lg border border-border p-3 text-content-muted">
+            {experience?.setup_hint && <p>{experience.setup_hint}</p>}
+            {requires.length > 0 && <p>Requires: {requires.join(', ')}</p>}
+            {plugin.permissions?.length > 0 && <p className="break-words text-xs">Access: {plugin.permissions.join(', ')}</p>}
+          </div>
+        </details>}
         {plugin.environment && (
           <div className="mt-3 space-y-2 rounded-md border border-border p-3 [&_button]:min-h-10 lg:[&_button]:min-h-0">
             <p className="text-sm font-medium">Python environment · {plugin.environment.ready ? 'Ready' : 'Needs installation'}</p>
@@ -111,23 +134,14 @@ export function PluginRow({ plugin, restart, onToggle, onRemove, onInstalled, bu
           </details>
         )}
       </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <Link to={pluginSettingsPath(plugin.id)} className={BTN}>Settings</Link>
-        {plugin.state !== 'misplaced' && plugin.state !== 'incompatible' && (
-          <button type="button" className={BTN} disabled={busy || removing}
-            onClick={() => onToggle(plugin, !desired)}
-            aria-pressed={desired}>
-            {plugin.pending_action === 'enable' || plugin.pending_action === 'disable' ? 'Undo change' : desired ? 'Turn off' : 'Turn on'}
-          </button>
-        )}
-        {!plugin.bundled && (
-          <button type="button" className={BTN} disabled={busy || packagePending}
+      {!plugin.bundled && <footer className="flex justify-end border-t border-border px-4 py-2 sm:px-5">
+          <button type="button" className="inline-flex min-h-10 items-center gap-1.5 rounded-md px-2 text-xs text-content-muted hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-50" disabled={busy || packagePending}
+            aria-label={`Remove ${plugin.name}`}
             title={packagePending ? 'Apply the pending package change before removing this plugin' : 'Remove this plugin (its data is kept for reinstalling)'}
             onClick={() => onRemove(plugin)}>
-            <span className="inline-flex items-center gap-1"><Trash2 aria-hidden="true" className="h-3.5 w-3.5" /> Remove</span>
+            <Trash2 aria-hidden="true" className="h-3.5 w-3.5" /> Remove plugin
           </button>
-        )}
-      </div>
+      </footer>}
       {restart && <span className="sr-only">{restart.how}</span>}
     </li>
   );
@@ -346,7 +360,7 @@ export default function PluginsPage() {
   const pendingRestart = Boolean(data?.pending_restart);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 px-4 py-6" data-probe-panel="plugins" data-probe-content="plugin-store">
+    <div className="mx-auto max-w-5xl space-y-6 px-4 py-6" data-probe-panel="plugins" data-probe-content="plugin-store">
       <div className="space-y-2">
         <SectionHeader eyebrow="Plugins" title="Plugin store"
           description="Add the tools you need. Each plugin brings its features, interface and help together." />
@@ -435,17 +449,18 @@ export default function PluginsPage() {
         {window.lds.loadProblems.map((item) => <p key={item.plugin}>{item.plugin}: {item.reason}</p>)}
         <button type="button" className={BTN + ' mt-3'} onClick={() => window.location.reload()}>Reload interfaces</button>
       </div>}
-      {bundled.length > 0 && <Card title="Included plugins" id="plugins-bundled"
-        help="These ship in every release and are replaced by every update. Turn off what you do not use.">
-        {bundled.length === 0
-          ? <p className="text-sm text-content-muted">This build bundles no plugin yet.</p>
-          : <ul>{bundled.map((p) => <PluginRow key={p.id} plugin={p} caps={caps} capsKnown={capsKnown} restart={restart} onToggle={toggle} onRemove={remove} onInstalled={() => { load(); refreshCaps(true); }} busy={busy} />)}</ul>}
-      </Card>}
+      {bundled.length > 0 && <section id="plugins-bundled" aria-labelledby="plugins-bundled-title" className="space-y-4">
+        <div><h2 id="plugins-bundled-title" className="text-base font-semibold">Included plugins <span className="ml-1 text-sm font-normal text-content-muted">{bundled.length}</span></h2>
+          <p className="mt-1 text-sm text-content-muted">These ship with LDS. Turn off what you do not use.</p></div>
+        <ul className="space-y-4">{bundled.map((p) => <PluginRow key={p.id} plugin={p} caps={caps} capsKnown={capsKnown} restart={restart} onToggle={toggle} onRemove={remove} onInstalled={() => { load(); refreshCaps(true); }} busy={busy} />)}</ul>
+      </section>}
 
-      <Card title="Installed plugins" id="plugins-external" help="Your plugins are kept across LDS updates.">
+      <section id="plugins-external" aria-labelledby="plugins-external-title" className="space-y-4">
+        <div><h2 id="plugins-external-title" className="text-base font-semibold">Installed plugins <span className="ml-1 text-sm font-normal text-content-muted">{external.length}</span></h2>
+          <p className="mt-1 text-sm text-content-muted">Your plugins are kept across LDS updates.</p></div>
         {external.length === 0
           ? <p className="text-sm text-content-muted">No plugin installed yet.</p>
-          : <ul>{external.map((p) => <PluginRow key={p.id} plugin={p} caps={caps} capsKnown={capsKnown} restart={restart} onToggle={toggle} onRemove={remove} onInstalled={() => { load(); refreshCaps(true); }} busy={busy} />)}</ul>}
+          : <ul className="space-y-4">{external.map((p) => <PluginRow key={p.id} plugin={p} caps={caps} capsKnown={capsKnown} restart={restart} onToggle={toggle} onRemove={remove} onInstalled={() => { load(); refreshCaps(true); }} busy={busy} />)}</ul>}
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <label className={BTN + ' inline-flex cursor-pointer items-center gap-1'}>
             <Upload aria-hidden="true" className="h-3.5 w-3.5" /> Install from a ZIP
@@ -454,7 +469,7 @@ export default function PluginsPage() {
           </label>
           <span className="text-xs text-content-muted">The archive is inspected first; nothing is written until you confirm.</span>
         </div>
-      </Card>
+      </section>
       </div>}
 
       {consent && (

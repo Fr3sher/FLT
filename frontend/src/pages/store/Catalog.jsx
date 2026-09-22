@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, LockKeyhole, Search, ShoppingBag } from 'lucide-react';
 import Presentation from './Presentation';
+import PluginAvatar from './PluginAvatar';
 
 const BTN = 'min-h-10 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-surface-raised disabled:opacity-50';
 
@@ -54,14 +55,19 @@ export default function Catalog({ catalog, installed, updatesOnly = false, busy,
         const paid = release.price.kind === 'paid';
         const needsAdmin = catalog.can_manage === false && !pending && !incompatible;
         return <article key={product.id} data-store-product={product.id} className="flex min-w-0 flex-col rounded-xl border border-border bg-surface p-5">
-          <Presentation key={manifest.version} release={release} />
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <h2 className="text-base font-semibold">{manifest.name}</h2>
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-1 basis-48 items-start gap-3">
+              <PluginAvatar id={product.id} name={manifest.name} />
+              <div className="min-w-0">
+                <h2 className="break-words text-lg font-semibold leading-snug">{manifest.name}</h2>
+                <p className="mt-1 text-xs text-content-muted">{manifest.publisher?.name || manifest.author} · {manifest.version}</p>
+              </div>
+            </div>
             <span className="rounded-full bg-surface-raised px-2 py-1 text-xs text-content-muted">
               {local ? `Installed · ${local.installed_version || local.version}` : paid ? 'Paid plugin' : 'Free'}
             </span>
           </div>
-          <p className="mt-1 text-xs text-content-muted">{manifest.publisher?.name || manifest.author} · {manifest.version}</p>
+          <Presentation key={`${manifest.version}:${catalog.checked_at || ''}`} release={release} />
           <p className="mt-3 flex-1 text-sm leading-relaxed text-content-muted">{manifest.description}</p>
           {incompatible && <p className="mt-3 text-sm text-amber-500">{release.compatibility_issues[0].message}</p>}
           <details className="mt-3 text-sm">

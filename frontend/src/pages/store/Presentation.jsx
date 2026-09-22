@@ -12,10 +12,11 @@ export function presentationImages(release) {
     && /^[a-z][a-z0-9-]{0,47}\/[0-9a-f]{64}\.(png|jpg|webp)$/.test(item.url.slice(prefix.length))).slice(0, 8);
 }
 
-function Screenshot({ item, className = '' }) {
+function Screenshot({ item, className = '', compact = false }) {
   const [failed, setFailed] = useState(false);
-  return failed ? <div role="status" className={`flex items-center justify-center bg-surface-raised p-6 text-sm text-content-muted ${className}`}>
-    Screenshot unavailable. You can still read the plugin details.
+  return failed ? <div role="status" className={`flex items-center justify-center gap-2 bg-surface-raised p-4 text-sm text-content-muted ${compact ? 'min-h-16 w-full' : className}`}>
+    <ImageIcon className="h-5 w-5 shrink-0" aria-hidden="true" />
+    {compact ? 'Preview unavailable' : 'Screenshot unavailable. You can still read the plugin details.'}
   </div> : <img src={item.url} alt={item.alt} width={item.width} height={item.height}
     loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)}
     className={`bg-surface-raised object-contain ${className}`} />;
@@ -101,7 +102,7 @@ export default function Presentation({ release }) {
   return <div className="mb-4" data-store-media="available">
     <button type="button" onClick={() => setOpen(true)} aria-label={`View ${name} screenshots`}
       className="block w-full overflow-hidden rounded-lg border border-border text-left hover:border-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
-      <Screenshot key={images[0].url} item={images[0]} className="aspect-video w-full" />
+      <Screenshot key={images[0].url} item={images[0]} className="aspect-video w-full" compact />
       <span className="flex min-h-10 items-center justify-between gap-2 px-3 py-2 text-xs font-medium">
         <span>View screenshots</span><span className="text-content-muted">{images.length}</span>
       </span>

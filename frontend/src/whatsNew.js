@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-z-plugin-manager-cards',
+    date: '2026-09-22',
+    title: 'Find your way around installed plugins',
+    blurb: 'Each plugin has its own card with a clear name, status and grouped actions. Expand details when you need them. Store cards keep plugin names above their previews and retry screenshots when the catalog refreshes.',
+    to: '/plugins?tab=installed',
+  },
+  {
     id: '2026-09-22-working-plugin-tool-installs',
     date: '2026-09-22',
     title: 'Prepare plugin tools without a dependency error',
