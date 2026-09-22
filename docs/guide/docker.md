@@ -164,8 +164,10 @@ on the host's localhost address can require plugin administrator authorization:
 
 The installed packages, their data and the verified catalog cache live under
 `/data`, so keep that volume when rebuilding or recreating the container.
-The Store currently accepts one installation plan at a time: apply its changes
-before installing the next plugin. In the GPU image, **Apply changes and restart**
+In **Plugins → Store**, tick the plugins you want and choose **Review selected**.
+Confirm the shared plan to prepare the whole selection, then apply it in one
+restart. Apply or cancel this pending plan before preparing another selection.
+In the GPU image, **Apply changes and restart**
 restarts only LDS through its supervisor, after checking for active work. In the
 API-only/external-ComfyUI image, restart the Studio service with your usual
 Compose files (for the default stack: `docker compose restart studio`).

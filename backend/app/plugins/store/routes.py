@@ -16,6 +16,16 @@ register_commerce_routes(bp)
 
 def _input(*, confirmation=False):
     data = request.get_json(silent=True)
+    if isinstance(data, dict) and 'ids' in data:
+        ids = data['ids']
+        if ('id' in data or data.get('version') is not None
+                or not isinstance(ids, list) or not 1 <= len(ids) <= 50
+                or any(not isinstance(pid, str) or not 1 <= len(pid) <= 128 for pid in ids)
+                or len(set(ids)) != len(ids)
+                or (confirmation and (not isinstance(data.get('plan_id'), str)
+                                      or len(data['plan_id']) != 64))):
+            raise StoreError('Select valid plugins and review their shared installation plan.')
+        return {**data, 'id': sorted(ids)}
     if (not isinstance(data, dict) or not isinstance(data.get('id'), str)
             or not 1 <= len(data['id']) <= 128
             or (data.get('version') is not None and (

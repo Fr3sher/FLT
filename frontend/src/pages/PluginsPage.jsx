@@ -222,7 +222,7 @@ export default function PluginsPage() {
   const planInstall = async (id, version) => {
     setBusy(true);
     try {
-      setStorePlan(await mutation('/api/plugins/store/plan', { id, version }));
+      setStorePlan(await mutation('/api/plugins/store/plan', Array.isArray(id) ? { ids: id } : { id, version }));
     } catch (e) {
       toast.error(e?.message || 'Could not prepare this installation.');
     } finally { setBusy(false); }
@@ -230,7 +230,9 @@ export default function PluginsPage() {
   const installFromStore = async () => {
     setBusy(true);
     try {
-      await mutation('/api/plugins/store/install', { id: storePlan.requested, version: storePlan.version, plan_id: storePlan.plan_id });
+      const selection = Array.isArray(storePlan.requested) ? { ids: storePlan.requested }
+        : { id: storePlan.requested, version: storePlan.version };
+      await mutation('/api/plugins/store/install', { ...selection, plan_id: storePlan.plan_id });
       setStorePlan(null);
       setTab('installed');
       await load();

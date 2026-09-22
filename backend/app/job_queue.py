@@ -474,7 +474,7 @@ def _pause_unconfirmed_comfyui_prompt(prompt_id, detail=None):
     return POLL_STALLED
 
 
-def _poll_outputs(prompt_id, timeout=POLL_TIMEOUT_SECONDS):
+def _poll_outputs(prompt_id, timeout=None):
     """Poll one ComfyUI prompt without mistaking an outage for an empty history.
 
     Returns (filename, failed) for normal terminal outcomes, or
@@ -484,7 +484,10 @@ def _poll_outputs(prompt_id, timeout=POLL_TIMEOUT_SECONDS):
     then resume.
     """
     from .utils.comfyui import ComfyHistoryHealth, get_comfyui_history_probe
+    from .generation_limits import generation_timeout_seconds
 
+    if timeout is None:
+        timeout = generation_timeout_seconds()
     deadline = time.monotonic() + timeout
     unhealthy_since = None
     cancel_event = _cancel_event(prompt_id)
@@ -1456,7 +1459,8 @@ class JobQueueManager:
             filename, failed, error_detail = None, True, submit_error
         else:
             try:
-                filename, failed = _poll_outputs(prompt_id, POLL_TIMEOUT_SECONDS)
+                from .generation_limits import generation_timeout_seconds
+                filename, failed = _poll_outputs(prompt_id, generation_timeout_seconds())
             except Exception as exc:
                 logger.exception('job_queue: poll for job %s failed', job.job_id)
                 # A thrown poll has no trustworthy remote terminal observation.

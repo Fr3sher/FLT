@@ -901,7 +901,8 @@ def dataset_generate(dataset_id):
         # would let a 3-engine run create rows for two engines before the third
         # is refused. Check the AGGREGATE first: all-or-nothing.
         svc.check_fanout_budget(
-            dataset_id, sum(len(v) for _, v in batches) * max(1, int(multiplier or 1)))
+            dataset_id, sum(len(v) for _, v in batches) * max(1, int(multiplier or 1)),
+            generators=[generator for generator, _ in batches])
         for generator, variations in batches:
             if generator in svc.API_ENGINES:
                 # API path (Gemini Nano Banana Pro or OpenAI ChatGPT gpt-image-2):

@@ -65,6 +65,88 @@ def register(ctx):
     operator.publish(public, keys, catalog, {target: content.getvalue()})
 
 
+def publish_pair(public, keys):
+    products, targets = [], {}
+    for pid in ('camera_angles', 'video'):
+        manifest = contract(id=pid, name=pid)
+        raw = json.dumps(manifest).encode()
+        content = io.BytesIO()
+        with zipfile.ZipFile(content, 'w') as archive:
+            archive.writestr('plugin.json', raw)
+            archive.writestr('ui/index.js', '// synthetic UI')
+            archive.writestr('ui/styles.css', '/* synthetic UI */')
+        target = f'{pid}/1.0.0.ldsplugin'
+        targets[target] = content.getvalue()
+        products.append({'id': pid, 'releases': [{
+            'manifest': manifest, 'manifest_sha256': hashlib.sha256(raw).hexdigest(),
+            'target': target, 'price': {'kind': 'free'},
+        }]})
+    operator.publish(public, keys, {'schema_version': 1, 'products': products}, targets)
+
+
+def test_selected_plugins_are_one_transaction_and_load_in_one_boot(acquisition):
+    public, keys, _config, root = acquisition
+    publish_pair(public, keys)
+    from app.plugins.routes import bp
+    app = Flask(__name__)
+    app.config.update(TESTING=True, SECRET_KEY='test-only',
+                      SQLALCHEMY_DATABASE_URI='sqlite:///:memory:', WTF_CSRF_ENABLED=False)
+    app.register_blueprint(bp)
+    client = app.test_client()
+    selection = {'ids': ['video', 'camera_angles']}
+    plan = client.post('/api/plugins/store/plan', json=selection)
+    assert plan.status_code == 200, plan.json
+    assert {p['reason'] for p in plan.json['packages']} == {'requested'}
+    result = client.post('/api/plugins/store/install', json={
+        **selection, 'plan_id': plan.json['plan_id']})
+    assert result.status_code == 200, result.json
+    pending, errors = storage.pending(root / 'installed')
+    assert set(pending) == {'camera_angles', 'video'} and errors == []
+    app = Flask('store_boot')
+    app.config.update(TESTING=True, SQLALCHEMY_DATABASE_URI='sqlite:///:memory:',
+                      WTF_CSRF_ENABLED=False)
+    db.init_app(app)
+    csrf = CSRFProtect(app)
+    with app.app_context():
+        db.create_all()
+        try:
+            loaded = load_plugins(app, csrf)
+            assert all(loaded.records[pid].state == 'loaded' for pid in selection['ids'])
+            assert storage.pending(root / 'installed') == ({}, [])
+        finally:
+            db.session.remove()
+            db.drop_all()
+
+
+@pytest.mark.parametrize('failure', ['tampered_download', 'changed_selection'])
+def test_no_partial_installation_when_a_selected_package_fails(acquisition, failure):
+    public, keys, _config, root = acquisition
+    publish_pair(public, keys)
+    ids = ['camera_angles', 'video']
+    plan = service.preview_plan(None, ids)
+    if failure == 'tampered_download':
+        next((public / 'targets' / 'video').iterdir()).write_bytes(b'tampered')
+    else:
+        ids = ['camera_angles']
+    with pytest.raises(StoreError):
+        service.prepare(None, ids, None, plan['plan_id'])
+    assert storage.pending(root / 'installed') == ({}, [])
+
+
+@pytest.mark.parametrize('selection', [[], ['video', 'video'], [None], 'video',
+                                      ['video'] * 51, ['']])
+def test_invalid_group_is_refused_before_catalog_access(selection, monkeypatch):
+    from app.plugins.routes import bp
+    monkeypatch.delenv('LDS_PLUGIN_ADMIN_TOKEN', raising=False)
+    monkeypatch.setattr(service, 'preview_plan', lambda *a: pytest.fail('invalid plan reached Store'))
+    app = Flask(__name__)
+    app.register_blueprint(bp)
+    client = app.test_client()
+    assert client.post('/api/plugins/store/plan', json={'ids': selection}).status_code == 409
+    assert client.post('/api/plugins/store/plan', json={'ids': ['video']},
+                       environ_overrides={'REMOTE_ADDR': '192.0.2.1'}).status_code == 403
+
+
 def test_signed_acquisition_does_not_import_until_boot_and_preserves_plugin_data(acquisition):
     public, keys, _config, root = acquisition
     publish_package(public, keys)

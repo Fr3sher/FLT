@@ -403,6 +403,26 @@ export default function LocalToolsSection(props) {
           <ResetToDefault label="ComfyUI response timeout" section="comfyui" field="object_info_timeout_s"
             config={config} configDefaults={configDefaults} setField={setField} />
         </div>
+        <div>
+          <label htmlFor="comfyui-local-queue-limit" className="block text-sm font-medium text-content">Local generation queue limit</label>
+          <input id="comfyui-local-queue-limit" type="number" min="1" max="10000" step="1"
+            value={config.comfyui.local_queue_limit ?? comfyDefault('local_queue_limit')}
+            onChange={(e) => setField('comfyui', 'local_queue_limit', Number(e.target.value))}
+            className={INPUT_CLASS} />
+          <p className="mt-1 text-xs text-content-muted">Maximum unfinished images per dataset for local generation. Queue a long run and let ComfyUI render it one image at a time. Batches using API engines keep their separate limit.</p>
+          <ResetToDefault label="Local generation queue limit" section="comfyui" field="local_queue_limit"
+            config={config} configDefaults={configDefaults} setField={setField} />
+        </div>
+        <div>
+          <label htmlFor="comfyui-generation-timeout" className="block text-sm font-medium text-content">Generation time limit (minutes)</label>
+          <input id="comfyui-generation-timeout" type="number" min="0" max="1440" step="1"
+            value={config.comfyui.generation_timeout_minutes ?? comfyDefault('generation_timeout_minutes')}
+            onChange={(e) => setField('comfyui', 'generation_timeout_minutes', Number(e.target.value))}
+            className={INPUT_CLASS} />
+          <p className="mt-1 text-xs text-content-muted">How long LDS waits for each submitted ComfyUI job. Increase it for slow renders, or use 0 for no time limit. Stop and checks for an unreachable worker remain active. Applies to jobs started after saving.</p>
+          <ResetToDefault label="Generation time limit" section="comfyui" field="generation_timeout_minutes"
+            config={config} configDefaults={configDefaults} setField={setField} />
+        </div>
         <SecretField field={HF_SECRET} {...props} />
       </Card>
 

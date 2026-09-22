@@ -99,7 +99,13 @@ DEFAULTS = {
                 # hardcoded 8 s broke the people who had invested the most in their
                 # ComfyUI (reported by j_o_e_l. on Discord, who measured ~15 s on his
                 # own install). Clamped to 5-300 by utils.comfyui.object_info_timeout().
-                'object_info_timeout_s': 45},
+                'object_info_timeout_s': 45,
+                # Local generation is queued serially; this is a queue budget,
+                # not the number of images rendered simultaneously.
+                'local_queue_limit': 1000,
+                # Per submitted ComfyUI prompt. Zero removes the elapsed-time
+                # deadline; cancellation and worker-health checks still apply.
+                'generation_timeout_minutes': 15},
     'ollama': {'url': 'http://127.0.0.1:11434', 'vision_model': 'huihui_ai/qwen3-vl-abliterated:8b-instruct',  # -instruct, NOT ':8b' (=thinking): see get_vision_model()
                # How many vision calls a bank pass keeps in flight. 4 is the
                # measured knee; see services/vision_pool.py for the numbers.

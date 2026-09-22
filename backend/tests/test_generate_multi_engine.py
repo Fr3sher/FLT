@@ -317,3 +317,47 @@ def test_capabilities_publishes_the_fanout_cap(client):
     hardcode its own copy."""
     caps = client.get('/api/capabilities').get_json()
     assert caps['max_fanout'] == svc.MAX_FANOUT
+    assert caps['max_local_fanout'] == 1000
+
+
+@pytest.mark.parametrize('engine', ['klein', 'krea'])
+def test_local_runs_queue_three_hundred_images_and_keep_the_configured_budget(client, monkeypatch, engine):
+    from app import config as cfg
+    from app.routes import datasets
+    from app.services import klein_edit_helper as klein, krea_edit_helper as krea
+    ds_id = _dataset_with_ref(client)
+    cfg.save_config({'comfyui': {'local_queue_limit': 300}})
+    calls = []
+
+    def enqueue(**kwargs):
+        calls.append(kwargs)
+        return f'synthetic-local-{len(calls)}'
+
+    monkeypatch.setattr(klein, 'klein_missing_nodes', lambda: [])
+    monkeypatch.setattr(klein, 'klein_missing_assets', lambda: [])
+    monkeypatch.setattr(klein, 'enqueue_klein_edit', enqueue)
+    monkeypatch.setattr(krea, 'preflight', lambda: None)
+    monkeypatch.setattr(krea, 'enqueue_krea_edit', enqueue)
+    monkeypatch.setattr(datasets, '_autostart_optional_klein', lambda: None)
+    response = client.post(f'/api/dataset/{ds_id}/generate', json={
+        'generator': engine, 'variations': _shots(100), 'multiplier': 3})
+    assert response.status_code == 200, response.json
+    assert response.json['created'] == 300 and len(calls) == 300
+    second = client.post(f'/api/dataset/{ds_id}/generate', json={
+        'generator': engine, 'variations': _shots(1)})
+    assert second.status_code == 400 and 'in flight' in second.json['error']
+    assert len(calls) == 300
+
+
+def test_mixed_local_and_api_batch_keeps_the_paid_guardrail(client, no_threads, monkeypatch):
+    from app.services import klein_edit_helper as klein
+    ds_id = _dataset_with_ref(client)
+    monkeypatch.setattr(klein, 'klein_missing_nodes', lambda: [])
+    monkeypatch.setattr(klein, 'klein_missing_assets', lambda: [])
+    response = client.post(f'/api/dataset/{ds_id}/generate', json={'engine_batches': [
+        {'generator': 'chatgpt', 'variations': _shots(1)},
+        {'generator': 'klein', 'variations': _shots(100)},
+    ]})
+    assert response.status_code == 400 and 'fan-out too large' in response.json['error']
+    assert not no_threads
+    assert client.get(f'/api/dataset/{ds_id}').json['images'] == []

@@ -63,8 +63,16 @@ def test_all_docker_lanes_refuse_in_place_code_updates(client, monkeypatch, runt
 
 @pytest.mark.parametrize('busy', [False, True])
 def test_gpu_plugin_apply_checks_work_before_supervised_restart(client, app, monkeypatch, busy):
+    from app import setup_installer
     from app.plugins import restart, routes
+    from app.plugins import environment
 
+    # These process-wide registries can contain fake jobs left by other test
+    # modules. This case owns an idle installation and varies only ComfyUI work.
+    monkeypatch.setattr(setup_installer, '_runs', {})
+    monkeypatch.setattr(setup_installer, '_pip_current', None)
+    monkeypatch.setattr(setup_installer, '_pip_queue', [])
+    monkeypatch.setattr(environment, '_RUNNING', {})
     monkeypatch.setenv('LDS_RUNTIME', 'docker-gpu')
     monkeypatch.setenv('LDS_RESTART_MODE', 'supervisor')
     monkeypatch.setattr(routes, 'lifecycle_payload', lambda registry: {

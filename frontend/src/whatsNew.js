@@ -84,6 +84,27 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-long-local-generation',
+    date: '2026-09-22',
+    title: 'Queue local generations for an unattended run',
+    blurb: 'Klein and Krea can now queue up to 1,000 unfinished images per dataset by default, with a configurable limit in Settings → Local tools → ComfyUI. The shot multiplier now goes up to 20. Images still run one at a time, and API runs keep their separate limit. Thanks to lucasofff for requesting longer overnight runs.',
+    to: '/settings/local-tools',
+  },
+  {
+    id: '2026-09-22-comfyui-generation-time-limit',
+    date: '2026-09-22',
+    title: 'Give slow ComfyUI generations more time',
+    blurb: 'Settings → Local tools → ComfyUI now lets you increase the 15-minute generation time limit, or set it to 0 for unlimited waiting. Stop controls and worker health checks stay active. Thanks to unteins for reporting the interruption on slow machines.',
+    to: '/settings/local-tools',
+  },
+  {
+    id: '2026-09-22-install-selected-plugins',
+    date: '2026-09-22',
+    title: 'Install several plugins with one restart',
+    blurb: 'Select the plugins you want in the Store, review their shared plan and confirm once. LDS verifies the whole selection before preparing it, then applies all changes in one restart. Thanks to _nofaceman for reporting the repeated restarts in Docker.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-21-docker-v2-plugins',
     date: '2026-09-21',
     title: 'Install V2 plugins in Docker',

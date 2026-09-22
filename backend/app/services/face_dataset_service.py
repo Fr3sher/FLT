@@ -261,8 +261,8 @@ def fanout_in_flight(dataset_id) -> int:
             .filter(FaceDatasetImage.filename.is_(None)).count())
 
 
-def check_fanout_budget(dataset_id, total):
-    """Refuse a WHOLE multi-engine batch up front when it would blow MAX_FANOUT.
+def check_fanout_budget(dataset_id, total, *, generators=()):
+    """Refuse a WHOLE multi-engine batch before exceeding its queue budget.
 
     generate_variations / generate_variations_nanobanana each enforce the cap on
     their own call, which is enough for a single engine but NOT for a run split
@@ -271,11 +271,13 @@ def check_fanout_budget(dataset_id, total):
     already created rows — a half-dispatched batch. The multi-engine route calls
     this with the aggregate BEFORE dispatching anything, so the run is all-or-
     nothing. The per-call checks stay as defense in depth."""
+    from ..generation_limits import local_queue_limit
+    limit = local_queue_limit() if generators and all(g in LOCAL_ENGINES for g in generators) else MAX_FANOUT
     total = int(total)
-    if total > MAX_FANOUT:
-        raise ValueError(f'fan-out too large ({total} > {MAX_FANOUT})')
+    if total > limit:
+        raise ValueError(f'fan-out too large ({total} > {limit})')
     in_flight = fanout_in_flight(dataset_id)
-    if in_flight + total > MAX_FANOUT:
+    if in_flight + total > limit:
         raise ValueError(f'too many generations in flight ({in_flight}), wait or cancel')
 # Shown when a delete can't move a file to Trash because it's still open in
 # another process (typically an antivirus scan of a just-cleaned image, or an
@@ -10700,15 +10702,7 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
         raise KleinModelsMissing(_missing)
     mult = max(1, int(multiplier))
     total = len(variations) * mult
-    if total > MAX_FANOUT:
-        raise ValueError(f'fan-out too large ({total} > {MAX_FANOUT})')
-    # Anti-DoS: the fan-out is free (never debited) → cap pending in-flight
-    # generations per dataset so one user can't monopolize the single GPU.
-    in_flight = (FaceDatasetImage.query
-                 .filter_by(dataset_id=dataset_id, status='pending')
-                 .filter(FaceDatasetImage.filename.is_(None)).count())
-    if in_flight + total > MAX_FANOUT:
-        raise ValueError(f'too many generations in flight ({in_flight}), wait or cancel')
+    check_fanout_budget(dataset_id, total, generators=('klein',))
     # Extra identity refs (multi-references) : chaînées en ReferenceLatent natifs
     # côté Klein — mêmes fichiers que le chemin Nano Banana multi-réfs.
     extra_paths = [os.path.join(_dataset_dir(ds.id), fn) for fn in extra_ref_filenames(ds)]
@@ -10959,13 +10953,7 @@ def generate_variations_krea(user_id, dataset_id, variations, multiplier,
     run_loras = keh.resolve_generation_lora_preset(generation_lora_preset)
     mult = max(1, int(multiplier))
     total = len(variations) * mult
-    if total > MAX_FANOUT:
-        raise ValueError(f'fan-out too large ({total} > {MAX_FANOUT})')
-    in_flight = (FaceDatasetImage.query
-                 .filter_by(dataset_id=dataset_id, status='pending')
-                 .filter(FaceDatasetImage.filename.is_(None)).count())
-    if in_flight + total > MAX_FANOUT:
-        raise ValueError(f'too many generations in flight ({in_flight}), wait or cancel')
+    check_fanout_budget(dataset_id, total, generators=('krea',))
     ref_path = _ref_path(ds)
     ids = []
     try:

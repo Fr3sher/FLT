@@ -230,13 +230,16 @@ export function billingEngines(engines, { free = [] } = {}) {
  *  queueing an empty batch. `maxFanout` mirrors the server cap; it is read from
  *  /api/capabilities, never hardcoded here, and 0/undefined disables the check
  *  (the server stays the authority and refuses with its own message). */
-export function generateBlockedReason({ engines, shotCount, mode, multiplier = 1, maxFanout = 0 }) {
+export function generateBlockedReason({ engines, shotCount, mode, multiplier = 1, maxFanout = 0, maxLocalFanout = 0 }) {
   const list = canonicalEngines(engines);
   if (!list.length) return 'Pick at least one engine above';
   if (!Number(shotCount)) return 'Select at least one shot';
   const total = totalImages(shotCount, list, mode, multiplier);
-  if (maxFanout > 0 && total > maxFanout) {
-    return `${total} images is over the ${maxFanout}-per-batch limit — `
+  const local = localOnly(list) && maxLocalFanout > 0;
+  const limit = local ? maxLocalFanout : maxFanout;
+  if (limit > 0 && total > limit) {
+    if (local) return `${total} images is over the ${limit}-image local queue limit — select fewer shots or raise it in Settings > Local tools > ComfyUI`;
+    return `${total} images is over the ${limit}-per-batch limit — `
       + (mode === 'all' ? 'switch to Split, ' : '') + 'uncheck an engine or select fewer shots';
   }
   return null;

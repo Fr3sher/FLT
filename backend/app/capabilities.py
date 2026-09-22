@@ -2569,6 +2569,7 @@ def _probe_uncached():
 
 
     from .services.face_dataset_service import MAX_FANOUT as _max_fanout
+    from .generation_limits import local_queue_limit
 
     caps = {
         'configured': cfg.is_configured(),
@@ -2577,6 +2578,7 @@ def _probe_uncached():
         # letting a multi-engine run be refused after the fact — the server
         # stays the authority, the UI just mirrors the number it is told.
         'max_fanout': _max_fanout,
+        'max_local_fanout': local_queue_limit(),
         'engines': {
             'klein': klein_ready,
             'krea': krea_ready,

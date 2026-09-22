@@ -5,6 +5,9 @@
 import { action, setting } from '../topicBuilders.js';
 
 export const ACTION_TOPICS = [
+  action('action-store-install-selection', 'Install several plugins together',
+    ['plugins', 'store', 'install', 'batch', 'selection', 'one restart', 'docker'],
+    '/plugins', 'getting-started', 'the-setup-wizard'),
   // ---- Action topics (kind 'action') -------------------------------------
   action('action-edit-reference', 'Edit the reference photo',
     ['edit', 'reference', 'prompt', 'chatgpt', 'nano banana', 'openrouter', 'klein',

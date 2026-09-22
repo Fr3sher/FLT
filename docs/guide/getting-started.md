@@ -166,6 +166,10 @@ vision tools; local generation prepares ComfyUI and its selected models;
 **Plugins** opens the Store and your installed plugins. Nothing is downloaded
 by choosing a goal or visiting a plugin page.
 
+To install several plugins, tick them in **Plugins → Store**, choose **Review
+selected**, and confirm the shared plan. All selected packages are checked before
+any changes are staged; one LDS restart applies the whole selection.
+
 Each plugin keeps its own settings and preparation under **My plugins**. Select
 the components you want, then prepare that selection. The server checks the
 whole plan before starting and displays progress and any failures. A completed

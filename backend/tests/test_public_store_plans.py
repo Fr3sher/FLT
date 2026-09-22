@@ -27,6 +27,21 @@ def test_latest_compatible_release_and_dependencies_in_install_order():
         ('video', '1.2.0'), ('camera_angles', '1.0.0')]
 
 
+def test_multiple_requested_plugins_are_resolved_together_with_shared_constraints():
+    camera = release('camera_angles', dependencies={'video': '<2'})
+    video = [release('video', '2.0.0'), release('video', '1.2.0')]
+    assert versions(resolve({'camera_angles': [camera], 'video': video},
+                            ['video', 'camera_angles'], {})) == [
+        ('video', '1.2.0'), ('camera_angles', '1.0.0')]
+
+
+def test_selected_plugins_cannot_claim_the_same_owned_surface():
+    catalog = {pid: [release(pid, owns={'engines': ['sample-engine']})]
+               for pid in ['camera_angles', 'video']}
+    with pytest.raises(StoreError, match='No compatible set'):
+        resolve(catalog, ['camera_angles', 'video'], {})
+
+
 def test_reverse_dependency_constrains_requested_update_and_conflict_is_explicit():
     cloud = release('cloud_training', dependencies={'video': '<2'})
     video = [release('video', '2.0.0'), release('video', '1.0.0')]

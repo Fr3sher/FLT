@@ -176,6 +176,15 @@ test('billingEngines names only the lanes that really charge', () => {
   assert.deepEqual(billingEngines(['klein']), []);
 });
 
+test('long local runs use their own cap without increasing API fan-out', () => {
+  const run = { engines: ['klein'], shotCount: 100, mode: 'all', multiplier: 3,
+    maxFanout: 60, maxLocalFanout: 1000 };
+  assert.equal(generateBlockedReason(run), null);
+  assert.match(generateBlockedReason({ ...run, multiplier: 20 }), /Local tools/);
+  assert.match(generateBlockedReason({ ...run, engines: ['klein', 'chatgpt'] }), /60-per-batch/);
+  assert.match(generateBlockedReason({ ...run, maxLocalFanout: undefined }), /60/);
+});
+
 test('generateBlockedReason: no silent empty batch, and the server cap is explained', () => {
   assert.match(generateBlockedReason({ engines: [], shotCount: 5, mode: 'split' }), /at least one engine/);
   assert.match(generateBlockedReason({ engines: ['klein'], shotCount: 0, mode: 'split' }), /at least one shot/);

@@ -53,6 +53,7 @@ def _plan(session, registry, plugin_id, version):
     installed = installed_manifests(registry)
     active = {pid for pid, record in registry.records.items() if record.state == 'loaded'} if registry else set()
     solution = resolve(catalog, plugin_id, installed, version=version, active=active)
+    requested = {plugin_id} if isinstance(plugin_id, str) else set(plugin_id)
     by_id = {r.manifest.id: r for r in solution}
     def closure(roots):
         needed = set(roots)
@@ -66,14 +67,14 @@ def _plan(session, registry, plugin_id, version):
     # activation in consent, while an old owner kept OFF has no such effect.
     # Already-active roots retain their flag rather than becoming dependencies
     # of the requested independent product in the displayed plan.
-    needed = closure({plugin_id}) | (closure(active) - active)
+    needed = closure(requested) | (closure(active) - active)
     flags = cfg.get('plugins.enabled') or {}
     changes = [r for r in solution if r.target and (
         r.manifest.id not in installed or installed[r.manifest.id].version != r.manifest.version
         or installed[r.manifest.id].bundled)]
     # Even a same-version reinstall comes from a newly authenticated target.
     if not changes:
-        changes = [r for r in solution if r.manifest.id == plugin_id and r.target]
+        changes = [r for r in solution if r.manifest.id in requested and r.target]
     changes += [r for r in solution if r not in changes and r.manifest.id in needed
                 and flags.get(r.manifest.id) is False]
     identity = plan_digest(solution, installed, session.config.identity)
@@ -81,7 +82,8 @@ def _plan(session, registry, plugin_id, version):
     operations, errors = storage.pending(external_dir())
     if operations or errors:
         raise StoreError('Apply or cancel the pending plugin changes before preparing another package set.')
-    identity = hashlib.sha256((identity + json.dumps(flags, sort_keys=True)).encode()).hexdigest()
+    consent = {'flags': flags, 'requested': sorted(requested), 'version': version}
+    identity = hashlib.sha256((identity + json.dumps(consent, sort_keys=True)).encode()).hexdigest()
     return changes, identity, needed
 
 
@@ -99,11 +101,12 @@ def preview_plan(registry, plugin_id, version=None):
                 commerce_status = 'unavailable'
         installed = installed_manifests(registry)
         flags = cfg.get('plugins.enabled') or {}
+        requested = {plugin_id} if isinstance(plugin_id, str) else set(plugin_id)
         return {'plan_id': identity, 'requested': plugin_id, 'version': version,
                 'packages': [{**r.payload(), 'action': 'install' if r.target else 'enable',
                               'will_enable': r.manifest.id in needed,
                               'previous_version': installed[r.manifest.id].version if r.manifest.id in installed else None,
-                              'reason': 'requested' if r.manifest.id == plugin_id else
+                              'reason': 'requested' if r.manifest.id in requested else
                                         'dependency' if r.manifest.id in needed else 'compatibility_update',
                               'remains_disabled': r.manifest.id not in needed and flags.get(r.manifest.id) is False,
                               } for r in changes], 'restart_required': True,

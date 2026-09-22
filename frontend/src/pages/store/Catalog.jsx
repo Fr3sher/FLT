@@ -6,6 +6,15 @@ const BTN = 'min-h-10 rounded-md border border-border px-3 py-2 text-sm font-med
 
 export default function Catalog({ catalog, installed, updatesOnly = false, busy, onPlan, onUnlock, selectedId = '', onClearSelection, loading = false, onRetry }) {
   const [search, setSearch] = useState('');
+  const [selection, setSelection] = useState([]);
+  const selectable = useMemo(() => (catalog?.products || []).filter(product => {
+    const release = product.recommended;
+    const local = installed.find(item => item.id === product.id);
+    return release && !release.compatibility_issues.length && !local?.pending_action
+      && (!local || product.update_available);
+  }).map(product => product.id), [catalog, installed]);
+  const chosen = selection.filter(id => selectable.includes(id));
+  const canSelect = !busy && catalog?.status === 'ready' && catalog?.can_manage;
   const products = useMemo(() => (catalog?.products || []).filter((product) => {
     if (updatesOnly && !product.update_available) return false;
     if (selectedId && product.id !== selectedId) return false;
@@ -28,6 +37,12 @@ export default function Catalog({ catalog, installed, updatesOnly = false, busy,
       {catalog && onRetry && <button type="button" className={BTN} disabled={busy || loading} onClick={onRetry}>
         {loading ? 'Retrying catalog…' : 'Retry catalog'}
       </button>}
+    </div>}
+    {selectable.length > 0 && <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-3" data-store-selection>
+      <p className="min-w-0 flex-1 basis-60 text-sm text-content-muted">Select several plugins, review them together, then restart LDS once.</p>
+      <button type="button" className={BTN} disabled={!canSelect || !chosen.length}
+        onClick={() => onPlan(chosen)}>Review selected ({chosen.length})</button>
+      {chosen.length > 0 && <button type="button" className={BTN} disabled={busy} onClick={() => setSelection([])}>Clear selection</button>}
     </div>}
     <div className="grid gap-4 md:grid-cols-2">
       {products.map((product) => {
@@ -64,6 +79,13 @@ export default function Catalog({ catalog, installed, updatesOnly = false, busy,
             </div>
           </details>
           <div className="mt-4 flex flex-wrap items-center gap-2">
+            {selectable.includes(product.id) && <label className="flex min-h-10 cursor-pointer items-center gap-2 text-sm">
+              <input type="checkbox" checked={chosen.includes(product.id)} disabled={!canSelect}
+                aria-label={`Select ${manifest.name} for installation`}
+                onChange={event => setSelection(current => event.target.checked
+                  ? [...new Set([...current, product.id])] : current.filter(id => id !== product.id))} />
+              Select
+            </label>}
             <button type="button" className={BTN + ' inline-flex items-center gap-2'}
               disabled={busy || pending || incompatible || catalog.status !== 'ready' || (!catalog.can_manage && !(needsAdmin && onUnlock))}
               onClick={() => needsAdmin ? onUnlock?.() : onPlan(product.id, manifest.version)}>
@@ -104,7 +126,7 @@ export function InstallPlan({ plan, busy, onConfirm, onCancel, onAcquire }) {
         {manifest.permissions?.length > 0 && <p className="mt-1 text-xs text-content-muted">Access: {manifest.permissions.join(', ')}</p>}
       </li>)}
     </ul>
-    <p className="text-sm text-content-muted">Your data is kept. The current features stay available until you apply the changes and restart LDS.</p>
+    <p className="text-sm text-content-muted">Your data is kept. All listed plugins are prepared together and applied in one restart. The current features stay available until you apply the changes and restart LDS.</p>
     {purchase && <p role="status" className="text-sm text-content-muted">Open Purchases to connect this installation, activate a license or review the purchase terms for: {plan.purchase_required.join(', ')}.</p>}
     {plan.paid_packages?.length > 0 && !purchase && <p className="text-sm text-content-muted">Your acquisition is linked. Download eligibility for these versions will be verified before preparing the installation.</p>}
     <div className="flex flex-wrap gap-2">
