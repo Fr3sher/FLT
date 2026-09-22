@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-zzz-plugin-columns',
+    date: '2026-09-22',
+    title: 'See more plugins at a glance',
+    blurb: 'The plugin catalog uses up to four columns on wide screens and adapts to three, two or one as the window gets narrower.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-22-zz-unified-plugins',
     date: '2026-09-22',
     title: 'Discover and manage plugins in one place',

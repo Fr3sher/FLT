@@ -51,7 +51,7 @@ export default function Catalog({ catalog, installed, filter = 'all', onFilterCh
         onClick={() => onPlan(chosen)}>Review selected ({chosen.length})</button>
       {chosen.length > 0 && <button type="button" className={BTN} disabled={busy} onClick={() => setSelection([])}>Clear selection</button>}
     </div>}
-    <div className="grid items-start gap-4 md:grid-cols-2">
+    <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
       {products.map(({ id, product, release, plugin }) => {
         if (!plugin && !release) return null;
         const manifest = release?.manifest;

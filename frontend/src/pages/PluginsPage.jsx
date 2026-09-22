@@ -234,7 +234,7 @@ export default function PluginsPage() {
   const pendingRestart = Boolean(data?.pending_restart);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-4 py-6" data-probe-panel="plugins" data-probe-content="plugin-store">
+    <div className="mx-auto w-full space-y-6" data-probe-panel="plugins" data-probe-content="plugin-store">
       <div className="space-y-2">
         <SectionHeader eyebrow="Workspace" title="Plugins"
           description="Find new tools and manage your installed plugins in one place." />
