@@ -165,7 +165,8 @@ def test_external_only_private_source_cannot_grant_first_party_or_unlisted_plugi
 
 
 @pytest.mark.parametrize('failure', [None, 'tampered', 'consent_mode'])
-def test_update_all_combines_sources_atomically_and_keeps_disabled_plugins(private_source, failure):
+@pytest.mark.parametrize('private_enabled', [False, True])
+def test_update_all_combines_sources_atomically_and_keeps_disabled_plugins(private_source, failure, private_enabled):
     source = private_source
     records = SimpleNamespace(records={})
     for plugin_id in ('camera_angles', PID):
@@ -183,12 +184,15 @@ def test_update_all_combines_sources_atomically_and_keeps_disabled_plugins(priva
             })
         records.records[plugin_id] = SimpleNamespace(manifest=manifest, legacy=None, bundled=False,
                                                      state='disabled' if plugin_id == PID else 'loaded')
-    cfg.save_config({'plugins': {'enabled': {PID: False}}})
+    # An enabled plugin that failed to load still keeps its desired activation.
+    # An absent flag means enabled, just like the lifecycle API.
+    cfg.save_config({'plugins': {'enabled': {} if private_enabled else {PID: False}}})
     ids = ['camera_angles', PID]
     plan = service.preview_plan(records, ids, update_only=True)
     assert len(plan['packages']) == 2
     private_plan = next(p for p in plan['packages'] if p['manifest']['id'] == PID)
-    assert private_plan['remains_disabled'] and not private_plan['will_enable']
+    assert private_plan['remains_disabled'] is not private_enabled
+    assert private_plan['will_enable'] is private_enabled
     if failure == 'tampered':
         next((source.private / 'targets' / PID).rglob('*.ldsplugin')).write_bytes(b'tampered')
     if failure:
@@ -199,7 +203,7 @@ def test_update_all_combines_sources_atomically_and_keeps_disabled_plugins(priva
         result = service.prepare(records, ids, None, plan['plan_id'], update_only=True)
         pending, errors = storage.pending(source.root / 'installed')
         assert result['ok'] and not errors and set(pending) == set(ids)
-        assert not pending[PID]['desired_enabled']
+        assert pending[PID]['desired_enabled'] is private_enabled
         assert pending['camera_angles']['desired_enabled']
         assert pending['camera_angles']['provenance']['store'] == source.config.identity
         assert len(storage.transaction_history(source.root / 'installed')) == 1

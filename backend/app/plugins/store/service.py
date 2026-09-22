@@ -108,7 +108,7 @@ def _plan(sessions, registry, plugin_id, version, *, update_only=False):
         if not requested <= installed.keys():
             raise StoreError('Only installed plugins can be updated together.')
         # Preserve disabled plugins and never turn an update into a downgrade.
-        active = {pid for pid in installed if flags.get(pid, pid in active)}
+        active = {pid for pid in installed if flags.get(pid, True)}
         catalog = {pid: [r for r in releases if pid not in installed or
                         Version(r.manifest.version) >= Version(installed[pid].version)]
                    for pid, releases in catalog.items()}
@@ -217,8 +217,7 @@ def prepare(registry, plugin_id, version, accepted_plan, *, check_change=None, u
             desired = flags.get(m.id)
             prepared.append({'archive': path, 'manifest': m, 'prefix': prefix,
                              'replacing': bool(old and not old.bundled),
-                             'desired_enabled': (m.id in needed or (bool(desired) if desired is not None else
-                                                 old.state == 'loaded' if update_only and old else True)),
+                             'desired_enabled': True if m.id in needed or desired is None else bool(desired),
                              'provenance': provenance})
         # This is the only mutating boundary. A whole dependency set is one
         # durable transaction; publication is completed while the server is down.
