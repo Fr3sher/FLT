@@ -31,6 +31,54 @@ def test_manual_command_quotes_paths_with_spaces(monkeypatch):
     cmd = setup_installer.manual_command('scrape_extras')
     assert '"C:\\LoRA Dataset Studio\\python\\python.exe"' in cmd
 
+
+@pytest.mark.parametrize('conflict', [False, True])
+def test_app_plugin_resolves_host_extras_and_preserves_pins(tmp_path, monkeypatch, conflict):
+    """Exercise real pip offline, without installing into the test interpreter."""
+    import json
+    import subprocess
+    import zipfile
+
+    from app import setup_installer
+
+    def wheel(name, version, dependencies=''):
+        module = name.replace('-', '_')
+        info = f'{module}-{version}.dist-info'
+        path = tmp_path / f'{module}-{version}-py3-none-any.whl'
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr(f'{info}/WHEEL', 'Wheel-Version: 1.0\nRoot-Is-Purelib: true\n')
+            archive.writestr(f'{info}/METADATA',
+                            f'Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n{dependencies}')
+
+    wheel('example-host', '1.0',
+          'Provides-Extra: crypto\nRequires-Dist: example-security==1.0; extra == "crypto"\n')
+    wheel('example-host', '2.0')
+    wheel('example-security', '1.0')
+    wheel('example-plugin', '1.0', f'Requires-Dist: example-host>={2 if conflict else 1}.0\n')
+    host = tmp_path / 'host.txt'
+    host.write_text('example-host[crypto]==1.0\n', encoding='utf-8')
+    plugin = tmp_path / 'plugin.txt'
+    plugin.write_text('example-plugin==1.0\n', encoding='utf-8')
+    monkeypatch.setattr(setup_installer, '_APP_REQUIREMENTS', host)
+    command = setup_installer._plugin_action_command({'python': 'app', 'requirements': plugin})
+    report = tmp_path / 'report.json'
+    result = subprocess.run(
+        [*command, '--isolated', '--dry-run', '--ignore-installed', '--no-index',
+         '--no-cache-dir', '--disable-pip-version-check', '--find-links', str(tmp_path),
+         '--report', str(report)],
+        capture_output=True, text=True, timeout=30,
+    )
+    if conflict:
+        assert result.returncode != 0
+        assert 'ResolutionImpossible' in result.stderr
+        assert not report.exists()
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        resolved = {item['metadata']['name']: item['metadata']['version']
+                    for item in json.loads(report.read_text(encoding='utf-8'))['install']}
+        assert resolved == {'example-host': '1.0', 'example-security': '1.0', 'example-plugin': '1.0'}
+
+
 def test_ollama_model_has_no_cli_fallback():
     from app import setup_installer
 

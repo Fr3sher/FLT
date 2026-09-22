@@ -3034,8 +3034,10 @@ def _plugin_action_command(spec) -> list:
         cmd += ['-c', str(_ML_REQUIREMENTS), *_flask_pillow_guard(cmd[0])]
     if spec.get('python') == 'app' or (spec.get('python') == 'capability' and _is_flask_venv(cmd[0])):
         if not _APP_REQUIREMENTS.is_file():
-            raise Precondition('The LDS dependency constraints are missing. Repair LDS before installing extras.')
-        cmd += ['-c', str(_APP_REQUIREMENTS)]
+            raise Precondition('The LDS dependency requirements are missing. Repair LDS before installing extras.')
+        # Host requirements can include extras, which pip forbids in constraints.
+        # Resolve them alongside the plugin to preserve both host pins and extras.
+        cmd += ['-r', str(_APP_REQUIREMENTS)]
     return cmd
 
 

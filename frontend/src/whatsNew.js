@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-working-plugin-tool-installs',
+    date: '2026-09-22',
+    title: 'Prepare plugin tools without a dependency error',
+    blurb: 'Fixed the “Constraints cannot have extras” error when preparing plugin tools. LDS keeps its required dependency versions while installing the selected tools. Retry the failed component from the plugin settings.',
+  },
+  {
     id: '2026-09-22-video-lora-collapse',
     date: '2026-09-22',
     title: 'Fold the video LoRA list whenever you need more room',
