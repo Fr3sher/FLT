@@ -84,7 +84,7 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
-    id: '2026-09-23-plugin-update-all', date: '2026-09-23',
+    id: '2026-09-23-zz-plugin-update-all', date: '2026-09-23',
     title: 'Update all your plugins with one restart',
     blurb: 'Use Update all to review available updates together, including connected private catalogs. Confirm once to download, prepare and restart automatically when your launcher supports it. Disabled plugins stay disabled. A retained cloud pod no longer blocks a restart that keeps its plugin enabled.',
     to: '/plugins?filter=updates',
