@@ -2,7 +2,7 @@
   "id": "canvas",
   "bundled": true,
   "name": "Canvas",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "api": 1,
   "description": "Explore all your training runs on a visual board. Arrange checkpoints and image groups, compare or blend LoRAs, save layouts and export the board.",
   "requires": [],
