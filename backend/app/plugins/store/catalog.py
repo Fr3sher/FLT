@@ -45,7 +45,7 @@ def parse_catalog(data, config):
     try:
         for product in products:
             plugin_id = product['id']
-            if config.external_ids and plugin_id not in config.external_ids:
+            if config.selected_ids and plugin_id not in config.selected_ids:
                 continue
             if plugin_id in result:
                 raise ValueError('duplicate product')

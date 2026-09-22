@@ -14,7 +14,7 @@ import pytest
 
 from app import config as cfg
 from app.extensions import db
-from app.plugins import storage
+from app.plugins import official, storage
 from app.plugins.loader import load_plugins
 from app.plugins.manifest import parse_manifest
 from app.plugins.store import client, service
@@ -27,19 +27,19 @@ from test_public_store_tuf import QuietHandler, operator, repository  # noqa: F4
 PID = 'studio.depth'
 
 
-def external_package(version):
-    manifest = contract(id=PID, name='Depth', version=version,
-                        publisher={'id': 'studio', 'name': 'Studio'})
+def package(version, plugin_id=PID):
+    publisher = {'id': 'studio', 'name': 'Studio'} if '.' in plugin_id else {'id': 'lds', 'name': 'LDS'}
+    manifest = contract(id=plugin_id, name='Synthetic product', version=version, publisher=publisher)
     raw = json.dumps(manifest).encode()
     content = io.BytesIO()
     with zipfile.ZipFile(content, 'w') as archive:
         archive.writestr('plugin.json', raw)
         archive.writestr('ui/index.js', '// synthetic plugin')
         archive.writestr('ui/styles.css', '/* synthetic styles */')
-    target = f'{PID}/{version}.ldsplugin'
+    target = f'{plugin_id}/{version}.ldsplugin'
     release = {'manifest': manifest, 'manifest_sha256': hashlib.sha256(raw).hexdigest(),
                'target': target, 'price': {'kind': 'free'}}
-    return {'schema_version': 1, 'products': [{'id': PID, 'releases': [release]}]}, {target: content.getvalue()}
+    return {'schema_version': 1, 'products': [{'id': plugin_id, 'releases': [release]}]}, {target: content.getvalue()}
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def private_source(acquisition):
               'root_path': 'private-root.json', 'plugin_ids': [PID]}
     path = folder / 'sources.json'
     path.write_text(json.dumps({'sources': [source]}), encoding='utf-8')
-    catalog, artifacts = external_package('1.0.1')
+    catalog, artifacts = package('1.0.1')
     operator.publish(private, keys, catalog, artifacts)
     yield SimpleNamespace(root=root, private=private, keys=keys, config=config,
                           source=source, path=path, catalog=catalog)
@@ -68,27 +68,61 @@ def private_source(acquisition):
     thread.join(timeout=2)
 
 
-def test_private_update_uses_normal_transaction_and_keeps_public_catalog(private_source):
+def authorize_official_product(source):
+    source.source.update(plugin_ids=[PID, 'manga'], official_ids=['manga'])
+    source.path.write_text(json.dumps({'sources': [source.source]}), encoding='utf-8')
+    artifacts = {}
+    # Only neutral fixture bytes: no implementation of these historic products.
+    for plugin_id in ('manga', 'creature_battle', 'camera_angles'):
+        catalog, archive = package('1.0.1', plugin_id)
+        source.catalog['products'].extend(catalog['products'])
+        artifacts.update(archive)
+    operator.publish(source.private, source.keys, source.catalog, artifacts)
+
+
+@pytest.mark.parametrize('include_official', [False, True], ids=['external', 'explicit-first-party'])
+def test_private_update_uses_normal_transaction_and_keeps_public_catalog(private_source, include_official):
     source = private_source
-    old_catalog, old_archives = external_package('1.0.0')
-    folder = source.root / 'installed' / PID
-    folder.mkdir(parents=True)
-    with zipfile.ZipFile(io.BytesIO(next(iter(old_archives.values())))) as archive:
-        archive.extractall(folder)
-    manifest = parse_manifest(old_catalog['products'][0]['releases'][0]['manifest'], folder)
-    records = SimpleNamespace(records={PID: SimpleNamespace(manifest=manifest, legacy=None, state='loaded', bundled=False)})
-    data = storage.data_dir(PID)
-    data.mkdir(parents=True)
-    (data / 'history').write_bytes(b'keep history')
+    plugin_ids = [PID, 'manga'] if include_official else [PID]
+    if include_official:
+        authorize_official_product(source)
+    config = client.load_private_configs()[0]
+    assert config.external_ids == frozenset({PID})
+    assert config.official_ids == frozenset({'manga'} if include_official else set())
+    assert config.scoped_ids == frozenset(plugin_ids)
+    assert config.root != source.config.root
+    records = SimpleNamespace(records={})
+    for plugin_id in plugin_ids:
+        old_catalog, old_archives = package('1.0.0', plugin_id)
+        folder = source.root / 'installed' / plugin_id
+        folder.mkdir(parents=True)
+        with zipfile.ZipFile(io.BytesIO(next(iter(old_archives.values())))) as archive:
+            archive.extractall(folder)
+        manifest = parse_manifest(old_catalog['products'][0]['releases'][0]['manifest'], folder,
+                                  official=plugin_id == 'manga')
+        if manifest.official:
+            official.record_install(plugin_id, folder, {
+                'id': plugin_id, 'publisher': 'lds', 'source': 'legacy_migration',
+                'manifest_sha256': official.manifest_digest(folder),
+            })
+        records.records[plugin_id] = SimpleNamespace(manifest=manifest, legacy=None, state='loaded', bundled=False)
+        data = storage.data_dir(plugin_id)
+        data.mkdir(parents=True)
+        (data / 'history').write_bytes(b'keep history')
     catalog = service.browse()
     assert catalog['status'] == 'ready'
-    assert {p['id'] for p in catalog['products']} == {'camera_angles', PID}
-    plan = service.preview_plan(records, PID)
-    assert [(p['manifest']['id'], p['previous_version'], p['manifest']['version'])
-            for p in plan['packages']] == [(PID, '1.0.0', '1.0.1')]
-    assert service.prepare(records, PID, None, plan['plan_id'])['ok']
+    assert {p['id'] for p in catalog['products']} == {'camera_angles', *plugin_ids}
+    assert len(catalog['products']) == len(plugin_ids) + 1
+    public = next(p for p in catalog['products'] if p['id'] == 'camera_angles')
+    assert [r['manifest']['version'] for r in public['releases']] == ['1.0.0']
+    assert service.preview_plan(None, 'camera_angles')['packages'][0]['manifest']['version'] == '1.0.0'
+    selection = plugin_ids if include_official else PID
+    plan = service.preview_plan(records, selection)
+    assert {(p['manifest']['id'], p['previous_version'], p['manifest']['version'])
+            for p in plan['packages']} == {(pid, '1.0.0', '1.0.1') for pid in plugin_ids}
+    assert service.prepare(records, selection, None, plan['plan_id'])['ok']
     pending, errors = storage.pending(source.root / 'installed')
-    assert set(pending) == {PID} and errors == []
+    assert set(pending) == set(plugin_ids) and errors == []
     app = Flask(__name__)
     app.config.update(TESTING=True, SQLALCHEMY_DATABASE_URI='sqlite:///:memory:', WTF_CSRF_ENABLED=False)
     db.init_app(app)
@@ -97,16 +131,27 @@ def test_private_update_uses_normal_transaction_and_keeps_public_catalog(private
         db.create_all()
         try:
             loaded = load_plugins(app, csrf)
-            assert loaded.records[PID].state == 'loaded', loaded.records[PID].error
-            assert loaded.records[PID].manifest.version == '1.0.1'
-            assert not loaded.records[PID].manifest.official
+            for plugin_id in plugin_ids:
+                record = loaded.records[plugin_id]
+                assert record.state == 'loaded', record.error
+                assert record.manifest.version == '1.0.1'
+                assert record.manifest.official is (plugin_id == 'manga')
+            assert storage.pending(source.root / 'installed') == ({}, [])
         finally:
             db.session.remove()
             db.drop_all()
-    assert (data / 'history').read_bytes() == b'keep history'
+    for plugin_id in plugin_ids:
+        assert (storage.data_dir(plugin_id) / 'history').read_bytes() == b'keep history'
+    receipts = cfg.data_dir() / 'plugin-store' / 'installed'
+    assert {p.stem for p in receipts.glob('*.json')} == ({'manga'} if include_official else set())
+    if include_official:
+        provenance = official.installed_provenance('manga', source.root / 'installed' / 'manga')
+        assert provenance['source'] == 'verified_store'
+        assert provenance['store'] == config.identity
+        assert provenance['target'] == 'manga/1.0.1.ldsplugin'
 
 
-def test_private_source_cannot_grant_first_party_or_unlisted_plugin_rights(private_source):
+def test_external_only_private_source_cannot_grant_first_party_or_unlisted_plugin_rights(private_source):
     source = private_source
     config = client.load_private_configs()[0]
     assert config.official_ids == frozenset()
@@ -115,7 +160,42 @@ def test_private_source_cannot_grant_first_party_or_unlisted_plugin_rights(priva
     unknown = json.loads(json.dumps(source.catalog))
     unknown['products'][0]['id'] = 'studio.other'
     assert parse_catalog(unknown, config) == {}
-    source.source['plugin_ids'] = ['camera_angles']
+    first_party, _ = package('1.0.1', 'manga')
+    assert parse_catalog(first_party, config) == {}
+
+
+def test_first_party_only_source_filters_catalog_and_has_its_own_scope_identity(private_source):
+    source = private_source
+    external_config = client.load_private_configs()[0]
+    authorize_official_product(source)
+    source.source['plugin_ids'] = ['manga']
+    source.path.write_text(json.dumps({'sources': [source.source]}), encoding='utf-8')
+    config = client.load_private_configs()[0]
+    assert config.external_ids == frozenset()
+    assert config.scoped_ids == config.official_ids == frozenset({'manga'})
+    assert config.identity != external_config.identity
+    assert client.config_for_plugins('manga') == config
+    assert client.config_for_plugins(PID) is None
+    assert set(parse_catalog(source.catalog, config)) == {'manga'}
+    assert {p['id'] for p in service.browse()['products']} == {'camera_angles', 'manga'}
+    plan = service.preview_plan(None, 'manga')
+    assert [(p['manifest']['id'], p['manifest']['official']) for p in plan['packages']] == [('manga', True)]
+
+
+@pytest.mark.parametrize('permissions', [
+    {'plugin_ids': ['manga']},
+    {'plugin_ids': ['camera_angles'], 'official_ids': ['camera_angles']},
+    {'plugin_ids': [PID], 'official_ids': ['manga']},
+    {'plugin_ids': ['manga'], 'official_ids': ['video']},
+    {'plugin_ids': ['manga', 'manga'], 'official_ids': ['manga']},
+    {'plugin_ids': ['manga'], 'official_ids': ['manga', 'manga']},
+    {'plugin_ids': [PID], 'official_ids': [PID]},
+    {'plugin_ids': ['unreviewed'], 'official_ids': ['unreviewed']},
+], ids=['implicit', 'primary-takeover', 'out-of-scope', 'wrong-official-id',
+        'duplicate-scope', 'duplicate-permission', 'external-as-official', 'unknown-official'])
+def test_private_official_permissions_must_match_exact_non_public_scope(private_source, permissions):
+    source = private_source
+    source.source.update(permissions)
     source.path.write_text(json.dumps({'sources': [source.source]}), encoding='utf-8')
     with pytest.raises(StoreError, match='configuration'):
         client.load_private_configs()
@@ -123,8 +203,10 @@ def test_private_source_cannot_grant_first_party_or_unlisted_plugin_rights(priva
 
 def test_duplicate_sources_and_mixed_source_transactions_are_refused(private_source):
     source = private_source
-    with pytest.raises(StoreError, match='separately'):
-        service.preview_plan(None, ['camera_angles', PID])
+    authorize_official_product(source)
+    for private_id in (PID, 'manga'):
+        with pytest.raises(StoreError, match='separately'):
+            service.preview_plan(None, ['camera_angles', private_id])
     assert storage.pending(source.root / 'installed') == ({}, [])
     source.path.write_text(json.dumps({'sources': [source.source, source.source]}), encoding='utf-8')
     with pytest.raises(StoreError, match='configuration'):

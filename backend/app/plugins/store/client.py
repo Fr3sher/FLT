@@ -70,6 +70,7 @@ class StoreConfig:
     root: bytes
     official_ids: frozenset
     external_ids: frozenset = frozenset()
+    scoped_ids: frozenset = frozenset()
 
     def __post_init__(self):
         object.__setattr__(self, 'metadata_url', _base_url(self.metadata_url))
@@ -83,10 +84,18 @@ class StoreConfig:
                 or any(not isinstance(pid, str) or not EXTERNAL_ID.fullmatch(pid) for pid in self.external_ids)):
             raise StoreError('External catalog permissions must name exact publisher.plugin identifiers.')
         object.__setattr__(self, 'external_ids', frozenset(self.external_ids))
+        if (not isinstance(self.scoped_ids, (set, frozenset))
+                or (self.scoped_ids and self.scoped_ids != self.official_ids | self.external_ids)):
+            raise StoreError('Catalog permissions must match its selected plugin identifiers.')
+        object.__setattr__(self, 'scoped_ids', frozenset(self.scoped_ids))
+
+    @property
+    def selected_ids(self):
+        return self.scoped_ids or self.external_ids
 
     @property
     def identity(self):
-        scope = json.dumps(sorted(self.external_ids)).encode() if self.external_ids else b''
+        scope = json.dumps(sorted(self.selected_ids)).encode() if self.selected_ids else b''
         return hashlib.sha256(self.root + self.metadata_url.encode() + b'\0' + self.target_url.encode() + scope).hexdigest()
 
 
@@ -101,7 +110,7 @@ def load_config():
         raise StoreError('The store trust configuration cannot be verified.') from exc
 
 
-def _read_config(data, directory, *, external_ids=frozenset()):
+def _read_config(data, directory, *, external_ids=frozenset(), scoped_ids=frozenset()):
     try:
         root_path = Path(data['root_path'])
         if not root_path.is_absolute():
@@ -111,13 +120,14 @@ def _read_config(data, directory, *, external_ids=frozenset()):
         if (not root or len(root) > 512000 or not isinstance(ids, list)
                 or any(not isinstance(pid, str) or pid not in OFFICIAL_IDS for pid in ids)):
             raise ValueError('invalid trust configuration')
-        return StoreConfig(_base_url(data['metadata_url']), _base_url(data['target_url']), root, frozenset(ids), external_ids)
+        return StoreConfig(_base_url(data['metadata_url']), _base_url(data['target_url']), root,
+                           frozenset(ids), external_ids, scoped_ids)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise StoreError('The store trust configuration cannot be verified.') from exc
 
 
 def load_private_configs():
-    """Operator-installed roots with exact external IDs; never catalog-provided trust."""
+    """Explicit operator roots and scopes; private catalogs cannot grant themselves rights."""
     path = cfg.data_dir() / 'plugin-store' / 'sources.json'
     if not path.exists():
         return []
@@ -131,11 +141,21 @@ def load_private_configs():
         for source in sources:
             ids = source['plugin_ids']
             if (not isinstance(ids, list) or not 1 <= len(ids) <= 100
-                    or any(not isinstance(pid, str) or not EXTERNAL_ID.fullmatch(pid) for pid in ids)
-                    or len(set(ids)) != len(ids) or claimed.intersection(ids)
-                    or source.get('official_ids')):
+                    or any(not isinstance(pid, str) or not (EXTERNAL_ID.fullmatch(pid) or pid in OFFICIAL_IDS)
+                           for pid in ids)
+                    or len(set(ids)) != len(ids) or claimed.intersection(ids)):
                 raise ValueError('invalid or overlapping source permissions')
-            result.append(_read_config(source, path.parent, external_ids=frozenset(ids)))
+            selected = frozenset(ids)
+            official = source.get('official_ids', [])
+            if (not isinstance(official, list)
+                    or any(not isinstance(pid, str) or pid not in OFFICIAL_IDS for pid in official)
+                    or len(set(official)) != len(official)
+                    or frozenset(official) != selected.intersection(OFFICIAL_IDS)):
+                raise ValueError('first-party permissions must be explicit and match the scope')
+            if official and load_config().official_ids.intersection(official):
+                raise ValueError('a private catalog cannot replace primary first-party products')
+            result.append(_read_config(source, path.parent, external_ids=selected.difference(official),
+                                       scoped_ids=selected))
             claimed.update(ids)
         return result
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -149,7 +169,7 @@ def config_for_plugins(plugin_ids):
             or any(not isinstance(pid, str) for pid in requested)):
         raise StoreError('Select valid plugin identifiers.')
     sources = load_private_configs()
-    selected = {next((index for index, source in enumerate(sources) if pid in source.external_ids), -1)
+    selected = {next((index for index, source in enumerate(sources) if pid in source.selected_ids), -1)
                 for pid in requested}
     if len(selected) > 1:
         raise StoreError('Update plugins from different catalogs separately.')
