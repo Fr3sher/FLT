@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-video-lora-collapse',
+    date: '2026-09-22',
+    title: 'Fold the video LoRA list whenever you need more room',
+    blurb: 'Use Collapse to close the LoRA list without changing your selection. The selected LoRA and its strength stay visible; Change opens the list again.',
+    to: '/studio?lane=video',
+  },
+  {
     id: '2026-09-22-long-local-generation',
     date: '2026-09-22',
     title: 'Queue local generations for an unattended run',

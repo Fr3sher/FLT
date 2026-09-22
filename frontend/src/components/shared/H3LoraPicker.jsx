@@ -119,15 +119,16 @@ export default function H3LoraPicker({ value, onChange, strength, onStrength, ap
         <h2 className="flex items-center gap-1.5 text-sm font-semibold text-content">
           <FlaskConical aria-hidden="true" className="h-4 w-4 text-content-muted" />LoRA under test
         </h2>
-        {!open && (
-          <button type="button" onClick={() => setOpen(true)}
-            className="ml-auto flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-xs text-content-muted hover:text-content min-h-10 lg:min-h-0">
-            Change <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />
-          </button>
-        )}
+        <button type="button" onClick={() => setOpen((current) => !current)}
+          aria-expanded={open}
+          aria-label={open ? 'Collapse LoRA list' : 'Change LoRA'}
+          className="ml-auto flex shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-xs text-content-muted hover:text-content min-h-10 lg:min-h-0">
+          {open ? 'Collapse' : 'Change'}
+          <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 ${open ? 'rotate-180' : ''}`} />
+        </button>
         {open && (
           <button type="button" onClick={load} title="Refresh the list"
-            className="ml-auto rounded-lg border border-border px-2 py-1 text-content-muted hover:text-content min-h-10 lg:min-h-0">
+            className="shrink-0 rounded-lg border border-border px-2 py-1 text-content-muted hover:text-content min-h-10 lg:min-h-0">
             <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
           </button>
         )}
