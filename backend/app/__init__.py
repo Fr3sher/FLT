@@ -819,6 +819,10 @@ def create_app(config_object=None):
     from .routes._common import reject_unparsable_json_body
     app.before_request(reject_unparsable_json_body)
 
+    # Optional product statistics run only after the normal request guards.
+    from .usage_statistics import install as install_usage_statistics
+    install_usage_statistics(app)
+
     # The schema and host request guards exist before a plugin registers any
     # callback. One loader owns both modern packages and the legacy adapter.
     from .plugins.loader import load_plugins

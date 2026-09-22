@@ -39,8 +39,9 @@ export const SETTINGS_SECTIONS = [
     description: 'Port, LAN access and the access token.',
     keywords: ['port', 'host', 'lan', 'network', 'token', 'remote', 'phone', 'bind'] },
   { id: 'maintenance', title: 'Maintenance', icon: Wrench, eyebrow: 'housekeeping',
-    description: 'Updates, server log and bug reports.',
-    keywords: ['update', 'restart', 'log', 'diagnostic', 'version', 'bug'] },
+    description: 'Usage sharing, updates, server log and bug reports.',
+    keywords: ['update', 'restart', 'log', 'diagnostic', 'version', 'bug',
+      'usage', 'statistics', 'analytics', 'telemetry', 'privacy', 'consent', 'sharing'] },
 ]
 
 /* Sidebar LED per section — derived from live capabilities so the rail doubles

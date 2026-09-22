@@ -6,6 +6,7 @@ import PinokioUpdateInstructions from '../common/PinokioUpdateInstructions'
 import { installMode, zipUpdateHeadline, progressLabel, progressPercent } from './updateStatus'
 import { Card } from './primitives'
 import { versionLabel } from '../../utils/versionLabel'
+import UsageStatisticsCard from './UsageStatisticsCard'
 
 /* In-app updater: "Check for updates" hits the git-aware check (commits-behind for a
    clone, release tag for a packaged build). "Update & restart" pulls (git) or downloads
@@ -284,6 +285,7 @@ function LogViewer() {
 export default function MaintenanceSection() {
   return (
     <div className="space-y-6">
+      <UsageStatisticsCard />
       <UpdatesCard />
       <DiagnosticReport />
       <LogViewer />

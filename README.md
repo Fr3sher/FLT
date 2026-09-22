@@ -4,7 +4,7 @@
 
 **A complete, self-hosted training workflow in one browser tab:** source or generate a Character, Concept or Style dataset, curate it, caption it, clean watermarks, then train — a LoRA on five model families, locally or in the cloud, or a full Krea 2 model on a rented GPU — and compare checkpoints before export.
 
-The core and the 13 public plugins are available at no charge, with public source under the project's PolyForm Noncommercial license, no account required for the core and no telemetry. Additional optional paid plugins may be offered later. API engines and rented GPUs are optional; local and manual workflows remain available.
+The core and the 13 public plugins are available at no charge, with public source under the project's PolyForm Noncommercial license and no account required for the core. Optional usage statistics are off by default. Additional optional paid plugins may be offered later. API engines and rented GPUs are optional; local and manual workflows remain available.
 
 > **V2 is now the main LDS release.** Install from the default [`v2` branch](https://github.com/perfectgf/lora-dataset-studio/tree/v2) or the [latest release](https://github.com/perfectgf/lora-dataset-studio/releases/latest). Existing ZIP installations can use **Update & restart** to upgrade the core while keeping their datasets, media and history. Git installations still on `main` must first switch to `v2` as described below. Then install the optional features you use from **Plugins → Store** and review each plugin's settings before its first run.
 
@@ -544,7 +544,9 @@ Use **Settings** for normal configuration. The complete defaults, `config.json` 
 
 The server binds to `127.0.0.1` by default. Before enabling LAN access or publishing a port, read [SECURITY.md](SECURITY.md#the-default-threat-model) and configure the access-token/VPN/reverse-proxy boundary that fits your network. The whole interface also works on a phone or tablet on your own network, so checking a run or triaging a bank does not need the machine that is training.
 
-**What leaves this machine.** There is no telemetry and no analytics: nothing about you, your images or your datasets is sent anywhere. The app does reach the internet in four situations:
+**What leaves this machine.** Optional usage statistics stay off unless you explicitly choose to share them. When available, **Settings → Maintenance → Optional usage statistics** explains and controls sharing: a random installation ID, activity dates, coarse feature names, operation outcomes/error categories, version, OS and duration ranges are sent to the LDS maintainer through PostHog Cloud EU. Images, prompts, captions, file names/paths, credentials, raw logs and session recordings are excluded. Turning sharing off clears the local outbox and identifier; it does not recall events already sent. Builds without a configured collector send no usage statistics. See [the usage statistics guide](docs/guide/settings-reference.md#usage-statistics).
+
+The app also reaches the internet in these situations:
 
 - **Update check** — on load and once an hour, it asks GitHub whether a newer version exists (a `git fetch` on a checkout, the releases API on a packaged install). It sends nothing about you, and there is currently **no setting to turn it off** — block the process at the firewall if you need it silent.
 - **Model downloads you start** — Setup and the Install buttons stream weights from Hugging Face, Civitai, Ollama and pytorch.org. Two extras also fetch their own weights the first time you use them: the aesthetic head (~13 MB, from GitHub) and the NSFW classifier plus SigLIP 2 (Hugging Face).
@@ -570,7 +572,7 @@ Still stuck? **Guide → Getting help** generates a paste-safe diagnostic report
 </p>
 
 The LDS core and the public plugins in this release have public source and are available at no charge under the project's PolyForm Noncommercial license,
-with no telemetry. Additional optional paid plugins may be offered later;
+with usage statistics off by default. Additional optional paid plugins may be offered later;
 the core and these public plugins remain free. Voluntary donations and the
 [vast.ai](https://cloud.vast.ai/?ref_id=683073) referral links disclosed above help
 fund development; those links do not change the price you pay. The project is

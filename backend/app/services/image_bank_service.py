@@ -7504,6 +7504,8 @@ def _score_job(bank_id, rescore=False):
         # report as "scored": see the counter in the write-back loop.
         ok = [r for r in results.values() if r.get('state') == 'ok']
         failed = sum(r.get('state') == 'error' for r in results.values())
+        if failed:
+            job['_usage_result'] = 'partial' if ok else 'failed'
         failure_note = ''
         if failed:
             failure_note = (f'{failed} image(s) failed; run Score again to retry '
@@ -10693,6 +10695,8 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             # user has to be able to see afterwards that the protection did
             # something, otherwise it is a promise with no evidence.
             skipped += f', {skipped_asserted} kept (written by you)'
+        if any(left.get(key, 0) for key in ('failed', 'fenced', 'unanswered')):
+            job['_usage_result'] = 'partial' if captioned else 'failed'
         skipped += _skipped_note(vanished=vanished, stale=stale,
                                  fenced=left.get('fenced', 0),
                                  fence_reason=left.get('fence_reason', ''),

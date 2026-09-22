@@ -8,7 +8,7 @@ Open **Settings** from the top nav. Each rail entry on the left is a section (Ov
 
 A few things hold true everywhere:
 
-- **Nothing saves until you say so.** Change any field and a floating **Unsaved changes** bar appears with **Save** and **Discard**. Navigate away with changes pending and they're kept in the bar, not written.
+- **Ordinary fields wait for Save.** Change a field and a floating **Unsaved changes** bar appears with **Save** and **Discard**. Navigate away with changes pending and they're kept in the bar, not written. The optional **Usage statistics** choice is separate: its buttons save immediately, including when you turn sharing off.
 - **Where values live.** Ordinary settings are written to `config.json` (git-ignored, in your data directory). Secrets — API keys and tokens — go to a separate `.env` file and are never written to `config.json` or committed.
 - **Secret fields are write-only.** An API-key box is always blank, even when a key is saved (a ✓ *Configured* badge tells you it's there). Typing a new value replaces the old one; **leaving a field blank never erases a saved key** — that would be too easy to do by accident. To actually remove a key, use its **Remove** button.
 - **Test buttons probe what's saved, not what's typed.** Hitting **Test** first persists whatever you've typed, then tests the *saved* setting end-to-end. So a Test result always reflects the value the app will really use.
@@ -885,6 +885,60 @@ Keeping the **app itself** healthy: updating it, and getting a bug report out of
 - **Back up everything** — not on this page but on the **Datasets library**: one button archives every dataset, its **training history** and your settings into a single file (⬇ download or 📂 open folder), and the library's **Import backup** restores it — datasets come back under **Trained**, not "Not trained yet". Tick **Include trained LoRAs** to bundle the (large) trained `.safetensors` too. **API keys and tokens are never included** — re-enter them on the new install. See *Using the app → Back up everything*.
 - **Diagnostic report** — a one-click, **paste-safe** report for bug reports: it carries the version, capability status and a log tail, with **no secrets** and file paths reduced to booleans (present/absent). Safe to drop into Discord or a GitHub issue.
 - **Server log** — a live tail of the server log, with **Copy all**, for when you need to see what just happened.
+
+## Usage statistics
+
+**Settings → Maintenance → Optional usage statistics.** This is entirely optional
+and **off by default**, including on existing installations. LDS sends no usage
+statistics until you choose **Share usage statistics**. Choose **No thanks** to
+save a refusal and dismiss the invitation; LDS remains fully usable either way.
+If sharing is unavailable on your installation, the settings card says so and no
+invitation appears.
+
+The statistics help the LDS maintainer understand which features people return
+to and which operations fail. When enabled, the allowed information is:
+
+| Information | Purpose |
+|---|---|
+| Random installation ID and days of activity | Count participating installations and returns over time. |
+| Event timestamps and first active day | Group activity by date and measure returns. |
+| Coarse feature names, such as Datasets, Bank or Training | See where development effort is useful. |
+| Supported operation outcomes and error categories | Find reliability problems without uploading an error message or log. |
+| LDS version and operating-system family | Identify version or platform differences. |
+| Approximate duration ranges | Spot slow operations without recording their contents. |
+| Production or test environment | Exclude the maintainer's synthetic tests from product statistics. |
+
+**Not collected:** images or videos, prompts, captions, dataset names or IDs,
+file names or paths, account names, tokens or API keys, log contents, key presses,
+screen recordings or complete page addresses. Plugin names and private routes
+are not sent. The browser only reports a coarse feature after a real pointer or
+keyboard interaction in the visible app; leaving a tab open does not create
+an activity heartbeat. The action or text entered is never reported.
+
+These are **pseudonymous installation statistics**, not a count or directory of
+individual people: one person can use several installations, several people can
+share an installation, and people who decline are absent from the figures.
+The choice applies to the whole LDS server installation, including other
+browsers connected to it.
+
+Statistics are sent in the background by the LDS server to **PostHog Cloud EU**
+for the maintainer's private product dashboard. There is no browser analytics
+SDK, automatic click capture or session replay. A network request necessarily
+exposes the sending server's network address to the receiving service; LDS does
+not add an IP address or location to the event properties. Loss of connectivity
+does not block your work.
+
+**Conservation:** PostHog's free plan lists **one year** of event retention.
+The provider is rolling enforcement out by project; while it is not enforced,
+older events remain stored. LDS therefore does not guarantee an automatic
+deletion date. See [PostHog's retention policy](https://posthog.com/docs/data/events-retention).
+Pending local events expire after seven days and are limited to 500 entries.
+
+**Turn off sharing** takes effect as soon as the choice is successfully saved:
+it stops new collection and clears statistics waiting to be sent. It does not
+recall data already delivered. The buttons save independently of the general
+Settings **Save** bar, and a failed save is shown so you can retry. You can change
+your choice here at any time; returning to an open browser tab rechecks it.
 
 ## Per-dataset settings
 

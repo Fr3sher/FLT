@@ -111,6 +111,13 @@ export const WHATS_NEW = [
     to: '/datasets?section=checkpoints',
   },
   {
+    id: '2026-09-22-zzzzz-optional-usage-statistics',
+    date: '2026-09-22',
+    title: 'Choose whether to help improve LDS with usage statistics',
+    blurb: 'Optional usage sharing helps prioritize features and reliability improvements. It stays off until you agree, excludes your images and text, and can be turned off immediately in Settings → Maintenance.',
+    to: '/settings/maintenance',
+  },
+  {
     id: '2026-09-22-zzzzz-plugin-restart-without-comfyui',
     date: '2026-09-22',
     title: 'Apply plugin changes even when ComfyUI is offline',

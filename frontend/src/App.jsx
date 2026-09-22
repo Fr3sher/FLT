@@ -51,6 +51,8 @@ import { versionLabel } from './utils/versionLabel'
 import { useTrainingActivity } from './hooks/useTrainingActivity'
 import { activityLabel } from './utils/trainingActivity'
 import { installMode } from './components/settings/updateStatus'
+import { UsageStatisticsProvider } from './usage/UsageStatisticsContext'
+import UsageStatisticsBanner from './usage/UsageStatisticsBanner'
 
 // px-2 up to `lg`: the desktop bar starts at `md` (768 px) and now carries five
 // workspaces (Datasets · Bank · Runs · Canvas · Test Studio) plus the utility
@@ -524,6 +526,7 @@ function Shell() {
       <SetupHealthNotice />
       <ComfyRecoveryBanner />
       <UpdateBanner />
+      <UsageStatisticsBanner />
       <main id="main-content" tabIndex={-1}
         className={boardRoute
           ? 'flex min-h-0 w-full flex-1 flex-col p-0 sm:px-3 sm:py-3'
@@ -565,6 +568,7 @@ function AppInner() {
         Skip to main content
       </a>
       <HashRouter>
+        <UsageStatisticsProvider>
         <HelpModeProvider>
         <Routes>
           <Route element={<Shell />}>
@@ -598,6 +602,7 @@ function AppInner() {
           </Route>
         </Routes>
         </HelpModeProvider>
+        </UsageStatisticsProvider>
       </HashRouter>
     </>
   )
