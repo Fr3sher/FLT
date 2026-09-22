@@ -89,7 +89,8 @@ Every insight must filter `environment = production` to exclude synthetic checks
    Show affected installations as well as operation counts.
 6. **Return on day 7**: cohort by `first_active_day`, returning event
    `lds_active_day` exactly seven UTC dates later. Include only cohorts old enough
-   to have seven days of observation. First observed activity is not necessarily
+   to have a fully completed seventh UTC day, with first activity in the last
+   180 days. First observed activity is not necessarily
    the software's installation date. Use the same rule for day 30 once available.
 
 The service sends no historical local activity at opt-in. Background polls or an

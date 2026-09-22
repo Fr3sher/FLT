@@ -104,18 +104,18 @@ export const WHATS_NEW = [
     to: '/plugins',
   },
   {
+    id: '2026-09-22-zzzzzz-optional-usage-statistics',
+    date: '2026-09-22',
+    title: 'Choose whether to help improve LDS with usage statistics',
+    blurb: 'Optional usage sharing helps prioritize features and reliability improvements. It stays off until you agree, excludes your images and text, and can be turned off immediately in Settings → Maintenance.',
+    to: '/settings/maintenance',
+  },
+  {
     id: '2026-09-22-zzzzzz-checkpoint-graph-refresh',
     date: '2026-09-22',
     title: 'Find your saved LoRAs without waiting for training setup',
     blurb: 'Checkpoints load using the dataset’s saved family, base and variant while training tools are still being detected. Refresh checkpoints also reloads the visible graph, and an older response can no longer hide newer results.',
     to: '/datasets?section=checkpoints',
-  },
-  {
-    id: '2026-09-22-zzzzz-optional-usage-statistics',
-    date: '2026-09-22',
-    title: 'Choose whether to help improve LDS with usage statistics',
-    blurb: 'Optional usage sharing helps prioritize features and reliability improvements. It stays off until you agree, excludes your images and text, and can be turned off immediately in Settings → Maintenance.',
-    to: '/settings/maintenance',
   },
   {
     id: '2026-09-22-zzzzz-plugin-restart-without-comfyui',

@@ -144,6 +144,7 @@ export const CORE_GUIDE_ANCHORS = {
     "trash-and-archives",
     "server-access",
     "maintenance",
+    "usage-statistics",
     "per-dataset-settings",
     "config-file-only-settings",
     "config-json-key-reference-all-keys"
