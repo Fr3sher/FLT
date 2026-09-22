@@ -89,7 +89,7 @@ def install_gate(app):
                 gate.writers.discard(token)
 
 
-def _plugin_blockers(registry):
+def _plugin_blockers(registry, changes=()):
     # Use THIS app's registry. Another test/tool app in the same interpreter
     # must not replace the safety checks with its process-global active view.
     def check(name, *args):
@@ -102,11 +102,15 @@ def _plugin_blockers(registry):
             raise RestartBlocked(next(x for x in value if x))
 
     check('comfyui.restart_blockers')
-    for plugin_id in registry.records:
-        check('plugin.disable_blockers', plugin_id)
+    # A retained resource can make permanent removal unsafe without making a
+    # restart unsafe: enabled plugins resume their supervision on the next boot.
+    for plugin in changes:
+        if plugin.get('pending_action') == 'remove' or (
+                plugin.get('pending_action') and plugin.get('desired_enabled') is False):
+            check('plugin.disable_blockers', plugin['id'])
 
 
-def _lock_and_check_work(gate, registry):
+def _lock_and_check_work(gate, registry, changes=()):
     from .. import setup_installer
     from ..extensions import db
     from ..gpu_window import vision_gpu_window_blocks_gpu
@@ -118,7 +122,7 @@ def _lock_and_check_work(gate, registry):
 
     # Cloud admissions, plugin scripts and Setup all reserve under this lock.
     gate.acquire(state_change_lock)
-    _plugin_blockers(registry)
+    _plugin_blockers(registry, changes)
 
     # Auto takes its own reentrant lock before the GPU lock. A paused handoff
     # still needs a living supervisor, even when its worker thread has stopped.
@@ -230,7 +234,7 @@ def apply_changes():
         state = lifecycle_payload(registry)
         if not state.get('pending_restart'):
             raise RestartBlocked('There are no plugin changes waiting to apply.')
-        _lock_and_check_work(gate, registry)
+        _lock_and_check_work(gate, registry, state.get('plugins', ()))
         comfy_warning = _comfy_restart_warning()
         if comfy_warning:
             log.warning('%s', comfy_warning)

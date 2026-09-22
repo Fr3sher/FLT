@@ -16,6 +16,8 @@ register_commerce_routes(bp)
 
 def _input(*, confirmation=False):
     data = request.get_json(silent=True)
+    if isinstance(data, dict) and not isinstance(data.get('update_only', False), bool):
+        raise StoreError('Choose a valid update operation.')
     if isinstance(data, dict) and 'ids' in data:
         ids = data['ids']
         if ('id' in data or data.get('version') is not None
@@ -82,7 +84,8 @@ def plan():
     try:
         data = _input()
         with state_change_lock:
-            return jsonify(service.preview_plan(_registry(), data.get('id'), data.get('version')))
+            return jsonify(service.preview_plan(_registry(), data.get('id'), data.get('version'),
+                                                update_only=data.get('update_only', False)))
     except (StoreError, OSError, ValueError) as exc:
         return jsonify({'error': str(exc) if isinstance(exc, StoreError) else 'The store plan could not be prepared.'}), 409
 
@@ -96,10 +99,13 @@ def install():
         with state_change_lock:
             registry = _registry()
             def check_change(plugin_id):
-                blocked = _change_blocker(plugin_id)
+                # Preparation retains running code; restart checks active work.
+                # Updating an enabled plugin does not abandon its resources.
+                blocked = _change_blocker(plugin_id, disabling=False)
                 if blocked is not None:
                     raise StoreError(blocked[0].get_json()['error'])
-            result = service.prepare(registry, data.get('id'), data.get('version'), data.get('plan_id'), check_change=check_change)
+            result = service.prepare(registry, data.get('id'), data.get('version'), data.get('plan_id'),
+                                     check_change=check_change, update_only=data.get('update_only', False))
             result['restart'] = restart_payload()
             return jsonify(result)
     except (StoreError, OSError, ValueError) as exc:

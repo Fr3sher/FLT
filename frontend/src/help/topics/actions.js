@@ -5,6 +5,9 @@
 import { action, setting } from '../topicBuilders.js';
 
 export const ACTION_TOPICS = [
+  action('action-store-update-all', 'Update all plugins and restart once',
+    ['plugins', 'updates', 'update all', 'restart', 'catalog'],
+    '/plugins', 'getting-started', 'the-setup-wizard'),
   action('action-store-install-selection', 'Install several plugins together',
     ['plugins', 'store', 'install', 'batch', 'selection', 'one restart', 'docker'],
     '/plugins', 'getting-started', 'the-setup-wizard'),

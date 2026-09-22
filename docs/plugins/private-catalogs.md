@@ -27,8 +27,9 @@ signatures authenticate downloads, they do not hide publicly served files.
 Only the exact listed plugin IDs are accepted from each source. External IDs
 use `publisher.plugin` and receive no first-party privileges. Sources cannot
 overlap one another or replace first-party products authorized by the primary
-catalog. Update plugins from different
-catalogs separately; each review and transaction belongs to one source.
+catalog. Updates from different catalogs can share one review, transaction and
+restart. Each source keeps its own trusted root, permissions and verified
+downloads; the whole selection must verify before any update is prepared.
 An unavailable source does not prevent other sources from being used. Cached
 listings are display-only: every installation requires fresh valid signatures,
 expiry checks and archive hashes. Removing a source stops its update offers;

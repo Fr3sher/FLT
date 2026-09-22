@@ -110,10 +110,12 @@ export default function PluginsPage() {
   const mutation = (url, body) => postJson(url, body, adminOptions);
   const upload = (form) => postForm('/api/plugins/install', form, adminOptions);
 
-  const planInstall = async (id, version) => {
+  const planInstall = async (id, version, updateOnly = false) => {
     setBusy(true);
     try {
-      setStorePlan(await mutation('/api/plugins/store/plan', Array.isArray(id) ? { ids: id } : { id, version }));
+      setStorePlan(await mutation('/api/plugins/store/plan', {
+        ...(Array.isArray(id) ? { ids: id } : { id, version }), update_only: updateOnly,
+      }));
     } catch (e) {
       toast.error(e?.message || 'Could not prepare this installation.');
     } finally { setBusy(false); }
@@ -123,10 +125,17 @@ export default function PluginsPage() {
     try {
       const selection = Array.isArray(storePlan.requested) ? { ids: storePlan.requested }
         : { id: storePlan.requested, version: storePlan.version };
-      await mutation('/api/plugins/store/install', { ...selection, plan_id: storePlan.plan_id });
+      const prepared = await mutation('/api/plugins/store/install', {
+        ...selection, plan_id: storePlan.plan_id, update_only: Boolean(storePlan.update_only),
+      });
+      const autoRestart = storePlan.update_only && prepared.restart?.can_apply;
       setStorePlan(null);
       setTab('installed');
       await load();
+      if (autoRestart) {
+        await apply();
+        return;
+      }
       await loadCatalog();
       toast.success('Plugins downloaded. Apply the changes to use them.');
     } catch (e) { toast.error(e?.message || 'Installation could not be prepared.'); }
@@ -279,6 +288,7 @@ export default function PluginsPage() {
         rejected={Boolean(adminToken) && adminToken === adminDraft && !catalogLoading && catalog.status === 'ready'} />}
 
       {storePlan && <InstallPlan plan={storePlan} busy={busy} onConfirm={installFromStore} onCancel={() => setStorePlan(null)}
+        restart={data?.restart}
         onAcquire={id => { setPurchaseId(id); setStorePlan(null); setTab('purchases'); }} />}
 
       {error && <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">{error}</p>}
@@ -309,6 +319,7 @@ export default function PluginsPage() {
 
       {tab === 'plugins' && <div role="tabpanel" id="store-plugins" aria-labelledby="store-tab-plugins">
         <Catalog catalog={catalog} installed={plugins} filter={filter} onFilterChange={setFilter} busy={busy} onPlan={planInstall}
+          onUpdateAll={ids => planInstall(ids, undefined, true)} pendingRestart={pendingRestart}
           loading={catalogLoading} onRetry={loadCatalog}
           onToggle={toggle} onRemove={remove} onInstalled={() => { load(); refreshCaps(true); }} caps={caps} capsKnown={capsKnown}
           onUnlock={() => document.getElementById('plugin-admin-token')?.focus()}

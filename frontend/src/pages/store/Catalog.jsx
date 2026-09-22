@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, LockKeyhole, Search, ShoppingBag } from 'lucide-react';
 import PluginCard from './PluginCard.jsx';
-import { canSelectEntry, catalogEntries, matchesFilter } from './catalogModel.js';
+import { availableUpdateIds, canSelectEntry, catalogEntries, matchesFilter } from './catalogModel.js';
 
 const BTN = 'min-h-10 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-surface-raised disabled:opacity-50';
 const UPDATE_BTN = 'min-h-10 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-semibold text-gray-950 hover:bg-primary-dark disabled:opacity-50';
 
 export default function Catalog({ catalog, installed, filter = 'all', onFilterChange, busy, onPlan, onUnlock,
-  selectedId = '', onClearSelection, loading = false, onRetry, onToggle, onRemove, onInstalled, caps, capsKnown }) {
+  selectedId = '', onClearSelection, loading = false, onRetry, onToggle, onRemove, onInstalled, caps, capsKnown,
+  onUpdateAll, pendingRestart = false }) {
   const [search, setSearch] = useState('');
   const [selection, setSelection] = useState([]);
   const entries = useMemo(() => catalogEntries(catalog?.products, installed), [catalog, installed]);
   const selectable = useMemo(() => entries.filter(canSelectEntry).map(entry => entry.id), [entries]);
   const chosen = selection.filter(id => selectable.includes(id));
   const canSelect = !busy && !loading && catalog?.status === 'ready' && catalog?.can_manage;
+  const updates = availableUpdateIds(entries);
   const products = entries.filter(entry => {
     if (selectedId) return entry.id === selectedId;
     if (!matchesFilter(entry, filter)) return false;
@@ -22,13 +24,21 @@ export default function Catalog({ catalog, installed, filter = 'all', onFilterCh
   });
 
   return <div className="space-y-4" data-store-catalog>
-    <div role="group" aria-label="Filter plugins" className="flex flex-wrap gap-2">
+    <div role="group" aria-label="Filter plugins" className="flex flex-wrap items-center gap-2">
       {[['all', 'All'], ['installed', 'Installed'], ['updates', 'Updates']].map(([key, label]) =>
         <button key={key} type="button" aria-pressed={!selectedId && filter === key} onClick={() => onFilterChange(key)}
           className={BTN + (!selectedId && filter === key ? ' border-primary bg-primary/10 text-primary' : '')}>
           {label} <span className="ml-1 text-xs">{entries.filter(entry => matchesFilter(entry, key)).length}</span>
         </button>)}
+      {updates.length > 0 && onUpdateAll && <button type="button" className={UPDATE_BTN + ' sm:ml-auto'}
+        disabled={!canSelect || pendingRestart} onClick={() => onUpdateAll(updates)}>
+        Update all ({updates.length})
+      </button>}
     </div>
+    {updates.length > 0 && onUpdateAll && <p className="text-xs text-content-muted">
+      {pendingRestart ? 'Apply the pending changes before preparing more updates.'
+        : 'Update all installed plugins with an available compatible release, then restart LDS once. Disabled plugins stay disabled.'}
+    </p>}
     {selectedId && <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/40 p-3 text-sm">
       <p>Selected plugin</p>
       <button type="button" onClick={() => { setSearch(''); onClearSelection(); }} className={BTN}>Show all plugins</button>
@@ -92,7 +102,7 @@ export default function Catalog({ catalog, installed, filter = 'all', onFilterCh
   </div>;
 }
 
-export function InstallPlan({ plan, busy, onConfirm, onCancel, onAcquire }) {
+export function InstallPlan({ plan, busy, onConfirm, onCancel, onAcquire, restart }) {
   const panelRef = useRef(null);
   useEffect(() => {
     // The review sits above the catalog, often outside the viewport of the
@@ -104,20 +114,23 @@ export function InstallPlan({ plan, busy, onConfirm, onCancel, onAcquire }) {
   }, [plan]);
   const purchase = plan.purchase_required?.length > 0;
   return <section ref={panelRef} role="region" aria-label="Review plugin installation" tabIndex={-1} className="space-y-4 rounded-xl border border-primary/40 bg-surface p-5" data-store-plan>
-    <h2 className="text-lg font-semibold">{purchase ? 'Review your plugins' : 'Ready to install'}</h2>
+    <h2 className="text-lg font-semibold">{purchase ? 'Review your plugins' : plan.update_only ? 'Ready to update all' : 'Ready to install'}</h2>
     <ul className="divide-y divide-border">
       {plan.packages.map(({ manifest, action, will_enable: willEnable, previous_version: previousVersion, reason, remains_disabled: remainsDisabled }) => <li key={manifest.id} className="py-3">
         <p className="font-medium">{manifest.name} <span className="text-sm text-content-muted">{manifest.version}</span></p>
         <p className="mt-1 text-sm text-content-muted">{action === 'enable' ? 'Enable the installed plugin' : previousVersion && previousVersion !== manifest.version ? `Replace installed version ${previousVersion}` : 'Download this complete plugin'}{willEnable ? ' and activate it after restarting.' : '.'}</p>
-        {reason === 'compatibility_update' && <p className="mt-1 text-sm text-content-muted">This update is needed for the selected plugins to work together. {remainsDisabled ? 'This plugin will stay disabled.' : 'Its activation setting is kept.'}</p>}
+        {reason === 'compatibility_update' && <p className="mt-1 text-sm text-content-muted">This update is needed for the selected plugins to work together. Its activation setting is kept.</p>}
+        {remainsDisabled && <p className="mt-1 text-sm text-content-muted">This plugin will stay disabled.</p>}
         {manifest.permissions?.length > 0 && <p className="mt-1 text-xs text-content-muted">Access: {manifest.permissions.join(', ')}</p>}
       </li>)}
     </ul>
-    <p className="text-sm text-content-muted">Your data is kept. All listed plugins are prepared together and applied in one restart. The current features stay available until you apply the changes and restart LDS.</p>
+    <p className="text-sm text-content-muted">{plan.update_only
+      ? `Your data and activation settings are kept. All updates are verified and prepared together. ${restart?.can_apply ? 'LDS will restart automatically once, then reload this page.' : restart?.how || 'Restart LDS once after preparation to apply all updates.'}`
+      : 'Your data is kept. All listed plugins are prepared together and applied in one restart. The current features stay available until you apply the changes and restart LDS.'}</p>
     {purchase && <p role="status" className="text-sm text-content-muted">Open Purchases to connect this installation, activate a license or review the purchase terms for: {plan.purchase_required.join(', ')}.</p>}
     {plan.paid_packages?.length > 0 && !purchase && <p className="text-sm text-content-muted">Your acquisition is linked. Download eligibility for these versions will be verified before preparing the installation.</p>}
     <div className="flex flex-wrap gap-2">
-      <button type="button" disabled={busy || purchase} className={BTN + ' border-primary bg-primary text-primary-foreground'} onClick={onConfirm}>{busy ? 'Preparing…' : 'Confirm installation'}</button>
+      <button type="button" disabled={busy || purchase || !plan.packages.length} className={BTN + ' border-primary bg-primary text-primary-foreground'} onClick={onConfirm}>{busy ? 'Downloading and preparing…' : plan.update_only ? restart?.can_apply ? 'Update all and restart' : 'Update all' : 'Confirm installation'}</button>
       {purchase && onAcquire && <button type="button" disabled={busy} className={BTN} onClick={() => onAcquire(plan.purchase_required[0])}>Open purchases</button>}
       <button type="button" disabled={busy} className={BTN} onClick={onCancel}>Cancel</button>
     </div>

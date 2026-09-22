@@ -20,6 +20,11 @@ export function canSelectEntry({ product, release, plugin }) {
     && (!plugin || product?.update_available));
 }
 
+export function availableUpdateIds(entries) {
+  return entries.filter(entry => entry.plugin && entry.product?.update_available && canSelectEntry(entry))
+    .map(entry => entry.id);
+}
+
 export function catalogView(params) {
   const legacy = params.get('tab');
   const filter = params.get('filter');

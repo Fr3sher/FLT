@@ -164,6 +164,47 @@ def test_external_only_private_source_cannot_grant_first_party_or_unlisted_plugi
     assert parse_catalog(first_party, config) == {}
 
 
+@pytest.mark.parametrize('failure', [None, 'tampered', 'consent_mode'])
+def test_update_all_combines_sources_atomically_and_keeps_disabled_plugins(private_source, failure):
+    source = private_source
+    records = SimpleNamespace(records={})
+    for plugin_id in ('camera_angles', PID):
+        old_catalog, archives = package('0.9.0', plugin_id)
+        folder = source.root / 'installed' / plugin_id
+        folder.mkdir(parents=True)
+        with zipfile.ZipFile(io.BytesIO(next(iter(archives.values())))) as archive:
+            archive.extractall(folder)
+        manifest = parse_manifest(old_catalog['products'][0]['releases'][0]['manifest'], folder,
+                                  official=plugin_id == 'camera_angles')
+        if manifest.official:
+            official.record_install(plugin_id, folder, {
+                'id': plugin_id, 'publisher': 'lds', 'source': 'legacy_migration',
+                'manifest_sha256': official.manifest_digest(folder),
+            })
+        records.records[plugin_id] = SimpleNamespace(manifest=manifest, legacy=None, bundled=False,
+                                                     state='disabled' if plugin_id == PID else 'loaded')
+    cfg.save_config({'plugins': {'enabled': {PID: False}}})
+    ids = ['camera_angles', PID]
+    plan = service.preview_plan(records, ids, update_only=True)
+    assert len(plan['packages']) == 2
+    private_plan = next(p for p in plan['packages'] if p['manifest']['id'] == PID)
+    assert private_plan['remains_disabled'] and not private_plan['will_enable']
+    if failure == 'tampered':
+        next((source.private / 'targets' / PID).rglob('*.ldsplugin')).write_bytes(b'tampered')
+    if failure:
+        with pytest.raises(StoreError):
+            service.prepare(records, ids, None, plan['plan_id'], update_only=failure != 'consent_mode')
+        assert storage.pending(source.root / 'installed') == ({}, [])
+    else:
+        result = service.prepare(records, ids, None, plan['plan_id'], update_only=True)
+        pending, errors = storage.pending(source.root / 'installed')
+        assert result['ok'] and not errors and set(pending) == set(ids)
+        assert not pending[PID]['desired_enabled']
+        assert pending['camera_angles']['desired_enabled']
+        assert pending['camera_angles']['provenance']['store'] == source.config.identity
+        assert len(storage.transaction_history(source.root / 'installed')) == 1
+
+
 def test_first_party_only_source_filters_catalog_and_has_its_own_scope_identity(private_source):
     source = private_source
     external_config = client.load_private_configs()[0]
@@ -237,13 +278,8 @@ def test_private_official_permissions_must_match_exact_non_public_scope(private_
         client.load_private_configs()
 
 
-def test_duplicate_sources_and_mixed_source_transactions_are_refused(private_source):
+def test_duplicate_sources_are_refused(private_source):
     source = private_source
-    authorize_official_product(source)
-    for private_id in (PID, 'manga'):
-        with pytest.raises(StoreError, match='separately'):
-            service.preview_plan(None, ['camera_angles', private_id])
-    assert storage.pending(source.root / 'installed') == ({}, [])
     source.path.write_text(json.dumps({'sources': [source.source, source.source]}), encoding='utf-8')
     with pytest.raises(StoreError, match='configuration'):
         client.load_private_configs()

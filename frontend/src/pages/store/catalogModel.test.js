@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canSelectEntry, catalogEntries, catalogView, matchesFilter } from './catalogModel.js';
+import { availableUpdateIds, canSelectEntry, catalogEntries, catalogView, matchesFilter } from './catalogModel.js';
 
 const release = { manifest: { id: 'example', version: '2.0.0' }, compatibility_issues: [] };
 const product = { id: 'example', recommended: release, update_available: true };
@@ -44,4 +44,15 @@ test('old plugin links open the matching filter and purchases remains separate',
   assert.deepEqual(catalogView(new URLSearchParams('tab=purchases')), { tab: 'purchases', filter: 'all' });
   assert.deepEqual(catalogView(new URLSearchParams('tab=plugins&filter=installed')), { tab: 'plugins', filter: 'installed' });
   assert.deepEqual(catalogView(new URLSearchParams('tab=unknown&filter=unknown')), { tab: 'plugins', filter: 'all' });
+});
+
+test('update all includes disabled installed plugins but excludes new, incompatible and pending packages', () => {
+  const products = ['active', 'disabled', 'pending', 'incompatible', 'new', 'current'].map(id => ({
+    ...product, id, update_available: id !== 'current',
+    recommended: { ...release, compatibility_issues: id === 'incompatible' ? ['Requires a newer LDS'] : [] },
+  }));
+  const installed = ['active', 'disabled', 'pending', 'incompatible', 'current'].map(id => ({
+    id, active: id !== 'disabled', pending_action: id === 'pending' ? 'update' : null,
+  }));
+  assert.deepEqual(availableUpdateIds(catalogEntries(products, installed)), ['active', 'disabled']);
 });

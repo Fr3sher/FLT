@@ -134,9 +134,11 @@ def prepare_plugin(plugin_id):
         return jsonify(error=str(exc)), exc.status
 
 
-def _change_blocker(plugin_id):
+def _change_blocker(plugin_id, *, disabling=True):
     if setup_installer.plugin_install_busy(plugin_id) or environment.running(plugin_id):
         return jsonify({'error': 'Wait for this plugin’s installation or running work to finish.'}), 409
+    if not disabling:
+        return None
     try:
         blockers = [str(r) for r in (run_filter(
             'plugin.disable_blockers', [], plugin_id, strict=True) or ()) if r]

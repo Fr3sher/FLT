@@ -7,6 +7,33 @@ from app.plugins.routes import restart_payload
 from app.services import updater
 
 
+@pytest.mark.parametrize('action, desired, blocked', [
+    (None, True, False), ('update', True, False),
+    ('disable', False, True), ('remove', True, True), ('update', False, True),
+])
+def test_restart_only_checks_retained_resource_blockers_when_disabling(action, desired, blocked):
+    from types import SimpleNamespace
+    from app.plugins.restart import _plugin_blockers, RestartBlocked
+
+    registry = SimpleNamespace(hooks={'plugin.disable_blockers': [
+        ('owner', lambda reasons, pid: reasons + ['Retained rental needs this plugin.'])]})
+    changes = [{'id': 'owner', 'pending_action': action, 'desired_enabled': desired}]
+    if blocked:
+        with pytest.raises(RestartBlocked, match='Retained rental'):
+            _plugin_blockers(registry, changes)
+    else:
+        _plugin_blockers(registry, changes)
+
+
+def test_restart_still_checks_active_plugin_gpu_work():
+    from types import SimpleNamespace
+    from app.plugins.restart import _plugin_blockers, RestartBlocked
+
+    registry = SimpleNamespace(hooks={'comfyui.restart_blockers': [
+        ('owner', lambda reasons: reasons + ['A render is running.'])]})
+    with pytest.raises(RestartBlocked, match='render is running'):
+        _plugin_blockers(registry)
+
 ROOT = Path(__file__).resolve().parents[2]
 
 

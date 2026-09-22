@@ -90,7 +90,7 @@ def _satisfies(version, ranges, *, installed=False):
     return all(SpecifierSet(spec).contains(version, prereleases=SpecifierSet(spec).prereleases is True) for spec in ranges)
 
 
-def resolve(catalog, requested, installed, *, version=None, active=None):
+def resolve(catalog, requested, installed, *, version=None, active=None, enable_requested=True):
     """Backtrack the small reviewed catalog, preserving reverse dependencies.
 
     Enabled products constrain dependencies. All installed manifests, including
@@ -116,7 +116,7 @@ def resolve(catalog, requested, installed, *, version=None, active=None):
     active = set(installed) if active is None else set(active)
 
     def enabled_ids(chosen):
-        result = active | set(roots)
+        result = active | (set(roots) if enable_requested else set())
         while True:
             expanded = result | {dep for pid in result if pid in chosen for dep in chosen[pid].manifest.requires}
             if expanded == result:
