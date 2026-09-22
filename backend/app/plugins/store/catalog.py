@@ -45,6 +45,8 @@ def parse_catalog(data, config):
     try:
         for product in products:
             plugin_id = product['id']
+            if config.external_ids and plugin_id not in config.external_ids:
+                continue
             if plugin_id in result:
                 raise ValueError('duplicate product')
             versions = {}
@@ -55,9 +57,7 @@ def parse_catalog(data, config):
                 manifest = parse_manifest(release['manifest'], Path('.'), official=plugin_id in config.official_ids)
                 if manifest.bundled or manifest.id != plugin_id or manifest.contract['schema_version'] != 2:
                     raise ValueError('invalid package identity')
-                if not manifest.official:
-                    # The initial store contains reviewed LDS products only.
-                    # Third-party namespaces still work through explicit ZIP consent.
+                if not manifest.official and plugin_id not in config.external_ids:
                     raise ValueError('publisher is not approved for this store')
                 version = Version(manifest.version)
                 if version in versions:

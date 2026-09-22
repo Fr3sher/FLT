@@ -1,11 +1,11 @@
 """Presentation downloads never consult purchase grants or installed code."""
 from .catalog import parse_catalog
-from .client import StoreError, StoreSession
+from .client import StoreError, StoreSession, config_for_plugins
 from .media_contract import MAX_MEDIA_BYTES, validate_image
 
 
 def read_image(plugin_id, version, image_id, filename):
-    with StoreSession() as session:
+    with StoreSession(config_for_plugins(plugin_id)) as session:
         catalog = parse_catalog(session.catalog(), session.config)
         release = next((entry for entry in catalog.get(plugin_id, ())
                         if entry.manifest.version == version), None)

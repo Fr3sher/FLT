@@ -215,7 +215,7 @@ def _prepare(repo, keys, catalog, artifacts, private_artifacts):
         raise ValueError('Artifacts must map target names to bytes.')
     entries, identities, products, media_entries = {}, set(), set(), {}
     for product in catalog['products']:
-        if (not isinstance(product, dict) or not re.fullmatch(r'[a-z][a-z0-9_]{1,63}', product.get('id', ''))
+        if (not isinstance(product, dict) or not re.fullmatch(r'[a-z][a-z0-9_]{1,63}|[a-z][a-z0-9_]{1,31}\.[a-z][a-z0-9_]{1,31}', product.get('id', ''))
                 or product['id'] in products or not isinstance(product.get('releases'), list)
                 or not 1 <= len(product['releases']) <= 100):
             raise ValueError('Invalid or duplicate catalog product.')

@@ -25,6 +25,7 @@ from tuf.ngclient.fetcher import FetcherInterface
 from ... import config as cfg
 from ..install import MAX_TOTAL_BYTES, _entry_relpath
 from ..official import OFFICIAL_IDS
+from ..manifest import EXTERNAL_ID
 from ..storage import managed_path
 
 _LOCK = threading.RLock()
@@ -68,6 +69,7 @@ class StoreConfig:
     target_url: str
     root: bytes
     official_ids: frozenset
+    external_ids: frozenset = frozenset()
 
     def __post_init__(self):
         object.__setattr__(self, 'metadata_url', _base_url(self.metadata_url))
@@ -77,10 +79,15 @@ class StoreConfig:
                 or any(pid not in OFFICIAL_IDS for pid in self.official_ids)):
             raise StoreError('The store trust configuration cannot be verified.')
         object.__setattr__(self, 'official_ids', frozenset(self.official_ids))
+        if (not isinstance(self.external_ids, (set, frozenset))
+                or any(not isinstance(pid, str) or not EXTERNAL_ID.fullmatch(pid) for pid in self.external_ids)):
+            raise StoreError('External catalog permissions must name exact publisher.plugin identifiers.')
+        object.__setattr__(self, 'external_ids', frozenset(self.external_ids))
 
     @property
     def identity(self):
-        return hashlib.sha256(self.root + self.metadata_url.encode() + b'\0' + self.target_url.encode()).hexdigest()
+        scope = json.dumps(sorted(self.external_ids)).encode() if self.external_ids else b''
+        return hashlib.sha256(self.root + self.metadata_url.encode() + b'\0' + self.target_url.encode() + scope).hexdigest()
 
 
 def load_config():
@@ -89,17 +96,65 @@ def load_config():
         raise StoreNotConfigured('The store has not been connected to a trusted catalog yet.')
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
+        return _read_config(data, path.parent)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise StoreError('The store trust configuration cannot be verified.') from exc
+
+
+def _read_config(data, directory, *, external_ids=frozenset()):
+    try:
         root_path = Path(data['root_path'])
         if not root_path.is_absolute():
-            root_path = path.parent / root_path
+            root_path = directory / root_path
         root = root_path.read_bytes()
         ids = data.get('official_ids', [])
         if (not root or len(root) > 512000 or not isinstance(ids, list)
                 or any(not isinstance(pid, str) or pid not in OFFICIAL_IDS for pid in ids)):
             raise ValueError('invalid trust configuration')
-        return StoreConfig(_base_url(data['metadata_url']), _base_url(data['target_url']), root, frozenset(ids))
+        return StoreConfig(_base_url(data['metadata_url']), _base_url(data['target_url']), root, frozenset(ids), external_ids)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise StoreError('The store trust configuration cannot be verified.') from exc
+
+
+def load_private_configs():
+    """Operator-installed roots with exact external IDs; never catalog-provided trust."""
+    path = cfg.data_dir() / 'plugin-store' / 'sources.json'
+    if not path.exists():
+        return []
+    try:
+        if path.stat().st_size > 128 * 1024:
+            raise ValueError('source list too large')
+        sources = json.loads(path.read_text(encoding='utf-8'))['sources']
+        if not isinstance(sources, list) or len(sources) > 20:
+            raise ValueError('invalid sources')
+        result, claimed = [], set()
+        for source in sources:
+            ids = source['plugin_ids']
+            if (not isinstance(ids, list) or not 1 <= len(ids) <= 100
+                    or any(not isinstance(pid, str) or not EXTERNAL_ID.fullmatch(pid) for pid in ids)
+                    or len(set(ids)) != len(ids) or claimed.intersection(ids)
+                    or source.get('official_ids')):
+                raise ValueError('invalid or overlapping source permissions')
+            result.append(_read_config(source, path.parent, external_ids=frozenset(ids)))
+            claimed.update(ids)
+        return result
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise StoreError('The private plugin sources configuration cannot be verified.') from exc
+
+
+def config_for_plugins(plugin_ids):
+    """None preserves the default Store session and its existing trust root."""
+    requested = [plugin_ids] if isinstance(plugin_ids, str) else plugin_ids
+    if (not isinstance(requested, (list, tuple)) or not 1 <= len(requested) <= 50
+            or any(not isinstance(pid, str) for pid in requested)):
+        raise StoreError('Select valid plugin identifiers.')
+    sources = load_private_configs()
+    selected = {next((index for index, source in enumerate(sources) if pid in source.external_ids), -1)
+                for pid in requested}
+    if len(selected) > 1:
+        raise StoreError('Update plugins from different catalogs separately.')
+    index = next(iter(selected), -1)
+    return sources[index] if index >= 0 else None
 
 
 class _Fetcher(FetcherInterface):

@@ -244,6 +244,15 @@ export default function PluginsPage() {
         </p>
       </div>
 
+      {tab === 'plugins' && <div className="flex flex-wrap items-center gap-2">
+        <label className={BTN + ' inline-flex cursor-pointer items-center gap-1'}>
+          <Upload aria-hidden="true" className="h-3.5 w-3.5" /> Install from a ZIP
+          <input ref={fileRef} type="file" accept=".ldsplugin,.zip,application/zip" className="sr-only"
+            onChange={(e) => inspect(e.target.files && e.target.files[0])} disabled={busy} />
+        </label>
+        <span className="text-xs text-content-muted">The archive is inspected first; nothing is written until you confirm.</span>
+      </div>}
+
       <div role="tablist" aria-label="Plugin store sections" className="flex flex-wrap gap-2 border-b border-border pb-3"
         onKeyDown={(event) => {
           const keys = ['plugins', 'purchases'];
@@ -324,14 +333,6 @@ export default function PluginsPage() {
         {window.lds.loadProblems.map((item) => <p key={item.plugin}>{item.plugin}: {item.reason}</p>)}
         <button type="button" className={BTN + ' mt-3'} onClick={() => window.location.reload()}>Reload interfaces</button>
       </div>}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <label className={BTN + ' inline-flex cursor-pointer items-center gap-1'}>
-            <Upload aria-hidden="true" className="h-3.5 w-3.5" /> Install from a ZIP
-            <input ref={fileRef} type="file" accept=".ldsplugin,.zip,application/zip" className="sr-only"
-              onChange={(e) => inspect(e.target.files && e.target.files[0])} disabled={busy} />
-          </label>
-          <span className="text-xs text-content-muted">The archive is inspected first; nothing is written until you confirm.</span>
-        </div>
       </div>}
 
       {consent && (

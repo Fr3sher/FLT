@@ -11,7 +11,7 @@ from .. import official, storage
 from ..install import inspect_archive, inspect_plugin_zip
 from ..loader import external_dir
 from .catalog import parse_catalog, plan_digest, resolve
-from .client import StoreError, StoreSession, load_config
+from .client import StoreError, StoreSession, load_config, load_private_configs, config_for_plugins
 from .commerce import CommerceClient, download_release
 
 
@@ -24,7 +24,32 @@ def _browse_path(config):
 
 
 def browse():
-    config = load_config()
+    try:
+        payload = _browse(load_config())
+    except StoreError as exc:
+        payload = {'status': 'unavailable', 'checked_at': None, 'message': str(exc), 'products': []}
+    messages = [payload['message']] if payload['message'] else []
+    try:
+        sources = load_private_configs()
+    except StoreError as exc:
+        sources = []
+        messages.append(str(exc))
+    for source in sources:
+        try:
+            additional = _browse(source)
+            payload['products'].extend(additional['products'])
+            if additional['status'] == 'ready' or payload['status'] == 'unavailable':
+                payload['status'] = additional['status']
+                payload['checked_at'] = additional['checked_at']
+            if additional['message']:
+                messages.append('A private plugin catalog is offline; showing its last verified releases.')
+        except StoreError:
+            messages.append('A private plugin catalog is unavailable. Other catalogs remain available.')
+    payload['message'] = ' '.join(dict.fromkeys(messages))
+    return payload
+
+
+def _browse(config):
     try:
         with StoreSession(config) as session:
             raw = session.catalog()
@@ -88,7 +113,7 @@ def _plan(session, registry, plugin_id, version):
 
 
 def preview_plan(registry, plugin_id, version=None):
-    with StoreSession() as session:
+    with StoreSession(config_for_plugins(plugin_id)) as session:
         changes, identity, needed = _plan(session, registry, plugin_id, version)
         paid = [r.manifest.id for r in changes if r.target and r.price['kind'] == 'paid']
         acquired, commerce_status = set(), 'not_required'
@@ -117,7 +142,7 @@ def preview_plan(registry, plugin_id, version=None):
 def prepare(registry, plugin_id, version, accepted_plan, *, check_change=None):
     if not isinstance(accepted_plan, str) or len(accepted_plan) != 64:
         raise StoreError('Review the installation plan before confirming it.')
-    with StoreSession() as session:
+    with StoreSession(config_for_plugins(plugin_id)) as session:
         changes, identity, needed = _plan(session, registry, plugin_id, version)
         if identity != accepted_plan:
             raise StoreError('The catalog or installed plugins changed. Review the new installation plan.')
@@ -143,10 +168,12 @@ def prepare(registry, plugin_id, version, accepted_plan, *, check_change=None):
                     or digest != release.manifest_sha256
                     or m.summary() != release.manifest.summary()):
                 raise StoreError('The downloaded package does not match the reviewed catalog manifest.')
-            provenance = {'id': m.id, 'publisher': 'lds', 'source': 'verified_store',
-                          'manifest_sha256': digest, 'archive_sha256': target.hashes['sha256'],
-                          'store': session.config.identity, 'target': release.target}
-            if not official.is_official_id(m.id):
+            provenance = None
+            if official.is_official_id(m.id):
+                provenance = {'id': m.id, 'publisher': 'lds', 'source': 'verified_store',
+                              'manifest_sha256': digest, 'archive_sha256': target.hashes['sha256'],
+                              'store': session.config.identity, 'target': release.target}
+            elif m.id not in session.config.external_ids:
                 raise StoreError('This publisher is not approved for automatic installation.')
             old = registry.records.get(m.id) if registry else None
             flags = cfg.get('plugins.enabled') or {}

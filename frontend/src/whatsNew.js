@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-22-private-plugin-updates',
+    date: '2026-09-22',
+    title: 'Update private plugins alongside your public plugins',
+    blurb: 'Configured private catalogs can offer signed updates for their approved plugins while the public catalog remains available. Install from a ZIP is also available at the top of Plugins.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-22-zzzz-plugin-update-button',
     date: '2026-09-22',
     title: 'Spot plugin updates immediately',
