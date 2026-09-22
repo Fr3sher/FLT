@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { apiFetch } from '../../api/fetchClient'
+import { postJson } from '../../api/fetchClient'
 import { INPUT_CLASS } from './primitives'
 
 export default function LocalLlmModelSelect({ id, label, provider, url, value, onChange, refreshKey }) {
@@ -16,7 +16,7 @@ export default function LocalLlmModelSelect({ id, label, provider, url, value, o
     // server must never supply choices for the new address.
     const timer = setTimeout(async () => {
       try {
-        const result = await apiFetch(`/api/local-llm/models?${query}`, {
+        const result = await postJson('/api/local-llm/models', Object.fromEntries(new URLSearchParams(query)), {
           background: true, signal: controller.signal,
         })
         if (!alive) return
