@@ -99,6 +99,12 @@ export const WHATS_NEW = [
     to: '/studio',
   },
   {
+    id: '2026-09-23-zzzzz-joycaption-video-enrich',
+    date: '2026-09-23',
+    title: 'Use Auto and Enrich with JoyCaption again',
+    blurb: 'Using JoyCaption to read a reference image no longer makes Auto or Enrich fail with a server error. If the image reader fails or times out, the Video plugin can show the reason.',
+  },
+  {
     id: '2026-09-23-zzzz-mobile-plugin-navigation',
     date: '2026-09-23',
     title: 'Reach every plugin from your phone',
