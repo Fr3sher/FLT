@@ -5,6 +5,7 @@ import { SettingsGroup, SettingsGroupsToc, useSettingsGroupProps } from './Setti
 import { ENGINES_GROUPS } from './settingsGroups'
 import KleinLoraCombobox, { useKleinGenerationLoras } from './KleinLoraCombobox'
 import ModelFilePicker, { useModelFiles } from './ModelFilePicker'
+import TrainedImageModelsCard from './TrainedImageModelsCard'
 import PromptOverrideField from '../common/PromptOverrideField'
 import PromptPreview from './PromptPreview'
 import ResetToDefault from './ResetToDefault'
@@ -971,7 +972,7 @@ function IdentityPromptsCard({ config, setField, promptDefaults, promptDefaultsB
    a native <details>, which the ?focus= reveal already knows how to open. */
 export default function EnginesSection(props) {
   const { config, setField, toggleEngine, caps, configDefaults } = props
-  const [group1, group2, group3, group4, group6] = ENGINES_GROUPS
+  const [group1, group2, group3, group4, group6, studioGroup] = ENGINES_GROUPS
   const groupProps = useSettingsGroupProps('engines')
   // The global default selects a run engine; each plugin owns its enabled toggles.
   const engineOptions = engineSettingsOptions()
@@ -1049,6 +1050,9 @@ export default function EnginesSection(props) {
       <IdentityPromptsCard config={config} setField={setField} promptDefaults={props.promptDefaults}
         promptDefaultsBySubject={props.promptDefaultsBySubject}
         setIdentityPrompts={props.setIdentityPrompts} configDefaults={configDefaults} />
+      </SettingsGroup>
+      <SettingsGroup {...groupProps(studioGroup)}>
+        <TrainedImageModelsCard config={config} setField={setField} />
       </SettingsGroup>
     </div>
   )

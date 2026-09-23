@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_STRENGTHS } from '../components/dataset/studio/constants';
 import { defaultCfgFor, defaultStepsFor, mixedModelDefaults } from '../utils/studioModelDefaults';
+import { defaultModelSelection, modelSelectionError } from '../utils/studioFamilySettings';
 import {
   addGuestCheckpoint, chosenCheckpoints, normalizeGuestCheckpoints,
   removeGuestCheckpoint,
@@ -98,7 +99,15 @@ export function useStudioForm(d, datasetId, family = null,
   const effectivePrompt = promptText ?? (d?.prompt || '');
   // Default to the first entry, including Krea Official (value empty string),
   // so the default chip appears selected; the backend maps it to its wired default.
-  const effectiveModels = selModels ?? (d?.z_models?.length ? [d.z_models[0].value] : []);
+  const effectiveModels = selModels ?? defaultModelSelection(d?.z_models, d?.default_model);
+  const modelError = modelSelectionError(d?.z_models,
+    !preselectedBaseRef.current && preselectBase ? [preselectBase] : effectiveModels);
+  const resetModels = () => {
+    preselectedBaseRef.current = true;
+    setSelModels(d?.z_models?.length ? [d.z_models[0].value] : null);
+    setSelCfgs(null);
+    setSelSteps(null);
+  };
   const effectiveAspects = selAspects ?? (d?.default_aspect ? [d.default_aspect] : ['9:16']);
   // Base-model CFG/steps (bobba84, GitHub #18): undistilled Z-Image Base must not
   // inherit Turbo settings (cfg 1, 8 steps), which ruin its output. Non-null
@@ -110,7 +119,7 @@ export function useStudioForm(d, datasetId, family = null,
   const effectiveSteps = selSteps ?? [modelDefaultSteps];
   // Detail daemon pass 2 is SDXL-only. Z-Image default_steps2 is null: empty axis
   // (counted as x1, omitted from the backend payload).
-  const effectiveSteps2 = selSteps2 ?? (d?.default_steps2 != null ? [d.default_steps2] : []);
+  const effectiveSteps2 = d?.default_steps2 != null ? (selSteps2 ?? [d.default_steps2]) : [];
   // Everything the axes multiply EXCEPT the checkpoints and the strength sweep.
   // 🧬 Blend collapses those two into one configuration (each LoRA carries its own
   // weight, they all load in the same image), so its cell count is exactly this —
@@ -170,12 +179,14 @@ export function useStudioForm(d, datasetId, family = null,
   const toggleStep = _toggleKeep(setSelSteps, () => effectiveSteps);
   const toggleStep2 = _toggleKeep(setSelSteps2, () => effectiveSteps2);
   // Models are strings, not numbers; keep at least one model selected.
-  const toggleModel = (m) =>
+  const toggleModel = (m) => {
+    preselectedBaseRef.current = true;
     setSelModels((cur) => {
       const base = cur ?? effectiveModels;
       const next = base.includes(m) ? base.filter((x) => x !== m) : [...base, m];
       return next.length ? next : base;
     });
+  };
 
   // Generate a seed for each launch unless locked; return the seed to use.
   const nextSeed = () => {
@@ -190,7 +201,7 @@ export function useStudioForm(d, datasetId, family = null,
     // Selected MODEL defaults for the picker default-value labels.
     modelDefaultCfg, modelDefaultSteps,
     mixedModelDefaults: mixedModelDefaults(d, effectiveModels),
-    guestCps,
+    guestCps, modelError, resetModels,
     setSelSts, setSeed, setSeedLocked, setGenCount, setPromptText,
     toggleCp, addGuest, removeGuest, toggleGuest,
     toggleSt, toggleAspect, toggleCfg, toggleStep, toggleStep2, toggleModel, rollSeed, nextSeed,

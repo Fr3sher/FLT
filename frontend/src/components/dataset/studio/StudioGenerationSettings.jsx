@@ -5,7 +5,7 @@
  * LoRA/strength; aspect/CFG/steps axes are handled elsewhere. Family-gated StudioSections offer:
  * FORMAT for all through ResolutionSelector/resolution_tier; SAMPLING for Krea with allowed
  * sampler/scheduler and empty Auto; DETAIL for SDXL with DetailDaemon 0-1; ENGINE for Krea with
- * precision, finishing and permanent_loras; NEGATIVE for Z-Image. This independent component owns
+ * precision, finishing and permanent_loras; NEGATIVE when supported by the server. This component owns
  * state, persists by storagePrefix, and emits normalized snake_case /run settings via onChange.
  * Omit empty fields to retain backend defaults; server also gates by family. Props: family,
  * storagePrefix, optional permanentLoras candidates [{filename,label|displayName,triggerWord}],
@@ -17,6 +17,7 @@ import ResolutionSelector from '../../shared/ResolutionSelector';
 import LockableSlider from '../../shared/LockableSlider';
 import ZImageLoraConfig from '../../shared/ZImageLoraConfig';
 import StudioSection from './StudioSection';
+import { supportsNegativePrompt } from '../../../utils/studioFamilySettings';
 import {
   KREA_SAMPLER_PRESETS_FALLBACK, presetChoice, splitSamplerChoice,
 } from '../../../utils/kreaSamplerChoice';
@@ -63,8 +64,8 @@ const STUDIO_ASPECTS = [
 
 const basename = (p) => String(p || '').split(/[\\/]/).pop();
 
-export default function StudioGenerationSettings({ family = 'zimage', storagePrefix = 'studioGen', permanentLoras = null, aspectPicker = false, onChange }) {
-  const isZ = family === 'zimage';
+export default function StudioGenerationSettings({ family = 'zimage', capabilities = null, storagePrefix = 'studioGen', permanentLoras = null, aspectPicker = false, onChange }) {
+  const hasNegative = supportsNegativePrompt(capabilities, family);
   const isSdxl = family === 'sdxl';
   const isKrea = family === 'krea';
 
@@ -173,7 +174,7 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
     // with aspectPicker=false, where AxisPickers owns the test axis; overriding it here would
     // break the matrix.
     if (aspectPicker && aspect) s.aspects = [aspect];
-    if (isZ) {
+    if (hasNegative) {
       const neg = negative.trim();
       if (neg) s.negative = neg;
     }
@@ -202,7 +203,7 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
       if (batched.length) s.batch_loras = batched;
     }
     onChange?.(s);
-  }, [isZ, isSdxl, isKrea, resolutionTier, resolutionMultiplier, aspectPicker, aspect, negative, detailAmount, sampler, scheduler,
+  }, [hasNegative, isSdxl, isKrea, resolutionTier, resolutionMultiplier, aspectPicker, aspect, negative, detailAmount, sampler, scheduler,
       weightDtype, permStack, onChange,
       hiresScale, hiresDenoise, hiresDefaults, finishSharpen, finishGrain]);
 
@@ -421,8 +422,8 @@ export default function StudioGenerationSettings({ family = 'zimage', storagePre
         </StudioSection>
       )}
 
-      {/* Z-Image NEGATIVE: global run negative prompt. */}
-      {isZ && (
+      {/* Only offer a negative prompt when the selected pipeline can apply it. */}
+      {hasNegative && (
         <StudioSection title="Negative" storageKey={k('sec_negative')} defaultOpen={false} anchorId="st-negative">
           <label className="flex flex-col gap-1">
             <span className="text-content-muted text-[0.625rem] uppercase">Negative prompt (optional)</span>

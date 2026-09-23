@@ -16,6 +16,7 @@ import { denseContinueBlocker, isFullTransformerRun } from '../../utils/training
 import { runStagingCleanup } from '../../utils/stagingCleanup.js'
 import { StatusBadge, timeAgo, famLabel, cardAccent, RunThumb, PodKeptNote, FullArtifactStatus, AutoRetryBadges, RecipeWarning, settingsLine, checkpointHref } from './RunHistoryAtoms.jsx'
 import useRunsHubContinue from './useRunsHubContinue.js'
+import { studioRunTarget } from '../../utils/studioRunNavigation.js'
 export { StatusBadge, timeAgo, famLabel, FullArtifactStatus, AutoRetryBadges, RecipeWarning, checkpointHref } from './RunHistoryAtoms.jsx'
 
 const POLL_MS = 5000
@@ -172,9 +173,9 @@ export function RunsHub({ endpoint = '/api/dataset/train/runs', render = null, c
 
   // Keep every Runs surface on the same Studio entry point: the dataset route
   // preselects this run's dataset without having to detour through the library.
-  const openTestStudio = (id) => {
-    if (id == null) return;
-    navigate(`/dataset/studio/${id}`);
+  const openTestStudio = (id, family) => {
+    const target = studioRunTarget(id, family);
+    if (target) navigate(target);
   };
 
 const stopLocal = async () => {
@@ -444,7 +445,7 @@ const renderRunCard = (run, i) => {
               </a>
             )}
             {!fullModel && run.dataset_id != null && (
-              <button type="button" onClick={() => openTestStudio(run.dataset_id)}
+              <button type="button" onClick={() => openTestStudio(run.dataset_id, run.train_type)}
                 title="Open Test Studio with this run's dataset selected"
                 className="rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-2 py-1 text-indigo-100 hover:bg-indigo-500/20 text-xs font-semibold">
                 <FlaskConical aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Test in Studio
@@ -569,7 +570,7 @@ const renderRunCard = (run, i) => {
                   Open dataset ↗
                 </button>
                 {data.local_active.current.dataset_id != null && (
-                  <button type="button" onClick={() => openTestStudio(data.local_active.current.dataset_id)}
+                  <button type="button" onClick={() => openTestStudio(data.local_active.current.dataset_id, data.local_active.current.train_type)}
                     title="Open Test Studio with this run's dataset selected"
                     className="px-2 py-1 rounded-lg text-indigo-200 hover:bg-indigo-500/10 hover:text-indigo-100 text-xs font-semibold">
                     <FlaskConical aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Test in Studio
@@ -620,7 +621,7 @@ const renderRunCard = (run, i) => {
               const collapsed = !!groupsCollapsed[gkey];
               const head = group.runs[0];
               const name = head.dataset_name || head.run_name || `Dataset #${group.datasetId}`;
-              const hasLoraRun = group.runs.some((run) => !isFullTransformerRun(run));
+              const testRun = group.runs.find((run) => !isFullTransformerRun(run));
               return (
                 <section key={`g${gi}-${gkey}`}
                   className="flex flex-col rounded-xl border border-border bg-surface">
@@ -643,8 +644,8 @@ const renderRunCard = (run, i) => {
                       className="ml-auto whitespace-nowrap rounded-lg px-2 py-0.5 text-content-muted hover:text-content text-[0.6875rem]">
                       Open dataset ↗
                     </button>
-                    {hasLoraRun && group.datasetId != null && (
-                      <button type="button" onClick={() => openTestStudio(group.datasetId)}
+                    {testRun && group.datasetId != null && (
+                      <button type="button" onClick={() => openTestStudio(group.datasetId, testRun.train_type)}
                         title="Open Test Studio with this run's dataset selected"
                         className="whitespace-nowrap rounded-lg px-2 py-0.5 text-indigo-200 hover:bg-indigo-500/10 hover:text-indigo-100 text-[0.6875rem] font-semibold">
                         <FlaskConical aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Test in Studio

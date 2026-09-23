@@ -52,6 +52,35 @@ If nothing on the grid tells you where to start, the line at the bottom opens th
 
 This section controls the shared local image engines, **Klein** and **Krea 2 Edit**. Configure ComfyUI under **Local tools**. Additional engines appear when their plugin is active; their credentials and provider options live on that plugin's settings page.
 
+### Trained image models
+
+**Test Image / Studio** supports all seven image training families: Z-Image,
+SDXL, Krea 2, FLUX.1, FLUX.2 Klein, Anima and Qwen-Image 2.1. The **Trained image
+models** group prepares FLUX.1, Anima and Qwen 2.1 using the same model selection
+that generation checks before launch.
+
+Each family needs its own diffusion model, text encoder(s) and VAE. Leave a
+file field blank to detect compatible installed files, including shared
+ComfyUI model roots. Choose **Install** for missing files; existing valid files
+are reused. Downloads are explicit and show progress and cancellation. Save
+file selections before **Check models again**. A missing or damaged custom
+selection must be corrected or cleared; downloading the recommended model
+does not silently change that selection.
+
+| Setting | Purpose |
+|---|---|
+| `studio_models.<family>.diffusion_model` | Optional ComfyUI-relative base model name; `<family>` is `flux`, `anima` or `qwenimage21` |
+| `studio_models.<family>.text_encoder` | Optional compatible encoder selection |
+| `studio_models.flux.text_encoder_2` | Optional FLUX.1 CLIP-L selection, in addition to T5 |
+| `studio_models.<family>.vae` | Optional compatible VAE selection |
+
+Qwen-Image 2.1 uses Qwen3-VL **8B** and the dedicated **2.1 VAE**. Its older
+Qwen Image/Edit counterparts are incompatible. If native nodes are missing,
+update ComfyUI and restart it after active jobs finish. LDS checks files and
+node availability separately and cannot report readiness while ComfyUI is
+unreachable. Sampler defaults follow the selected family; FLUX.1's guidance
+control is distilled guidance, while its sampler CFG stays at 1.
+
 ### Engines
 
 - **Default engine** → `engines.default`. The engine preselected in the workspace. A fresh core installation uses **Klein**; available choices follow the active engine catalog.

@@ -222,6 +222,13 @@ DEFAULTS = {
     # trade, offered rather than imposed; the Settings card says so.
     'image_input': {'max_side': 16384, 'max_pixels': 64 * 1024 * 1024},
     'training': {'default_family': 'zimage'},
+    # Empty slots discover compatible local assets; explicit pins remain visible
+    # as missing when moved, rather than silently choosing another model.
+    'studio_models': {
+        'flux': {'diffusion_model': '', 'text_encoder': '', 'text_encoder_2': '', 'vae': ''},
+        'anima': {'diffusion_model': '', 'text_encoder': '', 'vae': ''},
+        'qwenimage21': {'diffusion_model': '', 'text_encoder': '', 'vae': ''},
+    },
     # Concept face masking (opt-in per dataset, Advanced training options). Both
     # knobs are exposed because NOBODY has measured the right value: no public A/B
     # of a concept LoRA trained with vs without face masking exists, so shipping a

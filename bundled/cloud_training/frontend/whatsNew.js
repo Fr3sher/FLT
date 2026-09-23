@@ -1,5 +1,11 @@
 export const CLOUD_WHATS_NEW = [
   {
+    id: '2026-09-23-cloud-test-family',
+    date: '2026-09-23',
+    title: 'Test cloud checkpoints in their trained image family',
+    blurb: 'Test in Studio now opens the image family used by the selected cloud run, including FLUX.1, Anima and Qwen-Image 2.1. With the matching LDS update, datasets trained for several families open the intended checkpoints directly.',
+  },
+  {
     id: '2026-09-23-cloud-rental-reliability',
     date: '2026-09-23',
     title: 'Avoid incompatible GPU hosts and release failed rentals sooner',

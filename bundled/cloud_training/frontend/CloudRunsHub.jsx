@@ -396,7 +396,7 @@ function CloudRunsContent({ host }) {
                     Open dataset ↗
                   </button>
                   {!isFullTransformerRun(run) && run.dataset_id != null && (
-                    <button type="button" onClick={() => openTestStudio(run.dataset_id)}
+                    <button type="button" onClick={() => openTestStudio(run.dataset_id, run.train_type)}
                       title="Open Test Studio with this run's dataset selected"
                       className="px-2 py-1 rounded-lg text-indigo-200 hover:bg-indigo-500/10 hover:text-indigo-100 text-xs font-semibold">
                       <FlaskConical aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Test in Studio

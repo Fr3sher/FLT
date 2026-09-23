@@ -107,6 +107,7 @@ export const CORE_GUIDE_ANCHORS = {
     "advanced-environment-overrides",
     "overview",
     "image-engines",
+    "trained-image-models",
     "engines",
     "krea-2-edit-local",
     "klein-model-files-optional",

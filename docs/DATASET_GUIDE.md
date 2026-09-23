@@ -42,9 +42,12 @@ VRAM on an Ampere-or-newer GPU and 100 GB disk. Older saved cloud settings canno
 select a smaller machine. Live hourly prices are shown; duration and total-cost
 estimates are unavailable until this family has a measured speed model.
 
-Reference-image editing datasets, transparent RGBA datasets and
-in-app Test Studio generation are not available for this family. Test exported
-LoRAs in a compatible external Qwen-Image 2.1 workflow.
+Reference-image editing datasets and transparent RGBA training datasets are
+not available for this family. Trained LoRAs can generate images and compare
+checkpoints in **Test Image / Studio**. Prepare the matching Qwen-Image 2.1
+base, Qwen3-VL 8B encoder and dedicated 2.1 VAE in **Settings → Image engines →
+Trained image models**. This requires a current ComfyUI with native Qwen 2.1
+support; older Qwen Image/Edit assets are different models.
 
 **Krea note:** the default trains on **Krea-2-Raw** — the official recommendation is
 *"train on Raw, validate on Turbo"*. Raw runs are long (hours); that's normal, not stuck.
@@ -60,16 +63,17 @@ pushes it to your private Hugging Face repo, which the panel offers to do.
 **FLUX.1 note:** trains on **FLUX.1-dev**, a *gated* Hugging Face model — accept its
 license and set a HF token before the first run (the initial download is ~24 GB). It's
 a 12B model like Krea 2, so **~24 GB VRAM** is the comfort zone (drop the resolution to
-**768** to fit smaller cards). **Local training only for now**; in-app testing (Test
-Studio) is coming — until then, test your Flux LoRA in your own ComfyUI.
+**768** to fit smaller cards). **Local training only for now**; generated images
+and checkpoint comparisons are available in Test Studio using a compatible
+FLUX.1 base, T5 encoder, CLIP-L and VAE.
 
 **FLUX.2 Klein note:** two model sizes, picked next to the base selector — **4B**
 (default) trains on a **16–24 GB** local GPU, **9B** needs **32–48 GB VRAM** and is
 best trained via **☁️ Train in cloud** (both local and cloud runs are supported for
 this family). Both bases are *gated* on Hugging Face: accept the license of
 `FLUX.2-klein-base-4B` / `-9B` and set a HF token before the first run. In-app
-testing (Test Studio) is coming — until then, test your Klein LoRA in your own
-ComfyUI.
+testing and checkpoint comparisons are available in Test Studio with matching
+Klein generation models.
 
 **Anima note (the one family that takes BOTH caption styles):** Anima is an anime
 model with **hybrid prompting** — its model card documents *booru tags* and *natural
@@ -78,7 +82,9 @@ this is the family where the "match the style" rule below does **not** apply: ca
 in prose, caption in booru tags, or keep an existing dataset as it is — the app will
 not flag either as a mismatch, and you never have to force the launch. Prose is only
 the preselected default. It trains on the open `Anima-Base-v1.0-Diffusers` (no gated
-download) and is **local-only** for now.
+download) and is **local-only** for training. Its LoRAs can generate images and
+compare checkpoints in Test Studio. Prepare Anima's base, Qwen3 0.6B encoder and
+VAE under **Settings → Image engines → Trained image models**.
 
 ---
 

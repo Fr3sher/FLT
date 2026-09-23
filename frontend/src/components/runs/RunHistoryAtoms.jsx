@@ -2,7 +2,7 @@ import { Folder, Image as ImageIcon } from 'lucide-react'
 import { isTrainingRecipeReplayBlocked } from '../../utils/trainingRuns.js'
 import { canFetchDenseLocally, canRecheckFullTransformerDelivery, denseHubBackupView, denseLocalArtifactView, fullTransformerArtifactFiles, fullTransformerArtifactView, fullTransformerFp8Note } from '../../utils/trainingMode.js'
 
-const FAMILY_LABEL = { zimage: 'Z-Image', krea: 'Krea 2', sdxl: 'SDXL', flux: 'FLUX.1', flux2klein: 'FLUX.2 Klein', anima: 'Anima', video: 'Video' };
+const FAMILY_LABEL = { zimage: 'Z-Image', krea: 'Krea 2', sdxl: 'SDXL', flux: 'FLUX.1', flux2klein: 'FLUX.2 Klein', anima: 'Anima', qwenimage21: 'Qwen-Image 2.1', video: 'Video' };
 
 const STATUS_STYLE = {
   done: 'text-emerald-300 border-emerald-400/40 bg-emerald-500/10',
@@ -54,7 +54,7 @@ export function timeAgo(iso) {
 
 export function famLabel(f) { return FAMILY_LABEL[f] || f || 'LoRA'; }
 
-const FAMILY_SHORT = { zimage: 'Z-Image', krea: 'Krea', sdxl: 'SDXL', flux: 'FLUX', flux2klein: 'Klein', anima: 'Anima' };
+const FAMILY_SHORT = { zimage: 'Z-Image', krea: 'Krea', sdxl: 'SDXL', flux: 'FLUX', flux2klein: 'Klein', anima: 'Anima', qwenimage21: 'Qwen 2.1' };
 
 export function RunThumb({ run, broken, onBroken }) {
   if (run.preview_url && !broken) {

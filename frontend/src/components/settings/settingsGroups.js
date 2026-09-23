@@ -42,6 +42,8 @@ export const ENGINES_GROUPS = [
   // engine, so it has nowhere better to live.
   { id: 'prompts', title: 'Identity prompts (advanced)', icon: PenLine,
     blurb: 'Identity prompts and local generation instructions per subject type.' },
+  { id: 'studio-image-models', title: 'Trained image models', icon: Box,
+    blurb: 'Prepare FLUX.1, Anima and Qwen-Image 2.1 for Test Image and Studio.' },
 ]
 
 /** Local tools and their shared processing/network budgets. */

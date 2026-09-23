@@ -17,7 +17,6 @@ from ..config import LOCAL_USER
 from ..gpu_window import gpu_exclusive_vision_window
 from ..services import face_dataset_service as fds
 from ..services import lora_test_studio as lts
-from ..utils.comfyui import get_zimage_models
 # The engine-preflight misses answer the SAME actionable 409 here as in the
 # dataset lane — the body is what itemizes the missing assets and starts their
 # download. Imported rather than re-derived (routes/bank.py does the same).
@@ -61,9 +60,11 @@ def _family_axes(kind):
     selected, in blend or in comparison"). Same source, so the screens cannot
     drift into two ladders. `steps2` stays SDXL-only: the second pass is a
     property of that workflow, not a setting the others hide."""
+    defaults = lts.studio_family_defaults(kind)
     return {
-        'cfg_choices': lts.CFG_CHOICES, 'default_cfg': lts.DEFAULT_CFG,
-        'steps_choices': lts.STEPS_CHOICES, 'default_steps': lts.DEFAULT_STEPS,
+        'cfg_choices': [1.0] if kind == 'flux2klein' else lts.CFG_CHOICES,
+        'default_cfg': defaults['cfg'],
+        'steps_choices': lts.STEPS_CHOICES, 'default_steps': defaults['steps'],
         'steps2_choices': lts.STEPS_CHOICES if kind == 'sdxl' else None,
         'default_steps2': lts.DEFAULT_STEPS if kind == 'sdxl' else None,
         # Measured machine speed (observed median), with the same key/source
@@ -95,10 +96,13 @@ def studio_base_models():
     `models` keeps its exact shape — an older frontend reads it unchanged and
     simply ignores the two extras."""
     kind = (request.args.get('type') or 'zimage').lower()
+    if not lts.can_generate_with(kind):
+        return jsonify({'error': str(lts._no_generation_lane(kind))}), 400
     axes = _family_axes(kind)
+    capabilities = {'generation_capabilities': lts.generation_capabilities(kind)}
     if kind == 'sdxl':
         models = lts.list_sdxl_base_models()
-        return jsonify({'models': models, 'axes': axes,
+        return jsonify({**capabilities, 'models': models, 'axes': axes,
                         'model_defaults': _base_defaults(kind, models)})
     if kind == 'krea':
         # Local Krea alternatives exclude the elected default (krea_default_base).
@@ -116,17 +120,25 @@ def studio_base_models():
                     'default_steps': base_defaults['steps']}
         alts = lts.krea_alt_base_models()
         if not alts:
-            return jsonify({'models': [], 'axes': axes, 'base_note': entry['note'],
+            return jsonify({**capabilities, 'models': [], 'axes': axes, 'base_note': entry['note'],
                             'model_defaults': {'': base_defaults} if base_defaults else {}})
         out = [{'filename': '', 'label': entry['label']}]
         out += [{'filename': m, 'label': m.split('\\')[-1].rsplit('.', 1)[0]} for m in alts]
         defaults = _base_defaults(kind, out)
         if base_defaults:
             defaults[''] = base_defaults
-        return jsonify({'models': out, 'axes': axes, 'base_note': entry['note'],
+        return jsonify({**capabilities, 'models': out, 'axes': axes, 'base_note': entry['note'],
                         'model_defaults': defaults})
-    out = [{'filename': m, 'label': m.split('\\')[-1]} for m in get_zimage_models()]
-    return jsonify({'models': out, 'axes': axes,
+    out = [{'filename': m or '', 'label': lts._basename(m) if m else 'Default model'}
+           for m in lts.family_base_models(kind)]
+    if kind in lts.TRAINED_IMAGE_FAMILIES:
+        from ..services.trained_image_models import generation_readiness
+        readiness = generation_readiness(kind)
+        capabilities['generation_readiness'] = readiness
+        capabilities['default_model'] = (readiness.get('assets') or {}).get('diffusion_model', '')
+        if readiness.get('config_error'):
+            capabilities['base_note'] = readiness['config_error']
+    return jsonify({**capabilities, 'models': out, 'axes': axes,
                     'model_defaults': _base_defaults(kind, out)})
 
 

@@ -5,7 +5,7 @@
  * rhythm as the dataset fan-out) and exposes the mutations: launch run, rate
  * a cell 👍/👎, cancel the run, persist the best settings.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../components/common/Toast';
 import { postJson } from './useDataset';
 import { del } from '../api/fetchClient';
@@ -14,21 +14,31 @@ export function useLoraTestStudio(datasetId, family = null) {
   const toast = useToast();
   const [data, setData] = useState(null);
   const [launching, setLaunching] = useState(false);
+  const [error, setError] = useState(null);
+  const requestVersion = useRef(0);
 
   const [confirmingComfyuiRestart, setConfirmingComfyuiRestart] = useState(false);
   const refresh = useCallback(async () => {
     if (!datasetId) return;
+    const version = ++requestVersion.current;
     try {
       // family scopes the pipeline (ZIT/SDXL/Krea); the server resolves the default if absent.
       const qs = family ? `?family=${encodeURIComponent(family)}` : '';
       const r = await fetch(`/api/dataset/${datasetId}/lora-test/status${qs}`, { credentials: 'include' });
-      if (r.ok) setData(await r.json());
-    } catch { /* transient network error — the poll retries */ }
+      const payload = await r.json();
+      if (!r.ok || payload.ok === false) throw new Error(payload.error || 'Could not load the Test Studio.');
+      if (family && payload.family && payload.family !== family) {
+        throw new Error('The server returned a different model family. Reopen the Studio for this checkpoint.');
+      }
+      if (version === requestVersion.current) { setData(payload); setError(null); }
+    } catch (err) {
+      if (version === requestVersion.current) setError(err.message || 'Could not load the Test Studio.');
+    }
   }, [datasetId, family]);
 
   // Clear the grid immediately when the dataset changes. Otherwise the previous
   // LoRA cells remain until refetch completes, or indefinitely if fetching fails.
-  useEffect(() => { setData(null); }, [datasetId]);
+  useEffect(() => { setData(null); setError(null); }, [datasetId, family]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -168,5 +178,5 @@ export function useLoraTestStudio(datasetId, family = null) {
     return d;
   }, [refresh, toast]);
 
-  return { data, refresh, launch, rate, cancel, resume, confirmComfyuiRestart, confirmingComfyuiRestart, setBest, clearBest, deletePrompt, launching, scoreFaces, scoring };
+  return { data, error, refresh, launch, rate, cancel, resume, confirmComfyuiRestart, confirmingComfyuiRestart, setBest, clearBest, deletePrompt, launching, scoreFaces, scoring };
 }

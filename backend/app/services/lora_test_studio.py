@@ -173,7 +173,7 @@ _STUDIO_ASPECT_TO_GENERATE = {
     '9:16': 'portrait', '3:4': 'portrait', '1:1': 'square',
     '4:3': 'landscape', '16:9': 'landscape',
 }
-_MODE_LABEL_BY_FAMILY = {'zimage': 'Z-Image', 'krea': 'Krea 2 Turbo', 'sdxl': 'SDXL'}
+_MODE_LABEL_BY_FAMILY = {**FAMILY_LABELS, 'krea': 'Krea 2 Turbo'}
 DEFAULT_ASPECT = '9:16'
 # Resolution tiers match resolution.py/_TIERS; None preserves the legacy fixed dimensions.
 RESOLUTION_TIERS = ('fast', 'standard', 'hq', 'max')
@@ -318,6 +318,8 @@ def studio_model_defaults(family, models) -> dict:
     family that needs it has nowhere else to put it."""
     fam = (family or '').lower()
     resolver = {'zimage': zimage_model_defaults, 'krea': krea_model_defaults}.get(fam)
+    if fam in TRAINED_IMAGE_FAMILIES or fam == 'flux2klein':
+        resolver = lambda model: studio_family_defaults(fam)
     if resolver is None:
         return {}
     out = {}
@@ -495,7 +497,64 @@ FAMILIES = ('zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima', 'qwenimage2
 # can generate with. Generation requires a complete workflow, settings adapter
 # and base allowlist. Conflating these lists exposed an unusable Klein Generate
 # choice that silently failed through the Z-Image path (issue #53).
-GENERATION_FAMILIES = ('zimage', 'sdxl', 'krea', 'flux2klein')
+TRAINED_IMAGE_FAMILIES = ('flux', 'anima', 'qwenimage21')
+GENERATION_FAMILIES = ('zimage', 'sdxl', 'krea', 'flux2klein') + TRAINED_IMAGE_FAMILIES
+
+
+def studio_family_defaults(family):
+    """Defaults shared by the axes, persisted cells and graph builders."""
+    if family in TRAINED_IMAGE_FAMILIES:
+        from ..utils.trained_image_workflows import family_defaults
+        defaults = family_defaults(family)
+        return {'cfg': defaults['cfg'], 'steps': defaults['steps']}
+    if family == 'flux2klein':
+        return {'cfg': 1.0, 'steps': 4}
+    return {'cfg': DEFAULT_CFG, 'steps': DEFAULT_STEPS}
+
+
+def generation_capabilities(family):
+    return {'negative_prompt': family in ('zimage', 'anima', 'qwenimage21')}
+
+
+def family_base_models(family):
+    """Family-specific filenames for every launch, replay and winning preset."""
+    if family == 'sdxl':
+        return [m['filename'] for m in list_sdxl_base_models()]
+    if family == 'krea':
+        return [None] + get_krea_models()
+    if family == 'flux2klein':
+        from ..utils.comfyui import get_flux2_klein_models
+        return [None] + [m['filename'] if isinstance(m, dict) else m
+                         for m in get_flux2_klein_models()]
+    if family in TRAINED_IMAGE_FAMILIES:
+        from .trained_image_models import list_family_models
+        return [m['filename'] for m in list_family_models(family)]
+    if family == 'zimage':
+        return get_zimage_models()
+    raise _no_generation_lane(family)
+
+
+def _require_family_bases(family):
+    models = family_base_models(family)
+    if not models:
+        label = FAMILY_LABELS.get(family, family)
+        raise ValueError(f'no {label} model available — configure its models in Settings or Setup')
+    return models
+
+
+def _select_base_models(models, z_model=None, z_models=None, *, family=None):
+    """An explicit unavailable base must never silently select another model."""
+    if z_models is not None and not isinstance(z_models, (list, tuple)):
+        raise ValueError('base models must be a list')
+    requested = list(z_models) if z_models else ([z_model] if z_model else [])
+    if not requested and family in TRAINED_IMAGE_FAMILIES:
+        from .trained_image_models import resolve_family_assets
+        requested = [resolve_family_assets(family)['diffusion_model']]
+    requested = [None if m in ('', None) else m for m in requested]
+    invalid = [m for m in requested if m not in models]
+    if invalid:
+        raise ValueError('selected base model is unavailable for this family — choose an installed base')
+    return list(dict.fromkeys(requested)) or [models[0]]
 
 
 def can_generate_with(family: str) -> bool:
@@ -843,7 +902,8 @@ def _unknown_submit_recovery(rows, activity):
     }
 
 
-def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=None, steps2_list=None) -> list[tuple]:
+def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=None, steps2_list=None,
+                 *, family=None) -> list[tuple]:
     """Validate and materialize the checkpoint/strength/aspect grid.
 
     Require nonempty checkpoint and strength axes, with deduplication preserving
@@ -852,6 +912,7 @@ def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=Non
     to 9:16. Do not cap the cell count: users see the serial workload estimate.
     Blend leading weights also pass through this function into the strength
     column, so COMBINE_MAX_WEIGHT must use the same upper bound."""
+    defaults = studio_family_defaults(family)
     cps = [c for c in (checkpoints or []) if isinstance(c, str) and c.strip()]
     sts = []
     for s in (strengths or []):
@@ -879,7 +940,9 @@ def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=Non
         if 1.0 <= fv <= 15.0 and fv not in cfs:
             cfs.append(fv)
     if not cfs:
-        cfs = [DEFAULT_CFG]
+        cfs = [defaults['cfg']]
+    if family == 'flux2klein':
+        cfs = [1.0]
     sps = []
     for v in (steps_list or []):
         try:
@@ -889,7 +952,7 @@ def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=Non
         if 1 <= iv <= 50 and iv not in sps:
             sps.append(iv)
     if not sps:
-        sps = [DEFAULT_STEPS]
+        sps = [defaults['steps']]
     # Optional SDXL steps2 controls its detail pass; None reuses first-pass steps. Z-Image has no second pass.
     sps2 = []
     for v in (steps2_list or []):
@@ -1644,6 +1707,21 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
     ds_tag = f"d{dataset_id}_" if dataset_id is not None else ""
     fname = f"{user_id}_{ds_tag}LoraTest_{uuid.uuid4().hex[:8]}"
     extra_loras = extra_loras or []
+    family = (train_type or 'zimage').lower()
+    if family in TRAINED_IMAGE_FAMILIES:
+        from ..utils.trained_image_workflows import build_trained_image_workflow
+        from .trained_image_models import resolve_family_assets
+        bases = family_base_models(family)
+        assets = resolve_family_assets(family, z_model)
+        return build_trained_image_workflow(
+            family, base_model=z_model, assets=assets,
+            loras=[{'filename': checkpoint, 'strength': strength}] + list(extra_loras),
+            allowed_bases=set(bases),
+            allowed_loras=set(allowed_loras) | {e['filename'] for e in extra_loras},
+            prompt=prompt, negative=negative or '', seed=seed,
+            width=width, height=height, cfg=cfg, steps=steps,
+            sampler=sampler, scheduler=scheduler, weight_dtype=weight_dtype,
+            batch_size=1, filename_prefix=fname, available_classes=available_classes)
     if (train_type or 'zimage').lower() == 'sdxl':
         workflow = load_workflow_local(str(WORKFLOW_HQ_PATH))
         if not workflow:
@@ -1705,11 +1783,20 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
             workflow, lora_name=checkpoint, strength=strength, prompt=prompt,
             seed=seed, width=width, height=height, cfg=cfg, steps=steps,
             batch_size=1, filename_prefix=fname,
-            allowed_loras={l['filename'] for l in _pool_for_family('flux2klein')},
+            allowed_loras=set(allowed_loras),
             base_model=z_model,
             allowed_bases={m['filename'] if isinstance(m, dict) else m
                            for m in get_flux2_klein_models()},
         )
+        # Blend and permanent LoRAs belong to the same graph as the tested head.
+        model_ref = ['29', 0]
+        for index, entry in enumerate(extra_loras):
+            name = f'lds_klein_lora_{index}'
+            workflow[name] = {'class_type': 'LoraLoaderModelOnly', 'inputs': {
+                'model': model_ref, 'lora_name': entry['filename'],
+                'strength_model': float(entry.get('strength', 1.0))}}
+            model_ref = [name, 0]
+        workflow['31']['inputs']['model'] = model_ref
         return _resolve_workflow_node_classes(workflow, available_classes)
     # Close this file's third silent Z-Image fallback, for the same reason as
     # the others: an unsupported family previously inherited another workflow,
@@ -1753,6 +1840,12 @@ def _enqueue_cell(user_id, dataset_id, workflow, prompt, job_id=None, commit=Tru
     }
     if cell_id is not None:
         metadata['cell_id'] = int(cell_id)
+        cell = db.session.get(LoraTestImage, cell_id)
+        if cell is not None:
+            dataset = db.session.get(FaceDataset, cell.dataset_id)
+            metadata['family'] = (family_of_lora(cell.checkpoint)
+                                  or getattr(dataset, 'train_type', None) or 'zimage')
+            metadata['base_model'] = cell.z_model
     if run_id:
         metadata['run_id'] = str(run_id)
     queue_manager.add_job(job_type='image', user_id=str(user_id),
@@ -1839,7 +1932,7 @@ def _sanitize_gen_knobs(run_family, *, negative=None, sampler=None, scheduler=No
     An empty `negative` becomes None; clamp `denoise` to 0.05..1.0;
     `resolution_tier` must belong to RESOLUTION_TIERS."""
     fam = (run_family or 'zimage').lower()
-    neg = ((negative or '').strip() or None) if fam == 'zimage' else None
+    neg = ((negative or '').strip() or None) if generation_capabilities(fam)['negative_prompt'] else None
     smp = sampler if (fam == 'krea' and sampler in KREA_ALLOWED_SAMPLERS) else None
     # Custom sampler preset. Its allowlist is deliberately separate from
     # KREA_ALLOWED_SAMPLERS: they share a UI menu but target different graph
@@ -2342,6 +2435,8 @@ def _preflight_run(user_id, run_family, checkpoint, bases, allowed, prompt, seed
                 dataset_id=dataset_id, train_type=run_family, trigger_word=trigger_word,
                 sampler_preset=sampler_preset))
         except Exception as e:  # noqa: BLE001 — a bad representative build ≠ a missing asset
+            if run_family in TRAINED_IMAGE_FAMILIES:
+                raise
             logger.warning('studio preflight: representative build failed (base=%r): %s', base, e)
     preflight_family(run_family, wfs)
 
@@ -2857,38 +2952,11 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
         hires_scale=hires_scale, hires_denoise=hires_denoise,
         finish_sharpen=finish_sharpen, finish_grain=finish_grain)
 
-    cells = build_matrix(checkpoints, strengths, aspects, cfgs, steps_list, steps2_list)
+    cells = build_matrix(checkpoints, strengths, aspects, cfgs, steps_list, steps2_list,
+                         family=run_family)
 
-    # Base pool by family: SDXL uses Generate checkpoints, Krea uses the fixed
-    # workflow UNET without a base axis, and Z-Image uses Z-Image models.
-    if run_family == 'sdxl':
-        models = [m['filename'] for m in list_sdxl_base_models()]
-        if not models:
-            raise ValueError('no SDXL checkpoint available')
-    elif run_family == 'krea':
-        # Leading None keeps the workflow UNET as historical default/fallback.
-        # Local Krea checkpoints provide an optional base axis, like other families.
-        models = [None] + get_krea_models()
-    elif run_family == 'flux2klein':
-        # Leading None uses the elected UNET resolved by apply_klein_lora_test_settings.
-        # Local Klein models form an optional base axis using the same mechanism as Krea.
-        from ..utils.comfyui import get_flux2_klein_models
-        models = [None] + [m['filename'] for m in get_flux2_klein_models()]
-    elif not can_generate_with(run_family):
-        # Reject before the Z-Image fallback: unsupported families previously slipped
-        # through and returned another family's error (GitHub #53).
-        raise _no_generation_lane(run_family)
-    else:
-        models = get_zimage_models()
-        if not models:
-            raise ValueError('no Z-Image model available')
-    # Optional base-model sweep axis, validated against the allowlist.
-    # Prefer z_models (list), then legacy z_model (scalar), then the first base.
-    # Map '' (Krea's Official entry) to None before validation so Official plus
-    # an alternative remain a two-value axis.
-    _req_models = list(z_models) if z_models else ([z_model] if z_model else [])
-    _req_models = [None if m in ('', None) else m for m in _req_models]
-    valid_models = [m for m in _req_models if m in models] or [models[0]]
+    models = _require_family_bases(run_family)
+    valid_models = _select_base_models(models, z_model, z_models, family=run_family)
 
     try:
         seed = int(seed) if seed is not None else random.randint(1, 2**31 - 1)
@@ -3069,28 +3137,12 @@ def _cmp_resolve_run_family(selections):
             f'a test run cannot mix LoRA families ({named}) — they need different '
             'base models and workflows. Keep one family per run.')
     run_type = (next(iter(fams), None) or 'zimage').lower()
-    if run_type == 'sdxl':
-        models = [m['filename'] for m in list_sdxl_base_models()]
-        if not models:
-            raise ValueError('no SDXL checkpoint available')
-    elif run_type == 'krea':
-        # Leading None uses the workflow UNET (node 20) for runs without an explicit
-        # base; local Krea checkpoints are also selectable.
-        models = [None] + get_krea_models()
-    elif run_type == 'flux2klein':
-        from ..utils.comfyui import get_flux2_klein_models
-        models = [None] + [m['filename'] for m in get_flux2_klein_models()]
-    elif not can_generate_with(run_type):
-        raise _no_generation_lane(run_type)      # See create_run for the same rationale.
-    else:
-        models = get_zimage_models()
-        if not models:
-            raise ValueError('no Z-Image model available')
+    models = _require_family_bases(run_type)
     return run_type, models
 
 
 def _cmp_seed_and_prompts(models, z_model, z_models, seed, count, prompt,
-                          prompts):
+                          prompts, *, family=None):
     """Resolve the seed/base/prompt axes, extracted unchanged.
     Validate requested bases (list preferred, scalar for backward compatibility),
     choose the supplied or random seed, bound count, and derive the seed sequence
@@ -3098,9 +3150,7 @@ def _cmp_seed_and_prompts(models, z_model, z_models, seed, count, prompt,
     # Base models form a sweep axis exactly as in create_run. Canvas's
     # BASE MODEL (MULTI) previously launched only one silently. Prefer z_models,
     # then legacy scalar z_model, then the first available base.
-    _req_models = list(z_models) if z_models else ([z_model] if z_model else [])
-    _req_models = [None if m in ('', None) else m for m in _req_models]
-    valid_models = [m for m in _req_models if m in models] or [models[0]]
+    valid_models = _select_base_models(models, z_model, z_models, family=family)
     try:
         seed = int(seed) if seed is not None else random.randint(1, 2**31 - 1)
     except (TypeError, ValueError):
@@ -3319,7 +3369,7 @@ def _cmp_build_cell_plan(valid_models, selections, combos, strengths,
                 # with this combination's head weight.
                 combo_strengths = [combo[0]] if combo is not None else strengths
                 for cell in build_matrix([checkpoint], combo_strengths, aspects, cfgs,
-                                         steps_list, steps2_list):
+                                         steps_list, steps2_list, family=run_type):
                     cell_plan.append((sel, cell, combo, zm))
     cell_plan = _krea_zero_strength_first(
         cell_plan, run_type, lambda planned: planned[1][1])
@@ -3467,7 +3517,7 @@ def create_comparison_run(user_id, selections, strengths, settings=None, *,
     inject_trigger = settings.inject_trigger is not False
     run_type, models = _cmp_resolve_run_family(selections)
     valid_models, seed, count, seeds, prompt_axis = _cmp_seed_and_prompts(
-        models, z_model, z_models, seed, count, prompt, prompts)
+        models, z_model, z_models, seed, count, prompt, prompts, family=run_type)
     extra_loras, externals = _cmp_collect_extra_loras(
         run_type, permanent_loras, external_loras)
     batch_axis, knobs = _cmp_cell_knobs(
@@ -3687,7 +3737,7 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
     # which can differ for a dataset trained with several pipelines. Cache the
     # allowlist by (dataset, family).
     ds_cache, allowed_cache = {}, {}
-    _sdxl_bases = None  # SDXL base list, lazily computed and cached
+    base_cache = {}
 
     def _ds(did):
         if did not in ds_cache:
@@ -3712,21 +3762,18 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
         allowed = _allowed(img.dataset_id, cell_family)
         if not cell_ds or img.checkpoint not in allowed:
             continue  # skip a missing dataset/checkpoint
-        # Use this cell's family base pool: SDXL bases, fixed Krea base, otherwise
-        # Z-Image. Otherwise an SDXL resume could fall back to a Z-Image base.
-        if cell_family == 'sdxl':
-            if _sdxl_bases is None:
-                _sdxl_bases = [m['filename'] for m in list_sdxl_base_models()]
-            cell_models = _sdxl_bases
-        elif cell_family == 'krea':
-            # Leading None ensures legacy z_model=NULL cells, or cells whose local
-            # base has disappeared, fall back to the workflow UNET, never an arbitrary
-            # model.
-            cell_models = [None] + get_krea_models()
-        else:
-            cell_models = get_zimage_models()
-        z_model = (img.z_model if (img.z_model and img.z_model in cell_models)
-                   else (cell_models[0] if cell_models else None))
+        # A replay uses the saved base or fails explicitly if it was removed.
+        # Selecting the first remaining model would silently change the experiment.
+        try:
+            if cell_family not in base_cache:
+                base_cache[cell_family] = _require_family_bases(cell_family)
+            z_model = _select_base_models(base_cache[cell_family], img.z_model,
+                                         family=cell_family)[0]
+        except ValueError as exc:
+            img.status = 'failed'
+            img.error = str(exc)[:400]
+            db.session.commit()
+            continue
         aspect = img.aspect if img.aspect in TEST_ASPECTS else DEFAULT_ASPECT
         # Persisted resolution tier and multiplier reproduce initial dimensions.
         # Legacy cells without the column use the fixed table and multiplier 1.0.
@@ -3776,6 +3823,8 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
                                                                 if _stack_trigs
                                                                 else getattr(cell_ds, 'trigger_word', None))),
                                             available_classes=available_classes)
+            if cell_family in TRAINED_IMAGE_FAMILIES:
+                preflight_family(cell_family, [workflow])
             job_id = _enqueue_cell(user_id, img.dataset_id, workflow, prompt,
                                    cell_id=img.id, run_id=img.run_id)
             img.status = 'pending'
@@ -4724,17 +4773,10 @@ def set_best_settings(user_id, dataset_id, checkpoint, strength,
         raise ValueError(f'invalid strength: {strength!r}')
     if not 0.05 <= strength <= 4.0:
         raise ValueError(f'strength out of range: {strength}')
-    # Allow bases by family: SDXL bases, scanned local Krea UNETs, otherwise
-    # Z-Image. This prevents rejecting a valid base from another family.
-    if family == 'sdxl':
-        allowed_bases = {m['filename'] for m in list_sdxl_base_models()}
-    elif family == 'krea':
-        allowed_bases = set(get_krea_models())
-    else:
-        allowed_bases = set(get_zimage_models())
+    allowed_bases = set(family_base_models(family))
     z_model = z_model or None  # '' (Krea Official entry) means the default: NULL
     if z_model and z_model not in allowed_bases:
-        z_model = None  # do not persist an unknown model
+        raise ValueError('selected base model is unavailable for this family')
     try:
         cfg = round(float(cfg), 2) if cfg is not None else None
     except (TypeError, ValueError):
@@ -4963,7 +5005,8 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
     # Family CFG/steps fallback. Krea adjusts to the actual elected base:
     # Turbo settings (cfg 1, eight steps) on a non-distilled default produce
     # blurry sketches that users could mistake for failed training.
-    default_cfg, default_steps = DEFAULT_CFG, DEFAULT_STEPS
+    defaults = studio_family_defaults(eff)
+    default_cfg, default_steps = defaults['cfg'], defaults['steps']
     if eff == 'sdxl':
         z_models = [{'value': m['filename'], 'label': m['label']}
                     for m in list_sdxl_base_models()]
@@ -4982,13 +5025,24 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
                     + [{'value': m, 'label': _basename(m).rsplit('.', 1)[0]} for m in _alts]
                     if _alts else [])
     else:
-        z_models = [{'value': m, 'label': _basename(m).rsplit('.', 1)[0]}
-                    for m in get_zimage_models()]
+        z_models = [{'value': m or '', 'label': (_basename(m).rsplit('.', 1)[0]
+                                                if m else 'Default model')}
+                    for m in family_base_models(eff)]
+    generation_state = {}
+    if eff in TRAINED_IMAGE_FAMILIES:
+        from .trained_image_models import generation_readiness
+        readiness = generation_readiness(eff)
+        generation_state = {'generation_readiness': readiness,
+                            'default_model': (readiness.get('assets') or {}).get('diffusion_model', '')}
+        if readiness.get('config_error'):
+            base_note = readiness['config_error']
     return {
+        **generation_state,
         'checkpoints': list_test_checkpoints(ds, eff),
         'trigger_word': ds.trigger_word,
         'train_type': eff,
         'family': eff,
+        'generation_capabilities': generation_capabilities(eff),
         # Trained families for the dataset selector: [{family,label,count}].
         'available_families': fams,
         # Always-on style/utility LoRAs available for this family, outside the batch axis.
@@ -5000,7 +5054,8 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         'base_note': base_note,
         'aspects': list(TEST_ASPECTS.keys()),
         'default_aspect': DEFAULT_ASPECT,
-        'cfg_choices': CFG_CHOICES, 'default_cfg': default_cfg,
+        'cfg_choices': [1.0] if eff == 'flux2klein' else CFG_CHOICES,
+        'default_cfg': default_cfg,
         'steps_choices': STEPS_CHOICES, 'default_steps': default_steps,
         # Per-BASE-MODEL cfg/steps, keyed by the same `value` as `z_models` (bobba84,
         # GitHub #18): Z-Image Base is not guidance-distilled and must not inherit

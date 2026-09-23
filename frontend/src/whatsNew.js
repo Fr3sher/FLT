@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-23-zzzzz-test-every-image-family',
+    date: '2026-09-23',
+    title: 'Test and compare every image LoRA family',
+    blurb: 'Generate test images with FLUX.1, Anima and Qwen-Image 2.1 alongside Z-Image, SDXL, Krea 2 and FLUX.2 Klein. Compare checkpoints or blend compatible LoRAs with family-specific models, defaults and negative prompts where supported.',
+    to: '/studio',
+  },
+  {
     id: '2026-09-23-zzzz-mobile-plugin-navigation',
     date: '2026-09-23',
     title: 'Reach every plugin from your phone',

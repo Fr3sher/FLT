@@ -1,3 +1,5 @@
+import { FAMILY_IDS, familyLabel } from '../../../utils/familyBadges.js';
+
 // Shared LoRA Test Studio constants. Zero means the base model with LoRA off, a useful control
 // column reached by low strengths. The always-visible base row spans 0-2.0, with fine steps below
 // 1.0 and coarser steps above.
@@ -15,4 +17,6 @@ export const STRENGTH_CHOICES_EXTENDED = [2.25, 2.5, 2.75, 3.0, 3.5, 4.0, 4.5, 5
 export const STRENGTH_CHOICES_NEGATIVE = [-2.0, -1.5, -1.0, -0.75, -0.5, -0.25];
 export const DEFAULT_STRENGTHS = [0.7, 0.85, 1.0];
 // Training-family/pipeline labels for the family picker.
-export const FAMILY_LABELS = { zimage: 'Z-Image', sdxl: 'SDXL', krea: 'Krea 2' };
+export const FAMILY_LABELS = Object.fromEntries(
+  FAMILY_IDS.map((family) => [family, family === 'krea' ? 'Krea 2' : familyLabel(family)]),
+);

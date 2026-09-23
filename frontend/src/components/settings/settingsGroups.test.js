@@ -19,7 +19,7 @@ function fakeStorage({ throwing = false } = {}) {
 
 test('the Image engines groups carry stable ids — they live in localStorage and DOM anchors', () => {
   assert.deepEqual(ENGINES_GROUPS.map((g) => g.id),
-    ['engines-keys', 'klein', 'krea', 'lora-presets', 'prompts']);
+    ['engines-keys', 'klein', 'krea', 'lora-presets', 'prompts', 'studio-image-models']);
   // The persisted SeedVR2 group keeps its identity on its own plugin page.
   assert.equal(seedvr2.slots['settings.group'][0].id, 'seedvr2');
   assert.equal(typeof seedvr2.slots['settings.group'][0].panel, 'function');

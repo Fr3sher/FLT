@@ -34,11 +34,15 @@ import LoraRankingPanel from './LoraRankingPanel';
 import RunSelector from './RunSelector';
 import QuickVoteModal from './QuickVoteModal';
 import StudioResultViewer from './StudioResultViewer';
+import {
+  modelSelectionError, readComparisonAxis, studioModelSettingsLink, supportsNegativePrompt, writeComparisonAxis,
+} from '../../../utils/studioFamilySettings';
 
 const rollSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 export default function ComparisonStudio({ selection, baseModels = [], axes = null,
-  modelDefaults = null, runType = 'zimage', baseNote = null }) {
+  modelDefaults = null, runType = 'zimage', baseNote = null,
+  generationCapabilities = null, generationReadiness = null, defaultModel = null, settingsError = null }) {
   const toast = useToast();
 
   // Run settings are persisted so page reloads preserve them.
@@ -96,23 +100,15 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   const [count, setCount] = useState(() => {
     try { return Math.max(1, parseInt(localStorage.getItem('studioComp_count'), 10) || 1); } catch { return 1; }
   });
-  // Render axes: CFG, steps and SDXL's second pass. These were missing here although single-LoRA
-  // Studio and Canvas offered them. NEW localStorage keys preserve existing data semantics; absent
-  // keys read null, meaning the family's existing default.
-  const readAxis = (key) => {
-    try {
-      const v = JSON.parse(localStorage.getItem(key) || 'null');
-      return Array.isArray(v) && v.length ? v : null;
-    } catch { return null; }
-  };
-  // Selected base defaults to the parent's first model and resets when baseModels changes with
-  // runType. Declare BEFORE axes because their defaults depend on it. Reading a const before
-  // declaration throws ReferenceError during rendering; it is not undefined that ?? can recover
-  // from.
-  const [selectedBase, setSelectedBase] = useState('');
-  useEffect(() => {
-    setSelectedBase(baseModels.length > 0 ? baseModels[0].filename : '');
-  }, [baseModels]);
+  // Render axes are scoped by family. Legacy shared values migrate once to an existing family;
+  // newly supported pipelines start from their own server defaults.
+  const readAxis = (key) => readComparisonAxis(globalThis.localStorage, key, runType);
+  // Untouched selection follows the first server model; an explicit choice stays visible if it
+  // disappears. The shell remounts this component when the family changes.
+  const [baseChoice, setSelectedBase] = useState(null);
+  const selectedBase = baseChoice ?? defaultModel ?? baseModels[0]?.filename ?? '';
+  const modelError = modelSelectionError(baseModels.map((m) => ({ value: m.filename })),
+    baseChoice == null && defaultModel == null ? [] : [selectedBase]);
   const [selCfgs, setSelCfgs] = useState(() => readAxis('studioComp_cfgs'));
   const [selSteps, setSelSteps] = useState(() => readAxis('studioComp_steps'));
   const [selSteps2, setSelSteps2] = useState(() => readAxis('studioComp_steps2'));
@@ -133,12 +129,10 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   const effectiveSteps2 = axes?.steps2_choices
     ? effectiveAxis(selSteps2, axes.default_steps2) : [];
   useEffect(() => {
-    try {
-      localStorage.setItem('studioComp_cfgs', JSON.stringify(selCfgs));
-      localStorage.setItem('studioComp_steps', JSON.stringify(selSteps));
-      localStorage.setItem('studioComp_steps2', JSON.stringify(selSteps2));
-    } catch { /* private mode */ }
-  }, [selCfgs, selSteps, selSteps2]);
+    writeComparisonAxis(globalThis.localStorage, 'studioComp_cfgs', runType, selCfgs);
+    writeComparisonAxis(globalThis.localStorage, 'studioComp_steps', runType, selSteps);
+    writeComparisonAxis(globalThis.localStorage, 'studioComp_steps2', runType, selSteps2);
+  }, [runType, selCfgs, selSteps, selSteps2]);
   useEffect(() => {
     try {
       localStorage.setItem('studioComp_strengths', JSON.stringify(strengths));
@@ -206,6 +200,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
 
   const combine = mode === 'combine';
   const combineBlocked = combine ? combineBlocker(selection) : null;
+  const launchBlocked = settingsError || generationReadiness?.config_error || modelError || combineBlocked;
 
   // STACK view follows the DISPLAYED RUN, not the Compare/Blend toggle: yesterday's stack can be
   // opened while the toggle is on Compare, and vice versa.
@@ -243,7 +238,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   };
 
   const launch = async () => {
-    if (!selection.length || combineBlocked) return;
+    if (!selection.length || launchBlocked) return;
     if (!combine && !strengths.length) return;
     setLaunching(true);
     try {
@@ -323,7 +318,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
         {baseModels.length > 0 && (
           <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-3">
             <span className="text-content-muted text-[0.625rem] uppercase">
-              Base model ({FAMILY_LABELS[runType] || 'Z-Image'})
+              Base model ({FAMILY_LABELS[runType] || runType})
             </span>
             <select
               value={selectedBase}
@@ -334,8 +329,12 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
               {baseModels.map((m) => (
                 <option key={m.filename} value={m.filename}>{m.label}</option>
               ))}
+              {modelError && <option value={selectedBase}>{selectedBase} (unavailable)</option>}
             </select>
           </div>
+        )}
+        {(modelError || generationReadiness?.config_error) && studioModelSettingsLink(runType) && (
+          <a href={studioModelSettingsLink(runType)} className="text-sm underline">Open model settings →</a>
         )}
         <LoraStackPanel selection={selection} mode={mode} onMode={setMode}
           weights={stackWeights}
@@ -361,7 +360,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
             gpuBusy={data?.gpu_busy}
             batchMult={1 + ((genSettings.batch_loras || []).length)}
             combine={combine}
-            combineBlocked={combineBlocked}
+            combineBlocked={launchBlocked}
             configCount={blendConfigCount(selection, { weights: stackWeights, sets: stackSets })}
             axisTotal={axisTotal({ cfgs: effectiveCfgs, steps: effectiveSteps, steps2: effectiveSteps2 })}
             secondsPerImage={axes?.seconds_per_image ?? null}
@@ -410,6 +409,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
         <StudioGenerationSettings
           key={runType}
           family={runType}
+          capabilities={generationCapabilities}
           storagePrefix={`studioGenComp_${runType}`}
           aspectPicker
           onChange={setGenSettings}
@@ -515,10 +515,10 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
             { id: 'st-engine', emoji: '⚙️', label: 'Engine' },
           ] : []),
           ...(runType === 'sdxl' ? [{ id: 'st-detail', emoji: '✨', label: 'Detail' }] : []),
-          ...(runType === 'zimage' ? [{ id: 'st-negative', emoji: '🚫', label: 'Negative' }] : []),
+          ...(supportsNegativePrompt(generationCapabilities, runType) ? [{ id: 'st-negative', emoji: '🚫', label: 'Negative' }] : []),
           { id: 'st-results', emoji: '🖼️', label: 'Results' },
         ]}
-        canRun={!!selection.length && !!strengths.length && !launching && !data?.gpu_busy}
+        canRun={!!selection.length && (combine || !!strengths.length) && !launching && !data?.gpu_busy && !launchBlocked}
         running={launching}
         onRun={launch}
       />

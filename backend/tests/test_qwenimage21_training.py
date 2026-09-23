@@ -102,7 +102,7 @@ def test_checkpoint_isolation_and_arch_detection(app, tmp_path):
         assert lt._lora_arch_from_keys({'diffusion_model.transformer_blocks.0.img_mlp.gate_up.lora_A.weight'}) == 'qwenimage21'
         assert lt.lora_arch_conflicts('qwenimage21', 'zimage')
         assert 'qwenimage21' in studio.FAMILIES
-        assert not studio.can_generate_with('qwenimage21')
+        assert studio.can_generate_with('qwenimage21')
 
 
 @pytest.mark.plugins('cloud_training')

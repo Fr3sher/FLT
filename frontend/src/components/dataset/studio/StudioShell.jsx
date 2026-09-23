@@ -25,7 +25,7 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
   const onSelectionChange = useCallback((sel) => setSelection(sel), []);
 
   // Run train_type comes from the first selected LoRA, or null with no selection.
-  const runType = selection.length > 0 ? (selection[0].train_type || 'zimage') : null;
+  const runType = selection.length > 0 ? (selection[0].family || selection[0].train_type) : null;
 
   // Base list for current train_type; fetch /api/studio/base-models?type=... whenever runType
   // changes.
@@ -40,20 +40,38 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
   // The same response reports unusual default-base conditions even when models is empty;
   // installations without alternatives need this most.
   const [baseNote, setBaseNote] = useState(null);
+  const [generationCapabilities, setGenerationCapabilities] = useState(null);
+  const [loadedFamily, setLoadedFamily] = useState(null);
+  const [baseError, setBaseError] = useState(null);
+  const [defaultModel, setDefaultModel] = useState(null);
+  const [generationReadiness, setGenerationReadiness] = useState(null);
   useEffect(() => {
-    if (!runType) { setBaseModels([]); setAxes(null); setModelDefaults(null); setBaseNote(null); return; }
+    setBaseModels([]); setAxes(null); setModelDefaults(null); setBaseNote(null);
+    setGenerationCapabilities(null); setLoadedFamily(null); setBaseError(null);
+    setDefaultModel(null);
+    setGenerationReadiness(null);
+    if (!runType) return undefined;
     let cancelled = false;
     fetch(`/api/studio/base-models?type=${encodeURIComponent(runType)}`, { credentials: 'include' })
-      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok || d.ok === false) throw new Error(d.error || 'Could not load model settings.');
+        if (d.family && d.family !== runType) throw new Error('The server returned settings for a different model family.');
+        return d;
+      })
       .then((d) => {
         if (cancelled) return;
         setBaseModels(d.models || []);
         setAxes(d.axes || null);
         setModelDefaults(d.model_defaults || null);
         setBaseNote(d.base_note || null);
+        setGenerationCapabilities(d.generation_capabilities || null);
+        setDefaultModel(d.default_model ?? null);
+        setGenerationReadiness(d.generation_readiness || null);
+        setLoadedFamily(runType);
       })
-      .catch(() => {
-        if (!cancelled) { setBaseModels([]); setAxes(null); setModelDefaults(null); setBaseNote(null); }
+      .catch((error) => {
+        if (!cancelled) setBaseError(error.message || 'Could not load model settings.');
       });
     return () => { cancelled = true; };
   }, [runType]);
@@ -89,8 +107,12 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
       </div>
 
       {comparison ? (
-        <ComparisonStudio selection={selection} baseModels={baseModels} axes={axes}
-          modelDefaults={modelDefaults} runType={runType} baseNote={baseNote} />
+        <ComparisonStudio key={runType} selection={selection} baseModels={baseModels} axes={axes}
+          modelDefaults={modelDefaults} runType={runType} baseNote={baseNote}
+          generationCapabilities={generationCapabilities}
+          generationReadiness={generationReadiness}
+          defaultModel={defaultModel}
+          settingsError={loadedFamily === runType ? null : (baseError || 'Loading model settings…')} />
       ) : soloDatasetId ? (
         // key forces a clean remount when the solo LoRA OR family changes, resetting full-Studio
         // hooks/state instead of retaining the previous grid.

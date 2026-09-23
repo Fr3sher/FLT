@@ -230,7 +230,10 @@ _KREA_DOWNLOADS = {
 # of them should be told about the fourth rather than refused up front.
 
 
-_MODEL_DOWNLOADS = {**_KLEIN_DOWNLOADS, **_KREA_DOWNLOADS}
+from .services.trained_image_models import model_downloads as _studio_model_downloads
+
+_STUDIO_DOWNLOADS = _studio_model_downloads()
+_MODEL_DOWNLOADS = {**_KLEIN_DOWNLOADS, **_KREA_DOWNLOADS, **_STUDIO_DOWNLOADS}
 
 # Custom-node packs the app can install itself. The first git-cloned
 # dependencies this app installs at all, so the rules are written down rather
@@ -2321,6 +2324,13 @@ def _resolver_backed_assets():
     from .services import krea_edit_helper
     out = {a: (krea_edit_helper.krea_missing_assets,
                krea_edit_helper.krea_invalid_assets) for a in _KREA_DOWNLOADS}
+    from functools import partial
+    from .services import trained_image_models as studio_models
+    for family, specs in studio_models.ASSET_SPECS.items():
+        for slot in specs:
+            out[studio_models.install_action(family, slot)] = (
+                partial(studio_models.missing_assets, family),
+                partial(studio_models.invalid_assets, family))
     return out
 
 

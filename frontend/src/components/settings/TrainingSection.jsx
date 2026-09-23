@@ -6,7 +6,7 @@ import { defaultValueAt } from './settingDefaults.js'
 
 // Keep in sync with backend TRAIN_TYPES (face_dataset_service.py) — 'flux' had
 // been forgotten here when the FLUX.1 family landed (fixed alongside flux2klein).
-const FAMILY_OPTIONS = ['zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima']
+const FAMILY_OPTIONS = ['zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima', 'qwenimage21']
 
 
 /* Concept face masking (issue #15, reported by shivdbz2010 on GitHub). Both knobs

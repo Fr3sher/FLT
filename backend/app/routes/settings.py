@@ -419,6 +419,19 @@ def comfy_model_files():
     return jsonify({'files': files, 'folder': folder})
 
 
+@bp.get('/comfy/trained-image-models')
+def trained_image_models():
+    """Installed assets and explicit preparation actions for image Test Studio."""
+    from ..services.trained_image_models import settings_catalog
+    if request.args.get('force'):
+        from ..utils.comfyui import clear_model_caches
+        clear_model_caches()
+    try:
+        return jsonify({'families': settings_catalog()})
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+
 def seedvr2_models_list():
     """The SeedVR2 DiT builds actually PRESENT in this install's SEEDVR2 folder(s),
     plus the catalog of builds the app can talk about.
