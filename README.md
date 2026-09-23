@@ -118,16 +118,6 @@ Use **Settings** for normal configuration. Native installs bind to `127.0.0.1` b
 
 Optional usage statistics are off by default. Update checks, requested model downloads, configured providers and scraping can contact external services. The [network and privacy guide](docs/guide/network-access.md) describes these connections, the data shared and public-access settings.
 
-## Roadmap
-
-Planned directions, without release dates:
-
-- Merge Lab: per-block ratios, merge variants, checkpoint merging, fixed-seed comparisons and a one-click Turbo transplant.
-- Validate more video training targets with completed runs beyond Wan 2.2.
-- Support additional model families.
-
-Follow development and discuss priorities on [Discord](https://discord.gg/j6hnJBFtXE).
-
 ## Support the project
 
 [GitHub Sponsors](https://github.com/sponsors/perfectgf) supports development, API testing and rented test GPUs. Bug reports, contributions and sharing the project also help. For support, generate a diagnostic report under **Guide → Getting help**, then use [Discord](https://discord.gg/j6hnJBFtXE) or [GitHub issues](https://github.com/perfectgf/lora-dataset-studio/issues).

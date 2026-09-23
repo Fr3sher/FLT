@@ -38,7 +38,6 @@
 
 | Document | Covers |
 |---|---|
-| [Roadmap](../README.md#roadmap) | Directions currently planned, without date promises |
 | [Releases](https://github.com/perfectgf/lora-dataset-studio/releases) and [changelog](../CHANGELOG.md) | Current release notes and historical improvements |
 | [Plugin authoring](plugins/README.md) | SDK, package layout, compatibility and building plugins |
 | [Contributing](../CONTRIBUTING.md) | Development setup, tests and pull-request conventions |
@@ -46,4 +45,4 @@
 | [License](../LICENSE) | PolyForm Noncommercial License 1.0.0 |
 | [Responsible use](responsible-use.md) | Consent, privacy, source rights, prohibited uses and warranty |
 
-Current news, support and roadmap discussion live on [Discord](https://discord.gg/j6hnJBFtXE).
+Current news, support and feature discussions live on [Discord](https://discord.gg/j6hnJBFtXE).

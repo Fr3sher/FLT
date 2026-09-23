@@ -6,7 +6,7 @@ Thanks for wanting to make LoRA Dataset Studio better. This is a small, self-hos
 
 For anything bigger than a typo or a one-line fix, **talk about it first**. It saves you from building something that's already in progress or that doesn't fit the direction.
 
-- **Discord** ([join](https://discord.gg/j6hnJBFtXE)) — usually the fastest way. Ask in **#help**; float feature ideas in **#feature-requests**; talk implementation in **#dev-chat**. The curated **#community-ideas** board shows what people voted for (the roadmap follows it), and **#roadmap** shows what's shipped and coming.
+- **Discord** ([join](https://discord.gg/j6hnJBFtXE)) — usually the fastest way. Ask in **#help**; float feature ideas in **#feature-requests**; talk implementation in **#dev-chat**. The curated **#community-ideas** board shows what people voted for.
 - **[GitHub issues](https://github.com/perfectgf/lora-dataset-studio/issues)** — bug reports and feature requests. There are templates for both; for a bug, the app can write most of the report for you (**Guide → Getting help → Copy diagnostic report** — it includes version, OS and a log tail, no keys, no paths).
 
 A quick "I'm going to look at X" in an issue or on Discord means nobody duplicates your work.
