@@ -22,6 +22,7 @@ def test_registration_keeps_the_three_historical_engines_and_oauth_routes(app):
               for rule in app.url_map.iter_rules() if rule.endpoint != 'static'}
     prefix = '/api/settings/chatgpt-oauth/'
     assert actual == {(prefix + 'start', ('POST',)), (prefix + 'poll', ('GET',)),
+                      (prefix + 'models', ('GET',)),
                       (prefix + 'import-codex', ('POST',)), (prefix + 'logout', ('POST',))}
 
 
@@ -58,5 +59,5 @@ def test_package_metadata_matches_its_image_settings_and_files():
         'chatgpt_auth', 'chatgpt_subscription_model', 'openrouter_model',
         'nanobanana_model', 'chatgpt_image_model']}
     assert {path.name for path in (ROOT / 'lds_api_engines').glob('*.py')} == {
-        '__init__.py', 'chatgpt_image.py', 'chatgpt_oauth.py', 'nanobanana.py',
+        '__init__.py', 'chatgpt_image.py', 'chatgpt_oauth.py', 'chatgpt_models.py', 'nanobanana.py',
         'openrouter.py', 'probes.py', 'routes.py'}

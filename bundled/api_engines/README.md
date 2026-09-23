@@ -6,6 +6,13 @@ subscription lane and Codex CLI session import. Configure them from
 **Plugins → API image engines → Settings**, then choose an engine in the dataset
 generation controls.
 
+For a connected ChatGPT subscription, settings list the account's current
+models accepting reference images. Automatic follows OpenAI's first recommended
+model; a manual choice stays pinned. The former `gpt-5.4-mini` default follows
+Automatic, including on older hosts. This selects the ChatGPT request model;
+OpenAI selects the image-renderer version for the subscription. A rejected model
+stops the batch with its reason, without switching to a paid API key.
+
 Engine ids, generated-file tags, configuration keys and OAuth route URLs retain
 their existing values. OAuth state remains in `data/chatgpt_oauth.json`. No other
 product is required. Registration adds the engines, readiness probes and OAuth

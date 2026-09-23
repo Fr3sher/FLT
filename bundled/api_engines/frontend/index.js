@@ -44,6 +44,8 @@ export default {
   help: ([
     setting('engines.chatgpt_auth', 'engines', 'chatgpt-auth-mode', 'ChatGPT engine auth',
       ['chatgpt', 'auth', 'subscription', 'api key', 'codex', 'oauth', 'openai']),
+    setting('engines.chatgpt_subscription_model', 'engines', 'chatgpt-subscription-model', 'ChatGPT subscription model',
+      ['chatgpt', 'subscription', 'model', 'available models', 'automatic', 'codex']),
     setting('GEMINI_API_KEY', 'engines', 'GEMINI_API_KEY', 'Gemini API key',
       ['gemini', 'api key', 'nano banana', 'nanobanana', 'google', 'key']),
     setting('OPENAI_API_KEY', 'engines', 'OPENAI_API_KEY', 'OpenAI API key',
@@ -75,6 +77,11 @@ export default {
       app: { route: '/datasets?section=add' } },
   ]).map(guideHelp),
   whatsNew: [{
+    id: '2026-09-23-chatgpt-subscription-models',
+    date: '2026-09-23',
+    title: 'Choose an available model for your ChatGPT subscription',
+    blurb: 'Plugin settings now load the models available to your connected ChatGPT account. Automatic follows the first model recommended by OpenAI; a manual choice stays selected. The retired gpt-5.4-mini default now follows Automatic, fixing rejected generations. If a selected model is refused, the batch stops with the provider reason and never switches to a paid API key. The image-renderer version remains selected by your subscription.',
+  }, {
     id: '2026-09-23-gpt-image-25',
     date: '2026-09-23',
     title: 'Generate and edit with GPT Image 2.5 Sunburst',

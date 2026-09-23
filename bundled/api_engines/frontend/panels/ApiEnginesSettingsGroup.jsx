@@ -1,6 +1,7 @@
 import { INPUT_CLASS, Card, SecretField } from '@lds/plugin-sdk/ui'
 import { ResetToDefault } from '@lds/plugin-sdk/ui'
 import ChatgptSubscriptionConnect from './ChatgptSubscriptionConnect.jsx'
+import ChatgptSubscriptionModels from './ChatgptSubscriptionModels.jsx'
 
 /* API image engines ▸ Settings ▸ "Keys & models": the group this
    plugin contributes (`settings.group` in the descriptor). Three cards, moved
@@ -140,6 +141,7 @@ function ChatgptSubscriptionCard({ caps, config, setField, refreshCaps, toast, c
       help="Run the ChatGPT engine on your ChatGPT Plus/Pro image quota instead of a pay-per-use API key. Undocumented lane — it may stop working if OpenAI closes it. Limits vs API mode: up to 5 reference images (instead of 16), your plan's daily image cap applies, SFW only."
     >
       <ChatgptSubscriptionConnect caps={caps} refreshCaps={refreshCaps} toast={toast} />
+      <ChatgptSubscriptionModels caps={caps} config={config} setField={setField} />
 
       <div>
         <label htmlFor="chatgpt-auth-mode" className="block text-sm font-medium text-content">ChatGPT engine auth</label>

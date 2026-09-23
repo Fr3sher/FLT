@@ -131,7 +131,6 @@ _AMBIGUOUS = ('a content-policy refusal and a transient API error look '
 CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 # The Codex lane accepts far fewer input images than /images/edits (16).
 SUBSCRIPTION_MAX_REFS = 5
-SUBSCRIPTION_ROUTER_MODEL = 'gpt-5.4-mini'   # routing model only; image model is plan-selected
 
 
 class ChatGPTImageError(EngineError):
@@ -539,6 +538,11 @@ def _raise_for_subscription_status(resp) -> None:
         raise ChatGPTImageRefused(
             f"OpenAI's safety system refused this request (HTTP 400){suffix} — "
             'that filter is not configurable and LDS cannot turn it off')
+    if status == 400 and _blames_the_model(resp, detail):
+        raise ChatGPTImageFatal(
+            f'ChatGPT rejected the subscription model (HTTP 400){suffix} — '
+            'choose an available ChatGPT model in Plugins > API image engines > Settings. '
+            'No API-key fallback was used.')
     # Everything left is a status this lane has never been documented to send.
     # Name the code and hand over OpenAI's own words; claim nothing about which
     # of the two causes it was.
@@ -549,13 +553,14 @@ def _raise_for_subscription_status(resp) -> None:
 
 def _generate_via_subscription(refs: list, prompt: str, aspect_ratio: str) -> bytes | None:
     from . import chatgpt_oauth
+    from .chatgpt_models import resolve_model
     refs = refs[:SUBSCRIPTION_MAX_REFS]              # primary first, extras ride along
     content = [{'type': 'input_image',
                 'image_url': 'data:image/webp;base64,' + base64.b64encode(rb).decode('ascii')}
                for rb in refs]
     content.append({'type': 'input_text', 'text': prompt})
     body = {
-        'model': cfg.get('engines.chatgpt_subscription_model') or SUBSCRIPTION_ROUTER_MODEL,
+        'model': resolve_model(),
         'input': [{'role': 'user', 'content': content}],
         'tools': [{'type': 'image_generation', 'size': size_for_aspect(aspect_ratio),
                    'quality': CHATGPT_IMAGE_QUALITY, 'moderation': 'auto'}],

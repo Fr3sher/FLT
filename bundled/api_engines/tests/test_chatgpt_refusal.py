@@ -71,7 +71,9 @@ def _openai_err(message, code=None, param=None, status=400):
 
 
 def _sub_connected(monkeypatch):
-    from lds_api_engines import chatgpt_oauth
+    from lds_api_engines import chatgpt_oauth, chatgpt_models
+    monkeypatch.setattr(chatgpt_models, 'available_models',
+                        lambda: [{'id': 'gpt-6-sol'}])
     monkeypatch.setattr(chatgpt_oauth, 'access_token', lambda force_refresh=False: TOKEN)
     monkeypatch.setattr(chatgpt_oauth, 'account_id', lambda: 'acc-x')
     monkeypatch.setattr(chatgpt_oauth, 'status',
@@ -137,6 +139,59 @@ def test_a_dropped_connection_on_the_subscription_lane_says_so(app, monkeypatch,
 
 
 # --- 2. one sentence per cause, and never a borrowed one --------------------
+
+@pytest.mark.parametrize('saved,expected', [
+    ('gpt-5.4-mini', 'gpt-6-sol'),
+    (' gpt-5.4-mini ', 'gpt-6-sol'),
+    ('', 'gpt-6-sol'),
+    ('   ', 'gpt-6-sol'),
+    ('gpt-6-astra', 'gpt-6-astra'),
+])
+def test_subscription_replaces_old_router_without_changing_auth_or_image_model(
+        app, monkeypatch, saved, expected):
+    from lds_api_engines import chatgpt_image
+    from lds_sdk import config
+
+    config.save_config({'engines': {
+        'chatgpt_auth': 'subscription', 'chatgpt_subscription_model': saved,
+        'chatgpt_image_model': 'custom-api-image-model',
+    }})
+    _sub_connected(monkeypatch)
+    with patch('lds_api_engines.chatgpt_image.requests.post',
+               return_value=_resp(200, text=_sub_image_sse())) as post:
+        assert chatgpt_image.generate_variation(b'ref', 'a portrait') == PNG
+    assert post.call_count == 1
+    assert post.call_args.args[0] == chatgpt_image.CODEX_RESPONSES_URL
+    sent = post.call_args.kwargs
+    assert sent['json']['model'] == expected
+    assert sent['json']['tools'][0]['type'] == 'image_generation'
+    assert sent['json']['input'][0]['content'][0]['type'] == 'input_image'
+    assert sent['headers']['Authorization'] == f'Bearer {TOKEN}'
+    assert config.get('engines.chatgpt_subscription_model') == saved
+    assert config.get('engines.chatgpt_auth') == 'subscription'
+    assert config.get('engines.chatgpt_image_model') == 'custom-api-image-model'
+
+
+def test_unsupported_subscription_model_is_fatal_and_never_uses_api_key(app, monkeypatch):
+    from lds_api_engines import chatgpt_image
+    from lds_sdk import config
+    from lds_sdk.engine_errors import EngineFatal
+
+    config.save_config({'engines': {'chatgpt_auth': 'subscription',
+                                    'chatgpt_subscription_model': 'unavailable-router'}})
+    monkeypatch.setenv('OPENAI_API_KEY', KEY)
+    _sub_connected(monkeypatch)
+    detail = "The 'unavailable-router' model is not supported when using Codex with a ChatGPT account."
+    with patch('lds_api_engines.chatgpt_image.requests.post',
+               return_value=_resp(400, {'detail': detail})) as post:
+        with pytest.raises(EngineFatal) as error:
+            chatgpt_image.generate_variation(b'ref', 'a portrait')
+    assert post.call_count == 1
+    assert post.call_args.args[0] == chatgpt_image.CODEX_RESPONSES_URL
+    assert detail in str(error.value)
+    assert 'No API-key fallback' in str(error.value)
+    assert 'content-policy' not in str(error.value)
+
 
 def test_the_five_causes_get_five_different_sentences(app, monkeypatch):
     """Refusal, network, quota, token, closed door. If any two of these ever
@@ -230,6 +285,7 @@ def test_a_subscription_401_still_refreshes_once_before_giving_up(app, monkeypat
     """The refresh is the whole reason a first 401 is not an error. Only the
     SECOND one is the user's problem, and only then does it say so."""
     from lds_api_engines import chatgpt_image, chatgpt_oauth
+    _sub_connected(monkeypatch)
     calls = []
     monkeypatch.setattr(chatgpt_oauth, 'access_token',
                         lambda force_refresh=False: calls.append(force_refresh) or TOKEN)

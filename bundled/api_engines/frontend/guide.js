@@ -8,7 +8,7 @@ export const GUIDE = {
         "These advanced values belong to this plugin. Change them only when its normal controls do not cover your need.",
         "| Key | Default | Notes |",
         "|---|---|---|",
-        "| `engines.chatgpt_subscription_model` | `gpt-5.4-mini` | The Codex **router** model used by the subscription lane — not the image model. The subscription lane renders on whatever image model your plan serves; the API-key lane's image model is `engines.chatgpt_image_model`. |",
+        "| `engines.chatgpt_subscription_model` | Automatic | The ChatGPT model that handles the subscription request. Blank, `auto`, and the old shipped `gpt-5.4-mini` default follow the first model recommended in your account's current model list. An explicit choice stays pinned. The image-renderer version is selected by your subscription. |",
         "",
         "| Key | Meaning |",
         "|---|---|",
@@ -16,7 +16,7 @@ export const GUIDE = {
         "| `engines.openrouter_model` | Image model slug the OpenRouter engine requests. Free text; blank = `google/gemini-3-pro-image`. Must accept reference images. |",
         "| `engines.nanobanana_model` | Image model the Nano Banana engine requests. Free text; blank = the `NANOBANANA_MODEL` environment variable if set, else `gemini-3-pro-image`. Must accept reference images. |",
         "| `engines.chatgpt_image_model` | Image model the ChatGPT engine requests on the **API-key** lane. Free text; blank = the `CHATGPT_IMAGE_MODEL` environment variable if set, else `gpt-image-2.5-sunburst`, the plugin default. Must accept reference images. The subscription lane ignores it. |",
-        "| `engines.chatgpt_subscription_model` | Codex **router** model for the subscription lane (default `gpt-5.4-mini`) — not an image model. |",
+        "| `engines.chatgpt_subscription_model` | ChatGPT model for the subscription lane: Automatic or a model from the connected account's live list. This does not select the image-renderer version. |",
       ].join("\n") + "\n"},
     {
       chapter: "settings-reference",
@@ -103,6 +103,9 @@ export const GUIDE = {
         "- **Connect with ChatGPT** — starts an OAuth device-code sign-in; the badge then shows the connected account's email.",
         "- **Import from Codex CLI** — appears only if the app detects an existing `codex login` on this machine, and reuses that session.",
         "- **Disconnect** — signs out of the subscription lane.",
+        "- **ChatGPT model — subscription** — choose from the models OpenAI lists for your connected account that accept reference images. **Automatic** follows the first model recommended by OpenAI as that list changes; a manual choice stays pinned. **Refresh models** reloads availability. The former `gpt-5.4-mini` default now follows Automatic, so older saved settings also recover without a core update.",
+        "- This menu chooses the ChatGPT model that handles your request. OpenAI selects the **GPT Image renderer** for the subscription; the service does not expose a supported renderer-version selector. The API-key image-model field does not change subscription images.",
+        "- If OpenAI rejects the chosen subscription model, LDS stops the batch with its reason. Select an available model or Automatic. It never silently switches to a paid API key.",
         "- **ChatGPT engine auth** → `engines.chatgpt_auth`. Chooses which credential the ChatGPT engine uses. Default **`auto`**.",
         "",
         "| Value | Behaviour |",
@@ -131,6 +134,10 @@ export const GUIDE = {
 }
 
 const HELP_SECTIONS = {
+  "engines.chatgpt_subscription_model": [
+    "settings-reference",
+    "chatgpt-subscription-experimental"
+  ],
   "engines.chatgpt_auth": [
     "settings-reference",
     "chatgpt-subscription-experimental"
