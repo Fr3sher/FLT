@@ -1,6 +1,5 @@
 import { buildGeneratePayload } from '../studio/video/videoStudioApi.js'
 
-export const MAX_PREVIEW_CHECKPOINTS = 8
 export const videoPreviewsUrl = (id) => `/api/video-dataset/${id}/train/previews`
 
 export function previewSelector(node, pill) {
@@ -29,7 +28,6 @@ export function previewRequest({ choices, selected, prompt, mode, source, endFra
   if (!['t2v', 'i2v'].includes(mode)) throw new Error('Choose text-to-video or image-to-video.')
   const picks = choices.filter((c) => selected.includes(c.key))
   if (!picks.length) throw new Error('Select at least one checkpoint.')
-  if (picks.length > MAX_PREVIEW_CHECKPOINTS) throw new Error('Select up to 8 checkpoints per batch.')
   if (picks.length !== selected.length || picks.some((c) => !c.eligible)) {
     throw new Error('A selected checkpoint is no longer available. Review the selection.')
   }

@@ -38,7 +38,7 @@ def _wait(client, dataset_id):
 def clip(tmp_path):
     path = tmp_path / 'source.mp4'
     subprocess.run([svc._ffmpeg_or_raise(), '-y', '-f', 'lavfi', '-i',
-                    'testsrc2=size=64x64:rate=16:duration=3', '-c:v', 'libx264',
+                    'testsrc2=size=64x64:rate=16:duration=11', '-c:v', 'libx264',
                     '-pix_fmt', 'yuv420p', str(path)], check=True, capture_output=True)
     return path
 
@@ -69,7 +69,7 @@ def test_uploaded_clips_are_trainable_and_reimport_is_idempotent(client, app, cl
     assert result.get_json()['queued'] == 7
     data = _wait(client, dataset_id)
     assert data['import_activity']['done'] == 7
-    assert data['clips'] == 2, data['import_activity']
+    assert data['clips'] == 10, data['import_activity']
     assert (data['width'], data['height']) == (64, 64)
     from lds_video import video_training
     with app.app_context():
@@ -85,7 +85,7 @@ def test_uploaded_clips_are_trainable_and_reimport_is_idempotent(client, app, cl
         assert row['src_relpath'] == 'source.mp4'
     assert upload().status_code == 202
     repeated = _wait(client, dataset_id)
-    assert repeated['clips'] == 2
+    assert repeated['clips'] == 10
     assert 'already imported' in repeated['import_activity']['detail']
     assert all(p.suffix in ('.mp4', '.txt') for p in Path(data['output_dir']).iterdir())
 
@@ -134,7 +134,7 @@ def test_import_lease_protects_dataset_and_other_users(client, app):
 
 
 def test_short_or_broken_upload_leaves_no_training_files(client, clip):
-    dataset_id = _create(client, frames=81).get_json()['id']
+    dataset_id = _create(client, frames=193).get_json()['id']
     result = client.post(f'/api/video-dataset/{dataset_id}/import', data={
         'files': [(io.BytesIO(clip.read_bytes()), 'short.mp4'), (io.BytesIO(b'not video'), 'broken.mp4')],
     })

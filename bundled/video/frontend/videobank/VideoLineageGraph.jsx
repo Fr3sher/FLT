@@ -8,7 +8,7 @@ import { clampPopoverToViewport, POPOVER_W, popoverHeight } from '@lds/plugin-sd
 import { useFocusTrap } from '@lds/plugin-sdk/ui';
 import { fmtSize } from './videoCheckpoints'
 import { PluginSlot } from '@lds/plugin-sdk/ui';
-import { MAX_PREVIEW_CHECKPOINTS, previewKey, previewSelector } from './videoPreviewSelection.js'
+import { previewKey, previewSelector } from './videoPreviewSelection.js'
 import {
   MUTED_CLS, ROW_CLS, graphPillPreview, nodeGroup, pillActionModel, pillPreview, pillStep, videoDeployHint,
 } from './videoLineage'
@@ -231,7 +231,7 @@ export default function VideoLineageGraph({
   const toggleSelection = (node, pill) => {
     const key = previewKey(previewSelector(node, pill))
     onSelection?.(selected.includes(key) ? selected.filter((k) => k !== key)
-      : selected.length < MAX_PREVIEW_CHECKPOINTS ? [...selected, key] : selected)
+      : [...selected, key])
   }
   const openResults = (node, pill) => pill.generated_preview && onRenderedPreviews
     ? onRenderedPreviews(node, pill) : onPlaySample?.(node, pill)

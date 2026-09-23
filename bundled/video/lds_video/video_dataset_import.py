@@ -158,8 +158,7 @@ def _worker(user_id, dataset_id, entries, staging, slice_long, uploaded):
                             size = None
                             skipped['invalid_geometry'] = skipped.get('invalid_geometry', 0) + 1
                             continue
-                    spans = video_clip_export.slice_spans(0, duration, ds.frames, ds.fps,
-                                limit=svc.MAX_SLICES_PER_CLIP) if slice_long else [(0, duration)]
+                    spans = video_clip_export.slice_spans(0, duration, ds.frames, ds.fps) if slice_long else [(0, duration)]
                     if not spans:
                         skipped['too_short'] = skipped.get('too_short', 0) + 1
                     for start_s, end_s in spans:

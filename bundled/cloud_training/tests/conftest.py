@@ -68,7 +68,7 @@ def isolated_product(monkeypatch):
 
 
 @pytest.fixture()
-def app(tmp_path, monkeypatch):
+def app(tmp_path, monkeypatch, isolated_product):
     from flask import Flask
     from app.extensions import db
     import app.config as cfg

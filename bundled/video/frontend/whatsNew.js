@@ -2,6 +2,7 @@
 // entries. Keep ids and published copy stable; new video updates belong here.
 // Data only: release tooling reads this export without loading the application.
 export const WHATS_NEW = [
+  {"id": "2026-09-23-video-workload-choice", "date": "2026-09-23", "title": "Use the complete video selection", "blurb": "Long-video slicing keeps every complete clip. Compare all selected checkpoints and supply every training sample prompt you need; the sampling controls explain the added time and cloud cost."},
   {"id": "2026-09-23-video-import-selection", "date": "2026-09-23", "title": "Import your full video selection", "blurb": "Video dataset and Video Bank imports no longer reject a selection because it contains more than six videos. Progress, cancellation and duplicate detection remain available.", "to": "/datasets"},
   {
     id: '2026-09-23-create-video-dataset', date: '2026-09-23',

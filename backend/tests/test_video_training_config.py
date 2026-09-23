@@ -153,12 +153,13 @@ def test_video_sampling_is_disabled_by_default():
 def test_sampling_can_be_asked_for_and_then_matches_the_dataset():
     """When previews ARE wanted they must animate at the dataset's own rate and
     length — a preview rendered at another fps is not a preview of this LoRA."""
+    prompts = [f'a person walking in scene {i}' for i in range(6)]
     cfg = vtrain.build_job_config(_VideoDS(frames=81, fps=16), '/pod/ds', 100,
-                                  sample_prompts=['a person walking'])
+                                  sample_prompts=prompts)
     assert _proc(cfg)['train']['disable_sampling'] is False
     assert _proc(cfg)['sample']['num_frames'] == 81
     assert _proc(cfg)['sample']['fps'] == 16
-    assert _proc(cfg)['sample']['prompts'] == ['a person walking']
+    assert _proc(cfg)['sample']['prompts'] == prompts
 
 
 # --- resolution: one scalar for a rectangle -----------------------------------
@@ -820,4 +821,3 @@ def test_exact_sizes_are_held_by_the_resolution_arithmetic_itself():
             assert resolution * resolution == width * height, (key, width, height)
     # And the field is absent where nothing was verified — absence is honest.
     assert 'exact_sizes' not in vt.get('wan22_14b')
-

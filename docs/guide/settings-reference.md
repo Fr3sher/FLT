@@ -210,7 +210,7 @@ Each preset has a **name** and an **ordered list of LoRAs**, and each LoRA row h
 - a **file** — a name relative to your ComfyUI `models/loras` folder (e.g. `klein/my-lora.safetensors`), exactly like the consistency LoRA. The field is a **searchable dropdown of the LoRAs actually on disk** (every folder, `extra_model_paths.yaml` included), with Klein-compatible files listed first and each one badged by architecture; free text still works for a file you haven't downloaded yet;
 - a **strength** — `0`–`1.5`, default **`0.6`**.
 
-Use **＋ New preset**, **Duplicate**, **Delete** and rename to manage them, and the up/down controls to set chain order. **Caps: 8 LoRAs per preset, 12 presets.**
+Use **＋ New preset**, **Duplicate**, **Delete** and rename to manage them, and the up/down controls to set chain order. **Each preset can chain 8 LoRAs. Save as many named presets as you need.**
 
 **The strengths are also editable from the ✨ Upscale & improve window** (the one the ✨ button opens on a picture, and the inline panel on the dataset's bulk toolbar): once a preset is picked there, its LoRAs are listed with a slider each, saved as you drag. That is *tuning only* — the same `klein.generation_lora_presets` values, app-wide, so a change there applies wherever that preset runs, generation included. **Adding, removing, reordering and renaming stay here**, because those change what the preset *is* for every surface that runs Klein; the window links straight back to this card for them.
 

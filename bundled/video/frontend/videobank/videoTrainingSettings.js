@@ -4,7 +4,6 @@ export function videoTrainingControls({ rank = 16, memory = 'auto', prompts = ''
   }
   if (!['auto', 'on', 'off'].includes(memory)) throw new Error('Choose a memory mode.')
   const sample_prompts = prompts.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
-  if (sample_prompts.length > 4) throw new Error('Use at most 4 sample prompts, one per line.')
   if (sample_prompts.some((s) => s.length > 2000)) {
     throw new Error('Each sample prompt must be at most 2000 characters.')
   }

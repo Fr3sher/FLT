@@ -711,12 +711,11 @@ def _ref_boost():
 
 
 # --- Optional always-on generation LoRAs -------------------------------------
-# Hard caps, mirroring klein_edit_helper.MAX_GENERATION_LORAS /
-# MAX_GENERATION_LORA_PRESETS. The two lanes are deliberate copies (like
+# The active chain bound mirrors klein_edit_helper.MAX_GENERATION_LORAS.
+# Saved preset choices are all retained. The lanes are deliberate copies (like
 # comfyui.inject_krea_loras / inject_zimage_loras / inject_sdxl_loras are): the
 # shapes match, the clamps do not. Keep the numbers in step by hand if one moves.
 MAX_GENERATION_LORAS = 8          # LoRAs chained per preset
-MAX_GENERATION_LORA_PRESETS = 12  # named presets
 
 # Strength ceiling — comfyui.inject_krea_loras' clamp, deliberately NOT Klein's
 # 1.5. The utility LoRAs this feature exists for (filter-bypass) have no effect
@@ -731,7 +730,7 @@ def configured_generation_lora_presets():
     [{name, loras: [{file, strength}]}] with blank/duplicate names and
     blank/malformed rows dropped, strengths clamped to [0, LORA_STRENGTH_MAX]
     (junk -> DEFAULT_ROW_STRENGTH), rows capped at MAX_GENERATION_LORAS per
-    preset and presets at MAX_GENERATION_LORA_PRESETS.
+    preset; every named preset is retained.
 
     THE single source of truth for which files may chain and in what order — a
     /generate request can only NAME a preset from here, never define files or an
@@ -761,8 +760,6 @@ def configured_generation_lora_presets():
                 break
         seen.add(name)
         out.append({'name': name, 'loras': rows})
-        if len(out) >= MAX_GENERATION_LORA_PRESETS:
-            break
     return out
 
 

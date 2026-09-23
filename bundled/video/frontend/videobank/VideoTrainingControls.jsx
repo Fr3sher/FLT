@@ -32,7 +32,7 @@ export default function VideoTrainingControls({ value, onChange, error }) {
         placeholder="One prompt per line, including your trigger word"
         className={`${inputClass} w-full resize-y`} />
       <p id={`${id}-hint`} className="text-xs text-content-muted">
-        Optional · up to 4 prompts. Samples appear in the run graph after they are generated and collected.
+        Optional · one prompt per line. Each prompt adds a full video generation at every sampling interval, increasing training time and cloud cost. Samples appear in the run graph after collection.
         Each prompt adds video generation time and cloud cost. Leave blank to disable sampling.
       </p>
       {error && <p id={`${id}-error`} role="alert" className="text-xs text-rose-300">{error}</p>}

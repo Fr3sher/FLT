@@ -29,7 +29,6 @@ from lds_video import video_checkpoints as vck
 from lds_video import video_test_studio as vts
 from lds_video import video_training_local as vtl
 
-MAX_CHECKPOINTS = 8
 _BATCH_LOCK = threading.RLock()
 _FIELDS = {'checkpoints', 'mode', 'prompt', 'image', 'end_image', 'seed', 'steps',
            'frames', 'megapixels', 'aspect', 'lora_strength', 'accel', 'turbo',
@@ -58,8 +57,8 @@ def selectors(data):
     if not isinstance(data, dict) or set(data) - _FIELDS:
         raise ValueError('Unknown preview request fields.')
     requested = data.get('checkpoints')
-    if not isinstance(requested, list) or not 1 <= len(requested) <= MAX_CHECKPOINTS:
-        raise ValueError(f'Choose between 1 and {MAX_CHECKPOINTS} checkpoints.')
+    if not isinstance(requested, list) or not requested:
+        raise ValueError('Choose at least one checkpoint.')
     out, seen = [], set()
     for value in requested:
         if not isinstance(value, dict) or set(value) != {'run_id', 'step', 'final'}:

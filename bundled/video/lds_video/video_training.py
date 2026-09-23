@@ -234,8 +234,6 @@ def training_controls(rank=16, sample_prompts=None):
             not isinstance(prompt, str) for prompt in sample_prompts):
         raise ValueError('sample_prompts must be a list of text prompts')
     prompts = [prompt.strip() for prompt in sample_prompts if prompt.strip()]
-    if len(prompts) > 4:
-        raise ValueError('at most 4 sample prompts — each preview is a full video generation')
     if any(len(prompt) > 2000 for prompt in prompts):
         raise ValueError('each sample prompt must be at most 2000 characters')
     return rank, prompts

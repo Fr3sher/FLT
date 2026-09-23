@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   clampLoraStrength, generationLoraPresetPayload, sanitizeGenerationLoraPresets,
-  LORA_STRENGTH_MAX, MAX_GENERATION_LORAS, MAX_GENERATION_LORA_PRESETS,
+  LORA_STRENGTH_MAX, MAX_GENERATION_LORAS,
 } from './generationLoras.js'
 
 const PRESETS = [
@@ -41,16 +41,17 @@ test('sanitizeGenerationLoraPresets drops junk, dedupes names, keeps order', () 
   ])
 })
 
-test('sanitizeGenerationLoraPresets applies both caps', () => {
+test('sanitizeGenerationLoraPresets retains every preset while bounding the active chain', () => {
   const bigPreset = {
     name: 'Big',
     loras: Array.from({ length: MAX_GENERATION_LORAS + 4 },
       (_, i) => ({ file: `klein/l${i}.safetensors`, strength: 0.5 })),
   }
-  const many = Array.from({ length: MAX_GENERATION_LORA_PRESETS + 3 },
+  const many = Array.from({ length: 30 },
     (_, i) => ({ name: `P${i}`, loras: [] }))
   const out = sanitizeGenerationLoraPresets([bigPreset, ...many])
-  assert.equal(out.length, MAX_GENERATION_LORA_PRESETS)
+  assert.equal(out.length, 31)
+  assert.equal(out.at(-1).name, 'P29')
   assert.equal(out[0].loras.length, MAX_GENERATION_LORAS)
 })
 

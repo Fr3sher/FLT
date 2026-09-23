@@ -9,7 +9,7 @@ import { clipsUrl, optionsUrl, pickAvailableAccel } from '../studio/video/videoS
 import { releasePreview } from '../studio/video/videoStartFrames'
 import VideoPreviewResults from './VideoPreviewResults'
 import {
-  MAX_PREVIEW_CHECKPOINTS, previewBatchNotice, previewChoices, previewKey, previewRequest, videoPreviewsUrl,
+  previewBatchNotice, previewChoices, previewKey, previewRequest, videoPreviewsUrl,
 } from './videoPreviewSelection.js'
 
 const INITIAL_OPTIONS = { accel: '', eros: false, light: false, sparse: '', latentUpscale: false,
@@ -112,12 +112,12 @@ export default function VideoPreviewDialog({ datasetId, tree, selected, onSelect
           <fieldset disabled={busy} className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex min-w-0 flex-col gap-4">
               <section className="rounded-lg border border-border p-3">
-                <h3 className="text-sm font-semibold text-content">1. Checkpoints · {selected.length} / {MAX_PREVIEW_CHECKPOINTS}</h3>
+                <h3 className="text-sm font-semibold text-content">1. Checkpoints · {selected.length} selected</h3>
                 <p className="my-2 text-xs text-content-muted">One clip per save, with the same prompt, seed and frames. Required LoRAs are copied into ComfyUI before rendering.</p>
                 <div className="flex max-h-60 flex-col gap-1 overflow-y-auto">
                   {choices.map((c) => <label key={c.key} className={`flex min-h-10 items-start gap-2 rounded border border-border p-2 text-xs ${c.eligible ? 'cursor-pointer text-content' : 'text-content-subtle'}`}>
                     <input type="checkbox" checked={selected.includes(c.key)}
-                      disabled={!c.eligible || (!selected.includes(c.key) && selected.length >= MAX_PREVIEW_CHECKPOINTS)}
+                      disabled={!c.eligible}
                       onChange={() => toggle(c.key)} className="mt-0.5 h-4 w-4 shrink-0 accent-primary" />
                     <span>{c.label}{!c.eligible && <span className="mt-1 block text-[0.6875rem]">{c.reason}</span>}</span>
                   </label>)}

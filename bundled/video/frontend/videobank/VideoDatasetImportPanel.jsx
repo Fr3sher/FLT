@@ -32,7 +32,7 @@ export default function VideoDatasetImportPanel({ ds, refresh }) {
         <input type="checkbox" checked={sliceLong} disabled={sending || importing} onChange={(e) => setSliceLong(e.target.checked)} />
         Split long videos into consecutive clips
       </label>
-      <p className="text-xs text-content-subtle">{sliceLong ? 'Keeps up to 8 complete clips per video; any shorter remainder is left out.' : 'Keeps the first clip of the chosen length from each video.'}</p>
+      <p className="text-xs text-content-subtle">{sliceLong ? 'Keeps every complete clip from each video; any shorter remainder is left out.' : 'Keeps the first clip of the chosen length from each video.'}</p>
       <label className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3 text-sm text-content">
         Add video files
         <input type="file" multiple accept=".mp4,.mov,.mkv,.webm,.avi" disabled={sending || importing}

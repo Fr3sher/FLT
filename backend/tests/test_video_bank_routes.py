@@ -528,6 +528,20 @@ def test_a_shot_stays_promoted_while_ONE_of_its_slices_is_still_in_the_set(
     assert freed[0]['promoted_dataset_id'] is None
 
 
+def test_long_shot_promotion_keeps_every_complete_slice(client, tmp_path, seams, monkeypatch):
+    monkeypatch.setattr(svc, '_detect_source', detect_source_stub([
+        {'start_s': 0.0, 'end_s': 24.5, 'start_frame': 0, 'end_frame': 735}]))
+    bank_id = _ready_bank(client, tmp_path)
+    response = client.post(f'/api/video-bank/{bank_id}/promote',
+                           json={'name': 'all slices', 'target_profile': 'wan22_14b',
+                                 'frames': 33, 'slice_long': True})
+    assert response.status_code == 202, response.get_json()
+    data = client.get(f'/api/video-dataset/{response.get_json()["id"]}').get_json()
+    assert data['clips'] == 12
+    assert len(seams) == 12
+    assert len({row['source_clip_id'] for row in data['items']}) == 1
+
+
 def test_a_locked_clip_keeps_its_row_AND_its_caption_file(client, tmp_path, seams,
                                                           monkeypatch):
     """The folder IS the dataset — every trainer reads the directory, not our

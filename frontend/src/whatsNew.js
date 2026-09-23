@@ -83,6 +83,7 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
+  {"id": "2026-09-23-generation-preset-library", "date": "2026-09-23", "title": "Keep every named LoRA preset", "blurb": "Klein and Krea settings let you save and duplicate more than twelve named presets. Every preset stays available in generation selectors instead of being silently dropped.", "to": "/settings/engines"},
   {
     id: '2026-09-23-zzzzz-test-every-image-family',
     date: '2026-09-23',

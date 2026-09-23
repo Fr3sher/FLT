@@ -305,7 +305,7 @@ export default function PromoteVideoDialog({
               instead of only its first {frames || 'N'} frames. Each slice
               carries the SHOT&rsquo;s caption, which describes the whole shot —
               so a later slice may be captioned with things that happen earlier.
-              Up to 8 clips per shot.
+              Keeps every complete clip from each shot.
             </span>
           </span>
         </label>

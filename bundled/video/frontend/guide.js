@@ -1004,7 +1004,7 @@ export const GUIDE = {
         "## Render and compare video checkpoint previews",
         "",
         "Open **Checkpoints & LoRAs → Run graph → Generate previews** in a video dataset.",
-        "Tick up to eight saves in the graph or in the dialog. A numbered save and the",
+        "Tick the saves you want to compare in the graph or in the dialog. A numbered save and the",
         "final save are separate choices, even when they have the same training step.",
         "",
         `![A shared motion and render setup for selected H3 checkpoints](${guideImage0})`,

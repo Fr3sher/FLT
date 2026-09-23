@@ -2538,14 +2538,6 @@ def _resolve_edge_inset(value):
     return inset
 
 
-# How many clips ONE shot may contribute when long shots are sliced. A single
-# forty-minute take would otherwise become the whole dataset on its own —
-# `top_source_share` already warns about that at the source level, and this is
-# the same guard one level down. Eight is generous: at the longest H3 clip
-# length that is seventy seconds of one shot.
-MAX_SLICES_PER_CLIP = 8
-
-
 def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
                   frames=None, size=None, max_per_source=None,
                   edge_inset_s=None, trigger_word=None, slice_long=False):
@@ -2614,7 +2606,7 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
         for clip in rows:
             n = len(video_clip_export.slice_spans(
                 clip.start_s, clip.end_s, frames, profile['fps'],
-                inset_s=inset, limit=MAX_SLICES_PER_CLIP))
+                inset_s=inset))
             extra_slices += max(0, n - 1)
     # An empty sidecar trains as an EMPTY PROMPT and ai-toolkit says nothing about
     # it, so how many clips are about to ship without one is a limit that has to
@@ -2792,8 +2784,7 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size,
             # joins between slices are not shot boundaries. Off, the shot is one
             # span exactly as before, so nothing about the default path moved.
             spans = ([(a, b) for a, b in video_clip_export.slice_spans(
-                start_s, end_s, frames, profile_fps,
-                limit=MAX_SLICES_PER_CLIP)]
+                start_s, end_s, frames, profile_fps)]
                 if (slice_long and profile_fps) else [(start_s, end_s)])
             if not spans:
                 spans = [(start_s, end_s)]      # let the encoder speak the refusal

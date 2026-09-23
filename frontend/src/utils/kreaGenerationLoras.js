@@ -20,9 +20,8 @@ export const KREA_SLIDER_MAX = 6;
 /** krea_edit_helper.DEFAULT_ROW_STRENGTH. */
 export const KREA_LORA_STRENGTH_DEFAULT = 1.0;
 
-/** Mirror krea_edit_helper.MAX_GENERATION_LORAS / MAX_GENERATION_LORA_PRESETS. */
+/** Mirror the active chain bound in krea_edit_helper.MAX_GENERATION_LORAS. */
 export const MAX_GENERATION_LORAS = 8;
-export const MAX_GENERATION_LORA_PRESETS = 12;
 
 /** Filenames whose slider opens to the full 0..20. Every separator spelling is
  *  matched on purpose: the Studio's original /filterbypass/i handed
@@ -70,7 +69,6 @@ export function sanitizeKreaGenerationLoraPresets(list) {
     }
     seen.add(name);
     out.push({ name, loras: rows });
-    if (out.length >= MAX_GENERATION_LORA_PRESETS) break;
   }
   return out;
 }

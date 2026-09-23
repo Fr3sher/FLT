@@ -274,8 +274,8 @@ def test_a_replayed_run_keeps_every_stamped_training_flag():
 def test_previews_and_the_distillation_override_ride_the_stamp(
         app, tmp_path, monkeypatch):
     """Two launch-time levers, both stamped so the pod rebuild minutes later
-    replays the launch and not the present: `sample_prompts` (capped at 4 -
-    each preview is a full video generation on the paid GPU) and
+    replays the launch and not the present: every requested `sample_prompts`
+    entry (including selections beyond the former four-prompt limit) and
     `distillation: off`, which exists for MEASUREMENT - it is the only way to
     run one dataset with and without upstream's de-distillation recipe and
     compare the previews. 'auto' stamps nothing and keeps the gated default."""
@@ -285,18 +285,13 @@ def test_previews_and_the_distillation_override_ride_the_stamp(
         vid = _video_dataset(tmp_path, 'surf clips')
         monkeypatch.setattr(cvt, '_start_pod', lambda run: calls.append(run))
         out = cvt.launch_cloud_video_training(
-            'local', vid.id, steps=100, sample_prompts=['a wave', '  ', 'a dog'],
+            'local', vid.id, steps=100, sample_prompts=['a wave', '  ', 'a dog', 'a cat', 'a bird', 'a boat', 'a train'],
             distillation='off', _provision=lambda run: calls.append(run))
         from app.models import CloudTrainingRun
         run = db.session.get(CloudTrainingRun, out['run_id'])
         p = json.loads(run.train_params)
-        assert p['sample_prompts'] == ['a wave', 'a dog']    # blanks dropped
+        assert p['sample_prompts'] == ['a wave', 'a dog', 'a cat', 'a bird', 'a boat', 'a train']
         assert p['distillation'] == 'off'
-        with pytest.raises(ValueError):
-            cvt.launch_cloud_video_training(
-                'local', vid.id, steps=100,
-                sample_prompts=['1', '2', '3', '4', '5'],
-                _provision=lambda run: None)
         with pytest.raises(ValueError):
             cvt.launch_cloud_video_training(
                 'local', vid.id, steps=100, distillation='sideways',

@@ -46,8 +46,7 @@ import { SUBJECT_TYPE_LABELS } from '../dataset/subjectTypes.js'
    just PICKS a preset, starting on the engine's own default preset setting
    ("None" until one is chosen) — the choice carries the intent,
    there is no automatic gating. The app never ships or hardcodes a LoRA name. */
-const MAX_GENERATION_LORAS = 8        // mirrors the klein_edit_helper AND
-const MAX_GENERATION_LORA_PRESETS = 12 // krea_edit_helper caps — both the same
+const MAX_GENERATION_LORAS = 8 // mirrors the Klein and Krea active chain bounds
 
 const SMALL_BTN = 'grid h-6 w-6 place-items-center rounded border border-border text-xs ' +
   'text-content-muted hover:bg-surface-raised disabled:opacity-30'
@@ -92,7 +91,6 @@ function LoraPresetCard({ preset, index, presets, save, loraScan,
           className={`${INPUT_CLASS} mt-0 font-medium`}
         />
         <button type="button" className={TEXT_BTN}
-          disabled={presets.length >= MAX_GENERATION_LORA_PRESETS}
           onClick={() => save([...presets,
             { ...preset, name: freeName(presets, `${(preset?.name || 'Preset').trim() || 'Preset'} (copy)`), loras: rows.map((r) => ({ ...r })) }])}
           title="Duplicate this preset">
@@ -227,7 +225,7 @@ function KleinLorasCard({ config, setField }) {
     <Card
       id="klein-generation-lora-presets"
       title="Klein generation LoRA presets (optional)"
-      help={`Named combinations of your own LoRA files, chained after the consistency LoRA on the local Klein engine — inside a preset the order is the chain order (max ${MAX_GENERATION_LORAS} LoRAs each, ${MAX_GENERATION_LORA_PRESETS} presets). Pick each row from the LoRAs found under ComfyUI's models/loras (Klein-compatible ones are listed first; you can still type a path for a file not on disk yet) — any LoRA, any purpose. Per run, pick a preset in the workspace's Klein tuning panel — it opens on the default preset chosen below ("None" until you choose one), and picking something else there applies to that run only. Presets and LoRA autocomplete by @waltm (Discord).`}
+      help={`Named combinations of your own LoRA files, chained after the consistency LoRA on the local Klein engine — inside a preset the order is the chain order (max ${MAX_GENERATION_LORAS} LoRAs each). Pick each row from the LoRAs found under ComfyUI's models/loras (Klein-compatible ones are listed first; you can still type a path for a file not on disk yet) — any LoRA, any purpose. Per run, pick a preset in the workspace's Klein tuning panel — it opens on the default preset chosen below ("None" until you choose one), and picking something else there applies to that run only. Presets and LoRA autocomplete by @waltm (Discord).`}
     >
       {presets.length === 0 && (
         <p className="text-sm text-content-muted">No presets yet — create your first combination below.</p>
@@ -243,11 +241,10 @@ function KleinLorasCard({ config, setField }) {
         <button
           type="button" className={TEXT_BTN}
           onClick={() => save([...presets, { name: freeName(presets, 'My preset'), loras: [] }])}
-          disabled={presets.length >= MAX_GENERATION_LORA_PRESETS}
         >
           ＋ New preset
         </button>
-        <span className="text-xs text-content-muted">{presets.length}/{MAX_GENERATION_LORA_PRESETS}</span>
+        <span className="text-xs text-content-muted">{presets.length} presets</span>
       </div>
       <DefaultPresetField
         id="klein-default-lora-preset" engineLabel="Klein" presets={presets}
@@ -752,7 +749,7 @@ function KreaLorasCard({ config, setField }) {
     <Card
       id="krea-generation-lora-presets"
       title="Krea 2 Edit generation LoRA presets (optional)"
-      help={`Named combinations of your own LoRA files, chained after the identity-edit LoRA when Krea 2 Edit generates dataset images — inside a preset the order is the chain order (max ${MAX_GENERATION_LORAS} LoRAs each, ${MAX_GENERATION_LORA_PRESETS} presets). Pick each row from the LoRAs found under ComfyUI's models/loras; Krea-compatible ones are listed first, and a LoRA of another architecture is badged because ComfyUI would load it as a silent no-op here. Strength goes to 6, or to 20 for utility LoRAs whose filename says filter-bypass — those have no effect below ~10. Per run, pick a preset in the workspace's Krea 2 Edit tuning panel — it opens on the default preset chosen below ("None" until you choose one), and picking something else there applies to that run only. Only the model side is patched, so a LoRA's text-encoder weights are ignored. Preset mechanism by @waltm (Discord).`}
+      help={`Named combinations of your own LoRA files, chained after the identity-edit LoRA when Krea 2 Edit generates dataset images — inside a preset the order is the chain order (max ${MAX_GENERATION_LORAS} LoRAs each). Pick each row from the LoRAs found under ComfyUI's models/loras; Krea-compatible ones are listed first, and a LoRA of another architecture is badged because ComfyUI would load it as a silent no-op here. Strength goes to 6, or to 20 for utility LoRAs whose filename says filter-bypass — those have no effect below ~10. Per run, pick a preset in the workspace's Krea 2 Edit tuning panel — it opens on the default preset chosen below ("None" until you choose one), and picking something else there applies to that run only. Only the model side is patched, so a LoRA's text-encoder weights are ignored. Preset mechanism by @waltm (Discord).`}
     >
       {presets.length === 0 && (
         <p className="text-sm text-content-muted">No presets yet — create your first combination below.</p>
@@ -768,11 +765,10 @@ function KreaLorasCard({ config, setField }) {
         <button
           type="button" className={TEXT_BTN}
           onClick={() => save([...presets, { name: freeName(presets, 'My preset'), loras: [] }])}
-          disabled={presets.length >= MAX_GENERATION_LORA_PRESETS}
         >
           ＋ New preset
         </button>
-        <span className="text-xs text-content-muted">{presets.length}/{MAX_GENERATION_LORA_PRESETS}</span>
+        <span className="text-xs text-content-muted">{presets.length} presets</span>
       </div>
       <DefaultPresetField
         id="krea-default-lora-preset" engineLabel="Krea 2 Edit" presets={presets}
