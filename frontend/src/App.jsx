@@ -327,6 +327,7 @@ function NavBar() {
           <CheckUpdatesButton />
           <button type="button" onClick={() => setOpen((v) => !v)}
             aria-expanded={open} aria-label={open ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-controls="mobile-navigation"
             className="rounded-md p-2 text-content-muted hover:text-content hover:bg-surface-raised">
             {open
             ? <X aria-hidden="true" className="h-5 w-5" />
@@ -335,8 +336,8 @@ function NavBar() {
         </div>
       </div>
       {open && (
-        <nav aria-label="Main navigation (mobile)"
-          className="flex flex-col gap-1 border-t border-border px-4 py-2 md:hidden">
+        <nav id="mobile-navigation" aria-label="Main navigation (mobile)"
+          className="app-mobile-nav absolute inset-x-0 top-full flex flex-col gap-1 overflow-y-auto overscroll-contain border-t border-border bg-surface-overlay px-4 py-2 shadow-lg md:hidden">
           {mobileLinks}
           {/* Mounted only while the panel is open, so a phone pays for the
               poll exactly while someone is looking at the answer. */}

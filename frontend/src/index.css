@@ -8,6 +8,12 @@
   backdrop-filter: none;
 }
 .app-header-shell > a { letter-spacing: -0.025em; }
+/* Keep long plugin menus inside the visible viewport below the sticky bar. */
+.app-mobile-nav {
+  max-height: calc(100dvh - 100%);
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+.app-mobile-nav > * { flex-shrink: 0; }
 .app-header a:focus-visible,
 .app-header button:focus-visible {
   outline: 2px solid rgb(var(--accent));

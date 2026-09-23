@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-23-zzzz-mobile-plugin-navigation',
+    date: '2026-09-23',
+    title: 'Reach every plugin from your phone',
+    blurb: 'The mobile navigation menu now scrolls within the screen, so Plugins, Settings and other entries stay reachable even with many plugins enabled.',
+    to: '/plugins',
+  },
+  {
     id: '2026-09-23-zzz-qwen-image-21-training',
     date: '2026-09-23',
     title: 'Train Qwen-Image 2.1 LoRAs',
