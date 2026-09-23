@@ -43,6 +43,7 @@ def register(ctx):
     ctx.register_install_action('shot_detect', label='Install shot-boundary detection',
                                 python='capability', packages=('transnetv2-pytorch', 'av'))
     ctx.register_node_pack('h3_refmods_nodes')
+    ctx.register_node_pack('h3_clipproj_nodes')
     ctx.register_node_pack('h3_spectrum_nodes')
     from .performance_install import install_writer
     ctx.register_install_action('h3_fast_writer', label='Install the fast synchronous MP4 writer',

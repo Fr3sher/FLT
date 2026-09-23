@@ -9,10 +9,11 @@ export const REFERENCE_ACTIONS = [...Object.values(REFERENCE_BASE_ACTIONS),
 export function referenceInstallPlan(status, base = 'official', accel = 'ref4') {
   if (!status) return [];
   if (base === 'fused') accel = '';
-  const wanted = new Set(['h3_text_encoder', 'h3_video_vae', 'h3_audio_vae',
+  const wanted = new Set(['h3_text_encoder', 'h3_clip_projection', 'h3_clipproj_nodes', 'h3_video_vae', 'h3_audio_vae',
     REFERENCE_BASE_ACTIONS[base], REFERENCE_ACCEL_ACTIONS[accel]].filter(Boolean));
   const missing = (status.missing_weights || []).map((m) => m.action);
   const rows = missing.filter((action) => wanted.has(action));
+  if ((status.missing_nodes || []).some((node) => node === 'ClipProjApply' || node?.action === 'h3_clipproj_nodes')) rows.push('h3_clipproj_nodes');
   for (const node of ['ref4', 'ref8'].includes(accel) ? status.missing_nodes || [] : []) {
     if (node?.action === 'h3_reference_nodes' || (typeof node === 'string' && node.startsWith('LDS'))) {
       rows.unshift('h3_reference_nodes'); break;

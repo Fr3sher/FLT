@@ -24,7 +24,8 @@ def reference_status(classes=None, comfy_version=None):
         'hint': 'Turbo is already merged. Start at 8 steps; no acceleration LoRA. '
                 'Uses the existing Fused weight in models/diffusion_models.',
     }]
-    return result
+    from . import clipproj
+    return clipproj.reference_status(result, classes)
 
 
 def status(classes):

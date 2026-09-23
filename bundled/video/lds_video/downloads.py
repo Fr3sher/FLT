@@ -19,4 +19,6 @@ CHIMERA_DOWNLOADS = {'h3_taomate_lora': {'url': 'https://huggingface.co/CZMartin
                     'expected_bytes': 1333483008,
                     'sha256': '260616f7f60f698eb601dec376de00e3a0ba4e8c6cdc85673a5808b8bda4594c',
                     'license_url': 'https://huggingface.co/drozbay/MiniMax-H3-FastH3-Preview-LoRA'}}
-H3_DOWNLOADS = {**HOST_DOWNLOADS, **CHIMERA_DOWNLOADS}
+from .clipproj import DOWNLOADS as CLIPPROJ_DOWNLOADS
+
+H3_DOWNLOADS = {**HOST_DOWNLOADS, **CHIMERA_DOWNLOADS, **CLIPPROJ_DOWNLOADS}

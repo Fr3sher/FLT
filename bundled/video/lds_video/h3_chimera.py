@@ -1,6 +1,6 @@
 """Video recipes on the public H3 API."""
 from lds_sdk import h3_render as host
-from . import h3_refmods
+from . import h3_refmods, clipproj
 
 
 def normalise_accel(accel, turbo=False):
@@ -27,7 +27,7 @@ def missing_weights():
         if not host.weight_present(('loras',), spec['file']):
             rows.append({'action': spec['action'], 'filename': spec['file'], 'what': spec['label'],
                          'required': False, 'place_in': 'models/loras/'})
-    return rows
+    return clipproj.missing_weights(rows)
 
 
 def build_workflow(*, refmods=False, references=None, fused=False, h3_attention='auto',
@@ -71,7 +71,7 @@ def build_workflow(*, refmods=False, references=None, fused=False, h3_attention=
         h3_refmods.graft(graph, references)
         built['generation_settings'].update(refmods=True, references=references)
         built['notes'].append(f'identity RefMods: {len(references)} (experimental)')
-    return performance.apply(built, **controls, classes=performance_classes, mode=mode)
+    return clipproj.apply(performance.apply(built, **controls, classes=performance_classes, mode=mode))
 
 CHIMERA = ({'id': 'taomate_3step',
   'label': 'TaoMate H3 · 3 steps',

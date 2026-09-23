@@ -105,10 +105,8 @@ export function videoInstallCatalog(caps) {
     item('video_text', c.video_text, true, ''),
     // 🎬 Video Test Studio — five WEIGHT rows and no pack row, which is the
     // whole shape of this lane's install: the app downloads model files and
-    // leaves ComfyUI's custom_nodes alone. Its three optional packs are linked
-    // from the card instead, so this menu never offers a button that would add
-    // code to somebody's ComfyUI.
-    ...['h3_base', 'h3_text_encoder', 'h3_video_vae', 'h3_video_vae_int8', 'h3_audio_vae',
+    // ClipProj's required node pack has its own reviewed installation action.
+    ...['h3_base', 'h3_text_encoder', 'h3_clip_projection', 'h3_clipproj_nodes', 'h3_video_vae', 'h3_video_vae_int8', 'h3_audio_vae',
       'h3_turbo_lora', 'h3_parasyte_lora', 'h3_dareties_lora', 'h3_base_light',
       'h3_vdn_stage', 'h3_vdn_stage_int8'].map(
       (a) => item(a, dirValid && !videoStudioMissing.includes(a), dirValid, kleinHint)),
@@ -129,7 +127,7 @@ export function videoInstallCatalog(caps) {
 // small accelerations. A 12.5 GB opt-in belongs to its own row in the install
 // menu, like 10Eros stays out of any grouped button.
 export const VIDEO_STUDIO_INSTALL_ORDER = [
-  'h3_base', 'h3_text_encoder', 'h3_video_vae', 'h3_audio_vae', 'h3_turbo_lora',
+  'h3_base', 'h3_text_encoder', 'h3_clip_projection', 'h3_clipproj_nodes', 'h3_video_vae', 'h3_audio_vae', 'h3_turbo_lora',
   'h3_parasyte_lora', 'h3_dareties_lora',
 ]
 

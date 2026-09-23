@@ -188,10 +188,8 @@ from lds_sdk.h3_render import (  # noqa: F401 — retain the Video module's exis
     normalise_mode as normalise_mode,
     normalise_sparse as normalise_sparse,
     option_availability as option_availability,
-    preflight as preflight,
     reference_accel_spec as reference_accel_spec,
     reference_sparse_compatible as reference_sparse_compatible,
-    reference_status as reference_status,
     reference_weight_name as reference_weight_name,
     registered_classes as registered_classes,
     snap_frames as snap_frames,
@@ -214,6 +212,7 @@ from .h3_chimera import (
     build_workflow, missing_weights as missing_weights, normalise_accel as normalise_accel,
 )
 from .h3_performance import reference_status as reference_status
+from .clipproj import preflight as preflight
 
 
 class VideoStudioAssetsMissing(Exception):
