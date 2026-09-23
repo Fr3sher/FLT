@@ -2,6 +2,8 @@
 // entries. Keep ids and published copy stable; new video updates belong here.
 // Data only: release tooling reads this export without loading the application.
 export const WHATS_NEW = [
+  { id: '2026-09-23-video-recover-saved-mp4', date: '2026-09-23', title: 'Recover saved clips after ComfyUI history is cleared',
+    blurb: 'Old reference clips can now recover their saved MP4 from the configured ComfyUI output folder even after its history is cleared or ComfyUI stops. Recovery checks the embedded generation settings before restoring the player; no new render is needed.', to: '/studio?lane=video' },
   { id: '2026-09-23-video-performance-playback', date: '2026-09-23', title: 'Choose H3 performance controls and recover reference clips',
     blurb: 'Use an existing Fused Turbo model, H3 SageAttention, Spectrum, INT8 video decoding and fast MP4 recording. Prepare optional components from the render panel and restore the settings with Reuse. Old reference clips that saved an input filename recover their actual output on playback when ComfyUI still has its history and MP4. Auto and Enrich now separate identity from the opening scene when replacing a subject in a video.', to: '/studio?lane=video' },
   {"id": "2026-09-23-video-workload-choice", "date": "2026-09-23", "title": "Use the complete video selection", "blurb": "Long-video slicing keeps every complete clip. Compare all selected checkpoints and supply every training sample prompt you need; the sampling controls explain the added time and cloud cost."},
