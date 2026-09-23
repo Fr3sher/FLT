@@ -15,7 +15,7 @@ export default function VideoDatasetScrapePanel({ datasetId, busy, sliceLong, on
     } catch (e) { setError(e.message); return { ok: false } }
   }
   return <>
-    <p className="text-xs text-content-subtle">Select up to 6 videos per import, up to 200 MB each.</p>
+    <p className="text-xs text-content-subtle">Select the videos to import, up to 200 MB each.</p>
     {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
     <ConceptSourcesPanel destination="video-dataset" stateKey={`video-dataset:${datasetId}`}
       datasetId={datasetId} busy={busy} onImport={handleImport} />

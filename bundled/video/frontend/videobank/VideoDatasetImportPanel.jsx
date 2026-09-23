@@ -37,7 +37,7 @@ export default function VideoDatasetImportPanel({ ds, refresh }) {
         Add video files
         <input type="file" multiple accept=".mp4,.mov,.mkv,.webm,.avi" disabled={sending || importing}
           onChange={upload} className="min-h-10 min-w-0 max-w-full text-xs" />
-        <span className="text-xs text-content-subtle">MP4, MOV, MKV, WebM or AVI · up to 6 videos per import, 200 MB per file and 1 GB per upload.</span>
+        <span className="text-xs text-content-subtle">MP4, MOV, MKV, WebM or AVI · 200 MB per file and 1 GB per upload.</span>
       </label>
       {sending && <p role="status" className="text-sm text-content-muted">Uploading videos…</p>}
       {activity && <div role="status" className="rounded-lg border border-border p-3 text-sm text-content-muted">

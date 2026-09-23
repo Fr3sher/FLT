@@ -61,12 +61,14 @@ def test_uploaded_clips_are_trainable_and_reimport_is_idempotent(client, app, cl
     dataset_id = _create(client).get_json()['id']
     def upload():
         return client.post(f'/api/video-dataset/{dataset_id}/import', data={
-            'files': (io.BytesIO(clip.read_bytes()), '../../source.mp4'),
+            'files': [(io.BytesIO(clip.read_bytes()), '../../source.mp4') for _ in range(7)],
             'slice_long': 'true',
         })
     result = upload()
     assert result.status_code == 202, result.get_json()
+    assert result.get_json()['queued'] == 7
     data = _wait(client, dataset_id)
+    assert data['import_activity']['done'] == 7
     assert data['clips'] == 2, data['import_activity']
     assert (data['width'], data['height']) == (64, 64)
     from lds_video import video_training
@@ -101,10 +103,13 @@ def test_web_import_downloads_selected_videos_and_reports_partial_failure(client
     assert client.post(url, json={'items': [{'url': 'https://example.test/photo', 'type': 'image'}]}).status_code == 400
     result = client.post(url, json={'items': [
         {'url': 'https://example.test/bad.mp4', 'type': 'video'},
-        {'url': 'https://example.test/good.mp4', 'type': 'video', 'title': 'Not a caption'},
+        *[{'url': f'https://example.test/good-{i}.mp4', 'type': 'video', 'title': 'Not a caption'}
+          for i in range(7)],
     ]})
     assert result.status_code == 202
+    assert result.get_json()['queued'] == 8
     data = _wait(client, dataset_id)
+    assert data['import_activity']['done'] == 8
     assert data['clips'] == 1 and data['items'][0]['caption'] == ''
     assert '1 errors' in data['import_activity']['detail']
 

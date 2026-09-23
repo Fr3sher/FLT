@@ -9,10 +9,8 @@
  * differs: the address, the batch size, and the sentence a user reads.
  *
  * WHY THE BATCH IS SO MUCH SMALLER. One image is capped at 12 MB and 20 s, one
- * video at 200 MB and 180 s. The server bounds a request at
- * `SCRAPE_VIDEO_IMPORT_MAX` for that reason; sending more would earn a 400, so
- * the client cuts the selection at the same number and sends batches — which is
- * exactly what it already does for a 200-image scrape.
+ * video at 200 MB and 180 s. Sending successive batches keeps progress and
+ * cancellation responsive, regardless of how many videos the user selected.
  *
  * Pure logic (no JSX): `node --test` cannot parse JSX, and this is the part
  * worth pinning.
@@ -23,7 +21,7 @@ import { runBankScrapeImport } from './bankScrapeImport.js';
 
 export const VIDEO_BANK_SCRAPE_ENDPOINT = '/api/video-bank/scrape-import';
 
-/** = SCRAPE_VIDEO_IMPORT_MAX server-side (video_bank_service.py). */
+/** Transport batch size; the complete selection is imported across batches. */
 export const VIDEO_BANK_SCRAPE_BATCH = 6;
 
 /** The destination as the server wants it, or null when it is not usable yet.

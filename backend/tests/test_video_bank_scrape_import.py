@@ -584,16 +584,14 @@ def test_an_empty_selection_is_rejected(app):
             svc.scrape_import_to_video_bank(LOCAL_USER, [], name='Nothing')
 
 
-def test_the_per_request_cap_is_lower_than_the_image_outlets(app):
-    """Deliberately: one image is capped at 12 MB and 20 s, one video at 200 MB
-    and 180 s. A big selection is not refused — the client sends batches."""
-    from app.services.face_dataset_service import SCRAPE_IMPORT_MAX
-    assert svc.SCRAPE_VIDEO_IMPORT_MAX < SCRAPE_IMPORT_MAX
+def test_import_keeps_every_video_beyond_the_former_six_item_cap(app):
     with app.app_context():
-        items = [_item(f'http://x/{i}.mp4')
-                 for i in range(svc.SCRAPE_VIDEO_IMPORT_MAX + 1)]
-        with pytest.raises(ValueError):
-            svc.scrape_import_to_video_bank(LOCAL_USER, items, name='Too many')
+        by_url = {f'http://x/{i}.mp4': _mp4(bytes([i])) for i in range(12)}
+        with patch.object(svc, '_download_scrape_video', _fake_downloader(by_url)):
+            result = svc.scrape_import_to_video_bank(
+                LOCAL_USER, [_item(url) for url in by_url], name='All selected videos')
+        assert result['saved'] == 12
+        assert len(_files(svc.get_bank(LOCAL_USER, result['bank_id']))) == 12
 
 
 def test_a_failed_download_is_counted_and_never_stored(app):

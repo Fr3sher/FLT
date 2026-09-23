@@ -3578,15 +3578,6 @@ def delete_video_dataset(user_id, dataset_id) -> bool:
 # to a DATASET. Files landing there would sit inside training material, get
 # trained on, and be attributed to a dataset nobody added them to.
 
-# Per REQUEST cap. Far below the image outlet's 60 for a reason that is arithmetic
-# rather than taste: one image is capped at 12 MB and 20 s, one video at 200 MB
-# and 180 s (netfetch.MAX_DRIVER_BYTES / DOWNLOAD_TIMEOUT). Six items over two
-# workers bounds a request at three download rounds — the same order of magnitude
-# as the image outlet's worst case, instead of an order beyond it. Bigger
-# selections are not refused: the client sends them as successive batches, the way
-# it already does for images.
-SCRAPE_VIDEO_IMPORT_MAX = 6
-
 # Two, not the image lane's six. A video download saturates the link on its own;
 # more of them in flight does not make the pipe wider, it only multiplies the peak
 # disk of half-finished files and the number of sources one request can annoy.
@@ -3991,8 +3982,6 @@ def scrape_import_to_video_bank(user_id, items, bank_id=None, name=None, *,
     items = [it for it in (items or []) if isinstance(it, dict) and it.get('url')]
     if not items:
         raise ValueError('no items')
-    if len(items) > SCRAPE_VIDEO_IMPORT_MAX:
-        raise ValueError(f'max {SCRAPE_VIDEO_IMPORT_MAX} videos per import')
 
     if bank_id is not None:
         key = job_key(bank_id)

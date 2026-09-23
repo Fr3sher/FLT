@@ -2,6 +2,7 @@
 // entries. Keep ids and published copy stable; new video updates belong here.
 // Data only: release tooling reads this export without loading the application.
 export const WHATS_NEW = [
+  {"id": "2026-09-23-video-import-selection", "date": "2026-09-23", "title": "Import your full video selection", "blurb": "Video dataset and Video Bank imports no longer reject a selection because it contains more than six videos. Progress, cancellation and duplicate detection remain available.", "to": "/datasets"},
   {
     id: '2026-09-23-create-video-dataset', date: '2026-09-23',
     title: 'Create a video dataset straight from the library',

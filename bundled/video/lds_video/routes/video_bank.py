@@ -726,8 +726,7 @@ def video_bank_scrape_import():
     {'ok','bank_id','name','created','saved','already_there','added','skipped'}
     so one client helper drives both.
 
-    Synchronous, like the image outlet: the per-request cap
-    (`SCRAPE_VIDEO_IMPORT_MAX`) is what bounds it, and a big selection arrives as
+    Synchronous, like the image outlet: the client sends a large selection as
     successive batches. 400 on bad input — including the one destination that is
     refused however explicitly it was picked: a bank sitting on a dataset's own
     folder, where the clips would land inside training material. 409 when a pass

@@ -75,8 +75,8 @@ def start(app, user_id, dataset_id, *, items=None, files=None, slice_long=False)
     """Stage uploads and launch one cancellable import. Web fetches run in the job."""
     _require_dataset(user_id, dataset_id)
     entries = list(files if files is not None else (items or []))
-    if not entries or len(entries) > svc.SCRAPE_VIDEO_IMPORT_MAX:
-        raise ValueError(f'Choose 1 to {svc.SCRAPE_VIDEO_IMPORT_MAX} videos per import.')
+    if not entries:
+        raise ValueError('Choose at least one video to import.')
     if files is None and any(not isinstance(item, dict) or not item.get('url')
                              or item.get('type') != 'video' for item in entries):
         raise ValueError('Choose video results to import.')
