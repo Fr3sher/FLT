@@ -106,10 +106,10 @@ def path_for(name, user_id=None, restage=True):
 
 
 
-def validate_references(references, *, restage=True, user_id=None):
+def validate_references(references, *, restage=True, user_id=None, enforce_limits=True):
     if not isinstance(references, list) or not references:
         raise ValueError('Add at least one image, video or audio reference.')
-    if len(references) > sum(LIMITS.values()):
+    if enforce_limits and len(references) > sum(LIMITS.values()):
         raise ValueError('Too many references: at most 9 images, 3 videos and 3 audio files.')
     counts = dict.fromkeys(LIMITS, 0)
     out = []
@@ -119,7 +119,7 @@ def validate_references(references, *, restage=True, user_id=None):
             raise ValueError('invalid reference kind')
         kind = ref['kind']
         counts[kind] += 1
-        if counts[kind] > LIMITS[kind]:
+        if enforce_limits and counts[kind] > LIMITS[kind]:
             raise ValueError(f'Too many {kind} references (maximum {LIMITS[kind]}).')
         meta = _manifest(ref.get('name'), user_id)
         if meta['kind'] != kind:

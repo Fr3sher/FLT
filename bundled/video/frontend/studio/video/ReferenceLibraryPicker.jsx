@@ -108,7 +108,7 @@ export default function ReferenceLibraryPicker({ kind, limit, heldKeys = [], dis
       {feed.loading ? <p role="status" className="text-xs text-content-muted">Loading library…</p> : !feed.items.length && !feed.error && <p className="text-xs text-content-muted">No {labels[kind]} found in this library. Try another source or search.</p>}
       {feed.hasMore && <button type="button" className={BUTTON} disabled={feed.loading || locked} onClick={feed.more}>Load more</button>}
       {selected.length > 0 && <fieldset disabled={locked} className="min-w-0 space-y-2">
-        <legend className="mb-2 text-xs font-semibold text-content">Selected · {selected.length}/{limit}</legend>
+        <legend className="mb-2 text-xs font-semibold text-content">Selected · {selected.length}{Number.isFinite(limit) ? `/${limit}` : ''}</legend>
         {selected.map((selection) => {
           const { item } = selection;
           const key = libraryItemKey(item);
@@ -134,7 +134,7 @@ export default function ReferenceLibraryPicker({ kind, limit, heldKeys = [], dis
         })}
       </fieldset>}
       {selected.length > 0 && <button type="button" className="min-h-10 w-full rounded-md bg-primary px-3 py-2 text-xs font-semibold text-gray-950 disabled:opacity-40 lg:min-h-0" disabled={locked || selected.length > limit || invalid} onClick={add}>{adding ? 'Preparing selection…' : `Add selected (${selected.length})`}</button>}
-      <p role="status" aria-live="polite" className="min-w-0 text-xs text-content-muted">{notice || (selected.length ? '' : `Select up to ${limit} ${labels[kind]} to add.`)}</p>
+      <p role="status" aria-live="polite" className="min-w-0 text-xs text-content-muted">{notice || (selected.length ? '' : Number.isFinite(limit) ? `Select up to ${limit} ${labels[kind]} to add.` : `Select ${labels[kind]} to add.`)}</p>
     </section>
   );
 }

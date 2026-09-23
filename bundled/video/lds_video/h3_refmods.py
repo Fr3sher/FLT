@@ -52,8 +52,8 @@ def validate(mode, image, references, enabled):
         raise ValueError('Pick a start image, or use text mode with RefMods.')
     if mode == 't2v' and image:
         raise ValueError('Text mode must not include a start image.')
-    if not isinstance(references, list) or not 1 <= len(references) <= 2:
-        raise ValueError('RefMods need one or two identity images.')
+    if not isinstance(references, list) or not references:
+        raise ValueError('RefMods need at least one identity image.')
     for ref in references:
         if not isinstance(ref, dict) or ref.get('kind') != 'image':
             raise ValueError('RefMods accept identity images only.')
@@ -65,7 +65,8 @@ def graft(graph, references):
     readers = [node for node in graph.values() if node['inputs'].get('conditioning') == original]
     positive = original
     for index, ref in enumerate(references):
-        image, extract, apply = (str(920 + index * 3 + delta) for delta in range(3))
+        # A numeric range would eventually overlap optional render nodes.
+        image, extract, apply = (f'lds_refmod_{index}_{part}' for part in ('image', 'extract', 'apply'))
         graph[image] = {'class_type': 'LoadImage', 'inputs': {'image': ref['name']}}
         graph[extract] = {'class_type': CLASSES[0], 'inputs': {
             'name': f'lds_identity_{index + 1}', 'mode': 'encode', 'concept_type': 'identity',
@@ -77,7 +78,7 @@ def graft(graph, references):
         graph[apply] = {'class_type': CLASSES[1], 'inputs': {
             'conditioning': positive, 'mods': [extract, 0], 'override': False,
             'retention': 1.0, 'curve_direction': 'constant', 'curve_shape': 'linear',
-            'curve_value': 1.0, 'scramble_seed': -1, 'max_total_tokens': 4096}}
+            'curve_value': 1.0, 'scramble_seed': -1, 'max_total_tokens': 0}}
         positive = [apply, 0]
     for node in readers:
         node['inputs']['conditioning'] = positive

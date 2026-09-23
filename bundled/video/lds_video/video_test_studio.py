@@ -281,7 +281,7 @@ def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, end_image=None, lor
     aspect = str(aspect or 'auto').strip().lower()
     if mode == 'i2v' or aspect not in ('auto', 'portrait', 'landscape', 'square'):
         aspect = 'auto'
-    references = (refs.validate_references(references, user_id=user_id)
+    references = (refs.validate_references(references, user_id=user_id, enforce_limits=not refmods)
                   if mode == 'ref2va' or refmods else [])
     # A reference clip continues WITH its references (2026-09-07): the take
     # keeps the cast it was made with, and the seam is the H3 guide at frame 0

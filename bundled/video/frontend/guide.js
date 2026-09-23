@@ -1680,11 +1680,11 @@ GUIDE.sections.push({
   markdown: [
     "## First frame identity RefMods",
     "",
-    "In First frame mode, use the same image reference cards as References mode. Upload one or two identity images or choose them from Library, give each a role and use its tag in the motion. They are encoded as RefMods automatically; there is no switch to enable. Start and end frames are optional: without a start frame, the prompt describes the opening scene and the RefMods supply the identities. Choose the video shape, then generate. Remove all references to generate without RefMods. Continue restores them and Auto carries them through the take; TaoMate H3 (3 steps) and FastH3 v0.2 are available in Render.",
+    "In First frame mode, use the same image reference cards as References mode. Upload identity images or choose them from Library, give each a role and use its tag in the motion. They are encoded as RefMods automatically; there is no switch to enable or fixed image-count limit. Start and end frames are optional: without a start frame, the prompt describes the opening scene and the RefMods supply the identities. Choose the video shape, then generate. Remove all references to generate without RefMods. Continue restores them and Auto carries them through the take; TaoMate H3 (3 steps) and FastH3 v0.2 are available in Render.",
     "",
     "Prepare the FL2VA INT8 or W4A8 base and TaoMate H3 3-step in this plugin’s settings. The shared H3 text encoder and both VAEs are reused. RefMods use ComfyUI-MiniMaxH3Mod 0.2.5 by Luisacaotica, with full VAE encoding at 512 pixels and no training or saved embedding files. TaoMate H3 runs at exactly three steps, strength 1, Euler and sigma shifts 12/3. FastH3 v0.2 remains an alternative acceleration.",
     "",
-    "RefMods carry appearance; the first frame supplies current positions and scene state. Fidelity is experimental. RefMods currently accept images only, up to two. First and last frames are optional and remain separate from identity references. Continue and Reuse restore the identity inputs.",
+    "RefMods carry appearance; the first frame supplies current positions and scene state. Fidelity is experimental. RefMods accept images only; more references increase memory use and processing time. First and last frames are optional and remain separate from identity references. Continue and Reuse restore the identity inputs.",
     "",
     "After installing the node pack, restart ComfyUI when idle and refresh. Missing weights or nodes refuse the render before queueing. No GPU render is started by installation."
   ].join('\n') + '\n',

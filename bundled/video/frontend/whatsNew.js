@@ -2,6 +2,8 @@
 // entries. Keep ids and published copy stable; new video updates belong here.
 // Data only: release tooling reads this export without loading the application.
 export const WHATS_NEW = [
+  { id: '2026-09-23-video-refmods-no-count-limit', date: '2026-09-23', title: 'Use all your identity RefMods',
+    blurb: 'First-frame video accepts identity images without a fixed count limit, from uploads or Library. All selected references reach generation and Auto/Enrich. More references use more memory and processing time.', to: '/studio?lane=video' },
   { id: '2026-09-23-video-reference-lightbox', date: '2026-09-23', title: 'Inspect selected video references in a large preview',
     blurb: 'Click a reference photo or use Enlarge below a reference video to inspect the selected media. Photos offer original-size viewing; videos keep playback controls and the current position. First and last frame guides also open large. Close with Escape, the backdrop or the close button.', to: '/studio?lane=video' },
   { id: '2026-09-23-video-recover-saved-mp4', date: '2026-09-23', title: 'Recover saved clips after ComfyUI history is cleared',

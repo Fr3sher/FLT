@@ -217,7 +217,9 @@ Output the prompt alone, no reasoning or explanation."""
 
 def _validated(references):
     from lds_video import video_references
-    return video_references.validate_references(references)
+    # Writers also serve RefMods, which do not use the native reference slots.
+    # Render entrypoints enforce the limits for the selected generation mode.
+    return video_references.validate_references(references, enforce_limits=False)
 
 
 def _path_for(name):

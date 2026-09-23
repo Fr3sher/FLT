@@ -693,7 +693,7 @@ export default function VideoTestStudio({ datasetId = null } = {}) {
 
   const needsImage = mode === 'i2v' && sources.length === 0 && !useRefmods;
   const needsReferences = (isReference || useRefmods) && reference.references.length === 0;
-  const invalidRefmods = useRefmods && (reference.references.length > 2 || reference.references.some(r => r.kind !== 'image'));
+  const invalidRefmods = useRefmods && reference.references.some(r => r.kind !== 'image');
   const referenceProfileMissing = isReference && (
     referenceBaseMissing(options?.reference?.bases?.find((b) => b.id === reference.settings.base), reference.settings, options?.performance)
     || options?.reference?.accelerations?.find((a) => a.id === reference.settings.accel)?.available === false);
@@ -703,7 +703,7 @@ export default function VideoTestStudio({ datasetId = null } = {}) {
   // refused exactly the case the mode promises (found in verification).
   const perPictureReady = mode === 'i2v' && promptMode === 'per-image' && sources.length > 1;
   const blocked = invalidRefmods || busy || !!motionBusy || reference.staging || needsImage || needsReferences || referenceProfileMissing || removedReference || (!prompt.trim() && !perPictureReady);
-  const reason = invalidRefmods ? 'RefMods accept one or two identity images. Remove other references.' : needsReferences ? (useRefmods ? 'Add one or two identity images.' : 'Add an image, video or audio reference.')
+  const reason = invalidRefmods ? 'RefMods accept identity images only. Remove video or audio references.' : needsReferences ? (useRefmods ? 'Add an identity image.' : 'Add an image, video or audio reference.')
     : referenceProfileMissing ? 'Install the selected reference profile from Setup, then refresh this panel.'
       : removedReference ? 'Update the removed reference mentions in the motion before generating.' : needsImage
     ? 'Pick a start frame, add an identity reference, or switch to text-only.'
@@ -1014,7 +1014,7 @@ export default function VideoTestStudio({ datasetId = null } = {}) {
                   <option value="landscape">16:9</option><option value="portrait">9:16</option><option value="square">1:1</option>
                 </select>
               </label>}
-              <VideoReferencesPanel value={reference} identitiesOnly limits={{ image: 2, video: 0, audio: 0 }} disabled={busy}
+              <VideoReferencesPanel value={reference} identitiesOnly disabled={busy}
                 onInsertTag={tag => setPrompt(p => `${p}${p && !/\s$/.test(p) ? ' ' : ''}${tag} `)} />
             </div>}
             <VideoContinuationNotice state={continuation} mode={mode} isReference={isReference}

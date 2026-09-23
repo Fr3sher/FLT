@@ -359,7 +359,8 @@ def _writer_context(data, *, continues=_UNSET):
     extra = {}
     if str(data.get('mode') or '').lower() == 'ref2va' or data.get('refmods') is True:
         extra['mode'] = 'ref2va'
-        extra['references'] = vrefs.validate_references(data.get('references'), user_id=LOCAL_USER)
+        extra['references'] = vrefs.validate_references(data.get('references'), user_id=LOCAL_USER,
+                                                       enforce_limits=data.get('refmods') is not True)
     cont = data.get('continues') if continues is _UNSET else continues
     if str(data.get('mode') or '').lower() == 't2v':
         cont = None
@@ -1021,7 +1022,8 @@ def video_studio_generate():
         mode = vts.normalise_mode(data.get('mode'))
         from lds_video.h3_refmods import validate as validate_refmods
         validate_refmods(mode, data.get('image'), data.get('references'), data.get('refmods', False))
-        references = (vrefs.validate_references(data.get('references'), user_id=LOCAL_USER)
+        references = (vrefs.validate_references(data.get('references'), user_id=LOCAL_USER,
+                                               enforce_limits=not data.get('refmods', False))
                       if mode == 'ref2va' or data.get('refmods') else [])
     except (ValueError, RuntimeError) as exc:
         return _map_error(exc)

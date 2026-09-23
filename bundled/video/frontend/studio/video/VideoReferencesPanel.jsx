@@ -90,7 +90,7 @@ export default function VideoReferencesPanel({ value, limits, disabled, onInsert
   }, []);
   const refs = value.references;
   const rows = taggedReferences(refs);
-  const cap = { ...REFERENCE_LIMITS, ...limits };
+  const cap = identitiesOnly ? { image: Infinity, video: 0, audio: 0 } : { ...REFERENCE_LIMITS, ...limits };
   const change = (name, patch) => value.setReferences((list) => list.map((r) => r.name === name ? { ...r, ...patch } : r));
   // The clip's length in seconds, the threshold under which a cut lightens the render.
   const clipSeconds = Math.max(0, ((Number(value.settings?.frames) || REFERENCE_DEFAULTS.frames) - 1) / 24);
@@ -191,7 +191,7 @@ export default function VideoReferencesPanel({ value, limits, disabled, onInsert
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-sm font-semibold text-content">References</h2>
         <HelpBadge topic={identitiesOnly ? 'video-first-frame-refmods' : 'video-studio-references'} />
-        <span className="text-xs text-content-subtle">{identitiesOnly ? 'One or two identity images · start and end frames are optional.' : 'One clip combining all your reference images, videos and audio.'}</span>
+        <span className="text-xs text-content-subtle">{identitiesOnly ? 'Identity images · start and end frames are optional.' : 'One clip combining all your reference images, videos and audio.'}</span>
       </div>
       <p className="text-xs text-content-muted">{identitiesOnly ? 'Images added here are automatically encoded as identity RefMods. Give each a role and name its tag in the motion. No start or end frame is required: the prompt describes the scene. Add a start or end frame only to fix its composition. Remove all references to generate without RefMods.' : 'Keep a person, outfit or object from pictures, borrow motion from a video, or use an audio reference. Give each a role, then name its tag in the motion.'}</p>
       <div className={`grid gap-2 ${identitiesOnly ? 'grid-cols-1' : 'grid-cols-3'}`}>
@@ -201,7 +201,7 @@ export default function VideoReferencesPanel({ value, limits, disabled, onInsert
             <div key={kind} className="flex min-w-0 flex-col gap-1 rounded-lg border border-dashed border-border p-1">
               <label className={`relative flex min-h-20 min-w-0 flex-col items-center justify-center gap-1 rounded-md px-1 py-2 text-xs text-content ${busy || disabled || count >= cap[kind] ? 'opacity-50' : 'cursor-pointer hover:bg-surface-raised'}`}>
               <Icon aria-hidden="true" className="h-4 w-4" />
-              <span>{label} · {count}/{cap[kind]}</span>
+              <span>{label} · {count}{Number.isFinite(cap[kind]) ? `/${cap[kind]}` : ''}</span>
               <span className="text-content-muted">Upload</span>
               <input type="file" aria-label={`Add reference ${label.toLowerCase()}`} accept={accept} multiple
                 disabled={busy || disabled || count >= cap[kind]}
