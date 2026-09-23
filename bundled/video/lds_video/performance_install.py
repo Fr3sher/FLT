@@ -6,7 +6,7 @@ import hashlib
 import urllib.request
 from pathlib import Path
 
-WRITER_REVISION = 'v2'
+WRITER_REVISION = '95da845c5393884ab81fa116099304490f660c65'
 WRITER_FILES = {'__init__.py': {'bytes': 9371, 'sha256': '01852093fe4493786c87abaf212e2ae907055317d778d824ef617038827f3278'}, 'LICENSE': {'bytes': 10757, 'sha256': '5c7f173199fd7fb3cc83d86d24f3541e8ae0cb8c16e912ca519ed6a1435bd8f3'}, 'NOTICE': {'bytes': 432, 'sha256': '4f1442c7a5833f99ae6302862697a0a2c06f16c7f0ae39f8785c4fc0fc2961bf'}}
 
 

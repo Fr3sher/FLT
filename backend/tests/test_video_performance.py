@@ -106,7 +106,8 @@ def test_writer_install_is_owned_and_repeatable(monkeypatch, tmp_path):
     from lds_sdk.video_host import config as cfg
     monkeypatch.setattr(cfg, 'comfyui_dir', lambda: str(tmp_path))
     source = Path(__file__).resolve().parents[2] / 'bundled/video/authoring/comfy_nodes/lds_h3_fast_writer'
-    fetch = lambda url: (source / urlsplit(url).path.rsplit('/', 1)[-1]).read_bytes().replace(b'\r\n', b'\n')
+    def fetch(url):
+        return (source / urlsplit(url).path.rsplit('/', 1)[-1]).read_bytes().replace(b'\r\n', b'\n')
     custom = tmp_path / 'custom_nodes'; custom.mkdir()
     target = custom / 'lds_h3_fast_writer'; target.mkdir()
     foreign = target / '__init__.py'; foreign.write_text('foreign content')
