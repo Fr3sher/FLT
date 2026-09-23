@@ -100,6 +100,10 @@ export function engineRate(id) { const s = engineSpec(id); return s ? (s.rate ||
 export function engineIds() { return engineCatalog().map((e) => e.id) }
 export function apiEngineSpecs() { return engineCatalog().filter((e) => e.kind === 'api') }
 export function localEngineSpecs() { return engineCatalog().filter((e) => e.kind === 'local') }
+/** Cards supplied by enabled plugins, including local ComfyUI engines. */
+export function pluginEngineSpecs() {
+  return engineCatalog().filter((e) => !CORE_IDS.has(e.id) && typeof e.card === 'function')
+}
 export function apiEngineIds() { return apiEngineSpecs().map((e) => e.id) }
 /** Render on the user's own GPU through ComfyUI: free, slower, serialized on
  *  one GPU, and the ONLY ones allowed to receive 🔞 shots. */

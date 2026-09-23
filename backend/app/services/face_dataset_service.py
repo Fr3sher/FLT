@@ -37,6 +37,8 @@ from ..extensions import db
 from ..models import (CanvasImageNode, CanvasLanePlacement, CanvasNodePosition, FaceDataset,
                       FaceDatasetImage, LoraTestImage)
 from .. import config as cfg
+from ..engines.registry import (api_ids as api_engine_ids, ids as known_engine_ids,
+                               local_ids as local_engine_ids)
 from . import (bank_transfer_metadata, caption_origin, dataset_activity,
                image_encoding, reference_edit_jobs,
                scene_captions, trash)
@@ -268,7 +270,7 @@ def check_fanout_budget(dataset_id, total, *, generators=()):
     this with the aggregate BEFORE dispatching anything, so the run is all-or-
     nothing. The per-call checks stay as defense in depth."""
     from ..generation_limits import local_queue_limit
-    limit = local_queue_limit() if generators and all(g in LOCAL_ENGINES for g in generators) else MAX_FANOUT
+    limit = local_queue_limit() if generators and all(g in local_engine_ids() for g in generators) else MAX_FANOUT
     total = int(total)
     if total > limit:
         raise ValueError(f'fan-out too large ({total} > {limit})')
@@ -4513,7 +4515,7 @@ def _edit_engine_call(engine, refs, prompt):
     edit keeps its framing (1:1) — an in-place change, not a re-composition. The
     ChatGPT auth lane is pinned once, like the batch, so it never silently
     reroutes onto the paid API key mid-call."""
-    if engine not in API_ENGINES:
+    if engine not in api_engine_ids():
         raise ValueError(f'unknown edit engine: {engine}')
     generate = _api_generate_fn(engine)
     gen_kwargs = {'aspect_ratio': '1:1'}
@@ -4591,8 +4593,8 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt,
         raise ValueError('reference image required')
     if not os.path.exists(_ref_path(ds)):
         raise ValueError('reference image file missing')
-    api_engines = tuple(item for item in engines if item in API_ENGINES)
-    local_engines = tuple(item for item in engines if item in LOCAL_ENGINES)
+    api_engines = tuple(item for item in engines if item in api_engine_ids())
+    local_engines = tuple(item for item in engines if item in local_engine_ids())
     transient_refs = tuple(extra_edit_ref_bytes or ())
     if len(transient_refs) > MAX_EDIT_REFERENCE_UPLOADS:
         raise ValueError(
@@ -5316,15 +5318,23 @@ def _image_engine(img):
     is the right answer. Guessing 'klein' for an empty value would label old
     Nano Banana images as local, and a wrong badge is worse than none."""
     value = (img.klein_model or '').strip()
+    # Persisted provenance outlives a disabled/uninstalled plugin.
+    try:
+        metadata = json.loads(getattr(img, 'generation_meta', None) or '{}')
+    except (TypeError, ValueError):
+        metadata = {}
+    if (value and isinstance(metadata, dict)
+            and metadata.get('engine') == value):
+        return metadata['engine']
     if not value:
         return None
-    if value in API_ENGINES:
+    if value in api_engine_ids():
         return value
     # Krea 2 Edit rows store the engine id here, like the API ones: the engine
     # resolves its base model deterministically at enqueue AND at regenerate
     # (krea_edit_helper.resolve_krea_unet), so there is no per-row model to keep.
-    if value == KREA_ENGINE:
-        return KREA_ENGINE
+    if value in local_engine_ids():
+        return value
     return 'klein'   # a local model file name — the row was rendered on the GPU
 
 
@@ -11735,31 +11745,45 @@ def _rgn_resolve_target(img, prompt, engine):
     if prompt is None:
         raise ValueError('variation prompt unknown')
     requested = (engine or '').strip() or None
-    if requested is not None and requested not in KNOWN_ENGINES:
+    if requested is not None and requested not in known_engine_ids():
         raise ValueError(f'unknown engine: {requested}')
     # A row remembers its origin through `klein_model`: an engine TAG for the API
     # rows and for Krea, a real model FILE for Klein. Anything that isn't a known
     # tag is therefore a Klein row.
-    origin = img.klein_model if img.klein_model in KNOWN_ENGINES else 'klein'
+    origin = _image_engine(img) or 'klein'
+    if origin not in ('klein', 'krea') and requested is None:
+        from ..engines.registry import require_available
+        spec = require_available(origin)  # Never replace an unavailable plugin with Klein.
+        enabled = cfg.get('engines.enabled') or []
+        if spec.local_enqueue is not None and enabled and origin not in enabled:
+            raise ValueError(f'Enable {spec.label} in its plugin settings before retrying.')
     target = requested or origin
-    if is_nsfw_label(img.variation_label) and target in API_ENGINES:
+    if requested is not None:
+        from ..engines.registry import require_available
+        from . import local_dataset_engines
+        if local_dataset_engines.is_plugin_engine(requested):
+            spec = require_available(requested)
+            enabled = cfg.get('engines.enabled') or []
+            if enabled and requested not in enabled:
+                raise ValueError(f'Enable {spec.label} in its plugin settings before retrying.')
+    if is_nsfw_label(img.variation_label) and target in api_engine_ids():
         # Fail-closed: NSFW never reaches a third-party API. It stays on whatever
         # LOCAL engine the row came from (a Krea row keeps Krea) — forcing Klein
         # here would silently change engine behind the user's back.
-        target = origin if origin in LOCAL_ENGINES else 'klein'
+        target = origin if origin in local_engine_ids() else 'klein'
     else:
         # Engines disabled in Settings must not be used even when the row (or a
         # stale workspace selection) points at them: fall back to the default
         # engine, then to the first enabled one. An empty list means "all
         # enabled" (legacy configs).
         enabled = [e for e in (cfg.get('engines.enabled') or [])
-                   if e in KNOWN_ENGINES]
+                   if e in known_engine_ids()]
         if enabled and target not in enabled:
             default = cfg.get('engines.default')
             target = default if default in enabled else enabled[0]
         # ...and the NSFW clamp must survive that fallback.
-        if is_nsfw_label(img.variation_label) and target in API_ENGINES:
-            target = origin if origin in LOCAL_ENGINES else 'klein'
+        if is_nsfw_label(img.variation_label) and target in api_engine_ids():
+            target = origin if origin in local_engine_ids() else 'klein'
     return edited, stored_prompt, prompt, target
 
 
@@ -11776,7 +11800,7 @@ def _rgn_prepare_target(user_id, img, ds, target, engine, klein_model,
             'filename', 'caption', 'status', 'fail_reason', 'fail_kind', 'job_id',
             'klein_model', 'variation_prompt', 'watermark_state',
             'watermark_bbox', 'watermark_regions', 'face_score', 'face_state',
-            'content_sig', 'content_sig_stat')
+            'content_sig', 'content_sig_stat', 'generation_meta')
     }
     old_path = (os.path.join(_dataset_path(img.dataset_id), img.filename)
                 if img.filename else None)
@@ -11785,7 +11809,8 @@ def _rgn_prepare_target(user_id, img, ds, target, engine, klein_model,
     aspect = None
     ref_bytes = None
     model = None
-    if target in API_ENGINES:
+    from . import local_dataset_engines
+    if target in api_engine_ids():
         engine = target
         api_generate = _api_generate_fn(engine)
         ref_path = os.path.join(_dataset_path(ds.id), ds.ref_filename)
@@ -11793,6 +11818,12 @@ def _rgn_prepare_target(user_id, img, ds, target, engine, klein_model,
             raise ValueError('reference image file missing')
         aspect = aspect_for_label(img.variation_label, img.framing)
         ref_bytes = _all_ref_bytes(ds)  # Main and additional references.
+    elif local_dataset_engines.is_plugin_engine(target):
+        engine = target
+        local_dataset_engines.preflight(user_id, ds.id, engine)
+        aspect = aspect_for_label(img.variation_label, img.framing)
+        new_job_id = local_dataset_engines.enqueue(
+            user_id, ds, engine, prompt, label=img.variation_label, framing=img.framing)
     elif target == KREA_ENGINE:
         # Krea 2 Identity Edit: same shape as the Klein branch below, minus the
         # knobs it doesn't have. Its preflight raises KreaModelsMissing HERE,
@@ -11814,6 +11845,8 @@ def _rgn_prepare_target(user_id, img, ds, target, engine, klein_model,
             extra_metadata={'is_dataset': True, 'dataset_id': img.dataset_id,
                             'variation_label': img.variation_label})
     else:
+        if target != 'klein':
+            raise ValueError(f'Unsupported dataset engine: {target}')
         try:
             from .klein_edit_helper import enqueue_klein_edit, resolve_generation_lora_preset
         except ImportError:
@@ -11830,7 +11863,7 @@ def _rgn_prepare_target(user_id, img, ds, target, engine, klein_model,
         # on an API engine holds an engine TAG here, not a model — use the
         # workspace's Klein pick instead (None = enqueue's default model).
         # …and when the workspace sent none either, the DATASET's pick (None = auto).
-        model = (img.klein_model if img.klein_model not in API_ENGINES
+        model = (img.klein_model if img.klein_model not in known_engine_ids()
                  else ((klein_model or '').strip() or dataset_klein_model(ds)))
         ref_path = os.path.join(_dataset_path(ds.id), ds.ref_filename)
         extra_paths = [os.path.join(_dataset_path(ds.id), fn)
@@ -11886,8 +11919,9 @@ def _rgn_swap_row(user_id, img, edited, stored_prompt, target, engine,
         img.face_state = None
         # Engine TAG for the API engines and for Krea (each resolves its own
         # model); the real model FILE for Klein.
-        img.klein_model = (engine if target in API_ENGINES or target == KREA_ENGINE
+        img.klein_model = (engine if target != 'klein'
                            else model)
+        img.generation_meta = _generation_meta_json(engine=target)
         img.filename = None
         # The row loses its file AND its words; the stamp goes with them, or the
         # regenerated image would be born already protected against captioning.
@@ -12090,7 +12124,7 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
     # to in-flight IMMEDIATELY so the tile shows "…" and the polling/banner UI
     # reacts at once); without it the call is synchronous (test path / legacy
     # callers).
-    if target in API_ENGINES:
+    if target in api_engine_ids():
         return _rgn_run_api(app, img, ds, user_id, image_id, prompt,
                             aspect, ref_bytes, engine, api_generate)
 
@@ -12147,7 +12181,8 @@ def editable_engines():
     ComfyUI queue as every other local render, so the exclusion had outlived its
     reason — and it was the reason the app's only FREE edit lane was invisible."""
     from ..engines.registry import available_specs
-    return tuple(spec.id for spec in available_specs())
+    return tuple(spec.id for spec in available_specs()
+                 if spec.local_enqueue is None or spec.extra.get('supports_reference_edit') is True)
 
 
 def edit_engine_choice_message():
@@ -12365,7 +12400,7 @@ def generate_variations_nanobanana(app, user_id, dataset_id, variations, multipl
     from ..engines.registry import require_available
     require_available(engine)
     _guard_not_bank_export(dataset_id)
-    if engine not in API_ENGINES:
+    if engine not in api_engine_ids():
         raise ValueError(f'unknown API engine: {engine}')
     # Fail closed: NSFW variations never go to third-party API engines.
     # They exist only on the local Klein path.

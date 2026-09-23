@@ -10,8 +10,9 @@
    engine set can edit — and the two free ones now cover the most exploratory
    gesture in the app, the one you repeat until it looks right. */
 import {
-  primaryEngine, readEngines, apiEngineIds, engineIds, engineLabel, localEngineIds,
+  primaryEngine, readEngines, apiEngineIds, engineLabel, localEngineIds,
 } from './engineSelection.js';
+import { engineCatalog } from '../../engines/catalog.js';
 
 /** Engines that can edit the reference — DERIVED from the canonical engine list,
  *  never a second hardcoded list. The server accepts exactly
@@ -23,7 +24,9 @@ import {
  *  in it. Order = canonical engine order = toggle order in the modal, which puts
  *  the FREE local engines first — cheapest option first is not a ranking, it is
  *  the honest reading order for a gesture billed per press. */
-export function editEngines() { return [...engineIds()]; }
+export function editEngines() {
+  return engineCatalog().filter((spec) => spec.referenceEdit !== false).map((spec) => spec.id);
+}
 
 /** The refusal shown for a non-editable engine, DERIVED from EDIT_ENGINES:
  *  "Pick Klein, Krea 2 Edit, <each API engine> or <the last one>". The old

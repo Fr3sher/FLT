@@ -816,7 +816,10 @@ def _parse_engine_batches(data):
     # `in`, not truthiness: an EMPTY list means "the user has no engine selected"
     # and must be refused, not silently reinterpreted as a legacy Klein request.
     if 'engine_batches' not in data:
-        return [(data.get('generator') or 'klein', data.get('variations') or [])]
+        generator = data.get('generator') or 'klein'
+        if generator not in svc.known_engine_ids():
+            raise ValueError(f'unknown engine: {generator}')
+        return [(generator, data.get('variations') or [])]
     raw = data.get('engine_batches')
     if raw is None:
         raise ValueError('no engine selected')
@@ -830,7 +833,7 @@ def _parse_engine_batches(data):
         variations = entry.get('variations') or []
         # Every entry is checked — not just the first one — or an unknown engine
         # could ride along behind a valid one.
-        if generator not in svc.KNOWN_ENGINES:
+        if generator not in svc.known_engine_ids():
             raise ValueError(f'unknown engine: {generator}')
         if not isinstance(variations, list):
             raise ValueError('engine_batches variations must be a list')
@@ -854,7 +857,7 @@ def dataset_generate(dataset_id):
     # re-checks, defense in depth). Refused before anything is created, so a bad
     # entry in the middle of good ones cannot leave a half-dispatched run.
     for generator, variations in batches:
-        if generator in svc.API_ENGINES and any(
+        if generator in svc.api_engine_ids() and any(
                 v.get('nsfw') or is_nsfw_label(v.get('label')) for v in variations):
             return jsonify({'ok': False,
                             'error': 'NSFW variations run on a local engine only — '
@@ -871,7 +874,7 @@ def dataset_generate(dataset_id):
     # first, since it ran the preflight itself).
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'ok': False, 'error': 'dataset not found'}), 400
-    if any(generator in svc.LOCAL_ENGINES for generator, _ in batches):
+    if any(generator in svc.local_engine_ids() for generator, _ in batches):
         gate = _require_no_stalled_comfyui()
         if gate:
             return gate
@@ -895,6 +898,16 @@ def dataset_generate(dataset_id):
             keh2.preflight()
         except keh2.KreaModelsMissing as e:
             return _krea_missing_response(e)
+    from ..services import local_dataset_engines
+    try:
+        for generator, _variations in batches:
+            if local_dataset_engines.is_plugin_engine(generator):
+                local_dataset_engines.preflight(LOCAL_USER, dataset_id, generator)
+    except local_dataset_engines.LocalEngineNotReady as exc:
+        return jsonify({'ok': False, 'error': str(exc), 'engine': exc.engine,
+                        'setup_path': f'/plugins/{exc.plugin}/settings'}), 409
+    except ValueError as exc:
+        return _map_error(exc)
     created, per_engine = 0, {}
     try:
         # The per-engine calls each enforce MAX_FANOUT on their own share, which
@@ -904,7 +917,7 @@ def dataset_generate(dataset_id):
             dataset_id, sum(len(v) for _, v in batches) * max(1, int(multiplier or 1)),
             generators=[generator for generator, _ in batches])
         for generator, variations in batches:
-            if generator in svc.API_ENGINES:
+            if generator in svc.api_engine_ids():
                 # API path (Gemini Nano Banana Pro or OpenAI ChatGPT gpt-image-2):
                 # no GPU, rows filled by a background thread — the existing polling
                 # UI tracks them.
@@ -912,6 +925,9 @@ def dataset_generate(dataset_id):
                 ids = svc.generate_variations_nanobanana(
                     current_app._get_current_object(), LOCAL_USER, dataset_id,
                     variations, multiplier, engine=generator)
+            elif local_dataset_engines.is_plugin_engine(generator):
+                ids = local_dataset_engines.generate(
+                    LOCAL_USER, dataset_id, variations, multiplier, engine=generator)
             elif generator == 'krea':
                 # Second LOCAL path (Krea 2 Identity Edit): GPU-bound like Klein,
                 # free, NSFW-capable. Its one dial (grounding_px) is a setting,
@@ -921,7 +937,7 @@ def dataset_generate(dataset_id):
                 ids = svc.generate_variations_krea(
                     LOCAL_USER, dataset_id, variations, multiplier,
                     generation_lora_preset=data.get('krea_generation_lora_preset'))
-            else:
+            elif generator == 'klein':
                 ids = svc.generate_variations(LOCAL_USER, dataset_id,
                                               variations, multiplier,
                                               data.get('klein_model'),
@@ -931,6 +947,8 @@ def dataset_generate(dataset_id):
                                               # from config — absent/'' = none.
                                               generation_lora_preset=data.get('generation_lora_preset'))
                 _autostart_optional_klein()  # bg-fetch the consistency LoRA if it's absent
+            else:
+                raise ValueError(f'Unsupported dataset engine: {generator}')
             created += len(ids)
             per_engine[generator] = per_engine.get(generator, 0) + len(ids)
     except Exception as e:

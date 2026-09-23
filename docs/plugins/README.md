@@ -34,6 +34,7 @@ normal installations use the reviewed packages offered through Plugins.
 - [API 1.20: declared ComfyUI node preparation](../../sdk/python/API-1.20.md)
 - [API 1.21: protect active work during memory release](../../sdk/python/API-1.21.md)
 - [API 1.22: dataset creation and video imports](../../sdk/python/API-1.22.md)
+- [API 1.23: local dataset engines](../../sdk/python/API-1.23.md)
 - [Independent frontend SDK](../../sdk/frontend/README.md)
 
 Plugin Python imports its own package, standard-library modules and documented

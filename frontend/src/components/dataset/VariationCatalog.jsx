@@ -33,7 +33,7 @@ import {
   estimateCost, generateBlockedReason, localQueuesBehindApi, localOnly, readEngines,
   readMode, totalImages, writeEngines, writeMode,
 } from './engineSelection.js';
-import { apiEngineSpecs, freeEngines } from '../../engines/catalog.js';
+import { pluginEngineSpecs, freeEngines } from '../../engines/catalog.js';
 import EngineCard from './EngineCard.jsx';
 import { PluginPanel } from '../../plugins/PluginSlot.jsx';
 import { kreaUnavailableReason, groundingDescription } from '../../utils/kreaEngine.js';
@@ -1089,7 +1089,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         <span className="text-content-subtle text-[0.625rem]">{SUBJECT_TYPE_HINTS[subject]}</span>
       </div>
 
-      {/* Engine cards — Klein and Krea 2 Edit (local GPU), then every API
+      {/* Engine cards — Klein and Krea 2 Edit (local GPU), then every plugin
           engine the catalog holds (the enabled plugins', each drawing its own
           card through EngineCard).
           CHECKBOXES, not a radio group: several engines can run in one batch.
@@ -1099,7 +1099,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       <div className="flex items-center gap-2">
         <span className="text-content-muted text-[0.6875rem] uppercase">Engines</span>
         <span className="text-content-subtle text-[0.625rem]">
-          where the images are made — pick one or several · Klein and Krea 2 Edit run free on your GPU · API engines bill per image
+          where the images are made — pick one or several · local engines use your GPU · API engines use credits or a plan
         </span>
         <HelpBadge topic="dataset-engine-mode" />
       </div>
@@ -1112,8 +1112,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       </p>
       {/* A fact an engine's plugin wants next to the choice (the Gemini output
           filter and SynthID, for one) rides its spec as a `note` panel. */}
-      {apiEngineSpecs().filter((s) => typeof s.note === 'function').map((s) => (
-        <PluginPanel key={`note-${s.id}`} panelKey={`${s.plugin}:${s.id}:note`} importer={s.note} spec={s} />
+      {pluginEngineSpecs().filter((s) => typeof s.note === 'function').map((s) => (
+        <PluginPanel key={`note-${s.id}`} panelKey={`${s.plugin}:${s.id}:note`} importer={s.note}
+          spec={s} checked={engines.includes(s.id)} caps={caps} />
       ))}
       {/* Five cards now, and the column stops at THREE. Tailwind breakpoints read
           the VIEWPORT, but these cards live in the workspace column next to the
@@ -1175,15 +1176,15 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
               {kreaHint}
             </a>
           )} />
-        {/* The API engines' cards: each spec names its card panel (`card`), and
+        {/* The plugins' cards: each spec names its card panel (`card`), and
             the core hands it the same facts every card gets — checked,
             available, its share of the shots — plus the capabilities and the
             engines config it may read its own keys from. */}
-        {apiEngineSpecs().map((spec) => (
+        {pluginEngineSpecs().map((spec) => (
           <PluginPanel key={spec.id} panelKey={`${spec.plugin}:${spec.id}:card`} importer={spec.card}
             spec={spec} checked={engines.includes(spec.id)} available={!!available[spec.id]}
             generating={generating} onToggle={toggleEngine} share={engineShare(spec.id)}
-            caps={caps} engineConfig={engineConfig} />
+            caps={caps} engineConfig={engineConfig} enabledInSettings={enabledEngines.includes(spec.id)} />
         ))}
       </div>
 
@@ -1225,7 +1226,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           reference's shape while Krea capped itself at the reference's own pixel
           count, so the same dataset held tiles of two sizes and two shapes.
           Both now spend this budget on the shot card's ratio. */}
-      {(isKlein || isKrea) && (klAvailable || krAvailable) && (
+      {localEngineIds().some((id) => engines.includes(id) && available[id]) && (
         <div className="rounded-lg border border-border bg-app/30 px-2.5 py-2">
           <KreaDial
             id="variation-output-size-dial"
@@ -1240,9 +1241,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             onChange={setVariationSize}
           >
             How many pixels every generated shot gets, on the shape of its own
-            card. Shared by 🖥️ Klein and Krea 2 Edit so one dataset never mixes
-            two sizes. Larger costs more VRAM and more time per image, and the
-            edit models lose coherence past 2 MP — upscale further afterwards with
+            card. Shared by the local engines so one dataset uses the same pixel
+            budget. Larger costs more VRAM and more time per image, and results
+            can lose coherence at higher sizes — upscale further afterwards with
             ✨ Upscale &amp; improve instead.
           </KreaDial>
         </div>

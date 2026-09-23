@@ -51,6 +51,8 @@ class EngineSpec:
     generate: Callable | None = None       # () -> generate_variation(refs, prompt, **kw)
     generate_kwargs: Callable | None = None  # () -> extra kwargs pinned for a run (auth lane)
     probe: Callable | None = None  # () -> {'ok': bool, 'detail': str}
+    local_preflight: Callable | None = None  # (**reference facts) -> readiness dict
+    local_enqueue: Callable | None = None  # (**shot facts) -> host queue job id
     plugin: str | None = None      # the plugin that registered it, None for the core
     extra: dict = field(default_factory=dict)
 
@@ -85,6 +87,10 @@ _specs: dict[str, EngineSpec] = {}
 def register(spec: EngineSpec, *, replace: bool = False) -> EngineSpec:
     if spec.kind not in (API, LOCAL):
         raise ValueError(f'engine {spec.id!r}: kind must be {API!r} or {LOCAL!r}')
+    if spec.local_preflight is not None or spec.local_enqueue is not None:
+        if spec.kind != LOCAL or not all(callable(value) for value in
+                                        (spec.local_preflight, spec.local_enqueue)):
+            raise ValueError('A local dataset engine needs both preflight and enqueue callbacks.')
     with _lock:
         if spec.id in _specs and not replace:
             raise DuplicateEngine(f'engine {spec.id!r} is already registered'

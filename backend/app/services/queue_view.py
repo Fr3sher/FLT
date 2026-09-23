@@ -75,6 +75,8 @@ def _metadata(row) -> dict:
 
 
 def _engine_label(md):
+    if md.get('dataset_engine_plugin'):
+        return md.get('engine_label') or md.get('engine')
     engine = md.get('improve_engine')
     if engine == 'seedvr2':
         return 'SeedVR2'
