@@ -79,7 +79,16 @@ does not silently change that selection.
 
 Qwen-Image 2.1 uses Qwen3-VL **8B** and the dedicated **2.1 VAE**. Its older
 Qwen Image/Edit counterparts are incompatible. If native nodes are missing,
-update ComfyUI and restart it after active jobs finish. LDS checks files and
+choose **Fix missing ComfyUI nodes** in Studio or this Settings group. The repair
+panel provides update steps for Windows portable, Desktop and manual/server
+installations, links to ComfyUI and the official downloads, and identifies custom
+node packages when a test requires them. Finish active jobs before updating or
+restarting. Preserve local changes in customized installations; the panel also
+links instructions for sharing existing models with a separate installation.
+After restarting, use **Check nodes again** to query the running ComfyUI afresh.
+A failed connection or a still-missing node keeps the repair open; your prompt
+and checkpoint choices remain in place. LDS guides the update; it does not run
+ComfyUI's updater or restart an external process for you. LDS checks files and
 node availability separately and cannot report readiness while ComfyUI is
 unreachable. Sampler defaults follow the selected family; FLUX.1's guidance
 control is distilled guidance, while its sampler CFG stays at 1.

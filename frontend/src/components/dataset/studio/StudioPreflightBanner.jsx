@@ -11,8 +11,9 @@
  */
 import { FAMILY_LABELS } from './constants';
 import { studioModelSettingsLink } from '../../../utils/studioFamilySettings';
+import ComfyNodeRepair from '../../setup/ComfyNodeRepair';
 
-export default function StudioPreflightBanner({ missing, archMismatch, onDismiss }) {
+export default function StudioPreflightBanner({ missing, archMismatch, onDismiss, onRefresh }) {
   if (archMismatch) {
     const fam = FAMILY_LABELS[archMismatch.family] || archMismatch.family || 'this';
     const det = FAMILY_LABELS[archMismatch.detected] || archMismatch.detected || 'a different';
@@ -37,7 +38,6 @@ export default function StudioPreflightBanner({ missing, archMismatch, onDismiss
   const files = missing.files || [];
   const nodes = missing.nodes || [];
   const nodePacks = missing.node_packs || [];
-  const packFor = (ct) => nodePacks.find((p) => p.class_type === ct);
   if (!files.length && !nodes.length) return null;
   const fam = FAMILY_LABELS[missing.family] || missing.family || 'This';
   const modelSettingsLink = studioModelSettingsLink(missing.family);
@@ -90,43 +90,7 @@ export default function StudioPreflightBanner({ missing, archMismatch, onDismiss
       )}
 
       {nodes.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <span className="text-red-200/80 text-[0.6875rem] uppercase tracking-wide">
-            Missing ComfyUI node{nodes.length > 1 ? 's' : ''} — update ComfyUI or install the listed package
-          </span>
-          <ul className="m-0 flex flex-col gap-1">
-            {nodes.map((n) => {
-              const p = packFor(n);
-              return (
-                <li key={n} className="flex flex-col gap-0.5">
-                  <code className="self-start px-1.5 py-0.5 rounded border border-red-400/40 bg-red-500/10 text-red-100 text-[0.6875rem]">
-                    {n}
-                  </code>
-                  {p && (
-                    <span className="text-red-200/70 text-[0.625rem]">
-                      {p.core ? (
-                        <>Update ComfyUI, then restart it.</>
-                      ) : p.url ? (
-                        <>
-                          Install <b className="font-semibold">{p.pack}</b> via ComfyUI-Manager
-                          {p.search ? <> (search “{p.search}”)</> : null} —{' '}
-                          <a href={p.url} target="_blank" rel="noreferrer"
-                            className="underline break-all hover:text-red-100">{p.url}</a>
-                          , then restart ComfyUI.
-                        </>
-                      ) : (
-                        <>
-                          Install <b className="font-semibold">{p.pack}</b> from {p.setup},
-                          then restart ComfyUI.
-                        </>
-                      )}
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+        <ComfyNodeRepair nodes={nodes} nodePacks={nodePacks} onRefresh={onRefresh} />
       )}
     </div>
   );

@@ -93,7 +93,8 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
   const total = cells * promptMult;
   const modelError = d.generation_readiness?.config_error || form.modelError;
   const canLaunch = total > 0 && !d.pending && !d.gpu_busy && !studio.launching
-    && !launchBlocked && !modelError && d.generation_readiness?.models_ready !== false;
+    && !launchBlocked && !modelError && d.generation_readiness?.models_ready !== false
+    && !d.generation_readiness?.missing_nodes?.length;
   const launchText = batchLaunchText(launchLabel, allPickedPrompts);
   // Always-on LoRA batch comparison generates each configuration WITHOUT then WITH each checked
   // LoRA. Image/time estimates must include the backend's 1 + checked-count multiplier.
@@ -131,6 +132,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
     <>
       {/* Preflight: missing models/nodes (P0-a) and architecture mismatch. */}
       <StudioPreflightBanner missing={preflight} archMismatch={archMismatch}
+        onRefresh={async () => { await studio.refresh(); setPreflight(null); }}
         onDismiss={() => { setPreflight(null); setArchMismatch(null); }} />
 
       {/* Safeguards. */}

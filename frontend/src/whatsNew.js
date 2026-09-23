@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-23-zzzzzzz-studio-node-repair',
+    date: '2026-09-23',
+    title: 'Resolve missing ComfyUI nodes from your test setup',
+    blurb: 'Studio and model settings now offer installation-specific repair steps, direct ComfyUI links and a fresh node check. Missing nodes stay visible even when all model files are present, and your prompt and checkpoint choices survive the repair.',
+    to: '/studio',
+  },
+  {
     id: '2026-09-23-video-reference-text-writer',
     date: '2026-09-23',
     title: 'Auto and Enrich reach your chosen motion writer',

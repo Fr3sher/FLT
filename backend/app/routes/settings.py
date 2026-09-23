@@ -432,6 +432,25 @@ def trained_image_models():
         return jsonify({'error': str(exc)}), 400
 
 
+@bp.get('/comfy/node-check')
+def comfy_node_check():
+    """Recheck the requested node names on the configured ComfyUI after repair.
+
+    This reads the same node registry as Studio preflight, bypassing its cache.
+    Names are compared locally, never interpolated into a URL or command.
+    """
+    nodes = request.args.getlist('nodes')
+    if not 1 <= len(nodes) <= 64 or any(not n.strip() or len(n) > 256 for n in nodes):
+        return jsonify({'error': 'Provide between 1 and 64 node names.'}), 400
+    from ..utils.comfyui import clear_model_caches, fetch_object_info_classes
+    clear_model_caches()
+    classes = fetch_object_info_classes()
+    if classes is None:
+        return jsonify({'error': 'ComfyUI did not answer. Start it, then check nodes again.',
+                        'nodes_checked': False}), 503
+    return jsonify({'nodes_checked': True, 'missing_nodes': sorted(set(nodes) - classes)})
+
+
 def seedvr2_models_list():
     """The SeedVR2 DiT builds actually PRESENT in this install's SEEDVR2 folder(s),
     plus the catalog of builds the app can talk about.

@@ -3,6 +3,7 @@ import { apiFetch } from '../../api/fetchClient'
 import { Card } from './primitives'
 import ModelFilePicker from './ModelFilePicker'
 import InstallRunner from '../setup/InstallRunner'
+import ComfyNodeRepair from '../setup/ComfyNodeRepair'
 
 /** The same resolved files and install actions used by Studio's preflight. */
 export default function TrainedImageModelsCard({ config, setField }) {
@@ -51,10 +52,7 @@ export default function TrainedImageModelsCard({ config, setField }) {
               <div className="space-y-4 pt-2">
                 {family.config_error && <p role="alert" className="text-sm text-red-400">{family.config_error}</p>}
                 {family.missing_nodes?.length > 0 && (
-                  <p className="text-xs text-amber-400">
-                    Update ComfyUI, then restart it when your current jobs have finished.
-                    Required nodes: {family.missing_nodes.join(', ')}.
-                  </p>
+                  <ComfyNodeRepair nodes={family.missing_nodes} onRefresh={refresh} />
                 )}
                 {!family.nodes_checked && <p className="text-xs text-content-muted">
                   ComfyUI did not answer the node check. Model files alone do not confirm readiness.

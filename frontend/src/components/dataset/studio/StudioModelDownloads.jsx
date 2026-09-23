@@ -3,13 +3,15 @@ import { apiFetch } from '../../../api/fetchClient';
 import InstallRunner from '../../setup/InstallRunner';
 import { fmtSize } from '../../setup/fmtSize';
 import { HelpBadge } from '../../../help/HelpMode';
+import ComfyNodeRepair from '../../setup/ComfyNodeRepair';
 
 /** Use only repairs the resolver says can satisfy the selected files. */
 export default function StudioModelDownloads({ readiness, onRefresh }) {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
   const downloads = readiness?.downloads || [];
-  if (!downloads.length) return null;
+  const nodes = readiness?.missing_nodes || [];
+  if (!downloads.length && !nodes.length) return null;
 
   const refresh = async () => {
     setChecking(true);
@@ -27,7 +29,9 @@ export default function StudioModelDownloads({ readiness, onRefresh }) {
   };
 
   return (
-    <section aria-label="Download missing models"
+    <>
+    {nodes.length > 0 && <ComfyNodeRepair nodes={nodes} onRefresh={onRefresh} />}
+    {downloads.length > 0 && <section aria-label="Download missing models"
       className="min-w-0 space-y-3 rounded-lg border border-amber-400/40 bg-amber-400/5 p-3">
       <div className="space-y-1">
         <h3 className="text-sm font-semibold text-content">Prepare {readiness.label} for generation<HelpBadge topic="studio_models" /></h3>
@@ -54,6 +58,7 @@ export default function StudioModelDownloads({ readiness, onRefresh }) {
         {checking ? 'Checking model files…' : 'Check installed files again'}
       </button>
       {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
-    </section>
+    </section>}
+    </>
   );
 }

@@ -88,15 +88,32 @@ test('invalid model configuration blocks comparison even when another model is i
 });
 
 test('new-family missing files link to their install controls and identify core nodes accurately', () => {
-  const html = render(StudioPreflightBanner, { missing: {
+  const html = render(() => createElement(MemoryRouter, null, createElement(StudioPreflightBanner, { missing: {
     family: 'anima', files: [{ path: 'models/diffusion_models/anima.safetensors', kind: 'diffusion model' }],
     nodes: ['AnimaTokenizer'], node_packs: [{ class_type: 'AnimaTokenizer', pack: 'ComfyUI', core: true }],
-  } });
+  } })));
   assert.match(html, /Anima test pipeline/);
   assert.match(html, /focus=studio-models/);
   assert.match(html, /Missing ComfyUI node/);
   assert.doesNotMatch(html, /Missing custom node/);
-  assert.match(html, /Update ComfyUI, then restart it/);
+  assert.match(html, /Fix missing ComfyUI nodes/);
+  assert.match(html, /Check nodes again/);
+});
+
+test('missing nodes remain actionable when all model files are present', () => {
+  const html = renderComparison({
+    selection: [{ dataset_id: 1, checkpoint: 'first.safetensors', family: 'qwenimage21' }],
+    runType: 'qwenimage21',
+    generationReadiness: { label: 'Qwen-Image 2.1', models_ready: true, downloads: [],
+      missing_nodes: ['TextEncodeQwenImage21'] },
+  });
+  assert.match(html, /TextEncodeQwenImage21/);
+  assert.match(html, /Fix missing ComfyUI nodes/);
+  assert.match(html, /Check nodes again/);
+  assert.doesNotMatch(html, /Download missing models/);
+  const runButtons = html.match(/<button[^>]*>🚀 Run the test<\/button>/g) || [];
+  assert.equal(runButtons.length, 2);
+  assert.ok(runButtons.every((button) => button.includes('disabled')));
 });
 
 test('missing Qwen files offer in-place downloads and keep generation blocked until all files exist', () => {

@@ -20,6 +20,37 @@ UNSAFE_SECRET_CHARS = [
 ]
 
 
+@pytest.mark.parametrize('available, expected_code, missing', [
+    ({'CLIPLoader'}, 200, ['TextEncodeQwenImage21']),
+    ({'CLIPLoader', 'TextEncodeQwenImage21'}, 200, []),
+    (None, 503, None),
+])
+def test_comfy_node_check_rechecks_without_claiming_unreachable_is_ready(
+        client, monkeypatch, available, expected_code, missing):
+    from app.utils import comfyui
+    calls = []
+    monkeypatch.setattr(comfyui, 'clear_model_caches', lambda: calls.append('clear'))
+    monkeypatch.setattr(comfyui, 'fetch_object_info_classes',
+                        lambda: calls.append('fetch') or available)
+    response = client.get('/api/comfy/node-check', query_string=[
+        ('nodes', 'TextEncodeQwenImage21'), ('nodes', 'CLIPLoader')])
+    assert response.status_code == expected_code
+    assert calls == ['clear', 'fetch']
+    assert response.json['nodes_checked'] is (available is not None)
+    if available is not None:
+        assert response.json['missing_nodes'] == missing
+    else:
+        assert 'Start it' in response.json['error']
+
+
+@pytest.mark.parametrize('nodes', [[], [''], [' '], ['a' * 257], ['a'] * 65])
+def test_comfy_node_check_rejects_invalid_requests_before_network(client, monkeypatch, nodes):
+    from app.utils import comfyui
+    monkeypatch.setattr(comfyui, 'fetch_object_info_classes',
+                        lambda: pytest.fail('Invalid input must not trigger a probe'))
+    assert client.get('/api/comfy/node-check', query_string=[('nodes', n) for n in nodes]).status_code == 400
+
+
 @pytest.fixture(autouse=True)
 def _no_real_network(monkeypatch):
     """GET /api/capabilities calls probe(), which hits every reachability

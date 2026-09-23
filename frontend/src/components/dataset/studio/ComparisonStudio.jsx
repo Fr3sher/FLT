@@ -204,6 +204,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   const combineBlocked = combine ? combineBlocker(selection) : null;
   const launchBlocked = settingsError || generationReadiness?.config_error || modelError
     || (generationReadiness?.models_ready === false ? 'Download the required model files to continue.' : null)
+    || (generationReadiness?.missing_nodes?.length ? 'Repair the missing ComfyUI nodes to continue.' : null)
     || combineBlocked;
 
   // STACK view follows the DISPLAYED RUN, not the Compare/Blend toggle: yesterday's stack can be
@@ -437,6 +438,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
 
       <main id="st-results" className="flex flex-col gap-3 min-w-0 scroll-mt-16">
         <StudioPreflightBanner missing={preflight} archMismatch={archMismatch}
+          onRefresh={async () => { await onRefreshModels?.(); setPreflight(null); }}
           onDismiss={() => { setPreflight(null); setArchMismatch(null); }} />
         {data?.comfyui_recovery?.requires_comfyui_restart_confirmation && (
           <div className="flex items-center gap-2 flex-wrap rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2" role="status">
