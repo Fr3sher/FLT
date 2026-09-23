@@ -1,6 +1,6 @@
 # Documentation
 
-This is the documentation index for LoRA Dataset Studio. The root [README](../README.md) stays focused on capabilities and installation; detailed workflows and reference material live here.
+[Project overview](../README.md) · [Public plugins](../README.md#plugins)
 
 ## Start here
 
@@ -10,16 +10,20 @@ This is the documentation index for LoRA Dataset Studio. The root [README](../RE
 | [End-to-end workflow](guide/workflow.md) | You want the full source → curate → caption → clean → train → test → export walkthrough |
 | [Using the app](guide/using-the-app.md) | You need task-level instructions for a specific workspace, Image Bank, Canvas or Studio action |
 | [Dataset quality guide](DATASET_GUIDE.md) | You want guidance on image counts, variety, captions, masks and training-ready data |
+| [Feature reference](guide/features.md) | Detailed capabilities, screenshots and the limits of each workflow |
 
 ## Install and configure
 
 | Guide | Covers |
 |---|---|
-| [README — Setup & install](../README.md#setup--install) | Windows launcher, manual venv, API-only Docker and the beginner GPU Docker path |
+| [Installation](guide/installation.md) | Windows, manual Python, Pinokio, updates, external tools and API keys |
+| [Requirements](guide/requirements.md) | Hardware, disk space and dependencies by feature |
+| [Migrate to V2](guide/migrate-to-v2.md) | Upgrade a V1 Git installation while preserving data |
 | [Docker guide](guide/docker.md) | GPU-container CLI, storage, existing ComfyUI data, UID/GID, DNS, updates, resources and limits |
 | [RunPod guide](guide/runpod.md) | Running the whole studio on a rented GPU pod: registry push, template fields, network volume, the forced access token and the limits |
 | [Extensions guide](guide/extensions.md) | Optional local packages under `backend/extensions/`: the `register(app, csrf)` contract, the manifest, the trust model and why the folder can never ship |
 | [Settings reference](guide/settings-reference.md) | Every UI setting, dependency, model location, environment override and `config.json` key |
+| [Network access and privacy](guide/network-access.md) | External connections, optional usage statistics and public-access configuration |
 | [Security policy](../SECURITY.md) | Threat model, safe network exposure and private vulnerability reporting |
 
 ## Diagnose and recover
@@ -35,9 +39,11 @@ This is the documentation index for LoRA Dataset Studio. The root [README](../RE
 | Document | Covers |
 |---|---|
 | [Roadmap](../README.md#roadmap) | Directions currently planned, without date promises |
-| [Changelog](../CHANGELOG.md) | Shipped improvements rolled out of the README |
+| [Releases](https://github.com/perfectgf/lora-dataset-studio/releases) and [changelog](../CHANGELOG.md) | Current release notes and historical improvements |
+| [Plugin authoring](plugins/README.md) | SDK, package layout, compatibility and building plugins |
 | [Contributing](../CONTRIBUTING.md) | Development setup, tests and pull-request conventions |
 | [Code of Conduct](../CODE_OF_CONDUCT.md) | Community expectations |
 | [License](../LICENSE) | PolyForm Noncommercial License 1.0.0 |
+| [Responsible use](responsible-use.md) | Consent, privacy, source rights, prohibited uses and warranty |
 
 Current news, support and roadmap discussion live on [Discord](https://discord.gg/j6hnJBFtXE).

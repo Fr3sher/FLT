@@ -84,8 +84,8 @@ If `/data` or existing contents beneath it are not writable, `LDS_FORCE_CHOWN=tr
 is the last resort: it recursively changes ownership only for the `LDS_DATA` mount,
 never the ComfyUI or bank mounts.
 
-The full install matrix (Windows release ZIP, GPU requirements, external tools)
-lives in the README on GitHub.
+See [Installation](installation.md) for all launchers, updates and external tools,
+and [Requirements](requirements.md) for hardware and dependencies.
 
 ## What is running on your machine {#architecture}
 
