@@ -1,4 +1,4 @@
-"""Private Video recipes on the existing public H3 API."""
+"""Video recipes on the public H3 API."""
 from lds_sdk import h3_render as host
 from . import h3_refmods
 
@@ -30,8 +30,22 @@ def missing_weights():
     return rows
 
 
-def build_workflow(*, refmods=False, references=None, **options):
+def build_workflow(*, refmods=False, references=None, fused=False, h3_attention='auto',
+                   h3_spectrum=False, h3_video_vae='fp16', h3_video_writer='native',
+                   performance_classes=None, **options):
+    from . import h3_performance as performance
     mode = host.normalise_mode(options.get('mode'))
+    fused = fused or options.get('ref_base') == 'fused'
+    controls = dict(fused=fused, h3_attention=h3_attention, h3_spectrum=h3_spectrum,
+                    h3_video_vae=h3_video_vae, h3_video_writer=h3_video_writer)
+    performance.validate(**controls, **options)
+    if fused:
+        options['steps'] = options.get('steps') if options.get('steps') is not None else 8
+        options['ref_base'] = 'official'
+    if h3_attention != 'auto':
+        options['sage'] = False
+    if h3_video_vae == 'int8':
+        options['video_vae'] = host.VIDEO_VAE_INT8
     h3_refmods.validate(mode, options.get('image'), references, refmods)
     spec = next((row for row in CHIMERA if row['id'] == options.get('accel')), None)
     if spec and mode == 'ref2va':
@@ -57,7 +71,7 @@ def build_workflow(*, refmods=False, references=None, **options):
         h3_refmods.graft(graph, references)
         built['generation_settings'].update(refmods=True, references=references)
         built['notes'].append(f'identity RefMods: {len(references)} (experimental)')
-    return built
+    return performance.apply(built, **controls, classes=performance_classes, mode=mode)
 
 CHIMERA = ({'id': 'taomate_3step',
   'label': 'TaoMate H3 · 3 steps',

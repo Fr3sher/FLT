@@ -506,6 +506,30 @@ def test_poll_outputs_fails_fast_on_comfyui_error_status(app):
     assert (filename, failed) == (None, True)
 
 
+@pytest.mark.parametrize('key', ['images', 'gifs'])
+def test_poll_outputs_never_claims_a_reference_video(app, key):
+    from app.job_queue import _poll_outputs
+    history = {'p': {'outputs': {
+        '902': {key: [{'filename': 'lds_vref_input.mp4', 'type': 'input'}]},
+        '92': {key: [{'filename': 'render.mp4', 'type': 'output'}]},
+    }, 'status': {'status_str': 'success', 'completed': True}}}
+    with app.app_context(), patch('app.utils.comfyui.get_comfyui_history_probe',
+                                  return_value=_ready_history(history)):
+        assert _poll_outputs('p', timeout=1) == ('render.mp4', False)
+
+
+@pytest.mark.parametrize('status,output_type', [('error', 'output'), ('error', 'input'),
+                                              ('success', 'input')])
+def test_poll_outputs_rejects_failed_or_input_only_history(app, status, output_type):
+    from app.job_queue import _poll_outputs
+    history = {'p': {'outputs': {'902': {'images': [
+        {'filename': 'reference.mp4', 'type': output_type}]}},
+        'status': {'status_str': status, 'completed': True}}}
+    with app.app_context(), patch('app.utils.comfyui.get_comfyui_history_probe',
+                                  return_value=_ready_history(history)):
+        assert _poll_outputs('p', timeout=1) == (None, True)
+
+
 def test_poll_outputs_completed_with_no_outputs_fails(app):
     from app.job_queue import _poll_outputs
     history = {'prompt-1': {'outputs': {}, 'status': {'status_str': 'success', 'completed': True}}}

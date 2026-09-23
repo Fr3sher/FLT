@@ -17,6 +17,7 @@ import { Sparkles, Flame, Feather, Zap, Maximize2 } from 'lucide-react';
 import { SliderLock, useSliderLock } from '@lds/plugin-sdk/ui';
 import { ACCELERATIONS, accelOptionText, clipSeconds, SPARSE_CHOICES, sparseInForce, studioFrameChoices } from './videoStudioApi';
 import VideoReferenceOptions from './VideoReferenceOptions';
+import VideoPerformanceOptions from './VideoPerformanceOptions';
 
 function Toggle({ checked, onChange, icon: Icon, label, cost, hint, disabled, disabledHint }) {
   return (
@@ -96,7 +97,8 @@ export default function VideoOptionsPanel({ options, value, onChange, referenceM
      VDN-H3 at eight); the server's turbo_steps is the fallback for a row
      that does not say. */
   const accelSteps = picked?.steps || options?.turbo_steps || 6;
-  const autoSteps = referenceMode
+  const fused = referenceMode ? value.base === 'fused' : !!value.fused;
+  const autoSteps = fused ? 8 : referenceMode
     ? (options?.reference?.accelerations?.find((a) => a.id === value.accel)?.steps
       || (['ref8', 'vdn'].includes(value.accel) ? 8 : value.accel === 'ref4' ? 4 : options?.default_steps || 20))
     : value.accel
@@ -116,10 +118,11 @@ export default function VideoOptionsPanel({ options, value, onChange, referenceM
   /* ⚡ VDN-H3 owns the attention path the sparse pack also patches: the
      select greys while it is picked (and the payload leaves sparse out). */
   const vdnPicked = value.accel === 'vdn';
+  const customAttention = value.h3_attention === 'sage' || value.h3_spectrum;
   const taomate = !referenceMode && value.accel === 'taomate_3step';
   const steps = taomate ? 3 : value.steps ? Number(value.steps) : autoSteps;
   const seconds = clipSeconds(value.frames, fps);
-  const sparseHint = off('sparse')
+  const sparseHint = customAttention ? 'Off while H3 Sage or Spectrum is selected.' : off('sparse')
     ? need('sparse')
     : vdnPicked
       ? 'Off while VDN-H3 is picked: both patch the same attention path.'
@@ -132,7 +135,7 @@ export default function VideoOptionsPanel({ options, value, onChange, referenceM
       className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-3">
       <div className="flex flex-col gap-1.5">
         <h2 className="text-sm font-semibold text-content">Render</h2>
-        {referenceMode && <VideoReferenceOptions options={options?.reference} value={value} onChange={set} onRefresh={onRefresh} />}
+        {referenceMode && <VideoReferenceOptions options={options?.reference} value={value} onChange={set} onRefresh={onRefresh} performance={options?.performance} />}
         <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-1">
           {!referenceMode && <>
           {/* ⚡ One of the arena's top three, or the dense base. A select and
@@ -149,7 +152,7 @@ export default function VideoOptionsPanel({ options, value, onChange, referenceM
                 </span>
               )}
             </span>
-            <select value={value.accel || ''} onChange={(e) => set({ accel: e.target.value, steps: e.target.value === 'taomate_3step' ? 3 : '' })}
+            <select disabled={fused} value={value.accel || ''} onChange={(e) => set({ accel: e.target.value, ...(e.target.value === 'vdn' ? { h3_attention: 'native', h3_spectrum: false, sparse: '' } : {}), steps: e.target.value === 'taomate_3step' ? 3 : '' })}
               aria-label="Acceleration"
               className="w-full rounded-md border border-border bg-app px-2 py-1 text-xs text-content min-h-10 lg:min-h-0">
               <option value="">Off — dense base, {options?.default_steps || 20} steps</option>
@@ -166,7 +169,7 @@ export default function VideoOptionsPanel({ options, value, onChange, referenceM
               to arbitrate. */}
           <Toggle checked={value.eros} onChange={(v) => set({ eros: v, ...(v ? { light: false } : {}) })}
             icon={Flame} label="10Eros base" cost="its own faces"
-            disabled={options && !options.eros_available}
+            disabled={fused || (options && !options.eros_available)}
             disabledHint="Not on this machine — the official base is used."
             hint="A third-party finetune in place of the official base; works against an identity test." />
           {/* 🪶 The official weights at 4-bit (W4A8 ConvRot): 12.5 GB instead of
@@ -180,7 +183,7 @@ export default function VideoOptionsPanel({ options, value, onChange, referenceM
               probe that did not run must not read as a no. */}
           <Toggle checked={value.light && !lightOff} onChange={(v) => set({ light: v, ...(v ? { eros: false } : {}) })}
             icon={Feather} label="Lighter base (W4A8)" cost="−3.8 GB VRAM resident"
-            disabled={lightOff}
+            disabled={fused || lightOff}
             disabledHint={options?.light?.hint || 'Not on this machine — Setup can fetch it.'}
             hint="The official weights at 4-bit: no slower, 3.8 GB less VRAM once loaded, 12.5 GB on disk. Not seed-compatible with the full base." />
           <Toggle checked={value.latentUpscale && !off('latent_upscale')}
@@ -200,7 +203,7 @@ export default function VideoOptionsPanel({ options, value, onChange, referenceM
                 </span>
               )}
             </span>
-            <select value={off('sparse') ? '' : sparseInForce(value, referenceMode)} disabled={off('sparse') || vdnPicked}
+            <select value={off('sparse') ? '' : sparseInForce(value, referenceMode)} disabled={off('sparse') || vdnPicked || customAttention}
               aria-label="Sparse attention"
               onChange={(e) => set({ sparse: e.target.value })}
               className="w-full rounded-md border border-border bg-app px-2 py-1 text-xs text-content min-h-10 lg:min-h-0">
@@ -219,6 +222,8 @@ export default function VideoOptionsPanel({ options, value, onChange, referenceM
           </p>
         )}
       </div>
+
+      <VideoPerformanceOptions options={options} value={value} onChange={set} referenceMode={referenceMode} onRefresh={onRefresh} />
 
       {/* Steps — the plainest time-for-fidelity dial there is, and the only
           one that was decided for you. It sits with the render options rather

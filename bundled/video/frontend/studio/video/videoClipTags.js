@@ -18,6 +18,12 @@ export function clipTags(clip) {
     if (refs) tags.push(refs);
     if (clip.ref_image_size === 'max') tags.push('more reference detail');
   }
+  const performance = clip.generation_settings || {};
+  if (performance.fused) tags.push('H3 Fused Turbo');
+  if (performance.h3_attention === 'sage') tags.push('H3 SageAttention');
+  if (performance.h3_spectrum) tags.push('Spectrum');
+  if (performance.h3_video_vae === 'int8') tags.push('INT8 video VAE');
+  if (performance.h3_video_writer === 'fast') tags.push('fast MP4');
   if (clip.eros) tags.push('10Eros base');
   if (clip.light) tags.push('W4A8 base');
   if (clip.lora) {

@@ -184,6 +184,7 @@ def video_studio_options():
     # ONE /system_stats read for the reply: the launch advice and the lighter
     # base's version verdict must describe the same server.
     argv, ram_gb, comfy_version = vts.comfyui_launch_facts()
+    from lds_video import h3_performance
     return jsonify({
         # What this machine is still missing, and what Setup can do about it.
         # `action` is a setup_installer action name, so the Setup screen turns
@@ -194,6 +195,7 @@ def video_studio_options():
         'reference': vts.reference_status(classes, comfy_version),
         'options_available': vts.option_availability(classes),
         'sage': vts.sage_available(classes),
+        'performance': h3_performance.status(classes),
         'frame_choices': list(profile.get('frame_choices') or ()),
         # The catalogue's own default is a TRAINING clip length (39 frames,
         # 1.6 s). Publishing it here would open the studio on a clip too short
@@ -1145,6 +1147,9 @@ def enqueue_video_clip(data, prompt, *, mode, image, end_image=None, references=
         references=references if references is not None else data.get('references'),
         ref_base=data.get('ref_base', 'official'), ref_image_size=data.get('ref_image_size', 'match'),
         refmods=data.get('refmods', False),
+        fused=data.get('fused', False), h3_attention=data.get('h3_attention', 'auto'),
+        h3_spectrum=data.get('h3_spectrum', False), h3_video_vae=data.get('h3_video_vae', 'fp16'),
+        h3_video_writer=data.get('h3_video_writer', 'native'),
         # ⏭ …and for a reference CONTINUATION, whose canvas must be its
         # parent's: the seam picture is that parent's last frame, so its own
         # shape is the measurement. Read here, where the staged file is, and
@@ -1266,6 +1271,8 @@ def video_studio_clip_media(clip_id):
     clip = _owned_clips().filter_by(id=clip_id).first()
     if clip is None or not clip.filename:
         return jsonify({'error': 'clip not available'}), 404
+    from lds_video.video_result_recovery import recover
+    recover(clip)
     path = os.path.join(str(vts.clips_dir()), os.path.basename(clip.filename))
     if not os.path.isfile(path):
         return jsonify({'error': 'clip file not found'}), 404

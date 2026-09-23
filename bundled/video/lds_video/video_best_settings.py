@@ -158,7 +158,9 @@ def snapshot(clip):
             'lora', 'lora_strength', 'accel', 'sparse', 'latent_upscale')
     if not isinstance(value, dict) or any(key not in value for key in keys):
         return None
-    return {key: value[key] for key in keys}
+    return {**{key: value[key] for key in keys},
+            **{key: value[key] for key in ('fused', 'h3_attention', 'h3_spectrum',
+                                          'h3_video_vae', 'h3_video_writer') if key in value}}
 
 
 def save_best(user_id, clip_id):

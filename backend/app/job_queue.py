@@ -524,6 +524,15 @@ def _poll_outputs(prompt_id, timeout=None):
             history = probe.history or {}
             entry = history.get(prompt_id, history) if isinstance(history, dict) else {}
             outputs = (entry or {}).get('outputs') or {}
+            status = (entry or {}).get('status') or {}
+            if status.get('status_str') == 'error':
+                detail = _execution_error_detail(status)
+                if detail:
+                    job = ImageGenerationQueue.query.filter_by(comfyui_prompt_id=prompt_id).first()
+                    if job:
+                        job.error_message = detail
+                        db.session.commit()
+                return None, True
             for node_output in outputs.values():
                 # `images` is what SaveImage and SaveVideo report under.
                 # `gifs` is what VideoHelperSuite reports EVERY video under —
@@ -536,16 +545,11 @@ def _poll_outputs(prompt_id, timeout=None):
                 for key in ('images', 'gifs'):
                     for img in (node_output or {}).get(key) or []:
                         if (isinstance(img, dict) and img.get('filename')
-                                and img.get('type', 'output') != 'temp'):
+                                and img.get('type', 'output') == 'output'):
                             return img['filename'], False
-            status = (entry or {}).get('status') or {}
-            if status.get('status_str') == 'error' or (status.get('completed') and not outputs):
-                detail = _execution_error_detail(status)
-                if detail:
-                    job = ImageGenerationQueue.query.filter_by(comfyui_prompt_id=prompt_id).first()
-                    if job:
-                        job.error_message = detail
-                        db.session.commit()
+            # LoadVideo also reports its INPUT under `images`. A completed
+            # history containing only inputs/previews/text has no saved result.
+            if status.get('completed'):
                 return None, True
 
             job = ImageGenerationQueue.query.filter_by(comfyui_prompt_id=prompt_id).first()

@@ -1,3 +1,4 @@
+import { performanceSettings } from './videoPerformance.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ASPECTS, readReferenceDraft, REFERENCE_DEFAULTS, referenceDescriptors, referencePayload, remapReferencePrompt, writeReferenceDraft } from './videoReferences.js';
 
@@ -22,7 +23,7 @@ export default function useVideoReferences(setPrompt, storageKey) {
   }), []);
   const restore = useCallback((clip) => setDraft((d) => ({ ...d, active: true,
     references: referenceDescriptors(clip.references),
-    settings: { ...d.settings, base: clip.ref_base || 'official', accel: clip.accel || '',
+    settings: { ...d.settings, ...performanceSettings(clip.generation_settings), base: clip.ref_base || 'official', accel: clip.accel || '',
       imageSize: clip.ref_image_size || 'match', steps: clip.steps || '', sparse: clip.sparse || '',
       // A JOINED clip's `frames` is the FILE's count (parent + part − 1), not
       // a count the sampler takes: replayed, it renders about twice the clip

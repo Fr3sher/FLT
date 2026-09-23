@@ -1,3 +1,4 @@
+import { PERFORMANCE_DEFAULTS, performanceSettings } from './videoPerformance.js';
 import { referenceLibraryKey } from './referenceLibrary.js';
 
 /** Reference order is the model's order: pictures, videos (with soundtrack
@@ -9,6 +10,7 @@ export const REFERENCE_LIMITS = { image: 9, video: 3, audio: 3 };
  *  path that takes a shape from a clip filters through this. */
 export const ASPECTS = ['landscape', 'portrait', 'square'];
 export const REFERENCE_DEFAULTS = {
+  ...PERFORMANCE_DEFAULTS,
   base: 'official', accel: 'ref8', imageSize: 'match', sparse: '',
   refmods: false,
   steps: '', frames: 124, megapixels: 0.3, seed: '', aspect: 'landscape',
@@ -107,8 +109,8 @@ export function readReferenceDraft(storage, key = REFERENCE_STORAGE) {
     const saved = JSON.parse(storage?.getItem(key) || 'null');
     return { active: saved?.active === true,
       references: referenceDescriptors(saved?.references),
-      settings: { ...REFERENCE_DEFAULTS, ...(saved?.settings || {}),
-        base: ['official', 'light', 'eros'].includes(saved?.settings?.base) ? saved.settings.base : 'official',
+      settings: { ...REFERENCE_DEFAULTS, ...(saved?.settings || {}), ...performanceSettings(saved?.settings),
+        base: ['official', 'light', 'eros', 'fused'].includes(saved?.settings?.base) ? saved.settings.base : 'official',
         accel: ['', 'ref4', 'ref8', 'vdn'].includes(saved?.settings?.accel) ? saved.settings.accel : REFERENCE_DEFAULTS.accel,
         imageSize: saved?.settings?.imageSize === 'max' ? 'max' : 'match',
         aspect: ASPECTS.includes(saved?.settings?.aspect)

@@ -78,16 +78,17 @@ export default function VideoReferenceInstallCard({ caps, onDone }) {
       <p className="text-xs text-content-muted">Choose one base and its reference acceleration. Existing H3 prompt encoders and decoders are shared. LightX reference LoRAs are about 1.96 GB each; VDN uses its own stage.</p>
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="flex min-w-0 flex-col gap-1 text-xs text-content-muted">Reference base
-          <select value={base} disabled={running} onChange={(e) => { setBase(e.target.value); setActions(null); setStates({}); setMessage(''); }} className="min-h-10 min-w-0 rounded-md border border-border bg-surface px-2 text-content">
+          <select value={base} disabled={running} onChange={(e) => { setBase(e.target.value); if (e.target.value === 'fused') setAccel(''); setActions(null); setStates({}); setMessage(''); }} className="min-h-10 min-w-0 rounded-md border border-border bg-surface px-2 text-content">
             {bases.map((b) => <option value={b.id} key={b.id}>{b.label}</option>)}
           </select>
         </label>
         <label className="flex min-w-0 flex-col gap-1 text-xs text-content-muted">Acceleration
-          <select value={accel} disabled={running} onChange={(e) => { setAccel(e.target.value); setActions(null); setStates({}); setMessage(''); }} className="min-h-10 rounded-md border border-border bg-surface px-2 text-content">
+          <select value={accel} disabled={running || base === 'fused'} onChange={(e) => { setAccel(e.target.value); setActions(null); setStates({}); setMessage(''); }} className="min-h-10 rounded-md border border-border bg-surface px-2 text-content">
             <option value="ref4">Reference Turbo · 4 steps</option><option value="ref8">Reference Turbo · 8 steps</option><option value="vdn">VDN-H3 hybrid attention · 8 steps</option><option value="">None · dense sampling</option>
           </select>
         </label>
       </div>
+      {base === 'fused' && <p className="break-words text-xs text-content-muted">Fused Turbo already includes acceleration. Reuse your {bases.find(b => b.id === 'fused')?.file} in ComfyUI models/diffusion_models; this weight has no automatic download.</p>}
       {accel === 'vdn' && <p className="text-xs text-content-muted">Install the <a href="https://github.com/Saganaki22/ComfyUI-VDN-H3" target="_blank" rel="noopener noreferrer" className="underline">ComfyUI-VDN-H3 node pack by Saganaki22</a> in ComfyUI, then restart it. The selected download below supplies the VDN stage; Sparse stays off.</p>}
       {selection.length > 0 && <ul className="space-y-1 text-xs text-content-muted">
         {selection.map((action) => <li key={action} className="break-words">{VIDEO_INSTALL_LABELS[action] || action}{states[action]?.state ? ` — ${states[action].state}` : ''}

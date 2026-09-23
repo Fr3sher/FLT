@@ -213,6 +213,7 @@ from .h3_chimera import (
     accel_spec as accel_spec, accelerations_status as accelerations_status,
     build_workflow, missing_weights as missing_weights, normalise_accel as normalise_accel,
 )
+from .h3_performance import reference_status as reference_status
 
 
 class VideoStudioAssetsMissing(Exception):
@@ -253,6 +254,8 @@ def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, end_image=None, lor
                  turbo=False, accel=None, eros=False, light=False, sparse='',
                  latent_upscale=False,
                  references=None, ref_base='official', ref_image_size='match', refmods=False,
+                 fused=False, h3_attention='auto', h3_spectrum=False,
+                 h3_video_vae='fp16', h3_video_writer='native',
                  source_ratio=None, skip_preflight=False, continues=None,
                  _prepared=None, _record=None, _remote=None) -> dict:
     """Build the graph, record the clip, queue the job — in that order.
@@ -333,9 +336,19 @@ def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, end_image=None, lor
             light=light, light_on_disk=light_ok, light_note=light_note, sparse=sparse,
             latent_upscale=latent_upscale, source_ratio=source_ratio,
             references=references, ref_base=ref_base, ref_image_size=ref_image_size, refmods=refmods,
+            fused=fused, h3_attention=h3_attention, h3_spectrum=h3_spectrum,
+            h3_video_vae=h3_video_vae, h3_video_writer=h3_video_writer, performance_classes=classes,
             sage=sage_available(classes), filename_prefix=new_prefix(user_id))
     else:
         built = _prepared['built']
+    if _remote is None:
+        if built['generation_settings'].get('fused'):
+            name = built['workflow'][N_UNET]['inputs']['unet_name']
+            built['workflow'][N_UNET]['inputs']['unet_name'] = reference_weight_name(('diffusion_models', 'unet'), name) or name
+        for node in built['workflow'].values():
+            if node.get('class_type') == 'VAELoader':
+                name = node['inputs'].get('vae_name')
+                node['inputs']['vae_name'] = reference_weight_name(('vae',), name) or name
     if mode == 'ref2va' and _remote is None:
         if ref_base == 'light':
             _argv, _ram, version = comfyui_launch_facts()

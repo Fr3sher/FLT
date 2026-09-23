@@ -80,6 +80,8 @@ import {
 } from './videoStudioApi';
 
 /* No start frame yet — what the ✨ helpers and the readback see before a pick. */
+import { PERFORMANCE_DEFAULTS, performanceSettings, referenceBaseMissing } from './videoPerformance.js';
+
 const EMPTY_SOURCE = { image: null, ratio: null, preview: null };
 
 /* An acceleration ON by default — larryvrh's, the arena's first row. Without
@@ -87,6 +89,7 @@ const EMPTY_SOURCE = { image: null, ratio: null, preview: null };
    enough that a new user concludes the studio is broken rather than slow. The
    panel says what each choice changes. */
 const DEFAULT_OPTIONS = {
+  ...PERFORMANCE_DEFAULTS,
   accel: 'turbo', eros: false, light: false, shots: 1, sparse: '', latentUpscale: false,
   // '' = auto: the server's own count for the mode in force (turbo 6, dense
   // 20). Kept empty rather than pre-filled so a run reads "auto" until someone
@@ -185,7 +188,7 @@ export default function VideoTestStudio({ datasetId = null } = {}) {
       // available choice, or to the dense base. `available === null` (probe
       // unreachable) keeps the pick — an unknown is not a no.
       if (Array.isArray(d?.accelerations)) {
-        setOpts((o) => ({ ...o, accel: pickAvailableAccel(o.accel, d.accelerations) }));
+        setOpts((o) => ({ ...o, accel: o.fused ? '' : pickAvailableAccel(o.accel, d.accelerations) }));
       }
       if (d?.megapixels?.default) {
         setOpts((o) => ({ ...o, megapixels: d.megapixels.default }));
@@ -638,6 +641,7 @@ export default function VideoTestStudio({ datasetId = null } = {}) {
       reference.setReferences(referenceDescriptors(clip.references));
     }
     setOpts({
+      ...performanceSettings(clip.generation_settings),
       accel: clip.mode === 'ref2va' ? opts.accel : clipAccel(clip), eros: !!clip.eros, light: !!clip.light,
       sparse: clip.mode === 'ref2va' ? opts.sparse : clip.sparse || '',
       latentUpscale: !!clip.latent_upscale,
@@ -691,8 +695,7 @@ export default function VideoTestStudio({ datasetId = null } = {}) {
   const needsReferences = (isReference || useRefmods) && reference.references.length === 0;
   const invalidRefmods = useRefmods && (reference.references.length > 2 || reference.references.some(r => r.kind !== 'image'));
   const referenceProfileMissing = isReference && (
-    options?.reference?.bases?.find((b) => b.id === reference.settings.base)?.available === false
-    || options?.reference?.bases?.find((b) => b.id === reference.settings.base)?.ready === false
+    referenceBaseMissing(options?.reference?.bases?.find((b) => b.id === reference.settings.base), reference.settings, options?.performance)
     || options?.reference?.accelerations?.find((a) => a.id === reference.settings.accel)?.available === false);
   const removedReference = /\[removed (?:Picture|Video|Audio) \d+\]/.test(prompt);
   // ✨ Written per picture needs no typed motion: an empty field asks the
@@ -775,7 +778,7 @@ export default function VideoTestStudio({ datasetId = null } = {}) {
   const armAsReference = (clip, image, { fresh = true } = {}) => {
     reference.setReferences(referenceDescriptors(clip.references));
     reference.update({ active: true,
-      settings: { ...reference.settings, base: clip.ref_base || 'official',
+      settings: { ...reference.settings, ...performanceSettings(clip.generation_settings), base: clip.ref_base || 'official',
         accel: clip.accel || '', imageSize: clip.ref_image_size || 'match',
         // 'auto' is what a row that predates the shape carries, and it is not
         // one of the three the select offers: an unknown shape keeps the one
@@ -804,7 +807,7 @@ export default function VideoTestStudio({ datasetId = null } = {}) {
     if (clip.mode !== 'ref2va') {
       reference.setSettings({ refmods: clip.generation_settings?.refmods === true });
       reference.setReferences(referenceDescriptors(clip.references));
-      setOpts(o => ({ ...o, accel: clipAccel(clip), steps: clipAccel(clip) === 'taomate_3step' ? 3 : '', eros: !!clip.eros, light: !!clip.light }));
+      setOpts(o => ({ ...o, ...performanceSettings(clip.generation_settings), accel: clipAccel(clip), steps: clipAccel(clip) === 'taomate_3step' ? 3 : '', eros: !!clip.eros, light: !!clip.light }));
       setMode('i2v');
     }
     const inStrip = sources.find((f) => f.continues === clip.id);
@@ -856,7 +859,7 @@ export default function VideoTestStudio({ datasetId = null } = {}) {
         // The BASE follows the clip being continued, whatever box is ticked
         // right now: the joined render starts from that clip's last frame, and
         // a change of base at the seam would show. The dials stay yours.
-        setOpts((o) => ({ ...o, eros: !!clip.eros, light: !!clip.light }));
+        setOpts((o) => ({ ...o, ...performanceSettings(clip.generation_settings), eros: !!clip.eros, light: !!clip.light }));
       }
       setMode(asReference ? 'ref2va' : 'i2v');
       toast.success(asReference

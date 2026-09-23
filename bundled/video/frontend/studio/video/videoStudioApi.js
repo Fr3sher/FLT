@@ -220,6 +220,10 @@ export function buildGeneratePayload(state) {
     if (s.light) body.light = true;
     if (s.latentUpscale) body.latent_upscale = true;
   }
+  for (const key of ['h3_attention', 'h3_spectrum', 'h3_video_vae', 'h3_video_writer']) {
+    if (s[key] !== undefined) body[key] = s[key];
+  }
+  if (s.fused && mode !== 'ref2va') body.fused = true;
   // ⏭ The clip this launch continues: the render is joined behind it.
   if (mode !== 't2v' && s.continues) body.continues = Number(s.continues);
   return body;
@@ -249,7 +253,7 @@ export const ACCELERATIONS = [
  *  earlier pick is shown as off everywhere, not just greyed in one place. */
 export function sparseInForce(state) {
   if (!state?.sparse) return '';
-  if (state.accel === 'vdn') return '';
+  if (state.accel === 'vdn' || state.h3_attention === 'sage' || state.h3_spectrum) return '';
   return state.sparse;
 }
 /** The option line of the ⚡ select: the rank when the arena has one, the

@@ -32,7 +32,8 @@ from lds_video import video_training_local as vtl
 _BATCH_LOCK = threading.RLock()
 _FIELDS = {'checkpoints', 'mode', 'prompt', 'image', 'end_image', 'seed', 'steps',
            'frames', 'megapixels', 'aspect', 'lora_strength', 'accel', 'turbo',
-           'eros', 'light', 'sparse', 'latent_upscale', 'ratio'}
+           'eros', 'light', 'sparse', 'latent_upscale', 'ratio',
+           'fused', 'h3_attention', 'h3_spectrum', 'h3_video_vae', 'h3_video_writer'}
 
 
 class PreviewSelectionError(ValueError):
@@ -114,12 +115,12 @@ def _options(data):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(f'{key} must be a finite number.')
             out[key] = value
-    for key in ('eros', 'light', 'latent_upscale', 'turbo'):
+    for key in ('eros', 'light', 'latent_upscale', 'turbo', 'fused', 'h3_spectrum'):
         if key in data:
             if not isinstance(data[key], bool):
                 raise ValueError(f'{key} must be true or false.')
             out[key] = data[key]
-    for key in ('accel', 'sparse', 'aspect'):
+    for key in ('accel', 'sparse', 'aspect', 'h3_attention', 'h3_video_vae', 'h3_video_writer'):
         if key in data:
             if not isinstance(data[key], str):
                 raise ValueError(f'{key} must be a name.')
@@ -329,6 +330,7 @@ def start_previews(user_id, dataset_id, data):
                 item = _freeze(choice)
                 copies.append(item)
                 item['built'] = vts.build_workflow(**options, lora=item['lora'],
+                    performance_classes=classes,
                     eros_on_disk=eros_ok, light_on_disk=light_ok, light_note=light_note,
                     sage=vts.sage_available(classes), filename_prefix=vts.new_prefix(user_id))
                 vts.preflight(item['built']['workflow'])

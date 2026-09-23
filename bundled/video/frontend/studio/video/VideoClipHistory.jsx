@@ -17,6 +17,20 @@ import { clipTags } from './videoClipTags';
 import { canAutoContinue } from './videoAutoContinue';
 import { continuesAsReference } from './videoContinuation.js';
 import { progressLabel, renderForJob } from '@lds/plugin-sdk/ui';
+import { useState } from 'react';
+
+function ClipPlayer({ clip }) {
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  return <>
+    <video key={attempt} src={`${clipVideoUrl(clip.id)}?attempt=${attempt}`} controls loop muted playsInline
+      onError={() => setFailed(true)} onLoadedMetadata={() => setFailed(false)}
+      className="w-full rounded-lg border border-border bg-black" />
+    {failed && <p role="status" className="mt-1 text-xs text-amber-200">The video file could not be played.
+      <button type="button" className="ml-2 min-h-10 underline" onClick={() => { setFailed(false); setAttempt(n => n + 1); }}>Retry playback</button>
+    </p>}
+  </>;
+}
 
 const ACTION = 'flex items-center justify-center gap-1 rounded-lg border px-2 py-1 text-[0.6875rem] min-h-10 lg:min-h-0';
 
@@ -50,8 +64,7 @@ export default function VideoClipHistory({
               running ? 'border-amber-400/40' : clip.status === 'failed' ? 'border-red-500/30' : 'border-border'}`}>
             <div className="w-full shrink-0 sm:w-64">
               {clip.status === 'done' ? (
-                <video src={clipVideoUrl(clip.id)} controls loop muted playsInline
-                  className="w-full rounded-lg border border-border bg-black" />
+                <ClipPlayer key={clip.filename} clip={clip} />
               ) : (
                 <div className={`flex aspect-video w-full flex-col items-center justify-center gap-1.5 rounded-lg border text-xs ${
                   clip.status === 'failed'

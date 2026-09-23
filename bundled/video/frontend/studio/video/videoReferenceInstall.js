@@ -8,6 +8,7 @@ export const REFERENCE_ACTIONS = [...Object.values(REFERENCE_BASE_ACTIONS),
 
 export function referenceInstallPlan(status, base = 'official', accel = 'ref4') {
   if (!status) return [];
+  if (base === 'fused') accel = '';
   const wanted = new Set(['h3_text_encoder', 'h3_video_vae', 'h3_audio_vae',
     REFERENCE_BASE_ACTIONS[base], REFERENCE_ACCEL_ACTIONS[accel]].filter(Boolean));
   const missing = (status.missing_weights || []).map((m) => m.action);

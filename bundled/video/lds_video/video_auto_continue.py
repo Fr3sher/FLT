@@ -30,6 +30,7 @@ _SETTINGS = frozenset({
     'lora', 'lora_strength', 'run_id', 'dataset_id', 'seed', 'steps', 'frames',
     'megapixels', 'aspect', 'turbo', 'accel', 'eros', 'light', 'sparse',
     'latent_upscale', 'shots', 'refmods', 'references',
+    'fused', 'h3_attention', 'h3_spectrum', 'h3_video_vae', 'h3_video_writer',
 })
 
 
