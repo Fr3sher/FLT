@@ -72,6 +72,17 @@ const SOURCE_MODES = [
   ['url', 'URL'],
 ];
 
+const VIDEO_SOURCE_GROUPS = [
+  { label: 'SFW', tone: 'emerald', sources: [
+    ['Instagram', 'https://www.instagram.com/'], ['X / Twitter', 'https://x.com/'],
+    ['TikTok', 'https://www.tiktok.com/'], ['Civitai', 'https://civitai.com/images'],
+  ] },
+  { label: 'NSFW', tone: 'rose', sources: [
+    ['RedGifs', 'https://www.redgifs.com/'], ['Picazor', 'https://picazor.com/'],
+    ['Erome', 'https://www.erome.com/'],
+  ] },
+];
+
 const PEXELS_AUTH_ERROR = 'Confirm explicit Pexels authorization for dataset/ML use before scanning Pexels.';
 
 const PLATFORM_LABELS = {
@@ -97,6 +108,8 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   destination = 'dataset', stateKey = undefined }) {
   const toBank = destination === 'bank' || destination === 'video-bank';
   const toVideoBank = destination === 'video-bank';
+  const toVideoDataset = destination === 'video-dataset';
+  const toVideo = toVideoBank || toVideoDataset;
   const scanKey = stateKey === undefined ? datasetId : stateKey;
   const toast = useToast();
   const { caps, refresh } = useCapabilities();
@@ -324,22 +337,22 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
     <section className="bg-surface rounded-xl border border-border p-3 flex flex-col gap-2">
       <div className="flex items-center gap-2 flex-wrap">
         <h2 className="text-content font-semibold text-sm">
-          <><Globe aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />{toVideoBank ? 'Scrape videos into the bank'
+          <><Globe aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />{toVideoDataset ? 'Import videos from the web' : toVideoBank ? 'Scrape videos into the bank'
             : toBank ? 'Scrape into the bank' : 'Build from scraped images'}</>
         </h2>
         <span className="text-content-subtle text-[0.6875rem]"
-          title={toVideoBank
+          title={toVideoDataset ? 'Scan a website, choose videos and add encoded clips to this dataset.' : toVideoBank
             ? 'A video bank is the triage step for footage: bring back more than you need, then cut it into shots and keep the ones worth training on.'
             : toBank
               ? 'A bank is the triage step: bring back MORE than you need, then let the quality, duplicate and framing passes cut it down.'
               : 'Research-backed: 20-50 curated images beat hundreds of mixed ones; keep at most ~10 per gallery (one gallery ≈ one shoot).'}>
-          {toVideoBank ? 'clips only — shots are cut after'
+          {toVideoDataset ? 'videos only — encoded for this dataset' : toVideoBank ? 'clips only — shots are cut after'
             : toBank ? 'bring back plenty — you triage after' : 'aim for 20-50 varied images'}
         </span>
       </div>
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" aria-label="Compatible scraper sites">
-        {SOURCE_GROUPS.map((group) => (
+        {(toVideo ? VIDEO_SOURCE_GROUPS : SOURCE_GROUPS).map((group) => (
           <div key={group.label}
             className={`rounded-lg border px-2.5 py-2 ${group.tone === 'emerald'
               ? 'border-emerald-400/30 bg-emerald-500/5'
@@ -526,7 +539,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
             onSubmit={(e) => { e.preventDefault(); runScan(0); }}>
             <input type="url" value={url} onChange={(e) => setUrl(e.target.value)}
               aria-label="Gallery or media URL"
-              placeholder="Gallery, album, collection or direct photo URL"
+              placeholder={toVideo ? 'Video gallery, album or video page URL' : 'Gallery, album, collection or direct photo URL'}
               className="flex-1 min-w-[14rem] px-3 py-1.5 rounded-lg bg-surface-raised border border-border text-content text-sm placeholder:text-content-subtle focus:border-indigo-500 outline-none" />
             <button type="submit" disabled={scanning || !url.trim()}
               className="px-3 py-1.5 rounded-lg bg-surface border border-border text-content text-sm hover:bg-white/10 disabled:opacity-40">
@@ -535,8 +548,10 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
             <HelpBadge topic="action-scrape-scan" className="self-center" />
           </form>
           <p className="text-content-muted text-[0.6875rem] leading-relaxed">
-            Use this for supported galleries and albums, or direct Pexels photos and collections.
-            Normal Pexels keyword searches belong in the Pexels tab.
+            {toVideo ? 'Paste a supported video page, gallery or album URL, scan, then select the videos to import.' : <>
+              Use this for supported galleries and albums, or direct Pexels photos and collections.
+              Normal Pexels keyword searches belong in the Pexels tab.
+            </>}
           </p>
           {/pornpics\.com/i.test(url) && !/\/galleries\//i.test(url) && (
             <label className="flex items-center gap-2 text-[0.6875rem] text-content-muted cursor-pointer"
@@ -550,7 +565,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
         </div>
       )}
 
-      {!toBank && (
+      {!toBank && !toVideo && (
       <label className={`flex items-start gap-2 rounded-lg border px-2.5 py-2 text-[0.75rem] ${
         rescueSmall
           ? 'border-indigo-400/50 bg-indigo-500/10 text-content'
@@ -582,7 +597,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
           Only once the option is on (an off checkbox launches nothing), and OUTSIDE
           the <label> above: its picker is a control of its own, and inside a label
           every click on it would toggle the checkbox. */}
-      {!toBank && rescueSmall && (
+      {!toBank && !toVideo && rescueSmall && (
         <KleinModelSetting datasetId={datasetId} className="px-2.5" />
       )}
 
@@ -638,7 +653,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
                 bank is triaged — so the bank stores what it downloads and its own
                 passes (quality, duplicate groups, semantic) rule on it. */}
             <span className="ml-auto">
-              {toVideoBank
+              {toVideoDataset ? 'Encoded to this dataset’s clip length — videos that are too short are skipped' : toVideoBank
                 ? 'Stored as downloaded — shot cuts, motion and sharpness are the bank’s passes to judge'
                 : toBank
                   ? 'Stored as downloaded — small/duplicate/framing are the bank’s passes to judge'

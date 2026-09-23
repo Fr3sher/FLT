@@ -50,10 +50,10 @@ export default function VideoDatasetsPanel() {
   useEffect(() => { refresh() }, [refresh])
 
   const remove = async (ds) => {
-    if (!window.confirm(`Delete the video dataset “${ds.name}”?\n\nThe encoded clips are deleted. The bank they came from keeps every shot and every decision — you can re-cut at another length without triaging again.`)) return
+    if (!window.confirm(`Delete the video dataset “${ds.name}”?\n\nThe encoded clips are deleted. Original source videos and any bank shots are kept.`)) return
     try {
       await del(`/api/video-dataset/${ds.id}`)
-      toast.success('Video dataset deleted — the bank’s shots are untouched.')
+      toast.success('Video dataset deleted — original sources are untouched.')
       refresh()
     } catch (e) {
       toast.error(e?.message || 'Could not delete that dataset.')

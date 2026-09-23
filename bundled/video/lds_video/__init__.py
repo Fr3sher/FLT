@@ -34,6 +34,7 @@ def register(ctx):
                                 verify=probes.video_host_ready)
     ctx.register_blueprint(video_bank.bp, url_prefix='/api')
     ctx.register_blueprint(video_datasets.bp, url_prefix='/api')
+    ctx.register_request_limit('video_datasets.video_dataset_import', 1024 * 1024 * 1024)
     ctx.register_blueprint(video_studio.bp, url_prefix='/api/video-studio')
     ctx.register_job_handler('is_video_test', _video_test_done, presentation={
         'title': 'Video clip', 'surface': 'Video Test Studio',

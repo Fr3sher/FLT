@@ -26,6 +26,7 @@ const SCRAPE_DESTINATION_MEDIA = {
   dataset: ['image'],
   bank: ['image'],
   'video-bank': ['video'],
+  'video-dataset': ['video'],
 };
 
 /** 'video' or 'image'. Anything that is not explicitly a video reads as an

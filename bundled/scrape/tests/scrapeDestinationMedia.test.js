@@ -22,6 +22,9 @@ test('a video bank takes videos, the two image destinations take images', () => 
   assert.deepEqual(destinationMediaKinds('dataset'), ['image']);
   assert.deepEqual(destinationMediaKinds('bank'), ['image']);
   assert.deepEqual(destinationMediaKinds('video-bank'), ['video']);
+  assert.deepEqual(destinationMediaKinds('video-dataset'), ['video']);
+  assert.ok(destinationAcceptsItem('video-dataset', video()));
+  assert.ok(!destinationAcceptsItem('video-dataset', image()));
   assert.ok(destinationAcceptsItem('video-bank', video()));
   assert.ok(!destinationAcceptsItem('video-bank', image()));
   assert.ok(destinationAcceptsItem('bank', image()));

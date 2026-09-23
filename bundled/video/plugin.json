@@ -3,7 +3,7 @@
   "id": "video",
   "bundled": true,
   "name": "Video lane",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "api": 1,
   "publisher": {
     "id": "lds",
@@ -90,7 +90,8 @@
       "video-dataset-studio",
       "video-train-local",
       "video-promote-target",
-      "setup-video-studio"
+      "setup-video-studio",
+      "video-dataset-import"
     ],
     "tables": [
       "video_bank",
@@ -101,6 +102,7 @@
       "video_test_clip"
     ],
     "whats_new_ids": [
+      "2026-09-23-create-video-dataset",
       "2026-09-06-zzzz-video-prompt-survives-reload",
       "2026-09-03-video-test-studio-prompts-per-picture",
       "2026-09-03-video-test-studio-continue-from-last-frame",
@@ -220,7 +222,7 @@
   },
   "compatibility": {
     "lds": ">=2026.9.4",
-    "api": ">=1.21,<2",
+    "api": ">=1.22,<2",
     "python": ">=3.10,<4",
     "os": [
       "windows",

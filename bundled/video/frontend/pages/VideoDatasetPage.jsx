@@ -70,6 +70,12 @@ export default function VideoDatasetPage() {
   // the global loading chrome over the grid.
   useEffect(() => { hasPayload.current = false; load() }, [load])
   const refresh = useCallback(() => load({ background: true }), [load])
+  const importing = !!payload?.import_activity && !payload.import_activity.finished
+  useEffect(() => {
+    if (!importing) return undefined
+    const timer = setInterval(refresh, 1500)
+    return () => clearInterval(timer)
+  }, [importing, refresh])
 
   const back = () => navigate('/datasets')
 

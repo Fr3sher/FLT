@@ -22,10 +22,14 @@
  * not already provide).
  */
 import {
-  Clapperboard, GraduationCap, Package, Paperclip, PenLine, SlidersHorizontal,
+  Clapperboard, GraduationCap, Package, Paperclip, PenLine, SlidersHorizontal, Upload,
 } from 'lucide-react';
 
 export const VIDEO_DATASET_SECTIONS = [
+  { id: 'import', title: 'Add videos', icon: Upload, eyebrow: 'sources',
+    helpTopic: 'video-dataset-import', when: 'takesVideos',
+    description: 'Add video files or scan a website and import the clips you choose.',
+    panels: [{ id: 'sources', title: 'Import videos', targetId: 'vds-import-sources', when: 'always' }] },
   { id: 'clips', title: 'Clips', icon: Clapperboard, eyebrow: 'overview',
     helpTopic: 'video-dataset-clips',
     description: 'Every clip in the set — play one, read what it will train as, and drop the ones that should never have been cut.',

@@ -1,7 +1,7 @@
 # Video lane
 
-Video Bank turns rushes into shots for review, captioning and dataset creation. Video training sets retain the public local/cloud training workflows, checkpoint history and identity-reference training support. The H3 Test Studio generates image- or text-to-video clips, compares LoRAs, continues a clip manually, interpolates frames and offers DLSS 5 neural rendering.
+Create a video training set directly from **Datasets → New dataset → Video**. Choose its model, clip length and size, then add local files in **Add videos**. The optional web source panel can send selected videos to the same import endpoint. Imports report progress and skips, can be stopped, and avoid duplicating an already imported clip.
 
-Live is a separate plugin. Video does not import or require it. Preparation and the public Video settings belong to this plugin. Public ComfyUI optional node packs and model licences remain linked in its installation card.
+Video Bank also turns rushes into shots for review, captioning and dataset creation. Training sets include local training, checkpoint history and identity-reference support. The H3 Test Studio generates image- or text-to-video clips, compares LoRAs, continues clips manually and interpolates frames.
 
-This is a source projection awaiting atomic LDS host integration. Its SDK dependencies, optional cloud provider, managed shot-detection admission, table ownership, HTTP ownership and frontend primitives must be connected before enabling the plugin. The main implementation remains available until that transfer. Current isolated tests do not qualify the complete host, installation, training, rendering or GPU support.
+Preparation installs CPU video decoding and encoding tools. Direct imports accept up to six videos of 200 MB each per request (1 GB total); splitting keeps up to eight full clips per source. Files too short for the requested frame count are skipped. The first source can set the dataset size, fitted to the model; subsequent imports use that size. Add captions before training.

@@ -123,3 +123,8 @@ test('Pexels URL detection accepts only official web hosts over HTTP or HTTPS', 
   assert.equal(isPexelsUrl('https://www.pexels.com.evil.test/search/x/'), false);
   assert.equal(isPexelsUrl('https://pexels.com@evil.test/search/x/'), false);
 });
+
+test('a video selection retains its type for the dataset import endpoint', () => {
+  assert.deepEqual(scrapeItemToImportPayload({ url: 'https://example.test/clip.mp4', type: 'video' }),
+    { url: 'https://example.test/clip.mp4', title: '', type: 'video' });
+});

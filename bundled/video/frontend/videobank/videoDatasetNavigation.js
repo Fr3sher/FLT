@@ -15,6 +15,7 @@ const boolStatus = (value) => (value ? PANEL_STATUS.AVAILABLE : PANEL_STATUS.UNA
 
 const AVAILABILITY = {
   always: () => PANEL_STATUS.AVAILABLE,
+  takesVideos: (c) => boolStatus(c.takesVideos),
   hasSelection: (c) => boolStatus(c.selected > 0),
   hasClips: (c) => boolStatus(c.clips > 0),
   requiresReferences: (c) => boolStatus(c.requiresReferences),

@@ -79,7 +79,7 @@ export function buildWebSearchUrl(keyword, safe = false) {
  * need `platform` forwarded or the backend has nothing to key provenance on.
  */
 export function scrapeItemToImportPayload(it) {
-  const base = { url: it.url, title: it.title || '' };
+    const base = { url: it.url, title: it.title || '', ...(it.type === 'video' ? { type: 'video' } : {}) };
   if (it.platform === 'pexels') {
     return { ...base, platform: 'pexels', source_url: it.source_url,
       photographer: it.photographer, photographer_url: it.photographer_url };

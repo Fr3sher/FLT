@@ -7,7 +7,7 @@
 // { slot, surface, reason } — an exception on paper, never a silent gap.
 export const PAIRED_SURFACES = Object.freeze({
   'resource_monitor.readout': ['header', 'canvas'],
-  'sources.panel': ['dataset', 'bank', 'videoBank'],   // "import or scrape" panels
+  'sources.panel': ['dataset', 'bank', 'videoBank', 'videoDataset'],
   'more.menu': ['dataset', 'bank'],                    // the ⋯ More menus
   'lanes': ['bank', 'videoBank'],                      // the Images / Video lane tabs
   // The ☁ launch of a training on a rented GPU (the cloud plugin's): on the
@@ -57,6 +57,7 @@ export const SINGLE_SURFACE_SLOTS = Object.freeze({
   // The Datasets page's list of the other kinds of training set a plugin
   // brings (the video lane's video datasets), under the image datasets.
   'datasets.section': 'datasets',
+  'datasets.create': 'datasets', // { id, label, panel } in the New dataset form
   'capabilities.row': 'setup',
   // Data, not a component: an engine's catalog entry (src/engines/catalog.js
   // merges the enabled plugins' specs into the core's at each read).

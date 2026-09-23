@@ -34,6 +34,9 @@ export default {
     { path: '/video-dataset/:id', page: () => import('./pages/VideoDatasetPage.jsx') },
   ],
   slots: {
+    'datasets.create': [
+      { id: 'video', label: 'Video', panel: () => import('./videobank/NewVideoDatasetForm.jsx') },
+    ],
     'lanes': [
       { id: 'video', panels: {
         bank: () => import('./lanes/VideoLaneTab.jsx'),

@@ -1,5 +1,8 @@
 import { action, setupStep } from '@lds/plugin-sdk/help'
 export const VIDEO_LANE_TOPICS = [
+  action('video-dataset-import', 'Create and fill a video dataset',
+    ['new video dataset', 'add videos', 'import video', 'scrape videos', 'split long videos', 'upload clips'],
+    '/datasets', 'using-the-app', 'work-on-a-video-training-set'),
   { id: 'page-video-bank', kind: 'page', title: 'Video bank (rushes → shots)',
     keywords: ['video', 'videos', 'video bank', 'rushes', 'rush', 'footage', 'clip',
       'clips', 'shot', 'shots', 'shot detection', 'scene detection', 'cut', 'cuts',

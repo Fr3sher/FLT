@@ -3274,6 +3274,8 @@ def video_dataset_payload(user_id, dataset_id) -> dict | None:
     clips = (VideoDatasetClip.query.filter_by(dataset_id=ds.id)
              .order_by(VideoDatasetClip.filename.asc()).all())
     payload = _dataset_row(ds)
+    from lds_video.video_dataset_import import job_key as import_job_key
+    payload['import_activity'] = bank_jobs.get(import_job_key(ds.id))
     payload['items'] = [{
         'id': c.id, 'filename': c.filename, 'caption': c.caption,
         'source_bank_id': c.source_bank_id, 'source_clip_id': c.source_clip_id,

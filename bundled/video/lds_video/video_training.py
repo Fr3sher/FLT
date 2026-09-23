@@ -314,6 +314,10 @@ def build_job_config(video_ds, dataset_folder: str, steps: int,
     dataset. Asked for, previews are rendered at the DATASET's own frame count and
     fps — a preview at another rate is not a preview of this LoRA.
     """
+    from lds_sdk.video_host import bank_jobs
+    dataset_id = getattr(video_ds, 'id', None)
+    if dataset_id is not None and bank_jobs.running(f'video-dataset-import:{int(dataset_id)}'):
+        raise VideoTrainingUnsupported('Wait for the video import to finish before training this dataset.')
     key = getattr(video_ds, 'target_profile', None)
     profile = video_targets.get(key)
     if profile is None:

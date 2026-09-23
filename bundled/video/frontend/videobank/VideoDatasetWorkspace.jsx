@@ -11,6 +11,7 @@ import VideoTrainingBlock from './VideoTrainingBlock.jsx'
 import VideoCheckpointManager from './VideoCheckpointManager.jsx'
 import { videoPreflightUrl } from './videoCloudLaunch.js'
 import VideoDatasetGrid from './VideoDatasetGrid.jsx'
+import VideoDatasetImportPanel from './VideoDatasetImportPanel.jsx'
 import VideoDatasetLightbox from './VideoDatasetLightbox.jsx'
 import {
   videoDatasetClipCaptionUrl, videoDatasetClipOriginalUrl, videoDatasetNeuralRenderCancelUrl,
@@ -94,6 +95,7 @@ export default function VideoDatasetWorkspace({ ds, items, refresh, onBack }) {
   const shownIds = useMemo(() => shown.map((c) => c.id), [shown])
 
   const navContext = {
+    takesVideos: ds.frames > 1 && ds.fps > 0,
     selected: selected.length,
     clips: counts.total,
     requiresReferences: !!ds.requires_references,
@@ -476,6 +478,10 @@ export default function VideoDatasetWorkspace({ ds, items, refresh, onBack }) {
               workspace does it: the training block's poll advances a real run
               server-side, and it must not stop because someone looked at the
               clip grid. */}
+          {navContext.takesVideos && <section className={sectionCls('import')} aria-hidden={section !== 'import'}>
+            {heading('import')}
+            <VideoDatasetImportPanel ds={ds} refresh={refresh} />
+          </section>}
           <section className={sectionCls('clips')} aria-hidden={section !== 'clips'}>
             {heading('clips')}
             <div id="vds-clips-review" className="flex flex-col gap-2">
@@ -561,7 +567,7 @@ export default function VideoDatasetWorkspace({ ds, items, refresh, onBack }) {
                 onToggle={toggle} onOpen={(clip) => setOpenId(clip.id)}
                 emptyMessage={items.length
                   ? 'No clip matches this filter.'
-                  : 'This dataset has no clip — promote shots from a video bank, or build a stills set from an image dataset.'} />
+                  : 'This dataset has no clip — use Add videos to import files or web videos, promote shots from a video bank, or build a stills set from an image dataset.'} />
             </div>
             {selected.length > 0 && (
               <div id="vds-clips-bulk"

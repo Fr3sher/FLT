@@ -35,6 +35,7 @@ export default {
           dataset: () => import('./panels/ConceptSourcesPanel.jsx'),
           bank: () => import('./panels/BankScrapePanel.jsx'),
           videoBank: () => import('./panels/VideoBankScrapePanel.jsx'),
+          videoDataset: () => import('./panels/VideoDatasetScrapePanel.jsx'),
         },
       },
     ],

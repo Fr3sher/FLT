@@ -80,12 +80,13 @@ test('an item may narrow its surfaces, and parity then needs a written skip', ()
   const narrowed = { ...scrape, slots: { 'sources.panel': [{ id: 'web', surfaces: ['dataset'] }] } }
   assert.deepEqual(surfacesOf('sources.panel', narrowed.slots['sources.panel'][0]), ['dataset'])
   const gaps = parityGaps(narrowed)
-  assert.deepEqual(gaps.map((g) => g.surface), ['bank', 'videoBank'])
+  assert.deepEqual(gaps.map((g) => g.surface), ['bank', 'videoBank', 'videoDataset'])
   const excused = { ...narrowed, paritySkip: [
     { slot: 'sources.panel', surface: 'bank', reason: 'the bank has its own scrape intake' },
     { slot: 'sources.panel', surface: 'videoBank', reason: 'clips are not images' },
+    { slot: 'sources.panel', surface: 'videoDataset', reason: 'clips are not images' },
   ] }
   assert.deepEqual(parityGaps(excused), [])
   const silent = { ...narrowed, paritySkip: [{ slot: 'sources.panel', surface: 'bank' }] }
-  assert.equal(parityGaps(silent).length, 2, 'a skip without a reason is not a skip')
+  assert.equal(parityGaps(silent).length, 3, 'a skip without a reason is not a skip')
 })

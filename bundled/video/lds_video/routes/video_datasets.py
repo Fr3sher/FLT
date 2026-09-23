@@ -15,12 +15,14 @@ OUTPUTS — a user must not discover that in a forum thread after building a set
 """
 import logging
 import mimetypes
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, current_app, jsonify, request, send_file
 
 from lds_sdk.video_host.config import LOCAL_USER
 from lds_video import video_bank_service as svc
 from lds_video import neural_render_media as nr
 from lds_video import video_targets
+from lds_video import video_dataset_import as intake
+from lds_sdk.video_host import bank_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,42 @@ def video_targets_list():
 def video_datasets_list():
     """Every built video training set. GET {'datasets': [...]}"""
     return jsonify({'datasets': svc.list_video_datasets(LOCAL_USER)})
+
+
+@bp.post('/video-datasets')
+def video_dataset_create():
+    data = request.get_json(silent=True) or {}
+    try:
+        out = intake.create(LOCAL_USER, name=data.get('name'),
+            target_profile=data.get('target_profile'), frames=data.get('frames'),
+            size=data.get('size'), trigger_word=data.get('trigger_word'))
+    except (TypeError, ValueError) as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({'ok': True, **out}), 201
+
+
+@bp.post('/video-dataset/<int:dataset_id>/import')
+@bp.post('/video-dataset/<int:dataset_id>/scrape-import')
+def video_dataset_import(dataset_id):
+    data = request.get_json(silent=True) or {}
+    uploads = request.files.getlist('files') if request.mimetype == 'multipart/form-data' else None
+    try:
+        out = intake.start(current_app._get_current_object(), LOCAL_USER, dataset_id,
+            files=uploads, items=data.get('items'),
+            slice_long=(request.form.get('slice_long') == 'true' if uploads is not None
+                        else data.get('slice_long') is True))
+    except bank_jobs.BankJobBusy:
+        return jsonify({'error': 'An import is already running for this dataset.'}), 409
+    except (TypeError, ValueError, RuntimeError) as exc:
+        return jsonify({'error': str(exc)}), 404 if 'not found' in str(exc) else 400
+    return jsonify(out), 202
+
+
+@bp.post('/video-dataset/<int:dataset_id>/import/cancel')
+def video_dataset_import_cancel(dataset_id):
+    if svc.get_video_dataset(LOCAL_USER, dataset_id) is None:
+        return _missing(dataset_id)
+    return jsonify({'ok': bank_jobs.cancel(intake.job_key(dataset_id))})
 
 
 @bp.post('/video-datasets/from-dataset')
@@ -213,9 +251,13 @@ def video_dataset_delete(dataset_id):
 
     The bank's clips survive untouched; they only stop claiming to have been
     promoted, so the user can re-cut at a different length without re-triaging."""
-    if not svc.delete_video_dataset(LOCAL_USER, dataset_id):
-        return _missing(dataset_id)
-    nr.forget_backups(dataset_id)      # the kept originals go with the set
+    try:
+        with bank_jobs.mutation_lease(intake.job_key(dataset_id), 'delete'):
+            if not svc.delete_video_dataset(LOCAL_USER, dataset_id):
+                return _missing(dataset_id)
+            nr.forget_backups(dataset_id)      # the kept originals go with the set
+    except bank_jobs.BankJobBusy:
+        return jsonify({'error': 'Stop the video import before deleting this dataset.'}), 409
     return jsonify({'ok': True})
 
 
