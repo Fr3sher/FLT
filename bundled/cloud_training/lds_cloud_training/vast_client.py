@@ -165,7 +165,7 @@ def search_offers(min_vram_gb: int, max_dph: float, limit: int = 20,
                   min_inet_down_mbps: int = 0, min_reliability: float = 0.95,
                   min_disk_bw_mbps: int = 0, verified_only: bool = True,
                   secure_cloud_only: bool = False, min_disk_gb: int = 0,
-                  min_compute_cap: int = 0, *, credential=None) -> list:
+                  min_compute_cap: int = 0, min_cuda: float = 0, *, credential=None) -> list:
     """Offers matching the configured trust tier and resource constraints.
 
     Vast calls its normal host trust flag ``verified`` and exposes Secure
@@ -212,10 +212,17 @@ def search_offers(min_vram_gb: int, max_dph: float, limit: int = 20,
         body['disk_space'] = {'gte': int(min_disk_gb)}
     if min_compute_cap:
         body['compute_cap'] = {'gte': int(min_compute_cap)}
+    if min_cuda:
+        body['cuda_max_good'] = {'gte': float(min_cuda)}
     r = _request('POST', '/bundles/', json=body, credential=credential)
     if r.status_code != 200:
         raise _failed(r, 'offer search')
     offers = (r.json() or {}).get('offers') or []
+    if min_cuda:
+        # Do not pay for an image newer than the host's reported CUDA support,
+        # including an offer whose driver capability could not be established.
+        offers = [o for o in offers
+                  if float(o.get('cuda_max_good') or 0) >= float(min_cuda)]
     if min_disk_gb:
         # Belt and braces: the predicate above is honoured server-side (verified
         # live), but a silently-ignored filter would hand back exactly the
@@ -233,6 +240,8 @@ def search_offers(min_vram_gb: int, max_dph: float, limit: int = 20,
         # offer fields; both are treated as optional by every consumer.
         'disk_space_gb': round(float(o.get('disk_space') or 0), 1),
         'inet_down': o.get('inet_down'),
+        'cuda_max_good': o.get('cuda_max_good'),
+        'verified': o.get('verified') is True or o.get('verification') == 'verified',
         # host identity + quality signals for the selection layer (blacklist
         # of hosts that failed to boot, reliability preference within a class).
         # machine_id alone was not enough: it lives in a file on the host

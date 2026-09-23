@@ -47,6 +47,7 @@ from lds_sdk.cloud_host.services import dataset_activity
 from lds_cloud_training import dense_local_delivery as dld
 
 from lds_cloud_training import dense_weights
+from lds_cloud_training.rental_health import boot_failure, gpu_startup_failure, image_cuda_floor
 
 from lds_sdk.cloud_host.services import face_dataset_service as fds
 
@@ -2662,6 +2663,8 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
 _AUTO_RETRY_LIMIT = 1
 
 _AUTO_RETRY_MARKERS = (
+    'pod container startup failed',
+    'pod gpu initialization failed',
     'pod did not become ready',
     'pod unreachable',
     # A pod that vanished across an app restart used to say 'did not become
@@ -3228,21 +3231,13 @@ def _offer_ip(offer) -> str:
 def _filter_offers(offers) -> list:
     """Drop blacklisted hosts and bait-priced offers (< 60% of their GPU
     class's median price when the class has >= 3 offers — with fewer there is
-    no reliable median). Never returns [] when the input wasn't: if every
-    offer got filtered, fall back to the input minus blacklisted hosts only
-    (renting a suspect host beats failing the run outright)."""
+    no reliable median). A shortage never makes a known failed host eligible."""
     bad = _load_bad_hosts()
     banned_ips = _banned_ips(bad)
     by_machine = [o for o in offers
                   if str(o.get('machine_id') or '') not in bad]
     not_blacklisted = [o for o in by_machine
                        if not (_offer_ip(o) and _offer_ip(o) in banned_ips)]
-    if not not_blacklisted and by_machine:
-        # The address ban is the wide one; it must never be the reason a launch
-        # finds nothing. Fall back to the narrow machine_id ban and say so.
-        logger.warning('every remaining offer sits on a blacklisted address — '
-                       'falling back to the machine-id blacklist only')
-        not_blacklisted = by_machine
     by_class = {}
     for o in not_blacklisted:
         by_class.setdefault(o.get('gpu_name') or '', []).append(o)
@@ -3261,16 +3256,16 @@ def _filter_offers(offers) -> list:
     return kept or not_blacklisted
 
 def _best_of(group):
-    """Most reliable offer among those within +10% of the group's cheapest —
-    a hair more money for a host that actually boots is the right trade."""
+    """Prefer verified, reliable hosts within +10% of the group's cheapest."""
     priced = [o for o in group if o.get('dph_total') is not None]
     if not priced:
         return group[0]
     cheapest = min(o['dph_total'] for o in priced)
     window = [o for o in priced if o['dph_total'] <= cheapest * _SIMILAR_PRICE_WINDOW]
-    # reliability first; at equal (or absent) reliability the CHEAPEST wins —
-    # offers without the field must not silently cost +10%.
-    return max(window, key=lambda o: ((o.get('reliability') or 0), -o['dph_total']))
+    # Verification first, then reliability and price. Missing quality fields
+    # must not silently cost +10%.
+    return max(window, key=lambda o: (o.get('verified') is True,
+                                     (o.get('reliability') or 0), -o['dph_total']))
 
 def _pick_offer(offers, requested_gpu, strict=False):
     """Best offer of the requested GPU class if the user picked a speed tier
@@ -3621,6 +3616,8 @@ def _provision_with_credentials(run):
     def _search():
         return vast_client.search_offers(
             min_vram_gb=min_vram, max_dph=c.get('max_price_per_hour', 0.80),
+            limit=int(c.get('offer_scan_limit') or 100),
+            min_cuda=image_cuda_floor(_pod_image_for(run, c)),
             min_inet_down_mbps=int(c.get('min_inet_down_mbps') or 0),
             min_reliability=float(c.get('min_reliability') or 0.98),
             min_disk_bw_mbps=int(c.get('min_disk_bw_mbps') or 0),
@@ -5225,6 +5222,7 @@ def _wait_for_pod_ready(run, stop_event, c, cap_anchor,
     boot_facts = None
     boot_progress_ts = boot_started
     boot_rearms = 0
+    prior_boot_failure = None
     _set(run, phase_detail='Waiting for the pod to boot')
     port = int(c.get('ui_port') or 18675)
     if template_mode and port == 8675:
@@ -5288,6 +5286,11 @@ def _wait_for_pod_ready(run, stop_event, c, cap_anchor,
                 _blacklist_run_host(run, 'user stopped a boot stuck past 8 min')
             _finish(run, 'stopped', detail='Stopped by user during boot')
             return 'stopped'
+        failure = boot_failure(inst) if not reattaching else None
+        if failure and failure == prior_boot_failure:
+            _blacklist_run_host(run, failure)
+            raise RuntimeError(f'pod container startup failed: {failure}')
+        prior_boot_failure = failure
         # Live telemetry: surface WHERE the boot is stuck (image pull,
         # port publication, UI warm-up) in the UI phase line and the
         # log — runs #3/#4 died blind on 'Waiting for the pod to boot'.
@@ -5415,6 +5418,7 @@ def _poll_job_until_terminal(run, remote, job_id, stop_event, c,
     # that non-probe time silently eat the grace and declare a still-live
     # pod 'unreachable' on its very first failed probe.
     unreachable_since = None
+    prior_gpu_failure = None
     polls = 0
     while True:
         _assert_run_open(run)
@@ -5480,6 +5484,17 @@ def _poll_job_until_terminal(run, remote, job_id, stop_event, c,
         status = job.get('status')
         info = job.get('info') or ''
         _set_soft(run, phase_detail=f"{status}: {info}"[:500])
+        failure = (gpu_startup_failure(log_text)
+                   if status == 'running' and not job.get('step') else None)
+        if failure and failure == prior_gpu_failure:
+            # Two current observations, zero trained steps, and an explicit
+            # CUDA initialization failure: the UI's stale "running" is false.
+            try:
+                remote.stop_job(job_id)
+            except Exception:
+                pass
+            raise RuntimeError(f'pod GPU initialization failed: {failure}')
+        prior_gpu_failure = failure
 
         if status == 'completed':
             if _is_full_transformer_run(run):
@@ -6922,6 +6937,9 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
     offers = _filter_offers(vast_client.search_offers(
         min_vram_gb=min_vram, max_dph=price_cap,
         limit=int(c.get('offer_scan_limit') or 100),
+        min_cuda=image_cuda_floor(_QWEN_IMAGE_21_POD if fam == 'qwenimage21'
+                                  else c.get('video_image') or c.get('image')
+                                  if fam == 'video' else c.get('image')),
         min_inet_down_mbps=int(c.get('min_inet_down_mbps') or 0),
         min_reliability=float(c.get('min_reliability') or 0.98),
         min_disk_bw_mbps=int(c.get('min_disk_bw_mbps') or 0),

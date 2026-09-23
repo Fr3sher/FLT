@@ -68,13 +68,12 @@ def test_an_offer_without_an_address_is_judged_on_its_machine_id_only(ct, app):
         assert [o['offer_id'] for o in kept] == [2]
 
 
-def test_the_address_ban_never_starves_a_launch(ct, app):
-    """The wide ban may not be the reason nothing is rentable: when it would
-    empty the market, the launch falls back to the narrow machine_id ban."""
+def test_an_empty_market_never_reenables_a_failed_host_address(ct, app):
+    """A new machine id on a failed host is not a reason to rent it again."""
     with app.app_context():
         ct._blacklist_host(BAD_MACHINE, 'transient pod failure', ip=SHARED_IP)
         kept = ct._filter_offers([_offer(2, NEW_MACHINE, SHARED_IP)])
-        assert [o['offer_id'] for o in kept] == [2]
+        assert kept == []
         # ...but the machine that actually failed stays out, always.
         assert ct._filter_offers([_offer(1, BAD_MACHINE, SHARED_IP)]) == []
 

@@ -1,5 +1,11 @@
 export const CLOUD_WHATS_NEW = [
   {
+    id: '2026-09-23-cloud-rental-reliability',
+    date: '2026-09-23',
+    title: 'Avoid incompatible GPU hosts and release failed rentals sooner',
+    blurb: 'GPU offers now match the training image’s CUDA requirement. Known failed hosts remain excluded, and confirmed container or CUDA startup errors release a broken rental promptly instead of waiting for a long silence timeout. Slow downloads that keep progressing are preserved.',
+  },
+  {
     id: '2026-09-23-cloud-qwen-image-21',
     date: '2026-09-23',
     title: 'Train Qwen-Image 2.1 on a cloud GPU',

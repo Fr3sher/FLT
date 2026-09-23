@@ -89,6 +89,23 @@ def test_search_offers_optional_trust_filters(vc, monkeypatch):
     assert seen[1]['datacenter'] == {'eq': True}
 
 
+def test_search_rejects_hosts_below_the_container_cuda_version(vc, monkeypatch):
+    seen = {}
+    def request(method, path, **kwargs):
+        seen.update(kwargs['json'])
+        return FakeResp(200, {'offers': [
+            {'id': 1, 'cuda_max_good': 12.8},
+            {'id': 2, 'cuda_max_good': 12.9, 'verification': 'verified'},
+            {'id': 3, 'cuda_max_good': 13.0},
+            {'id': 4},
+        ]})
+    monkeypatch.setattr(vc, '_request', request)
+    offers = vc.search_offers(24, .8, min_cuda=12.9)
+    assert seen['cuda_max_good'] == {'gte': 12.9}
+    assert [offer['offer_id'] for offer in offers] == [2, 3]
+    assert offers[0]['verified'] is True
+
+
 def test_create_instance_returns_contract_id(vc, monkeypatch):
     seen = {}
 

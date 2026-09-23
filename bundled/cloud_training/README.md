@@ -17,11 +17,14 @@ Video's cloud mutations dispatch to this product only while it is active. Run
 history deletion preserves unconfirmed rentals. Local checkpoint history stays
 readable when Cloud is disabled.
 
-**Do not activate this snapshot against a live cloud account yet.** The separate
-cloud-quantization rental lifecycle still needs qualification. Loading plugins
-in a minimal test host does not qualify a production application startup.
+Training offers must satisfy the CUDA version advertised by the selected pod
+image, as well as the configured memory, disk and host filters. Keep **Verified
+hosts only** enabled for the recommended host pool. An excluded host address
+is never silently reintroduced when offers are scarce.
 
-All validation of this snapshot uses mocked provider responses and blocked
-network sockets. No GPU rental or provider connection was used.
+Confirmed container startup faults and GPU initialization failures stop a broken
+LoRA rental promptly, even when the remote job still says "Starting job". The
+existing single-retry policy applies only after release is confirmed. A moving
+download or an advancing training step is not treated as a startup failure.
 
 Licensed under PolyForm Noncommercial 1.0.0; see `LICENSE`.
