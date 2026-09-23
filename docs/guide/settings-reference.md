@@ -61,7 +61,10 @@ that generation checks before launch.
 
 Each family needs its own diffusion model, text encoder(s) and VAE. Leave a
 file field blank to detect compatible installed files, including shared
-ComfyUI model roots. Choose **Install** for missing files; existing valid files
+ComfyUI model roots. Test Studio also offers **Download** buttons beside missing
+models, with file sizes, progress and a check after installation, so you can
+prepare the files without leaving your test. Choose **Install** in Settings;
+existing valid files
 are reused. Downloads are explicit and show progress and cancellation. Save
 file selections before **Check models again**. A missing or damaged custom
 selection must be corrected or cleared; downloading the recommended model

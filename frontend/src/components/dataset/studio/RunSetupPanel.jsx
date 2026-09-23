@@ -11,6 +11,7 @@ import LaunchBar from './LaunchBar';
 import StudioGenerationSettings from './StudioGenerationSettings';
 import StudioActionBar from './StudioActionBar';
 import StudioPreflightBanner from './StudioPreflightBanner';
+import StudioModelDownloads from './StudioModelDownloads';
 import { launchSettings, launchText as batchLaunchText, mergeBatches, visibleBatch } from './promptBatch';
 import { readInjectTrigger, writeInjectTrigger } from './triggerPref';
 import ScenePromptsPanel from './ScenePromptsPanel';
@@ -92,7 +93,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
   const total = cells * promptMult;
   const modelError = d.generation_readiness?.config_error || form.modelError;
   const canLaunch = total > 0 && !d.pending && !d.gpu_busy && !studio.launching
-    && !launchBlocked && !modelError;
+    && !launchBlocked && !modelError && d.generation_readiness?.models_ready !== false;
   const launchText = batchLaunchText(launchLabel, allPickedPrompts);
   // Always-on LoRA batch comparison generates each configuration WITHOUT then WITH each checked
   // LoRA. Image/time estimates must include the backend's 1 + checked-count multiplier.
@@ -271,6 +272,9 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
               )}
             </p>
           )}
+
+          <StudioModelDownloads readiness={d.generation_readiness}
+            onRefresh={async () => { await studio.refresh(); setPreflight(null); }} />
 
           {/*
            * Global generation settings match Generate: aspect/resolution and family-specific

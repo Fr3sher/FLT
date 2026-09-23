@@ -383,12 +383,68 @@ def test_klein_model_dest_is_unet_klein(app, tmp_path):
                                       'flux-2-klein-9b-kv-fp8.safetensors'))
 
 
-def test_download_dest_path_requires_valid_comfyui(app, tmp_path):
+@pytest.mark.parametrize('action', ['klein_lora', 'studio_qwenimage21_diffusion_model'])
+def test_download_dest_path_requires_valid_comfyui(app, tmp_path, action):
     from app import setup_installer, config
     with app.app_context():
-        config.save_config({'comfyui': {'base_dir': str(tmp_path / 'not-comfyui')}})
+        override = tmp_path / 'custom-models'
+        override.mkdir()
+        config.save_config({'comfyui': {'base_dir': str(tmp_path / 'not-comfyui'),
+                                        'models_dir': str(override)}})
         with pytest.raises(setup_installer.Precondition):
-            setup_installer._download_dest_path('klein_lora')
+            setup_installer._download_dest_path(action)
+
+
+@pytest.mark.parametrize('slot', ['diffusion_model', 'text_encoder', 'vae'])
+def test_studio_model_download_lands_in_the_configured_discovery_root(app, tmp_path, monkeypatch, slot):
+    import struct
+    from app import config, setup_installer
+    from app.services import trained_image_models
+    base = _make_comfyui(tmp_path)
+    override = tmp_path / 'custom-models'
+    action = f'studio_qwenimage21_{slot}'
+    header = b'{"weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}'
+    payload = struct.pack('<Q', len(header)) + header + b'\0' * 4
+    monkeypatch.setattr(setup_installer.requests, 'get', _FakeGet(payload=payload))
+    with app.app_context():
+        config.save_config({'comfyui': {'base_dir': str(base), 'models_dir': str(override)}})
+        spec = setup_installer.model_download_spec(action)
+        dest = setup_installer._download_dest_path(action)
+        assert dest == str(override.joinpath(*spec['dest']))
+        setup_installer._runs[action] = setup_installer._new_run()
+        assert setup_installer._run_model_download(action) == 0
+        assert action not in trained_image_models.missing_assets('qwenimage21')
+        assert os.path.isfile(dest) and not os.path.exists(dest + '.part')
+        # This change is scoped to Studio actions; existing install destinations stay stable.
+        assert setup_installer._download_dest_path('klein_lora').startswith(str(base / 'models'))
+        assert not base.joinpath('models', *spec['dest']).exists()
+
+
+def test_studio_model_download_reuses_existing_extra_root_with_models_override(app, tmp_path, monkeypatch):
+    import struct
+    from app import config, setup_installer
+    from app.services import trained_image_models
+    base = _make_comfyui(tmp_path)
+    override = tmp_path / 'custom-models'
+    shared = tmp_path / 'shared-encoders'
+    shared.mkdir()
+    existing = shared / 'qwen3vl_8b_bf16.safetensors'
+    header = b'{"weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}'
+    payload = struct.pack('<Q', len(header)) + header + b'\0' * 4
+    existing.write_bytes(payload)
+    (base / 'extra_model_paths.yaml').write_text(
+        f'shared:\n  text_encoders: {shared.as_posix()}\n', encoding='utf-8')
+    def refuse_network(*_a, **_kw):
+        raise AssertionError('An existing compatible encoder must be reused')
+    monkeypatch.setattr(setup_installer.requests, 'get', refuse_network)
+    action = 'studio_qwenimage21_text_encoder'
+    with app.app_context():
+        config.save_config({'comfyui': {'base_dir': str(base), 'models_dir': str(override)}})
+        setup_installer._runs[action] = setup_installer._new_run()
+        assert setup_installer._run_model_download(action) == 0
+        assert action not in trained_image_models.missing_assets('qwenimage21')
+        assert not os.path.exists(setup_installer._download_dest_path(action))
+    assert existing.read_bytes() == payload
 
 
 def test_manual_command_klein_lora_is_curl_to_real_url(app, tmp_path):

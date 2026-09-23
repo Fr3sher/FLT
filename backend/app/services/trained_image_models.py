@@ -167,7 +167,7 @@ def generation_readiness(family, base_model=None, *, check_nodes=True):
         return {'family': family, 'label': FAMILY_LABELS[family], 'assets': {},
                 'ready': False, 'models_ready': False, 'nodes_checked': False,
                 'missing_assets': [], 'invalid_assets': [], 'missing_nodes': [],
-                'install_actions': [], 'config_error': str(exc)}
+                'install_actions': [], 'downloads': [], 'config_error': str(exc)}
     missing, invalid = _asset_status(family, assets)
     classes = None
     if check_nodes:
@@ -183,12 +183,21 @@ def generation_readiness(family, base_model=None, *, check_nodes=True):
     # A canonical download cannot repair a custom pin pointing somewhere else.
     actions = ([m['action'] for m in missing if m['slot'] not in pinned_slots]
                + [m['asset'] for m in invalid if m['slot'] not in pinned_slots])
+    actions = list(dict.fromkeys(actions))
+    repairs = {item['asset'] for item in invalid}
+    downloads = [
+        {'action': action, 'slot': slot, 'label': spec['label'],
+         'filename': spec['filename'], 'size_bytes': spec['size_bytes'],
+         'source_url': f'https://huggingface.co/{spec["repo_id"]}',
+         'repair': action in repairs}
+        for slot, spec in _specs(family).items()
+        if (action := install_action(family, slot)) in actions]
     return {'family': family, 'label': FAMILY_LABELS[family], 'assets': assets,
             'ready': not missing and not invalid and not missing_nodes and classes is not None,
             'models_ready': not missing and not invalid,
             'nodes_checked': classes is not None,
             'missing_assets': missing, 'invalid_assets': invalid,
-            'missing_nodes': missing_nodes, 'install_actions': list(dict.fromkeys(actions)),
+            'missing_nodes': missing_nodes, 'install_actions': actions, 'downloads': downloads,
             'pin_warnings': pin_warnings}
 
 

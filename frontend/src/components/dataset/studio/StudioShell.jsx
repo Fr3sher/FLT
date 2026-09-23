@@ -45,6 +45,7 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
   const [baseError, setBaseError] = useState(null);
   const [defaultModel, setDefaultModel] = useState(null);
   const [generationReadiness, setGenerationReadiness] = useState(null);
+  const [modelRevision, setModelRevision] = useState(0);
   useEffect(() => {
     setBaseModels([]); setAxes(null); setModelDefaults(null); setBaseNote(null);
     setGenerationCapabilities(null); setLoadedFamily(null); setBaseError(null);
@@ -74,7 +75,7 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
         if (!cancelled) setBaseError(error.message || 'Could not load model settings.');
       });
     return () => { cancelled = true; };
-  }, [runType]);
+  }, [runType, modelRevision]);
 
   const comparison = selection.length >= 2;
   // Single-LoRA branch uses its dataset. With no selection, fall back to the URL-preselected
@@ -112,6 +113,7 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
           generationCapabilities={generationCapabilities}
           generationReadiness={generationReadiness}
           defaultModel={defaultModel}
+          onRefreshModels={() => setModelRevision((revision) => revision + 1)}
           settingsError={loadedFamily === runType ? null : (baseError || 'Loading model settings…')} />
       ) : soloDatasetId ? (
         // key forces a clean remount when the solo LoRA OR family changes, resetting full-Studio

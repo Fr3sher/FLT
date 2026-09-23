@@ -29,6 +29,7 @@ import StackVariantsGrid from './StackVariantsGrid';
 import StudioGenerationSettings from './StudioGenerationSettings';
 import StudioActionBar from './StudioActionBar';
 import StudioPreflightBanner from './StudioPreflightBanner';
+import StudioModelDownloads from './StudioModelDownloads';
 import LoraComparisonGrid from './LoraComparisonGrid';
 import LoraRankingPanel from './LoraRankingPanel';
 import RunSelector from './RunSelector';
@@ -42,7 +43,8 @@ const rollSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 export default function ComparisonStudio({ selection, baseModels = [], axes = null,
   modelDefaults = null, runType = 'zimage', baseNote = null,
-  generationCapabilities = null, generationReadiness = null, defaultModel = null, settingsError = null }) {
+  generationCapabilities = null, generationReadiness = null, defaultModel = null, settingsError = null,
+  onRefreshModels = null }) {
   const toast = useToast();
 
   // Run settings are persisted so page reloads preserve them.
@@ -200,7 +202,9 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
 
   const combine = mode === 'combine';
   const combineBlocked = combine ? combineBlocker(selection) : null;
-  const launchBlocked = settingsError || generationReadiness?.config_error || modelError || combineBlocked;
+  const launchBlocked = settingsError || generationReadiness?.config_error || modelError
+    || (generationReadiness?.models_ready === false ? 'Download the required model files to continue.' : null)
+    || combineBlocked;
 
   // STACK view follows the DISPLAYED RUN, not the Compare/Blend toggle: yesterday's stack can be
   // opened while the toggle is on Compare, and vice versa.
@@ -336,6 +340,8 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
         {(modelError || generationReadiness?.config_error) && studioModelSettingsLink(runType) && (
           <a href={studioModelSettingsLink(runType)} className="text-sm underline">Open model settings →</a>
         )}
+        <StudioModelDownloads readiness={generationReadiness}
+          onRefresh={async () => { await onRefreshModels?.(); setPreflight(null); }} />
         <LoraStackPanel selection={selection} mode={mode} onMode={setMode}
           weights={stackWeights}
           sets={stackSets}

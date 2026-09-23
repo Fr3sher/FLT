@@ -966,7 +966,14 @@ def _download_dest_path(action) -> str:
     """Absolute destination for a model download, under the validated ComfyUI
     models root."""
     spec = model_download_spec(action)
-    return os.path.join(_comfyui_root(), 'models', *spec['dest'])
+    root = _comfyui_root()
+    models_root = os.path.join(root, 'models')
+    if action in _STUDIO_DOWNLOADS and cfg.get('comfyui.models_dir'):
+        # Studio discovery reads the configured models root. Downloading into
+        # the install's default directory would leave those assets invisible.
+        # Keep validating the ComfyUI install before honoring its override.
+        models_root = os.path.abspath(os.fspath(cfg.comfyui_dir('models')))
+    return os.path.join(models_root, *spec['dest'])
 
 
 def _node_pack_dest(action) -> str:

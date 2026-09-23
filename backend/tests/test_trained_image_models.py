@@ -128,3 +128,29 @@ def test_settings_catalog_preserves_controls_when_one_pin_is_invalid(model_tree,
     anima = next(f for f in catalog if f['family'] == 'anima')
     assert anima['config_error'] and len(anima['slots']) == 3
     assert len(catalog) == 3
+
+
+def test_download_details_offer_only_actions_that_repair_the_resolved_family(model_tree):
+    root, pins = model_tree
+    status = models.generation_readiness('qwenimage21', check_nodes=False)
+    assert {item['action'] for item in status['downloads']} == set(status['install_actions'])
+    assert len(status['downloads']) == 3
+    assert status['downloads'][0] == {
+        'action': 'studio_qwenimage21_diffusion_model', 'slot': 'diffusion_model',
+        'label': 'Qwen-Image 2.1 diffusion model',
+        'filename': 'qwen_image_2.1_int8_convrot.safetensors',
+        'size_bytes': 7256783064, 'source_url': 'https://huggingface.co/Comfy-Org/Qwen-Image-2.1',
+        'repair': False,
+    }
+    weights(root / 'text_encoders' / 'qwen3vl_8b_int8_convrot.safetensors')
+    corrupt = root / 'vae' / 'qwen_image_2.1_vae_bf16.safetensors'
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_text('<!doctype html><title>Access denied</title>')
+    pins['studio_models.qwenimage21.diffusion_model'] = 'custom/missing.safetensors'
+    status = models.generation_readiness('qwenimage21', check_nodes=False)
+    # A download fixes the corrupt automatic VAE, not a custom pin or a valid encoder.
+    assert status['install_actions'] == ['studio_qwenimage21_vae']
+    assert [(item['slot'], item['repair']) for item in status['downloads']] == [('vae', True)]
+    pins['studio_models.qwenimage21.diffusion_model'] = '../unsafe.safetensors'
+    status = models.generation_readiness('qwenimage21', check_nodes=False)
+    assert status['config_error'] and status['downloads'] == [] and status['install_actions'] == []

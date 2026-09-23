@@ -66,6 +66,7 @@ test('a configured missing base is shown and blocks comparison instead of select
   assert.match(html, /Base model unavailable: missing-configured\.safetensors/);
   assert.match(html, /value="missing-configured\.safetensors" selected=""/);
   assert.match(html, /focus=studio-models/);
+  assert.doesNotMatch(html, /Download missing models/);
   const runButton = html.match(/<button[^>]*aria-label="Run the test"[^>]*>/)?.[0];
   assert.ok(runButton?.includes('disabled'));
 });
@@ -96,4 +97,26 @@ test('new-family missing files link to their install controls and identify core 
   assert.match(html, /Missing ComfyUI node/);
   assert.doesNotMatch(html, /Missing custom node/);
   assert.match(html, /Update ComfyUI, then restart it/);
+});
+
+test('missing Qwen files offer in-place downloads and keep generation blocked until all files exist', () => {
+  const html = renderComparison({
+    selection: [
+      { dataset_id: 1, checkpoint: 'first.safetensors', family: 'qwenimage21' },
+      { dataset_id: 2, checkpoint: 'second.safetensors', family: 'qwenimage21' },
+    ], runType: 'qwenimage21', defaultModel: 'qwen-base.safetensors',
+    baseModels: [{ filename: 'qwen-base.safetensors', label: 'Qwen base' }],
+    generationReadiness: { label: 'Qwen-Image 2.1', models_ready: false, downloads: [
+      { action: 'studio_qwenimage21_text_encoder', label: 'Text encoder',
+        filename: 'qwen-encoder.safetensors', size_bytes: 9_000_000_000 },
+      { action: 'studio_qwenimage21_vae', label: 'VAE', filename: 'qwen-vae.safetensors' },
+    ] },
+  });
+  assert.match(html, /Download Text encoder/);
+  assert.match(html, /Download VAE/);
+  assert.match(html, /qwen-encoder.safetensors/);
+  assert.match(html, /Check installed files again/);
+  const runButtons = html.match(/<button[^>]*>🚀 Run the test<\/button>/g) || [];
+  assert.equal(runButtons.length, 2);
+  assert.ok(runButtons.every((button) => button.includes('disabled')));
 });
