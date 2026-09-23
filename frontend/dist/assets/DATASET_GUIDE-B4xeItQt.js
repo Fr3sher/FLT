@@ -25,8 +25,8 @@ before you caption anything.
 
 ### Qwen-Image 2.1 training
 
-Select **Qwen-Image 2.1** in the dataset's model-family selector to train a local
-LoRA from RGB images and prose captions. Update AI Toolkit and install its current
+Select **Qwen-Image 2.1** in the dataset's model-family selector to train a
+LoRA from RGB images and prose captions. For local training, update AI Toolkit and install its current
 requirements in its own Python environment first; the dedicated \`qwen_image_2\`
 architecture is required. The older Qwen Image architecture is incompatible.
 
@@ -37,7 +37,12 @@ GPU memory requirements have not been measured in LDS. The text encoder stays
 loaded, matching AI Toolkit's model defaults. Checkpoints have their own run
 suffix and deploy to \`loras/qwenimage21\`.
 
-Cloud training, reference-image editing datasets, transparent RGBA datasets and
+Cloud Training uses a dedicated September 23 AI Toolkit image, at least 32 GB
+VRAM on an Ampere-or-newer GPU and 100 GB disk. Older saved cloud settings cannot
+select a smaller machine. Live hourly prices are shown; duration and total-cost
+estimates are unavailable until this family has a measured speed model.
+
+Reference-image editing datasets, transparent RGBA datasets and
 in-app Test Studio generation are not available for this family. Test exported
 LoRAs in a compatible external Qwen-Image 2.1 workflow.
 
