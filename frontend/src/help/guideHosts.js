@@ -81,6 +81,7 @@ export const CORE_GUIDE_ANCHORS = {
   ],
   "dataset-guide": [
     "1-pick-your-model-family-first",
+    "qwen-image-2-1-training",
     "2-how-many-images-and-which-ones",
     "3-captions-the-make-or-break-step",
     "4-settings-cheat-sheet",
