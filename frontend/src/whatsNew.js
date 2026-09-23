@@ -83,6 +83,251 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-07-training-speed-levers',
+    date: '2026-09-07',
+    title: 'Trade memory back for time: batch size, quantisation backend, checkpointing and compile',
+    blurb:
+      'Local training was tuned to FIT — a 12B model in 24 GB — and four of those choices were '
+      + 'frozen where you could not reach them. Advanced options gains a Speed group: train 2 or 4 '
+      + 'images per step, switch gradient checkpointing off, pick the quantisation backend (the '
+      + 'default saves memory but cannot go faster; convrot8 quantises the activations too and does '
+      + 'the maths in int8), and try compiling the model. Defaults are unchanged, and each control '
+      + 'says what it costs.',
+    to: '/datasets?section=training',
+  },
+  {
+    // Same-day ids sort the feed (date, then id): 'zzzzz' keeps this one above
+    // the day's earlier entries, so the badge counts it (2026-09-06).
+    id: '2026-09-06-zzzzz-comfyui-interrupt-second-press',
+    date: '2026-09-06',
+    title: 'Cancel stops the render, and 🧹 Free memory has a second press instead of a wall',
+    blurb:
+      'Cancelling a clip ComfyUI is already rendering now asks ComfyUI to stop it, '
+      + 'instead of waiting for the render to end on its own — a render that pages '
+      + 'can take a minute or two to notice. Free memory still refuses while a render '
+      + 'of LDS’s own is on the card, but it says so and the same button pressed again '
+      + 'within a minute interrupts that render (it is dropped) and frees the memory. '
+      + 'A training and a job that is not LDS’s keep their protection.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-09-06-zzzz-video-prompt-survives-reload',
+    date: '2026-09-06',
+    title: 'The motion you typed survives a page reload',
+    blurb:
+      'In the video studio, the Motion field comes back as you left it after a '
+      + 'refresh or a trip to another page, in every mode. It is kept in this '
+      + 'browser as you type; clearing the field clears it.',
+    to: '/studio?lane=video',
+  },
+  {
+    id: '2026-09-05-zzz-video-reuse-reliability',
+    date: '2026-09-05',
+    title: 'Keep your clip settings when you reuse or finish a video',
+    blurb: 'Reuse keeps the canvas shape of text-to-video clips, and Smooth and Neural rendering preserve the selected accelerator. Last-frame extraction also recovers cleanly if an export is interrupted.',
+    to: '/studio?lane=video',
+  },
+  {
+    id: '2026-09-05-zzz-training-cleanup-ownership',
+    date: '2026-09-05',
+    title: 'Keep your quantization GPU safe from training cleanup',
+    blurb: 'Training cleanup now checks which task owns a rented instance, so it leaves quantization instances alone.',
+  },
+  {
+    id: '2026-09-05-zzz-small-screen-video-controls',
+    date: '2026-09-05',
+    title: 'Reach video graph actions on a small screen',
+    blurb: 'Checkpoint menus stay inside the screen and offer comfortable touch targets. Long render-option labels wrap so you can read the whole setting.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-09-05-zzz-comfyui-input-check',
+    date: '2026-09-05',
+    title: 'Know when ComfyUI cannot see the image you selected',
+    blurb: 'A mismatched input folder is caught before a render starts, with an explanation of which folder needs checking instead of an unexplained generation error.',
+  },
+  {
+    id: '2026-09-05-zzz-cancelled-reads',
+    date: '2026-09-05',
+    title: 'Closing a picker no longer looks like a lost connection',
+    blurb: 'A cancelled read no longer triggers the offline banner or a connection-error notification.',
+  },
+  {
+    id: '2026-09-05-zz-vast-referral-link',
+    date: '2026-09-05',
+    title: 'Creating a vast.ai account through the app now supports the project, at no cost to you',
+    blurb: 'Every vast.ai link in the app and its docs is a referral link: vast.ai pays this project 3% of what a referred account spends there. Prices are identical, nothing in the app changes, and the untagged link sits right next to the disclosure.',
+    to: '/settings/training',
+  },
+  {
+    id: '2026-09-05-zz-setup-scan-startup',
+    date: '2026-09-05',
+    title: 'Spend less time waiting for the Setup scan',
+    blurb: 'Setup checks your installed tools sooner after an app restart. Opening it reuses the current machine scan; Re-scan still checks again when you need it.',
+    to: '/setup',
+  },
+  {
+    id: '2026-09-05-setup-adopts-comfyui-input-folder',
+    date: '2026-09-05',
+    title: "Setup points you at the input folder ComfyUI really reads",
+    blurb: "If your ComfyUI keeps its input folder somewhere else (Comfy Desktop's shared folder, a --input-directory launch), the Setup wizard's ComfyUI card now says so and offers that folder in one click, instead of leaving the fix inside an Advanced fold of Settings. Reported on GitHub (#64).",
+    to: '/setup?step=comfyui',
+  },
+  {
+    id: '2026-09-04-zzzzzzzz-workspace-header-refresh',
+    date: '2026-09-04',
+    title: 'Find your workspace at a glance',
+    blurb: 'The header now separates workspace navigation from machine readings and tools, with matching icons, a clearer active tab and more readable resource values. Gallery no longer carries a Beta badge.',
+  },
+  {
+    id: '2026-09-04-zzzzz-no-setup-detour-after-a-dropped-request',
+    date: '2026-09-04',
+    title: 'Coming back to the app no longer lands you on Setup when a request dropped on the way',
+    blurb:
+      'Opening the app again on a phone — after a video had rendered, say — '
+      + 'sometimes showed the Setup wizard as if the machine had never been '
+      + 'configured. It had: the first two requests of the page load had been '
+      + 'dropped by a link that was reconnecting, and “I could not ask” was '
+      + 'being read as “never set up”. A dropped request is now retried once '
+      + 'and otherwise ignored; only the server’s own answer can open the '
+      + 'wizard, and an install it has already seen working is never bounced.',
+  },
+  {
+    id: '2026-09-04-per-picture-prompts-in-one-pass',
+    date: '2026-09-04',
+    title: 'Writing a prompt per picture no longer reloads the video model between each one',
+    blurb:
+      '✨ Written per picture asked the vision model once per picture — and every '
+      + 'one of those asks makes ComfyUI let go of its models, so the next clip '
+      + 'reloaded MiniMax H3, tens of gigabytes, once per picture. A twelve-frame '
+      + 'strip paid that eleven times over for nothing. The prompts are now all '
+      + 'written in a single hold of the GPU, before the first clip is queued: '
+      + 'the model comes back once. Same screen, same fallbacks, same notices — '
+      + 'the batch is simply not spending its time swapping weights any more.',
+    to: '/studio',
+  },
+  {
+    // Same-day ids sort the feed (date, then id): an id below the day's
+    // others never reaches the top, and the badge counts nothing new.
+    id: '2026-09-03-what-each-capability-unlocks',
+    date: '2026-09-03',
+    title: 'Capabilities: every row says what it unlocks — and the Video lane’s three doors are counted',
+    blurb:
+      'Settings ▸ Overview (and the wizard’s last screen) put one line under '
+      + 'each capability saying what it does — "Test Studio (images)" is where '
+      + 'test images are generated with a LoRA, "Video Test Studio" tests one '
+      + 'in motion. Three rows join the count: ✨ DLSS 5 neural rendering, '
+      + '↗ Smooth (frame interpolation) and the 🔴 Live lane — each its own '
+      + 'install, each shown not-ready with its door instead of hiding behind '
+      + 'a green video row.',
+    to: '/settings/overview',
+  },
+  {
+    id: '2026-09-03-video-test-studio-prompts-per-picture',
+    date: '2026-09-03',
+    title: 'A batch of pictures, one prompt each',
+    blurb:
+      'With several start frames in the strip, the Video Test Studio now asks '
+      + 'which prompt the batch runs: the same motion for every picture (as '
+      + 'before, the comparison that says something about the LoRA), or one '
+      + 'written by ✨ per picture — your motion enriched with each frame, or '
+      + 'a proposal from the frame alone — written before anything is queued.',
+    to: '/studio?lane=video',
+  },
+  {
+    id: '2026-09-03-video-test-studio-continue-from-last-frame',
+    date: '2026-09-03',
+    title: 'Continue a clip from its last frame — and get one video',
+    blurb:
+      'A ⏭ Continue button on every finished clip of the Video Test Studio: '
+      + 'its last frame becomes the next start frame, you write the next '
+      + 'motion, and the render lands joined behind the clip it continues — '
+      + 'one video, that clip then the new one, the cut frame dropped and the '
+      + 'sound kept in step (a smoothed clip has none: its side is padded with '
+      + 'silence, the new part keeps its own). Continue the result again and '
+      + 'the chain grows.',
+    to: '/studio?lane=video',
+  },
+  {
+    id: '2026-09-03-video-accelerations',
+    date: '2026-09-03',
+    title: 'Pick your video acceleration among the arena’s top three',
+    blurb:
+      'The Video Test Studio’s Turbo box is now a choice: larryvrh’s Turbo v4 '
+      + '(as before), Plaguekind’s Parasyte Turbo or silveroxides’ DARE-TIES '
+      + 'merge — the first three rows of the MiniMax-H3 acceleration arena, '
+      + 'statistical ties at six steps. Each runs with the settings the arena '
+      + 'verified; Setup downloads the two new LoRAs, and a clip remembers '
+      + 'which one made it.',
+    to: '/studio?lane=video',
+  },
+  {
+    id: '2026-09-03-video-run-graph-and-previews',
+    date: '2026-09-03',
+    title: 'A video set draws its runs as a graph, with the training samples on each save',
+    blurb:
+      'The Checkpoints & LoRAs section of a video set now opens on the same run graph '
+      + 'an image dataset has: one card per run, this PC or a rented pod, a pill per '
+      + 'save, and a curve from the exact step a continuation resumed from. A save that '
+      + 'training rendered a sample for shows its still — click it to play the clip, '
+      + 'one prompt after another — and every verb (download, deploy, continue, delete) '
+      + 'is one click away on the pill, the same as in the list below.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-09-03-video-smooth-rate',
+    date: '2026-09-03',
+    title: 'Smooth asks which rate you want',
+    blurb:
+      'The ↗ Smooth button of the Video Test Studio opens a small window before '
+      + 'it runs: 48, 72 or 96 fps for a 24 fps clip — ×2, ×3 or ×4, because the '
+      + 'interpolator works by whole factors — with the frame count and the '
+      + 'relative cost of each. It used to go straight to 48.',
+    to: '/studio?lane=video',
+  },
+  {
+    id: '2026-09-03-video-quick-prompts',
+    date: '2026-09-03',
+    title: 'Pick a video prompt instead of writing one',
+    blurb:
+      'A ⚡ row of preset chips now sits under the Video Test Studio’s Motion '
+      + 'field: Scenarios, Multi-Shot, Timeline, Camera, Audio, Voice and Visual '
+      + 'Style, written in H3’s own prompt format. They stack rather than '
+      + 'replace — take a scenario, add a camera move, add an audio bed, and each '
+      + 'one lands on its own line under what you already wrote. In a text-only '
+      + 'clip the presets drop their reference to a start frame, because there '
+      + 'is not one.',
+    to: '/studio?lane=video',
+  },
+  {
+    id: '2026-09-03-video-live-channel',
+    date: '2026-09-03',
+    title: 'Live: your video LoRA as a channel that never stops (experimental)',
+    blurb:
+      'A third tab in the Test Studio. Write a few scenes, pick the LoRA, '
+      + 'press Start: clips render back to back and land in a stream you watch '
+      + 'in the tab or in VLC on any machine of your network. Playback is '
+      + 'retimed to what your card actually sustains — the rail says how many '
+      + 'seconds a clip renders in, how many it plays for, and whether the '
+      + 'channel is keeping up. Shape borrowed from FastH3 Live, an open-source '
+      + 'endless AI channel on the same engine; the pipeline is your own.',
+    to: '/studio?lane=live',
+  },
+  {
+    id: '2026-09-03-compare-export',
+    date: '2026-09-03',
+    title: 'Save a before/after comparison as one video',
+    blurb:
+      'The ⇔ comparison has an ⬇ Export button: the original and its neural '
+      + 'render are encoded into ONE mp4, side by side and labelled, so a '
+      + 'before/after can be shown to somebody who does not have the app — on a '
+      + 'rendered clip of a training set and on a render in the Test Studio '
+      + 'alike. The exported file starts with no metadata at all, because a '
+      + 'clip out of the studio carries the whole generation workflow — prompts '
+      + 'and folder paths included — in a tag nothing displays.',
+    to: '/studio?lane=video',
+  },
+  {
     id: '2026-09-03-video-studio-render-time',
     date: '2026-09-03',
     title: 'Every clip in the Video Test Studio says how long it took to render',

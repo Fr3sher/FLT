@@ -4,15 +4,23 @@ import { SettingsGroup, SettingsGroupsToc, useSettingsGroupProps } from './Setti
 import { TRAINING_GROUPS } from './settingsGroups'
 import ResetToDefault from './ResetToDefault'
 import { defaultValueAt } from './settingDefaults.js'
+import { VAST_REFERRAL_ID, vastSignupUrl } from '../../utils/vastReferral.js'
+import VastReferralDisclosure from '../common/VastReferralDisclosure'
+import VastLink from '../common/VastLink'
 
 // Keep in sync with backend TRAIN_TYPES (face_dataset_service.py) — 'flux' had
 // been forgotten here when the FLUX.1 family landed (fixed alongside flux2klein).
 const FAMILY_OPTIONS = ['zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima']
 
 /* First-time walkthrough for renting cloud GPUs — collapsed by default so the
-   card stays compact for users who already have a key. */
-function VastKeyGuide() {
+   card stays compact for users who already have a key. Step 1 is the ONE link
+   in the app that may carry the project's vast.ai referral id (the account is
+   created there; see utils/vastReferral.js). When it does, the disclosure sits
+   right under the steps with the untagged link beside it — Billing and Keys
+   stay bare. Exported for tests/vast-key-guide-render.test.mjs. */
+export function VastKeyGuide({ referralId = VAST_REFERRAL_ID } = {}) {
   const link = 'font-medium text-sky-300 underline hover:text-sky-200'
+  const signup = vastSignupUrl(referralId)
   return (
     <details className="mb-2 rounded-lg border border-border bg-surface px-3 py-2 open:pb-3">
       <summary className="cursor-pointer select-none text-xs font-medium text-content">
@@ -21,18 +29,19 @@ function VastKeyGuide() {
       <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-xs text-content-muted">
         <li>
           Create a free account at{' '}
-          <a href="https://cloud.vast.ai/" target="_blank" rel="noreferrer" className={link}>cloud.vast.ai</a>
+          <a href={signup} target="_blank" rel="noreferrer" className={link}>cloud.vast.ai</a>
           {' '}(email or Google sign-in).
         </li>
         <li>
           Add credit: open{' '}
-          <a href="https://cloud.vast.ai/billing/" target="_blank" rel="noreferrer" className={link}>Billing</a>
+          <VastLink path="/billing/" referralId={referralId} className={link}>Billing</VastLink>
           {' '}in the left sidebar and click <strong>Add Credit</strong> — $5 is plenty to
-          start (a typical training run costs ~$1–2, billed by vast.ai, not by this app).
+          start (a typical training run costs ~$1–2, billed by{' '}
+          <VastLink referralId={referralId} className={link} />, not by this app).
         </li>
         <li>
           Open{' '}
-          <a href="https://cloud.vast.ai/manage-keys/" target="_blank" rel="noreferrer" className={link}>Keys</a>
+          <VastLink path="/manage-keys/" referralId={referralId} className={link}>Keys</VastLink>
           {' '}(left sidebar, under Account) and copy your API key — create one first if
           the list is empty.
         </li>
@@ -41,6 +50,7 @@ function VastKeyGuide() {
           key automatically and should answer “connected as &lt;your account&gt;”.
         </li>
       </ol>
+      <VastReferralDisclosure referralId={referralId} linkClass={link} className="mt-2 text-xs text-content-muted" />
     </details>
   )
 }
@@ -282,7 +292,7 @@ function CloudTrainingCard({ config, setField, configDefaults }) {
             className={INPUT_CLASS}
           />
           <p className="mt-1 text-[0.6875rem] text-content-subtle">
-            How long a mid-run pod may stay unreachable (a vast.ai network blip) before the run is given up and retried on a fresh host. Raise it if healthy runs die with "pod unreachable".
+            How long a mid-run pod may stay unreachable (a <VastLink className="underline" /> network blip) before the run is given up and retried on a fresh host. Raise it if healthy runs die with "pod unreachable".
           </p>
           <ResetToDefault label="Unreachable grace" section="cloud" field="unreachable_grace_minutes"
             config={config} configDefaults={configDefaults} setField={setField} />

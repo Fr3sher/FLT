@@ -18,6 +18,7 @@ import InstallRunner from '../components/setup/InstallRunner'
 import InstallEverything from '../components/setup/InstallEverything'
 import { HelpBadge } from '../help/HelpMode'
 import { kleinAssetBlocks } from '../utils/kleinAssets.js'
+import CloudSignupNote from '../components/setup/CloudSignupNote'
 
 const INPUT_CLASS =
   'mt-1 w-full rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-sm text-content ' +
@@ -104,6 +105,12 @@ const CAPABILITY_STEP_ID = {
   // 39.5 GB, and it lives on the install step. The comfyui step would land on
   // nothing to press.
   '🎬 Video Test Studio (beta)': 'install',
+  // The Video lane's three doors: the DLSS 5 bridge card and the video
+  // install card (which lists the option node packs, Smooth's included) are
+  // both on the install screen; Live needs those weights first.
+  '✨ DLSS 5 neural rendering': 'install',
+  '↗ Smooth (frame interpolation)': 'install',
+  '🔴 Live lane (beta)': 'install',
   'Captioning': 'ollama',
   'Auto-framing & head-crop': 'ollama',
   'Face-similarity scoring': 'quality',
@@ -125,7 +132,7 @@ const CAPABILITY_STEP_ID = {
   // control that turns it on.
   '📤 Civitai publishing': 'image',
   'LoRA training': 'training',
-  'Test Studio': 'comfyui',
+  '🖼️ Test Studio (images)': 'comfyui',
 }
 
 export default function SetupPage() {
@@ -162,6 +169,10 @@ export default function SetupPage() {
   const [runtimeReadiness, setRuntimeReadiness] = useState(null)
   const [readinessRevision, setReadinessRevision] = useState(0)
   const [dirCheck, setDirCheck] = useState(null)    // live classify of the typed ComfyUI dir
+  // Bumped when an override changes what the SAME typed dir resolves to (the input
+  // folder adopted from ComfyUI's own report, GitHub #64): the debounce below is keyed
+  // on the string and would otherwise keep showing a verdict that is no longer true.
+  const [dirCheckRevision, setDirCheckRevision] = useState(0)
   const [skipConfirm, setSkipConfirm] = useState(false) // "continue without ComfyUI" panel open
   const [ollamaSkipConfirm, setOllamaSkipConfirm] = useState(false) // same, for Ollama
   const [savingProvider, setSavingProvider] = useState(false)   // local-LLM switch in flight
@@ -181,7 +192,7 @@ export default function SetupPage() {
   // Auto-detect installed tools. Reachable default ports (Ollama 11434, ComfyUI
   // 8188) are safe to fill + save automatically; disk-scanned paths are only
   // SUGGESTED (a scan can guess wrong) and applied on the user's click.
-  const runAutodetect = useCallback(async (baseConfig) => {
+  const runAutodetect = useCallback(async (baseConfig, force = false) => {
     setDetecting(true)
     try {
       const d = await apiFetch('/api/setup/autodetect')
@@ -207,7 +218,10 @@ export default function SetupPage() {
         setConfig(saved.config)
         savedConfigRef.current = JSON.stringify(saved.config)
       }
-      await refresh(true)
+      // The app shell is already checking capabilities on first load. Reuse
+      // that scan unless auto-detection saved new settings or the user asked
+      // for a fresh check; otherwise cold Python checks run twice at startup.
+      await refresh(force || changed)
       return d
     } catch { return null }
     finally { setDetecting(false); setScanned(true) }
@@ -294,7 +308,7 @@ export default function SetupPage() {
       } catch { if (alive) setDirCheck(null) }
     }, 350)
     return () => { alive = false; clearTimeout(t) }
-  }, [baseDir])
+  }, [baseDir, dirCheckRevision])
 
   /* Switch which local LLM this install uses, from the wizard.
 
@@ -638,6 +652,21 @@ export default function SetupPage() {
                     at 400px. */}
                 {v.note && (
                   <p className="break-words text-xs text-amber-400">⚠ {v.note}</p>
+                )}
+                {/* ComfyUI has said where it reads (an absolute --input-directory in the
+                    command line it echoes): one click saves that folder as the input
+                    override and asks the verdict again. This offer used to live only in
+                    Settings > Advanced: ComfyUI folder overrides, which is how a Comfy
+                    Desktop user with its shared folder ended up on GitHub (#64). */}
+                {v.inputSuggestion && (
+                  <button type="button"
+                    onClick={async () => {
+                      await applyDetectedPath('comfyui', 'input_dir', v.inputSuggestion)
+                      setDirCheckRevision((n) => n + 1)
+                    }}
+                    className="break-all rounded-md border border-border-strong px-2.5 py-1 text-left text-xs font-medium text-primary hover:bg-surface-raised">
+                    Use the input folder ComfyUI reports: {v.inputSuggestion}
+                  </button>
                 )}
                 {v.suggestion && (
                   <button type="button" onClick={() => setField('comfyui', 'base_dir', v.suggestion)}
@@ -1481,11 +1510,10 @@ export default function SetupPage() {
       <>
         {guidedField('ai-toolkit directory', 'aitoolkit', 'dir', 'C:\\ai-toolkit')}
         {saveRecheckBtn}
-        <p className="mt-2 text-content-muted text-xs">
-          No GPU? You can skip this step: add a <strong>vast.ai API key</strong> in
-          Settings instead and train in the cloud (the app rents a GPU per run,
-          ~$1-2, and shuts it down automatically).
-        </p>
+        {/* "No GPU?" note — the wizard's one "create a vast.ai account" moment. Its own
+            component (components/setup/CloudSignupNote.jsx) so the sign-up link and its
+            disclosure are rendered by tests in both states; this page is not mountable. */}
+        <CloudSignupNote />
       </>
     )
     if (step.valid) {
@@ -1804,7 +1832,7 @@ export default function SetupPage() {
             {detecting
               ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-border-strong border-t-primary" aria-hidden="true" />
               : (
-                <button type="button" onClick={() => runAutodetect(config)}
+                <button type="button" onClick={() => runAutodetect(config, true)}
                   className="text-xs text-primary underline">Re-scan</button>
               )}
           </div>
@@ -1897,7 +1925,10 @@ export default function SetupPage() {
                 return (
                   <li key={s.label} className={`flex items-center gap-2 px-2 py-1 text-sm ${rowOk ? 'text-content' : 'text-content-subtle'}`}>
                     <span aria-hidden="true" className={rowOk ? 'text-emerald-400' : 'text-content-subtle'}>{rowOk ? '✓' : '✗'}</span>
-                    <span>{s.label}{noteEl}</span>
+                    <span className="flex min-w-0 flex-col">
+                      <span>{s.label}{noteEl}</span>
+                      {s.what && <span className="text-[11px] text-content-subtle">{s.what}</span>}
+                    </span>
                   </li>
                 )
               }
@@ -1909,7 +1940,10 @@ export default function SetupPage() {
                       focus-visible:ring-primary ${rowOk ? 'text-content' : 'text-content-subtle'}`}>
                     <span className="flex items-center gap-2">
                       <span aria-hidden="true" className={rowOk ? 'text-emerald-400' : 'text-content-subtle'}>{rowOk ? '✓' : '✗'}</span>
+                      <span className="flex min-w-0 flex-col">
                       <span>{s.label}{noteEl}</span>
+                      {s.what && <span className="text-[11px] text-content-subtle">{s.what}</span>}
+                    </span>
                     </span>
                     <span aria-hidden="true" className={`text-xs ${s.ok ? 'text-content-subtle/60' : 'text-content-subtle'}`}>›</span>
                   </button>

@@ -67,6 +67,8 @@ def test_enrich_at_launch_writes_from_what_the_launch_carries(client, monkeypatc
     from app.services import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
+    monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
+                        lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     launched = {}
     monkeypatch.setattr(vts, 'enqueue_clip',
                         lambda user, **kw: launched.update(kw) or
@@ -178,6 +180,8 @@ def test_a_launch_whose_enrichment_failed_still_launches_and_says_so(
     from app.services.vision_ollama import LocalOllamaFenceError
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
+    monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
+                        lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     launched = {}
     monkeypatch.setattr(vts, 'enqueue_clip',
                         lambda user, **kw: launched.update(kw) or
@@ -237,6 +241,8 @@ def test_the_shot_count_reaches_the_writer_on_all_three_gestures(client, monkeyp
     from app.services import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
+    monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
+                        lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     monkeypatch.setattr(vts, 'enqueue_clip',
                         lambda user, **kw: {'clip_id': 1, 'seed': 1, 'frames': kw.get('frames')})
     seen = []
@@ -266,6 +272,8 @@ def test_the_three_writers_run_inside_the_gpu_exclusive_vision_window(client, mo
     from app.services import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
+    monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
+                        lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     monkeypatch.setattr(vts, 'enqueue_clip',
                         lambda user, **kw: {'clip_id': 1, 'seed': 1, 'frames': kw.get('frames')})
     entered, state = [], {'inside': False}
@@ -314,6 +322,8 @@ def test_a_queued_clip_refuses_the_buttons_with_its_reason_and_lets_the_launch_t
     from app.job_queue import queue_manager
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
+    monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
+                        lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     launched = {}
     monkeypatch.setattr(vts, 'enqueue_clip',
                         lambda user, **kw: launched.update(kw) or
@@ -360,6 +370,8 @@ def test_an_unusable_enrichment_is_a_sentence_on_the_button_and_a_reason_at_laun
 
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
+    monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
+                        lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     launched = {}
     monkeypatch.setattr(vts, 'enqueue_clip',
                         lambda user, **kw: launched.update(kw) or
@@ -382,6 +394,8 @@ def test_a_launch_heads_an_image_to_video_prompt_once_and_unnames_the_picture_in
     from app.services import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
+    monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
+                        lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     launched = {}
     monkeypatch.setattr(vts, 'enqueue_clip',
                         lambda user, **kw: launched.update(kw) or
@@ -424,6 +438,8 @@ def test_a_typed_prompt_in_the_headers_english_launches_whole_and_nothing_launch
     from app.services import video_test_studio as vts
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'comfyui': {'reachable': True}})
+    monkeypatch.setattr('app.capabilities.probe_comfyui',   # the runner has no ComfyUI
+                        lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     launched = {}
     monkeypatch.setattr(vts, 'enqueue_clip',
                         lambda user, **kw: launched.update(kw) or
@@ -486,3 +502,89 @@ def test_a_typed_prompt_in_the_headers_english_launches_whole_and_nothing_launch
         client.post('/api/video-studio/generate',
                     json={'mode': 't2v', 'prompt': p, 'frames': 56})
         assert launched['prompt'] == 'She turns slowly. Then she smiles.'
+
+
+# --- ✨ /motion/write-batch : N pictures, ONE vision window --------------------
+#
+# The route exists for the ORDER of GPU work, not for convenience: entering the
+# vision window makes ComfyUI drop its models, so the next clip reloads the
+# video model (tens of GB for H3). Writing per picture through the single-frame
+# routes pays that per picture. These pin the two things only the route can get
+# wrong: one window for the whole strip, and one bad frame not costing the rest.
+
+def test_one_window_writes_for_the_whole_strip(client, monkeypatch):
+    from app.services import video_motion_prompt as vmp
+    from app.routes import video_studio as vs
+    windows = []
+
+    class _W:
+        def __init__(self, **kw):
+            windows.append(kw)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(vs, 'gpu_exclusive_vision_window', lambda **kw: _W(**kw))
+    monkeypatch.setattr(vmp, 'suggest_from_frame', lambda name, **kw: f'motion for {name}')
+    r = client.post('/api/video-studio/motion/write-batch',
+                    json={'images': ['a.png', 'b.png', 'c.png'], 'seconds': 5.0})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert [x['prompt'] for x in body['results']] == [
+        'motion for a.png', 'motion for b.png', 'motion for c.png']
+    # ONE window for three pictures — the reload this replaces.
+    assert len(windows) == 1, f'expected a single vision window, got {len(windows)}'
+    # …and a TTL that covers the batch, not one click.
+    assert windows[0]['flag_ttl'] >= 600
+
+
+def test_a_typed_prompt_enriches_every_frame_instead_of_proposing(client, monkeypatch):
+    """The panel's own rule, applied N times: typed motion → enrich each frame
+    from it; nothing typed → propose from the frame alone. Getting this backwards
+    would silently throw away what the user wrote."""
+    from app.services import video_motion_prompt as vmp
+    calls = []
+    monkeypatch.setattr(vmp, 'enhance',
+                        lambda text, **kw: (calls.append(('enhance', text, kw.get('image'))) or 'rich'))
+    monkeypatch.setattr(vmp, 'suggest_from_frame',
+                        lambda name, **kw: (calls.append(('suggest', name)) or 'fresh'))
+    client.post('/api/video-studio/motion/write-batch',
+                json={'images': ['a.png', 'b.png'], 'prompt': 'she turns'})
+    assert [c[0] for c in calls] == ['enhance', 'enhance']
+    assert [c[2] for c in calls] == ['a.png', 'b.png'], 'each frame anchors its own rewrite'
+    calls.clear()
+    client.post('/api/video-studio/motion/write-batch', json={'images': ['a.png']})
+    assert [c[0] for c in calls] == ['suggest']
+
+
+def test_one_unwritable_frame_does_not_cost_the_others(client, monkeypatch):
+    from app.services import video_motion_prompt as vmp
+
+    def flaky(name, **kw):
+        if name == 'bad.png':
+            raise ValueError('the model could not describe that start frame')
+        return f'motion for {name}'
+
+    monkeypatch.setattr(vmp, 'suggest_from_frame', flaky)
+    r = client.post('/api/video-studio/motion/write-batch',
+                    json={'images': ['a.png', 'bad.png', 'c.png']})
+    assert r.status_code == 200, 'a frame that failed is not a failed batch'
+    body = r.get_json()
+    assert body['written'] == 2 and body['failed'] == 1
+    got = {x['image']: x for x in body['results']}
+    assert 'could not describe' in got['bad.png']['error']
+    assert 'prompt' not in got['bad.png']
+    assert [x['index'] for x in body['results']] == [0, 1, 2]
+
+
+def test_an_empty_or_oversized_strip_is_refused_before_the_gpu(client):
+    r = client.post('/api/video-studio/motion/write-batch', json={'images': []})
+    assert r.status_code == 400
+    from app.routes.video_studio import MAX_WRITE_BATCH
+    r = client.post('/api/video-studio/motion/write-batch',
+                    json={'images': [f'{i}.png' for i in range(MAX_WRITE_BATCH + 1)]})
+    assert r.status_code == 400
+    assert str(MAX_WRITE_BATCH) in r.get_json()['error']

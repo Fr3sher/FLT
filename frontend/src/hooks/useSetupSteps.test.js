@@ -286,7 +286,7 @@ test('comfyuiDirVerdict maps each backend status to an actionable message', () =
   }
   // Blank / in-flight / unknown -> muted, nothing to render.
   assert.deepEqual(comfyuiDirVerdict({ status: 'empty' }),
-    { tone: 'muted', suggestion: '', note: '', message: '' });
+    { tone: 'muted', suggestion: '', note: '', inputSuggestion: '', message: '' });
   assert.equal(comfyuiDirVerdict(null).message, '');
 });
 
@@ -322,6 +322,33 @@ test('a working install, or a backend that says nothing, adds no note', () => {
 test('the wizard renders the input-folder note', () => {
   const jsx = fs.readFileSync(new URL('../pages/SetupPage.jsx', import.meta.url), 'utf8');
   assert.match(jsx, /v\.note/);
+});
+
+/* GitHub #64 (mikemil828, Comfy Desktop with its shared folder): the folder ComfyUI
+   was started with was known to the app but offered only inside an Advanced fold of
+   Settings. Once ComfyUI has proved it cannot see ours, the wizard offers the one it
+   reports — and only then: a suggestion with nothing to fix is a field to explain. */
+test('when ComfyUI cannot see our input folder and says where it reads, that folder is offered', () => {
+  const v = comfyuiDirVerdict({
+    status: 'valid', resolved: 'C:/Comfy',
+    input_check: { path: 'C:/Comfy/input', ok: false,
+      problem: 'ComfyUI cannot see the source image the app just staged. The app used C:/Comfy/input, but the ComfyUI answering at http://127.0.0.1:8188 reads its input folder somewhere else — it was started with `--input-directory D:/ComfyUI-Shared/input`.',
+      suggestion: 'D:/ComfyUI-Shared/input' },
+  });
+  assert.equal(v.tone, 'ok');
+  assert.match(v.note, /cannot see/);
+  assert.equal(v.inputSuggestion, 'D:/ComfyUI-Shared/input');
+  // no note, no offer — even if the backend sent a folder
+  assert.equal(comfyuiDirVerdict({ status: 'valid', resolved: 'C:/Comfy',
+    input_check: { path: 'C:/Comfy/input', ok: true, problem: '', suggestion: 'D:/x' } }).inputSuggestion, '');
+  assert.equal(comfyuiDirVerdict({ status: 'valid', resolved: 'C:/Comfy',
+    input_check: { path: 'C:/Comfy/input', ok: false, problem: 'not writable' } }).inputSuggestion, '');
+});
+
+test('the wizard renders the one-click adoption of the reported input folder', () => {
+  const jsx = fs.readFileSync(new URL('../pages/SetupPage.jsx', import.meta.url), 'utf8');
+  assert.match(jsx, /v\.inputSuggestion/);
+  assert.match(jsx, /applyDetectedPath\('comfyui', 'input_dir', v\.inputSuggestion\)/);
 });
 
 test('skip panel lists what turns off and what stays on', () => {
@@ -439,7 +466,7 @@ test('installCatalog lists every app-installable component, present + available'
       // optional node packs are linked from its card, never installed by the
       // app: it downloads model files and does not add code to a ComfyUI.
       'h3_base', 'h3_text_encoder', 'h3_video_vae', 'h3_audio_vae',
-      'h3_turbo_lora',
+      'h3_turbo_lora', 'h3_parasyte_lora', 'h3_dareties_lora',
       'lanpaint_nodes'],
   );
   // Everything installed in fullCaps -> every tile present, and available to REINSTALL.
@@ -452,7 +479,7 @@ test('installCatalog lists every app-installable component, present + available'
 test('installCatalog stays fully available for reinstall when all is green', () => {
   // The menu must never collapse once installed — each item can always be repaired.
   const cat = installCatalog(fullCaps());
-  assert.ok(cat.length === 27 && cat.every((c) => c.available));
+  assert.ok(cat.length === 29 && cat.every((c) => c.available))   // 27 + the two arena accelerations;
 });
 
 test('installCatalog marks missing ML extras not-present but still available', () => {
@@ -495,6 +522,50 @@ test('installCatalog gates the vision model on a reachable, named Ollama', () =>
   assert.match(noName.ollama_model.hint, /model name/);
 });
 
+test('the Video lane\'s three doors are rows of their own: ready, waiting, or missing with a door', () => {
+  const row = (caps, label) => deriveCapabilitySummary(caps).find((s) => s.label === label);
+  const DLSS = '✨ DLSS 5 neural rendering';
+  const SMOOTH = '↗ Smooth (frame interpolation)';
+  const LIVE = '🔴 Live lane (beta)';
+  // Everything there.
+  const on = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: true,
+    video_studio_options: { vfi: { available: true } } }, dlss5nr: { ready: true }, video_encode: true };
+  for (const l of [DLSS, SMOOTH, LIVE]) assert.equal(row(on, l).ok, true, l);
+  // ComfyUI down with the weights on disk: Smooth and Live wait (their
+  // verdict needs the process), DLSS does not — it has a worker of its own.
+  const off = { comfyui: { dir_valid: true, reachable: false, video_studio_missing: [] },
+    dlss5nr: { ready: false }, video_encode: true };
+  assert.equal(row(off, SMOOTH).pending, true);
+  assert.match(row(off, SMOOTH).note, /launch ComfyUI/);
+  assert.equal(row(off, LIVE).pending, true);
+  assert.equal(row(off, DLSS).pending, undefined);
+  assert.equal(row(off, DLSS).ok, false);
+  // ComfyUI up, packs missing: Smooth is plainly missing, its door the video
+  // install card (which lists the packs) — never "waiting".
+  const noPacks = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: true,
+    video_studio_options: { vfi: { available: false, nodes: ['RIFE VFI'] } } }, video_encode: true };
+  assert.equal(row(noPacks, SMOOTH).ok, false);
+  assert.equal(row(noPacks, SMOOTH).pending, undefined);
+  assert.equal(row(noPacks, SMOOTH).topic, 'setup-video-studio');
+  // /object_info unreadable while ComfyUI answers (available: null) is not a
+  // verdict either way: the row does not go green on it.
+  const unread = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: true,
+    video_studio_options: { vfi: { available: null } } } };
+  assert.equal(row(unread, SMOOTH).ok, false);
+  // Weights there, ffmpeg not: Live names the gap and its door is the video
+  // extra on the quality step, not the weights it already has.
+  const noFfmpeg = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: true }, video_encode: false };
+  assert.equal(row(noFfmpeg, LIVE).ok, false);
+  assert.match(row(noFfmpeg, LIVE).note, /ffmpeg/);
+  assert.equal(row(noFfmpeg, LIVE).topic, 'setup-quality');
+  // Weights missing: the door is the video install.
+  const noWeights = { comfyui: { dir_valid: true, reachable: true, video_studio_ready: false,
+    video_studio_missing: ['h3_unet'] }, video_encode: true };
+  assert.equal(row(noWeights, LIVE).ok, false);
+  assert.equal(row(noWeights, LIVE).pending, undefined);
+  assert.equal(row(noWeights, LIVE).topic, 'setup-video-studio');
+});
+
 test('installCatalog gates Klein weights on a validated ComfyUI', () => {
   const invalid = byAction(installCatalog({ ...fullCaps(),
     comfyui: { dir_valid: false, klein_missing: ['klein_model'] } }));
@@ -516,7 +587,7 @@ test('capability summary: configured-but-not-running ComfyUI reads as OK with a 
   const off = { comfyui: { dir_valid: true, reachable: false }, engines: {} };
   assert.equal(row(off, 'Klein (local)').pending, true);
   assert.match(row(off, 'Klein (local)').note, /launch ComfyUI/);
-  assert.equal(row(off, 'Test Studio').pending, true);
+  assert.equal(row(off, '🖼️ Test Studio (images)').pending, true);
   // no ComfyUI configured at all -> honest plain miss, no note
   const none = { comfyui: { dir_valid: false, reachable: false }, engines: {} };
   assert.equal(row(none, 'Klein (local)').pending, undefined);
@@ -591,6 +662,57 @@ test('the first-install steps do not define a working ai-toolkit as "has a venv"
   assert.match(all, /portable/i);
   assert.match(all, /ai-toolkit Python interpreter/);
   assert.ok(AITOOLKIT_INSTALL_STEPS.some((s) => s.command), 'the clone command survives');
+});
+
+// The step that decides whether training ever reaches the GPU used to be left to
+// the reader ("its README walks through creating a venv"): a plain pip install
+// torch on Windows is CPU-only, Accelerate honours it without a word, and the
+// run looks alive for 300 hours (acontentsheltie, Discord, RTX 3090). ai-toolkit
+// ships an installer that reads the driver and picks the build; the wizard names
+// it. The INSTALL subcommand, never run_windows.bat, which ends in
+// `manager launch` and opens ai-toolkit's own web UI — the one this app never
+// talks to and that already cost a user hours (GitHub #19).
+test('the first-install steps hand over an installer that picks the right PyTorch', () => {
+  const cmds = AITOOLKIT_INSTALL_STEPS.map((s) => s.command || '');
+  assert.ok(cmds.some((c) => c.includes('manager install')),
+    `no manager install command in: ${cmds.join(' | ')}`);
+  const all = AITOOLKIT_INSTALL_STEPS.map((s) => `${s.text} ${s.command || ''}`).join(' ');
+  // It must say WHY that command and not `pip install torch`.
+  assert.match(all, /driver/i);
+  // ai-toolkit's own UI is not a route this app ever sends anyone to.
+  assert.doesNotMatch(all, /run_windows/i);
+  assert.doesNotMatch(all, /manager launch/i);
+});
+
+test('the no-interpreter verdict names that installer too, both doors still open', () => {
+  const v = aitoolkitVerdict(trainStep({ valid: false, dir_valid: true }), DIR);
+  assert.match(v.body, /manager install/);
+  assert.match(v.body, /driver/i);
+  // The Psyko_2000 lesson holds: the borrowed-interpreter door stays a peer.
+  assert.match(v.body, /already run ai-toolkit with/i);
+});
+
+// `manager/` landed upstream on 2026-07-27. On an older checkout the command is
+// dead ("No module named manager") — and those are the installs most likely to
+// have a half-built venv, so that is the worst possible audience for a dead
+// remedy. The sentence follows what the backend found ON DISK, never a date.
+test('the manager command is presented as live only on a checkout that has it', () => {
+  const withIt = aitoolkitVerdict(
+    trainStep({ valid: false, dir_valid: true, has_manager: true }), DIR);
+  const without = aitoolkitVerdict(
+    trainStep({ valid: false, dir_valid: true, has_manager: false }), DIR);
+  assert.notEqual(withIt.body, without.body, 'the flag must change what is said');
+  // Present: run it. Absent: update first, and never an unqualified "run this".
+  assert.match(withIt.body, /running `python -m manager install` from there/);
+  assert.doesNotMatch(without.body, /running `python -m manager install` from there/);
+  assert.match(without.body, /updating ai-toolkit first/i);
+  assert.match(without.body, /since July 2026/);
+  // Both keep the peer route and the reason the choice matters at all.
+  for (const body of [withIt.body, without.body]) {
+    assert.match(body, /driver/i);
+    assert.match(body, /already run ai-toolkit with/i);
+    assert.match(body, /python_embeded/);
+  }
 });
 
 test('SetupPage renders the verdict instead of hardcoding the old sentence', () => {

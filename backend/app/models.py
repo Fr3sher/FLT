@@ -1763,6 +1763,7 @@ class VideoTestClip(db.Model):
 
     prompt = db.Column(Text, nullable=True)
     mode = db.Column(String(8), nullable=False, default='i2v')  # i2v|t2v
+    aspect = db.Column(String(16), nullable=True, default='auto', server_default='auto')
     source_image = db.Column(String(255), nullable=True)  # the file handed to LoadImage
     seed = db.Column(db.BigInteger, nullable=True)
     steps = db.Column(Integer, nullable=True)
@@ -1774,12 +1775,14 @@ class VideoTestClip(db.Model):
     lora = db.Column(String(255), nullable=True)         # LoraLoader form, or null for base-only
     lora_strength = db.Column(Float, nullable=True)
     turbo = db.Column(db.Boolean, nullable=False, default=False)
+    accel = db.Column(String(16), nullable=True)     # ⚡ turbo | parasyte | dareties; null = dense base
     sparse = db.Column(String(16), nullable=True)        # '' / default / conservative / max
     latent_upscale = db.Column(db.Boolean, nullable=False, default=False)
     # ↗ The clip this one was interpolated FROM, or NULL. A smoothed clip is a
     # new artefact with its own frame rate — never an edit of the original,
     # which would destroy the comparison the studio exists for.
     vfi_of = db.Column(Integer, nullable=True, index=True)
+    continues_of = db.Column(Integer, nullable=True, index=True)   # ⏭ the clip this one is joined behind
     # ✨ The clip this one was neural-rendered FROM (DLSS 5), or NULL — the same
     # rule: a new artefact next to the original, never an edit of it.
     nr_of = db.Column(Integer, nullable=True, index=True)

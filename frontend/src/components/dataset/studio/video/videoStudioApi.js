@@ -22,6 +22,26 @@ export const loraImportUrl = () => '/api/video-studio/lora/import';
 
 /** ↗ Smooth a finished clip — RIFE interpolation, as a new clip. */
 export const clipVfiUrl = (id) => `/api/video-studio/clip/${id}/vfi`;
+/** ⏭ Stage a finished clip's last frame as the next start frame (POST), and
+ *  the same frame as a picture for the strip (GET). */
+export const clipLastFrameUrl = (id) => `/api/video-studio/clip/${id}/last-frame`;
+export const clipLastFramePngUrl = (id) => `/api/video-studio/clip/${id}/last-frame.png`;
+/** ↗ The rates Smooth can make of a clip. RIFE interpolates by a WHOLE factor,
+ *  so the choices are the source rate times 2, 3 and 4 — 48, 72, 96 fps for a
+ *  clip authored at 24 — never an arbitrary number (that would mean dropping
+ *  frames unevenly afterwards). `cost` is relative to the ×2 pass: the work
+ *  grows with the frames written between each pair (1, 2, 3). */
+export const SMOOTH_MULTIPLIERS = [2, 3, 4];
+export function smoothTargets(clip) {
+  const fps = Number(clip?.fps) > 0 ? Number(clip.fps) : 24;
+  const frames = Number(clip?.frames) > 0 ? Number(clip.frames) : null;
+  return SMOOTH_MULTIPLIERS.map((m) => ({
+    multiplier: m,
+    fps: Math.round(fps * m),
+    frames: frames ? frames * m : null,
+    cost: m - 1,
+  }));
+}
 
 /** ✨ Neural render a finished clip — DLSS 5 Neural Rendering, as a new clip. */
 export const clipNeuralRenderUrl = (id) => `/api/video-studio/clip/${id}/neural-render`;
@@ -30,6 +50,10 @@ export const clipNeuralRenderUrl = (id) => `/api/video-studio/clip/${id}/neural-
  * what is already written. Both answer with a prompt the user can still edit —
  * neither is a launch. */
 export const motionSuggestUrl = () => '/api/video-studio/motion/suggest';
+/* ✨ One window, N frames. Entering the vision window makes ComfyUI drop its
+   models, so writing per picture through the two single-frame routes would
+   reload the video model once per picture. See the route's docstring. */
+export const motionWriteBatchUrl = () => '/api/video-studio/motion/write-batch';
 export const motionEnhanceUrl = () => '/api/video-studio/motion/enhance';
 
 /** ⚙ The model that writes the motion — listed, and chosen. */
@@ -40,11 +64,28 @@ export const generateUrl = () => `${VIDEO_STUDIO_BASE}/generate`;
 /** The history, newest first: one page of `limit`, `before` (a clip id) for the
  * page after it. The server appends the SOURCE of every listed render, so the
  * pair a comparison needs is always on screen together. */
+/** The newest page REPLACES what it covers and KEEPS what it does not.
+ *  `keepOlderThan` is the boundary of the page PROPER (the server's
+ *  `oldest_id`), never the oldest id on the page: a source that rode along
+ *  with its render is older by construction, and taking it as the boundary
+ *  dropped every loaded clip between the two at every poll. Deleted rows
+ *  leave through the page they belonged to, which the fresh page no longer
+ *  carries. */
+export function mergeClipPages(prev, fresh, keepOlderThan) {
+  const byId = new Map();
+  (fresh || []).forEach((c) => byId.set(c.id, c));
+  (prev || []).forEach((c) => { if (c.id < keepOlderThan && !byId.has(c.id)) byId.set(c.id, c); });
+  return [...byId.values()].sort((a, b) => b.id - a.id);
+}
+
 export const clipsUrl = (limit = 24, before = null) =>
   `${VIDEO_STUDIO_BASE}/clips?limit=${limit}${before ? `&before=${before}` : ''}`;
 export const clipUrl = (id) => `${VIDEO_STUDIO_BASE}/clip/${id}`;
 export const clipVideoUrl = (id) => `${VIDEO_STUDIO_BASE}/clip/${id}/video`;
 export const clipRateUrl = (id) => `${VIDEO_STUDIO_BASE}/clip/${id}/rate`;
+/** ⬇ A render and its source as ONE side-by-side mp4 (404 when the clip is
+ * not a render, or its source is gone). */
+export const clipComparisonUrl = (id) => `${VIDEO_STUDIO_BASE}/clip/${id}/comparison`;
 
 const historyCursor = (page) => {
   const value = Number(page?.next_before);
@@ -132,11 +173,46 @@ export function buildGeneratePayload(state) {
   // ✨ Enrich at launch: the SERVER rewrites the motion and records what ran,
   // so a clip never claims a prompt that is not the one it was made from.
   if (s.enhance) body.enhance = true;
-  if (s.turbo) body.turbo = true;
+  // ⚡ The acceleration by name; `turbo` rides along for the older servers'
+  // boolean when the name is larryvrh's.
+  if (s.accel) {
+    body.accel = s.accel;
+    if (s.accel === 'turbo') body.turbo = true;
+  } else if (s.turbo) {
+    body.turbo = true;
+  }
   if (s.eros) body.eros = true;
   if (s.sparse) body.sparse = s.sparse;
   if (s.latentUpscale) body.latent_upscale = true;
+  // ⏭ The clip this launch continues: the render is joined behind it.
+  if (s.continues) body.continues = Number(s.continues);
   return body;
+}
+
+/** ⚡ The Render panel's acceleration choices, as the server names them —
+ *  this list is only the shape shown before the options arrive (and in tests);
+ *  the server's `accelerations` carries availability, arena rank and hint. */
+export const ACCELERATIONS = [
+  { id: 'turbo', label: 'larryvrh Turbo v4', arena: '#1 · I2V 1103 / T2V 1110', steps: 6 },
+  { id: 'parasyte', label: 'Parasyte Turbo', arena: '#2 · I2V 1106 / T2V 1094', steps: 6 },
+  { id: 'dareties', label: 'DARE-TIES merge', arena: '#3 · I2V 1107 / T2V 1085', steps: 6 },
+];
+export const accelLabel = (id) => (ACCELERATIONS.find((a) => a.id === id) || {}).label
+  || (id ? String(id) : '');
+/** The acceleration a clip ran with: the stored name, or `turbo` from the
+ *  flag on rows older than the choice. */
+export const clipAccel = (clip) => (clip?.accel || (clip?.turbo ? 'turbo' : ''));
+/** What the panel should hold once the server said what is on this machine:
+ *  the current pick if it is available (or unknown), else the first available
+ *  one, else the dense base. `null` availability (probe unreachable) keeps
+ *  the pick — an unknown is not a no. */
+export function pickAvailableAccel(current, accelerations) {
+  const rows = Array.isArray(accelerations) ? accelerations : [];
+  if (!current) return '';
+  const row = rows.find((a) => a.id === current);
+  if (!row || row.available !== false) return current;
+  const other = rows.find((a) => a.available === true);
+  return other ? other.id : '';
 }
 
 /** How long the clip will be, in seconds, at the target's own fps.
@@ -165,9 +241,11 @@ export function clipSummary(clip) {
   } else {
     bits.push('no LoRA');
   }
-  if (clip.turbo) bits.push('⚡ turbo');
+  const accel = clipAccel(clip);
+  if (accel) bits.push(accel === 'turbo' ? '⚡ turbo' : `⚡ ${accelLabel(accel)}`);
   if (clip.sparse) bits.push(`sparse ${clip.sparse}`);
   if (clip.latent_upscale) bits.push('🔬 upscale');
+  if (clip.continues_of) bits.push(`⏭ continues #${clip.continues_of}`);
   bits.push(`${clip.steps} steps`);
   if (clip.seed !== null && clip.seed !== undefined) bits.push(`seed ${clip.seed}`);
   return bits.join(' · ');

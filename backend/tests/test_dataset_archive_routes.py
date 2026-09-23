@@ -259,7 +259,12 @@ def test_ordinary_endpoints_keep_the_plain_ceiling(app, client, monkeypatch):
     response = client.post('/api/ordinary-upload', data=b'x' * 1024)
 
     assert response.status_code == 413
-    assert response.get_json()['error'] == 'upload too large'
+    error = response.get_json()['error']
+    assert error.startswith('upload too large')
+    # …and it names the numbers: a bare "too large" sent people resizing single
+    # photos when the whole drop was over the ceiling (_nofaceman, Discord).
+    assert 'this request is 0.0 MiB' in error and 'the app accepts 0.0 MiB at a time' in error
+    assert 'drop fewer files at once' in error
 
 
 def test_backup_metadata_cap_is_checked_before_inflation(app, monkeypatch):
@@ -577,3 +582,39 @@ def test_backup_v2_rejects_unowned_analysis_cache(app):
     with app.app_context(), pytest.raises(
             ValueError, match='unreferenced analysis cache'):
         service.import_backup_zip(LOCAL_USER, output.getvalue())
+
+
+def test_photo_import_gets_its_own_raised_ceiling(app, client, monkeypatch):
+    """A drop of photographs is a local file copy, not a stranger's upload: the
+    generic 64 MiB web default refused five to eight body shots (_nofaceman,
+    Discord). The route that already knew how to raise a ceiling for archives
+    raises one for photos too — bounded, because 20 files is the real cap."""
+    app.config.update(
+        MAX_CONTENT_LENGTH=128,
+        DATASET_IMPORT_MAX_UPLOAD_BYTES=64 * 1024,
+    )
+    _make_max_content_length_read_only(monkeypatch)
+
+    with app.test_request_context('/api/dataset/1/import', method='POST'):
+        from flask import request
+        request.url_rule = type('R', (), {'endpoint': 'datasets.dataset_import'})()
+        assert request.max_content_length == 64 * 1024
+
+    # …and the raise is that endpoint's privilege, not a global one.
+    with app.test_request_context('/api/dataset/1/generate', method='POST'):
+        from flask import request
+        request.url_rule = type('R', (), {'endpoint': 'datasets.dataset_generate'})()
+        assert request.max_content_length == 128
+
+
+def test_the_import_ceiling_is_env_tunable_and_never_zero(monkeypatch):
+    """Someone who shoots 60 MP masters can raise it; a broken value cannot
+    silently disable the guard."""
+    from app import (_DEFAULT_DATASET_IMPORT_MAX_UPLOAD_BYTES, _positive_env_int)
+    monkeypatch.setenv('LDS_DATASET_IMPORT_MAX_UPLOAD_BYTES', str(3 * 1024 * 1024 * 1024))
+    assert _positive_env_int('LDS_DATASET_IMPORT_MAX_UPLOAD_BYTES',
+                             _DEFAULT_DATASET_IMPORT_MAX_UPLOAD_BYTES) == 3 * 1024 * 1024 * 1024
+    for bad in ('0', '-1', 'lots', ''):
+        monkeypatch.setenv('LDS_DATASET_IMPORT_MAX_UPLOAD_BYTES', bad)
+        assert _positive_env_int('LDS_DATASET_IMPORT_MAX_UPLOAD_BYTES',
+                                 _DEFAULT_DATASET_IMPORT_MAX_UPLOAD_BYTES) == 512 * 1024 * 1024

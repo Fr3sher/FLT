@@ -86,6 +86,70 @@ def _no_live_comfyui_vram_release(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_live_comfyui_queue_interrupt(request, monkeypatch):
+    """A cancel now asks ComfyUI to stop LDS's own running prompt
+    (`interrupt_own_prompt`, 2026-09-06), and the memory button reads what
+    ComfyUI runs (`running_prompt_identity`). Both go through one seam,
+    `_running_entries` — a live GET /queue on 127.0.0.1:8188, followed by a
+    POST /interrupt when the running prompt is exactly the caller's. On a
+    developer machine the GET is a dependency on someone else's ComfyUI, the
+    same undeclared dependency the fixture above names; the POST could never
+    match a fixture id, but the suite must not be one typo away from stopping
+    a real render. The seam answers "could not be asked", the path a machine
+    without ComfyUI takes, so every caller keeps running its own logic.
+
+    Tests that are ABOUT the two functions opt back in with
+    @pytest.mark.comfyui_http and drive `requests` themselves; tests of the
+    callers patch the functions, and a later setattr wins."""
+    if request.node.get_closest_marker('comfyui_http'):
+        return
+    monkeypatch.setattr('app.utils.comfyui._running_entries', lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_nvidia_smi_vram_reading(request, monkeypatch):
+    """Every local training launch reads the card twice around its ComfyUI /free
+    (`system_stats.gpu_vram_used_gb`, one fresh nvidia-smi fork each). Where the
+    spawn is injected or real -- the video lane's `_spawn` seam, test_run_folder_log's
+    dying_run -- nothing stubs subprocess, so 48 real nvidia-smi forks joined the
+    suite (measured 61b009ae vs ad7557c3): a dependency on the box's driver, 5 s
+    each on a hung one, exactly the undeclared dependency the fixture above names.
+
+    None is the function's own "cannot answer" value, so the launch paths keep
+    behaving. The test that is ABOUT the reading opts back in with
+    @pytest.mark.gpu_reading and stubs `_gpu_sample` itself."""
+    if request.node.get_closest_marker('gpu_reading'):
+        return
+    from app.services import system_stats
+    monkeypatch.setattr(system_stats, 'gpu_vram_used_gb', lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_comfyui_input_visibility_probe(monkeypatch):
+    """Staging a file now ASKS ComfyUI whether it can see it (GitHub #64).
+
+    Same undeclared dependency as the fixture above, one door over: every
+    `stage_input_image` / `stage_input_write` in the suite would HEAD
+    `<comfyui>/view` — and `api_address()` always resolves, because config.py's
+    DEFAULTS ship http://127.0.0.1:8188. On a machine running ComfyUI that call
+    ANSWERS, with a 404 (the tmp_path a test staged into is obviously not that
+    ComfyUI's input folder), and the guard would then refuse the staging. The
+    suite would go red on the developer's machine and stay green in CI, which is
+    the worst shape a test can take.
+
+    None is the module's own "could not ask" verdict, so this stub puts every
+    test back on the pre-#64 code path. Tests that are ABOUT the guard set their
+    own value; a later setattr wins over this one.
+
+    `_comfy_folder_note` is stubbed for the same reason and needs saying, because
+    it is NOT on the same path: it only runs once the guard has already refused,
+    so a test that sets the verdict to False would reach a live /system_stats
+    through the message builder even with the line above in place."""
+    monkeypatch.setattr('app.utils.comfy_fs.comfyui_sees_input', lambda *a, **k: None)
+    monkeypatch.setattr('app.utils.comfy_fs._comfy_folder_note', lambda *a, **k: '')
+
+
+@pytest.fixture(autouse=True)
 def _reset_inmemory_registries():
     """dataset_activity is a process-global in-memory store (a batch dies with the
     process, not the request). With :memory: DBs each test restarts dataset ids at

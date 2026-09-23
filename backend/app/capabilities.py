@@ -12,11 +12,14 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import requests
+from flask import current_app, has_app_context
 
 from . import config as cfg
 from .services import ffmpeg_tools
@@ -26,6 +29,10 @@ from .utils import comfy_fs
 _CACHE_TTL = 30
 _cache = None
 _cache_ts = 0.0
+_cache_lock = threading.Lock()
+_probe_lock = threading.Lock()
+_cache_generation = 0
+_PROBE_WORKERS = 4
 
 _IMPORT_TTL = 600
 # How long an UNKNOWN verdict (the probe never answered) is remembered. Short,
@@ -39,6 +46,7 @@ _UNKNOWN_TTL = 60
 # answered 'CUDA' to one probe and 'no answer' to the other.
 _IMPORT_TIMEOUT = 90
 _import_cache = {}  # key -> (ts, ok|None)  — None = unknown, kept briefly
+_import_locks = {}  # same key -> lock; retained across invalidation for waiters
 # EVERY probe that vouches for a ``backend/infer/*`` worker runs in the exact
 # environment that worker runs in — isolated from the process owner's user
 # site-packages (``services.infer_env``). The two must move together: a probe
@@ -151,19 +159,39 @@ def _cached_import_state(key: str, python: str, module_expr: str):
     for _IMPORT_TTL (a venv does not change between two probes), an unknown for
     _UNKNOWN_TTL so it re-tries soon against a now-warm import WITHOUT spawning
     a fresh 90 s subprocess on every 2 s poll of the Bank panel."""
-    now = time.time()
     cache_key = f'{key}:{python}:{module_expr}'
-    cached = _import_cache.get(cache_key)
-    if cached is not None:
-        ttl = _IMPORT_TTL if cached[1] is not None else _UNKNOWN_TTL
-        if now - cached[0] < ttl:
+
+    def fresh_cached():
+        cached = _import_cache.get(cache_key)
+        if cached is not None:
+            ttl = _IMPORT_TTL if cached[1] is not None else _UNKNOWN_TTL
+            if time.time() - cached[0] < ttl:
+                return cached
+        return None
+
+    with _cache_lock:
+        cached = fresh_cached()
+        if cached is not None:
             return cached[1]
-    probe_python = (python if (key in _USER_SITE_IMPORT_KEYS
-                               or not infer_env.is_borrowed(python))
-                    else (python, infer_env.NO_USER_SITE_FLAG))
-    ok = _import_ok(probe_python, module_expr)
-    _import_cache[cache_key] = (now, ok)
-    return ok
+        import_lock = _import_locks.setdefault(cache_key, threading.Lock())
+    # Different import expressions can proceed together; callers asking the
+    # same question share the verdict, including an UNKNOWN timeout.
+    with import_lock:
+        with _cache_lock:
+            cached = fresh_cached()
+            if cached is not None:
+                return cached[1]
+            generation = _cache_generation
+        probe_python = (python if (key in _USER_SITE_IMPORT_KEYS
+                                   or not infer_env.is_borrowed(python))
+                        else (python, infer_env.NO_USER_SITE_FLAG))
+        ok = _import_ok(probe_python, module_expr)
+        with _cache_lock:
+            # An install may finish while this old interpreter is still being
+            # probed. Its caller may finish, but it cannot poison the next read.
+            if generation == _cache_generation:
+                _import_cache[cache_key] = (time.time(), ok)
+        return ok
 
 
 def _cached_import(key: str, python: str, module_expr: str) -> bool:
@@ -239,12 +267,27 @@ def _dataset_import_policy() -> dict:
     config, not capabilities."""
     from .services import face_dataset_service as _fds
     p = _fds.import_encode_policy()
+    # The two halves of "how big a drop can one request carry": the dropzone
+    # splits a drop by both BEFORE sending, so a stack of high-resolution
+    # photos never meets the bare 413 it used to (_nofaceman, Discord). Read
+    # from the app config when a context is up; the shipped default otherwise,
+    # so a probe from a background thread still publishes the number.
+    # The ceiling of the IMPORT route, not the app-wide one: photos coming off
+    # the user's own disk get a raised ceiling (like archive imports do), and a
+    # dropzone told the generic 64 MiB would split a drop the app would have
+    # taken whole. Falls back to the shipped default outside an app context.
+    max_request_bytes = (int(current_app.config['DATASET_IMPORT_MAX_UPLOAD_BYTES'])
+                         if has_app_context()
+                         and current_app.config.get('DATASET_IMPORT_MAX_UPLOAD_BYTES')
+                         else 512 * 1024 * 1024)
     return {'max_side': p['max_side'], 'encoding': p['encoding'],
             'capped': p['capped'], 'ceiling': p['ceiling'],
             'input_max_side': p['input_max_side'],
             'input_max_pixels': p['input_max_pixels'],
             'preserve_max_side': p['preserve_max_side'],
-            'preserve_max_pixels': p['preserve_max_pixels']}
+            'preserve_max_pixels': p['preserve_max_pixels'],
+            'max_files_per_request': _fds.IMPORT_MAX_FILES,
+            'max_request_bytes': max_request_bytes}
 
 
 def comfyui_down_message(status, waited) -> str:
@@ -637,14 +680,22 @@ def comfyui_runtime(timeout=3) -> dict:
 def clear_import_cache() -> None:
     """Drop cached import-probe results and the main probe cache so the next
     probe re-checks freshly installed packages instead of a stale 600s 'False'."""
-    global _cache, _cache_ts
-    _import_cache.clear()
-    # The encoder verdict is a probe too (it RUNS ffmpeg), cached the same way —
-    # so it has to be dropped here or the video row keeps its pre-install ✗ for
-    # ten minutes after the install that fixed it.
-    ffmpeg_tools.clear_cache()
-    _cache = None
-    _cache_ts = 0.0
+    global _cache, _cache_ts, _cache_generation
+    with _cache_lock:
+        _cache_generation += 1
+        _import_cache.clear()
+        # The encoder verdict is a probe too (it RUNS ffmpeg), cached the same
+        # way, so a fresh install must drop its pre-install verdict as well.
+        ffmpeg_tools.clear_cache()
+        # So is the ai-toolkit torch probe, and it was the one exception: this
+        # function is what "↻ Check again" calls — the button a user presses
+        # right after installing a package by hand — yet the answer that says
+        # their venv cannot build an Accelerator survived it, refusing a launch
+        # on an install that had just been repaired. Nothing else in the app
+        # ever emptied that cache; expiry was the only way out.
+        _torch_probe_cache.clear()
+        _cache = None
+        _cache_ts = 0.0
 
 
 # Where an ai-toolkit checkout keeps the Python that runs it. There is NO single
@@ -697,13 +748,19 @@ def probe_aitoolkit() -> dict:
         # Python runs it (conda/uv/system/portable installs all land here).
         # State the finding and hand over both ways out.
         found = aitoolkit_python_candidates(d)
+        # Does this checkout carry ai-toolkit's own installer? The wizard names
+        # `python -m manager install` as the way to give it a Python, and that
+        # module landed upstream on 2026-07-27: on an older checkout the command
+        # answers "No module named manager". Presence on disk, never a date.
+        from .services.training_diagnostics import has_aitoolkit_manager
         detail = (f'ai-toolkit found at {d} but no Python interpreter found '
                   'inside — create a venv there, or set its Python interpreter '
                   'in Settings → Local tools')
         if found:
             detail += f' (candidate: {found[0]})'
         return {'ok': False, 'detail': detail, 'has_run': True,
-                'python_candidates': found}
+                'python_candidates': found,
+                'has_manager': has_aitoolkit_manager(d)}
     return {'ok': False, 'detail': f'invalid aitoolkit dir: {d}',
             'has_run': False, 'python_candidates': []}
 
@@ -781,9 +838,24 @@ def probe_aitoolkit_test() -> dict:
     from .services.training_diagnostics import interpreter_verdict
     report = aitoolkit_interpreter_report()
     verdict = interpreter_verdict(report['python'], report['torch'],
-                                  alternative=report['alternative'])
+                                  alternative=report['alternative'],
+                                  aitoolkit_dir=cfg.aitoolkit_path('dir'))
     if verdict:
         return {**result, 'ok': False, 'detail': verdict['message']}
+    # torch imports — but can it see the card? A CPU-only wheel, or a CUDA build
+    # the driver cannot serve, makes ai-toolkit train on the CPU in silence
+    # (acontentsheltie, Discord, RTX 3090). Same rule as above: an UNKNOWN probe
+    # keeps the green — a machine with no NVIDIA card has nothing to miss, and
+    # a cold-import timeout is not a verdict.
+    try:
+        from .services.training_diagnostics import fix_line, torch_cuda_verdict
+        cuda = torch_cuda_verdict(aitoolkit_torch_info(),
+                                  venv_python=cfg.aitoolkit_path('venv_python'),
+                                  aitoolkit_dir=cfg.aitoolkit_path('dir'))
+    except Exception:
+        return result      # a probe that broke is not a red Test — same rule as the launch gate
+    if cuda and not cuda['available']:
+        return {**result, 'ok': False, 'detail': cuda['message'] + fix_line(cuda['command'])}
     return result
 
 
@@ -1519,39 +1591,127 @@ def gpu_vram_gb():
 
 # --- ai-toolkit torch probe (what actually trains) -----------------------------
 # ai-toolkit runs in ITS OWN venv, which LDS never installs — it only reads the
-# interpreter the user pointed at. Whether that venv's torch carries kernels for
-# the local GPU is invisible from here, and getting it wrong is silent: RTX 50
-# (Blackwell, sm_120) + a stable wheel = `is_available()` True, then a hard
-# "no kernel image is available for execution on the device" at the first real
-# computation. So: probe the venv, but only when it can matter.
+# interpreter the user pointed at. Two things about that venv's torch are
+# invisible from here, and getting either wrong is silent:
+#  * whether it carries kernels for the local GPU: RTX 50 (Blackwell, sm_120) +
+#    a stable wheel = `is_available()` True, then a hard "no kernel image is
+#    available for execution on the device" at the first real computation;
+#  * whether it can see the GPU AT ALL: a CPU-only wheel (a plain `pip install
+#    torch` on Windows), a CUDA build newer than the NVIDIA driver, or a card
+#    hidden by CUDA_VISIBLE_DEVICES all answer `is_available()` False — and
+#    ai-toolkit takes its device from Hugging Face Accelerate (since 5e663746,
+#    2025-01-25, before Krea 2 existed), which then picks the CPU without a
+#    word (the `device: cuda:0` in the job config decides nothing). The run
+#    "works": the card stays empty, system RAM fills, the ETA reads in the
+#    hundreds of hours. Reported by acontentsheltie (Discord, RTX 3090): three
+#    logs where latent caching never got past image 1 and VRAM sat at 0.8 GB
+#    throughout. (The 3.6 s per quantised block in those logs is NOT a tell:
+#    measured, the device changes that loop by 0.06 s — it is the safetensors
+#    paging in from disk, 0.2 GB/s there against 0.7 GB/s on our bench.)
 #
-# COST DISCIPLINE. `import torch` in a cold venv costs seconds, so the expensive
-# probe is gated behind a ~100 ms nvidia-smi capability read: a GPU below
-# compute 10.0 (everything up to Ada / RTX 40) can never hit the trap and pays
-# nothing at all. What we do run is cached 10 min — a venv does not change
-# between two runs.
+# The probe asks the venv the exact question ai-toolkit asks, in the exact
+# conditions: `run.py` loads `<ai-toolkit>/.env` before anything else, so a
+# `CUDA_VISIBLE_DEVICES=-1` or an `ACCELERATE_USE_CPU=1` kept there hides the
+# card from the run and from nothing else — the probe runs from that folder
+# and loads the same file, then reads `Accelerator().device` itself, because
+# three environment variables send Accelerate to the CPU while
+# `is_available()` still answers True (measured, 2026-09-07).
+#
+# COST DISCIPLINE. `import torch` in a cold venv costs seconds, so the probe is
+# gated behind a ~100 ms nvidia-smi read: a machine with no NVIDIA card seen has
+# nothing the venv's torch could miss and pays nothing. The second trap is
+# card-agnostic, so every card with a configured ai-toolkit pays the import —
+# ONCE: a venv that sees the card is remembered 10 min (a venv does not change
+# between two runs); anything else only _UNKNOWN_TTL, see _torch_probe_ttl.
+# (Until 2026-09-07 the gate skipped everything below compute 10.0, so a 3090
+# training on its CPU for days was never noticed by the app.)
 _cc_cache = {'ts': 0.0, 'cc': None}
 _TORCH_PROBE_TTL = 600
-_torch_probe_cache = {}   # interpreter path -> (ts, info)
+_torch_probe_cache = {}   # interpreter path -> (ts, info | None)
 
-# First capability major that stable wheels may not cover (Blackwell = 12).
-# 10 is deliberately lower than 12: it keeps the gate honest if a future
-# generation lands before the wheels do.
-_RISKY_CC_MAJOR = 10
-
+# The probe captures torch's OWN reason when the card cannot be opened ("The
+# NVIDIA driver on your system is too old…"): torch says it as a warning at the
+# first `is_available()`, and quoting it beats guessing. `torchvision` is read
+# from the dist-info (importlib.metadata), never imported: a torchvision built
+# against another torch dies at import, and one process death would silence
+# BOTH verdicts (this one and the Blackwell one). `accelerator_device` is what
+# ai-toolkit will actually train on; best-effort (None when accelerate is not
+# importable), and an Accelerator() with no distributed setup costs ~0.1 s.
 _TORCH_PROBE_CODE = (
-    'import json, torch\n'
-    'cap = name = None\n'
+    'import json, warnings\n'
     'try:\n'
-    '    if torch.cuda.is_available():\n'
-    '        cap = list(torch.cuda.get_device_capability(0))\n'
-    '        name = torch.cuda.get_device_name(0)\n'
+    '    from dotenv import load_dotenv\n'
+    '    load_dotenv()\n'
     'except Exception:\n'
     '    pass\n'
+    'import torch\n'
+    'cap = name = tv = accel = None\n'
+    'avail = False\n'
+    'reason = ""\n'
+    'with warnings.catch_warnings(record=True) as caught:\n'
+    '    warnings.simplefilter("always")\n'
+    '    try:\n'
+    '        avail = bool(torch.cuda.is_available()) and torch.cuda.device_count() > 0\n'
+    '        if avail:\n'
+    '            cap = list(torch.cuda.get_device_capability(0))\n'
+    '            name = torch.cuda.get_device_name(0)\n'
+    '    except Exception as e:\n'
+    '        avail = False\n'
+    '        reason = str(e)\n'
+    '    if not avail and not reason:\n'
+    '        reason = " ".join(str(w.message) for w in caught\n'
+    '                          if "CUDA" in str(w.message))[:400]\n'
+    'try:\n'
+    '    from importlib.metadata import version\n'
+    '    tv = version("torchvision")\n'
+    'except Exception:\n'
+    '    pass\n'
+    # Why Accelerate did not answer, kept instead of swallowed. `Accelerator()`
+    # here is byte-for-byte what ai-toolkit runs (toolkit/accelerator.py:
+    # `get_accelerator()` is a bare `Accelerator()`), so an exception on this
+    # line is an exception on that one. Folding it into `accelerator_device:
+    # null` made "accelerate is not installed" and "its config raises"
+    # indistinguishable from silence, and torch_cuda_verdict read the empty
+    # string as nothing-to-say: a venv with a working torch and no accelerate
+    # was declared ready by the Test button and by the launch gate.
+    'accel_error = ""\n'
+    'try:\n'
+    '    from accelerate import Accelerator\n'
+    '    accel = str(Accelerator().device)\n'
+    'except Exception as e:\n'
+    '    accel_error = type(e).__name__ + ": " + str(e)\n'
     'print(json.dumps({"torch": torch.__version__, "cuda": torch.version.cuda,\n'
+    '                  "cuda_available": avail, "cuda_reason": reason,\n'
     '                  "capability": cap, "device_name": name,\n'
-    '                  "arch_list": list(torch.cuda.get_arch_list())}))\n'
+    '                  "arch_list": list(torch.cuda.get_arch_list()),\n'
+    '                  "torchvision": tv, "accelerator_device": accel,\n'
+    '                  "accelerator_error": accel_error}))\n'
 )
+
+
+def _torch_probe_ttl(info) -> float:
+    """How long a probe answer is trusted. A venv that SEES the card, with
+    Accelerate resolving to it, is remembered _TORCH_PROBE_TTL (a venv does not
+    change between two runs). Everything else — an unanswered probe, a torch
+    that cannot open the card, an Accelerate pointed at the CPU — only
+    _UNKNOWN_TTL: an unknown is never a fact, and a refusal must not outlive a
+    transient CUDA hiccup (a driver reset after an update) by ten minutes
+    while telling someone to reinstall torch. The short TTL still spares the
+    caller a fresh cold import on every preflight of the same minute."""
+    if not isinstance(info, dict) or not info.get('cuda_available'):
+        return _UNKNOWN_TTL
+    # An Accelerate that could not be asked is the THIRD refusal, and it nearly
+    # inherited the long TTL: `accelerator_device` is None on that payload, the
+    # `or 'cuda'` below substitutes the string, and the refusal read as a card
+    # that answers. Ten minutes of a remembered NO is exactly what the docstring
+    # above forbids — the user runs the Fix line this refusal printed, presses
+    # Test, and is refused again with no way to tell that the remedy worked.
+    # Gated on the REASON and never on a falsy device, so a payload cached
+    # before this field existed keeps the TTL it has today.
+    if info.get('accelerator_error'):
+        return _UNKNOWN_TTL
+    dev = str(info.get('accelerator_device') or 'cuda')
+    return _TORCH_PROBE_TTL if dev.startswith('cuda') else _UNKNOWN_TTL
 
 
 def gpu_compute_capability():
@@ -1576,12 +1736,14 @@ def gpu_compute_capability():
     return cc
 
 
-def _torch_probe(python: str, timeout=90):
+def _torch_probe(python: str, timeout=90, cwd=None):
     """Raw torch facts from `python`, as a dict, or None. None is UNKNOWN — torch
-    not importable, interpreter broken, cold-import timeout — never a claim."""
+    not importable, interpreter broken, cold-import timeout — never a claim.
+    `cwd` is the ai-toolkit folder when known, so the probe's `load_dotenv()`
+    finds the same `.env` that `run.py` loads before training."""
     try:
         proc = subprocess.run([python, '-c', _TORCH_PROBE_CODE],
-                              capture_output=True, text=True, timeout=timeout,
+                              capture_output=True, text=True, timeout=timeout, cwd=cwd,
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except Exception:
         return None
@@ -1596,23 +1758,25 @@ def _torch_probe(python: str, timeout=90):
 
 def aitoolkit_torch_info():
     """torch/GPU facts from the ai-toolkit venv — the interpreter that TRAINS —
-    or None when we cannot know (no ai-toolkit, no NVIDIA GPU, GPU old enough to
-    be covered by every wheel, torch not importable, probe timeout). Callers must
-    treat None as 'no information', never as a verdict."""
+    or None when we cannot know (no ai-toolkit, no NVIDIA GPU seen by
+    nvidia-smi, torch not importable, probe timeout). Callers must treat None
+    as 'no information', never as a verdict."""
     cc = gpu_compute_capability()
-    if cc is None or cc[0] < _RISKY_CC_MAJOR:
-        return None                       # cheap exit: no torch import at all
+    if cc is None:
+        return None      # no NVIDIA card seen: nothing the venv's torch could miss
     python = cfg.aitoolkit_path('venv_python')
     if not python or not Path(python).is_file():
         return None
     key = str(python)
     now = time.time()
     hit = _torch_probe_cache.get(key)
-    if hit and (now - hit[0]) < _TORCH_PROBE_TTL:
+    if hit and (now - hit[0]) < _torch_probe_ttl(hit[1]):
         return hit[1]
-    info = _torch_probe(key)
-    if info is None:
-        return None      # a cold-import timeout must not be cached as a fact
+    aitk_dir = cfg.aitoolkit_path('dir')
+    info = _torch_probe(key, cwd=str(aitk_dir) if aitk_dir and Path(aitk_dir).is_dir() else None)
+    # None (a cold-import timeout) is remembered too — briefly, never as a
+    # fact: two callers in one preflight, or two preflights in one minute, must
+    # not each pay a fresh 90 s import for the same unanswered question.
     _torch_probe_cache[key] = (now, info)
     return info
 
@@ -1671,7 +1835,7 @@ def classify_comfyui_dir(path: str) -> dict:
     the folder itself otherwise). Never raises — a filesystem hiccup degrades
     to 'not_comfyui' rather than throwing into the request.
 
-    Every verdict also carries `input_check` = {path, ok, problem}: "this IS a
+    Every verdict also carries `input_check` = {path, ok, problem, suggestion}: "this IS a
     ComfyUI install" was only ever half the question, and the wizard used to
     certify the half it could see. The other half is whether the app can actually
     HAND FILES to that install — every local engine copies its source into
@@ -1718,19 +1882,56 @@ def _input_check(base_dir: str) -> dict:
     the folder the app would really use rather than a layout assumption.
     {'path','ok','problem'}; ok=None = nothing probed. Never raises."""
     if not base_dir:
-        return {'path': '', 'ok': None, 'problem': ''}
+        return {'path': '', 'ok': None, 'problem': '', 'suggestion': ''}
     try:
         override = cfg.get('comfyui.input_dir') or ''
     except Exception:
         override = ''
+    suggestion = ''
     try:
         target = cfg.resolve_comfyui_dir('input', base_dir, override)
         path = str(target) if target else ''
         verdict = comfy_fs.probe_folder('input', path)
+        # Writable is only half of "usable". A folder can pass every local check
+        # and still not be the one ComfyUI reads — a second install, or the
+        # `--input-directory` flag no disk inspection can see (GitHub #64). Asked
+        # only once the local verdict is green: a missing or read-only folder has
+        # a louder answer already, and this one costs a round trip.
+        if verdict['ok']:
+            invisible = comfy_fs.input_visibility_problem(path)
+            if invisible:
+                verdict = {'ok': False, 'problem': invisible}
+                # ComfyUI has just proved it reads somewhere else. If it also SAYS
+                # where, offer that folder for one click right here: the very same
+                # suggestion already existed, but only inside the Advanced fold of
+                # Settings that nobody opens unless told to — which is how a Comfy
+                # Desktop user with its shared folder ended up on GitHub (#64,
+                # mikemil828). Asked only after the probe failed: an override
+                # nobody needs is a field to explain.
+                suggestion = _reported_input_folder(path)
     except Exception:
-        return {'path': '', 'ok': None, 'problem': ''}
+        return {'path': '', 'ok': None, 'problem': '', 'suggestion': ''}
     return {'path': comfy_fs.safe_path(path), 'ok': verdict['ok'],
-            'problem': verdict['problem']}
+            'problem': verdict['problem'], 'suggestion': suggestion}
+
+
+def _reported_input_folder(current: str) -> str:
+    """The input folder the RUNNING ComfyUI says it uses, when that is not the one
+    the app just probed — '' otherwise. Reported (an absolute `--input-directory`
+    in the argv ComfyUI echoes), never inferred: the same rule
+    `parse_comfy_argv_dirs` applies, for the same reason. Never raises."""
+    try:
+        reported = detect_comfyui_folders().get('input_dir') or ''
+    except Exception:
+        return ''
+    if not reported or not current:
+        return reported
+    try:
+        same = (comfy_fs.path_flavour(reported).normpath(reported).lower()
+                == comfy_fs.path_flavour(current).normpath(current).lower())
+    except Exception:
+        same = False
+    return '' if same else reported
 
 
 def classify_comfyui_folders(base_dir: str, overrides: dict | None = None) -> dict:
@@ -1777,6 +1978,12 @@ def classify_comfyui_folders(base_dir: str, overrides: dict | None = None) -> di
         if exists:
             verdict = comfy_fs.probe_folder(kind, resolved)
             usable, problem = verdict['ok'], verdict['problem']
+            # input/ is the only folder BOTH sides must agree on by path, and the
+            # only one whose disagreement is invisible from here (GitHub #64).
+            if kind == 'input' and usable:
+                invisible = comfy_fs.input_visibility_problem(resolved)
+                if invisible:
+                    usable, problem = False, invisible
         out[key] = {'kind': kind, 'source': source,
                     'resolved': resolved, 'exists': exists,
                     'usable': usable, 'problem': problem}
@@ -1819,14 +2026,23 @@ _WINDOWS_ABS_RE = __import__('re').compile(r'^[A-Za-z]:[\\/]|^\\\\')
 
 
 def parse_comfy_argv_dirs(argv) -> dict:
-    """Extract the folder overrides ComfyUI was launched with from its own argv.
+    r"""Extract the folder overrides ComfyUI was launched with from its own argv.
 
     Both argparse spellings are accepted (`--input-directory X` and
     `--input-directory=X`). RELATIVE paths are deliberately DROPPED: they resolve
     against ComfyUI's working directory, which we do not know, and this app never
     guesses a path by convention. `--base-directory` is likewise not turned into
     input/output suggestions — the install-directory field already derives those, and
-    inventing them here would be a layout assumption, not an answer. Never raises."""
+    inventing them here would be a layout assumption, not an answer.
+
+    "Absolute" is judged under BOTH conventions, and the path is normalised under
+    its OWN. ComfyUI may be answering from WSL or a container, so a Windows reader
+    routinely gets `/workspace/ComfyUI/input` — and `os.path.isabs` calls that
+    RELATIVE on Windows (a leading slash is drive-relative there; Python 3.13 made
+    the rule explicit), which silently dropped the container case, the one these
+    fields exist for. `os.path.normpath` made it worse where it did pass: it
+    rewrote `/mnt/shared/input` as `\mnt\shared\input`, a path correct on neither
+    side. Never raises."""
     out = {}
     if not isinstance(argv, (list, tuple)):
         return out
@@ -1846,7 +2062,7 @@ def parse_comfy_argv_dirs(argv) -> dict:
                 continue
         except (OSError, ValueError):
             continue
-        out[key] = os.path.normpath(value)
+        out[key] = comfy_fs.path_flavour(value).normpath(value)
     return out
 
 
@@ -2221,18 +2437,37 @@ def _comfyui_caps_section(comfy, base_dir, comfy_dir, comfy_launcher,
     }
 
 
-def probe(force=False) -> dict:
-    global _cache, _cache_ts
-    now = time.time()
-    if _cache is not None and not force and (now - _cache_ts) < _CACHE_TTL:
-        return copy.deepcopy(_cache)
+def _parallel_probes(probes):
+    """Bound cold subprocess/network work and give each worker its own context."""
+    app = current_app._get_current_object() if has_app_context() else None
 
+    def run(function):
+        if app is None:
+            return function()
+        with app.app_context():
+            return function()
+
+    with ThreadPoolExecutor(max_workers=_PROBE_WORKERS,
+                            thread_name_prefix='capability') as executor:
+        pending = {key: executor.submit(run, function)
+                   for key, function in probes.items()}
+        return {key: future.result() for key, future in pending.items()}
+
+
+def _probe_comfy_models():
+    # Keep the shared ComfyUI discovery caches on one worker: these dependent
+    # reads must not launch concurrent /object_info scans against the server.
     comfy = probe_comfyui()
-    ollama = probe_ollama()
-    ollama_installed = probe_ollama_installed()
-    from .services import vision_llm as _vision_llm
-    _llm_provider = _vision_llm.provider()
-    _wm_clean = _watermark_clean_options()
+    return (comfy, _scan_models(), _probe_klein(comfy), _probe_krea(comfy),
+            _probe_seedvr2(comfy))
+
+
+def _probe_training_captioner():
+    aitoolkit = probe_aitoolkit()
+    return aitoolkit, probe_joycaption(aitoolkit)
+
+
+def _probe_active_lmstudio(_llm_provider):
     _lmstudio_url = ''
     # A filesystem stat, not a round-trip, so it runs for the INACTIVE provider
     # too: "LM Studio is installed on this machine" is worth knowing on the card
@@ -2254,30 +2489,81 @@ def probe(force=False) -> dict:
         # Swallowing the reason into a log nobody opens is how a broken provider
         # reads as "just not configured".
         lmstudio_model = {'ok': False, 'detail': f'LM Studio probe failed: {_exc}'}
-    aitoolkit = probe_aitoolkit()
-    gemini = probe_gemini()
-    openai_ = probe_openai()
-    openrouter_ = probe_openrouter()
-    face_scoring = probe_face_scoring()
-    masks = probe_masks()
-    bank_scoring = probe_bank_scoring()
-    bank_siglip2 = probe_bank_siglip2()
-    watermark_inpaint = probe_watermark_inpaint()
-    watermark_detect = probe_watermark_detect()
-    video = probe_video()
-    dlss5nr = probe_dlss5nr()
-    video_text = probe_video_text()
-    scrape_deps = probe_scrape_deps()
-    joycaption = probe_joycaption(aitoolkit)
-    models = _scan_models()
+    return _lmstudio_url, _lmstudio_installed, lmstudio, lmstudio_model
+
+
+def probe(force=False) -> dict:
+    """Share ordinary polls; an explicit refresh always re-reads configuration."""
+    global _cache, _cache_ts
+    with _cache_lock:
+        if _cache is not None and not force and time.time() - _cache_ts < _CACHE_TTL:
+            return copy.deepcopy(_cache)
+    with _probe_lock:
+        with _cache_lock:
+            # Another request may have filled the cache while this one waited.
+            # Force must still scan: Settings may have changed in the meantime.
+            if _cache is not None and not force and time.time() - _cache_ts < _CACHE_TTL:
+                return copy.deepcopy(_cache)
+            generation = _cache_generation
+        caps = None
+        try:
+            caps = _probe_uncached()
+        finally:
+            with _cache_lock:
+                if generation != _cache_generation:
+                    # Discard a late encoder verdict even if another probe
+                    # failed: ffmpeg owns an additional, independent cache.
+                    ffmpeg_tools.clear_cache()
+                elif caps is not None:
+                    # A cold scan can exceed the TTL. Its lifetime starts when
+                    # the answer becomes available, not before the first import.
+                    _cache, _cache_ts = caps, time.time()
+        return copy.deepcopy(caps)
+
+
+def _probe_uncached():
+    from .services import vision_llm as _vision_llm
+    _llm_provider = _vision_llm.provider()
+    results = _parallel_probes({
+        'comfy_models': _probe_comfy_models,
+        'training_captioner': _probe_training_captioner,
+        'bank_scoring': probe_bank_scoring,
+        'masks': probe_masks,
+        'ollama': probe_ollama,
+        'ollama_installed': probe_ollama_installed,
+        'lmstudio': lambda: _probe_active_lmstudio(_llm_provider),
+        'gemini': probe_gemini,
+        'openai': probe_openai,
+        'openrouter': probe_openrouter,
+        'face_scoring': probe_face_scoring,
+        'bank_siglip2': probe_bank_siglip2,
+        'watermark_inpaint': probe_watermark_inpaint,
+        'watermark_detect': probe_watermark_detect,
+        'video': probe_video,
+        'dlss5nr': probe_dlss5nr,
+        'video_text': probe_video_text,
+        'scrape_deps': probe_scrape_deps,
+        'watermark_clean': _watermark_clean_options,
+    })
+    comfy, models, klein, krea, seedvr2 = results['comfy_models']
+    aitoolkit, joycaption = results['training_captioner']
+    ollama = results['ollama']
+    ollama_installed = results['ollama_installed']
+    _lmstudio_url, _lmstudio_installed, lmstudio, lmstudio_model = results['lmstudio']
+    gemini, openai_, openrouter_ = results['gemini'], results['openai'], results['openrouter']
+    face_scoring, masks = results['face_scoring'], results['masks']
+    bank_scoring, bank_siglip2 = results['bank_scoring'], results['bank_siglip2']
+    watermark_inpaint, watermark_detect = results['watermark_inpaint'], results['watermark_detect']
+    video, dlss5nr, video_text = results['video'], results['dlss5nr'], results['video_text']
+    scrape_deps, _wm_clean = results['scrape_deps'], results['watermark_clean']
     (_keh, klein_missing, klein_invalid, klein_unsupported_enums,
-     klein_ready) = _probe_klein(comfy)
+     klein_ready) = klein
     (krea_missing, krea_nodes_missing, krea_nodes_installed, krea_invalid,
-     krea_pin_gaps, krea_base_resolved, krea_ready) = _probe_krea(comfy)
+     krea_pin_gaps, krea_base_resolved, krea_ready) = krea
     (seedvr2_missing, seedvr2_nodes_missing, seedvr2_nodes_installed,
      seedvr2_invalid, seedvr2_ready, seedvr2_tiling_ready,
      seedvr2_tiling_nodes_missing,
-     seedvr2_ceiling_mp) = _probe_seedvr2(comfy)
+     seedvr2_ceiling_mp) = seedvr2
     base_dir = cfg.get('comfyui.base_dir') or ''
     from .services import comfyui_control
     comfy_launcher = comfyui_control.launcher_status()
@@ -2389,6 +2675,11 @@ def probe(force=False) -> dict:
             # can see" are different problems with different fixes.
             'dir_valid': bool(aitoolkit.get('has_run')),
             'python_candidates': list(aitoolkit.get('python_candidates') or []),
+            # Whether `python -m manager install` is a live command in THIS
+            # checkout. The wizard names it as the way to build the training
+            # environment; ai-toolkit only grew that module on 2026-07-27, so on
+            # an older clone the line would answer "No module named manager".
+            'has_manager': bool(aitoolkit.get('has_manager')),
         },
         'cloud_training': bool(cfg.secret('VAST_API_KEY')),
         # Publish-to-HF is gated purely on the HF_TOKEN secret being present (the
@@ -2519,5 +2810,4 @@ def probe(force=False) -> dict:
         'studio_visible': comfy['ok'],
     }
 
-    _cache, _cache_ts = caps, now
-    return copy.deepcopy(caps)
+    return caps

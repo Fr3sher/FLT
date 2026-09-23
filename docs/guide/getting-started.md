@@ -129,6 +129,17 @@ of running invisibly alongside the first.
   on a missing Fortran compiler (measured and reported by strouder, GitHub #19).
   On Windows, install **3.11.9** — it is the last 3.11 with a binary installer;
   later 3.11.x are source-only security releases.
+- **Or hand that whole job to ai-toolkit.** Run `python -m manager install` from
+  the ai-toolkit folder and its own installer provisions a Python it supports,
+  reads your NVIDIA driver, installs the CUDA build of PyTorch that matches it
+  and creates the venv next to `run.py` — all inside that folder, nothing
+  system-wide. The Studio then detects that interpreter on its own. This is the
+  step worth not improvising: a plain `pip install torch` on Windows installs a
+  **CPU-only** wheel, ai-toolkit trains on the CPU without a word, and the run
+  looks alive for hundreds of hours (see [The card never fills at all: the run
+  is on the CPU](troubleshooting.md#the-card-never-fills-at-all-the-run-is-on-the-cpu)).
+  Use the `install` subcommand rather than `run_windows.bat`, which finishes by
+  starting ai-toolkit's own web UI — the one this app never talks to.
 - The two do **not** have to match. They are separate environments on purpose.
 
 ### If Hugging Face downloads fail {#hf-downloads}
@@ -192,7 +203,7 @@ mentioning it again.
   flow (source → curate → caption → train).
 - **🏋️ Runs** — every training in one place, cloud *and* local: live progress,
   the settings each launch used, retry a failed run (↻), continue a finished
-  one (▶), and download the LoRA (appears once ai-toolkit or a vast.ai key is set).
+  one (▶), and download the LoRA (appears once ai-toolkit or a [vast.ai](https://cloud.vast.ai/?ref_id=683073) key is set).
 - **Test Studio** — grid-test a trained LoRA across checkpoints and strengths,
   vote, and rank (appears once ComfyUI is reachable).
 - **Guide** — this manual.

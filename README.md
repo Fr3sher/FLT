@@ -5,6 +5,7 @@
 **A complete, self-hosted training workflow in one browser tab:** source or generate a Character, Concept or Style dataset, curate it, caption it, clean watermarks, then train — a LoRA on five model families, locally or in the cloud, or a full Krea 2 model on a rented GPU — and compare checkpoints before export.
 
 No account, paid tier or telemetry. API engines and rented GPUs are optional; local and manual workflows remain available.
+There is no upsell in the app: optional cloud signup referral links are disclosed and do not change the price.
 
 <h3 align="center">☕ Keep the project in development</h3>
 
@@ -211,7 +212,7 @@ the target model accepts.
 |---|---|
 | **Guided local training** | ai-toolkit underneath, family-scoped starters, adaptive step policies, launch guards, queueing and advanced controls |
 | **Slider LoRA (Beta)** | Train a bipolar conceptual slider from positive and negative prompt poles, so LoRA strength moves the learned trait in either direction and Test Studio can sweep both sides |
-| **Cloud training** | Rent a vast.ai GPU from the same launch flow, stream progress and checkpoints home, and terminate pods automatically |
+| **Cloud training** | Rent a [vast.ai](https://cloud.vast.ai/?ref_id=683073) GPU from the same launch flow, stream progress and checkpoints home, and terminate pods automatically |
 | **Parallel cloud runs** | Run several cloud trainings on one dataset at once to A/B toolkit settings — each run rents its own pod (billed separately), capped by the concurrent-runs ceiling in Settings |
 | **Full-model training (Krea 2)** | Train the whole transformer instead of an adapter. The finished master lands on your own disk and is verified before the pod is destroyed, appears in 📦 Checkpoints & LoRAs next to the ~10 GB fp8 twin ComfyUI loads, and can be continued from the step written inside it. The lane is cloud-only and Krea 2 only, and it accepts Raw, Turbo or a Krea 2 checkpoint of your own. Turbo is allowed with a warning nobody can honestly skip — a full-model run on a distilled base has not been measured, by us or by anyone, and it may cost the model its few-step behaviour. A ComfyUI scaled-fp8 export is refused outright as a base: the trainer cannot load one |
 | **Merge a LoRA into a checkpoint** | Fold one or more of your LoRAs into a base, each at its own weight, and get a complete model you can publish. A plan answers first, from the file headers alone: how many tensors change, how big the output is, which drive it lands on, how long it takes, and what a half-way failure leaves. What comes out is a **merged** model, not a trained one — the file's own metadata records the base, every LoRA and its weight, so it stays true after a rename. It is also the published route to getting few-step speed back on a Raw full model, by folding in the re-distillation LoRA Krea publishes for Turbo; that one we have not tested ourselves, and the screen says so before you start it |
@@ -220,10 +221,13 @@ the target model accepts.
 | **Experiment lineage** | Inspect, annotate and diff the exact tree of runs and the checkpoint each continuation resumed from |
 | **LoRA Canvas** | Put every dataset's lineage on one pan/zoom board, rearrange cards, compare runs across datasets, generate from same-family checkpoints — including 🧬 blending several checkpoints into one image, with purple provenance edges joining a blended picture to every pill it came from (blends made before this feature show a badge instead) — pin/fuse outputs and continue training from a pill; each generation run keeps its own strip in training-step order, with the character dataset's reference face on its lane. A 🔌 + LoRA button pins any LoRA from your ComfyUI folder onto the board as its own plugin node, with its own strength — it stacks onto a run anchored by a checkpoint trained here, not as a solo generation on its own. ⏏ **Undeploy** lists every LoRA the app has put into ComfyUI, across all datasets and families, and removes the ones you tick in one pass — only what the app deployed is listed, so LoRAs you downloaded yourself are never shown or touched, and the training saves are kept so anything removed can be deployed again |
 | **Test Studio** | Fixed-seed checkpoint × strength grids, multi-LoRA comparisons or 🧬 combined stacks (several of your LoRAs in one image, each at its own weight, weight variants compared side by side), a ✨ Enhance button that enriches your prompt through your local LLM, votes, Wilson ranking, face ranking and shareable exports |
+| **📝 Prompt batch** | Tick several prompts — from the saved history, from 🎬 Scenes or from the 🌐 Civitai browser — and one launch renders them all: one image set per prompt, same checkpoints, same settings, same seed. The cost counter multiplies by the batch before you click, not after. On every launch surface, the multi-LoRA comparison included |
 | **🎬 Scenes** | Run a bank's or a dataset's captions in their order as one batch of prompt passes (a storyboard, a shoot, a chapter page by page), each shown with the image it came from, in the Test Studio and the board's 🎨 Generate; the 🎲 shortcut still draws one caption at random |
 | **🖼 Gallery** | One feed of every image the app ever generated — Test Studio cells, Canvas previews, comparison runs and ✨ improvements — across every dataset, newest first, with dataset / renders-vs-improved / 👍 liked filters. The viewer walks the feed with the arrow keys and shows everything a picture was made from; ⬇ downloads keep the lineage name, ✨ Upscale & improve runs straight from the feed (the result lands at its top), and a Select mode deletes misses or ZIPs a pick. The feed loads itself as you scroll, on a phone as well as a desktop |
 | **📷 Camera angles** | Re-photograph a generated image (Gallery viewer) or a kept dataset image from other camera positions — pick azimuths on a dial plus a camera height and a distance, read the exact prompts and the cost before you shoot, cancel any view from the queue. Runs locally on Qwen-Image-Edit with a Multiple-Angles LoRA through ComfyUI; Setup installs the whole stack from one card. On a dataset image the angle is written into the caption at birth ("seen from behind, low camera angle") and re-injected on every later captioning pass, because an angle left undescribed binds to the trigger word. New views land as pending candidates of the normal keep/reject cycle. The Bank stays out on purpose — it is the reservoir of real photos; promote first, then re-shoot |
-| **🌐 Civitai top prompts** | Browse Civitai's most-reacted images of the day, week, month, year or all time, each shown next to the generation prompt it was posted with, and reuse one in a click — the same button on the dataset Test Studio, the multi-LoRA comparison and the board's 🎨 Generate. Not every image publishes its prompt (the browser keeps the ones that do by default), and reading prompts needs the free Civitai API key from Settings → Scraping & sources — the same single key the scraper uses. The content-level select is a ceiling, Safe by default |
+| **🌐 Civitai top prompts** | Browse Civitai's most-reacted images of the day, week, month, year or all time, each shown next to the generation prompt it was posted with, and reuse one in a click — or tick several and render them all in one run, one image set per prompt on the same seed and settings, which is what makes them comparable. The same button on the dataset Test Studio, the multi-LoRA comparison and the board's 🎨 Generate. Not every image publishes its prompt (the browser keeps the ones that do by default), and reading prompts needs the free Civitai API key from Settings → Scraping & sources — the same single key the scraper uses. The content-level select is a ceiling, Safe by default |
+| **🎬 Video Test Studio** | The same question as the image Studio, asked of a video LoRA: one clip per start frame, same seed and same prompt, so the clips differ by their picture and nothing else. Pick several start frames at once — files, bank tiles, Gallery images or a training clip — and one click queues one clip each. Every dial says what it costs (turbo, sparse attention, latent upscale, sampling steps), clips run to 15 seconds, and the history keeps the prompt in the engine's own format with every setting that ran and the time it took. From a finished clip: ↻ Reuse its settings, ≈ Smooth to twice the frame rate, ✨ Neural to re-render it |
+| **✨ DLSS 5 Neural Rendering** | Re-render a finished clip through NVIDIA's DLSS 5 model — skin, hair and fabric gain structure the source only implied. In a dataset the render replaces the clip and the original is kept (Restore); in the studio it is a new clip beside the old one. **⇔ Compare** plays both side by side, in step, with a 1:1 zoom, because a neural render is judged in motion and not on a still. Strength, passes and a 2× working size push it past the model's default. Windows + NVIDIA only: Setup installs the bridge, you bring the model file — the app never downloads it and says so |
 | **Studio shortcuts and recovery** | Open Studio directly from a run, draw prompts from kept dataset captions, and pause safely when ComfyUI drops instead of launching later cells against changed state |
 
 <table>
@@ -237,7 +241,19 @@ the target model accepts.
   </tr>
   <tr>
     <td valign="top"><sub><strong>📷 Camera angles</strong> — pick positions on the dial, read the exact prompts and the cost <em>before</em> you shoot. Lives in the Gallery viewer and on every kept dataset image.</sub></td>
-    <td valign="top"><sub><strong>🌐 Civitai top prompts</strong> — the most-reacted images next to the prompt they were posted with; ⤵ drops one into your prompt field. Next to the prompt box on every generation surface.</sub></td>
+    <td valign="top"><sub><strong>🌐 Civitai top prompts</strong> — the most-reacted images next to the prompt they were posted with; ⤵ drops one into your prompt field, ☐ Batch collects several for one run. Next to the prompt box on every generation surface.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/video/dlss5-compare.png"><img src="docs/screenshots/video/dlss5-compare.png" alt="The Compare view: the original clip and its DLSS 5 neural render playing side by side, in step, at 1:1" width="100%"></a>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/video/video-studio-clips.png"><img src="docs/screenshots/video/video-studio-clips.png" alt="The Video Test Studio clip history: each clip with its prompt, the dials that ran, the render time, and the Reuse, Smooth, Neural and Compare actions" width="100%"></a>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><strong>✨ DLSS 5 Neural Rendering</strong> — ⇔ Compare plays the original and the render together, in step, at 1:1. A neural render is judged in motion, not on a still.</sub></td>
+    <td valign="top"><sub><strong>🎬 Video Test Studio</strong> — every clip keeps the prompt, the dials that produced it and what it cost; ↻ Reuse, ≈ Smooth, ✨ Neural and ⇔ Compare start from there.</sub></td>
   </tr>
 </table>
 
@@ -248,6 +264,7 @@ the target model accepts.
 | **Training ZIP and sidecars** | Standard kept image + same-stem `.txt` pairs for ai-toolkit/Kohya-compatible tools |
 | **Portable backup and restore** | Datasets, decisions, captions, settings and run history in one file; API keys stay out |
 | **Hugging Face publishing** | Publish kept pairs to a dataset repository, private by default and gated by an explicit rights confirmation |
+| **Publish to Civitai** | Push a trained checkpoint and the images you pick to a Civitai model page without leaving the app — the page, the version and the pictures in one dialog. It is left as a **draft** so nothing goes public until you have read it back on Civitai. Uses the same free API key the prompt browser and the scraper already share |
 | **ComfyUI deployment** | Deploy individual LoRA checkpoints or downloaded cloud results into the configured LoRA tree; a full model's fp8 twin goes to ComfyUI's own diffusion-models folder instead, hard-linked when it sits on the same drive so it costs no second copy. The full-precision master is never sent — it is the only file you can train from again |
 | **Recoverable deletion** | Deleted app data goes to Trash; destructive Image Bank actions state their destination before confirmation |
 | **Storage you can see and move** | Settings › Storage lists every folder the app writes to with its path and (on request) its size, and can point the dataset root, the cloud run staging and the checkpoint store at another drive — moving what is already there, or adopting the new folder empty, never silently. Trained checkpoints live in their own store that no cleanup touches; the trash sits on the same disk, so space returns only when you empty it. The same tab shrinks any full-precision `.safetensors` on this machine to the ~10 GB fp8 file ComfyUI loads, and chooses where a finished full model is delivered. |
@@ -358,7 +375,7 @@ Missing dependencies are shown in Setup/Settings and gated features stay unavail
 |---|---|---|
 | **Docker + existing ComfyUI** | Run LDS in Docker while keeping the ComfyUI already installed on the host | The launcher asks for the ComfyUI folder once; local training still uses host ai-toolkit or the cloud |
 | **Docker GPU + fresh ComfyUI** | Run LDS and a new isolated ComfyUI together on an NVIDIA GPU | Existing ComfyUI/models stay untouched; local training still uses host ai-toolkit or the cloud |
-| **Rented GPU pod (RunPod)** | Reach the studio, Image Bank and ComfyUI generation from any browser, on a GPU you do not own | Training still rents a vast.ai instance; ai-toolkit is not in the image, so local training is unavailable. Large ZIP exports can hit the pod proxy's 100-second timeout. See the [RunPod guide](docs/guide/runpod.md) |
+| **Rented GPU pod (RunPod)** | Reach the studio, Image Bank and ComfyUI generation from any browser, on a GPU you do not own | Training still rents a [vast.ai](https://cloud.vast.ai/?ref_id=683073) instance; ai-toolkit is not in the image, so local training is unavailable. Large ZIP exports can hit the pod proxy's 100-second timeout. See the [RunPod guide](docs/guide/runpod.md) |
 | **Full local** | Local engines, ML helpers, ai-toolkit training, Canvas generation and Test Studio | Install/connect only the tools you need; each capability degrades independently |
 
 ## Setup & install
@@ -477,7 +494,9 @@ Which of the two serves those features is a single setting (**Settings ▸ Local
 | OpenRouter | Image models through OpenRouter | [OpenRouter keys](https://openrouter.ai/keys) |
 | Pexels | Optional official-API image search | [Pexels API key](https://www.pexels.com/api/key/) |
 | Hugging Face | Gated weights and optional publishing | [Hugging Face tokens](https://huggingface.co/settings/tokens) |
-| vast.ai | Optional cloud training | [vast.ai console](https://cloud.vast.ai/) |
+| vast.ai | Optional cloud training | [vast.ai console](https://cloud.vast.ai/?ref_id=683073) (referral link — disclosed below) |
+
+> **Affiliate disclosure.** The vast.ai links in this README, in the guides and in the app are referral links. If you create an account through one of them, vast.ai pays this project 3% of what you spend on their platform, for as long as your account lives. It costs you nothing extra — vast.ai's prices are the same either way — and it changes nothing in the app: the cloud lane was vast.ai-only before these links existed and still runs on your own API key, vast.ai bills you directly, and the app sends no data about you anywhere. If you would rather not, use the untagged link: <https://cloud.vast.ai/>
 
 Secrets saved in Settings live in the git-ignored `.env`, never in `config.json` or a commit. Full-model Krea 2 cloud runs use a separate `HF_CLOUD_TOKEN`; a narrowly scoped fine-grained token is recommended, while a global `role=write` token is accepted with a broad-access warning and read-only is rejected. Follow the [cloud-token instructions](docs/guide/settings-reference.md#cloud-training).
 

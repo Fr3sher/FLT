@@ -32,6 +32,7 @@ reason the pitfalls below can be pinned by tests at all.
 
 import json
 import os
+import subprocess
 import random
 import re
 import uuid
@@ -72,6 +73,8 @@ N_SAGE = '600'          # PathchSageAttentionKJ
 # string that looks like every other key.
 N_TURBO_LORA = '601'
 N_TURBO_SAMPLER = '603'
+N_ACCEL_LORA = '602'    # a stock-loader acceleration LoRA (Parasyte, DARE-TIES)
+N_SHIFT = '604'         # MiniMaxH3SigmaShift — the shift those LoRAs were tuned at
 N_TEST_LORA = '610'     # the LoRA under test — 606-609 are the style LoRAs upstream
 N_UPSCALE = '800'
 N_UPSCALE_PARAMS = '801'
@@ -95,7 +98,8 @@ BASE_OFFICIAL = 'minimax_h3_fl2va_pruned_int8_convrot.safetensors'
 BASE_EROS = ('10Eros_Max_h3_fl2va_beta2_pruned_int8_convrot_skip_edges'
              '.safetensors')
 
-# ⚡ The 4-step distillation LoRA (larryvrh), applied through its OWN node, not
+# ⚡ The 6-step distillation LoRA (larryvrh v4, step 600 EMA — the top row of the
+# multimodalart H3 acceleration arena at 6 steps), applied through its OWN node, not
 # a standard loader. Both halves of that sentence were paid for:
 #
 #   * the file uses H3's bare key naming (`blocks.0.attn…`) plus 102 adaln keys.
@@ -113,6 +117,54 @@ TURBO_LORA = 'minimax_h3_turbo_v4_step600_ema.safetensors'
 # MINIMUM; 4-8 is the useful range. 6-8 steps look noticeably better than 4" —
 # and at 4 steps with fast motion this checkpoint trails ghosting.
 TURBO_STEPS = 6
+
+# ⚡ The accelerations the Render panel offers: the top three rows of the
+# multimodalart MiniMax-H3 acceleration arena (human preference Elo, ~7 400
+# votes per task, 95 % intervals about ±26 — so the three are statistical
+# ties), every one of them at 6 steps and about 4× the 28-step reference.
+# `turbo` is larryvrh's LoRA through its OWN nodes (a LoRA node and the
+# double-clock sampler, see _graft_turbo). The other two are ordinary LoRAs
+# for the stock loader, run on the stock euler sampler at the sigma shift
+# their cards and the arena ran them at (video 8, audio 3; the base's own
+# grid is 12/3). Strengths are the arena's verified settings, not 1.0: the
+# Parasyte file's alpha convention wants 4-5, the merge's card says 0.6-0.8.
+PARASYTE_LORA = 'H3-PK-Parasyte-Turbo.safetensors'
+DARETIES_LORA = 'minimax_h3_fl2v_lightx2v_v0.1_dareties_v4_step600_comfy_fro.safetensors'
+ACCELERATIONS = (
+    {'id': 'turbo', 'label': 'larryvrh Turbo v4', 'file': TURBO_LORA, 'steps': TURBO_STEPS,
+     'arena': '#1 · I2V 1103 / T2V 1110', 'author': 'larryvrh', 'license': 'apache-2.0',
+     'action': 'h3_turbo_lora', 'pack': 'turbo', 'strength': 1.0, 'shift': None,
+     'hint': 'A distillation LoRA with its own sampler — a different model, not a faster one.'},
+    {'id': 'parasyte', 'label': 'Parasyte Turbo', 'file': PARASYTE_LORA, 'steps': TURBO_STEPS,
+     'arena': '#2 · I2V 1106 / T2V 1094', 'author': 'Plaguekind', 'license': 'MIT',
+     'action': 'h3_parasyte_lora', 'pack': None, 'strength': 4.0, 'shift': (8.0, 3.0),
+     'hint': "Plaguekind's LoRA on the stock sampler: strength 4, shift 8/3, euler. MIT."},
+    {'id': 'dareties', 'label': 'DARE-TIES merge', 'file': DARETIES_LORA, 'steps': TURBO_STEPS,
+     'arena': '#3 · I2V 1107 / T2V 1085', 'author': 'silveroxides', 'license': 'not stated',
+     'action': 'h3_dareties_lora', 'pack': None, 'strength': 0.8, 'shift': (8.0, 3.0),
+     'hint': 'LightX2V v0.1 and larryvrh v4 merged (DARE-TIES): strength 0.8, shift 8/3, euler. '
+             'Its author states no license.'},
+)
+ACCEL_IDS = tuple(a['id'] for a in ACCELERATIONS)
+
+
+def accel_spec(accel) -> dict:
+    for a in ACCELERATIONS:
+        if a['id'] == accel:
+            return a
+    raise ValueError(f'unknown acceleration: {accel!r}')
+
+
+def normalise_accel(accel, turbo=False) -> str:
+    """The acceleration in force: the one named, `turbo` for a caller that still
+    speaks the boolean, '' for the dense base. Anything else is refused — a
+    string that reaches a loader must be one this module wrote."""
+    key = str(accel or '').strip().lower()
+    if key in ACCEL_IDS:
+        return key
+    if key in ('', 'none', 'off', 'false', '0'):
+        return 'turbo' if turbo else ''
+    raise ValueError(f'unknown acceleration: {accel!r}')
 
 # Without turbo the base is not distilled and needs a real schedule.
 DEFAULT_STEPS = 20
@@ -259,10 +311,13 @@ def normalise_sparse(mode) -> str:
 def build_workflow(*, prompt, mode='i2v', image=None, seed=None, steps=None,
                    frames=None, megapixels=MP_DEFAULT, aspect='auto',
                    fps=None, lora=None, lora_strength=1.0, turbo=False,
-                   eros=False, eros_on_disk=False, sparse='',
+                   accel=None, eros=False, eros_on_disk=False, sparse='',
                    latent_upscale=False, source_ratio=None, sage=True,
                    filename_prefix='lds_video_test') -> dict:
     """One MiniMax H3 clip, as a ComfyUI graph.
+
+    `accel` names one of ACCELERATIONS ('' or None for the dense base); `turbo`
+    is the older boolean and means `accel='turbo'` when `accel` is not given.
 
     `eros_on_disk` is passed IN rather than probed here so the whole option
     matrix stays testable without a 21 GB file — and so the fail-open path (ask
@@ -330,14 +385,25 @@ def build_workflow(*, prompt, mode='i2v', image=None, seed=None, steps=None,
             # answer than a clip on the official base plus a line saying so.
             notes.append('base: 10Eros requested but absent — official base used')
 
-    if turbo:
+    accel = normalise_accel(accel, turbo)
+    if accel == 'turbo':
         _graft_turbo(wf)
-        notes.append(f'turbo: 4-step distillation, steps={wf[N_SCHEDULER]["inputs"]["steps"]}')
+    elif accel:
+        _graft_stock_accel(wf, accel_spec(accel))
     if steps is not None:
         # An explicit step count always wins, including over the turbo default:
         # the panel showing 6 while the graph runs 4 is the exact failure this
         # pipeline already paid for once.
         wf[N_SCHEDULER]['inputs']['steps'] = max(4, min(40, int(steps)))
+    # The note reads the count AFTER the override: a log that said "steps=6"
+    # while the graph ran the user's 4 was seen on the first real launch.
+    if accel == 'turbo':
+        notes.append(f'turbo: larryvrh distillation, steps={wf[N_SCHEDULER]["inputs"]["steps"]}')
+    elif accel:
+        spec = accel_spec(accel)
+        notes.append(f"accel: {spec['label']} @ {spec['strength']:g}, shift "
+                     f"{spec['shift'][0]:g}/{spec['shift'][1]:g}, euler, "
+                     f"steps={wf[N_SCHEDULER]['inputs']['steps']}")
 
     if lora:
         # The applied force comes BACK from the graft rather than being
@@ -358,7 +424,8 @@ def build_workflow(*, prompt, mode='i2v', image=None, seed=None, steps=None,
     return {'workflow': wf, 'seed': int(seed), 'frames': frames,
             'megapixels': megapixels, 'notes': notes,
             'base': wf[N_UNET]['inputs']['unet_name'],
-            'steps': wf[N_SCHEDULER]['inputs']['steps']}
+            'steps': wf[N_SCHEDULER]['inputs']['steps'],
+            'accel': accel}
 
 
 def _model_readers(wf, ref, *, skip=()):
@@ -450,6 +517,31 @@ def _graft_turbo(wf):
     wf[N_SCHEDULER]['inputs']['steps'] = TURBO_STEPS
 
 
+def _graft_stock_accel(wf, spec):
+    """⚡ An acceleration LoRA through the STOCK loader, and the sigma shift it
+    was tuned at, on the stock euler sampler.
+
+    Both nodes go INTO the chain (the loader, then the shift) so the guider
+    path and the scheduler read the same patched model — the rule every graft
+    here follows, for the reason _insert_into_chain states. The shift is a
+    core ComfyUI node (comfy_extras.nodes_minimax_h3): no pack to install.
+    """
+    _insert_into_chain(wf, N_ACCEL_LORA, {
+        'class_type': 'LoraLoaderModelOnly',
+        'inputs': {'model': [N_UNET, 0], 'lora_name': spec['file'],
+                   'strength_model': float(spec['strength'])},
+    }, [N_UNET, 0])
+    video, audio = spec['shift']
+    _insert_into_chain(wf, N_SHIFT, {
+        'class_type': 'MiniMaxH3SigmaShift',
+        'inputs': {'model': [N_ACCEL_LORA, 0], 'shift_video': float(video),
+                   'shift_audio': float(audio)},
+    }, [N_ACCEL_LORA, 0])
+    wf[N_SAMPLER_SELECT]['inputs']['sampler_name'] = 'euler'
+    wf[N_SCHEDULER]['inputs']['scheduler'] = 'simple'
+    wf[N_SCHEDULER]['inputs']['steps'] = int(spec['steps'])
+
+
 def _graft_test_lora(wf, lora_name, strength):
     """The LoRA under test, chained onto the head of the model chain.
 
@@ -466,7 +558,12 @@ def _graft_test_lora(wf, lora_name, strength):
 
     Returns the strength that was actually applied, after coercion and clamping.
     """
-    head = [N_TURBO_LORA, 0] if N_TURBO_LORA in wf else [N_UNET, 0]
+    if N_TURBO_LORA in wf:
+        head = [N_TURBO_LORA, 0]
+    elif N_ACCEL_LORA in wf:
+        head = [N_ACCEL_LORA, 0]
+    else:
+        head = [N_UNET, 0]
     try:
         force = float(strength)
     except (TypeError, ValueError):
@@ -890,8 +987,8 @@ def clips_dir(create=True):
 def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, lora=None,
                  lora_strength=1.0, run_id=None, dataset_id=None, seed=None,
                  steps=None, frames=None, megapixels=MP_DEFAULT, aspect='auto',
-                 turbo=False, eros=False, sparse='', latent_upscale=False,
-                 source_ratio=None, skip_preflight=False) -> dict:
+                 turbo=False, accel=None, eros=False, sparse='', latent_upscale=False,
+                 source_ratio=None, skip_preflight=False, continues=None) -> dict:
     """Build the graph, record the clip, queue the job — in that order.
 
     The row is written BEFORE the queue insert and in the SAME transaction, so a
@@ -903,16 +1000,30 @@ def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, lora=None,
     from ..job_queue import queue_manager
     from ..models import VideoTestClip
 
+    # Keep the T2V canvas choice with the clip so Reuse cannot inherit a later
+    # render's format. I2V follows its source image instead of a canvas preset.
+    mode = 't2v' if str(mode or 'i2v').lower() == 't2v' else 'i2v'
+    aspect = str(aspect or 'auto').strip().lower()
+    if mode == 'i2v' or aspect not in ('auto', 'portrait', 'landscape', 'square'):
+        aspect = 'auto'
+
     # ONE /object_info read for the whole launch, and it decides two things:
     # whether SageAttention goes into the graph at all, and (through the
     # preflight below) whether an armed option's nodes are there. Reading it
     # twice would let a ComfyUI that restarts between the two answer differently
     # for the same clip.
+    # ⏭ A continuation: the clip this one will be joined behind. Checked
+    # before anything is queued — a parent that is not done has no last frame.
+    parent = None
+    if continues:
+        parent = VideoTestClip.query.filter_by(id=int(continues)).first()
+        if parent is None or parent.status != 'done' or not parent.filename:
+            raise ValueError('the clip to continue has not finished rendering')
     classes = registered_classes()
     built = build_workflow(
         prompt=prompt, mode=mode, image=image, seed=seed, steps=steps,
         frames=frames, megapixels=megapixels, aspect=aspect, lora=lora,
-        lora_strength=lora_strength, turbo=turbo, eros=eros,
+        lora_strength=lora_strength, turbo=turbo, accel=accel, eros=eros,
         eros_on_disk=eros_on_disk() if eros else False, sparse=sparse,
         latent_upscale=latent_upscale, source_ratio=source_ratio,
         sage=sage_available(classes), filename_prefix=new_prefix(user_id))
@@ -922,13 +1033,14 @@ def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, lora=None,
     job_id = str(uuid.uuid4())
     clip = VideoTestClip(
         run_id=run_id, dataset_id=dataset_id, job_id=job_id, status='pending',
-        prompt=prompt, mode=('t2v' if str(mode).lower() == 't2v' else 'i2v'),
+        prompt=prompt, mode=mode, aspect=aspect,
         source_image=image, seed=built['seed'], steps=built['steps'],
         frames=built['frames'], megapixels=built['megapixels'],
         fps=float(_profile().get('fps') or 24.0), base_model=built['base'],
         lora=lora, lora_strength=float(lora_strength) if lora else None,
-        turbo=bool(turbo), sparse=normalise_sparse(sparse),
-        latent_upscale=bool(latent_upscale))
+        turbo=(built['accel'] == 'turbo'), accel=(built['accel'] or None),
+        sparse=normalise_sparse(sparse), latent_upscale=bool(latent_upscale),
+        continues_of=(parent.id if parent else None))
     db.session.add(clip)
     db.session.flush()          # mint the id inside the same transaction
     queue_manager.add_job(job_type='image', user_id=str(user_id),
@@ -1046,6 +1158,7 @@ def interpolate_clip(user_id, clip_id, multiplier=VFI_MULTIPLIER) -> dict:
     clip = VideoTestClip(
         run_id=src.run_id, dataset_id=src.dataset_id, job_id=job_id,
         status='pending', prompt=src.prompt, mode=src.mode,
+        aspect=src.aspect or 'auto', accel=src.accel,
         source_image=src.source_image, seed=src.seed, steps=src.steps,
         # The frame COUNT grows with the rate, so the clip lasts exactly as
         # long — RIFE inserts between frames, it does not slow anything down.
@@ -1107,7 +1220,240 @@ def link_completed_clip(job_id, filename, failed=False, reason=None):
     clip.filename = filename
     clip.status = 'done'
     _bring_clip_home(filename)
+    continues = getattr(clip, 'continues_of', None)
+    clip_id = clip.id
+    # Committed BEFORE any join: from here the row is a valid render (the
+    # part), and the encode below runs with no write transaction open. It ran
+    # inside this one once — measured: every other writer got "database is
+    # locked" for the length of ffmpeg (up to its 600 s timeout).
     db.session.commit()
+    if continues:
+        # ⏭ The part becomes the whole: parent, then this render.
+        _join_continuation(clip_id)
+
+
+# ── ⏭ Continue: the last frame as the next start frame, the clips joined ──
+
+def _run_ffmpeg(cmd, timeout=600):
+    """The app's subprocess convention for ffmpeg (video_bank_service has the
+    same): no console window in the frozen Windows build, utf-8 stderr with
+    replacement, and a timeout."""
+    return subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                          errors='replace', timeout=timeout,
+                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+
+
+def last_frame_command(ffmpeg, src, dst):
+    """The last frame of `src` as a PNG: seek into the last second and take the
+    first frame of the REVERSED tail — the true last frame whatever the exact
+    duration, where `-sseof` alone can land past it and write nothing."""
+    return [ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-sseof', '-1', '-i', src,
+            '-vf', 'reverse', '-frames:v', '1', '-update', '1', dst]
+
+
+def last_frame_png(clip_id) -> str:
+    """The clip's last frame as a PNG next to its mp4 (`clip_<id>_last.png`),
+    extracted once and kept; the picture the next clip starts from."""
+    from ..models import VideoTestClip
+    from . import ffmpeg_tools
+    clip = VideoTestClip.query.filter_by(id=int(clip_id)).first()
+    if clip is None:
+        raise LookupError('clip not found')
+    if clip.status != 'done' or not clip.filename:
+        raise ValueError('that clip has not finished rendering yet')
+    root = str(clips_dir())
+    src = os.path.join(root, os.path.basename(clip.filename))
+    if not os.path.isfile(src):
+        raise ValueError('that clip is no longer on disk')
+    dst = os.path.join(root, f'clip_{int(clip_id)}_last.png')
+    if os.path.isfile(dst) and os.path.getmtime(dst) >= os.path.getmtime(src):
+        return dst
+    ffmpeg = ffmpeg_tools.ffmpeg_path()
+    if not ffmpeg:
+        raise ValueError('ffmpeg is needed to read the last frame — install the video extra from Setup')
+    # Concurrent previews and continuations must never see a partial PNG. Keep
+    # the previous complete image until ffmpeg succeeds, then publish in place.
+    tmp = os.path.join(root, f'.clip_{int(clip_id)}_last.{uuid.uuid4().hex[:8]}.png')
+    try:
+        r = _run_ffmpeg(last_frame_command(ffmpeg, src, tmp), timeout=120)
+        if r.returncode != 0 or not os.path.isfile(tmp):
+            raise ValueError(f'the last frame could not be read: {(r.stderr or "")[-300:]}')
+        os.replace(tmp, dst)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return dst
+
+
+def _probe_media(ffmpeg, path) -> dict:
+    """What ffmpeg sees in a file, read off its own `-i` banner: whether it
+    has a sound track, and how long it plays. The join needs both — a smoothed
+    clip has no sound (its VHS_VideoCombine is given pictures only), and a
+    silent side joined to a sounding one must be padded with silence of ITS
+    length, not muted along with the other side (found in verification,
+    2026-09-03: the blind `-an` fallback threw the new part's sound away)."""
+    r = _run_ffmpeg([ffmpeg, '-hide_banner', '-i', path], timeout=60)
+    text = (r.stderr or '') + (getattr(r, 'stdout', '') or '')
+    audio = re.search(r'Stream #\d+:\d+.*?: Audio', text) is not None
+    m = re.search(r'Duration: (\d+):(\d+):(\d+(?:\.\d+)?)', text)
+    duration = None
+    if m:
+        duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    return {'audio': audio, 'duration': duration}
+
+
+def continuation_command(ffmpeg, parent, part, dst, width, height, fps, *, part_fps=None,
+                         parent_audio=True, part_audio=True, parent_seconds=None,
+                         part_seconds=None):
+    """Parent, then the new part: one video, at the parent's cadence.
+
+    The part's FIRST frame is dropped — it is the parent's last frame, the
+    picture the part was conditioned on, and kept it freezes the join for one
+    frame — and its audio is trimmed by the same 1/fps (the PART's fps: a
+    smoothed parent plays at 48 while its part rendered at 24) so the two stay
+    in step. Both sides are forced to one constant cadence (`fps=`): concat
+    accepts mixed rates and writes a variable-rate file whose stated fps then
+    lies to Smooth and to the card. The part is scaled to the parent's size in
+    case the dials changed between the two.
+
+    Sound: each side that has a track keeps it (resampled to one format, or
+    concat refuses the pair); a side without one is padded with silence of
+    its own length, so the other side's sound survives. Neither side sounding
+    → no track. Metadata is dropped: a studio clip carries its whole
+    generation graph in a tag, and the join is not that graph."""
+    fps = float(fps or 24)
+    part_fps = float(part_fps or fps)
+    trim = 1.0 / part_fps
+    rate = f'{fps:g}'
+    graph = (f'[1:v]trim=start_frame=1,setpts=PTS-STARTPTS,'
+             f'scale={int(width)}:{int(height)}:flags=lanczos,setsar=1,fps={rate}[v1];'
+             f'[0:v]setsar=1,fps={rate}[v0];[v0][v1]concat=n=2:v=1:a=0[v]')
+    cmd = [ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-i', parent, '-i', part]
+    fmt = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo'
+    if parent_audio or part_audio:
+        if parent_audio:
+            a0 = f'[0:a]{fmt}[a0]'
+        else:
+            if parent_seconds is None:
+                raise ValueError('a silent parent needs its length to be padded with silence')
+            a0 = f'anullsrc=r=48000:cl=stereo:d={max(float(parent_seconds), 0.01):.3f}[a0]'
+        if part_audio:
+            a1 = f'[1:a]atrim=start={trim:.6f},asetpts=PTS-STARTPTS,{fmt}[a1]'
+        else:
+            if part_seconds is None:
+                raise ValueError('a silent part needs its length to be padded with silence')
+            a1 = f'anullsrc=r=48000:cl=stereo:d={max(float(part_seconds) - trim, 0.01):.3f}[a1]'
+        graph += f';{a0};{a1};[a0][a1]concat=n=2:v=0:a=1[a]'
+        cmd += ['-filter_complex', graph, '-map', '[v]', '-map', '[a]', '-c:a', 'aac', '-b:a', '128k']
+    else:
+        cmd += ['-filter_complex', graph, '-map', '[v]', '-an']
+    cmd += ['-c:v', 'libx264', '-crf', '19', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart', '-map_metadata', '-1', dst]
+    return cmd
+
+
+def _join_continuation(clip_id) -> bool:
+    """⏭ The finished part joined behind the clip it continues, as THIS clip's
+    file: what the card plays is the whole, the parent followed by the new
+    motion. The parent stays as it is; the part is not kept apart.
+
+    Called AFTER the completion is committed, and committing on its own: the
+    row is already 'done' with the part as its file — a valid render — while
+    ffmpeg runs, so no write lock is held for the length of an encode (the
+    Bank's passes keep the same rule, `_release_db_before_inference`). A join
+    that fails, or raises, leaves the part as the clip and says so in
+    `error`, which the card shows under its lineage line."""
+    from ..extensions import db
+    from ..models import VideoTestClip
+    from . import ffmpeg_tools
+
+    def _fail(msg):
+        row = VideoTestClip.query.filter_by(id=int(clip_id)).first()
+        if row is not None:
+            row.error = f'continuation not joined: {msg}'[:300]
+            db.session.commit()
+        return False
+
+    # 1. What the join needs, read in one short transaction.
+    clip = VideoTestClip.query.filter_by(id=int(clip_id)).first()
+    if clip is None or not clip.continues_of or not clip.filename:
+        return False
+    parent = VideoTestClip.query.filter_by(id=int(clip.continues_of)).first()
+    root = str(clips_dir())
+    part = os.path.join(root, os.path.basename(clip.filename))
+    if parent is None or not parent.filename:
+        return _fail('the clip it continues is gone')
+    src = os.path.join(root, os.path.basename(parent.filename))
+    if not os.path.isfile(src) or not os.path.isfile(part):
+        return _fail('a file is missing')
+    ffmpeg = ffmpeg_tools.ffmpeg_path()
+    if not ffmpeg:
+        return _fail('ffmpeg is not available')
+    parent_id, parent_frames, part_frames = parent.id, parent.frames, clip.frames
+    fps = float(parent.fps or clip.fps or 24)
+    part_fps = float(clip.fps or fps)
+    try:
+        from PIL import Image
+        with Image.open(last_frame_png(parent_id)) as im:
+            width, height = im.size
+    except Exception as exc:  # noqa: BLE001 — no size, no scaling target
+        return _fail(str(exc))
+    db.session.commit()   # nothing dirty — this only ends the read before the encode
+
+    # 2. The encode, with no transaction open.
+    stem, _ = os.path.splitext(os.path.basename(part))
+    out_name = f'{stem}_joined.mp4'
+    dst = os.path.join(root, out_name)
+    try:
+        p_src, p_part = _probe_media(ffmpeg, src), _probe_media(ffmpeg, part)
+        parent_audio, part_audio = p_src['audio'], p_part['audio']
+        # A silent side is padded with silence of its own length; when that
+        # length cannot be read the pair goes without sound rather than out of step.
+        if ((not parent_audio and part_audio and p_src['duration'] is None)
+                or (parent_audio and not part_audio and p_part['duration'] is None)):
+            parent_audio = part_audio = False
+        r = _run_ffmpeg(continuation_command(
+            ffmpeg, src, part, dst, width, height, fps, part_fps=part_fps,
+            parent_audio=parent_audio, part_audio=part_audio,
+            parent_seconds=p_src['duration'], part_seconds=p_part['duration']))
+        if r.returncode != 0 or not os.path.isfile(dst):
+            raise RuntimeError((r.stderr or '')[-300:] or 'ffmpeg wrote nothing')
+    except Exception as exc:  # noqa: BLE001 — a timeout, a vanished binary, a refused graph: the part stays
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+        # A timeout's own text is the whole command line — the two paths alone
+        # outrun the 300 characters the card can show; say the one fact.
+        msg = (f'ffmpeg timed out after {exc.timeout:.0f} s'
+               if isinstance(exc, subprocess.TimeoutExpired) else str(exc))
+        logger.warning('video studio: clip %s could not be joined behind clip %s: %s',
+                       clip_id, parent_id, msg)
+        return _fail(msg)
+
+    # 3. Name the joint on the row and commit — then, and only then, let the part go.
+    row = VideoTestClip.query.filter_by(id=int(clip_id)).first()
+    if row is None:
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+        return False
+    row.filename = out_name
+    if parent_frames and part_frames:
+        # The part's frames, minus the dropped one, at the parent's cadence.
+        row.frames = int(parent_frames) + int(round((int(part_frames) - 1) * fps / part_fps))
+    row.fps = fps
+    row.error = None
+    db.session.commit()
+    try:
+        os.remove(part)
+    except OSError:
+        pass
+    logger.info('video studio: clip %s joined behind clip %s -> %s', clip_id, parent_id, out_name)
+    return True
 
 
 def _render_seconds(job_id):
@@ -1199,6 +1545,9 @@ REQUIRED_WEIGHTS = (
 # that checkbox rather than the lane.
 OPTIONAL_WEIGHTS = (
     ('h3_turbo_lora', ('loras',), TURBO_LORA, 'turbo'),
+    # ⚡ The other two accelerations of the Render panel (arena rows 2 and 3).
+    ('h3_parasyte_lora', ('loras',), PARASYTE_LORA, 'parasyte'),
+    ('h3_dareties_lora', ('loras',), DARETIES_LORA, 'dareties'),
     # ⚠️ No setup action for this one, on purpose — see UNFETCHABLE below.
     (None, ('latent_upscale_models',), UPSCALE_MODEL, 'latent_upscale'),
     # Nor for the third-party base: it is somebody else's finetune, it is
@@ -1355,6 +1704,28 @@ def option_availability(classes=None) -> dict:
             continue
         gone = [c for c in spec['classes'] if c not in classes]
         out[option] = {**row, 'available': not gone, 'nodes': gone}
+    return out
+
+
+def accelerations_status(classes=None) -> list:
+    """The Render panel's acceleration choices, resolved against THIS machine:
+    the weight on disk and, for larryvrh's, its node pack too. `available` is
+    what the panel can offer; `action` is the Setup button that fetches the
+    weight; `pack` travels for the one choice that needs code installed."""
+    packs = option_availability(classes)
+    out = []
+    for a in ACCELERATIONS:
+        weight = _weight_present(('loras',), a['file'])
+        pack = packs.get(a['pack']) if a['pack'] else None
+        pack_ok = None if pack is None else pack['available']
+        out.append({
+            'id': a['id'], 'label': a['label'], 'arena': a['arena'], 'steps': a['steps'],
+            'author': a['author'], 'license': a['license'], 'file': a['file'],
+            'action': a['action'], 'hint': a['hint'], 'weight_present': bool(weight),
+            'pack': pack,
+            # A probe that could not run is not a no — same rule as the packs.
+            'available': bool(weight) and pack_ok is not False,
+        })
     return out
 
 

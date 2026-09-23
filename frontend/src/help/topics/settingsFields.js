@@ -628,7 +628,7 @@ export const SETTINGS_FIELD_TOPICS = [
     'Loss weight kept on faces',
     ['face mask', 'weight', 'loss', 'min weight', 'concept', 'mask faces', 'zero',
      'strength', 'how hard']),
-  // Memory saving (quantisation + low-VRAM streaming) is a per-run Advanced
+  // Memory saving (quantisation + low-VRAM loading) is a per-run Advanced
   // training option like Dual captions, so it points at the settings-reference
   // section that documents the Advanced panel rather than a global Settings card.
   { id: 'training.memory_saving', kind: 'setting', title: 'Memory saving (quantisation, low VRAM)',
@@ -642,7 +642,17 @@ export const SETTINGS_FIELD_TOPICS = [
     guide: { chapter: 'settings-reference', anchor: 'training' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'memory-saving-advanced',
-      text: 'New: if your card is bigger than 24 GB you can switch quantisation and low-VRAM streaming off (Advanced options → Memory saving) for a faster, more precise run.' } },
+      text: 'New: if your card is bigger than 24 GB you can switch quantisation and low-VRAM loading off (Advanced options → Memory saving) for a faster, more precise run.' } },
+  { id: 'training.speed', kind: 'setting', title: 'Speed (batch size, quantisation backend, checkpointing, compile)',
+    keywords: ['speed', 'faster', 'slow', 'slower', 's/it', 'seconds per step', 'step time',
+      'batch', 'batch size', 'gradient checkpointing', 'checkpointing', 'compile',
+      'torch.compile', 'quantisation backend', 'qtype', 'convrot8', 'int8', 'w8a8',
+      'qfloat8', 'fp8', 'throughput', 'hours', 'eta', 'onetrainer', 'comparison',
+      'advanced', 'training'],
+    guide: { chapter: 'settings-reference', anchor: 'training' },
+    app: { route: '/datasets?section=training' },
+    tip: { trigger: 'training-speed-advanced',
+      text: 'New: Advanced options → Speed. Batch size, the quantisation backend, gradient checkpointing and compile were fixed at the values that fit 24 GB — on a bigger card you can trade that memory back for time.' } },
   // server
   setting('server.port', 'server', 'server-port', 'Server port',
     ['server', 'port', 'bind', 'network', '5051']),

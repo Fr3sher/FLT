@@ -65,7 +65,7 @@ const routeValid = (route) => {
   // the image lane silently, which is exactly the class of dead link this test
   // exists to catch.
   if (path === '/studio') {
-    return ['image', 'video'].includes(new URLSearchParams(qs).get('lane'))
+    return ['image', 'video', 'live'].includes(new URLSearchParams(qs).get('lane'))
   }
   if (path !== '/datasets') return false
   const params = new URLSearchParams(qs)
@@ -165,7 +165,7 @@ test('(5) each Settings section and Workspace section has its topic', () => {
 
 test('(6) tips have unique triggers and non-empty text', () => {
   const tips = helpTips()
-  assert.equal(tips.length, 19, 'expected exactly 19 one-time tips')
+  assert.equal(tips.length, 20, 'expected exactly 20 one-time tips')
   const triggers = new Set()
   for (const tip of tips) {
     assert.ok(tip.trigger, 'tip missing trigger')

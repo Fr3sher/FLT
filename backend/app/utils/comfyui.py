@@ -31,6 +31,7 @@ import os
 import re
 import socket
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -769,6 +770,82 @@ def cancel_comfyui_prompt(prompt_id, client_id=None, worker_url=None) -> bool:
             is ComfyPromptState.DELETED)
 
 
+def _running_entries(worker_url=None):
+    """ComfyUI's `queue_running` list, or None when it cannot be asked."""
+    api_addr = worker_url or api_address()
+    # A read timeout tolerant of a starved HTTP loop: under a paging GPU the
+    # repo measured 3-second /queue timeouts two in a row while the render
+    # was alive (ComfyQueueVerdict). Asking to stop that render is the one
+    # read that must survive it.
+    response = requests.get(urljoin(api_addr, '/queue'), timeout=(3, 10), allow_redirects=False)
+    status = getattr(response, 'status_code', None)
+    if type(status) is not int or not 200 <= status < 300:
+        return None
+    queue = response.json()
+    running = queue.get('queue_running') if isinstance(queue, dict) else None
+    return list(running) if isinstance(running, (list, tuple)) else None
+
+
+def running_prompt_identity(worker_url=None):
+    """(prompt_id, client_id) of the prompt ComfyUI is running — the head of
+    `queue_running`, the one entry a single prompt worker executes and the
+    one `interrupt_own_prompt` reads — (None, None) when it is idle, None
+    when it could not be asked."""
+    try:
+        running = _running_entries(worker_url)
+        if running is None:
+            return None
+        if not running:
+            return (None, None)
+        prompt_id, client_id = _queue_entry_identity(running[0])
+        return (str(prompt_id) if prompt_id else None, str(client_id) if client_id else None)
+    except (requests.RequestException, ValueError, TypeError, AttributeError):
+        return None
+
+
+def interrupt_own_prompt(prompt_id, client_id, worker_url=None) -> str:
+    """Ask ComfyUI to stop the prompt it is RUNNING — only when that prompt is
+    LDS's exact one (prompt id AND client id). `/interrupt` is global: it
+    stops whatever runs, so it is never sent while another client's prompt
+    is on the card. Until 2026-09-06 a running prompt was never interrupted
+    at all: a cancelled render that paged kept the card for an hour under a
+    sentence saying it could not be stopped from LDS.
+
+    Returns 'interrupted', 'not_running' (nothing runs, or ours is not the
+    running one), 'foreign' (another client's prompt runs) or 'unknown'."""
+    if not prompt_id or not client_id:
+        return 'unknown'
+    api_addr = worker_url or api_address()
+    try:
+        running = _running_entries(worker_url)
+        if running is None:
+            return 'unknown'
+        if not running:
+            return 'not_running'
+        # The head of `queue_running` is what /interrupt would stop: one
+        # prompt worker, one executing prompt (ComfyUI main.py). The buttons
+        # read the same entry (`running_prompt_identity`), so what they
+        # refuse and what a cancel interrupts never diverge.
+        head_prompt, head_client = _queue_entry_identity(running[0])
+        if str(head_prompt or '') != str(prompt_id) or str(head_client or '') != str(client_id):
+            return 'foreign'
+        # The targeted form. ComfyUI accepts {"prompt_id"} since 2025-09-02
+        # and then interrupts ONLY when that id is the one executing —
+        # measured in refutation: a non-current id triggers nothing, so the
+        # window between this GET and the POST cannot hit a successor. An
+        # older build ignores the body and stops what runs, which the GET
+        # just verified is ours.
+        response = requests.post(urljoin(api_addr, '/interrupt'), json={'prompt_id': str(prompt_id)},
+                                 timeout=(3, 10), allow_redirects=False)
+        status = getattr(response, 'status_code', None)
+        return 'interrupted' if type(status) is int and 200 <= status < 300 else 'unknown'
+    except requests.RequestException as exc:
+        logger.warning('Could not interrupt ComfyUI prompt %s: %s', prompt_id, exc)
+    except Exception as exc:  # noqa: BLE001 — a malformed queue answer
+        logger.warning('Unexpected error interrupting ComfyUI prompt %s: %s', prompt_id, exc)
+    return 'unknown'
+
+
 def fetch_output_image_bytes(filename, subfolder='', timeout=30):
     """Fetch a finished image's bytes from the LOCAL ComfyUI over its HTTP API
     (`GET /view`), rather than reading the file off disk.
@@ -853,6 +930,15 @@ _OBJECT_INFO_TIMEOUT_MAX = 300
 # consumer still fails OPEN, so this can only ever make the app decide FASTER,
 # never differently, and `clear_model_caches()` drops it on demand.
 _OBJECT_INFO_FAIL_TTL = 20
+# Past the TTL the cached set is STALE, not wrong: it is served at once and
+# refreshed in the background, so a launch never waits the read out (6.7 MB,
+# 2.2 s measured — paid by every Generate that came more than a minute after
+# the previous one). Past _OBJECT_INFO_STALE_MAX the read blocks again: a set
+# that old may predate a ComfyUI restart, and the refresh button still drops
+# the cache outright (`clear_model_caches`) for the fresh-deploy case.
+_OBJECT_INFO_STALE_MAX = 600
+_object_info_refresh_lock = threading.Lock()
+_object_info_refreshing = False
 # Outcome of the last real ATTEMPT (a cache hit is not an attempt and never
 # rewrites it). Doubles as the negative cache: `status != 'ok'` within
 # _OBJECT_INFO_FAIL_TTL of `timestamp`, for the same api address, is served
@@ -1056,9 +1142,14 @@ def _fetch_object_info(timeout=None, force=False):
     (see `confirm_unavailable_model_files`). Nothing on a hot path may pass it."""
     addr = api_address()
     now = time.time()
-    if (not force and _object_info_cache["data"] is not None
-            and _object_info_cache["key"] == addr
-            and now - _object_info_cache["timestamp"] < _OBJECT_INFO_TTL):
+    cached_here = (not force and _object_info_cache["data"] is not None
+                   and _object_info_cache["key"] == addr)
+    if cached_here and now - _object_info_cache["timestamp"] < _OBJECT_INFO_TTL:
+        return (_object_info_cache["data"], _object_info_cache["enums"],
+                _object_info_cache["files"])
+    if cached_here and now - _object_info_cache["timestamp"] < _OBJECT_INFO_STALE_MAX:
+        # Stale-while-revalidate: answer with what we have, refresh behind.
+        _refresh_object_info_in_background()
         return (_object_info_cache["data"], _object_info_cache["enums"],
                 _object_info_cache["files"])
     if (not force and _object_info_last["status"] not in ('ok', 'unknown')
@@ -1095,6 +1186,26 @@ def _fetch_object_info(timeout=None, force=False):
                               files=files)
     _object_info_last.update(timestamp=now, key=addr, status='ok', waited=read_budget)
     return classes, enums, files
+
+
+def _refresh_object_info_in_background():
+    """One refresh at a time; the caller already has a stale answer to use."""
+    global _object_info_refreshing
+    with _object_info_refresh_lock:
+        if _object_info_refreshing:
+            return
+        _object_info_refreshing = True
+
+    def _run():
+        global _object_info_refreshing
+        try:
+            _fetch_object_info(force=True)
+        except Exception:  # noqa: BLE001 — the stale set stays; the next call retries
+            logger.debug('object_info background refresh failed', exc_info=True)
+        finally:
+            with _object_info_refresh_lock:
+                _object_info_refreshing = False
+    threading.Thread(target=_run, name='object-info-refresh', daemon=True).start()
 
 
 def fetch_object_info_classes(timeout=None):

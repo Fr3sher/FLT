@@ -11,8 +11,9 @@ harmless huggingface_hub `FutureWarning`. Hours lost on a deprecation notice.
 from unittest.mock import patch
 
 from app.services.training_diagnostics import (
-    CU128_INDEX_URL, MAX_EXCERPT_LINES, extract_error_excerpt, gated_repo_verdict,
-    torch_arch_verdict,
+    CU128_INDEX_URL, CU130_INDEX_URL, MAX_EXCERPT_LINES, extract_error_excerpt, fix_line,
+    gated_repo_verdict, torch_arch_verdict, torch_cuda_verdict, torch_index_url,
+    torch_reinstall_command,
 )
 
 # The actual log the user was shown, trimmed. Nothing in it is an error.
@@ -125,21 +126,192 @@ def test_the_cap_is_a_real_cap_even_at_absurdly_small_budgets():
 # --- torch_arch_verdict ---------------------------------------------------
 # Simulated probe payloads: the verdict must never need a real card.
 
-BLACKWELL = {'torch': '2.7.1+cu126', 'cuda': '12.6', 'capability': [12, 0],
+BLACKWELL = {'torch': '2.7.1+cu126', 'cuda': '12.6', 'cuda_available': True,
+             'cuda_reason': '', 'capability': [12, 0],
              'device_name': 'NVIDIA GeForce RTX 5070',
-             'arch_list': ['sm_50', 'sm_80', 'sm_86', 'sm_90', 'compute_90']}
-ADA = {'torch': '2.7.1+cu126', 'cuda': '12.6', 'capability': [8, 9],
-       'device_name': 'NVIDIA GeForce RTX 4090',
-       'arch_list': ['sm_50', 'sm_80', 'sm_86', 'sm_90']}
+             'arch_list': ['sm_50', 'sm_80', 'sm_86', 'sm_90', 'compute_90'],
+             'torchvision': '0.22.1+cu126', 'accelerator_device': 'cuda'}
+ADA = {'torch': '2.7.1+cu126', 'cuda': '12.6', 'cuda_available': True, 'cuda_reason': '',
+       'capability': [8, 9], 'device_name': 'NVIDIA GeForce RTX 4090',
+       'arch_list': ['sm_50', 'sm_80', 'sm_86', 'sm_90'], 'torchvision': '0.22.1+cu126',
+       'accelerator_device': 'cuda'}
+# The payload the probe emitted before it learned to ask whether torch can SEE
+# the card (2026-09-07): no `cuda_available` field at all. An older answer is
+# unknown, never a verdict.
+LEGACY = {'torch': '2.7.1+cu126', 'cuda': '12.6', 'capability': [8, 9],
+          'device_name': 'NVIDIA GeForce RTX 4090',
+          'arch_list': ['sm_50', 'sm_80', 'sm_86', 'sm_90']}
+# The silent-CPU trap, as the probe reads it (acontentsheltie, Discord, RTX 3090):
+# a CPU-only wheel has no CUDA at all — `torch.version.cuda` is None …
+CPU_ONLY = {'torch': '2.13.0+cpu', 'cuda': None, 'cuda_available': False,
+            'cuda_reason': '', 'capability': None, 'device_name': None,
+            'arch_list': [], 'torchvision': '0.28.0+cpu', 'accelerator_device': 'cpu'}
+# … while a CUDA build the driver cannot serve keeps its CUDA version and torch
+# says why, as a warning at the first `is_available()`.
+DRIVER_TOO_OLD = {'torch': '2.13.0+cu130', 'cuda': '13.0', 'cuda_available': False,
+                  'cuda_reason': ('CUDA initialization: The NVIDIA driver on your system '
+                                  'is too old (found version 12040). Please update your GPU '
+                                  'driver by downloading and installing a new version.'),
+                  'capability': None, 'device_name': None, 'arch_list': [],
+                  'torchvision': '0.28.0+cu130', 'accelerator_device': 'cpu'}
+AMPERE = {'torch': '2.9.1+cu128', 'cuda': '12.8', 'cuda_available': True, 'cuda_reason': '',
+          'capability': [8, 6], 'device_name': 'NVIDIA GeForce RTX 3090',
+          'arch_list': ['sm_50', 'sm_80', 'sm_86', 'sm_90'], 'torchvision': '0.24.1+cu128',
+          'accelerator_device': 'cuda'}
+# torch sees the card; Accelerate — the one ai-toolkit listens to — was sent to
+# the CPU (ACCELERATE_USE_CPU=1, or a line in the ai-toolkit .env). Measured
+# 2026-09-07: is_available() True, Accelerator().device cpu.
+ACCEL_CPU = {**AMPERE, 'accelerator_device': 'cpu'}
+# CUDA_VISIBLE_DEVICES="" (empty, not -1): is_available() True, device_count 0,
+# get_device_capability raises — a payload at odds with itself, measured too.
+CONTRADICTORY = {**AMPERE, 'capability': None, 'device_name': None,
+                 'cuda_reason': 'Invalid device id'}
+VENV_PYTHON = 'C:\\Users\\somebody\\ai-toolkit\\venv\\Scripts\\python.exe'
 
 
 def test_blackwell_on_a_stable_wheel_is_diagnosed_with_the_cu128_remedy():
-    v = torch_arch_verdict(BLACKWELL, venv_python='C:\\Users\\somebody\\ai-toolkit\\venv\\Scripts\\python.exe')
+    v = torch_arch_verdict(BLACKWELL, venv_python=VENV_PYTHON)
     assert v['supported'] is False and v['blackwell'] is True
     assert v['sm'] == 'sm_120' and v['built_up_to'] == 'sm_90'
     assert 'no kernel image' in v['message'] and 'RTX 5070' in v['message']
     assert CU128_INDEX_URL in v['command'] and '--force-reinstall' in v['command']
+    # `--index-url` replaces PyPI: without --no-deps pip re-resolves numpy from
+    # the PyTorch index and breaks every extension compiled against numpy 2.
+    assert '--no-deps' in v['command']
     assert 'somebody' not in v['command']       # paste-safe like everything else
+    # …and RUNNABLE: a venv under the profile is spelled the way PowerShell
+    # both hides the account name and executes it (a bare "<path>" is a parse
+    # error there, and no Windows shell expands the `~` of the redaction).
+    assert v['command'].startswith('& "$env:USERPROFILE\\ai-toolkit\\venv\\Scripts\\python.exe" -m pip')
+
+
+# --- torch_cuda_verdict ---------------------------------------------------
+# Can torch SEE the card at all? ai-toolkit takes its device from Accelerate,
+# which picks the CPU in silence when `torch.cuda.is_available()` is False —
+# three Krea 2 runs on a 3090 never put a byte on the card, ETA 300 hours.
+
+def test_a_cpu_only_wheel_is_named_and_gets_the_cuda_build_of_the_same_torch():
+    v = torch_cuda_verdict(CPU_ONLY, venv_python=VENV_PYTHON)
+    assert v['available'] is False and v['cpu_build'] is True and v['cuda'] is None
+    assert 'CPU-only' in v['message'] and 'falls back to the CPU' in v['message']
+    assert 'hundreds of hours' in v['message']
+    cmd = v['command']
+    # torch 2.13 lives on the cu130 index (cu128 stops at 2.11, measured): a
+    # cu128 pin would be "No matching distribution found".
+    assert '--no-deps' in cmd and '--force-reinstall' in cmd and CU130_INDEX_URL in cmd
+    # The pair the venv already resolved everything else against — the local
+    # `+cpu` tag names the build being replaced and never reaches pip.
+    assert 'torch==2.13.0 torchvision==0.28.0' in cmd and '+cpu' not in cmd
+    assert 'somebody' not in cmd and 'somebody' not in v['message']
+    assert cmd.startswith('& "$env:USERPROFILE\\ai-toolkit\\venv\\Scripts\\python.exe" -m pip')
+    assert 'Hugging Face Accelerate' in v['message']      # the real chooser, named
+
+
+def test_the_index_follows_the_torch_version():
+    assert torch_index_url('2.9.1+cpu') == CU128_INDEX_URL
+    assert torch_index_url('2.11.0+cpu') == CU128_INDEX_URL
+    assert torch_index_url('2.12.0+cpu') == CU130_INDEX_URL
+    assert torch_index_url('2.14.0+cpu') == CU130_INDEX_URL
+    assert torch_index_url(None) == CU128_INDEX_URL                  # the Blackwell remedy
+    assert CU128_INDEX_URL in torch_reinstall_command(None, '2.9.1+cpu', '0.24.1+cpu')
+
+
+def test_a_dev_or_prerelease_torch_is_never_pinned():
+    """A nightly is not on the stable indexes: a pin on it is a certain failure."""
+    cmd = torch_reinstall_command(None, '2.14.0.dev20260901+cu130', '0.29.0.dev20260901+cu130')
+    assert '==' not in cmd and 'torch torchvision' in cmd
+    assert '==' not in torch_reinstall_command(None, '2.10.0a0+git1234', '0.25.0a0')
+
+
+def test_accelerate_pointed_at_the_cpu_is_refused_without_a_pip_line():
+    v = torch_cuda_verdict(ACCEL_CPU, venv_python=VENV_PYTHON)
+    assert v['available'] is False and v['cpu_build'] is False
+    assert v['command'] == ''                       # nothing is installed wrong
+    assert 'sees the GPU' in v['message'] and 'resolves to "cpu"' in v['message']
+    assert 'ACCELERATE_USE_CPU' in v['message'] and '.env' in v['message']
+
+
+def test_a_payload_at_odds_with_itself_is_unknown():
+    assert torch_cuda_verdict(CONTRADICTORY) is None
+
+
+def test_the_pip_line_is_one_the_shell_actually_runs():
+    """Measured on a live machine: PowerShell parses `"<path>" -m pip` as an
+    expression and stops on `-m`; cmd and PowerShell both choke on the `~` of
+    the redaction. The forms below are the ones that ran."""
+    home_win = torch_reinstall_command('C:\\Users\\somebody\\ai-toolkit\\venv\\Scripts\\python.exe')
+    assert home_win.startswith('& "$env:USERPROFILE\\ai-toolkit\\venv\\Scripts\\python.exe" -m pip')
+    assert 'somebody' not in home_win and '~' not in home_win
+    bare_win = torch_reinstall_command('C:\\ai-toolkit\\venv\\Scripts\\python.exe')
+    assert bare_win.startswith('C:\\ai-toolkit\\venv\\Scripts\\python.exe -m pip')   # pwsh, cmd, bash
+    spaced_win = torch_reinstall_command('D:\\My Tools\\ai-toolkit\\venv\\Scripts\\python.exe')
+    assert spaced_win.startswith('& "D:\\My Tools\\ai-toolkit\\venv\\Scripts\\python.exe" -m pip')
+    home_posix = torch_reinstall_command('/home/somebody/ai-toolkit/venv/bin/python')
+    assert home_posix.startswith('~/ai-toolkit/venv/bin/python -m pip')        # unquoted: bash expands ~
+    assert 'somebody' not in home_posix
+    spaced_posix = torch_reinstall_command('/opt/my tools/venv/bin/python')
+    assert spaced_posix.startswith('"/opt/my tools/venv/bin/python" -m pip')
+    assert torch_reinstall_command(None).startswith('<ai-toolkit venv python> -m pip')
+
+
+def test_the_fix_sentence_names_powershell_only_when_the_line_needs_it():
+    assert fix_line('& "$env:USERPROFILE\\x\\python.exe" -m pip').startswith(' Fix (PowerShell): & "')
+    assert fix_line('C:\\ai-toolkit\\venv\\Scripts\\python.exe -m pip').startswith(' Fix: C:\\')
+    assert fix_line('') == ''
+
+
+def test_an_unknown_torch_version_reads_as_english_not_as_a_placeholder():
+    v = torch_cuda_verdict({**CPU_ONLY, 'torch': ''})
+    assert v['message'].startswith('The PyTorch installed in the ai-toolkit venv is a CPU-only build')
+    assert 'the installed PyTorch' not in v['message'] and 'venv ()' not in v['message']
+    d = torch_cuda_verdict({**DRIVER_TOO_OLD, 'torch': None})
+    assert d['message'].startswith('The PyTorch installed in the ai-toolkit venv (built for CUDA 13.0)')
+
+
+def test_a_cuda_build_the_driver_cannot_serve_quotes_torch_and_names_the_driver():
+    """No pip line here: the same torch on another CUDA flavour is not on the
+    indexes (cu128 stops at 2.11), so a reinstall would fail or downgrade. The
+    driver is the remedy, with the generation it needs."""
+    v = torch_cuda_verdict(DRIVER_TOO_OLD)
+    assert v['available'] is False and v['cpu_build'] is False and v['cuda'] == '13.0'
+    assert 'built for CUDA 13.0' in v['message']
+    assert 'driver on your system is too old' in v['message']    # torch's own words
+    assert 'Update the NVIDIA driver' in v['message'] and 'R580' in v['message']
+    assert v['command'] == ''
+
+
+def test_a_cuda_build_with_no_reason_names_the_usual_suspects():
+    v = torch_cuda_verdict({**DRIVER_TOO_OLD, 'cuda_reason': ''})
+    assert 'older than that CUDA release' in v['message']
+    assert 'CUDA_VISIBLE_DEVICES' in v['message']
+
+
+def test_torch_reason_is_redacted_before_it_reaches_a_help_thread():
+    v = torch_cuda_verdict({**DRIVER_TOO_OLD,
+                            'cuda_reason': 'failed at C:\\Users\\somebody\\venv\\x.py'})
+    assert 'somebody' not in v['message'] and 'somebody' not in v['reason']
+
+
+def test_a_torch_that_sees_the_card_is_cleared_with_no_command():
+    v = torch_cuda_verdict(AMPERE)
+    assert v['available'] is True and v['command'] == ''
+    assert 'RTX 3090' in v['message']
+
+
+def test_the_cuda_verdict_is_none_whenever_we_simply_do_not_know():
+    for payload in (None, {}, {'error': 'timeout'}, LEGACY, CONTRADICTORY, 'garbage', 42):
+        assert torch_cuda_verdict(payload) is None, payload
+
+
+def test_the_reinstall_command_pins_the_pair_or_nothing():
+    both = torch_reinstall_command(VENV_PYTHON, '2.13.0+cpu', '0.28.0+cpu')
+    assert 'torch==2.13.0 torchvision==0.28.0' in both and 'somebody' not in both
+    # Half a pin is worse than none: `--no-deps` would let a torchvision built for
+    # another torch land next to the pinned one.
+    half = torch_reinstall_command(None, '2.13.0+cpu', None)
+    assert '==' not in half and 'torch torchvision' in half
+    assert '<ai-toolkit venv python>' in half
+    assert '--no-deps' in torch_reinstall_command(None)
 
 
 def test_a_supported_card_is_cleared_across_minor_versions():
@@ -184,15 +356,23 @@ def test_without_a_known_interpreter_the_command_stays_a_placeholder():
 
 # --- the probe gate: cost discipline --------------------------------------
 
-def test_an_old_gpu_never_pays_for_a_torch_import(app):
-    """A card below the risky generation cannot hit the trap, so `import torch`
-    in a cold venv (seconds) must not run at all."""
+def test_every_card_pays_the_probe_once_because_the_cpu_only_trap_is_card_agnostic(app, tmp_path):
+    """Until 2026-09-07 a card below compute 10.0 skipped the probe entirely: the
+    only trap known then (Blackwell kernels) could not touch it. The second trap
+    — a torch that cannot see the card, ai-toolkit training on the CPU without a
+    word — touches every card, so an RTX 3090 now pays the import too. Once."""
     from app import capabilities
+    fake_python = tmp_path / 'python.exe'
+    fake_python.write_text('')
+    capabilities._torch_probe_cache.clear()
     with app.app_context():
-        with patch.object(capabilities, 'gpu_compute_capability', return_value=(8, 9)), \
-             patch.object(capabilities, '_torch_probe') as probe:
-            assert capabilities.aitoolkit_torch_info() is None
-        probe.assert_not_called()
+        with patch.object(capabilities, 'gpu_compute_capability', return_value=(8, 6)), \
+             patch.object(capabilities.cfg, 'aitoolkit_path', return_value=fake_python), \
+             patch.object(capabilities, '_torch_probe', return_value=CPU_ONLY) as probe:
+            assert capabilities.aitoolkit_torch_info() == CPU_ONLY
+            assert capabilities.aitoolkit_torch_info() == CPU_ONLY
+            assert probe.call_count == 1
+    capabilities._torch_probe_cache.clear()
 
 
 def test_an_unknown_gpu_is_not_probed_and_asserts_nothing(app):
@@ -204,9 +384,10 @@ def test_an_unknown_gpu_is_not_probed_and_asserts_nothing(app):
         probe.assert_not_called()
 
 
-def test_a_failed_probe_is_not_cached_as_a_fact(app, tmp_path):
-    """A cold-import timeout must be retried next time, never remembered as
-    'this venv has no torch'."""
+def test_a_failed_probe_is_remembered_briefly_and_never_as_a_fact(app, tmp_path):
+    """A cold-import timeout is retried soon (after _UNKNOWN_TTL), never
+    remembered as 'this venv has no torch' — but two callers of the same
+    preflight must not each pay a fresh 90 s import for the same silence."""
     from app import capabilities
     fake_python = tmp_path / 'python.exe'
     fake_python.write_text('')
@@ -214,9 +395,56 @@ def test_a_failed_probe_is_not_cached_as_a_fact(app, tmp_path):
     with app.app_context():
         with patch.object(capabilities, 'gpu_compute_capability', return_value=(12, 0)), \
              patch.object(capabilities.cfg, 'aitoolkit_path', return_value=fake_python), \
-             patch.object(capabilities, '_torch_probe', return_value=None):
+             patch.object(capabilities, '_torch_probe', return_value=None) as probe:
             assert capabilities.aitoolkit_torch_info() is None
-        assert capabilities._torch_probe_cache == {}
+            assert capabilities.aitoolkit_torch_info() is None
+            assert probe.call_count == 1                       # the second read is the cache
+            key = str(fake_python)
+            ts, info = capabilities._torch_probe_cache[key]
+            assert info is None
+            capabilities._torch_probe_cache[key] = (ts - capabilities._UNKNOWN_TTL - 1, None)
+            assert capabilities.aitoolkit_torch_info() is None
+            assert probe.call_count == 2                       # asked again once the TTL is over
+    capabilities._torch_probe_cache.clear()
+
+
+def test_a_refusal_is_not_remembered_for_ten_minutes(app, tmp_path):
+    """A transient False (a driver resetting after an update) must not lock the
+    launch out for _TORCH_PROBE_TTL while telling someone to reinstall torch:
+    a negative answer is re-asked after _UNKNOWN_TTL, a positive one is not."""
+    from app import capabilities
+    assert capabilities._torch_probe_ttl(CPU_ONLY) == capabilities._UNKNOWN_TTL
+    # …even when accelerate was not importable and said nothing about the device.
+    assert capabilities._torch_probe_ttl({**CPU_ONLY, 'accelerator_device': None}) \
+        == capabilities._UNKNOWN_TTL
+    assert capabilities._torch_probe_ttl(ACCEL_CPU) == capabilities._UNKNOWN_TTL
+    assert capabilities._torch_probe_ttl(None) == capabilities._UNKNOWN_TTL
+    assert capabilities._torch_probe_ttl(AMPERE) == capabilities._TORCH_PROBE_TTL
+    assert capabilities._torch_probe_ttl({**AMPERE, 'accelerator_device': None}) \
+        == capabilities._TORCH_PROBE_TTL          # no word from accelerate = no reason to doubt
+
+
+def test_the_probe_runs_from_the_aitoolkit_folder_so_its_dotenv_counts(app, tmp_path):
+    """`run.py` loads <ai-toolkit>/.env before training; a CUDA_VISIBLE_DEVICES
+    kept there hides the card from the run and from nothing else (measured).
+    The probe therefore runs from that folder and loads the same file."""
+    from app import capabilities
+    root = tmp_path / 'ai-toolkit'
+    root.mkdir()
+    fake_python = root / 'python.exe'
+    fake_python.write_text('')
+    paths = {'venv_python': fake_python, 'dir': root}
+    capabilities._torch_probe_cache.clear()
+    with app.app_context():
+        with patch.object(capabilities, 'gpu_compute_capability', return_value=(8, 6)), \
+             patch.object(capabilities.cfg, 'aitoolkit_path', side_effect=lambda k: paths.get(k)), \
+             patch.object(capabilities, '_torch_probe', return_value=AMPERE) as probe:
+            assert capabilities.aitoolkit_torch_info() == AMPERE
+    assert probe.call_args.kwargs.get('cwd') == str(root)
+    assert 'load_dotenv' in capabilities._TORCH_PROBE_CODE
+    assert 'Accelerator().device' in capabilities._TORCH_PROBE_CODE
+    assert 'import torchvision' not in capabilities._TORCH_PROBE_CODE   # never imported, only read
+    capabilities._torch_probe_cache.clear()
 
 
 def test_a_successful_probe_is_cached_so_a_relaunch_costs_nothing(app, tmp_path):
@@ -299,6 +527,143 @@ def test_a_raising_probe_never_breaks_the_preflight(app):
         with patch.object(capabilities, 'aitoolkit_torch_info', side_effect=OSError('boom')):
             r = lt.training_preflight(LOCAL_USER, ds.id)
     assert r['verdict'] in ('ready', 'warnings')     # the preflight still answered
+
+
+# --- the silent-CPU trap on the same surfaces -------------------------------
+# acontentsheltie's three logs, replayed as the probe payload. Unlike the arch
+# row this one BLOCKS, and the ack cannot waive it: ai-toolkit would not fail,
+# it would train on the CPU for days.
+
+def test_the_preflight_blocks_a_run_that_would_train_on_the_cpu(app):
+    from app.config import LOCAL_USER
+    from app import capabilities
+    from app.services import lora_training as lt
+    with app.app_context():
+        ds = _dataset(app)
+        with patch.object(capabilities, 'aitoolkit_torch_info', return_value=CPU_ONLY):
+            r = lt.training_preflight(LOCAL_USER, ds.id)
+    row = next((c for c in r['checks'] if c['id'] == 'torch_cuda'), None)
+    assert row is not None and row['status'] == 'fail' and row['scope'] == 'machine'
+    assert row['bypassable'] is False
+    assert 'CPU' in row['detail'] and '2.13.0+cpu' in row['detail']
+    assert len(row['detail']) < 110, 'the row sits in a list on a phone — keep it short'
+    assert r['verdict'] == 'blocked' and r['can_override'] is False
+    # The BLOCKER carries the whole story and the paste-safe pip line: that is
+    # what the launch button reads, so the refusal is said once, before the
+    # amber "Start anyway" modal could offer a run the server would refuse.
+    assert any('CPU-only' in b and '--no-deps' in b and CU130_INDEX_URL in b
+               for b in r['blockers'])
+    assert any('CPU-only' in w for w in r['warnings'])
+    # And the arch row has nothing to add: there is no card seen to have kernels for.
+    assert not any(c['id'] == 'torch_arch' for c in r['checks'])
+
+
+def test_the_row_reads_as_english_when_the_probe_gave_no_version(app):
+    from app.config import LOCAL_USER
+    from app import capabilities
+    from app.services import lora_training as lt
+    with app.app_context():
+        ds = _dataset(app)
+        with patch.object(capabilities, 'aitoolkit_torch_info', return_value={**CPU_ONLY, 'torch': ''}):
+            r = lt.training_preflight(LOCAL_USER, ds.id)
+    row = next(c for c in r['checks'] if c['id'] == 'torch_cuda')
+    assert row['detail'].startswith("the ai-toolkit venv's PyTorch cannot see the GPU")
+
+
+def test_the_preflight_says_nothing_about_cuda_when_torch_sees_the_card(app):
+    from app.config import LOCAL_USER
+    from app import capabilities
+    from app.services import lora_training as lt
+    with app.app_context():
+        ds = _dataset(app)
+        with patch.object(capabilities, 'aitoolkit_torch_info', return_value=AMPERE):
+            r = lt.training_preflight(LOCAL_USER, ds.id)
+    assert not any(c['id'] in ('torch_cuda', 'torch_arch') for c in r['checks'])
+    assert r['verdict'] != 'blocked'
+
+
+def test_an_older_probe_payload_adds_no_cuda_row(app):
+    """A payload without `cuda_available` is an unknown, not a verdict."""
+    from app.config import LOCAL_USER
+    from app import capabilities
+    from app.services import lora_training as lt
+    with app.app_context():
+        ds = _dataset(app)
+        with patch.object(capabilities, 'aitoolkit_torch_info', return_value=LEGACY):
+            r = lt.training_preflight(LOCAL_USER, ds.id)
+    assert not any(c['id'] == 'torch_cuda' for c in r['checks'])
+
+
+TRAINING_PYTHON = 'C:\\t\\ai-toolkit\\venv\\Scripts\\python.exe'
+
+
+def test_a_launch_is_refused_when_torch_cannot_see_the_card(app):
+    """The gate the preflight row mirrors: same sentence, same pip line — and
+    it holds for every caller of assert_interpreter_ready (image, video)."""
+    import pytest
+    from app import capabilities
+    from app.services import lora_training as lt
+    with app.app_context():
+        with patch.object(capabilities, 'aitoolkit_interpreter_report',
+                          return_value={'python': TRAINING_PYTHON, 'torch': True,
+                                        'alternative': ''}), \
+             patch.object(capabilities, 'aitoolkit_torch_info', return_value=CPU_ONLY):
+            with pytest.raises(RuntimeError) as err:
+                lt.assert_interpreter_ready()
+    text = str(err.value)
+    assert 'CPU-only' in text and 'falls back to the CPU' in text
+    assert '--no-deps' in text and CU130_INDEX_URL in text
+    assert ' Fix' in text
+
+
+def test_a_launch_is_refused_when_accelerate_is_pointed_at_the_cpu(app):
+    import pytest
+    from app import capabilities
+    from app.services import lora_training as lt
+    with app.app_context():
+        with patch.object(capabilities, 'aitoolkit_interpreter_report',
+                          return_value={'python': TRAINING_PYTHON, 'torch': True,
+                                        'alternative': ''}), \
+             patch.object(capabilities, 'aitoolkit_torch_info', return_value=ACCEL_CPU):
+            with pytest.raises(RuntimeError) as err:
+                lt.assert_interpreter_ready()
+    assert 'ACCELERATE_USE_CPU' in str(err.value) and ' Fix' not in str(err.value)
+
+
+def test_an_older_card_than_the_wheel_is_told_the_only_ways_out():
+    """Reachable since the probe runs on every card: a GTX 10-series against a
+    build whose kernels start at sm_70 dies for certain — say what to do."""
+    pascal = {**AMPERE, 'capability': [6, 1], 'device_name': 'NVIDIA GeForce GTX 1080 Ti',
+              'arch_list': ['sm_70', 'sm_75', 'sm_80', 'sm_86', 'sm_90', 'sm_100', 'sm_120']}
+    v = torch_arch_verdict(pascal)
+    assert v['supported'] is False and v['command'] == ''
+    assert 'older PyTorch that still ships sm_61' in v['message']
+    # A card between the wheel's floor and Blackwell keeps the plain mismatch text.
+    mid = torch_arch_verdict({**BLACKWELL, 'capability': [11, 0]})
+    assert 'only ways out' not in mid['message']
+
+
+def test_a_launch_goes_through_when_torch_sees_the_card_or_nobody_knows(app):
+    from app import capabilities
+    from app.services import lora_training as lt
+    with app.app_context():
+        for info in (AMPERE, LEGACY, None):
+            with patch.object(capabilities, 'aitoolkit_interpreter_report',
+                              return_value={'python': TRAINING_PYTHON, 'torch': True,
+                                            'alternative': ''}), \
+                 patch.object(capabilities, 'aitoolkit_torch_info', return_value=info):
+                lt.assert_interpreter_ready()       # no raise
+
+
+def test_a_probe_that_raises_never_blocks_a_launch(app):
+    from app import capabilities
+    from app.services import lora_training as lt
+    with app.app_context():
+        with patch.object(capabilities, 'aitoolkit_interpreter_report',
+                          return_value={'python': TRAINING_PYTHON, 'torch': True,
+                                        'alternative': ''}), \
+             patch.object(capabilities, 'aitoolkit_torch_info', side_effect=OSError('boom')):
+            lt.assert_interpreter_ready()           # no raise
 
 
 # --- the one-line summary on the Runs page --------------------------------

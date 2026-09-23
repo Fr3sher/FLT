@@ -38,29 +38,37 @@ import StudioActionBar from '../StudioActionBar';
 import VideoClipHistory from './VideoClipHistory';
 import VideoLoraPicker from './VideoLoraPicker';
 import VideoOptionsPanel from './VideoOptionsPanel';
+import VideoQuickPrompts from './VideoQuickPrompts';
+import { appendQuickPrompt } from './videoPromptPresets';
 import MotionModelDialog from './MotionModelDialog';
+import SmoothDialog from './SmoothDialog';
 import VideoSourcePicker from './VideoSourcePicker';
 import NeuralRenderDialog from '../../../videobank/NeuralRenderDialog';
 import SideBySideVideo from '../../../videobank/SideBySideVideo';
 import { shortLoraName } from './videoLoraGroups';
+import { readPromptDraft, writePromptDraft } from './videoPromptDraft';
 import {
-  addFrames, failureNotice, generateLabel, queueClips, queuedNotice, releasePreview, removeFrame,
+  addFrames, failureNotice, generateLabel, perImagePrompts, queueClips, queuedNotice, releasePreview,
+  removeFrame,
 } from './videoStartFrames';
 import {
+  accelLabel, clipAccel, clipLastFramePngUrl, clipLastFrameUrl,
   clipRateUrl, clipSeconds, clipUrl, clipsUrl, generateUrl,
   isRunning, launchAdviceLines, mergeHistoryClips, mergeHistoryPaging, optionsUrl,
   clipVfiUrl, clipNeuralRenderUrl, clipVideoUrl,
-  motionEnhanceUrl, motionSuggestUrl,
+  pickAvailableAccel, clipComparisonUrl,
+  motionEnhanceUrl, motionSuggestUrl, motionWriteBatchUrl,
 } from './videoStudioApi';
 
 /* No start frame yet — what the ✨ helpers and the readback see before a pick. */
 const EMPTY_SOURCE = { image: null, ratio: null, preview: null };
 
-/* Turbo ON by default. Without it the base is undistilled and a first clip is
-   tens of minutes — long enough that a new user concludes the studio is broken
-   rather than slow. It is a checkbox, and the panel says what it changes. */
+/* An acceleration ON by default — larryvrh's, the arena's first row. Without
+   one the base is undistilled and a first clip is tens of minutes — long
+   enough that a new user concludes the studio is broken rather than slow. The
+   panel says what each choice changes. */
 const DEFAULT_OPTIONS = {
-  turbo: true, eros: false, sparse: '', latentUpscale: false,
+  accel: 'turbo', eros: false, sparse: '', latentUpscale: false,
   // '' = auto: the server's own count for the mode in force (turbo 6, dense
   // 20). Kept empty rather than pre-filled so a run reads "auto" until someone
   // decides otherwise — a number in the box would claim a choice nobody made.
@@ -95,8 +103,17 @@ export default function VideoTestStudio() {
   const removeSource = useCallback((key) => setSources((prev) => removeFrame(prev, key)), []);
   const clearSources = useCallback(() => setSources([]), []);
   // How far a batch is between the click and the last reply, for the button.
-  const [progress, setProgress] = useState({ done: 0, total: 0 });
-  const [prompt, setPrompt] = useState('');
+  const [progress, setProgress] = useState({ done: 0, total: 0, phase: 'queueing' });
+  /* The batch's prompt: ONE for every picture (the default, the comparison
+     that says something about the LoRA), or one WRITTEN per picture by ✨ —
+     the frame read by the vision model, the typed motion enriched with it or
+     a proposal from the picture alone. Written before anything is queued:
+     the writer's window shuts once a clip sits in the queue. */
+  const [promptMode, setPromptMode] = useState('same');
+  // Kept in this browser (2026-09-06): a reload, or a trip to another page,
+  // gives the field back as it was typed.
+  const [prompt, setPrompt] = useState(readPromptDraft);
+  useEffect(() => { writePromptDraft(prompt); }, [prompt]);
   const [opts, setOpts] = useState(DEFAULT_OPTIONS);
   const [clips, setClips] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -106,12 +123,13 @@ export default function VideoTestStudio() {
     apiFetch(optionsUrl()).then((d) => {
       setOptions(d);
       if (d?.frame_default) setOpts((o) => ({ ...o, frames: d.frame_default }));
-      // Turbo defaults ON, but only where it CAN run: on a ComfyUI without the
-      // pack it would send a launch that is refused before anything happens,
-      // which is a poor first click. `available === null` (probe unreachable)
-      // keeps the default — an unknown is not a no.
-      if (d?.options_available?.turbo?.available === false) {
-        setOpts((o) => ({ ...o, turbo: false }));
+      // The acceleration defaults to larryvrh's, but only where it CAN run:
+      // a launch refused before anything happens is a poor first click. The
+      // server says what this machine holds; the pick moves to the first
+      // available choice, or to the dense base. `available === null` (probe
+      // unreachable) keeps the pick — an unknown is not a no.
+      if (Array.isArray(d?.accelerations)) {
+        setOpts((o) => ({ ...o, accel: pickAvailableAccel(o.accel, d.accelerations) }));
       }
       if (d?.megapixels?.default) {
         setOpts((o) => ({ ...o, megapixels: d.megapixels.default }));
@@ -180,16 +198,80 @@ export default function VideoTestStudio() {
      server's from the first reply — see queueClips) — text-only is one
      launch without a picture. The walk stops at the first refusal and says how
      far it got; what queued is queued, and the list picks it up. */
+  // What a refused write says. A "GPU busy" refusal carries WHY in `detail`
+  // (a clip is rendering, training runs) — the same join the dataset passes
+  // use, because "GPU busy" alone does not say what to wait for.
+  const said = (e, fallback) =>
+    [e?.message, e?.body?.detail].filter(Boolean).join(' — ') || fallback;
+  /* ✨ One prompt for one picture, the way the two buttons ask: the typed
+     motion enriched with the frame, or a proposal from the frame alone.
+
+     ⚠️ Asked for EVERY picture in ONE request, not once per picture. Entering
+     the vision window makes ComfyUI let go of its models, so the next clip
+     reloads the video model — tens of gigabytes for H3. Twelve single-frame
+     calls would pay that twelve times over; `/motion/write-batch` holds one
+     window for the whole strip and pays it once. `perImagePrompts` keeps its
+     loop and its fallbacks: what changes is WHERE the writing happens. */
+  const writePromptsFor = async (frames, typed) => {
+    const reply = await postJson(motionWriteBatchUrl(), {
+      images: frames.map((f) => f.image),
+      prompt: (typed && typed.trim()) ? typed : '',
+      model: motionModel, seconds,
+    });
+    const byIndex = new Map();
+    const byImage = new Map();
+    for (const r of (reply?.results || [])) {
+      if (typeof r?.index === 'number') byIndex.set(r.index, r);
+      if (r?.image) byImage.set(r.image, r);
+    }
+    // The shape `perImagePrompts` expects: resolve to the prompt, or throw the
+    // frame's own reason so its fallback and its naming still work.
+    return (frame, index) => {
+      const r = byIndex.get(index) || byImage.get(frame?.image) || null;
+      const written = typeof r?.prompt === 'string' ? r.prompt.trim() : '';
+      if (written) return written;
+      throw new Error(r?.error || 'the writer had nothing for this picture');
+    };
+  };
+
   const generate = async () => {
     setBusy(true);
-    const launches = mode === 't2v' ? [null] : sources;
-    setProgress({ done: 0, total: launches.length });
+    let launches = mode === 't2v' ? [null] : sources;
+    setProgress({ done: 0, total: launches.length, phase: 'queueing' });
     try {
-      const outcome = await queueClips(launches, { enhance: enhanceOn,
+      const perPicture = mode === 'i2v' && promptMode === 'per-image' && launches.length > 1;
+      if (perPicture) {
+        setProgress({ done: 0, total: launches.length, phase: 'writing' });
+        // ONE request writes for every picture, then the loop below only reads
+        // the answers back — no second round trip, no second window.
+        const resolve = await writePromptsFor(launches, prompt);
+        const written = await perImagePrompts(launches, prompt,
+          (frame, typed, index) => resolve(frame, index),
+          (done, total) => setProgress({ done, total, phase: 'writing' }));
+        launches = written.frames;
+        // The pictures the writer could not answer for, BY NAME, and why (a
+        // "GPU busy" refusal says what to wait for). All of them: nothing is
+        // queued — N renders of a prompt nobody wrote is not a batch.
+        const named = written.fallen.map((f) => `picture ${f.index + 1}`).join(', ');
+        const why = said(written.error, 'the writer could not answer for them');
+        if (written.fallen.length === launches.length) {
+          toast.error(`The writer answered for none of the ${launches.length} pictures — ${why}. Nothing was queued.`);
+          return;
+        }
+        if (!prompt.trim()) {
+          // No typed motion to fall back on: those pictures sit this batch out.
+          launches = launches.filter((f) => f.prompt);
+          if (written.fallen.length) toast.warning(`${named} skipped — ${why}.`);
+        } else if (written.fallen.length) {
+          toast.warning(`${named} launch with the prompt as typed — ${why}.`);
+        }
+        setProgress({ done: 0, total: launches.length, phase: 'queueing' });
+      }
+      const outcome = await queueClips(launches, { enhance: enhanceOn && !perPicture,
         mode, prompt, aspect,
         lora: lora.lora, loraStrength: strength, runId: lora.runId,
         datasetId: lora.datasetId, ...opts,
-      }, (body) => postJson(generateUrl(), body), (done, total) => setProgress({ done, total }));
+      }, (body) => postJson(generateUrl(), body), (done, total) => setProgress({ done, total, phase: 'queueing' }));
       if (outcome.failed) toast.error(failureNotice(outcome));
       else toast.success(queuedNotice(outcome));
       // The launch went through with the prompt as typed: the writer could
@@ -228,11 +310,15 @@ export default function VideoTestStudio() {
   // the new card simply appears and renders. `vfiBusy` only guards the double
   // click between the POST and that first poll.
   const [vfiBusy, setVfiBusy] = useState(null);
+  // ↗ The finished clip the Smooth window was opened for, or null. The rate
+  // is asked there (×2, ×3, ×4 of the source), never assumed.
+  const [vfiClip, setVfiClip] = useState(null);
   // ✨ Neural render. `nrClip` is the finished clip the dialog was opened
   // for; the render itself is a queued row like any other, so the list's
   // poll shows it land and `nrBusy` only guards the double click.
   const [nrClip, setNrClip] = useState(null);
   const [nrBusy, setNrBusy] = useState(null);
+  const [continueBusy, setContinueBusy] = useState(null);
   // ⇔ The rendered clip being compared with its source, or null.
   const [compareClip, setCompareClip] = useState(null);
   // ✨ The Motion helpers. `motionBusy` names WHICH one is running so the two
@@ -257,11 +343,12 @@ export default function VideoTestStudio() {
       setNrBusy(null);
     }
   };
-  const smooth = async (clip) => {
+  const smooth = async (clip, multiplier) => {
     setVfiBusy(clip.id);
     try {
-      await postJson(clipVfiUrl(clip.id), {});
-      toast.info?.('Smoothing queued — the new clip appears below when it is done.');
+      const r = await postJson(clipVfiUrl(clip.id), { multiplier });
+      setVfiClip(null);
+      toast.info?.(`Smoothing to ${Math.round(r?.fps || 0) || '…'} fps queued — the new clip appears below when it is done.`);
       await refreshClips();
     } catch (e) {
       toast.error(e?.message || 'That clip could not be smoothed.');
@@ -285,11 +372,6 @@ export default function VideoTestStudio() {
   // toast, the notice takes over and replays the click when the model frees
   // up — or offers the unload. A replay fails outside the try/catch below, so
   // it gets its own voice.
-  // What a refused write says. A "GPU busy" refusal carries WHY in `detail`
-  // (a clip is rendering, training runs) — the same join the dataset passes
-  // use, because "GPU busy" alone does not say what to wait for.
-  const said = (e, fallback) =>
-    [e?.message, e?.body?.detail].filter(Boolean).join(' — ') || fallback;
   const { fence, runGuarded, unloadAndRetry, stopWaiting } = useOllamaFence({
     onError: (e) => toast.error(said(e, 'The motion writer could not answer.')),
   });
@@ -357,9 +439,14 @@ export default function VideoTestStudio() {
   const reuse = (clip) => {
     setPrompt(clip.prompt || '');
     setMode(clip.mode === 't2v' ? 't2v' : 'i2v');
+    setAspect(clip.aspect || 'auto');
     setOpts({
-      turbo: !!clip.turbo, eros: !!clip.eros, sparse: clip.sparse || '',
-      latentUpscale: !!clip.latent_upscale, frames: clip.frames || opts.frames,
+      accel: clipAccel(clip), eros: !!clip.eros, sparse: clip.sparse || '',
+      latentUpscale: !!clip.latent_upscale,
+      // A joined clip's `frames` is the FILE's count (parent + part − 1), not
+      // a count the sampler takes: reused, it would read "723 frames" and
+      // render 362. The dial keeps its value; every other dial is replayed.
+      frames: clip.joined ? opts.frames : (clip.frames || opts.frames),
       megapixels: clip.megapixels || opts.megapixels,
       // Reuse replays the count the clip ACTUALLY ran, never "auto" — the
       // whole point of ↻ Reuse is that the second run is the first one with
@@ -387,10 +474,14 @@ export default function VideoTestStudio() {
   };
 
   const needsImage = mode === 'i2v' && sources.length === 0;
-  const blocked = busy || needsImage || !prompt.trim();
+  // ✨ Written per picture needs no typed motion: an empty field asks the
+  // writer for a proposal from each picture alone — a gate on the field
+  // refused exactly the case the mode promises (found in verification).
+  const perPictureReady = mode === 'i2v' && promptMode === 'per-image' && sources.length > 1;
+  const blocked = busy || needsImage || (!prompt.trim() && !perPictureReady);
   const reason = needsImage
     ? 'Pick a start frame, or switch to text-only.'
-    : (!prompt.trim() ? 'Describe the motion first.' : null);
+    : (!prompt.trim() && !perPictureReady ? 'Describe the motion first.' : null);
 
   /* The readback: what is about to be rendered, in one line, next to the
      button — the moment before a multi-minute job is the moment to catch
@@ -400,7 +491,7 @@ export default function VideoTestStudio() {
     mode === 't2v' ? 'text only' : (sources.length > 1 ? `from ${sources.length} images` : 'from an image'),
     seconds ? `${seconds}s` : `${opts.frames} frames`,
     `${Number(opts.megapixels).toFixed(2)} MP`,
-    opts.turbo ? 'turbo' : null,
+    opts.accel ? (opts.accel === 'turbo' ? 'turbo' : accelLabel(opts.accel)) : null,
     opts.eros ? '10Eros' : null,
     opts.sparse ? `sparse ${opts.sparse}` : null,
     opts.latentUpscale ? 'upscale ×2' : null,
@@ -414,7 +505,34 @@ export default function VideoTestStudio() {
   // walk is while it queues — the same text in the rail and in the phone's
   // bar, which is handed the running text too (its own convention is a bare
   // "…" while a run is on; a batch has a count to show).
-  const label = generateLabel({ mode, count: sources.length, busy, done: progress.done, total: progress.total });
+  const label = generateLabel({ mode, count: sources.length, busy, done: progress.done, total: progress.total,
+    phase: progress.phase });
+  /* ⏭ Continue: the clip's last frame staged as the next start frame — the
+     picture is exactly where that clip ended — and the launch marked so the
+     render lands joined behind it. The motion is yours to write again. */
+  const continueFrom = async (clip) => {
+    // Already staged: a second click would stage a second PNG the strip's
+    // dedupe then drops — under a success toast.
+    if (sources.some((f) => f.key === `continue:${clip.id}`)) {
+      toast.info(`Clip #${clip.id} is already in the strip — its last frame is queued to be continued.`);
+      return;
+    }
+    setContinueBusy(clip.id);
+    try {
+      const r = await postJson(clipLastFrameUrl(clip.id), {});
+      setMode('i2v');
+      addSources([{ key: `continue:${clip.id}`, image: r.image, ratio: r.ratio,
+        preview: clipLastFramePngUrl(clip.id), continues: clip.id }]);
+      toast.success(`Last frame of clip #${clip.id} staged — write the next motion, then Generate. The result plays as clip #${clip.id} followed by the new one.`);
+      const el = document.getElementById('vs-motion');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      toast.error(e?.message || 'The last frame could not be read.');
+    } finally {
+      setContinueBusy(null);
+    }
+  };
+  const continuing = sources.filter((f) => f.continues);
   const generateButton = (
     <button type="button" onClick={generate} disabled={blocked}
       className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-primary px-4 py-2 text-sm font-semibold text-gray-950 disabled:opacity-40 min-h-10">
@@ -494,6 +612,12 @@ export default function VideoTestStudio() {
             <VideoSourcePicker mode={mode} onMode={setMode} frames={sources}
               aspect={aspect} onAspect={setAspect}
               onAdd={addSources} onRemove={removeSource} onClear={clearSources} />
+            {mode === 'i2v' && continuing.length > 0 && (
+              <p className="rounded-lg border border-border bg-surface-raised px-2.5 py-1.5 text-[0.6875rem] text-content-muted">
+                ⏭ {continuing.map((f) => `clip #${f.continues}`).join(', ')}: the render lands joined behind it —
+                one video, that clip then the new motion. Remove the frame from the strip to launch a plain clip instead.
+              </p>
+            )}
           </div>
 
           <div id="vs-motion" className="flex flex-col gap-1.5 rounded-xl border border-border bg-surface p-3 scroll-mt-16">
@@ -538,6 +662,11 @@ export default function VideoTestStudio() {
               what the scene looks like. ✨ Auto and ✨ Enrich answer in H3’s own
               three-field prompt, paced to the clip length you set.
             </span>
+            {/* The presets, under the field they write into. They APPEND, like
+                ✨ Enrich leaves your text alone — so the picker can be used on a
+                half-written prompt without eating it. */}
+            <VideoQuickPrompts mode={mode}
+              onAppend={(text) => setPrompt((p) => appendQuickPrompt(p, text))} />
             <OllamaFenceNotice fence={fence} onUnload={unloadAndRetry} onStop={stopWaiting} />
             {/* The toggle enriches AT LAUNCH — what runs is what the clip
                 records, so a card always names the prompt that really made it.
@@ -554,6 +683,28 @@ export default function VideoTestStudio() {
                 </span>
               </span>
             </label>
+            {/* The batch's prompt, asked only when there IS a batch: two
+                choices, so a segmented pair rather than a select. */}
+            {mode === 'i2v' && sources.length > 1 && (
+              <div data-testid="video-prompt-mode" className="flex flex-col gap-1 rounded-lg border border-border bg-surface-raised px-2 py-1.5 text-[0.6875rem]">
+                <span className="font-semibold text-content">Prompt for the {sources.length} pictures</span>
+                <div role="radiogroup" aria-label="Prompt for the batch" className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-surface p-0.5">
+                  {[['same', 'Same for all'], ['per-image', '✨ Written per picture']].map(([id, text]) => (
+                    <button key={id} type="button" role="radio" aria-checked={promptMode === id}
+                      onClick={() => setPromptMode(id)}
+                      className={`min-h-10 rounded-md px-2 py-1 text-xs font-semibold lg:min-h-0 ${
+                        promptMode === id ? 'bg-primary text-white' : 'text-content-muted hover:text-content'}`}>
+                      {text}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-content-muted">
+                  {promptMode === 'per-image'
+                    ? 'Before anything is queued, ✨ reads each picture and writes its prompt: your motion enriched with it, or a proposal from the picture alone when the field is empty. One short call per picture, while ComfyUI is idle.'
+                    : 'Every clip runs the motion above, on one seed: the clips differ by their picture and nothing else.'}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -577,15 +728,23 @@ export default function VideoTestStudio() {
         <h2 className="font-mono text-[0.625rem] uppercase tracking-[0.18em] text-content-subtle">
           Clips — newest first
         </h2>
-        <VideoClipHistory clips={clips} onRate={rate} onDelete={remove} onReuse={reuse} onVfi={smooth} vfiBusy={vfiBusy}
+        <VideoClipHistory clips={clips} onRate={rate} onDelete={remove} onReuse={reuse} onVfi={setVfiClip} vfiBusy={vfiBusy}
           onNeuralRender={(clip) => setNrClip(clip)} nrBusy={nrBusy}
           onCompare={(clip) => setCompareClip(clip)}
-          onJumpTo={jumpTo} hasMore={paging.hasMore} loadingMore={loadingMore} onLoadMore={loadMore} />
+          onJumpTo={jumpTo} onContinue={continueFrom} continueBusy={continueBusy}
+          hasMore={paging.hasMore} loadingMore={loadingMore} onLoadMore={loadMore} />
       </section>
 
       <StudioActionBar shortcuts={SHORTCUTS} canRun={!blocked} running={busy}
         onRun={generate} runLabel={`▶ ${label}`} runningLabel={`▶ ${label}`} note={reason} />
 
+      {/* ↗ The rate Smooth makes, asked before it runs: 48, 72 or 96 fps for
+          a 24 fps clip — the interpolator works by whole factors. */}
+      {vfiClip && (
+        <SmoothDialog clip={vfiClip} busy={vfiBusy === vfiClip.id}
+          onSmooth={(multiplier) => smooth(vfiClip, multiplier)}
+          onClose={() => setVfiClip(null)} />
+      )}
       {/* ✨ The neural render dials, asked once per clip. The capability's own
           sentences come with the options payload, so the dialog can refuse
           in words on a machine without the model. */}
@@ -603,6 +762,7 @@ export default function VideoTestStudio() {
         <SideBySideVideo originalSrc={clipVideoUrl(compareClip.nr_of)}
           renderSrc={clipVideoUrl(compareClip.id)}
           title={`clip #${compareClip.nr_of} → neural render #${compareClip.id}`}
+          exportHref={clipComparisonUrl(compareClip.id)}
           onClose={() => setCompareClip(null)} />
       )}
       {/* ⚙ The model that writes the motion, on demand. */}
