@@ -58,6 +58,45 @@ def test_real_package_registers_settings_engine_and_own_installers(forge):
         assert 'qwen_dataset' not in datasets.editable_engines()
 
 
+@pytest.mark.parametrize('native_combo', [False, True])
+def test_ready_probe_reads_cache_choices_from_comfyui_response(forge, monkeypatch, native_combo):
+    from app.utils import comfyui
+    from lds_qwen_dataset import engine
+
+    app, _ = forge
+
+    def combo(values):
+        return ['COMBO', {'options': values, 'default': values[0]}] if native_combo else [values, {}]
+
+    payload = {
+        'KSampler': {'input': {'required': {
+            'sampler_name': [['res_multistep'], {}], 'scheduler': [['simple'], {}],
+        }}},
+        'CLIPLoader': {'input': {'required': {'type': [['qwen_image'], {}]}}},
+        'QwenImage21Cache': {'input': {'required': {
+            'model': ['MODEL', {}],
+            'device': combo(['auto', 'gpu', 'cpu', 'off']),
+            'dtype': combo(['default', 'int8', 'int4']),
+        }}},
+    }
+    monkeypatch.setattr(comfyui.requests, 'get', lambda *args, **kwargs: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: payload))
+    monkeypatch.setattr(engine.local_render, 'fetch_object_info_enums', comfyui.fetch_object_info_enums)
+    comfyui.clear_model_caches()
+    try:
+        with app.app_context():
+            status = registry.get('qwen_dataset').local_preflight(reference_count=1)
+            assert status['ok'], status['detail']
+            # Parsing the new format must still reject an unsupported setting.
+            payload['QwenImage21Cache']['input']['required']['device'] = combo(['cpu', 'off'])
+            comfyui.clear_model_caches()
+            status = registry.get('qwen_dataset').local_preflight(reference_count=1)
+            assert not status['ok']
+            assert 'does not support device=auto' in status['detail']
+    finally:
+        comfyui.clear_model_caches()
+
+
 def test_real_route_enqueues_native_graph_and_preserves_reference_identity(forge, monkeypatch):
     app, admitted = forge
     client = app.test_client()

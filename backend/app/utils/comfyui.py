@@ -1055,10 +1055,9 @@ def _distill_object_info(data):
     """{class_type: {input_name: frozenset(accepted values)}} for the COMBO inputs
     named in `_VERSION_SENSITIVE_INPUTS`.
 
-    ComfyUI declares a combo input as `[[<choice>, <choice>, …], {options}]` — the
-    type slot is a literal list of the accepted values. That list is the exact one
-    ComfyUI prints in its "Value not in list" validation error, so comparing our
-    graph against it reproduces ComfyUI's own verdict without a round trip.
+    Legacy nodes use `[[<choice>, <choice>, …], {options}]`; newer native nodes
+    use `["COMBO", {"options": [<choice>, …]}]`. Both expose the accepted values
+    ComfyUI prints in its "Value not in list" validation error.
 
     A class with no checkable input maps to an empty dict (it must still appear so
     the class-presence view keeps every key)."""
@@ -1075,6 +1074,8 @@ def _distill_object_info(data):
                     if name not in _VERSION_SENSITIVE_INPUTS:
                         continue
                     choices = decl[0] if isinstance(decl, (list, tuple)) and decl else None
+                    if choices == 'COMBO' and len(decl) > 1 and isinstance(decl[1], dict):
+                        choices = decl[1].get('options')
                     if isinstance(choices, list) and all(isinstance(v, str) for v in choices):
                         combos[name] = frozenset(choices)
         out[cls] = combos
