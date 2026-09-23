@@ -4,6 +4,7 @@ import { postForm, postJson } from '@lds/plugin-sdk';
 import { HelpBadge } from '@lds/plugin-sdk';
 import { useToast } from '@lds/plugin-sdk';
 import ReferenceLibraryPicker from './ReferenceLibraryPicker';
+import ReferenceMediaPreview from './ReferenceMediaPreview';
 import { librarySelectionBody, librarySelectionKey, referenceLibraryKey } from './referenceLibrary';
 import { sourceUrl } from './videoStudioApi';
 import { CUT_MAX_SECONDS, CUT_MIN_SECONDS, cutBody, cutDefaultDuration, cutInterval, moveReference, REFERENCE_DEFAULTS, REFERENCE_LIMITS, referenceFormatSize, referenceUrl, replaceReference, selectReferenceFormat, taggedReferences } from './videoReferences';
@@ -216,18 +217,17 @@ export default function VideoReferencesPanel({ value, limits, disabled, onInsert
       {!guideTarget && libraryPicker}
       {!identitiesOnly && <p className="text-[0.6875rem] text-content-subtle">Videos: 2–15 s, prepared at 24 fps. Audio: 0.2–15 s. Video sound is off until you include it below. H3 uses video frames from the beginning of each reference, up to the generated clip length.</p>}
       <div role="status" aria-live="polite" className="text-xs text-content-muted">{busy ? 'Preparing references…' : notice}</div>
-      <fieldset disabled={busy || disabled} className="min-w-0 space-y-2 disabled:opacity-60">
+      <div className="min-w-0 space-y-2">
         {rows.map((r) => {
           const siblings = rows.filter((x) => x.kind === r.kind);
           const at = siblings.findIndex((x) => x.name === r.name);
           return (
             <article key={r.name} className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-app p-2 sm:flex-row" data-testid="video-reference">
               <div className="flex w-full shrink-0 items-center justify-center sm:w-32">
-                {r.kind === 'image' ? <img src={referenceUrl(r.name)} alt={r.role || r.tag} className="max-h-36 max-w-full rounded object-contain" />
-                  : r.kind === 'video' ? <video src={referenceUrl(r.name)} controls muted playsInline preload="metadata" className="max-h-36 w-full rounded" />
-                    : <audio src={referenceUrl(r.name)} controls preload="metadata" className="h-10 w-full min-w-0" aria-label={r.role || r.tag} />}
+                {r.kind === 'audio' ? <audio src={referenceUrl(r.name)} controls preload="metadata" className="h-10 w-full min-w-0" aria-label={r.role || r.tag} />
+                  : <ReferenceMediaPreview kind={r.kind} src={referenceUrl(r.name)} label={r.tag} description={r.role || r.source_label} />}
               </div>
-              <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <fieldset disabled={busy || disabled} className="flex min-w-0 flex-1 flex-col gap-2 disabled:opacity-60">
                 <div className="flex flex-wrap items-center gap-1">
                   {[r.tag, r.audioTag].filter(Boolean).map((tag) => <button key={tag} type="button" className={`${BUTTON} font-mono text-primary`} onClick={() => onInsertTag(tag)} title="Insert this tag in the motion">{tag}</button>)}
                   {r.duration > 0 && <span className="text-[0.6875rem] text-content-subtle">{Number(r.duration).toFixed(1)} s</span>}
@@ -254,11 +254,11 @@ export default function VideoReferencesPanel({ value, limits, disabled, onInsert
                   {r.use_format === true && <p className="text-[0.6875rem] text-content-subtle">Keeps this video’s proportions. Resolution still follows Render.</p>}
                   <ReferenceCut key={r.name} reference={r} clipSeconds={clipSeconds} disabled={busy || disabled} onCut={(start, duration) => cut(r, start, duration)} />
                 </>}
-              </div>
+              </fieldset>
             </article>
           );
         })}
-      </fieldset>
+      </div>
       <p className="text-[0.6875rem] text-content-subtle">Tags follow the order within each media type. Moving a reference updates its tags in your prompt; removing one marks its old mentions for you to edit.</p>
       {/* Open when a guide is actually set: ⏭ Continue arms the first frame
           guide, and a picture that decides the render must not sit behind a
@@ -274,7 +274,7 @@ export default function VideoReferencesPanel({ value, limits, disabled, onInsert
             </label>
             <button type="button" className={BUTTON} disabled={busy || disabled} aria-expanded={libraryTarget === which} onClick={() => setLibraryTarget(libraryTarget === which ? null : which)} aria-label={`Choose ${which === 'firstFrame' ? 'first' : 'last'} frame guide from library`}>Library</button>
             {value[which] && <>
-              <img src={`${sourceUrl()}?image=${encodeURIComponent(value[which].image)}`} alt={which === 'firstFrame' ? 'First frame guide' : 'Last frame guide'} className="max-h-36 w-full rounded object-contain" />
+              <ReferenceMediaPreview src={`${sourceUrl()}?image=${encodeURIComponent(value[which].image)}`} label={which === 'firstFrame' ? 'First frame guide' : 'Last frame guide'} />
               <button type="button" disabled={busy || disabled} className={BUTTON} onClick={() => value.update({ [which]: null })}>
                 {value[which].continues ? `⏭ Last frame of clip #${value[which].continues} · Remove` : '✓ Guide ready · Remove'}
               </button>

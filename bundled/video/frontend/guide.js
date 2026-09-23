@@ -1379,6 +1379,8 @@ export const GUIDE = {
       markdown: [
         "## Make a video from references",
         "",
+        "Click a selected reference photo, or **Enlarge** below a reference video, to inspect it in a large preview. Images can switch between fit-to-screen and original size; scroll to inspect an image at original size. Videos retain their controls and resume from the miniature’s current position. First and last frame guides also open large. Close with **Escape**, the backdrop or the close button. Previews stay available while generation settings are locked.",
+        "",
         "### Performance and playback",
         "",
         "The Render panel offers H3 Fused Turbo (using an existing weight), H3 SageAttention, Spectrum, FP16 or INT8 video decoding, and native or fast MP4 recording. Fused Turbo already includes acceleration: do not add a Turbo LoRA. Auto selects 8 steps. Sage and Spectrum can be combined; Sparse and VDN must be off. Spectrum forecasts intermediate steps and can change motion or detail. Compare results at the same seed.",

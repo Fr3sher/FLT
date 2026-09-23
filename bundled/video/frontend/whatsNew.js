@@ -2,6 +2,8 @@
 // entries. Keep ids and published copy stable; new video updates belong here.
 // Data only: release tooling reads this export without loading the application.
 export const WHATS_NEW = [
+  { id: '2026-09-23-video-reference-lightbox', date: '2026-09-23', title: 'Inspect selected video references in a large preview',
+    blurb: 'Click a reference photo or use Enlarge below a reference video to inspect the selected media. Photos offer original-size viewing; videos keep playback controls and the current position. First and last frame guides also open large. Close with Escape, the backdrop or the close button.', to: '/studio?lane=video' },
   { id: '2026-09-23-video-recover-saved-mp4', date: '2026-09-23', title: 'Recover saved clips after ComfyUI history is cleared',
     blurb: 'Old reference clips can now recover their saved MP4 from the configured ComfyUI output folder even after its history is cleared or ComfyUI stops. Recovery checks the embedded generation settings before restoring the player; no new render is needed.', to: '/studio?lane=video' },
   { id: '2026-09-23-video-performance-playback', date: '2026-09-23', title: 'Choose H3 performance controls and recover reference clips',
