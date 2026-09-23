@@ -489,7 +489,7 @@ def _prompt_with_triggers(prompt, trigger_words):
 # Cover every family in lora_training._FAMILY_SUBDIR; the parity contract guards
 # this. Missing families previously caused deployed Klein files to be searched
 # in the Z-Image folder and incorrectly reported as undeployed (issue #52).
-FAMILIES = ('zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima')
+FAMILIES = ('zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima', 'qwenimage21')
 
 # Distinguish families whose LoRAs can be discovered from families the Studio
 # can generate with. Generation requires a complete workflow, settings adapter

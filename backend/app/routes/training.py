@@ -1054,12 +1054,14 @@ def dataset_train_base_info(dataset_id):
                     # The panel uses it to stay quiet instead of recommending Anima to
                     # someone who cannot run it.
                     'anima_supported': lt._aitoolkit_supports_anima(),
+                    'qwenimage21_supported': lt._aitoolkit_supports_qwenimage21(),
                     # One base-list entry for every TRAIN_TYPES family, without exception.
                     # The panel populates its selector from this (covered by contract tests).
                     'bases_by_type': {'zimage': bases, 'sdxl': sdxl_bases,
                                       'krea': krea_bases, 'flux': flux_bases,
                                       'flux2klein': flux2klein_bases,
-                                      'anima': anima_bases}})
+                                      'anima': anima_bases,
+                                      'qwenimage21': [{'value': '', 'label': 'Official - Qwen-Image 2.1'}]}})
 
 
 @bp.post('/dataset/<int:dataset_id>/train/settings')

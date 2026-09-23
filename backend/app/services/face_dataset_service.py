@@ -1349,7 +1349,7 @@ def set_fidelity(user_id, dataset_id, fidelity) -> bool:
 # grouping; still editable in TrainingPanel. Use flux2klein, not klein:
 # klein already names a generation engine, and reusing it would collide
 # with model resolvers and Studio LoRA paths.
-TRAIN_TYPES = ('zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima')
+TRAIN_TYPES = ('zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima', 'qwenimage21')
 
 
 def normalize_train_type(t) -> str:
@@ -12613,6 +12613,7 @@ _TRAIN_FAMILY_LABELS = {
     'flux': 'FLUX.1',
     'sdxl': 'SDXL',
     'anima': 'Anima',
+    'qwenimage21': 'Qwen-Image 2.1',
 }
 
 

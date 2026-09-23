@@ -23,6 +23,24 @@ before you caption anything.
 | **Preview quality** | Fast, distilled | Depends on checkpoint | Raw: slow but faithful | High, ~20 steps | Non-distilled, real CFG (~25 steps) |
 | **Best for** | Fast iteration, prose-driven prompting | Booru-native checkpoints, NSFW ecosystems | Highest realism ceiling | The largest LoRA ecosystem, strong prompt fidelity | Modern FLUX.2 stack; 4B trains on mid-range GPUs |
 
+### Qwen-Image 2.1 training
+
+Select **Qwen-Image 2.1** in the dataset's model-family selector to train a local
+LoRA from RGB images and prose captions. Update AI Toolkit and install its current
+requirements in its own Python environment first; the dedicated `qwen_image_2`
+architecture is required. The older Qwen Image architecture is incompatible.
+
+The recipe uses `Comfy-Org/Qwen-Image-2.1`, the official Qwen repository for
+configuration and auxiliary components, convrot8 quantization, shifted flow
+matching, rank 32, and 40-step previews at CFG 3. Resolution defaults to 768/1024;
+GPU memory requirements have not been measured in LDS. The text encoder stays
+loaded, matching AI Toolkit's model defaults. Checkpoints have their own run
+suffix and deploy to `loras/qwenimage21`.
+
+Cloud training, reference-image editing datasets, transparent RGBA datasets and
+in-app Test Studio generation are not available for this family. Test exported
+LoRAs in a compatible external Qwen-Image 2.1 workflow.
+
 **Krea note:** the default trains on **Krea-2-Raw** — the official recommendation is
 *"train on Raw, validate on Turbo"*. Raw runs are long (hours); that's normal, not stuck.
 The **Base** selector also lists every Krea 2 checkpoint sitting in your ComfyUI

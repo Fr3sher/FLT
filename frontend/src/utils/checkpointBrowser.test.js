@@ -70,6 +70,8 @@ test('cloud payload always sends the selected base to the server guard', () => {
 test('family labels and ComfyUI folders stay tied to the results filter', () => {
   assert.equal(trainFamilyLabel('flux2klein'), 'FLUX.2 Klein');
   assert.equal(loraFolderLabel('flux2klein'), 'loras/flux2klein');
+  assert.equal(trainFamilyLabel('qwenimage21'), 'Qwen-Image 2.1');
+  assert.equal(loraFolderLabel('qwenimage21'), 'loras/qwenimage21');
   assert.equal(trainFamilyLabel('unknown'), 'Z-Image');
   assert.equal(loraFolderLabel('unknown'), 'loras/z image');
 });

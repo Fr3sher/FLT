@@ -608,7 +608,8 @@ def _loras_root():
 # Family -> its subfolder under a loras root. Single source for the deploy
 # accessors AND for the multi-root read helpers below.
 _FAMILY_SUBDIR = {'zimage': 'z image', 'sdxl': 'sdxl', 'krea': 'krea',
-                  'flux': 'flux', 'flux2klein': 'flux2klein', 'anima': 'anima'}
+                  'flux': 'flux', 'flux2klein': 'flux2klein', 'anima': 'anima',
+                  'qwenimage21': 'qwenimage21'}
 
 
 def _lora_dest_dir_zimage():
@@ -821,6 +822,27 @@ def _aitoolkit_supports_anima() -> bool:
     return False
 
 
+def _aitoolkit_supports_qwenimage21() -> bool:
+    """Require the dedicated 2.1 architecture, never the older Qwen Image loader."""
+    root = cfg.aitoolkit_path('dir')
+    if not root:
+        return False
+    source = root / 'extensions_built_in/diffusion_models/qwen_image_2/qwen_image_2.py'
+    try:
+        return bool(re.search(r'^\s*arch\s*=\s*[\'\"]qwen_image_2[\'\"]',
+                              source.read_text(encoding='utf-8'), re.MULTILINE))
+    except OSError:
+        return False
+
+
+def _assert_qwenimage21_ready(family) -> None:
+    if family == 'qwenimage21' and not _aitoolkit_supports_qwenimage21():
+        raise ValueError(
+            'Qwen-Image 2.1 needs a recent AI Toolkit (qwen_image_2 arch missing). '
+            'Update it (git pull) and install its current requirements in its own '
+            'Python environment before training.')
+
+
 def _aitoolkit_supports_automagic3() -> bool:
     """Whether this checkout can resolve the Automagic3 optimizer.
 
@@ -873,6 +895,8 @@ def _lora_dest_dir(ds, family=None) -> str:
         return str(_lora_dest_dir_flux2klein())
     if fam == 'anima':
         return str(_lora_dest_dir_anima())
+    if fam == 'qwenimage21':
+        return os.path.join(_loras_root(), 'qwenimage21')
     return str(_lora_dest_dir_zimage())
 
 
@@ -1048,14 +1072,16 @@ def _detect_safetensors_arch(keys) -> str | None:
 # Verdict = FAMILY key ('zimage'|'sdxl'|'krea'|'flux'|'flux2klein') or None
 # (undetectable → callers MUST NOT block; the guarantee is simply absent).
 _LORA_ARCH_LABEL = {'zimage': 'Z-Image', 'sdxl': 'SDXL', 'krea': 'Krea 2',
-                    'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein'}
+                    'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein',
+                    'qwenimage21': 'Qwen-Image 2.1'}
 # Key-namespace GROUP: two families in the SAME group share the tensor namespace,
 # so a wrong file loads its keys (a version mismatch then fails LOUDLY on a shape
 # error, not silently). Different groups = disjoint names = SILENT drop = the
 # danger we block. FLUX.1 and FLUX.2 Klein share the double/single-stream layout,
 # so they're one group (a name-only sniff can't tell them apart anyway).
 _LORA_ARCH_NAMESPACE = {'zimage': 'zimage', 'sdxl': 'sdxl', 'krea': 'krea',
-                        'flux': 'flux', 'flux2klein': 'flux', 'anima': 'anima'}
+                        'flux': 'flux', 'flux2klein': 'flux', 'anima': 'anima',
+                        'qwenimage21': 'qwenimage21'}
 
 
 def _family_from_base_model_version(value) -> str | None:
@@ -1067,6 +1093,8 @@ def _family_from_base_model_version(value) -> str | None:
     v = str(value or '').strip().lower()
     if not v:
         return None
+    if v == 'qwen_image_2':
+        return 'qwenimage21'
     if 'anima' in v:                     # AnimaModel.get_base_model_version() → 'anima'
         return 'anima'
     if v.startswith(('flux2_klein', 'flux2klein')):
@@ -1103,6 +1131,8 @@ def _lora_arch_from_keys(keys) -> str | None:
         return any(sub in k for k in keys)
     if has('lora_unet_') or has('lora_te'):
         return 'sdxl'
+    if has('transformer_blocks.') and has('.img_mlp.gate_up.'):
+        return 'qwenimage21'
     if has('double_blocks.') or has('single_blocks.') \
             or has('single_transformer_blocks.'):
         return 'flux'
@@ -1183,7 +1213,8 @@ _ARCH_LABEL = {'sdxl': 'an SDXL', 'sd15': 'a Stable Diffusion 1.5',
 # had no effect at all. The two are merged, with 'zimage' kept (the runtime
 # behaviour of the surviving definition), and the lower one deleted.
 _FAMILY_LABEL = {'zimage': 'Z-Image', 'sdxl': 'SDXL', 'krea': 'Krea 2',
-                 'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein', 'anima': 'Anima'}
+                 'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein', 'anima': 'Anima',
+                 'qwenimage21': 'Qwen-Image 2.1'}
 # Caption FORM each family is prompted with — the only input of the
 # MISMATCH_CAPTION guard (assert_trainable). Three values:
 #   'booru'  the model is tag-native (SDXL booru checkpoints, e.g. bigLove);
@@ -1305,10 +1336,14 @@ def official_base_repo(ds, family=None, variant=_PERSISTED):
         return ZIMAGE_BASE if var == 'base' else ZIMAGE_TURBO_BASE
     if fam == 'anima':
         return ANIMA_BASE           # public, non-gated → the pre-rent HEAD returns 200
+    if fam == 'qwenimage21':
+        return QWENIMAGE21_BASE
     return None
 
 
 KREA_BASE_LABEL = 'Krea-2-Turbo'   # mirrors name_or_path 'krea/Krea-2-Turbo'
+QWENIMAGE21_BASE = 'Comfy-Org/Qwen-Image-2.1'
+QWENIMAGE21_EXTRAS = 'Qwen/Qwen-Image-2.1'
 # Flux has one official base. Avoid a dot so _base_tag_for cannot mistake it
 # for an extension. The stable '_FLUX-1-dev' suffix prevents collisions with
 # official Z-Image runs sharing a trigger, as with Krea.
@@ -1424,7 +1459,7 @@ def assert_zimage_custom_recipe_confirmed(family, base_model, variant,
 # can only have been picked on another family (their builders gate on
 # `_is_custom_weights`, so they ignore it outright — see the `name_or_path` lines
 # in _build_job_config_krea/_flux/_flux2klein/_anima).
-_ABSOLUTE_BASE_FAMILIES = ('krea', 'flux', 'flux2klein', 'anima')
+_ABSOLUTE_BASE_FAMILIES = ('krea', 'flux', 'flux2klein', 'anima', 'qwenimage21')
 
 
 def foreign_base_reason(family, base_model) -> str | None:
@@ -1576,7 +1611,7 @@ def _valid_variants_for(family) -> tuple:
 # Advanced per-dataset ai-toolkit settings, persisted as train_settings JSON.
 # Missing, null or invalid values use family-specific defaults; never send
 # an invalid configuration to ai-toolkit.
-_DEFAULT_RANK = {'zimage': 16, 'krea': 32, 'sdxl': 32, 'flux': 16, 'flux2klein': 16, 'anima': 32}   # official defaults, except the retained Z-Image rank choice
+_DEFAULT_RANK = {'zimage': 16, 'krea': 32, 'sdxl': 32, 'flux': 16, 'flux2klein': 16, 'anima': 32, 'qwenimage21': 32}
 # Klein STYLE uses linear 128/alpha 64 and Conv2d 64/alpha 32 (4:2:2:1), matching
 # the 64-run February 2026 sweep and BFL example. Other Klein kinds retain 16.
 _KLEIN_STYLE_RANK = 128
@@ -1601,7 +1636,8 @@ _TIMESTEP_TYPE_CHOICES = ('sigmoid', 'linear', 'weighted', 'shift')  # flowmatch
 # FULL_TRANSFORMER_TIMESTEP_TYPE_CHOICES. Local LoRA and dense pod training use
 # independently updated and pinned ai-toolkit installations respectively.
 _DEFAULT_TIMESTEP = {'zimage': 'sigmoid', 'krea': 'linear', 'flux': 'sigmoid',
-                                          'flux2klein': 'weighted', 'anima': 'weighted'}   # resolved Auto defaults; SDXL has none
+                                          'flux2klein': 'weighted', 'anima': 'weighted',
+                                          'qwenimage21': 'shift'}   # resolved Auto defaults; SDXL has none
                      # Optimizer, LR schedule and effective batch values verified against
                      # ai-toolkit get_optimizer and toolkit/scheduler.py. CAME is unsupported.
 _OPTIMIZER_CHOICES = (
@@ -1664,6 +1700,7 @@ _DEFAULT_MEMORY_SAVING = {
     'krea':       {'quantize': True,  'quantize_te': True,  'low_vram': True},
     'flux':       {'quantize': True,  'quantize_te': True,  'low_vram': True},
     'flux2klein': {'quantize': True,  'quantize_te': True,  'low_vram': True},
+    'qwenimage21': {'quantize': True, 'quantize_te': True, 'low_vram': True},
     # The 2B DiT defaults to no quantization in ai-toolkit. Keep the toggle
     # available so smaller cards can enable it.
     'anima':      {'quantize': False, 'quantize_te': False, 'low_vram': False},
@@ -1710,9 +1747,11 @@ def _model_memory_block(ds, family) -> dict:
         out['low_vram'] = True
     if q or qte:
         out['qtype'] = (s.get('qtype') if s.get('qtype') in _QTYPE_CHOICES
-                        else 'qfloat8')
+                        else 'convrot8' if family == 'qwenimage21' else 'qfloat8')
     if s.get('qtype_te') in _QTYPE_CHOICES:
         out['qtype_te'] = s['qtype_te']
+    elif family == 'qwenimage21' and qte:
+        out['qtype_te'] = 'convrot8'
     # `compile` is a MODEL-block key upstream (ModelConfig.compile), which is why
     # it lives here rather than with the train knobs. Emitted only when asked, so
     # an untouched dataset produces the exact same config as before.
@@ -2598,6 +2637,7 @@ _SAMPLE_RECIPE_DEFAULTS = {
     'flux': (20, 4),          # FLUX.1-dev : guidance ~4 (notebook officiel)
     'flux2klein': (25, 4),
     'anima': (25, 4),
+    'qwenimage21': (40, 3),
     'sdxl': (28, 6),
 }
 
@@ -2894,6 +2934,16 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
     ):
         if _k in s:
             snap[_k] = s[_k]
+    if fam == 'qwenimage21':
+        memory = _model_memory_block(ds, fam)
+        snap.update({
+            'model_arch': 'qwen_image_2',
+            'effective_base': _weights if _is_custom_weights(_weights) else QWENIMAGE21_BASE,
+            'extras_name_or_path': QWENIMAGE21_EXTRAS,
+            'qtype': memory.get('qtype'), 'qtype_te': memory.get('qtype_te'),
+            'cache_text_embeddings': _cache_text_embeddings_eff(ds, fam),
+            'unload_text_encoder': False,
+        })
     return snap
 
 
@@ -4675,6 +4725,8 @@ def _dest_base_tag(ds, base_model=_PERSISTED, family=None,
     # collide with a Z-Image run sharing the trigger.
     if not tag and fam == 'anima':
         tag = _base_tag_for(ANIMA_BASE_LABEL)
+    if not tag and fam == 'qwenimage21':
+        tag = '_Qwen-Image-2-1'
     return tag + _custom_combo_hash(ds, base_model, family)
 
 
@@ -5427,6 +5479,12 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
         _apply_slider_overrides(ds, cfg_['config']['process'][0], 'anima')
         _apply_dual_captions(ds, cfg_['config']['process'][0], dataset_folder)
         return cfg_
+    if _train_type(ds) == 'qwenimage21':
+        cfg_ = _build_job_config_qwenimage21(ds, dataset_folder, steps, training_folder)
+        _apply_style_overrides(ds, cfg_['config']['process'][0], 'qwenimage21')
+        _apply_slider_overrides(ds, cfg_['config']['process'][0], 'qwenimage21')
+        _apply_dual_captions(ds, cfg_['config']['process'][0], dataset_folder)
+        return cfg_
     trigger = _safe_trigger(ds)
     base_model = getattr(ds, 'train_base_model', None)
     recipe = zimage_training_recipe(getattr(ds, 'train_variant', None), base_model)
@@ -5900,6 +5958,61 @@ def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder
             }],
         },
     }
+
+
+def _build_job_config_qwenimage21(ds, dataset_folder, steps, training_folder=None) -> dict:
+    """Text-to-image LoRA recipe for upstream's distinct Qwen-Image 2.1 loader.
+
+    Match diffusion_models/ui.tsx: Comfy-Org weights, convrot8 on both components,
+    shifted flow matching, CFG 3 and no encoder unloading. LDS exports RGB image/
+    caption pairs; reference-image editing and RGBA datasets are not exposed here.
+    """
+    family = 'qwenimage21'
+    trigger = _safe_trigger(ds)
+    base = getattr(ds, 'train_base_model', None)
+    return {'job': 'extension', 'config': {
+        'name': f'lora_{trigger}',
+        'process': [{
+            'type': 'sd_trainer',
+            'training_folder': training_folder if training_folder else str(_run_root(ds)),
+            'device': 'cuda:0',
+            'trigger_word': trigger,
+            'network': _network_block(ds, _lora_rank(ds, family), family),
+            'save': {'dtype': _save_dtype_eff(ds), 'save_every': _save_every(ds),
+                     'max_step_saves_to_keep': _max_step_saves(ds)},
+            'datasets': [{
+                'folder_path': dataset_folder, 'caption_ext': 'txt',
+                'caption_dropout_rate': 0.05, 'cache_latents_to_disk': True,
+                **_dataset_cache_text_embeddings(ds, default=False),
+                'resolution': _train_res(ds), **_mask_fields(dataset_folder),
+            }],
+            'train': {
+                'batch_size': _batch_size_eff(ds), 'steps': steps,
+                'gradient_accumulation': _grad_accum(ds),
+                'train_unet': True, 'train_text_encoder': False,
+                'unload_text_encoder': False,
+                'gradient_checkpointing': _grad_checkpointing_eff(ds),
+                'noise_scheduler': 'flowmatch',
+                'timestep_type': _timestep_type_eff(ds, 'shift'),
+                'optimizer': _optimizer_eff(ds), 'lr': _lr_eff(ds), 'dtype': 'bf16',
+                **_train_serializer_fields(ds), **_content_or_style_fields(ds),
+                **_lr_sched_fields(ds), **_ema_fields(ds),
+            },
+            'model': {
+                'arch': 'qwen_image_2',
+                'name_or_path': base if _is_custom_weights(base) else QWENIMAGE21_BASE,
+                'extras_name_or_path': QWENIMAGE21_EXTRAS,
+                'model_kwargs': {'rgba': False},
+                **_model_memory_block(ds, family),
+            },
+            'sample': {
+                'sampler': 'flowmatch', 'sample_every': _sample_every(ds),
+                'guidance_scale': _sample_guidance(ds, family),
+                'sample_steps': _sample_steps(ds, family),
+                'prompts': _sample_prompts(ds, trigger),
+            },
+        }],
+    }}
 
 
 def _build_job_config_sdxl(ds, dataset_folder: str, steps: int, training_folder=None) -> dict:
@@ -7860,6 +7973,13 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     kept = [r for r in rows if r.status == 'keep' and r.filename]
     n = len(kept)
     _pf_automagic3(ds, lane, _machine_warn, _check)
+    if ttype == 'qwenimage21' and (lane or 'local') == 'local':
+        try:
+            _assert_qwenimage21_ready(ttype)
+        except ValueError as exc:
+            blockers.append(str(exc))
+            _check('qwenimage21_arch', 'Qwen-Image 2.1 trainer', 'fail', str(exc),
+                   scope='machine')
     # Skip character-only composition and identity-leak heuristics for concept/style datasets to avoid false warnings.
     concept = fds.is_conceptual(ds)
     style = fds.is_style(ds)
@@ -8356,6 +8476,7 @@ def _lt_refuse_or_resolve(user_id, dataset_id, train_type, variant,
         raise ValueError(
             "ai-toolkit doesn't support Anima yet (anima arch missing) - "
             "update it (git pull) before training an Anima LoRA.")
+    _assert_qwenimage21_ready(launch_fam)
     if (_optimizer_eff(launch_view) == 'automagic3'
             and not _aitoolkit_supports_automagic3()):
         raise ValueError(
@@ -10567,6 +10688,7 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
         raise ValueError(
             "ai-toolkit doesn't support Anima yet (anima arch missing) - "
             "update it (git pull) before queuing an Anima LoRA.")
+    _assert_qwenimage21_ready(ttype)
     if (_optimizer_eff(queue_view) == 'automagic3'
             and not _aitoolkit_supports_automagic3()):
         raise ValueError(

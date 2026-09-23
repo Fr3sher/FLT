@@ -2192,6 +2192,9 @@ def _lct_resolve_and_refuse(user_id, dataset_id, train_type, base_model,
     if fam == 'anima':
         raise ValueError('Anima cloud training is coming once the pod image is '
                          'verified — train it locally for now')
+    if fam == 'qwenimage21':
+        raise ValueError('Qwen-Image 2.1 trains locally — the cloud environment '
+                         'is not verified for this model')
     variant = (variant or '').strip().lower()
     return ds, mode, fam, base_model, variant
 
@@ -6860,6 +6863,9 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
     if fam == 'anima':
         raise ValueError('Anima cloud training is coming once the pod image is '
                          'verified — train it locally for now')
+    if fam == 'qwenimage21':
+        raise ValueError('Qwen-Image 2.1 trains locally — the cloud environment '
+                         'is not verified for this model')
     selected_variant = str(
         variant or getattr(ds, 'train_variant', None)
         or lt._default_variant_for(fam)).strip().lower()

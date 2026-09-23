@@ -401,6 +401,7 @@ function NewDatasetForm({ onCreate, onClose }) {
           <option value="flux">FLUX.1 (prose captions)</option>
           <option value="flux2klein">FLUX.2 Klein (prose captions)</option>
           <option value="anima">Anima (prose or booru tags)</option>
+          <option value="qwenimage21">Qwen-Image 2.1 (prose captions)</option>
         </select>
       </label>
       {/*

@@ -98,6 +98,7 @@ export function trainFamilyLabel(type) {
   if (type === 'flux') return 'FLUX.1';
   if (type === 'flux2klein') return 'FLUX.2 Klein';
   if (type === 'anima') return 'Anima';
+  if (type === 'qwenimage21') return 'Qwen-Image 2.1';
   return 'Z-Image';
 }
 
@@ -107,5 +108,6 @@ export function loraFolderLabel(type) {
   if (type === 'flux') return 'loras/flux';
   if (type === 'flux2klein') return 'loras/flux2klein';
   if (type === 'anima') return 'loras/anima';
+  if (type === 'qwenimage21') return 'loras/qwenimage21';
   return 'loras/z image';
 }

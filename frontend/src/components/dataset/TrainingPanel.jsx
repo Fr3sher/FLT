@@ -82,7 +82,7 @@ import {
 } from '../../utils/trainingMode.js';
 // Hard and recommended image minimums per family mirror server TRAIN_MIN_IMAGES. Preflight remains
 // authoritative; this only disables the button early.
-const TRAIN_MIN = { zimage: [12, 20], sdxl: [20, 30], krea: [15, 20], flux: [15, 20], flux2klein: [15, 20], anima: [15, 20] };
+const TRAIN_MIN = { zimage: [12, 20], sdxl: [20, 30], krea: [15, 20], flux: [15, 20], flux2klein: [15, 20], anima: [15, 20], qwenimage21: [12, 20] };
 // Slider mode: images are only a denoising substrate → mirror of
 // TRAIN_MIN_IMAGES_SLIDER server-side (the preflight stays authoritative).
 const TRAIN_MIN_SLIDER = [4, 12];
@@ -128,7 +128,7 @@ function timeAgo(iso) {
 }
 
 // Family label for a checkpoint group header — mirrors CloudRunsPage's FAMILY_LABEL.
-const GROUP_FAMILY_LABEL = { zimage: 'Z-Image', krea: 'Krea 2', sdxl: 'SDXL', flux: 'FLUX.1', flux2klein: 'FLUX.2 Klein', anima: 'Anima' };
+const GROUP_FAMILY_LABEL = { zimage: 'Z-Image', krea: 'Krea 2', sdxl: 'SDXL', flux: 'FLUX.1', flux2klein: 'FLUX.2 Klein', anima: 'Anima', qwenimage21: 'Qwen-Image 2.1' };
 const groupFamLabel = (f) => GROUP_FAMILY_LABEL[f] || f || 'LoRA';
 
 /**
@@ -608,7 +608,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const advDropout = adv?.dropout ?? 0;
   const advDropoutChoices = adv?.dropout_choices ?? [0.05, 0.1, 0.15, 0.2, 0.3];
   const advTimestep = adv?.timestep_type ?? 'auto';
-  const advTimestepDefault = adv?.default_timestep_type ?? (trainType === 'krea' ? 'linear' : (trainType === 'flux2klein' || trainType === 'anima') ? 'weighted' : (trainType === 'zimage' || trainType === 'flux') ? 'sigmoid' : null);   // Mirrors _DEFAULT_TIMESTEP.
+  const advTimestepDefault = adv?.default_timestep_type ?? (trainType === 'qwenimage21' ? 'shift' : trainType === 'krea' ? 'linear' : (trainType === 'flux2klein' || trainType === 'anima') ? 'weighted' : (trainType === 'zimage' || trainType === 'flux') ? 'sigmoid' : null);   // Mirrors _DEFAULT_TIMESTEP.
   const advTimestepSupported = adv ? adv.timestep_type_supported !== false : trainType !== 'sdxl';
   const advTimestepChoices = adv?.timestep_type_choices ?? ['sigmoid', 'linear', 'weighted', 'shift'];
   const advOptimizer = adv?.optimizer ?? 'adamw8bit';
@@ -1772,6 +1772,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           <option value="flux">FLUX.1 (~20 img)</option>
           <option value="flux2klein">FLUX.2 Klein (~20 img)</option>
           <option value="anima">Anima (~20 img)</option>
+          <option value="qwenimage21">Qwen-Image 2.1 (local)</option>
         </select>
         <PluginSlot slot="training.dense" surface="dataset" placement="mode"
           fullMode={fullMode} fullTransformerEligible={fullTransformerEligible}
@@ -2201,7 +2202,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 aria-label="Base model"
                 className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] max-w-[230px]">
                 {(currentBases.length ? currentBases
-                  : [{ value: '', label: trainType === 'sdxl' ? (comfyConfigured ? 'No SDXL checkpoint found' : 'ComfyUI not configured') : trainType === 'krea' ? 'Official — Krea 2' : trainType === 'flux' ? 'Official — FLUX.1-dev' : trainType === 'flux2klein' ? 'Official — FLUX.2 Klein' : trainType === 'anima' ? 'Official — Anima' : 'Official — Z-Image-Turbo' }]).map((b) => (
+                  : [{ value: '', label: trainType === 'sdxl' ? (comfyConfigured ? 'No SDXL checkpoint found' : 'ComfyUI not configured') : trainType === 'krea' ? 'Official — Krea 2' : trainType === 'flux' ? 'Official — FLUX.1-dev' : trainType === 'flux2klein' ? 'Official — FLUX.2 Klein' : trainType === 'anima' ? 'Official — Anima' : trainType === 'qwenimage21' ? 'Official — Qwen-Image 2.1' : 'Official — Z-Image-Turbo' }]).map((b) => (
                   <option key={b.value} value={b.value}>
                     {trainType === 'zimage' && !b.value ? 'Official recipe — selected by variant' : b.label}{b.value && baseInfo?.converted?.[b.value] ? ' ✓' : ''}{baseOptionSuffix(b)}
                   </option>
@@ -2332,7 +2333,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
              * without ComfyUI configured, its list shrinks to the official base and should explain
              * why.
              */}
-            {!comfyConfigured && trainType !== 'flux2klein' && trainType !== 'anima' && (
+            {!comfyConfigured && !['flux2klein', 'anima', 'qwenimage21'].includes(trainType) && (
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-amber-300 text-[0.625rem]">
                   ⚠️ ComfyUI folder not set — training bases can't be listed{trainType === 'sdxl' ? '' : trainType === 'krea' ? ' (the official Krea 2 base still works)' : ' (the official Z-Image base still works)'}.
@@ -2809,7 +2810,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                       onChange={(e) => saveAdv({ qtype: e.target.value || 'auto' })}
                       aria-label="Quantisation backend"
                       className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] disabled:opacity-50">
-                      <option value="">Auto (qfloat8)</option>
+                        <option value="">Auto ({trainType === 'qwenimage21' ? 'convrot8' : 'qfloat8'})</option>
                       {advQtypeChoices.map((q) => (
                         <option key={q} value={q}>
                           {q === 'convrot8' ? 'convrot8 — int8, can be faster' : `${q} — weights only`}
@@ -3193,6 +3194,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               <option value="flux">FLUX.1</option>
               <option value="flux2klein">FLUX.2 Klein</option>
               <option value="anima">Anima</option>
+              <option value="qwenimage21">Qwen-Image 2.1</option>
             </select>
             {checkpointBaseOptions.length > 0 ? (
               <select value={checkpointBase} onChange={(event) => setCheckpointBase(event.target.value)}

@@ -497,6 +497,11 @@ export const SETTINGS_FIELD_TOPICS = [
   // so like Dual captions it points at the dataset guide rather than
   // settings-reference. Its two tuning knobs live in Settings > Training and are
   // covered by the settings topics below.
+  { id: 'training.qwenimage21', kind: 'setting', title: 'Train a Qwen-Image 2.1 LoRA',
+    keywords: ['qwen', 'qwen image', '2.1', 'qwen_image_2', 'training', 'model family',
+      'local', 'convrot8', 'ai toolkit'],
+    guide: { chapter: 'dataset-guide', anchor: '1-pick-your-model-family-first' },
+    app: { route: '/datasets' } },
   { id: 'training.mask_faces', kind: 'setting', title: 'Mask faces (Concept datasets)',
     keywords: ['mask faces', 'face mask', 'masking', 'concept', 'identity', 'bleed',
       'identity bleed', 'face bleed', 'character lora', 'combine loras', 'act',

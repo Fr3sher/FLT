@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-23-zzz-qwen-image-21-training',
+    date: '2026-09-23',
+    title: 'Train Qwen-Image 2.1 LoRAs locally',
+    blurb: 'Choose Qwen-Image 2.1 for image-and-caption datasets, with its own training recipe and checkpoint folder. Requires an up-to-date AI Toolkit and dependencies. Cloud training, image-edit pairs and RGBA datasets are not available for this family.',
+    to: '/datasets',
+  },
+  {
     id: '2026-09-23-zz-plugin-update-all', date: '2026-09-23',
     title: 'Update all your plugins with one restart',
     blurb: 'Use Update all to review available updates together, including connected private catalogs. Confirm once to download, prepare and restart automatically when your launcher supports it. Disabled plugins stay disabled. A retained cloud pod no longer blocks a restart that keeps its plugin enabled.',
