@@ -12,6 +12,95 @@ import pytest
 pytestmark = pytest.mark.plugins('video')
 
 
+@pytest.mark.parametrize('provider', ['ollama', 'lmstudio'])
+@pytest.mark.parametrize('gesture', ['suggest', 'enhance'])
+def test_reference_buttons_reach_the_real_text_driver_after_joycaption(
+        app, client, monkeypatch, tmp_path, provider, gesture):
+    """Exercise the plugin -> SDK -> core chain; simulate only inference and GPU access."""
+    import json
+    from contextlib import nullcontext
+    from queue import Queue
+    from types import SimpleNamespace
+    from PIL import Image
+    from app import config
+    from app.services import joycaption, vision_lmstudio, vision_ollama
+    from lds_video import video_motion_prompt as motion
+    from lds_video import video_reference_prompt as writer
+    from lds_video import video_references as refs
+    from lds_video.routes import video_studio as routes
+
+    name = 'lds_vref_' + 'a' * 32 + '.png'
+    Image.new('RGB', (32, 32), 'red').save(tmp_path / name)
+    monkeypatch.setattr(refs, '_input_path', lambda value: tmp_path / value)
+    with app.app_context():
+        config.save_config({'local_llm': {'provider': provider}})
+        writer.set_observer('joycaption')
+        (refs._manifest_dir() / f'{name}.json').write_text(json.dumps({
+            'name': name, 'kind': 'image', 'owner': refs._owner(),
+        }), encoding='utf-8')
+
+    monkeypatch.setattr(writer, '_memo', {})
+    monkeypatch.setattr(writer, '_sweep_stale_stills', lambda: None)
+    monkeypatch.setattr(writer, '_release_local_runner', lambda: (True, ''))
+    monkeypatch.setattr(writer, 'joycaption_weights_cached', lambda: True)
+    monkeypatch.setattr(joycaption, 'availability', lambda: {'ok': True})
+    monkeypatch.setattr(routes, 'gpu_exclusive_vision_window', lambda **kw: nullcontext())
+    monkeypatch.setattr(motion, 'available', lambda: (True, ''))
+    monkeypatch.setattr(vision_ollama, '_admit_local_ollama', lambda *a, **kw: None)
+    monkeypatch.setattr(vision_lmstudio, '_admit', lambda *a, **kw: None)
+    monkeypatch.setattr(vision_lmstudio, 'ensure_model_loaded', lambda *a, **kw: (True, ''))
+    observed = []
+    caption = 'A red toy robot stands on a table.'
+
+    def worker(*args, **kwargs):
+        output = Queue()
+
+        def consume(payload):
+            images = json.loads(payload)['images']
+            observed.extend(images)
+            output.put(json.dumps({'captions': dict.fromkeys(images, caption)}) + '\n')
+
+        return SimpleNamespace(
+            stdin=SimpleNamespace(write=consume, close=lambda: output.put(None)),
+            stdout=iter(output.get, None), stderr=iter(()), returncode=0,
+            wait=lambda **kw: 0)
+
+    monkeypatch.setattr(joycaption.subprocess, 'Popen', worker)
+    answer = ('subject_definitions: <Subject 1> is the robot from <Picture 1>.\n'
+              'summary: A robot waves.\n'
+              'retention_analysis: Keep its red body and tabletop setting.\n'
+              'detailed_description: [Shot 1] <Subject 1> raises one arm and waves slowly.\n'
+              'overall_soundscape: A quiet room.\n'
+              'non_diegetic_music: N/A')
+    sent = []
+
+    def post(url, *, json, timeout, **kwargs):
+        sent.append((url, json))
+        data = ({'response': answer} if provider == 'ollama' else
+                {'choices': [{'message': {'content': answer}}]})
+        return SimpleNamespace(status_code=200, text='', json=lambda: data,
+                               raise_for_status=lambda: None)
+
+    monkeypatch.setattr(vision_ollama.requests, 'post', post)
+    response = client.post(f'/api/video-studio/motion/{gesture}', json={
+        'mode': 'ref2va', 'references': [{'kind': 'image', 'name': name}],
+        'model': 'test-writer', 'seconds': 5,
+        'prompt': 'The robot waves slowly.', 'instruction': 'The robot waves slowly.',
+    })
+    assert response.status_code == 200, response.get_json()
+    assert 'raises one arm and waves slowly' in response.get_json()['prompt']
+    assert '<Picture 1>' in response.get_json()['prompt']
+    assert len(observed) == 1, 'the JoyCaption SDK call must actually describe the reference'
+    assert len(sent) == 1, 'the writer must succeed without a repair request'
+    url, payload = sent[0]
+    assert url.endswith('/api/generate' if provider == 'ollama' else '/v1/chat/completions')
+    assert payload['model'] == 'test-writer'
+    assert 'provider' not in payload
+    prompt = payload['prompt'] if provider == 'ollama' else payload['messages'][0]['content']
+    assert caption in prompt, 'the observation must reach the actual text driver'
+    assert ('AUTO' if gesture == 'suggest' else 'ENRICH') in prompt
+
+
 def test_the_panel_s_pieces_reach_the_writer(client, monkeypatch):
     """image + instruction + model + the clip length, from ✨ Auto."""
     from lds_video import video_motion_prompt as vmp

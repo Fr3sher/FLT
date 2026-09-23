@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-23-video-reference-text-writer',
+    date: '2026-09-23',
+    title: 'Auto and Enrich reach your chosen motion writer',
+    blurb: 'Reference prompts can now continue from JoyCaption to Ollama without a server error. Text generation also keeps the selected local provider when settings change during a request.',
+    to: '/studio',
+  },
+  {
     id: '2026-09-23-zzzzzz-studio-model-downloads',
     date: '2026-09-23',
     title: 'Download missing test models without leaving Studio',
