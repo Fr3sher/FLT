@@ -2,6 +2,8 @@
 // entries. Keep ids and published copy stable; new video updates belong here.
 // Data only: release tooling reads this export without loading the application.
 export const WHATS_NEW = [
+  { id: '2026-09-23-video-official-int8-vae', date: '2026-09-23', title: 'Prepare the smaller official H3 INT8 VAE',
+    blurb: 'INT8 preparation now downloads the official optimized 2.81 GB video VAE. The previous experimental file is detected and replaced only after the new download passes its size and SHA-256 checks. Update LDS before preparing it from the Render panel.', to: '/studio?lane=video' },
   { id: '2026-09-23-video-refmods-no-count-limit', date: '2026-09-23', title: 'Use all your identity RefMods',
     blurb: 'First-frame video accepts identity images without a fixed count limit, from uploads or Library. All selected references reach generation and Auto/Enrich. More references use more memory and processing time.', to: '/studio?lane=video' },
   { id: '2026-09-23-video-reference-lightbox', date: '2026-09-23', title: 'Inspect selected video references in a large preview',
