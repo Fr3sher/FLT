@@ -86,8 +86,8 @@ export const WHATS_NEW = [
   {
     id: '2026-09-23-zzz-qwen-image-21-training',
     date: '2026-09-23',
-    title: 'Train Qwen-Image 2.1 LoRAs locally',
-    blurb: 'Choose Qwen-Image 2.1 for image-and-caption datasets, with its own training recipe and checkpoint folder. Requires an up-to-date AI Toolkit and dependencies. Cloud training, image-edit pairs and RGBA datasets are not available for this family.',
+    title: 'Train Qwen-Image 2.1 LoRAs',
+    blurb: 'Choose Qwen-Image 2.1 for image-and-caption datasets, with its own training recipe and checkpoint folder. Train locally with an up-to-date AI Toolkit, or use Cloud Training with its dedicated pod image. Image-edit pairs and RGBA datasets are not available for this family.',
     to: '/datasets',
   },
   {

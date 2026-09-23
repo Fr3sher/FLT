@@ -1772,7 +1772,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           <option value="flux">FLUX.1 (~20 img)</option>
           <option value="flux2klein">FLUX.2 Klein (~20 img)</option>
           <option value="anima">Anima (~20 img)</option>
-          <option value="qwenimage21">Qwen-Image 2.1 (local)</option>
+          <option value="qwenimage21">Qwen-Image 2.1</option>
         </select>
         <PluginSlot slot="training.dense" surface="dataset" placement="mode"
           fullMode={fullMode} fullTransformerEligible={fullTransformerEligible}

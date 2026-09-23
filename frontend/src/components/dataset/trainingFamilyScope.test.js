@@ -196,7 +196,7 @@ test('the local-only families each state their own refusal', () => {
   // Anima was missing from the ladder: with enough kept images the cloud button
   // enabled itself, and the server refused only after the click.
   assert.match(cloudUnsupportedFamilyReason('anima'), /Anima cloud training is coming/);
-  assert.match(cloudUnsupportedFamilyReason('qwenimage21'), /Qwen-Image 2.1 trains locally/);
+  assert.equal(cloudUnsupportedFamilyReason('qwenimage21'), null);
 });
 
 test('the cloud-served families are not blocked by family', () => {

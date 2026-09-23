@@ -106,13 +106,35 @@ def test_checkpoint_isolation_and_arch_detection(app, tmp_path):
 
 
 @pytest.mark.plugins('cloud_training')
-def test_cloud_refused_before_reservation(app, tmp_path, monkeypatch):
+def test_cloud_recipe_resources_and_price_without_invented_estimate(app, tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
     from app import config as cfg
     from lds_cloud_training import cloud_training as ct
     monkeypatch.setattr(ct.cfg, 'secret', lambda k: 'fake-key' if k == 'VAST_API_KEY' else None)
+    searches = []
+    def offers(**kwargs):
+        searches.append(kwargs)
+        return [{'offer_id': 1, 'gpu_name': 'RTX A6000', 'gpu_ram_gb': 48,
+                 'dph_total': 0.6}]
+    monkeypatch.setattr(ct.vast_client, 'search_offers', offers)
+    monkeypatch.setattr(ct, '_filter_offers', lambda rows: rows)
     with app.app_context():
         ds = _dataset(app, tmp_path)
-        with pytest.raises(ValueError, match='Qwen-Image 2.1 trains locally'):
-            ct.gpu_tiers(cfg.LOCAL_USER, ds.id)
-        with pytest.raises(ValueError, match='Qwen-Image 2.1 trains locally'):
-            ct.launch_cloud_training(cfg.LOCAL_USER, ds.id, train_type='qwenimage21')
+        tiers = ct.gpu_tiers(cfg.LOCAL_USER, ds.id)
+        assert searches[0]['min_vram_gb'] == 32
+        assert searches[0]['min_disk_gb'] == 100
+        assert searches[0]['min_compute_cap'] == 800
+        assert tiers['tiers'][0]['dph_total'] == 0.6
+        assert tiers['tiers'][0]['est_cost'] is None
+        params = {'train_type': 'qwenimage21', 'steps': 100}
+        run = SimpleNamespace(dataset_id=ds.id, job_name='qwen_test',
+                              train_params=json.dumps(params))
+        assert '0bd3411-2026-09-23' in ct._pod_image_for(run, {'image': 'old-trainer'})
+        settings = {'DATASETS_FOLDER': '/workspace/datasets', 'TRAINING_FOLDER': '/workspace/output'}
+        job = ct._build_pod_job_config(run, str(tmp_path / 'dataset'), settings)
+        proc = job['config']['process'][0]
+        assert proc['model']['arch'] == 'qwen_image_2'
+        assert proc['type'] == 'diffusion_trainer'
+        assert proc['datasets'][0]['folder_path'] == '/workspace/datasets/qwen_test'
+        assert proc['model']['qtype'] == proc['model']['qtype_te'] == 'convrot8'

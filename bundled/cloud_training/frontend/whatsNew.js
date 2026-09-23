@@ -1,5 +1,11 @@
 export const CLOUD_WHATS_NEW = [
   {
+    id: '2026-09-23-cloud-qwen-image-21',
+    date: '2026-09-23',
+    title: 'Train Qwen-Image 2.1 on a cloud GPU',
+    blurb: 'Image-and-caption datasets can now train Qwen-Image 2.1 LoRAs on a dedicated AI Toolkit pod image. The GPU picker enforces this model’s memory, disk and GPU requirements and shows live hourly prices.',
+  },
+  {
     id: '2026-09-22-cloud-continue-gpu-choice',
     date: '2026-09-22',
     title: 'Choose your GPU when continuing training in the cloud',

@@ -2192,9 +2192,6 @@ def _lct_resolve_and_refuse(user_id, dataset_id, train_type, base_model,
     if fam == 'anima':
         raise ValueError('Anima cloud training is coming once the pod image is '
                          'verified — train it locally for now')
-    if fam == 'qwenimage21':
-        raise ValueError('Qwen-Image 2.1 trains locally — the cloud environment '
-                         'is not verified for this model')
     variant = (variant or '').strip().lower()
     return ds, mode, fam, base_model, variant
 
@@ -3307,6 +3304,17 @@ def _pick_offer(offers, requested_gpu, strict=False):
     return _best_of(offers)
 
 _VIDEO_DISK_FLOOR_GB = 120
+_QWEN_IMAGE_21_POD = 'vastai/ostris-ai-toolkit:0bd3411-2026-09-23-cuda-12.9'
+
+
+def _lora_min_vram(cloud_cfg, family):
+    configured = int((cloud_cfg.get('min_vram_gb') or {}).get(family, 24))
+    return max(32, configured) if family == 'qwenimage21' else configured
+
+
+def _min_compute_cap(cloud_cfg, family):
+    configured = int((cloud_cfg.get('min_compute_cap') or {}).get(family, 0))
+    return max(800, configured) if family == 'qwenimage21' else configured
 
 def _disk_gb_for(cloud_cfg, params) -> int:
     """Pod disk size: the configured default, bumped when the run trains on a
@@ -3330,6 +3338,9 @@ def _disk_gb_for(cloud_cfg, params) -> int:
         # otherwise still rent 60 GB and lose the run at 58.
         disk_gb = max(_VIDEO_DISK_FLOOR_GB,
                       int(cloud_cfg.get('video_disk_gb') or _VIDEO_DISK_FLOOR_GB))
+    elif params.get('train_type') == 'qwenimage21':
+        # Transformer, text encoder, Xet reconstruction and checkpoint cache.
+        disk_gb = max(100, int(cloud_cfg.get('disk_gb') or 60))
     else:
         disk_gb = int(cloud_cfg.get('disk_gb') or 60)
     try:
@@ -3421,6 +3432,10 @@ def _pod_image_for(run, c):
     because the dense recipe's supported/refused verdicts were read against
     that exact commit. A video config without `video_image` falls back to the
     shared pin: an older trainer beats no trainer, and Wan runs still work on it."""
+    if _run_param(run, 'train_type') == 'qwenimage21':
+        # The shared July image predates this architecture. Keep its other
+        # recipes intact and select the September trainer for this family.
+        return _QWEN_IMAGE_21_POD
     if crd.table_of(run) == crd.VIDEO:
         return c.get('video_image') or c.get('image')
     return c.get('image')
@@ -3588,7 +3603,7 @@ def _provision_with_credentials(run):
         dense = c.get('full_transformer') or {}
         min_vram = max(80, int(dense.get('min_vram_gb') or 80))
     else:
-        min_vram = (c.get('min_vram_gb') or {}).get(fam, 24)
+        min_vram = _lora_min_vram(c, fam)
     disk_gb = _disk_gb_for(c, params)
     template_hash = (c.get('template_hash') or '').strip()
     # A transient create refusal (offer just taken -> HTTP 400/409, rate limit,
@@ -3622,7 +3637,7 @@ def _provision_with_credentials(run):
             # against $0.802 for the next one up. Picking by price alone rents
             # the one card in the list that cannot do the work. Per family and
             # absent by default: nothing here changes what the face lane sees.
-            min_compute_cap=int((c.get('min_compute_cap') or {}).get(fam, 0)))
+            min_compute_cap=_min_compute_cap(c, fam))
 
     def _stamp(offer):
         # Stamp the host identity so a boot failure can blacklist THIS machine —
@@ -6863,9 +6878,6 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
     if fam == 'anima':
         raise ValueError('Anima cloud training is coming once the pod image is '
                          'verified — train it locally for now')
-    if fam == 'qwenimage21':
-        raise ValueError('Qwen-Image 2.1 trains locally — the cloud environment '
-                         'is not verified for this model')
     selected_variant = str(
         variant or getattr(ds, 'train_variant', None)
         or lt._default_variant_for(fam)).strip().lower()
@@ -6895,7 +6907,7 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
         dense = c.get('full_transformer') or {}
         min_vram = max(80, int(dense.get('min_vram_gb') or 80))
     else:
-        min_vram = (c.get('min_vram_gb') or {}).get(fam, 24)
+        min_vram = _lora_min_vram(c, fam)
     price_cap = c.get('max_price_per_hour', 0.80)
     overhead_min = float(c.get('pod_overhead_minutes') or 0)
     # A wider scan than the launch default so several GPU classes surface (the
@@ -6911,7 +6923,8 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
         secure_cloud_only=bool(c.get('secure_cloud_only', False)),
         # …including the disk floor, or the picker prices tiers that the launch
         # cannot rent (a custom base can push the real ask higher still).
-        min_disk_gb=_disk_gb_for(c, {'training_mode': mode})))
+        min_disk_gb=_disk_gb_for(c, {'training_mode': mode, 'train_type': fam}),
+        min_compute_cap=_min_compute_cap(c, fam)))
     cheapest_by_gpu = {}
     for o in offers:
         name = o.get('gpu_name') or 'GPU'
@@ -6924,9 +6937,8 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
     tiers = []
     for name, o in cheapest_by_gpu.items():
         dph = o.get('dph_total')
-        if mode == 'full_transformer':
-            # The empirical speed model is LoRA-only. Presenting its estimate
-            # for a dense 26 GB transformer would be fabricated precision.
+        if mode == 'full_transformer' or fam == 'qwenimage21':
+            # Neither dense training nor Qwen has a calibrated speed model.
             est_min = est_cost = exceeds_cap = None
             estimate_status = 'unavailable'
         else:
@@ -6954,7 +6966,7 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
             'variant': selected_variant,
             'training_mode': mode,
             'hf_cloud_token': hf_cloud_token,
-            'disk_gb': _disk_gb_for(c, {'training_mode': mode}),
+            'disk_gb': _disk_gb_for(c, {'training_mode': mode, 'train_type': fam}),
             'max_price_per_hour': price_cap,
             'max_runtime_minutes': max_runtime}
 
