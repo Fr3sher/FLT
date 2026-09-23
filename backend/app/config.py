@@ -1389,7 +1389,7 @@ def load_config(force=False) -> dict:
             user)
         return copy.deepcopy(_cache)
 
-def save_config(partial: dict) -> dict:
+def save_config(partial: dict, *, plugin_id=None) -> dict:
     global _cache
     with _lock:
         p = _config_path()
@@ -1404,6 +1404,16 @@ def save_config(partial: dict) -> dict:
         # file must not resurrect a preset the user just deleted — only purge.
         if not isinstance(current, dict):
             current = {}
+        incoming_engines = (partial or {}).get('engines')
+        if plugin_id and isinstance(incoming_engines, dict) and 'enabled' in incoming_engines:
+            # A plugin edits only its own slice of this shared list. Merge under
+            # the write lock so a stale settings page cannot undo other choices.
+            owned = plugin_engine_ids(plugin_id)
+            effective = _merge_new_engines(_deep_merge(DEFAULTS, current), current)
+            partial = copy.deepcopy(partial)
+            partial['engines']['enabled'] = [
+                engine for engine in effective['engines']['enabled'] if engine not in owned
+            ] + incoming_engines['enabled']
         merged = _stamp_known_engines(_migrate_klein_loras(
             _migrate_krea_pose_profile(_deep_merge(current, partial or {}), current,
                                        partial or {}),
@@ -1755,6 +1765,14 @@ def settings_ownership():
     return owners
 
 
+def plugin_engine_ids(plugin_id):
+    """Declared image engines whose selection a plugin settings page edits."""
+    from .plugins.registry import active
+    registry = active()
+    record = registry.records.get(plugin_id) if registry and plugin_id else None
+    return record.manifest.owned('engines') if record else ()
+
+
 def settings_view(value, plugin_id=None):
     """Filter a settings payload without moving or deleting persisted keys."""
     owners = settings_ownership()
@@ -1778,6 +1796,14 @@ def settings_view(value, plugin_id=None):
             result[section] = ({key: copy.deepcopy(item) for key, item in node.items()
                                 if (section, key) not in keys}
                                if isinstance(node, dict) else copy.deepcopy(node))
+    if plugin_id:
+        owned_engines = plugin_engine_ids(plugin_id)
+        engines = value.get('engines')
+        enabled = engines.get('enabled') if isinstance(engines, dict) else None
+        if owned_engines and isinstance(enabled, list):
+            result.setdefault('engines', {})['enabled'] = [
+                engine for engine in enabled if isinstance(engine, str) and engine in owned_engines
+            ]
     return result
 
 

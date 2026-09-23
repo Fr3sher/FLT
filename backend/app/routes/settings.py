@@ -254,7 +254,7 @@ def put_settings():
     scope = _settings_scope()
     if (cfg.settings_view(config_partial, scope) != config_partial
             or set(secrets_partial) - set(cfg.settings_secret_keys(scope))):
-        return jsonify({'error': 'These settings belong to another owner. Open its plugin settings.'}), 400
+        return jsonify({'error': 'This page submitted settings outside its plugin. Reload the page and try again.'}), 400
     # Validate through config's persistence boundary before saving config.json
     # too, so a rejected combined request changes neither file.  This covers all
     # control/format/Unicode line separators and a pre-existing poisoned .env,
@@ -328,7 +328,7 @@ def put_settings():
                 'error': hf_cloud_check['detail'],
                 'secret_checks': {'HF_CLOUD_TOKEN': hf_cloud_check},
             }), 400
-    cfg.save_config(config_partial)
+    cfg.save_config(config_partial, plugin_id=scope)
     cfg.set_secrets(secrets_partial)
     # A changed ComfyUI location must take effect NOW: the base/model listers cache
     # their scans for 5 min, so without this the training-base dropdowns keep showing

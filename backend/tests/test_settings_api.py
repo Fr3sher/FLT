@@ -1288,6 +1288,48 @@ def test_settings_offers_an_engine_added_by_an_update(client, tmp_path, monkeypa
 
 
 @pytest.mark.plugins('api_engines')
+@pytest.mark.parametrize('selection', [['chatgpt'], [], ['nanobanana', 'chatgpt', 'openrouter']])
+def test_plugin_engine_selection_saves_with_model_and_key(client, selection):
+    from app import config as cfg
+
+    url = '/api/settings?plugin=api_engines'
+    assert set(client.get(url).json['config']['engines']['enabled']) == {
+        'nanobanana', 'chatgpt', 'openrouter'}
+    cfg.save_config({'engines': {'enabled': ['klein', 'uninstalled-engine', 'chatgpt']}})
+    shown = client.get(url).get_json()
+    assert shown['config']['engines']['enabled'] == ['chatgpt']
+
+    # Another page may save while this plugin's settings are open.
+    cfg.save_config({'engines': {'enabled': ['uninstalled-engine', 'chatgpt']}})
+    response = client.put(url, json={
+        'config': {'engines': {'enabled': selection, 'chatgpt_image_model': 'example-model'}},
+        'secrets': {'OPENAI_API_KEY': 'fixture-key'},
+    })
+    assert response.status_code == 200, response.get_json()
+    assert response.json['config']['engines']['enabled'] == selection
+    stored = cfg.load_config(force=True)['engines']
+    assert stored['enabled'] == ['uninstalled-engine', *selection]
+    assert stored['chatgpt_image_model'] == 'example-model'
+    assert cfg.secret('OPENAI_API_KEY') == 'fixture-key'
+    assert client.get(url).json['config']['engines']['enabled'] == selection
+
+
+@pytest.mark.plugins('api_engines')
+@pytest.mark.parametrize('selection', [['klein'], ['unknown-engine'], 'chatgpt', None, [{}]])
+def test_plugin_engine_selection_rejects_foreign_or_invalid_values(client, selection):
+    from app import config as cfg
+
+    before = cfg.load_config()
+    response = client.put('/api/settings?plugin=api_engines', json={
+        'config': {'engines': {'enabled': selection, 'chatgpt_image_model': 'example-model'}},
+        'secrets': {'OPENAI_API_KEY': 'fixture-key'},
+    })
+    assert response.status_code == 400
+    assert cfg.load_config() == before
+    assert not cfg.secret('OPENAI_API_KEY')
+
+
+@pytest.mark.plugins('api_engines')
 def test_unchecking_an_engine_over_the_api_sticks(client, monkeypatch):
     """The counter-test over HTTP: the SPA saves the full config it was shown,
     minus the engine the user just unchecked. It must not reappear on reload."""
