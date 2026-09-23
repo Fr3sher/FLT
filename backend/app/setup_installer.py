@@ -3509,7 +3509,9 @@ def _run_primary_download(action) -> int:
         if not reason:
             _append(action, f'already present: {dest}')
             return 0
-        _append(action, f'the file already here needs replacing: {reason}')
+        diagnosis = ('needs replacing' if reason.startswith('superseded model revision')
+                     else 'cannot be loaded')
+        _append(action, f'the file already here {diagnosis}: {reason}')
         # It is NOT deleted now. `dest` is written by os.replace(part, dest) at the
         # end of a successful download, which overwrites it atomically, so there is
         # nothing to clear beforehand — and clearing it beforehand is exactly how a
