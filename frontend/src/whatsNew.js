@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-23-zzzzzzzz-plugin-engine-settings-save',
+    date: '2026-09-23',
+    title: 'Save your enabled image engines from plugin settings',
+    blurb: 'Engine checkboxes now show your saved selection and save alongside API keys and model choices without an ownership error. Changing a plugin\'s engines preserves your other engine selections.',
+  },
+  {
     id: '2026-09-23-zzzzzzz-studio-node-repair',
     date: '2026-09-23',
     title: 'Resolve missing ComfyUI nodes from your test setup',
