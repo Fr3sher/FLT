@@ -1091,10 +1091,14 @@ def test_flask_venv_detector_does_not_follow_managed_python_symlink(
     """
     from app import setup_installer
 
-    app_python = tmp_path / 'app' / 'python'
-    managed_python = tmp_path / 'managed' / 'python'
+    app_root = tmp_path / 'app'
+    managed_root = tmp_path / 'managed'
+    app_python = app_root / 'bin' / 'python'
+    managed_python = managed_root / 'bin' / 'python'
     app_python.parent.mkdir(parents=True)
     managed_python.parent.mkdir(parents=True)
+    (app_root / 'pyvenv.cfg').write_text('home = /usr/bin\n')
+    (managed_root / 'pyvenv.cfg').write_text('home = /usr/bin\n')
     app_python.touch()
     try:
         managed_python.symlink_to(app_python)
