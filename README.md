@@ -6,9 +6,18 @@ Build, curate, caption and train image datasets from one browser interface. LDS 
 
 The core and public plugins are free under the [PolyForm Noncommercial license](LICENSE). The core needs no account; optional usage statistics are off by default. External APIs and rented GPUs have their own charges. Additional paid plugins may be offered later.
 
-![Dataset workspace](docs/screenshots/02-workspace.png)
+<table>
+  <tr>
+    <td width="50%" align="center"><a href="docs/screenshots/generate/generate-variations.png"><img src="docs/screenshots/generate/generate-variations.png" alt="Generation engines" width="100%"></a><br><sub>Generation engines</sub></td>
+    <td width="50%" align="center"><a href="docs/screenshots/02-workspace.png"><img src="docs/screenshots/02-workspace.png" alt="Dataset workspace" width="100%"></a><br><sub>Dataset workspace</sub></td>
+  </tr>
+</table>
 
-[Watch a complete Character LoRA workflow in seven minutes](https://github.com/user-attachments/assets/d51ff89c-34e9-41a9-b47d-08939a8c867b). People shown in the demo and screenshots are AI-generated.
+A complete Character LoRA workflow in seven minutes:
+
+https://github.com/user-attachments/assets/d51ff89c-34e9-41a9-b47d-08939a8c867b
+
+People shown in the demo and screenshots are AI-generated.
 
 ## What it does
 
@@ -46,6 +55,33 @@ Install optional features from **Plugins → Store**, configure and prepare them
 | [Web scraping](bundled/scrape/) | Import selected images or clips from searches and supported gallery URLs into datasets or banks | Source-dependent credentials and permissions; Pexels requires explicit dataset/ML authorization |
 
 API providers apply their own billing and content policies. Model licenses also apply, including MiniMax H3's territory restrictions; check the [video limits](docs/guide/features.md#video-bank-beta--first-release-read-the-limits) before using it. Plugin authors can start with the [SDK and package guide](docs/plugins/README.md).
+
+## Screenshots
+
+Click a screenshot to view it at full size.
+
+<table>
+  <tr>
+    <td width="33%" align="center"><a href="docs/screenshots/bank/bank-overview.png"><img src="docs/screenshots/bank/bank-overview.png" alt="Image Bank" width="100%"></a><br><sub>Image Bank</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/bank/bank-analyze-and-overview.png"><img src="docs/screenshots/bank/bank-analyze-and-overview.png" alt="Analysis and coverage" width="100%"></a><br><sub>Analysis and coverage</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/bank/bank-launch-all.png"><img src="docs/screenshots/bank/bank-launch-all.png" alt="Batch analysis" width="100%"></a><br><sub>Batch analysis</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="docs/screenshots/03-curate.png"><img src="docs/screenshots/03-curate.png" alt="Dataset curation" width="100%"></a><br><sub>Dataset curation</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/bank/find-text-launch.png"><img src="docs/screenshots/bank/find-text-launch.png" alt="Text detection" width="100%"></a><br><sub>Text detection</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/training/runs-hub.png"><img src="docs/screenshots/training/runs-hub.png" alt="Training runs" width="100%"></a><br><sub>Training runs</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="docs/screenshots/studio/studio-grid.png"><img src="docs/screenshots/studio/studio-grid.png" alt="Checkpoint comparisons" width="100%"></a><br><sub>Checkpoint comparisons</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/canvas/canvas-board.png"><img src="docs/screenshots/canvas/canvas-board.png" alt="LoRA Canvas" width="100%"></a><br><sub>LoRA Canvas</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/studio/civitai-prompt-browser.png"><img src="docs/screenshots/studio/civitai-prompt-browser.png" alt="Civitai prompts" width="100%"></a><br><sub>Civitai prompts</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="docs/screenshots/release/camera-angles-picker.png"><img src="docs/screenshots/release/camera-angles-picker.png" alt="Camera angles" width="100%"></a><br><sub>Camera angles</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/video/video-studio-clips.png"><img src="docs/screenshots/video/video-studio-clips.png" alt="Video Test Studio" width="100%"></a><br><sub>Video Test Studio</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/video/dlss5-compare.png"><img src="docs/screenshots/video/dlss5-compare.png" alt="DLSS 5 comparison" width="100%"></a><br><sub>DLSS 5 comparison</sub></td>
+  </tr>
+</table>
 
 ## Setup & install
 
