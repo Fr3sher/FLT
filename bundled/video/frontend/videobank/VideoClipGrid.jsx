@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react'
-import { videoClipThumbUrl } from './videoBankApi.js'
-import { clipLabel } from './videoClipFragment.js'
-import { FLAG_LABELS } from './videoMetricsFilter.js'
-import { cameraBadge } from './videoCameraMotion.js'
-import { transitionChip } from './videoShotCuts.js'
+import { videoClipThumbUrl } from './videoBankApi'
+import { clipLabel } from './videoClipFragment'
+import { FLAG_LABELS } from './videoMetricsFilter'
+import { cameraBadge } from './videoCameraMotion'
+import { transitionChip } from './videoShotCuts'
 
 /** 🎬 The shot gallery — JPEG thumbnails, and NOT ONE <video>.
  *

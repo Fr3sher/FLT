@@ -65,7 +65,7 @@ export const ENRICH_UNKNOWN = 'the server did not say which prompt ran, so the l
 
 /** Queue one clip per frame, in order, on ONE seed and ONE prompt.
  *
- * `base` is the launch without its frame (mode, prompt, LoRA, dials — and the
+ * `base` is the launch without its START frame (a picked LAST frame is in it, one for the whole batch; mode, prompt, LoRA, dials — and the
  * seed as typed, '' for random); `post(body)` performs one POST /generate and
  * resolves to the server's reply; `onQueued(done, total)` is called after
  * each launch that went through, for a button that counts.
@@ -202,6 +202,6 @@ export function generateLabel({ mode, count, busy, done = 0, total = 0, phase = 
     if (phase === 'writing') return `Writing prompt ${Math.min(done + 1, total)} of ${total}…`;
     return total > 1 ? `Queueing ${Math.min(done + 1, total)} of ${total}…` : 'Queueing…';
   }
-  const n = mode === 't2v' ? 1 : count;
+  const n = mode === 't2v' || mode === 'ref2va' ? 1 : count;
   return n > 1 ? `Generate ${n} clips` : 'Generate clip';
 }

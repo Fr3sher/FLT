@@ -17,7 +17,7 @@ stay local for the same reason.
 import json
 import os
 
-from lds_video.models import db
+from .models import db
 
 
 def clip_summary(clip):

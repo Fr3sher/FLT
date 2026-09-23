@@ -20,9 +20,7 @@
 //  3. "Not embedded" is a much more likely state here than in the image lane. A
 //     bank of rushes is triaged long before anyone thinks to search it, so the
 //     honest default is to explain the pass rather than to return an empty grid.
-import {
-  spreadLabel, readinessHint, pendingLabel, suggestPushDown,
-} from '@lds/plugin-sdk/search'
+import { spreadLabel, readinessHint, pendingLabel, suggestPushDown } from '@lds/plugin-sdk/search';
 
 // Re-exported so the video components have ONE import and cannot accidentally
 // grow a second, drifting copy of a sentence that was measured once.

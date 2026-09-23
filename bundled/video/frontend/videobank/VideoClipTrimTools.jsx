@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { patchJson, postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
+import { patchJson, postJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
 import {
   I2V_FIRST_FRAME_HINT, boundsAtPlayhead, boundsChanged, draftSummary,
   frameStep, newShotBounds, nudgedBounds, retouchToast, splitAvailability,
-} from './videoClipEdit.js'
-import { videoClipBoundsUrl, videoClipSplitUrl, videoSourceClipsUrl } from './videoBankApi.js'
+} from './videoClipEdit'
+import { videoClipBoundsUrl, videoClipSplitUrl, videoSourceClipsUrl } from './videoBankApi'
 
 /** ✂ The retouch tools, folded under the ONE <video> the lightbox mounts.
  *

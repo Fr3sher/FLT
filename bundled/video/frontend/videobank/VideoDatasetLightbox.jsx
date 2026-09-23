@@ -1,9 +1,9 @@
 import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui'
 import { useEffect, useRef, useState } from 'react'
-import { videoDatasetClipComparisonUrl, videoDatasetClipMediaUrl } from './videoBankApi.js'
-import { neuralRenderTags } from './neuralRenderMetadata.js'
-import { clipDurationS, isStillFile, lightboxKeyAction } from './videoDatasetClips.js'
-import { clipLabel } from './videoClipFragment.js'
+import { videoDatasetClipComparisonUrl, videoDatasetClipMediaUrl } from './videoBankApi'
+import { neuralRenderTags } from './neuralRenderMetadata'
+import { clipDurationS, isStillFile, lightboxKeyAction } from './videoDatasetClips'
+import { clipLabel } from './videoClipFragment'
 
 /** ▶ Watching ONE clip of a dataset — the only <video> this page ever mounts.
  *

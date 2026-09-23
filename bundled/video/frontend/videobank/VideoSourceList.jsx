@@ -1,8 +1,8 @@
 import {
   formatDuration, formatFileSize, sourceEncoding, sourceGeometry, sourceState,
-} from './videoBankStatus.js'
-import { firstShotBounds } from './videoClipEdit.js'
-import { canRecut } from './videoShotCuts.js'
+} from './videoBankStatus'
+import { firstShotBounds } from './videoClipEdit'
+import { canRecut } from './videoShotCuts'
 
 // The per-file actions share one look: they are peers, and a difference in
 // weight between them would read as a difference in consequence.

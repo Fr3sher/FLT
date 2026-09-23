@@ -13,13 +13,13 @@
  * ▶ pipeline and 🎬 promote buttons are NOT here: like the image lane's
  * "Launch all…" and "Promote…", the two decisive actions live in the top bar.
  */
-import VideoCapabilityStrip from './VideoCapabilityStrip.jsx'
-import VideoShotCutsPanel from './VideoShotCutsPanel.jsx'
-import { GroupLabel, PassButton } from '@lds/plugin-sdk/ui'
-import { GuideInfoDot } from '@lds/plugin-sdk/ui'
-import { passBlockedBy } from '../lib/videoCapability.js'
-import { PASS_LABELS } from './videoBankStatus.js'
-import { VIDEO_PASS_TOPICS } from './videoPassTopics.js'
+import VideoCapabilityStrip from './VideoCapabilityStrip'
+import VideoShotCutsPanel from './VideoShotCutsPanel'
+import { GroupLabel, PassButton } from '@lds/plugin-sdk/ui';
+import { GuideInfoDot } from '@lds/plugin-sdk/ui';
+import { passBlockedBy } from '../lib/videoCapability.js';
+import { PASS_LABELS } from './videoBankStatus'
+import { VIDEO_PASS_TOPICS } from './videoPassTopics'
 
 export default function VideoPassesPanel({
   bankId, bank, counts, capability, step, busy,

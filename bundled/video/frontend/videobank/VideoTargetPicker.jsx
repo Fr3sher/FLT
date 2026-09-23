@@ -1,4 +1,4 @@
-import { targetWarnings, targetBadge } from './videoTargetChoice.js'
+import { targetWarnings, targetBadge } from './videoTargetChoice'
 
 const TONE = {
   danger: 'border-rose-500/60 bg-rose-500/10 text-rose-100',

@@ -55,7 +55,12 @@ from lds_sdk import workers as infer_env
 
 logger = logging.getLogger(__name__)
 
-_SCRIPT = str(Path(__file__).resolve().parents[1] / 'infer' / 'shot_detect_infer.py')
+# The lane's infer scripts live beside the package (bundled/video/infer/),
+# not in the core's backend/infer/: resolved from this file, wherever the
+# plugin is installed.
+_INFER_DIR = Path(__file__).resolve().parents[1] / 'infer'
+
+_SCRIPT = str(_INFER_DIR / 'shot_detect_infer.py')
 
 # Persisted verbatim in VideoClip.detector. Duplicated in the child
 # (shot_detect_infer.DETECTOR_ID) on purpose — the two run in different

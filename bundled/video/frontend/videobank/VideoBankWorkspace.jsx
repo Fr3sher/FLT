@@ -1,46 +1,44 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiFetch, postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
-import { HelpBadge } from '@lds/plugin-sdk'
+import { apiFetch, postJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
+import { HelpBadge } from '@lds/plugin-sdk';
 import {
   videoBankUrl, videoClipsUrl, videoPassUrl, videoSourceClipsUrl,
   videoSourceRecutUrl, videoSourceSingleShotUrl,
-} from './videoBankApi.js'
-import { retouchToast } from './videoClipEdit.js'
-import { passBlockedBy } from '../lib/videoCapability.js'
+} from './videoBankApi'
+import { retouchToast } from './videoClipEdit'
+import { passBlockedBy } from '../lib/videoCapability.js';
 import {
   countsProblems, activityLine, activityPercent, isBusy,
   resumeSafetyNote,
   announcement, nextStep, passLabel, PASS_LABELS,
-} from './videoBankStatus.js'
+} from './videoBankStatus'
 import {
   statusFilterCount, toggleSelection, selectRange,
   triagePayload, triageAllPayload, triageAllConfirmation, emptyGridMessage,
   hasMore,
-} from './videoTriage.js'
+} from './videoTriage'
 import {
   burstKeyAction, clipIndex, firstPendingIndex, stepIndex, afterDecision,
   undoEntry, pushUndo, popUndo,
   createQueue, queueDecision, startBatch, finishBatch, queueDepth,
   loadBurstPrefs, saveBurstPrefs,
-} from './videoBurstTriage.js'
-import VideoBurstBar from './VideoBurstBar.jsx'
-import VideoClipGrid from './VideoClipGrid.jsx'
-import VideoClipLightbox from './VideoClipLightbox.jsx'
-import VideoFilterRail from './VideoFilterRail.jsx'
-import VideoPassesPanel from './VideoPassesPanel.jsx'
-import RunEverythingDialog from './RunEverythingDialog.jsx'
-import { matchLine } from './videoClipSearch.js'
-import { filterByFlag, flagChips, flagFilterNote } from './videoMetricsFilter.js'
-import { cameraChips, filterByCamera } from './videoCameraMotion.js'
-import PromoteVideoDialog from './PromoteVideoDialog.jsx'
-import DescribeShotsDialog from './DescribeShotsDialog.jsx'
-import { GuideInfoDot } from '@lds/plugin-sdk/ui'
-import { VIDEO_PASS_TOPICS } from './videoPassTopics.js'
-import { Stat } from '@lds/plugin-sdk/ui'
-import {
-  loadRailOpen, passesButtonLabel, railIsColumn, saveRailOpen,
-} from '@lds/plugin-sdk/bank'
+} from './videoBurstTriage'
+import VideoBurstBar from './VideoBurstBar'
+import VideoClipGrid from './VideoClipGrid'
+import VideoClipLightbox from './VideoClipLightbox'
+import VideoFilterRail from './VideoFilterRail'
+import VideoPassesPanel from './VideoPassesPanel'
+import RunEverythingDialog from './RunEverythingDialog'
+import { matchLine } from './videoClipSearch'
+import { filterByFlag, flagChips, flagFilterNote } from './videoMetricsFilter'
+import { cameraChips, filterByCamera } from './videoCameraMotion'
+import PromoteVideoDialog from './PromoteVideoDialog'
+import DescribeShotsDialog from './DescribeShotsDialog'
+import { GuideInfoDot } from '@lds/plugin-sdk/ui';
+import { VIDEO_PASS_TOPICS } from './videoPassTopics'
+import { Stat } from '@lds/plugin-sdk/ui';
+import { loadRailOpen, passesButtonLabel, railIsColumn, saveRailOpen } from '@lds/plugin-sdk/bank';
 
 const PAGE = 120
 const POLL_MS = 2000

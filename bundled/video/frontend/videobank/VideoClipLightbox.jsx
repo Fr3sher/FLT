@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import {
   clipFragmentSrc, clipLabel, shouldRemountPlayer, playerBudgetWarning,
   MAX_MOUNTED_PLAYERS,
-} from './videoClipFragment.js'
-import { playFromSecond, captionStateNote } from './videoClipSearch.js'
-import { videoClipCaptionUrl } from './videoBankApi.js'
-import { patchJson } from '@lds/plugin-sdk'
-import { videoSourceMediaUrl } from './videoBankApi.js'
-import VideoClipTrimTools from './VideoClipTrimTools.jsx'
+} from './videoClipFragment'
+import { playFromSecond, captionStateNote } from './videoClipSearch'
+import { videoClipCaptionUrl } from './videoBankApi'
+import { patchJson } from '@lds/plugin-sdk';
+import { videoSourceMediaUrl } from './videoBankApi'
+import VideoClipTrimTools from './VideoClipTrimTools'
+import { shotKeyAction } from './videoBurstTriage'
 
 /** 🎬 Watching ONE shot — the only <video> element this lane ever mounts.
  *
@@ -72,11 +73,12 @@ export default function VideoClipLightbox({
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose?.()
-      else if (e.key === 'ArrowLeft') onPrev?.()
-      else if (e.key === 'ArrowRight') onNext?.()
-      else if (e.key === 'k' || e.key === 'K') onKeep?.()
-      else if (e.key === 'r' || e.key === 'R') onReject?.()
+      const action = shotKeyAction(e)
+      if (action === 'close') onClose?.()
+      else if (action === 'prev') onPrev?.()
+      else if (action === 'next') onNext?.()
+      else if (action === 'keep') onKeep?.()
+      else if (action === 'reject') onReject?.()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

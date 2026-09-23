@@ -1,5 +1,5 @@
-import { clipLabel } from './videoClipFragment.js'
-import { clipDurationS, datasetClipPoster, hasCaption, isStillFile } from './videoDatasetClips.js'
+import { clipLabel } from './videoClipFragment'
+import { clipDurationS, datasetClipPoster, hasCaption, isStillFile } from './videoDatasetClips'
 
 /** 🎞 The clips of a built dataset — and, exactly like the bank's gallery, NOT
  * ONE <video>.

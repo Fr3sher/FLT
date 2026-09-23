@@ -14,6 +14,16 @@ source = package_tests.source
 change_manifest = package_tests.change_manifest
 
 
+def test_literal_export_extensions_do_not_execute_sdk_source(tmp_path):
+    module = tmp_path / 'exports.py'
+    module.write_text(
+        "__all__ = ['queue']\n"
+        "__all__ += ['require_ready']\n"
+        "__all__ += compute_private_names()\n"
+        "raise AssertionError('source must not execute')\n", encoding='utf-8')
+    assert common.literals(module)['__all__'] == ['queue', 'require_ready']
+
+
 def test_derived_sdk_version_does_not_import_the_application(host):
     (host / 'backend/lds_sdk/__init__.py').write_text(
         "from app.plugins.api import LDS_PLUGIN_API_MAJOR as API_MAJOR, LDS_PLUGIN_API_MINOR as API_MINOR\n"

@@ -92,17 +92,17 @@ import tempfile
 from lds_sdk.video_host import config as cfg
 from lds_sdk import workers as infer_env
 from lds_video.models import db
-from lds_video.models import VideoBank
-from lds_video.models import VideoClip
-from lds_video.models import VideoSource
-from lds_video.video_pass_scaffold import clip_summary as _summary
-from lds_video.video_pass_scaffold import empty_scratch as _empty
-from lds_video.video_pass_scaffold import retry_when_idle as _retry_when_idle
-from lds_video.video_pass_scaffold import store_pass_result
+from lds_video.models import VideoBank, VideoClip, VideoSource
+from lds_video.video_pass_scaffold import clip_summary as _summary, empty_scratch as _empty, retry_when_idle as _retry_when_idle, store_pass_result
 
 logger = logging.getLogger(__name__)
 
-_SCRIPT = str(Path(__file__).resolve().parents[1] / 'infer' / 'video_ai_check_infer.py')
+# The lane's infer scripts live beside the package (bundled/video/infer/),
+# not in the core's backend/infer/: resolved from this file, wherever the
+# plugin is installed.
+_INFER_DIR = Path(__file__).resolve().parents[1] / 'infer'
+
+_SCRIPT = str(_INFER_DIR / 'video_ai_check_infer.py')
 
 # The encoder. A CONSTANT and not a setting, unlike `video_caption.model`: that
 # one is a choice between checkpoints that all do the same job differently, while

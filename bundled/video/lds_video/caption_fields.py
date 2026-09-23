@@ -10,8 +10,8 @@ facets.
 
 STDLIB ONLY, ON PURPOSE. The inference worker runs in an interpreter this
 project does not own (ComfyUI's python_embeded, the Score interpreter) and
-imports this file by path to count tokens on the PROSE alone — so nothing here
-may import the app, Flask or the database.
+loads a verified copy beside its script to count tokens on the PROSE alone —
+so nothing here may import the app, Flask or the database.
 
 The parse is deliberately forgiving and never raises: a model that forgets the
 separator, mislabels a line or writes the fields in prose gets its whole text

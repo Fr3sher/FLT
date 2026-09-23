@@ -13,17 +13,20 @@ to tell there are two services behind the app.
 
 No login — single local user (`cfg.LOCAL_USER`), like every other blueprint here.
 """
+import sqlalchemy as sa
 import logging
 import os
 import uuid
+from contextlib import contextmanager, nullcontext
 
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, current_app, jsonify, request, send_file
 
 from lds_sdk.video_host.config import LOCAL_USER
 from lds_sdk.video_host.gpu import gpu_exclusive_vision_window
 from lds_sdk.video_host import studio as lts
 from lds_sdk import dlss5 as _nr
 from lds_video import video_test_studio as vts
+from lds_video import video_references as vrefs
 from lds_sdk.video_host.http import map_error as _map_error
 from lds_sdk.video_host.http import require_comfyui as _require_comfyui
 from lds_sdk.video_host.http import require_no_stalled_comfyui as _require_no_stalled_comfyui
@@ -85,12 +88,19 @@ def _clip_dict(clip):
     return {
         'id': clip.id, 'status': clip.status, 'error': clip.error,
         'filename': clip.filename, 'prompt': clip.prompt, 'mode': clip.mode,
-        'aspect': getattr(clip, 'aspect', None) or 'auto',
+        # The queue job behind a pending clip, so the card can match the
+        # progress bar the listing carries to the one clip it belongs to.
+        'job_id': clip.job_id,
         # The staged start frame, so ↻ Reuse can hand it back: without it a
         # reused image-to-video clip lands in i2v mode with nothing to animate
         # and Generate stays blocked — every dial restored except the one that
         # decides whether the button works at all.
         'source_image': clip.source_image,
+        'references': vrefs.references_of(clip),
+        'ref_base': getattr(clip, 'ref_base', None),
+        'ref_image_size': getattr(clip, 'ref_image_size', None) or 'match',
+        'aspect': getattr(clip, 'aspect', None) or 'auto',
+        'end_image': getattr(clip, 'end_image', None),
         # ↗ The clip this one was smoothed from, so the card can say so.
         'vfi_of': getattr(clip, 'vfi_of', None),
         # ⏭ The clip this one continues (joined behind it), and whether the join happened.
@@ -113,14 +123,43 @@ def _clip_dict(clip):
         'accel': (getattr(clip, 'accel', None) or ('turbo' if clip.turbo else '')),
         'sparse': clip.sparse or '', 'latent_upscale': bool(clip.latent_upscale),
         'eros': (clip.base_model == vts.BASE_EROS),
+        'light': (clip.base_model == vts.BASE_LIGHT),
         'rating': clip.rating, 'run_id': clip.run_id,
         'dataset_id': clip.dataset_id,
+        'generation_settings': _json_or_none(clip.generation_settings),
         'created_at': clip.created_at.isoformat() if clip.created_at else None,
         'seconds': (round((clip.frames - 1) / clip.fps, 2)
                     if clip.frames and clip.fps else None),
         # ⏱ How long the queue spent on it, or null when the queue could not say.
         'render_seconds': clip.render_seconds,
     }
+
+
+@bp.post('/clip/<int:clip_id>/best')
+def video_studio_clip_best(clip_id):
+    from lds_video import video_best_settings as best
+    try:
+        saved = best.save_best(LOCAL_USER, clip_id)
+    except LookupError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except (ValueError, TypeError) as exc:
+        return _map_error(exc)
+    return jsonify({'ok': True, 'best_settings': saved})
+
+
+@bp.get('/best-settings')
+def video_studio_best_settings():
+    from lds_video import video_best_settings as best
+    try:
+        ds_id, run_id = best.resolve_lora(LOCAL_USER, request.args.get('lora'),
+                                        run_id=request.args.get('run_id'),
+                                        dataset_id=request.args.get('dataset_id'))
+        ds = best.get_dataset(LOCAL_USER, ds_id) if ds_id else None
+    except (ValueError, TypeError) as exc:
+        return _map_error(exc)
+    return jsonify({'dataset_id': ds_id, 'run_id': run_id,
+                    'dataset_name': ds.name if ds else None,
+                    'best_settings': best.read_best(ds) if ds else None})
 
 
 @bp.get('/options')
@@ -142,6 +181,9 @@ def video_studio_options():
     # be in the graph. Asking twice could answer differently in the same reply.
     classes = vts.registered_classes()
     missing = vts.missing_weights()
+    # ONE /system_stats read for the reply: the launch advice and the lighter
+    # base's version verdict must describe the same server.
+    argv, ram_gb, comfy_version = vts.comfyui_launch_facts()
     return jsonify({
         # What this machine is still missing, and what Setup can do about it.
         # `action` is a setup_installer action name, so the Setup screen turns
@@ -149,6 +191,7 @@ def video_studio_options():
         # file and `place_in` says where to put it by hand.
         'missing_weights': missing,
         'ready': vts.studio_ready(missing),
+        'reference': vts.reference_status(classes, comfy_version),
         'options_available': vts.option_availability(classes),
         'sage': vts.sage_available(classes),
         'frame_choices': list(profile.get('frame_choices') or ()),
@@ -164,16 +207,22 @@ def video_studio_options():
                        'default': vts.MP_DEFAULT},
         'sparse_modes': list(vts.SPARSE_MODES),
         'turbo_steps': vts.TURBO_STEPS, 'default_steps': vts.DEFAULT_STEPS,
-        # ⚡ The three arena accelerations, each with whether THIS machine has it.
-        'accelerations': vts.accelerations_status(),
+        # ⚡ The arena's three and VDN-H3, each with whether THIS machine has
+        # it — and, for VDN-H3, the card's VRAM: on a 24 GB card its hint asks
+        # for the lighter base, which is what the launch will insist on.
+        'accelerations': vts.accelerations_status(classes, vram_gb=vts.comfyui_vram_gb()),
         'base_official': vts.BASE_OFFICIAL, 'base_eros': vts.BASE_EROS,
         'eros_available': vts.eros_on_disk(),
+        # 🪶 The lighter base: file + version verdict, and the sentence for a
+        # greyed box, decided here so the panel never guesses which of the two.
+        'base_light': vts.BASE_LIGHT,
+        'light': vts.light_status(comfy_version),
         # ✨ DLSS 5 neural rendering — ready + the sentences naming what is
         # missing, so the clip history's button can refuse in words.
         'neural_render': _nr.status(),
         # How the running ComfyUI was started, judged against this machine's
         # RAM: None, or the flag that turns minutes per clip into seconds.
-        'launch_advice': vts.launch_advice(*vts.comfyui_launch_facts()),
+        'launch_advice': vts.launch_advice(argv, ram_gb, comfy_version),
     })
 
 
@@ -243,13 +292,7 @@ def video_studio_clip_last_frame(clip_id):
     as the Bank, Gallery and upload routes, so the graph loads it the same way.
     The reply names the clip so the launch can say it continues it."""
     try:
-        png = vts.last_frame_png(clip_id)
-        from lds_sdk.video_host import comfy_fs
-        from lds_sdk.video_host import config as cfg
-        input_dir = comfy_fs.ensure_input_usable(cfg.comfyui_dir('input'))
-        dest = f'lds_vstudio_{uuid.uuid4().hex[:10]}.png'
-        staged = comfy_fs.stage_input_image(png, dest, input_dir)
-        ratio = _image_ratio(staged)
+        out = stage_clip_last_frame(clip_id)
     except LookupError as exc:
         return jsonify({'ok': False, 'error': str(exc)}), 404
     except (ValueError, TypeError) as exc:
@@ -257,8 +300,19 @@ def video_studio_clip_last_frame(clip_id):
     except Exception as exc:                      # noqa: BLE001
         logger.exception('video studio: staging the last frame of clip %s failed', clip_id)
         return jsonify({'ok': False, 'error': str(exc)}), 409
-    return jsonify({'ok': True, 'image': dest, 'ratio': ratio, 'continues': int(clip_id),
-                    'preview': f'/api/video-studio/clip/{int(clip_id)}/last-frame.png'})
+    return jsonify({'ok': True, **out})
+
+
+def stage_clip_last_frame(clip_id):
+    """The same staged frame for manual and automatic continuation."""
+    from lds_sdk.video_host import comfy_fs
+    from lds_sdk.video_host import config as cfg
+    png = vts.last_frame_png(clip_id)
+    input_dir = comfy_fs.ensure_input_usable(cfg.comfyui_dir('input'))
+    dest = f'lds_vstudio_{uuid.uuid4().hex[:10]}.png'
+    staged = comfy_fs.stage_input_image(png, dest, input_dir)
+    return {'image': dest, 'ratio': _image_ratio(staged), 'continues': int(clip_id),
+            'preview': f'/api/video-studio/clip/{int(clip_id)}/last-frame.png'}
 
 
 def _clip_seconds(data: dict):
@@ -282,6 +336,77 @@ def _clip_seconds(data: dict):
     return (vts.snap_frames(data.get('frames')) - 1) / fps
 
 
+_UNSET = object()
+
+
+def _writer_context(data, *, continues=_UNSET):
+    """⏭🎞 What the ✨ writers are handed beyond the frame and the text: the
+    previous parts when the frame continues a clip, and the staged last frame
+    when one is picked. Keyword arguments ONLY when present, so a writer
+    called without them is called exactly as before. `continues` given by the
+    caller (the batch, per picture) wins over the body's — None included: a
+    picture that continues nothing must not fall back to the strip's list.
+    A text-only launch continues nothing either (no first frame to carry on
+    from), as the panel's own rule says — and ONLY text-only: a reference
+    launch that carries `continues` has a first frame by construction since
+    2026-09-07 (enqueue_clip refuses one without it), so it is the next part
+    of a take and the writer has to be told. Excluding it, as this line did
+    from 2026-09-04, cost the continuity rule — same people, same wardrobe,
+    same light, never reintroduced as new — and let the camera instruction
+    back in AT THE SEAM."""
+    extra = {}
+    if str(data.get('mode') or '').lower() == 'ref2va' or data.get('refmods') is True:
+        extra['mode'] = 'ref2va'
+        extra['references'] = vrefs.validate_references(data.get('references'), user_id=LOCAL_USER)
+    cont = data.get('continues') if continues is _UNSET else continues
+    if str(data.get('mode') or '').lower() == 't2v':
+        cont = None
+    if cont not in (None, '', False):          # a list, or any non-id, is rejected by previous_parts itself
+        previous = vts.previous_parts(cont)
+        if previous:
+            extra['previous'] = previous
+    end = os.path.basename(str(data.get('end_image') or '')) or None
+    if end:
+        extra['end_image'] = end
+    if data.get('direction'):
+        extra['direction'] = str(data['direction'])
+    return extra
+
+
+def _observes_locally(data) -> bool:
+    """⚙ A still or a reference read by JoyCaption runs on THIS machine's GPU
+    even when the writer is GPT: the window has to open for the observer, not
+    only for the writer — the old rule was written when the writer was the
+    only local step a ✨ press could take. Since 2026-09-06 that is every
+    press with a frame (the start frame, a last frame) or a reference to
+    read, not only one with a reference video."""
+    from lds_video.video_reference_prompt import uses_local_observer
+    references = (data.get('references') or []
+                  if str(data.get('mode') or '').lower() == 'ref2va' or data.get('refmods') is True else [])
+    # A strip (`images`, the per-picture batch) reads every one of its frames.
+    image = data.get('image') or next((x for x in (data.get('images') or []) if x), None)
+    return uses_local_observer(references, image=image, end_image=data.get('end_image'))
+
+
+@contextmanager
+def _motion_window(model=None, *, flag_ttl=600, local_observer=False):
+    from lds_video import video_motion_prompt as vmp
+    resolved = vmp._writer_model(model)
+    window = (nullcontext() if vmp.uses_chatgpt(resolved) and not local_observer
+              else gpu_exclusive_vision_window(flag_ttl=flag_ttl))
+    with window:
+        # Pin GPT for the entire request, including every frame in a batch.
+        # A settings change must not start a local model outside its GPU window.
+        yield resolved
+
+
+def _reference_writer_warnings(data):
+    if str(data.get('mode') or '').lower() != 'ref2va':
+        return {}
+    from lds_video.video_reference_prompt import context_warnings
+    return {'warnings': context_warnings(data.get('references') or [])}
+
+
 @bp.post('/motion/suggest')
 def video_studio_motion_suggest():
     """✨ Propose the movement, by looking at the staged start frame.
@@ -303,13 +428,15 @@ def video_studio_motion_suggest():
     from lds_video import video_motion_prompt as vmp
     data = request.get_json(silent=True) or {}
     try:
-        with gpu_exclusive_vision_window(flag_ttl=600):
+        with _motion_window(data.get('model'), flag_ttl=600,
+                            local_observer=_observes_locally(data)) as writer_model:
             out = vmp.suggest_from_frame(
                 data.get('image'),
                 instruction=data.get('instruction'),
-                model=data.get('model'),
+                model=writer_model,
                 seconds=_clip_seconds(data),
-                shots=data.get('shots', 1))
+                shots=data.get('shots', 1),
+                **_writer_context(data))
     except Exception as exc:
         # Like the image studio's twin: a bad ask is 400, the Ollama/LM Studio
         # fence 409 with its code (the panel offers the unload), the window's
@@ -317,7 +444,7 @@ def video_studio_motion_suggest():
         # sentence. The narrow clause this replaced let the fence through as
         # a bare 500 with no message to show.
         return _map_error(exc)
-    return jsonify({'ok': True, 'prompt': out})
+    return jsonify({'ok': True, 'prompt': out, **_reference_writer_warnings(data)})
 
 
 @bp.post('/motion/write-batch')
@@ -346,6 +473,8 @@ def video_studio_motion_write_batch():
     from lds_video import video_motion_prompt as vmp
     data = request.get_json(silent=True) or {}
     images = [str(n) for n in (data.get('images') or []) if str(n or '').strip()]
+    if str(data.get('mode') or '').lower() == 'ref2va':
+        return jsonify({'ok': False, 'error': 'References are written together; use Auto or Enrich once.'}), 400
     if not images:
         return jsonify({'ok': False, 'error': 'No start frame to write for.'}), 400
     if len(images) > MAX_WRITE_BATCH:
@@ -353,22 +482,42 @@ def video_studio_motion_write_batch():
                         'error': (f'{len(images)} pictures at once is more than one '
                                   f'window writes for (max {MAX_WRITE_BATCH}).')}), 400
     typed = str(data.get('prompt') or '').strip()
+    # `instruction` is the Motion field as a STEER for ✨ Auto — the frame says
+    # what is there, this says what should happen in it. Distinct from `prompt`
+    # (enrich THIS text): the panel sends whichever gesture it means. The first
+    # port of this route passed instruction='' on the propose branch, so the
+    # per-picture batch silently ignored what the user had typed — the exact
+    # sentence ✨ Auto honours on a single frame.
+    instruction = str(data.get('instruction') or '').strip()
     seconds = _clip_seconds(data)
     shots = data.get('shots', 1)
     model = data.get('model')
+    # ⏭ One entry per picture (a frame staged by ⏭ Continue carries the clip
+    # it continues; the others carry nothing), or one value for the strip.
+    cont = data.get('continues')
+    continues = cont if isinstance(cont, list) else [cont] * len(images)
     out = []
     try:
-        # ONE window for the whole strip — the reason this route exists.
-        with gpu_exclusive_vision_window(flag_ttl=_write_batch_ttl(len(images))):
+        # ONE window for the whole strip — the reason this route exists — and
+        # it opens for a local observer with a GPT writer too (review,
+        # 2026-09-06: the strip's frames are read on this card).
+        with _motion_window(model, flag_ttl=_write_batch_ttl(len(images)),
+                            local_observer=_observes_locally(data)) as writer_model:
+            # JoyCaption as the observer: every frame of the strip and the last
+            # frame described in ONE worker, before the writers; a refusal ends
+            # the batch with its sentence, as the window's own refusals do.
+            end = os.path.basename(str(data.get('end_image') or '')) or None
+            vmp.prime_stills(list(images) + ([end] if end else []), model=writer_model)
             for i, name in enumerate(images):
                 try:
+                    extra = _writer_context(data, continues=(continues[i] if i < len(continues) else None))
                     if typed:
-                        written = vmp.enhance(typed, image=name, model=model,
-                                              seconds=seconds, shots=shots)
+                        written = vmp.enhance(typed, image=name, model=writer_model,
+                                              seconds=seconds, shots=shots, **extra)
                     else:
-                        written = vmp.suggest_from_frame(name, instruction='',
-                                                         model=model, seconds=seconds,
-                                                         shots=shots)
+                        written = vmp.suggest_from_frame(name, instruction=instruction,
+                                                         model=writer_model, seconds=seconds,
+                                                         shots=shots, **extra)
                     out.append({'index': i, 'image': name, 'prompt': written})
                 except Exception as exc:          # noqa: BLE001
                     logger.warning('video studio: batch write failed on %s: %s', name, exc)
@@ -401,15 +550,17 @@ def video_studio_motion_enhance():
     data = request.get_json(silent=True) or {}
     original = str(data.get('prompt') or '').strip()
     try:
-        with gpu_exclusive_vision_window(flag_ttl=600):
+        with _motion_window(data.get('model'), flag_ttl=600,
+                            local_observer=_observes_locally(data)) as writer_model:
             out = vmp.enhance(data.get('prompt'), image=data.get('image'),
-                              model=data.get('model'), seconds=_clip_seconds(data),
-                              shots=data.get('shots', 1))
+                              model=writer_model, seconds=_clip_seconds(data),
+                              shots=data.get('shots', 1), **_writer_context(data))
     except Exception as exc:
         return _map_error(exc)
     # `unchanged` is how the panel tells "the model had nothing to add" from
     # "the request worked": the two look identical in the field.
     return jsonify({'ok': True, 'prompt': out,
+                    **_reference_writer_warnings(data),
                     'unchanged': str(out or '').strip() == original})
 
 
@@ -420,13 +571,71 @@ def video_studio_motion_models():
     return jsonify(vmp.model_choices())
 
 
+def _json_object(data):
+    """A PUT body as the dict it must be: an absent body is an empty choice (the
+    old `or {}`), an array or a scalar is a 400 sentence — not an AttributeError
+    on `.get` turned into a bare 500."""
+    if data is None:
+        return {}, None
+    if not isinstance(data, dict):
+        return None, (jsonify({'error': 'Send a JSON object.'}), 400)
+    return data, None
+
+
+@bp.get('/motion/dials')
+def video_studio_motion_dials():
+    """⚙ The writer's sampling dials as they will be used, next to the shipped
+    defaults and the bounds — so the window can draw a slider that cannot be
+    dragged outside what the provider accepts, and a ↺ that means something."""
+    from lds_video import video_motion_prompt as vmp
+    return jsonify({'ok': True, 'dials': vmp.configured_dials(),
+                    'defaults': vmp.dial_defaults(),
+                    'bounds': {k: [lo, hi] for k, (lo, hi, _) in vmp.DIAL_BOUNDS.items()}})
+
+
+@bp.put('/motion/dials')
+def video_studio_motion_dials_set():
+    """⚙ Save the dials. Answers what was KEPT after clamping, and the window
+    shows that — a 40 typed into temperature comes back as 2.0 on screen rather
+    than silently becoming something else at the next launch."""
+    from lds_video import video_motion_prompt as vmp
+    data, refused = _json_object(request.get_json(silent=True))
+    if refused:
+        return refused
+    return jsonify({'ok': True, 'dials': vmp.set_dials(data.get('dials'))})
+
+
 @bp.put('/motion/model')
 def video_studio_motion_model_set():
     """⚙ Remember the model that writes the motion. Empty returns to the
     provider's own vision model."""
     from lds_video import video_motion_prompt as vmp
-    data = request.get_json(silent=True) or {}
+    data, refused = _json_object(request.get_json(silent=True))
+    if refused:
+        return refused
     return jsonify({'ok': True, 'model': vmp.set_model(data.get('model'))})
+
+
+@bp.get('/motion/reference-observer')
+def video_studio_reference_observer():
+    """⚙ How reference VIDEOS are read before the writer sees them: the method
+    in use, the two on offer, and whether JoyCaption can run on this install."""
+    from lds_video import video_reference_prompt as vrp
+    return jsonify({'ok': True, **vrp.observer_choices()})
+
+
+@bp.put('/motion/reference-observer')
+def video_studio_reference_observer_set():
+    """⚙ Remember the method. Anything but the two names is a 400, never a
+    value stored and silently read back as the default."""
+    from lds_video import video_reference_prompt as vrp
+    data, refused = _json_object(request.get_json(silent=True))
+    if refused:
+        return refused
+    try:
+        return jsonify({'ok': True, 'observer': vrp.set_observer(data.get('observer'))})
+    except ValueError as exc:
+        return _map_error(exc)
 
 
 @bp.post('/lora/import')
@@ -482,6 +691,14 @@ def video_studio_source():
     Returns the staged NAME (what the graph's LoadImage will reference) and the
     aspect ratio, which the latent upscale needs to size its target.
     """
+    data = request.get_json(silent=True) or {}
+    if 'library_source' in data:
+        from lds_video import video_reference_selection as selection
+        try:
+            return jsonify({'ok': True, **selection.stage_guide(
+                LOCAL_USER, data['library_source'], data.get('frame', 'first'))})
+        except Exception as exc:
+            return _reference_library_error(exc)
     try:
         src_path, cleanup = _resolve_source(request)
     except ValueError as exc:
@@ -507,6 +724,153 @@ def video_studio_source():
     return jsonify({'ok': True, 'image': dest, 'ratio': ratio})
 
 
+@bp.get('/source')
+def video_studio_source_preview():
+    """Preview a staged frame guide, including a frame restored by Reuse."""
+    name = request.args.get('image')
+    if not isinstance(name, str) or not vts.STAGED_FRAME_NAME.fullmatch(name):
+        return jsonify({'error': 'not a staged frame name'}), 400
+    try:
+        if not vts.restage_frame(name):
+            raise ValueError('That frame is no longer staged — pick it again.')
+        path = vts.staged_frame_path(name)
+    except (ValueError, RuntimeError) as exc:
+        return _map_error(exc)
+    except LookupError as exc:
+        return jsonify({'error': str(exc)}), 404
+    response = send_file(path, mimetype='image/png', conditional=True, max_age=0)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.post('/reference')
+def video_studio_reference_stage():
+    """Stage bounded media from an upload or an existing library picture."""
+    data = request.get_json(silent=True) or {}
+    form = request.form if request.files else data
+    kind = form.get('kind') or 'image'
+    upload = request.files.get('file')
+    cleanup = False
+    source = None
+    try:
+        if 'library_source' in data:
+            from lds_video import video_reference_selection as selection
+            ref = selection.stage(LOCAL_USER, kind=kind, descriptor=data['library_source'],
+                frame=data.get('frame', 'first'), start_seconds=data.get('start_seconds'),
+                duration_seconds=data.get('duration_seconds'), role=data.get('role', ''),
+                include_audio=data.get('include_audio', False))
+            return jsonify({'ok': True, 'reference': ref})
+        if data.get('cut_from'):
+            # ✂ A staged video cut to an interval: a new reference from the
+            # staged copy, the panel swaps it in place (2026-09-06).
+            include_audio = data.get('include_audio', False)
+            if not isinstance(include_audio, bool):
+                raise ValueError('include_audio must be true or false')
+            ref = vrefs.cut_reference(data['cut_from'], data.get('start_seconds'),
+                                      data.get('duration_seconds'), user_id=LOCAL_USER,
+                                      role=str(data.get('role') or ''), include_audio=include_audio)
+            return jsonify({'ok': True, 'reference': ref})
+        if upload is None:
+            if kind != 'image':
+                raise ValueError('Upload a video or audio reference file.')
+            if data.get('image'):
+                if not vts.restage_frame(data['image']):
+                    raise ValueError('That image is no longer staged — pick it again.')
+                source = vts.staged_frame_path(data['image'])
+            else:
+                source, cleanup = _resolve_source(request)
+        include_audio = form.get('include_audio', False)
+        if isinstance(include_audio, str):
+            include_audio = include_audio.lower() == 'true'
+        ref = vrefs.stage_reference(kind=kind, upload=upload, source=source,
+            role=form.get('role', ''), include_audio=bool(include_audio), user_id=LOCAL_USER)
+    except Exception as exc:
+        if 'library_source' in data:
+            return _reference_library_error(exc)
+        return _map_error(exc)
+    finally:
+        if cleanup and source:
+            try:
+                os.unlink(source)
+            except OSError:
+                pass
+    return jsonify({'ok': True, 'reference': ref})
+
+
+def _reference_library_error(exc):
+    import subprocess
+    if isinstance(exc, LookupError):
+        return jsonify({'error': str(exc)}), 404
+    if isinstance(exc, (OSError, subprocess.TimeoutExpired)):
+        return jsonify({'error': 'This library file could not be read in time. Select it again or use a smaller excerpt.'}), 409
+    return _map_error(exc)
+
+
+@bp.get('/reference-library')
+def video_studio_reference_library():
+    from lds_video import video_reference_library as library
+    try:
+        return jsonify(library.list_library(LOCAL_USER, kind=request.args.get('kind', 'image'),
+            source=request.args.get('source'), collection_id=request.args.get('collection_id'),
+            offset=request.args.get('offset', 0), limit=request.args.get('limit', 40),
+            q=request.args.get('q', '')))
+    except Exception as exc:
+        return _reference_library_error(exc)
+
+
+@bp.get('/reference-library/info')
+def video_studio_reference_library_info():
+    from lds_video import video_reference_selection as selection
+    try:
+        return jsonify(selection.info(LOCAL_USER, request.args.to_dict()))
+    except Exception as exc:
+        return _reference_library_error(exc)
+
+
+@bp.get('/reference-library/preview')
+def video_studio_reference_library_preview():
+    from lds_video import video_reference_selection as selection
+    try:
+        path = selection.preview(LOCAL_USER, request.args.to_dict())
+        return send_file(path, mimetype='image/jpeg', conditional=True, max_age=60)
+    except Exception as exc:
+        return _reference_library_error(exc)
+
+
+@bp.get('/reference')
+def video_studio_reference_media():
+    try:
+        name = request.args.get('name')
+        path = vrefs.path_for(name, user_id=LOCAL_USER)
+    except (ValueError, OSError, RuntimeError) as exc:
+        return _map_error(exc)
+    mime = {'.png': 'image/png', '.mp4': 'video/mp4', '.wav': 'audio/wav'}[path.suffix]
+    response = send_file(path, mimetype=mime, conditional=True, max_age=0)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.post('/frame/adopt')
+def video_studio_frame_adopt():
+    """🔍 A start frame as a library row — what the shared viewer needs.
+
+    Body `{dataset_id?, image?: staged name | gallery_image_id?: int}`. No
+    `dataset_id` = the holding dataset of the video lane. Answers `{ok, image}`
+    where `image` is the Gallery's own serializer output, so the viewer opened
+    on it reads exactly what it reads on the Gallery page
+    (services/video_test_studio.adopt_frame says why a row, and why one)."""
+    data = request.get_json(silent=True) or {}
+    try:
+        row = vts.adopt_frame(data.get('dataset_id'), image=data.get('image'),
+                              gallery_image_id=data.get('gallery_image_id'),
+                              user_id=LOCAL_USER)
+    except LookupError as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 404
+    except ValueError as exc:
+        return _map_error(exc)
+    from lds_sdk.run_history import gallery_image
+    return jsonify({'ok': True, 'image': gallery_image(row)})
+
 def _resolve_source(req):
     """(path to read the picture from, whether the caller must delete it).
 
@@ -527,16 +891,14 @@ def _resolve_source(req):
         # (watermark-cleaned blob, manual rotation, bank-side crop), and a reader
         # calling `abs_image_path` directly would quietly animate the version the
         # user already cleaned.
-        from lds_sdk.video_host.models import BankImage
-        from lds_sdk.video_host import image_bank_service as banks
-        bank = banks.get_bank(LOCAL_USER, int(data['bank_id']))
-        row = (BankImage.query
-               .filter_by(id=int(data['image_id']), bank_id=int(data['bank_id']))
-               .first() if bank else None)
-        path = banks.resolved_image_path(bank, row) if row else None
+        from lds_sdk.video_media_library import image_path
+        try:
+            path = image_path(LOCAL_USER, 'bank', int(data['image_id']), collection_id=int(data['bank_id']))
+        except LookupError as exc:
+            raise ValueError('that bank image is not on disk') from exc
         if not path or not os.path.isfile(path):
             raise ValueError('that bank image is not on disk')
-        return path, False
+        return str(path), False
 
     if data.get('dataset_id') and data.get('filename'):
         return _dataset_clip_frame(int(data['dataset_id']), data['filename']), True
@@ -546,16 +908,16 @@ def _resolve_source(req):
         # Served at full size from the dataset folder it lives in, exactly as
         # /api/dataset/<id>/img/<name> serves it, so what gets animated is the
         # picture the user is looking at rather than a thumbnail of it.
-        from lds_sdk.gallery_exports import GalleryExports
-        from lds_sdk.images import GalleryImages
-        image_id = int(data['gallery_image_id'])
-        row = GalleryImages(LOCAL_USER).get(image_id)
-        if row is None or not row.filename or not row.dataset_id:
-            raise ValueError('that generated image is not in the gallery any more')
-        path = GalleryExports(LOCAL_USER).path(image_id)
-        if not path:
+        from lds_sdk.video_media_library import LibraryFileUnavailable, image_path
+        try:
+            path = image_path(LOCAL_USER, 'gallery', int(data['gallery_image_id']))
+        except LibraryFileUnavailable as exc:
+            raise ValueError('that generated image is no longer on disk') from exc
+        except LookupError as exc:
+            raise ValueError('that generated image is not in the gallery any more') from exc
+        if not os.path.isfile(path):
             raise ValueError('that generated image is no longer on disk')
-        return path, False
+        return str(path), False
 
     raise ValueError('attach an image, or name a bank image, a dataset clip or '
                      'a gallery image')
@@ -644,13 +1006,44 @@ def video_studio_generate():
     the rest with THAT prompt and THAT seed, since the vision window is shut
     to it as soon as this clip sits in ComfyUI's queue.
     """
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Expected video settings.'}), 400
+    if 'cloud_session_id' in data:
+        return jsonify({'error': 'Open Creature Battle to render with its cloud GPU session.'}), 400
     blocked = _require_comfyui() or _require_no_stalled_comfyui()
     if blocked:
         return blocked
-    data = request.get_json(silent=True) or {}
     prompt = str(data.get('prompt') or '').strip()
-    mode = 't2v' if str(data.get('mode') or 'i2v').lower() == 't2v' else 'i2v'
+    try:
+        mode = vts.normalise_mode(data.get('mode'))
+        from lds_video.h3_refmods import validate as validate_refmods
+        validate_refmods(mode, data.get('image'), data.get('references'), data.get('refmods', False))
+        references = (vrefs.validate_references(data.get('references'), user_id=LOCAL_USER)
+                      if mode == 'ref2va' or data.get('refmods') else [])
+    except (ValueError, RuntimeError) as exc:
+        return _map_error(exc)
     image = data.get('image')
+    # 🎞 The last frame: a staged name, reduced to its basename like the
+    # LoadImage it feeds expects (ComfyUI resolves it under its input dir).
+    end_image = os.path.basename(str(data.get('end_image') or '')) or None
+    # A staged frame the boot sweep has cleared (↻ Reuse of a clip older than
+    # 48 h) comes back from the clip's own copy — or the launch is refused
+    # with a sentence now, not by ComfyUI's 400 a minute later.
+    for role, name in (('start', image if mode in ('i2v', 'ref2va') else None), ('last', end_image)):
+        try:
+            present = not name or vts.restage_frame(name)
+            if name and mode == 'ref2va':
+                if str(name) != os.path.basename(str(name)):
+                    raise ValueError('A guide frame must be a staged image name.')
+                vts.staged_frame_path(name, role=role)
+        except (ValueError, RuntimeError) as exc:           # ComfyFolderUnavailable: the folder itself
+            return _map_error(exc)
+        except LookupError:
+            present = False
+        if not present:
+            return jsonify({'ok': False,
+                            'error': f'that {role} frame is no longer staged — pick it again'}), 409
     # ✨ Enrich at launch. Done HERE, before the graph is built, so the clip row
     # records the prompt that actually ran — a card naming a prompt the sampler
     # never read would be the one lie this screen cannot afford. A failed
@@ -665,10 +1058,12 @@ def video_studio_generate():
             # The same GPU-exclusive vision window as the ✨ buttons (see
             # `/motion/suggest`): a clip already queued or rendering refuses
             # it, and that refusal is one more reason to launch un-enriched.
-            with gpu_exclusive_vision_window(flag_ttl=600):
-                prompt = vmp.enhance(prompt, image=(image if mode == 'i2v' else None),
+            with _motion_window(flag_ttl=600, local_observer=_observes_locally(data)) as writer_model:
+                prompt = vmp.enhance(prompt, image=(image if mode in ('i2v', 'ref2va') else None),
+                                     model=writer_model,
                                      seconds=_clip_seconds(data),
-                                     shots=data.get('shots', 1))
+                                     shots=data.get('shots', 1),
+                                     **_writer_context(data))
         except Exception as exc:
             # Every failure, the fence and the window included: the clip still
             # launches, and the answer carries the reason so the panel can say it.
@@ -688,8 +1083,18 @@ def video_studio_generate():
     # one names a picture the encoder is not given — the header, the identity
     # sentence and the tag go. Done before the row is written, so the card
     # shows the prompt that ran.
-    prompt = (vmp.inject_alignment_header(prompt) if mode == 'i2v'
-              else vmp.strip_picture_references(prompt))
+    if mode == 'ref2va':
+        from lds_video.video_reference_prompt import validate_prompt_references
+        try:
+            prompt = validate_prompt_references(prompt, references)
+        except ValueError as exc:
+            return _map_error(exc)
+    elif data.get('refmods') is True:
+        from lds_video.h3_refmods import first_frame_prompt
+        prompt = first_frame_prompt(prompt, has_first_frame=mode == 'i2v' and bool(image))
+    else:
+        prompt = (vmp.inject_alignment_header(prompt) if mode == 'i2v'
+                  else vmp.strip_picture_references(prompt))
     if not vmp.has_motion(prompt):
         # Judged AFTER the rewrite, on the description alone: a prompt that
         # was nothing but the header, or labels around nothing — a clip's
@@ -699,38 +1104,93 @@ def video_studio_generate():
                         'error': 'The prompt carries no motion once its header and '
                                  'labels are set aside — describe what you want to '
                                  'see move.'}), 400
-    lora = data.get('lora') or None
-    if lora and lts.is_unsafe_external_lora_name(lora):
-        # The same guard the image studio applies to a LoRA name: this string
-        # reaches a loader that resolves it under the loras roots, and a rooted
-        # or `..`-bearing name is the one shape that walks out of them.
-        return jsonify({'ok': False, 'error': 'invalid LoRA name'}), 400
     try:
-        out = vts.enqueue_clip(
-            LOCAL_USER, prompt=prompt, mode=mode, image=image, lora=lora,
-            lora_strength=data.get('lora_strength', 1.0),
-            run_id=data.get('run_id'), dataset_id=data.get('dataset_id'),
-            seed=data.get('seed'), steps=data.get('steps'),
-            frames=data.get('frames'), megapixels=data.get('megapixels',
-                                                           vts.MP_DEFAULT),
-            aspect=data.get('aspect', 'auto'), turbo=bool(data.get('turbo')),
-            accel=data.get('accel'), continues=data.get('continues'),
-            eros=bool(data.get('eros')), sparse=data.get('sparse', ''),
-            latent_upscale=bool(data.get('latent_upscale')),
-            # The ratio only sizes the latent upscale, and a client that has
-            # the staged NAME but not the shape (↻ Reuse) would otherwise fall
-            # back to the node's landscape defaults — turning a reused portrait
-            # clip into a wide one on the upscale pass. Re-read here from the
-            # file itself, which is still where the staging put it.
-            source_ratio=(data.get('ratio')
-                          or (_staged_image_ratio(image) if mode == 'i2v' else None)))
+        out = enqueue_video_clip(data, prompt, mode=mode, image=image, end_image=end_image,
+                                 references=references)
     except lts.StudioAssetsMissing as exc:
         return _studio_missing_response(exc)
     except (ValueError, TypeError) as exc:
         return _map_error(exc)
     if enrich_skipped:
         out = {**out, 'enrich_skipped': enrich_skipped}
-    return jsonify({'ok': True, 'prompt': prompt, **out})
+    return jsonify({'ok': True, 'prompt': prompt,
+                    **(_reference_writer_warnings(data) if data.get('enhance') else {}), **out})
+
+
+def enqueue_video_clip(data, prompt, *, mode, image, end_image=None, references=None):
+    """Shared queue seam: Auto uses the same name fence, graph and preflight."""
+    if 'cloud_session_id' in data:
+        raise ValueError('Open Creature Battle to render with its cloud GPU session.')
+    # ⏭ A reference continuation renders at the shape of the picture it starts
+    # on, and the panel says so in words — the shape control reads "From clip
+    # #N" and is locked. If that picture cannot be measured, falling back to
+    # the dial would render one thing while the screen promises another; the
+    # launch says so instead (raised in verification, 2026-09-07).
+    if mode == 'ref2va' and data.get('continues') and image and _staged_image_ratio(image) is None:
+        raise ValueError('The shape of the frame this continues could not be read. '
+                         'Stage its last frame again, or drop the continuation.')
+    lora = data.get('lora') or None
+    if lora and lts.is_unsafe_external_lora_name(lora):
+        raise ValueError('invalid LoRA name')
+    return vts.enqueue_clip(
+        LOCAL_USER, prompt=prompt, mode=mode, image=image, end_image=end_image,
+        lora=lora, lora_strength=data.get('lora_strength', 1.0),
+        run_id=data.get('run_id'), dataset_id=data.get('dataset_id'),
+        seed=data.get('seed'), steps=data.get('steps'), frames=data.get('frames'),
+        megapixels=data.get('megapixels', vts.MP_DEFAULT),
+        aspect=data.get('aspect', 'auto'), turbo=bool(data.get('turbo')),
+        accel=data.get('accel'), continues=data.get('continues'),
+        eros=bool(data.get('eros')), light=bool(data.get('light')),
+        sparse=data.get('sparse', ''), latent_upscale=bool(data.get('latent_upscale')),
+        references=references if references is not None else data.get('references'),
+        ref_base=data.get('ref_base', 'official'), ref_image_size=data.get('ref_image_size', 'match'),
+        refmods=data.get('refmods', False),
+        # ⏭ …and for a reference CONTINUATION, whose canvas must be its
+        # parent's: the seam picture is that parent's last frame, so its own
+        # shape is the measurement. Read here, where the staged file is, and
+        # only for a continuation — a plain reference launch keeps taking its
+        # shape from the dial, guide or no guide.
+        # In reference mode the ratio is MEASURED, never taken from the body:
+        # the shipped panel sends none there, and a hand-built one would
+        # otherwise steer a canvas the rule above says belongs to the parent
+        # (raised in verification, 2026-09-07). i2v keeps trusting the strip's,
+        # which is the shape of the picture it just staged.
+        source_ratio=(_staged_image_ratio(image) if (data.get('continues') and image) else None)
+        if mode == 'ref2va'
+        else (data.get('ratio') or (_staged_image_ratio(image) if mode == 'i2v' else None)))
+
+
+@bp.route('/auto-continue', methods=['GET', 'POST', 'PATCH'])
+def video_studio_auto_continue():
+    from lds_video import video_auto_continue as auto
+    try:
+        runner = auto.manager(current_app._get_current_object())
+        data = request.get_json(silent=True) or {}
+        if request.method == 'POST':
+            state = runner.start(data)
+        elif request.method == 'PATCH':
+            state = runner.update(data)
+        else:
+            state = runner.status()
+        return jsonify({'ok': True, 'session': state})
+    except (ValueError, RuntimeError) as exc:
+        return _map_error(exc)
+
+
+@bp.post('/auto-continue/<action>')
+def video_studio_auto_continue_action(action):
+    from lds_video import video_auto_continue as auto
+    if action not in ('stop', 'resume'):
+        return jsonify({'error': 'Unknown continuation action.'}), 404
+    try:
+        runner = auto.manager(current_app._get_current_object())
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            raise ValueError('Expected an Auto session identity.')
+        state = getattr(runner, action)(data.get('session_id'))
+        return jsonify({'ok': True, 'session': state})
+    except (ValueError, RuntimeError) as exc:
+        return _map_error(exc)
 
 
 @bp.get('/clips')
@@ -752,7 +1212,7 @@ def video_studio_clips():
         limit = max(1, min(200, int(request.args.get('limit', 24))))
     except (TypeError, ValueError):
         limit = 24
-    query = VideoTestClip.query.order_by(VideoTestClip.id.desc())
+    query = _owned_clips().order_by(VideoTestClip.id.desc())
     try:
         before = int(request.args.get('before', 0))
     except (TypeError, ValueError):
@@ -764,9 +1224,17 @@ def video_studio_clips():
     wanted = ({getattr(c, 'nr_of', None) for c in page} | {getattr(c, 'vfi_of', None) for c in page}
               | {getattr(c, 'continues_of', None) for c in page})
     wanted = {i for i in wanted if i and i not in listed}
-    sources = (VideoTestClip.query.filter(VideoTestClip.id.in_(wanted)).all()
+    sources = (_owned_clips().filter(VideoTestClip.id.in_(wanted)).all()
                if wanted else [])
     rows = sorted(page + sources, key=lambda c: c.id, reverse=True)
+    # Where the clip on the card actually is — ComfyUI's own progress bar, read
+    # from its console — so the "Rendering…" tile can say "step 3/4, about an
+    # hour left" instead of spinning the same way for a minute and for a night.
+    # Only paid for while a clip is pending; the read is cached and shared.
+    render = None
+    if any(c.status == 'pending' for c in rows):
+        from lds_sdk import comfy
+        render = comfy.render_progress()
     # `oldest_id` is the boundary of the page PROPER. The panel keeps what it
     # loaded below that boundary and pages further back from it; a source
     # that rode along is older than the page by construction and must not
@@ -774,14 +1242,14 @@ def video_studio_clips():
     # vanished at the next poll (read as "Smooth deleted my clips").
     return jsonify({'clips': [_clip_dict(c) for c in rows],
                     'has_more': len(page) == limit, 'page_size': limit,
-                    'oldest_id': page[-1].id if page else 0})
+                    'oldest_id': page[-1].id if page else 0,
+                    'render': render})
 
 
 @bp.get('/clip/<int:clip_id>')
 def video_studio_clip(clip_id):
     """One clip — what the panel polls while a job is in flight."""
-    from lds_video.models import VideoTestClip
-    clip = VideoTestClip.query.filter_by(id=clip_id).first()
+    clip = _owned_clips().filter_by(id=clip_id).first()
     if clip is None:
         return jsonify({'error': 'clip not found'}), 404
     return jsonify(_clip_dict(clip))
@@ -795,8 +1263,7 @@ def video_studio_clip_media(clip_id):
     206-capable response the player downloads the whole clip before it can seek
     a single second of it.
     """
-    from lds_video.models import VideoTestClip
-    clip = VideoTestClip.query.filter_by(id=clip_id).first()
+    clip = _owned_clips().filter_by(id=clip_id).first()
     if clip is None or not clip.filename:
         return jsonify({'error': 'clip not available'}), 404
     path = os.path.join(str(vts.clips_dir()), os.path.basename(clip.filename))
@@ -805,14 +1272,11 @@ def video_studio_clip_media(clip_id):
     return send_file(path, mimetype='video/mp4', conditional=True, max_age=0)
 
 
-
-
 @bp.post('/clip/<int:clip_id>/rate')
 def video_studio_rate(clip_id):
     """👍 / 👎 / clear — the image studio's scale, so one habit covers both."""
     from lds_video.models import db
-    from lds_video.models import VideoTestClip
-    clip = VideoTestClip.query.filter_by(id=clip_id).first()
+    clip = _owned_clips().filter_by(id=clip_id).first()
     if clip is None:
         return jsonify({'error': 'clip not found'}), 404
     data = request.get_json(silent=True) or {}
@@ -833,23 +1297,34 @@ def video_studio_delete(clip_id):
     is worse than a stray mp4, and the file was in the app's own folder.
     """
     from lds_video.models import db
-    from lds_video.models import VideoTestClip
-    clip = VideoTestClip.query.filter_by(id=clip_id).first()
+    clip = _owned_clips().filter_by(id=clip_id).first()
     if clip is None:
         return jsonify({'error': 'clip not found'}), 404
+    if clip.status == 'pending' and '"execution": "battle_cloud"' in (clip.generation_settings or ''):
+        return jsonify({'error': 'Stop the battle GPU before deleting its unfinished clip.'}), 409
     if clip.filename:
         try:
             os.unlink(os.path.join(str(vts.clips_dir()),
                                    os.path.basename(clip.filename)))
         except OSError:
             pass
-    # ⏭ The last-frame cache the clip may have grown: derived from the mp4,
-    # written by the app, and SQLite reuses a deleted id — a stale sidecar
-    # under the next clip's id is one mtime check away from being served.
-    try:
-        os.unlink(os.path.join(str(vts.clips_dir()), f'clip_{int(clip_id)}_last.png'))
-    except OSError:
-        pass
+    # ⏭ The last-frame cache the clip may have grown, and 🎬 the copies of the
+    # frames it started from / ended on: derived from or staged for this
+    # clip, written by the app, and SQLite reuses a deleted id — a stale
+    # sidecar under the next clip's id is one mtime check away from being
+    # served, or restaged as the next clip's picture.
+    for which in ('last', 'first', 'end'):
+        try:
+            os.unlink(os.path.join(str(vts.clips_dir()), f'clip_{int(clip_id)}_{which}.png'))
+        except OSError:
+            pass
+    vrefs.delete_clip_references(clip)
     db.session.delete(clip)
     db.session.commit()
     return jsonify({'ok': True})
+
+
+def _owned_clips():
+    from lds_video.models import VideoTestClip
+    return VideoTestClip.query.filter(sa.or_(VideoTestClip.user_id == str(LOCAL_USER),
+                                              VideoTestClip.user_id.is_(None)))

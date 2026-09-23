@@ -46,11 +46,11 @@ import os
 import re
 
 from lds_sdk.video_host import config as cfg
-from lds_sdk.video_host.models import CloudTrainingRun
-from lds_sdk.video_host import cloud_run_dataset as crd
-from lds_sdk import cloud_training as ct
-from lds_sdk.video_host import cloud_video_training as cvt
-from lds_sdk.video_host import lora_training as lt
+from lds_sdk import cloud_runs
+from lds_sdk.video_host import run_dataset as crd
+from lds_sdk import run_history as rg
+from lds_video import video_run_lineage as checkpoint_steps
+from lds_sdk import video_training_runtime as lt
 from lds_video import video_checkpoints as vck
 from lds_video import video_targets
 from lds_video import video_training_local as vtl
@@ -89,8 +89,7 @@ def local_record_id(ds) -> int:
 def _cloud_runs(ds) -> list:
     """This dataset's cloud runs, oldest first — the order the layout sorts
     siblings in. Ownership is the (id, table) pair."""
-    return [r for r in (CloudTrainingRun.query.filter_by(dataset_id=ds.id)
-                        .order_by(CloudTrainingRun.id.asc()).all())
+    return [r for r in (cloud_runs.for_dataset(ds.id))
             if crd.owns(r, ds.id, crd.VIDEO)]
 
 
@@ -250,6 +249,9 @@ def _pills(ds, run, steps, paths, deployed, samples) -> list:
             pill['preview_url'] = None
             pill['preview_status'] = None
         out.append(pill)
+    vck._annotate_steps(ds, run.id if run else None, out, paths)
+    from lds_video.video_checkpoint_previews import annotate_pills
+    annotate_pills(ds, run, out, paths)
     return out
 
 
@@ -259,7 +261,7 @@ def local_total_steps(ds) -> int | None:
     format). None when there is no such file — the final save then keeps
     `step: None` and the label says "Final" without inventing a number."""
     try:
-        path = os.path.join(str(lt._jobs_dir()), vtl.local_run_name(ds) + '.json')
+        path = os.path.join(str(lt.jobs_dir()), vtl.local_run_name(ds) + '.json')
         with open(path, encoding='utf-8') as fh:
             job = json.load(fh)
         for proc in (job.get('config') or {}).get('process') or []:
@@ -276,8 +278,8 @@ def _cloud_node(ds, run, run_ids, deployed) -> dict:
     parent = p.get('parent_run_id')
     parent = int(parent) if parent is not None and int(parent) in run_ids else None
     resumed_from = p.get('resume_step')
-    steps = cvt.harvested_steps(run)
-    paths = ct.run_checkpoint_files(run)
+    steps = checkpoint_steps.harvested_steps(run)
+    paths = rg.run_checkpoint_files(run)
     pills = _pills(ds, run, steps, paths, deployed, list_samples(ds, run))
     return {
         'record_id': run.id, 'run_id': run.id, 'source': 'cloud',
@@ -293,7 +295,7 @@ def _cloud_node(ds, run, run_ids, deployed) -> dict:
         'note': '', 'has_note': False, 'is_current': False,
         'created_at': run.created_at.isoformat() if run.created_at else None,
         'finished_at': run.finished_at.isoformat() if run.finished_at else None,
-        'status': run.status, 'active': run.status in ct.ACTIVE_STATES,
+        'status': run.status, 'active': run.status in rg.ACTIVE_STATES,
         'training_mode': 'lora', 'gpu': run.gpu_name, 'price_per_hour': run.price_per_hour,
         'checkpoints': pills, 'saves': len(paths), 'checkpoint_ready': bool(pills),
     }
@@ -304,7 +306,7 @@ def _local_node(ds, deployed) -> dict | None:
     if not saves:
         return None
     total = local_total_steps(ds)
-    steps = cvt.group_saves_by_step(saves, target=total)
+    steps = checkpoint_steps.group_saves_by_step(saves, target=total)
     active = bool(vtl.video_training_progress(ds.id, ds.user_id)['active'])
     pills = _pills(ds, None, steps, saves, deployed, list_samples(ds, None))
     return {

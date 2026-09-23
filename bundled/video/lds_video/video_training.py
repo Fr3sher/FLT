@@ -30,7 +30,6 @@ because the whole reason to move a video run to a rented 80 GB pod is to turn it
 off.
 """
 import math
-import os
 import re
 
 from lds_video import video_targets
@@ -180,15 +179,13 @@ _MOE_ARCHES = ('wan22_14b', 'wan22_14b_i2v')
 # together instead of the run becoming two half-trainings in sequence.
 _SWITCH_BOUNDARY_EVERY = 10
 
-# The suffixes `wan22_14b_model.save_lora` appends when it splits a state dict on
-# `.transformer_1.` / `.transformer_2.`. Order matters only for readability; the
-# parser matches whichever is present.
-_STAGE_SUFFIXES = ('high_noise', 'low_noise')
-
-# ai-toolkit zero-pads the step to 9 digits. 6 is the floor every consumer in this
-# app already used, and it is what keeps a trailing '_v3' or '_rc74' from reading
-# as a step.
-_STEP_RE = re.compile(r'_(\d{6,})$')
+# The checkpoint-name parser (`_STAGE_SUFFIXES`, `_STEP_RE`, the two functions
+# below) is the core's — services/checkpoint_names.py — because the run graph
+# reads every save through it; re-exported here for this lane's callers.
+from lds_sdk.video_host.checkpoint_names import STAGE_SUFFIXES as _STAGE_SUFFIXES
+from lds_sdk.video_host.checkpoint_names import STEP_RE as _STEP_RE
+from lds_sdk.video_host.checkpoint_names import restage_checkpoint_name
+from lds_sdk.video_host.checkpoint_names import split_checkpoint_name
 
 
 def is_multistage_arch(arch) -> bool:
@@ -199,52 +196,6 @@ def is_multistage_arch(arch) -> bool:
     goes out of its way to ask for a combined file — and the combined file is not
     what any downstream loader here expects."""
     return str(arch or '') in _MOE_ARCHES
-
-
-def split_checkpoint_name(filename):
-    """``(step, stage)`` for one saved checkpoint filename.
-
-    `step` is None for the run's FINAL save, which carries no number in either
-    world — that is how a caller flags it final. `stage` is `'high_noise'`,
-    `'low_noise'`, or None for a single-file arch.
-
-    THIS EXISTS BECAUSE OF THE ANCHOR. Every step read in this app was
-    ``_(\\d{6,})\\.safetensors$``, and `save_lora` builds its pair by rewriting
-    `.safetensors` into `_high_noise.safetensors`. The step is therefore no longer
-    at the end of the stem, the regex misses, and each consumer's `or target`
-    fallback labels EVERY intermediate save with the run's total step count — six
-    identical pills, and a "continue from step 50" that resumes from step 100.
-    Nothing raises; the numbers are just wrong.
-
-    The stage is only recognised at the very end of the stem, so a dataset called
-    "low noise study" does not turn all of its saves into low-noise halves."""
-    stem = os.path.basename(str(filename or ''))
-    if stem.lower().endswith('.safetensors'):
-        stem = stem[:-len('.safetensors')]
-    stage = None
-    for suffix in _STAGE_SUFFIXES:
-        if stem.endswith('_' + suffix):
-            stage = suffix
-            stem = stem[:-(len(suffix) + 1)]
-            break
-    m = _STEP_RE.search(stem)
-    return (int(m.group(1)) if m else None), stage
-
-
-def restage_checkpoint_name(base: str, step, stage) -> str:
-    """Rebuild a checkpoint filename from a new stem plus the step and stage read
-    off the original — the inverse of `split_checkpoint_name`.
-
-    The mirror into the local run folder needs this. Rebuilding from the step
-    alone gives BOTH halves of a pair the same name, and the second copy is then
-    refused as a collision with the first — one expert of every checkpoint lost,
-    with a log line that says the local file was protected."""
-    parts = [base]
-    if step is not None:
-        parts.append(f'{int(step):09d}')
-    if stage:
-        parts.append(stage)
-    return '_'.join(parts) + '.safetensors'
 
 
 def _resolution_for(width, height, size_multiple, max_pixels=None):
@@ -271,6 +222,23 @@ def _resolution_for(width, height, size_multiple, max_pixels=None):
     if max_pixels:
         side = min(side, math.sqrt(max_pixels))
     return max(step, int(side // step) * step)
+
+
+def training_controls(rank=16, sample_prompts=None):
+    """Validate before either lane starts work; never silently truncate previews."""
+    if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= 256:
+        raise ValueError('LoRA rank must be an integer between 1 and 256')
+    if sample_prompts is None:
+        return rank, []
+    if not isinstance(sample_prompts, list) or any(
+            not isinstance(prompt, str) for prompt in sample_prompts):
+        raise ValueError('sample_prompts must be a list of text prompts')
+    prompts = [prompt.strip() for prompt in sample_prompts if prompt.strip()]
+    if len(prompts) > 4:
+        raise ValueError('at most 4 sample prompts — each preview is a full video generation')
+    if any(len(prompt) > 2000 for prompt in prompts):
+        raise ValueError('each sample prompt must be at most 2000 characters')
+    return rank, prompts
 
 
 def build_job_config(video_ds, dataset_folder: str, steps: int,
@@ -314,6 +282,7 @@ def build_job_config(video_ds, dataset_folder: str, steps: int,
     dataset. Asked for, previews are rendered at the DATASET's own frame count and
     fps — a preview at another rate is not a preview of this LoRA.
     """
+    rank, sample_prompts = training_controls(rank, sample_prompts)
     from lds_sdk.video_host import bank_jobs
     dataset_id = getattr(video_ds, 'id', None)
     if dataset_id is not None and bank_jobs.running(f'video-dataset-import:{int(dataset_id)}'):
@@ -610,3 +579,5 @@ def job_name_for(video_ds) -> str:
 # Kept as the name the image families use, so a reader grepping for the family of
 # builders finds this one too.
 _build_job_config_video = build_job_config
+
+__all__ = ['_STAGE_SUFFIXES', '_STEP_RE', 'restage_checkpoint_name', 'split_checkpoint_name']

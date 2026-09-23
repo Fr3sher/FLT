@@ -184,8 +184,11 @@ export const allQuickPrompts = () =>
  *  dropped rather than the preset: same shot, same camera, same audio, minus a
  *  sentence about an image that does not exist. `videoQuickPrompts.test.js`
  *  enumerates all of them and fails if any t2v text still names a picture. */
-export function promptForMode(prompt, mode) {
-  if (mode !== 't2v') return prompt;
+export function promptForMode(prompt, mode, hasReferenceImages = true) {
+  if (mode === 'ref2va' && hasReferenceImages) {
+    return prompt.replace(/\bopens (?:exactly )?on image \d+\b/gi, 'uses the visual content from <Picture 1>');
+  }
+  if (mode !== 't2v' && mode !== 'ref2va') return prompt;
   return prompt
     .replace(/\s+from <Picture \d+>/gi, '')
     .replace(/\bopens (?:exactly )?on image \d+\b/gi, 'opens on the subject');

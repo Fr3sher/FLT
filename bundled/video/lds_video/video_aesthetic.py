@@ -58,7 +58,12 @@ from lds_video.video_pass_scaffold import clip_summary as _summary
 
 logger = logging.getLogger(__name__)
 
-_SCRIPT = str(Path(__file__).resolve().parents[1] / 'infer' / 'video_aesthetic_infer.py')
+# The lane's infer scripts live beside the package (bundled/video/infer/),
+# not in the core's backend/infer/: resolved from this file, wherever the
+# plugin is installed.
+_INFER_DIR = Path(__file__).resolve().parents[1] / 'infer'
+
+_SCRIPT = str(_INFER_DIR / 'video_aesthetic_infer.py')
 
 # The child imports torch and downloads a 13 MB head on its first ever run. Same
 # generosity as the frame encoder's start timeout, and for the same reason: a

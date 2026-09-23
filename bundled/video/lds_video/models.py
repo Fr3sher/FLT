@@ -1,7 +1,9 @@
-"""Video mappings over the six historical public table schemas."""
+"""Video-owned ORM mappings over the durable historical table schema."""
+from sqlalchemy import event
 from lds_sdk.database import for_plugin
+from lds_sdk.video_data import delete_dataset_links, delete_clip_links
 
-db = for_plugin("video", tables=('video_bank', 'video_source', 'video_clip', 'video_dataset', 'video_dataset_clip', 'video_test_clip'))
+db = for_plugin("video", tables=("video_bank", "video_source", "video_clip", "video_dataset", "video_dataset_clip", "video_test_clip", "video_checkpoint_preview"))
 
 class VideoBank(db.BaseMapped):
     __table__ = db.table('video_bank')
@@ -38,3 +40,16 @@ class VideoTestClip(db.BaseMapped):
 
     def __repr__(self):
         return f'<VideoTestClip {self.id} {self.status} lora={self.lora}>'
+
+class VideoCheckpointPreview(db.BaseMapped):
+    __table__ = db.table('video_checkpoint_preview')
+
+
+@event.listens_for(VideoDataset, 'before_delete')
+def _delete_dataset_links(_mapper, connection, dataset):
+    delete_dataset_links(connection, dataset.id)
+
+
+@event.listens_for(VideoTestClip, 'before_delete')
+def _delete_clip_links(_mapper, connection, clip):
+    delete_clip_links(connection, clip.id)

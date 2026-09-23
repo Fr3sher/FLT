@@ -20,9 +20,7 @@ logger = logging.getLogger(__name__)
 JOB_KIND = 'neural_render'
 _STUDIO_THREADS = {}
 
-def backup_dir(dataset_id) -> Path:
-    """Originals of rendered dataset clips — OUTSIDE the dataset folder on
-    purpose (every trainer reads that folder whole)."""
+def backup_dir(dataset_id):
     return cfg.data_dir() / 'video_nr_backup' / str(int(dataset_id))
 
 # ── Dataset clips: render in place, keep the original ───────────────────────
@@ -260,6 +258,8 @@ def start_studio_render(app, user_id, clip_id, params) -> dict:
     src = VideoTestClip.query.filter_by(id=int(clip_id)).first()
     if src is None:
         raise NeuralRenderError('clip not found')
+    if src.user_id not in (None, str(user_id)):
+        raise NeuralRenderError('clip not found')
     if src.status != 'done' or not src.filename:
         raise NeuralRenderError('that clip has not finished rendering yet')
     src_path = os.path.join(str(vts.clips_dir()), os.path.basename(src.filename))
@@ -272,14 +272,23 @@ def start_studio_render(app, user_id, clip_id, params) -> dict:
     out_name = f'{vts.new_prefix(user_id)}_nr_{uuid.uuid4().hex[:6]}.mp4'
     clip = VideoTestClip(
         run_id=src.run_id, dataset_id=src.dataset_id, job_id=None,
-        status='pending', prompt=src.prompt, mode=src.mode,
-        aspect=src.aspect or 'auto', accel=src.accel,
-        source_image=src.source_image, seed=src.seed, steps=src.steps,
+        generation_settings=src.generation_settings,
+        status='pending', prompt=src.prompt, mode=src.mode, aspect=src.aspect or 'auto',
+        user_id=str(user_id), references_json=src.references_json,
+        ref_base=src.ref_base, ref_image_size=src.ref_image_size, accel=src.accel,
+        source_image=src.source_image, end_image=getattr(src, 'end_image', None), seed=src.seed, steps=src.steps,
         frames=src.frames, megapixels=src.megapixels, fps=src.fps,
         base_model=src.base_model, lora=src.lora, lora_strength=src.lora_strength,
         turbo=bool(src.turbo), sparse=src.sparse, latent_upscale=bool(src.latent_upscale),
         vfi_of=src.vfi_of, nr_of=src.id, nr_params=json.dumps(params))
     db.session.add(clip)
+    db.session.flush()
+    from lds_video import video_references as refs
+    try:
+        refs.keep_clip_references(clip.id, refs.references_of(src), user_id=user_id)
+    except (ValueError, OSError) as exc:
+        db.session.rollback()
+        raise NeuralRenderError('could not preserve the clip references') from exc
     db.session.commit()
     new_id = clip.id
     dst_path = os.path.join(str(vts.clips_dir()), out_name)

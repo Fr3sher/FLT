@@ -88,12 +88,8 @@ import logging
 import math
 
 from lds_video.models import db
-from lds_video.models import VideoBank
-from lds_video.models import VideoClip
-from lds_video.models import VideoSource
-from lds_video.video_pass_scaffold import clip_summary as _summary
-from lds_video.video_pass_scaffold import retry_when_idle as _retry_when_idle
-from lds_video.video_pass_scaffold import store_pass_result
+from lds_video.models import VideoBank, VideoClip, VideoSource
+from lds_video.video_pass_scaffold import clip_summary as _summary, retry_when_idle as _retry_when_idle, store_pass_result
 
 logger = logging.getLogger(__name__)
 

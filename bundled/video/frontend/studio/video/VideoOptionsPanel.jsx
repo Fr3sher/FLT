@@ -1,5 +1,5 @@
 /**
- * The four options that change what the model computes, plus the three dials
+ * The five options that change what the model computes, plus the three dials
  * that change what it is asked for — laid out for the render rail (redesign,
  * 2026-08-31): one column on a wide screen, where the rail is 360 px, two
  * columns when the rail stacks under the take on a phone.
@@ -13,9 +13,10 @@
  * from the shared target catalogue through `/options`, so a length offered here
  * is a length the VAE accepts.
  */
-import { Sparkles, Flame, Zap, Maximize2 } from 'lucide-react';
+import { Sparkles, Flame, Feather, Zap, Maximize2 } from 'lucide-react';
 import { SliderLock, useSliderLock } from '@lds/plugin-sdk/ui';
-import { ACCELERATIONS, clipSeconds, SPARSE_CHOICES, studioFrameChoices } from './videoStudioApi.js';
+import { ACCELERATIONS, accelOptionText, clipSeconds, SPARSE_CHOICES, sparseInForce, studioFrameChoices } from './videoStudioApi';
+import VideoReferenceOptions from './VideoReferenceOptions';
 
 function Toggle({ checked, onChange, icon: Icon, label, cost, hint, disabled, disabledHint }) {
   return (
@@ -42,13 +43,19 @@ function Toggle({ checked, onChange, icon: Icon, label, cost, hint, disabled, di
   );
 }
 
-export default function VideoOptionsPanel({ options, value, onChange }) {
-  const set = (patch) => onChange({ ...value, ...patch });
+export default function VideoOptionsPanel({ options, value, onChange, referenceMode = false, onRefresh }) {
+  // Reference settings merge patches; displayed availability overrides must
+  // not overwrite the saved preferences when another dial changes.
+  const set = (patch) => onChange(referenceMode ? patch : { ...value, ...patch });
   /* What this ComfyUI can actually run. `available === false` is a verdict (the
      pack is absent); `null` or missing is "could not ask", and an option is
      offered as usual there — a probe that did not run must not read as a no. */
   const avail = options?.options_available || {};
   const off = (k) => avail[k]?.available === false;
+  /* 🪶 The lighter base's verdict comes as its own block. `false` is a no
+     (file absent, or a server older than the format — the hint says which);
+     a missing block is a probe that did not run, and the box stays offered. */
+  const lightOff = !!options?.light && options.light.available === false;
   /* Names the PACK, because that is what the user has to go and get: this app
      downloads model files but does not install nodes into somebody's ComfyUI.
      The ComfyUI-Manager search term is included — it is how most people will
@@ -78,33 +85,56 @@ export default function VideoOptionsPanel({ options, value, onChange }) {
      six-step schedule, dense sampling runs twenty. An explicit count wins over
      both — including over turbo's — which is why the panel must show WHICH
      number is in force rather than implying the checkbox decides. */
-  const autoSteps = value.accel
-    ? (options?.turbo_steps || 6) : (options?.default_steps || 20);
   /* ⚡ The acceleration choices, resolved by the server against THIS machine
-     (weight on disk, node pack for larryvrh's). Before the options arrive the
-     static list shows the shape; nothing is disabled until the server says. */
+     (weight on disk, node pack for larryvrh's and VDN-H3's). Before the
+     options arrive the static list shows the shape; nothing is disabled until
+     the server says. */
   const accels = Array.isArray(options?.accelerations) && options.accelerations.length
     ? options.accelerations : ACCELERATIONS;
   const picked = accels.find((a) => a.id === value.accel) || null;
+  /* Each acceleration carries its OWN step count (the arena's three at six,
+     VDN-H3 at eight); the server's turbo_steps is the fallback for a row
+     that does not say. */
+  const accelSteps = picked?.steps || options?.turbo_steps || 6;
+  const autoSteps = referenceMode
+    ? (options?.reference?.accelerations?.find((a) => a.id === value.accel)?.steps
+      || (['ref8', 'vdn'].includes(value.accel) ? 8 : value.accel === 'ref4' ? 4 : options?.default_steps || 20))
+    : value.accel
+    ? accelSteps : (options?.default_steps || 20);
+  /* The pack a greyed choice is missing, named from the row itself (VDN-H3
+     needs its own pack; larryvrh's needs the turbo one). */
+  const needPack = (row) => (row?.pack?.pack
+    ? `Needs the ${row.pack.pack} node pack in ComfyUI (ComfyUI-Manager: “${row.pack.search}”), then a restart.`
+    : need('turbo'));
   const accelHint = !value.accel
     ? `The official base, dense: ${options?.default_steps || 20} steps, tens of minutes.`
     : picked?.available === false
       ? (picked.weight_present === false
-        ? `Not on this machine — Setup downloads it (Video Test Studio › ${picked.label}).`
-        : need('turbo'))
-      : (picked?.hint || 'A distillation LoRA: six steps instead of twenty.');
-  const steps = value.steps ? Number(value.steps) : autoSteps;
+        ? `Not on this machine — Setup downloads it (${picked.setup_path || `Video Test Studio › ${picked.label}`}).`
+        : needPack(picked))
+      : (picked?.hint || `A few-step schedule: ${accelSteps} steps instead of ${options?.default_steps || 20}.`);
+  /* ⚡ VDN-H3 owns the attention path the sparse pack also patches: the
+     select greys while it is picked (and the payload leaves sparse out). */
+  const vdnPicked = value.accel === 'vdn';
+  const taomate = !referenceMode && value.accel === 'taomate_3step';
+  const steps = taomate ? 3 : value.steps ? Number(value.steps) : autoSteps;
   const seconds = clipSeconds(value.frames, fps);
   const sparseHint = off('sparse')
     ? need('sparse')
-    : SPARSE_CHOICES.find((c) => c.value === value.sparse)?.hint;
+    : vdnPicked
+      ? 'Off while VDN-H3 is picked: both patch the same attention path.'
+    : referenceMode && value.sparse
+      ? 'Trades some attention within the generated video for speed. References and audio stay dense; compare identity, motion and prompt adherence.'
+      : SPARSE_CHOICES.find((c) => c.value === value.sparse)?.hint;
 
   return (
     <section data-probe-panel="video-studio-options"
       className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-3">
       <div className="flex flex-col gap-1.5">
         <h2 className="text-sm font-semibold text-content">Render</h2>
+        {referenceMode && <VideoReferenceOptions options={options?.reference} value={value} onChange={set} onRefresh={onRefresh} />}
         <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-1">
+          {!referenceMode && <>
           {/* ⚡ One of the arena's top three, or the dense base. A select and
               not three checkboxes: exactly one can run, and the third choice
               would not fit a phone as a segmented row with its rank. */}
@@ -112,47 +142,66 @@ export default function VideoOptionsPanel({ options, value, onChange }) {
             value.accel ? 'border-primary/60 bg-primary/5' : 'border-border'}`}>
             <span className="flex items-center gap-1.5 text-sm text-content">
               <Zap aria-hidden="true" className="h-3.5 w-3.5 text-content-muted" />
-              <span className="min-w-0 flex-1">Acceleration, {options?.turbo_steps || 6} steps</span>
+              <span className="min-w-0 flex-1">Acceleration, {accelSteps} steps</span>
               {value.accel && (
                 <span className="shrink-0 rounded-full border border-border px-1.5 py-px text-[0.625rem] text-content-subtle">
                   minutes, not tens
                 </span>
               )}
             </span>
-            <select value={value.accel || ''} onChange={(e) => set({ accel: e.target.value })}
+            <select value={value.accel || ''} onChange={(e) => set({ accel: e.target.value, steps: e.target.value === 'taomate_3step' ? 3 : '' })}
               aria-label="Acceleration"
               className="w-full rounded-md border border-border bg-app px-2 py-1 text-xs text-content min-h-10 lg:min-h-0">
               <option value="">Off — dense base, {options?.default_steps || 20} steps</option>
               {accels.map((a) => (
                 <option key={a.id} value={a.id} disabled={a.available === false}>
-                  {a.label} · arena {a.arena}{a.available === false ? ' — not installed' : ''}
+                  {accelOptionText(a)}
                 </option>
               ))}
             </select>
             <span className="text-[0.6875rem] leading-snug text-content-subtle">{accelHint}</span>
           </label>
-          <Toggle checked={value.eros} onChange={(v) => set({ eros: v })}
+          {/* Two boxes swap the BASE and a clip has one base: ticking either
+              clears the other, so the pair never sends a graph the builder has
+              to arbitrate. */}
+          <Toggle checked={value.eros} onChange={(v) => set({ eros: v, ...(v ? { light: false } : {}) })}
             icon={Flame} label="10Eros base" cost="its own faces"
             disabled={options && !options.eros_available}
             disabledHint="Not on this machine — the official base is used."
             hint="A third-party finetune in place of the official base; works against an identity test." />
+          {/* 🪶 The official weights at 4-bit (W4A8 ConvRot): 12.5 GB instead of
+              21, the same seconds per clip, 3.8 GB less VRAM at the peak once
+              resident, level on the first clip after a swap — measured, twice.
+              What the row does NOT promise is the seed: the two bases render two
+              different clips from one seed. `light.hint` is the SERVER's sentence
+              for a greyed box — file absent, or a ComfyUI older than the format —
+              so the panel never guesses which of the two it is. A server that
+              sends no `light` block (older backend) leaves the box offered: a
+              probe that did not run must not read as a no. */}
+          <Toggle checked={value.light && !lightOff} onChange={(v) => set({ light: v, ...(v ? { eros: false } : {}) })}
+            icon={Feather} label="Lighter base (W4A8)" cost="−3.8 GB VRAM resident"
+            disabled={lightOff}
+            disabledHint={options?.light?.hint || 'Not on this machine — Setup can fetch it.'}
+            hint="The official weights at 4-bit: no slower, 3.8 GB less VRAM once loaded, 12.5 GB on disk. Not seed-compatible with the full base." />
           <Toggle checked={value.latentUpscale && !off('latent_upscale')}
             onChange={(v) => set({ latentUpscale: v })}
             icon={Maximize2} label="Latent upscale ×2" cost="+ minutes"
             disabled={off('latent_upscale')} disabledHint={need('latent_upscale')}
             hint="Enlarges before decoding, audio untouched. This is the pass that costs the time." />
+          </>}
           <label className={`flex flex-col gap-1 rounded-lg border px-2.5 py-2 ${
-            off('sparse') ? 'border-border opacity-60' : value.sparse ? 'border-primary/60 bg-primary/5' : 'border-border'}`}>
+            off('sparse') || vdnPicked ? 'border-border opacity-60' : value.sparse ? 'border-primary/60 bg-primary/5' : 'border-border'}`}>
             <span className="flex items-center gap-1.5 text-sm text-content">
               <Sparkles aria-hidden="true" className="h-3.5 w-3.5 text-content-muted" />
               <span className="min-w-0 flex-1">Sparse attention</span>
-              {!off('sparse') && (
+              {!off('sparse') && !vdnPicked && (
                 <span className="shrink-0 rounded-full border border-border px-1.5 py-px text-[0.625rem] text-content-subtle">
                   speed for fidelity
                 </span>
               )}
             </span>
-            <select value={off('sparse') ? '' : value.sparse} disabled={off('sparse')}
+            <select value={off('sparse') ? '' : sparseInForce(value, referenceMode)} disabled={off('sparse') || vdnPicked}
+              aria-label="Sparse attention"
               onChange={(e) => set({ sparse: e.target.value })}
               className="w-full rounded-md border border-border bg-app px-2 py-1 text-xs text-content min-h-10 lg:min-h-0">
               {SPARSE_CHOICES.map((c) => (
@@ -162,7 +211,7 @@ export default function VideoOptionsPanel({ options, value, onChange }) {
             <span className="text-[0.6875rem] leading-snug text-content-subtle">{sparseHint}</span>
           </label>
         </div>
-        {value.sparse && value.sparse !== 'max' && value.latentUpscale && (
+        {!referenceMode && value.sparse && value.sparse !== 'max' && value.latentUpscale && (
           <p className="rounded-lg border border-border bg-app px-2.5 py-1.5 text-[0.6875rem] leading-snug text-content-muted">
             With the upscale on, the first pass stays dense and only the upscale
             samples sparse — the prompt keeps its say where it sets the
@@ -177,7 +226,7 @@ export default function VideoOptionsPanel({ options, value, onChange }) {
           is how you find out whether turbo's six are enough for YOUR motion. */}
       <label className="flex flex-col gap-1 border-t border-border pt-3 text-xs text-content-muted">
         <span className="flex items-baseline justify-between gap-2">
-          Sampling steps
+          Sampling steps {taomate && <span className="text-xs text-content-muted">· TaoMate requires 3</span>}
           <span className="flex items-baseline gap-2">
             <span className="tabular-nums text-content">
               {value.steps ? steps : `auto · ${autoSteps}`}
@@ -194,13 +243,15 @@ export default function VideoOptionsPanel({ options, value, onChange }) {
               label="sampling steps" />
           </span>
         </span>
-        <input type="range" min="4" max="40" step="1" value={steps}
+        <input type="range" min={taomate ? 3 : 4} max={taomate ? 3 : 40} step="1" value={steps}
           onChange={(e) => set({ steps: Number(e.target.value) })}
-          {...stepsLock.rangeProps}
+          {...stepsLock.rangeProps} disabled={taomate || stepsLock.rangeProps.disabled}
           className={`mt-1 accent-primary ${stepsLock.rangeProps.className}`} />
         <span className="text-[0.6875rem] leading-snug text-content-subtle">
-          {value.accel
-            ? 'The acceleration is trained for 6 — going far above it '
+          {referenceMode && value.accel
+            ? `This reference acceleration is trained for ${autoSteps} steps. Auto restores that profile; compare changes using the same references.`
+            : value.accel
+            ? `The acceleration is trained for ${accelSteps} — going far above it `
               + 'costs minutes without buying detail, and below 4 it ghosts on '
               + 'fast motion. An explicit count wins over its own.'
             : 'Dense sampling: more steps, more time, diminishing returns past '

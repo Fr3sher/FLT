@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { HelpBadge } from '@lds/plugin-sdk'
+import { HelpBadge } from '@lds/plugin-sdk';
 
 /** 🗣 The launch window of the Describe pass — the options, AT the button.
  *

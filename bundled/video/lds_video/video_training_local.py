@@ -41,6 +41,7 @@ training button: it is a multi-hour download with a progress bar that says
 size is named first and the download is a separate, explicit yes.
 """
 import json
+import secrets
 import logging
 import os
 import threading
@@ -48,11 +49,13 @@ from pathlib import Path
 
 from flask import current_app
 
-from lds_sdk.video_host.job_queue import GPU_ARBITER_LOCK
+from lds_sdk.video_host import config as cfg
+from lds_sdk.config import aitoolkit_path
+from lds_sdk.video_training_runtime import GPU_ARBITER_LOCK
 from lds_sdk.video_runtime import queue as queue_manager
 from lds_video.models import VideoDataset
-from lds_sdk.video_host import cloud_run_dataset as crd
-from lds_sdk.video_host import lora_training as lt
+from lds_sdk.video_host import run_dataset as crd
+from lds_sdk import video_training_runtime as lt
 from lds_video import video_targets
 from lds_video import video_training
 
@@ -116,7 +119,7 @@ def _models_dir() -> Path:
     inherits this process's environment, so reading it here and there cannot
     disagree."""
     env = (os.environ.get('MODELS_PATH') or '').strip()
-    return Path(env) if env else Path(str(lt._aitoolkit_dir())) / 'models'
+    return Path(env) if env else Path(str(lt.aitoolkit_dir())) / 'models'
 
 
 def installed_arch_available(arch) -> bool:
@@ -132,7 +135,7 @@ def installed_arch_available(arch) -> bool:
         return False
     base = name.split('_ref2va')[0] if name.endswith('_ref2va') else name
     try:
-        source = (Path(str(lt._aitoolkit_dir())) / 'extensions_built_in'
+        source = (Path(str(lt.aitoolkit_dir())) / 'extensions_built_in'
                   / 'diffusion_models' / base / f'{base}.py')
         return f'"{name}"' in source.read_text(encoding='utf-8', errors='ignore')
     except (OSError, TypeError, ValueError):
@@ -157,7 +160,7 @@ def supports_training_adapter(arch) -> bool:
     if not video_training.training_adapter_for(arch):
         return False
     try:
-        source = (Path(str(lt._aitoolkit_dir())) / 'extensions_built_in'
+        source = (Path(str(lt.aitoolkit_dir())) / 'extensions_built_in'
                   / 'diffusion_models' / str(arch) / f'{arch}.py')
         return 'def load_training_adapter' in source.read_text(
             encoding='utf-8', errors='ignore')
@@ -239,19 +242,28 @@ def local_run_name(video_ds) -> str:
     return f'{video_training.job_name_for(video_ds)}_ds{int(video_ds.id)}'
 
 
-def _run_root(video_ds) -> Path:
+def _run_root(video_ds, *, missing_ok=False) -> Path | None:
     """The run's TOP folder — ai-toolkit's `training_folder` for this dataset.
 
     It holds `training.log` and the run marker, and ai-toolkit creates the save
     root one level below it (`<training_folder>/<config name>`). That is the image
     lane's layout too, and the reason for it is that a checkpoint scan of the save
     root must see checkpoints and nothing else."""
-    return Path(str(lt._output_dir())) / local_run_name(video_ds)
+    try:
+        output = lt.output_dir()
+    except RuntimeError:
+        # Read-only status exists before the optional trainer is configured.
+        # Launch paths still raise; configured-path failures must not be hidden.
+        if missing_ok and not aitoolkit_path('output'):
+            return None
+        raise
+    return Path(str(output)) / local_run_name(video_ds)
 
 
-def save_root(video_ds) -> Path:
+def save_root(video_ds, *, missing_ok=False) -> Path | None:
     """Where ai-toolkit writes this run's checkpoints and samples."""
-    return _run_root(video_ds) / local_run_name(video_ds)
+    root = _run_root(video_ds, missing_ok=missing_ok)
+    return root / local_run_name(video_ds) if root is not None else None
 
 
 def run_log_path(video_ds) -> str:
@@ -311,7 +323,7 @@ def _default_spawn(argv, cwd, env, stdout):
         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
 
-@lt._serial_local_launch
+@lt.serial_local_launch
 def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
                          low_vram=True, rank=16, sample_prompts=None,
                          accept_download=False, do_i2v=False, _spawn=None) -> dict:
@@ -392,41 +404,41 @@ def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
             'download them.',
             weights['repo'], weights['gigabytes'], free)
 
-    lt.assert_free_disk(lt._output_dir(), lt.MIN_FREE_GB_TRAIN, 'a training run')
+    lt.assert_free_disk(lt.output_dir(), lt.MIN_FREE_GB_TRAIN, 'a training run')
     _assert_run_folder_matches(ds, arch)
     # Cheap refusal before the config is written; the authoritative copy of this
     # check runs under the GPU arbiter below.
-    lt._assert_no_vision_pass_on_gpu()
+    lt.assert_no_vision_pass_on_gpu()
 
-    config_path = str(Path(str(lt._jobs_dir())) / f'{run_name}.json')
+    config_path = str(Path(str(lt.jobs_dir())) / f'{run_name}.json')
     with open(config_path, 'w', encoding='utf-8') as fh:
         json.dump(job_config, fh, indent=2)
 
     log_path = run_log_path(ds)
     env = lt.training_subprocess_env()
     spawn = _spawn or _default_spawn
-    run_token = lt.secrets.token_urlsafe(16)
+    run_token = secrets.token_urlsafe(16)
     dataset_id = int(ds.id)
     app = current_app._get_current_object()
 
     # The image lane's lock order, kept exactly: queue ownership first, GPU
     # admission second. The Ollama handoff stays INSIDE both, or a vision pass
     # could claim the card in the interval before the spawn.
-    with lt._queue_lock, GPU_ARBITER_LOCK:
-        if (queue_manager._get_system_state('training_in_progress', False)
-                and not lt._training_process_is_definitely_dead(
-                    queue_manager._get_system_state('training_pid', None))):
+    with lt.queue_lock, GPU_ARBITER_LOCK:
+        if (queue_manager.get_state('training_in_progress', False)
+                and not lt.training_process_is_definitely_dead(
+                    queue_manager.get_state('training_pid', None))):
             raise ValueError(
                 'a training is already in progress - wait for it to finish '
                 'before starting this one')
-        lt._assert_no_vision_pass_on_gpu()
+        lt.assert_no_vision_pass_on_gpu()
         if queue_manager.has_comfyui_work():
             from lds_sdk.video_host.gpu import GpuBusyError
             raise GpuBusyError(
                 'ComfyUI has queued or active work, so local training cannot '
                 'take the GPU. Wait for it to finish or cancel it safely first.')
         try:
-            from lds_sdk.video_host.ollama_gpu_fence import ensure_released_for_comfy
+            from lds_sdk.video_host.gpu import ensure_released_for_comfy
             released = ensure_released_for_comfy()
         except Exception as exc:
             from lds_sdk.video_host.gpu import GpuBusyError
@@ -441,9 +453,9 @@ def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
                 'safely. Wait for the vision task to finish or unload it.')
         # Same lever as the image lane, same place: after Ollama, before the
         # identity is published (lora_training._comfyui_free_before_training).
-        _comfy_free = lt._comfyui_free_before_training('video')
+        _comfy_free = lt.comfyui_free_before_training('video')
 
-        queue_manager._set_system_state('training_error', None, ttl_seconds=1)
+        queue_manager.set_state('training_error', None, ttl_seconds=1)
         identity = {
             'training_in_progress': True,
             'training_dataset_id': dataset_id,
@@ -457,11 +469,11 @@ def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
         proc = None
         try:
             for key, value in identity.items():
-                queue_manager._set_system_state(
-                    key, value, ttl_seconds=lt._TRAIN_STATE_TTL)
+                queue_manager.set_state(
+                    key, value, ttl_seconds=lt.TRAIN_STATE_TTL)
             logf = open(log_path, 'w', encoding='utf-8')
-            proc = spawn([str(lt._venv_python()), 'run.py', config_path],
-                         str(lt._aitoolkit_dir()), env, logf)
+            proc = spawn([str(lt.venv_python()), 'run.py', config_path],
+                         str(lt.aitoolkit_dir()), env, logf)
         except Exception as exc:
             if logf is not None:
                 try:
@@ -469,7 +481,7 @@ def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
                 except OSError:
                     pass
             try:
-                lt._clear_training_identity(ttl_seconds=None)
+                lt.clear_training_identity(ttl_seconds=None)
             except Exception:
                 logger.exception(
                     'could not clear the partial pre-spawn video training fence')
@@ -480,16 +492,16 @@ def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
         # keeps another GPU owner off the card, and it must stay fail-closed even
         # if the richer PID identity cannot be persisted.
         try:
-            lt._record_training_process_identity(proc.pid)
+            lt.record_training_process_identity(proc.pid)
         except Exception:
             logger.exception(
                 'could not persist the spawned video training identity; '
                 'keeping the GPU fence fail-closed')
 
     # Second VRAM reading outside the lock pair, as on the image lane.
-    lt._comfyui_free_report(_comfy_free)
+    lt.comfyui_free_report(_comfy_free)
     threading.Thread(
-        target=lt._watch_training,
+        target=lt.watch_training,
         args=(app, proc, log_path, dataset_id),
         daemon=True).start()
     logger.info('local video run %s started: %s clips, %s steps, profile %s',
@@ -524,26 +536,27 @@ def video_training_progress(video_dataset_id, user_id=None) -> dict:
     ds = query.first()
     if ds is None:
         raise ValueError('video dataset not found')
-    cur_id = queue_manager._get_system_state('training_dataset_id', None)
-    cur_table = queue_manager._get_system_state('training_dataset_table', None)
-    active = (bool(queue_manager._get_system_state('training_in_progress', False))
+    cur_id = queue_manager.get_state('training_dataset_id', None)
+    cur_table = queue_manager.get_state('training_dataset_table', None)
+    active = (bool(queue_manager.get_state('training_in_progress', False))
               and cur_table == crd.VIDEO
               and cur_id is not None and int(cur_id) == int(ds.id)
-              and not lt._training_process_is_definitely_dead(
-                  queue_manager._get_system_state('training_pid', None)))
+              and not lt.training_process_is_definitely_dead(
+                  queue_manager.get_state('training_pid', None)))
     parsed = {'step': None, 'total': None, 'loss': None, 'speed': None,
               'eta': None, 'loss_curve': []}
     download = None
-    log_path = run_log_path(ds)
-    log_exists = os.path.isfile(log_path)
+    root = _run_root(ds, missing_ok=True)
+    log_path = root / 'training.log' if root is not None else None
+    log_exists = log_path is not None and os.path.isfile(log_path)
     if log_exists:
         try:
             size = os.path.getsize(log_path)
             with open(log_path, encoding='utf-8', errors='replace') as fh:
-                if size > lt._PROG_LOG_MAX_BYTES:
-                    fh.seek(size - lt._PROG_LOG_MAX_BYTES)
+                if size > lt.PROG_LOG_MAX_BYTES:
+                    fh.seek(size - lt.PROG_LOG_MAX_BYTES)
                 text = fh.read()
-            parsed = lt._parse_training_log(text)
+            parsed = lt.parse_training_log(text)
             download = lt.parse_download_progress(text)
         except OSError:
             log_exists = False
@@ -575,8 +588,6 @@ def training_preflight(user_id, video_dataset_id, lane='local') -> dict:
     guard-rails a user may waive; they are either facts about the set or about
     the machine that will run it.
     """
-    from lds_sdk import cloud_training as ct
-    from lds_sdk.lifecycle import is_available, state_change_lock
     from lds_sdk.video_host import gpu_speed
     from lds_video import video_bank_service as _vbs
     ds = VideoDataset.query.filter_by(id=int(video_dataset_id),
@@ -657,19 +668,21 @@ def training_preflight(user_id, video_dataset_id, lane='local') -> dict:
 
     # ---- the account (cloud lane only) -----------------------------------------
     if lane == 'cloud':
+        from lds_sdk.lifecycle import is_available, state_change_lock
         with state_change_lock:
             if not is_available('cloud_training'):
                 _check('cloud_plugin', 'Cloud training plugin', 'fail',
                        'Install and enable Cloud training in Plugins before renting a GPU.',
                        scope='cloud')
             else:
-                configured = bool(ct.cfg.secret('VAST_API_KEY'))
+                from lds_sdk import cloud_training as ct
+                configured = bool(cfg.secret('VAST_API_KEY'))
                 _check('vast', 'vast.ai account',
                        'ok' if configured else 'fail',
                        'API key configured' if configured
                        else 'no vast.ai API key — add it in the Cloud training plugin settings before renting a GPU',
                        scope='cloud')
-                c = ct.cfg.get('cloud') or {}
+                c = cfg.get('cloud') or {}
                 limit = max(1, int((c.get('max_concurrent_runs') or 1)))
                 actives = ct.get_active_runs()
                 _check('fleet', 'Cloud run limit',
@@ -712,8 +725,10 @@ def list_run_checkpoints(video_dataset_id, user_id=None) -> list:
     ds = query.first()
     if ds is None:
         raise ValueError('video dataset not found')
-    root = save_root(ds)
+    root = save_root(ds, missing_ok=True)
     out = []
+    if root is None:
+        return out
     try:
         names = os.listdir(root)
     except OSError:

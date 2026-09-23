@@ -11,7 +11,7 @@ import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui'
  * history: comparison happens in time (two players, same seed, one setting
  * changed) rather than in space.
  *
- * THE SHAPE OF THE SCREEN (redesign, 2026-08-31 — "follow the overall theme")
+ * THE SHAPE OF THE SCREEN (redesign, 2026-08-31 — "respecte le thème général")
  * A take sheet. On a wide screen the TAKE sits on the left — which LoRA, which
  * start frame, what moves — and the RENDER rail on the right stays in view
  * while you scroll: the dials and the Generate button, with a one-line readback
@@ -36,28 +36,48 @@ import { SUPERSEDED_ANSWER_NOTICE, keepAnswer } from '@lds/plugin-sdk/inference'
 import { OllamaFenceNotice } from '@lds/plugin-sdk/inference';
 import { useToast } from '@lds/plugin-sdk';
 import { StudioActionBar } from '@lds/plugin-sdk/ui';
-import VideoClipHistory from './VideoClipHistory.jsx';
+import VideoClipHistory from './VideoClipHistory';
+import VideoBestSettings, { useVideoBestSettings } from './VideoBestSettings.jsx';
+/* The extension is NOT decoration here: `VideoBestSettings.jsx` and
+   `videoBestSettings.js` differ only by case, so a bare specifier resolved
+   with .jsx first lands on the component on Windows and macOS. That is what
+   kept this file out of the mount harness — and out of the one test that
+   would have caught a white screen (found in verification, 2026-09-07). */
+import { bestToControls, bestUnavailable } from './videoBestSettings.js';
+import AutoContinuePanel from './AutoContinuePanel.jsx';
+import useAutoContinue from './useAutoContinue';
+import { autoIsBusy, autoLimit, canAutoContinue } from './videoAutoContinue';
 import VideoLoraPicker from './VideoLoraPicker.jsx';
 import VideoOptionsPanel from './VideoOptionsPanel.jsx';
 import VideoQuickPrompts from './VideoQuickPrompts.jsx';
-import { appendQuickPrompt } from './videoPromptPresets.js';
+import { appendQuickPrompt } from './videoPromptPresets';
 import MotionModelDialog from './MotionModelDialog.jsx';
 import SmoothDialog from './SmoothDialog.jsx';
 import VideoSourcePicker from './VideoSourcePicker.jsx';
-import { shortLoraName } from './videoLoraGroups.js';
-import { readPromptDraft, writePromptDraft } from './videoPromptDraft.js';
+import VideoReferencesPanel from './VideoReferencesPanel.jsx';
+import useVideoReferences from './useVideoReferences';
+import { ASPECTS, readReferenceDraft, referenceDescriptors, referenceFormat, referenceFormatSize, referencePayload, referenceSummary } from './videoReferences';
+import { continuationState, continuesAsReference } from './videoContinuation';
+import VideoContinuationNotice from './VideoContinuationNotice.jsx';
+import { readPromptDraft, writePromptDraft } from './videoPromptDraft';
+import { GeneratedImageLightbox } from '@lds/plugin-sdk/ui';
+import { useCanvasImageImprove } from '@lds/plugin-sdk/inference';
+import { useRestoreImproveSettings } from '@lds/plugin-sdk/inference';
+import { canImproveCanvasImage } from '@lds/plugin-sdk/inference';
+import { shortLoraName } from '@lds/plugin-sdk/h3';
 import {
   addFrames, failureNotice, generateLabel, perImagePrompts, queueClips, queuedNotice, releasePreview,
   removeFrame,
-} from './videoStartFrames.js';
+} from './videoStartFrames';
 import {
   accelLabel, clipAccel, clipLastFramePngUrl, clipLastFrameUrl, clipRateUrl, clipSeconds, clipUrl, clipsUrl,
-  generateUrl, mergeClipPages,
+  buildGeneratePayload, generateUrl, mergeClipPages,
   pickAvailableAccel,
   isRunning, launchAdviceLines, optionsUrl, clipVfiUrl, clipNeuralRenderUrl, clipVideoUrl,
   clipComparisonUrl,
-  motionEnhanceUrl, motionSuggestUrl, motionWriteBatchUrl,
-} from './videoStudioApi.js';
+  motionEnhanceUrl, motionSuggestUrl, motionWriteBatchUrl, SHOT_CHOICES, shotCap,
+  frameAdoptBody, frameAdoptUrl, frameDatasetIdOf, sourceUrl, sparseInForce, writerContext,
+} from './videoStudioApi';
 
 /* No start frame yet — what the ✨ helpers and the readback see before a pick. */
 const EMPTY_SOURCE = { image: null, ratio: null, preview: null };
@@ -67,7 +87,7 @@ const EMPTY_SOURCE = { image: null, ratio: null, preview: null };
    enough that a new user concludes the studio is broken rather than slow. The
    panel says what each choice changes. */
 const DEFAULT_OPTIONS = {
-  accel: 'turbo', eros: false, sparse: '', latentUpscale: false,
+  accel: 'turbo', eros: false, light: false, shots: 1, sparse: '', latentUpscale: false,
   // '' = auto: the server's own count for the mode in force (turbo 6, dense
   // 20). Kept empty rather than pre-filled so a run reads "auto" until someone
   // decides otherwise — a number in the box would claim a choice nobody made.
@@ -85,12 +105,16 @@ const SHORTCUTS = [
   { id: 'vs-clips', emoji: '🎞', label: 'Clips' },
 ];
 
-export default function VideoTestStudio() {
+/* `datasetId` is the image dataset the Studio was opened FROM (StudioPage
+   resolves `/dataset/studio/:id` and `/studio?dataset=`), or null on the
+   plain /studio the nav opens — the video lane sits under no dataset. It
+   only decides where an opened start frame gets its library row. */
+export default function VideoTestStudio({ datasetId = null } = {}) {
   const toast = useToast();
   const [options, setOptions] = useState(null);
   const [lora, setLora] = useState({ lora: null, runId: null, datasetId: null });
   const [strength, setStrength] = useState(1.3);
-  const [mode, setMode] = useState('i2v');
+  const [mode, setMode] = useState(() => readReferenceDraft().active ? 'ref2va' : 'i2v');
   const [aspect, setAspect] = useState('landscape');
   // The start frames, in pick order: the strip the picker draws and the list
   // Generate walks — one clip each, on one seed (one frame was the whole state
@@ -98,9 +122,16 @@ export default function VideoTestStudio() {
   // read, and what a change of resets the poller on.
   const [sources, setSources] = useState([]);
   const source = sources[0] || EMPTY_SOURCE;
+  // ⏭ The frame the ✨ writers take their chain from: the one that continues a
+  // clip when the strip holds one — ⏭ Continue APPENDS to the strip, so the
+  // first frame is usually an older pick (found in verification, 2026-09-04).
+  const chainFrame = sources.find((f) => f.continues) || source;
   const addSources = useCallback((list) => setSources((prev) => addFrames(prev, list).frames), []);
   const removeSource = useCallback((key) => setSources((prev) => removeFrame(prev, key)), []);
   const clearSources = useCallback(() => setSources([]), []);
+  // 🎞 The picture the clip ENDS on — one per launch, shared by every clip of
+  // a batch (H3 first-last conditioning). null = a free ending.
+  const [endFrame, setEndFrame] = useState(null);
   // How far a batch is between the click and the last reply, for the button.
   const [progress, setProgress] = useState({ done: 0, total: 0, phase: 'queueing' });
   /* The batch's prompt: ONE for every picture (the default, the comparison
@@ -109,13 +140,39 @@ export default function VideoTestStudio() {
      a proposal from the picture alone. Written before anything is queued:
      the writer's window shuts once a clip sits in the queue. */
   const [promptMode, setPromptMode] = useState('same');
-  // Kept in this browser (2026-09-06): a reload, or a trip to another page,
-  // gives the field back as it was typed.
-  const [prompt, setPrompt] = useState(readPromptDraft);
+  // Kept in this browser like the references (2026-09-06): a reload, or a
+  // trip to another page, gives the field back as it was typed.
+  const [prompt, setPrompt] = useState(() => readPromptDraft());
   useEffect(() => { writePromptDraft(prompt); }, [prompt]);
   const [opts, setOpts] = useState(DEFAULT_OPTIONS);
+  const reference = useVideoReferences(setPrompt);
+  const isReference = mode === 'ref2va';
+  const useRefmods = !isReference && reference.references.length > 0;
+  const launchMode = mode === 'i2v' && !sources.length && useRefmods ? 't2v' : mode;
+  const formatReference = referenceFormat(reference.references);
+  const renderOpts = isReference ? { ...opts, ...reference.settings,
+    eros: false, light: false, latentUpscale: false,
+    sparse: options?.options_available?.sparse?.available === false ? '' : reference.settings.sparse } : opts;
+  const writerFrame = isReference ? reference.firstFrame : chainFrame;
+  const writerEnd = isReference ? reference.endFrame : endFrame;
+  const [writerNotice, setWriterNotice] = useState('');
+  const updateReference = reference.update;
+  useEffect(() => { updateReference({ active: mode === 'ref2va' }); }, [mode, updateReference]);
+  useEffect(() => { setWriterNotice(''); }, [mode, reference.signature]);
   const [clips, setClips] = useState([]);
+  // ComfyUI's progress bar for the clip on the GPU, as the clips listing
+  // carries it — refreshed by the same poll that watches the clip itself.
+  const [renderProgress, setRenderProgress] = useState(null);
   const [busy, setBusy] = useState(false);
+  const best = useVideoBestSettings(lora, toast);
+  const applyBest = (saved) => {
+    const error = bestUnavailable(saved, options, mode);
+    if (error) { toast.error(error); return; }
+    const next = bestToControls(saved, options, opts);
+    setMode(next.mode); setAspect(next.aspect); setLora(next.lora);
+    setStrength(next.strength); setOpts(next.opts);
+    toast.success('Best settings applied. Your motion and frames are unchanged.');
+  };
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -133,6 +190,10 @@ export default function VideoTestStudio() {
       if (d?.megapixels?.default) {
         setOpts((o) => ({ ...o, megapixels: d.megapixels.default }));
       }
+      // 🪶 The lighter base's verdict arrives with the options: a box ticked
+      // before the reply (the fail-open window) must not keep announcing a
+      // base the server just said it cannot run.
+      if (d?.light?.available === false) setOpts((o) => ({ ...o, light: false }));
     }).catch(() => setOptions(null));
   }, []);
 
@@ -154,6 +215,7 @@ export default function VideoTestStudio() {
       const fresh = d.clips || [];
       const boundary = Number(d.oldest_id) || (fresh.length ? Math.min(...fresh.map((c) => c.id)) : 0);
       mergeClips(fresh, boundary);
+      setRenderProgress(d.render || null);
       if (!oldestLoadedRef.current || boundary < oldestLoadedRef.current) oldestLoadedRef.current = boundary;
       setHasMore(!!d.has_more);
       return fresh;
@@ -161,6 +223,17 @@ export default function VideoTestStudio() {
       return [];
     }
   }, []);
+  const auto = useAutoContinue(refreshClips);
+  const [autoDirection, setAutoDirection] = useState('');
+  const [autoMaxClips, setAutoMaxClips] = useState('0');
+  const autoDraftId = useRef(null);
+  useEffect(() => {
+    if (auto.session && autoDraftId.current !== auto.session.id) {
+      autoDraftId.current = auto.session.id;
+      setAutoDirection(auto.session.direction || '');
+      setAutoMaxClips(String(auto.session.max_clips || 0));
+    }
+  }, [auto.session]);
   const loadMore = useCallback(async () => {
     setLoadingMore(true);
     try {
@@ -219,10 +292,21 @@ export default function VideoTestStudio() {
      window for the whole strip and pays it once. `perImagePrompts` keeps its
      loop and its fallbacks: what changes is WHERE the writing happens. */
   const writePromptsFor = async (frames, typed) => {
+    // `prompt` = enrich THIS text on every frame (the typed motion, as the
+    // Enrich button does). `instruction` = the same text as a STEER when the
+    // batch PROPOSES instead (as the Auto button does): the frame says what is
+    // there, the field says what should happen in it. The first port sent only
+    // `prompt`, so a proposing batch ignored what the user had typed.
     const reply = await postJson(motionWriteBatchUrl(), {
       images: frames.map((f) => f.image),
+      ...(useRefmods ? { refmods: true, references: referencePayload(reference.references) } : {}),
+      // ⏭ per picture: a frame staged by Continue names the clip it follows.
+      continues: frames.map((f) => f.continues || null),
+      // 🎞 one last frame for the whole strip, when one is picked.
+      end_image: endFrame?.image || null,
       prompt: (typed && typed.trim()) ? typed : '',
-      model: motionModel, seconds,
+      instruction: (typed && typed.trim()) ? typed : '',
+      model: motionModel, seconds, shots: opts.shots,
     });
     const byIndex = new Map();
     const byImage = new Map();
@@ -242,7 +326,7 @@ export default function VideoTestStudio() {
 
   const generate = async () => {
     setBusy(true);
-    let launches = mode === 't2v' ? [null] : sources;
+    let launches = isReference ? [reference.firstFrame] : launchMode === 't2v' ? [null] : sources;
     setProgress({ done: 0, total: launches.length, phase: 'queueing' });
     try {
       const perPicture = mode === 'i2v' && promptMode === 'per-image' && launches.length > 1;
@@ -274,15 +358,20 @@ export default function VideoTestStudio() {
         setProgress({ done: 0, total: launches.length, phase: 'queueing' });
       }
       const outcome = await queueClips(launches, { enhance: enhanceOn && !perPicture,
-        mode, prompt, aspect,
+        mode: launchMode, prompt, aspect: isReference ? reference.settings.aspect : aspect,
         lora: lora.lora, loraStrength: strength, runId: lora.runId,
-        datasetId: lora.datasetId, ...opts,
+        datasetId: lora.datasetId, endImage: writerEnd?.image || null, ...renderOpts,
+        ...(useRefmods ? { refmods: true, references: referencePayload(reference.references) } : {}),
+        ...(isReference ? { references: referencePayload(reference.references),
+          refBase: reference.settings.base, refImageSize: reference.settings.imageSize } : {}),
       }, (body) => postJson(generateUrl(), body), (done, total) => setProgress({ done, total, phase: 'queueing' }));
       if (outcome.failed) toast.error(failureNotice(outcome));
       else toast.success(queuedNotice(outcome));
       // The launch went through with the prompt as typed: the writer could
       // not run (fence, server away). Said, or the checkbox looks ignored.
       if (outcome.enrichSkipped) toast.warning(`Queued without enrichment — ${outcome.enrichSkipped}`);
+      const warnings = outcome.queued.flatMap((r) => r?.warnings || r?.context_warnings || []);
+      if (warnings.length) setWriterNotice([...new Set(warnings)].join(' '));
       if (outcome.queued.length) refreshClips();
     } catch (e) {
       toast.error(e?.message || 'The clip could not be queued.');
@@ -304,6 +393,18 @@ export default function VideoTestStudio() {
     try {
       await del(clipUrl(clip.id));
       setClips((cs) => cs.filter((c) => c.id !== clip.id));
+      // ⏭ …and the continuation it was armed for, or the panel keeps promising
+      // a join behind a clip that is gone: the guide outlives the card (it is
+      // kept in this browser), so the promise survived a reload and the launch
+      // was refused minutes later. Done HERE, on the delete that actually went
+      // through — never inferred from a clip missing off the list, which is
+      // paginated (verification, 2026-09-07). Said, too: the guide picture and
+      // the shape lock disappear with it, and a panel that rearranges itself
+      // after a click somewhere else owes a sentence.
+      if (continuation.used.includes(clip.id) || continuation.ignored.some((c) => c.id === clip.id)) {
+        toast.info(`Clip #${clip.id} is gone, so the continuation armed on it was dropped.`);
+      }
+      disarmContinuation(clip.id);
     } catch (e) {
       toast.error(e?.message || 'Could not delete that clip.');
     }
@@ -327,6 +428,67 @@ export default function VideoTestStudio() {
   const [continueBusy, setContinueBusy] = useState(null);
   // ⇔ The rendered clip being compared with its source, or null.
   const [compareClip, setCompareClip] = useState(null);
+  /* 🔍 The strip's viewer is the SHARED one every surface opens on a picture,
+     so a start frame gets the same verbs as the Gallery — ✨ improve, 🔍
+     upscale, ✦ repair, 📷 camera angles, 📤 Civitai — rather than a viewer of
+     its own with three of them. What the viewer needs is a library row: the
+     server gives the frame one (frame/adopt — a content-addressed copy in the
+     dataset folder, once), and the row travels with the strip index so ‹ ›
+     walk the frames. The row lives in the page's image dataset when the
+     Studio was opened from one, else in the server's holding dataset —
+     never in the LoRA's, which is a VIDEO dataset (another table). */
+  const [zoom, setZoom] = useState(null);
+  const frameDatasetId = frameDatasetIdOf({ pageDatasetId: datasetId });
+  const restoreImproveSettings = useRestoreImproveSettings();
+  const improveImage = useCanvasImageImprove({
+    launchMessage: (label) => `${label || 'Improve'} started — the result lands in the 🖼 Gallery; pick it from the Gallery tab to animate it.`,
+  });
+  const openFrame = useCallback(async (frame, index) => {
+    try {
+      const r = await postJson(frameAdoptUrl(), frameAdoptBody(frame, frameDatasetId));
+      // The row's id rides on the frame: the picker's Gallery tab then reads
+      // that picture as already in the strip instead of offering it again.
+      setSources((prev) => prev.map((f, i) => (i === index ? { ...f, galleryImageId: r.image.id } : f)));
+      setZoom({ index, img: r.image });
+    } catch (e) {
+      toast.error(e?.message || 'The start frame could not be opened.');
+    }
+  }, [frameDatasetId, toast]);
+  /* 🎞 The last frame opens in the same viewer; its index is -1 so ‹ › do
+     not walk the strip from it and a repair re-stages IT, not a start frame. */
+  const openEndFrame = useCallback(async (frame) => {
+    try {
+      const bare = { ...frame, key: String(frame.key || '').replace(/^end:/, '') };
+      const r = await postJson(frameAdoptUrl(), frameAdoptBody(bare, frameDatasetId));
+      setEndFrame((cur) => (cur ? { ...cur, galleryImageId: r.image.id } : cur));
+      setZoom({ index: -1, img: r.image });
+    } catch (e) {
+      toast.error(e?.message || 'The last frame could not be opened.');
+    }
+  }, [frameDatasetId, toast]);
+  /* ✦ Repair rewrote the library file, and the strip animates a COPY staged
+     into ComfyUI: the repaired picture is staged again into the same slot, so
+     what the viewer shows is what the next clip starts from. */
+  const restageFrame = useCallback(async (index, img) => {
+    try {
+      const r = await postJson(sourceUrl(), { gallery_image_id: img.id });
+      if (index < 0) {
+        setEndFrame((cur) => {
+          if (!cur) return cur;
+          releasePreview(cur);
+          return { ...cur, image: r.image, ratio: r.ratio, preview: `${img.url}?v=${Date.now()}` };
+        });
+        return;
+      }
+      setSources((prev) => prev.map((f, i) => {
+        if (i !== index) return f;
+        releasePreview(f);   // an upload's blob: URL is let go before it is replaced
+        return { ...f, image: r.image, ratio: r.ratio, preview: `${img.url}?v=${Date.now()}` };
+      }));
+    } catch (e) {
+      toast.error(e?.message || 'The repaired picture could not be staged.');
+    }
+  }, [toast]);
   // ✨ The Motion helpers. `motionBusy` names WHICH one is running so the two
   // buttons cannot both spin, and the enhancer toggle is a per-run choice —
   // remembered nowhere, because it changes what the sampler reads.
@@ -368,7 +530,19 @@ export default function VideoTestStudio() {
      clip, and a writer that does not know which it is writing paces both the
      same way; this is the value the whole Motion field is timed against. */
   const fps = options?.fps || 24;
-  const seconds = clipSeconds(opts.frames, fps);
+  const seconds = clipSeconds(renderOpts.frames, fps);
+  // 🎬 The most shots this length can hold, by the server's rule; a choice
+  // that the length then outgrows is brought back to the cap rather than
+  // sent as a number the server would trim in silence.
+  const shotsCap = shotCap(seconds);
+  // The cap in words, singular where it is one — the sentence and the title
+  // share it, so neither can say "1 shots".
+  const shotsCapNote = shotsCap === 1
+    ? `a ${seconds}s clip holds a single shot`
+    : `a ${seconds}s clip holds at most ${shotsCap} shots`;
+  useEffect(() => {
+    if (opts.shots > shotsCap) setOpts((o) => ({ ...o, shots: shotsCap }));
+  }, [shotsCap, opts.shots]);
 
   /* ✨ Propose the movement from the staged start frame. A PROPOSAL: the model
      sees a still, so it can read who is there and how they are posed, never
@@ -385,7 +559,7 @@ export default function VideoTestStudio() {
   // another: the guard keeps the ACTION, with the frame, the mode and the
   // length it was clicked under, and a switch while it waits would write
   // that answer — a motion paced for the old length — into the new setup.
-  useEffect(() => { stopWaiting(); }, [mode, source.image, seconds, stopWaiting]);
+  useEffect(() => { stopWaiting(); }, [mode, source.image, seconds, reference.signature, stopWaiting]);
   // And a switch while it RUNS: the request is in flight, the guard cannot
   // stop it, and its answer would land in the new setup all the same — so
   // each action asks the guard before writing, and says so when told no
@@ -393,7 +567,9 @@ export default function VideoTestStudio() {
   const setAside = () => toast.info(SUPERSEDED_ANSWER_NOTICE);
 
   const autoMotion = async () => {
-    if (!source.image) { toast.warning('Pick a start frame first.'); return; }
+    if ((isReference || useRefmods) ? !reference.references.length : launchMode === 't2v' || !source.image) {
+      toast.warning(isReference ? 'Add a reference first.' : 'Pick a start frame first.'); return;
+    }
     setMotionBusy('auto');
     // The action, not the click: the guard keeps it and replays it verbatim,
     // so the frame, the instruction and the length are captured here.
@@ -401,10 +577,16 @@ export default function VideoTestStudio() {
       // What is already written STEERS the proposal instead of being replaced
       // by it: the frame says what is there, this says what should happen in it.
       const r = await postJson(motionSuggestUrl(),
-        { image: source.image, instruction: prompt, model: motionModel, seconds });
+        { image: isReference ? reference.firstFrame?.image : launchMode === 't2v' ? null : source.image,
+          instruction: prompt, model: motionModel, seconds, shots: opts.shots,
+          ...writerContext({ frame: writerFrame, endFrame: writerEnd, mode: launchMode, refmods: useRefmods,
+            references: referencePayload(reference.references), refBase: reference.settings.base,
+            refImageSize: reference.settings.imageSize }) });
       // Nothing came back: nothing to write, nothing to set aside — the
       // notice is for an answer, not for an empty reply.
-      if (r?.prompt && keepAnswer(run, setAside)) setPrompt(r.prompt);
+      if (r?.prompt && keepAnswer(run, setAside)) {
+        setPrompt(r.prompt); setWriterNotice((r.warnings || []).join(' '));
+      }
     };
     try {
       await runGuarded(suggest);
@@ -425,9 +607,13 @@ export default function VideoTestStudio() {
       // The start frame travels too: an enrichment anchored on the picture
       // that will actually be animated cannot add scenery the frame lacks.
       const r = await postJson(motionEnhanceUrl(),
-        { prompt, image: mode === 't2v' ? null : (source.image || null),
-          model: motionModel, seconds });
+        { prompt, image: isReference ? reference.firstFrame?.image : launchMode === 't2v' ? null : (source.image || null),
+          model: motionModel, seconds, shots: opts.shots,
+          ...writerContext({ frame: writerFrame, endFrame: writerEnd, mode: launchMode, refmods: useRefmods,
+            references: referencePayload(reference.references), refBase: reference.settings.base,
+            refImageSize: reference.settings.imageSize }) });
       if (!keepAnswer(run, setAside)) return;
+      setWriterNotice((r.warnings || []).join(' '));
       // "Nothing to add" and "it worked" look the same in the field; the
       // server says which, so a silent click is never mistaken for a rewrite.
       if (r?.unchanged) toast.info('The model had nothing to add — your text is unchanged.');
@@ -444,11 +630,21 @@ export default function VideoTestStudio() {
 
   const reuse = (clip) => {
     setPrompt(clip.prompt || '');
-    setMode(clip.mode === 't2v' ? 't2v' : 'i2v');
+    setMode(clip.mode === 'ref2va' ? 'ref2va' : clip.mode === 't2v' ? 't2v' : 'i2v');
     setAspect(clip.aspect || 'auto');
+    if (clip.mode === 'ref2va') reference.restore(clip);
+    else {
+      reference.setSettings({ refmods: clip.generation_settings?.refmods === true });
+      reference.setReferences(referenceDescriptors(clip.references));
+    }
     setOpts({
-      accel: clipAccel(clip), eros: !!clip.eros, sparse: clip.sparse || '',
+      accel: clip.mode === 'ref2va' ? opts.accel : clipAccel(clip), eros: !!clip.eros, light: !!clip.light,
+      sparse: clip.mode === 'ref2va' ? opts.sparse : clip.sparse || '',
       latentUpscale: !!clip.latent_upscale,
+      // 🎬 A clip records no shot plan — the reused prompt carries its own cut
+      // marks — so the row keeps its value. A replacement that dropped the key
+      // left the row with nothing selected (found by verification, 2026-09-04).
+      shots: opts.shots,
       // A joined clip's `frames` is the FILE's count (parent + part − 1), not
       // a count the sampler takes: reused, it would read "723 frames" and
       // render 362. The dial keeps its value; every other dial is replayed.
@@ -463,48 +659,98 @@ export default function VideoTestStudio() {
     if (clip.lora) {
       setLora({ lora: clip.lora, runId: clip.run_id, datasetId: clip.dataset_id });
       setStrength(clip.lora_strength ?? 1);
-    }
+    } else setLora({ lora: null, runId: null, datasetId: null });
     // The start frame comes back too, or Reuse restores every dial except the
     // one that decides whether Generate works: an image-to-video clip reused
-    // without its frame lands blocked on "Pick a start frame". The staged file
-    // is still in ComfyUI's input folder — the name is all the graph needs, and
-    // the server re-reads the shape from the file when it is not sent.
+    // without its frame lands blocked on "Pick a start frame". The name is all
+    // the graph needs: the server puts the file back into ComfyUI's input
+    // folder from the clip's own copy when the boot sweep has cleared it, and
+    // re-reads the shape from it when it is not sent.
     if (clip.mode !== 't2v' && clip.source_image) {
       // The one frame this clip came from, alone in the strip: Reuse means
       // "this clip again, one thing changed", not "this clip and the batch".
       // The frames it replaces let go of their upload previews first.
       sources.forEach(releasePreview);
-      setSources([{ key: `staged:${clip.source_image}`, image: clip.source_image, ratio: null, preview: null }]);
+      // ⏭ …and the clip it continued, so the reused launch continues the same
+      // parent (a branch, which the Continue chapter presents as a feature)
+      // and the ✨ writers keep their chain.
+      setSources([{ key: `staged:${clip.source_image}`, image: clip.source_image, ratio: null, preview: null,
+        continues: clip.continues_of || null }]);
     }
+    // 🎞 And the frame it ended on, when it had one — a dial of its own,
+    // replayed (or cleared) whatever the mode: a text-only clip can end on a
+    // picture too, and a last frame left armed from before would otherwise
+    // ride into "this clip again" (found in verification, 2026-09-04).
+    releasePreview(endFrame);
+    setEndFrame(clip.end_image
+      ? { key: `end:staged:${clip.end_image}`, image: clip.end_image, ratio: null, preview: null } : null);
     toast.info?.('Settings loaded — change one thing and generate again.');
   };
 
-  const needsImage = mode === 'i2v' && sources.length === 0;
+  const needsImage = mode === 'i2v' && sources.length === 0 && !useRefmods;
+  const needsReferences = (isReference || useRefmods) && reference.references.length === 0;
+  const invalidRefmods = useRefmods && (reference.references.length > 2 || reference.references.some(r => r.kind !== 'image'));
+  const referenceProfileMissing = isReference && (
+    options?.reference?.bases?.find((b) => b.id === reference.settings.base)?.available === false
+    || options?.reference?.bases?.find((b) => b.id === reference.settings.base)?.ready === false
+    || options?.reference?.accelerations?.find((a) => a.id === reference.settings.accel)?.available === false);
+  const removedReference = /\[removed (?:Picture|Video|Audio) \d+\]/.test(prompt);
   // ✨ Written per picture needs no typed motion: an empty field asks the
   // writer for a proposal from each picture alone — a gate on the field
   // refused exactly the case the mode promises (found in verification).
   const perPictureReady = mode === 'i2v' && promptMode === 'per-image' && sources.length > 1;
-  const blocked = busy || needsImage || (!prompt.trim() && !perPictureReady);
-  const reason = needsImage
-    ? 'Pick a start frame, or switch to text-only.'
+  const blocked = invalidRefmods || busy || !!motionBusy || reference.staging || needsImage || needsReferences || referenceProfileMissing || removedReference || (!prompt.trim() && !perPictureReady);
+  const reason = invalidRefmods ? 'RefMods accept one or two identity images. Remove other references.' : needsReferences ? (useRefmods ? 'Add one or two identity images.' : 'Add an image, video or audio reference.')
+    : referenceProfileMissing ? 'Install the selected reference profile from Setup, then refresh this panel.'
+      : removedReference ? 'Update the removed reference mentions in the motion before generating.' : needsImage
+    ? 'Pick a start frame, add an identity reference, or switch to text-only.'
     : (!prompt.trim() && !perPictureReady ? 'Describe the motion first.' : null);
+
+  /* ⏭ What THIS launch is joined behind, and what stays armed that it will
+     not use. Both are shown: a continuation is a click that means something,
+     and a mode that cannot honour it has to say so rather than render a
+     stranger under a "Queued" toast.
+     Declared HERE, above the readback that reads it: a `const` is in its
+     temporal dead zone until its own line, so the same two lines written in
+     the other order threw a ReferenceError on EVERY render — a white studio
+     in every mode, armed or not (found in verification, 2026-09-07). */
+  const continuation = continuationState({ mode, sources, firstFrame: reference.firstFrame });
+  // The clip the reference guide continues, when it continues one: the shape
+  // control reads it, and so does the panel's own summary.
+  const guideContinues = reference.firstFrame?.continues || null;
+  const disarmContinuation = (id) => {
+    setSources((prev) => prev.filter((f) => f.continues !== id));
+    if (reference.firstFrame?.continues === id) reference.update({ firstFrame: null });
+  };
 
   /* The readback: what is about to be rendered, in one line, next to the
      button — the moment before a multi-minute job is the moment to catch
      "wrong LoRA" or "still on 10Eros". */
   const readback = [
     lora.lora ? `${shortLoraName(lora.lora)} @ ${Number(strength).toFixed(2)}` : 'no LoRA',
-    mode === 't2v' ? 'text only' : (sources.length > 1 ? `from ${sources.length} images` : 'from an image'),
-    seconds ? `${seconds}s` : `${opts.frames} frames`,
-    `${Number(opts.megapixels).toFixed(2)} MP`,
-    opts.accel ? (opts.accel === 'turbo' ? 'turbo' : accelLabel(opts.accel)) : null,
-    opts.eros ? '10Eros' : null,
-    opts.sparse ? `sparse ${opts.sparse}` : null,
-    opts.latentUpscale ? 'upscale ×2' : null,
+    isReference ? `references: ${referenceSummary(reference.references) || 'none'}`
+      : launchMode === 't2v' ? (useRefmods ? 'prompt + identity references' : 'text only') : (sources.length > 1 ? `from ${sources.length} images` : 'from an image'),
+    // ⏭ The join, in the line read the moment before a multi-minute click —
+    // and, when one is armed that this mode does not run, that it is NOT one.
+    continuation.used.length ? `⏭ joined behind ${continuation.used.map((id) => `#${id}`).join(', ')}`
+      : continuation.ignored.length
+        ? `⏭ ${continuation.ignored.map(({ id }) => `#${id}`).join(', ')} NOT continued` : null,
+    seconds ? `${seconds}s` : `${renderOpts.frames} frames`,
+    // 🎬 Only when a writer runs at THIS launch: the plan is read by the
+    // enrich-at-launch rewrite and the per-picture batch, never by the sampler.
+    (opts.shots > 1 && (enhanceOn || promptMode === 'per-image')) ? `✨ ${opts.shots} shots` : null,
+    `${Number(renderOpts.megapixels).toFixed(2)} MP`,
+    renderOpts.accel ? (renderOpts.accel === 'turbo' ? 'turbo' : accelLabel(renderOpts.accel)) : null,
+    isReference ? `${reference.settings.base} reference base` : opts.eros ? '10Eros' : null,
+    renderOpts.light ? 'W4A8 base' : null,
+    writerEnd ? 'ends on a picture' : null,
+    useRefmods ? `RefMods: ${reference.references.length} identity image${reference.references.length > 1 ? 's' : ''}` : null,
+    sparseInForce(renderOpts, isReference) ? `sparse ${sparseInForce(renderOpts, isReference)}` : null,
+    renderOpts.latentUpscale ? 'upscale ×2' : null,
     // Only when it was CHOSEN: "auto" belongs in the dial's own label, and a
     // readback that always claimed a step count would make the automatic case
     // look like a decision somebody made.
-    opts.steps ? `${opts.steps} steps` : null,
+    renderOpts.steps ? `${renderOpts.steps} steps` : null,
   ].filter(Boolean).join(' · ');
 
   // The button counts what a click queues ("Generate 3 clips"), and where the
@@ -516,20 +762,106 @@ export default function VideoTestStudio() {
   /* ⏭ Continue: the clip's last frame staged as the next start frame — the
      picture is exactly where that clip ended — and the launch marked so the
      render lands joined behind it. The motion is yours to write again. */
+  /* ⏭ Arm a References clip's continuation on the guide: the cast comes back
+     with it — the references are what hold its characters, and continuing from
+     the picture alone drops that identity at the seam — and so does what
+     decides the LOOK of the seam: the base, its acceleration, the reference
+     size and the shape. The dials that pace the new part (length, megapixels,
+     seed) stay yours. Through setReferences, so the tags already in the motion
+     field are remapped to the cast that comes back.
+     One function for the full click and for the repair below: the repair used
+     to arm the guide WITHOUT the cast, which is the very loss this feature
+     exists to prevent (verification, 2026-09-07). */
+  const armAsReference = (clip, image, { fresh = true } = {}) => {
+    reference.setReferences(referenceDescriptors(clip.references));
+    reference.update({ active: true,
+      settings: { ...reference.settings, base: clip.ref_base || 'official',
+        accel: clip.accel || '', imageSize: clip.ref_image_size || 'match',
+        // 'auto' is what a row that predates the shape carries, and it is not
+        // one of the three the select offers: an unknown shape keeps the one
+        // in force rather than emptying the control.
+        aspect: ASPECTS.includes(clip.aspect) ? clip.aspect : reference.settings.aspect },
+      firstFrame: { image, continues: clip.id },
+      // The parent's ENDING must not ride into the part: it would pin the new
+      // clip to the picture the parent already ended on. Only on a FRESH ⏭
+      // though — a repair puts back what was lost, and clearing a last frame
+      // the author picked in the meantime would be a silent deletion
+      // (verification, 2026-09-07).
+      ...(fresh ? { endFrame: null } : {}) });
+    setMode('ref2va');
+  };
+
   const continueFrom = async (clip) => {
-    // Already staged: a second click would stage a second PNG the strip's
-    // dedupe then drops — under a success toast.
-    if (sources.some((f) => f.key === `continue:${clip.id}`)) {
-      toast.info(`Clip #${clip.id} is already in the strip — its last frame is queued to be continued.`);
+    /* Already armed, in one place or in both. Read by what a frame CONTINUES,
+       not by the key ⏭ gives it: ↻ Reuse hands the same continuation back
+       under `staged:…`, and a key test let a second copy of the same picture
+       through — two identical multi-minute renders on one click (verification,
+       2026-09-07).
+       And when only ONE side holds it, this REPAIRS instead of refusing: the
+       two remove buttons each empty their own side, and a ⏭ that answered
+       "already armed" to the state it should fix made itself a no-op. The
+       picture is already staged, so re-arming costs no request. */
+    if (clip.mode !== 'ref2va') {
+      reference.setSettings({ refmods: clip.generation_settings?.refmods === true });
+      reference.setReferences(referenceDescriptors(clip.references));
+      setOpts(o => ({ ...o, accel: clipAccel(clip), steps: clipAccel(clip) === 'taomate_3step' ? 3 : '', eros: !!clip.eros, light: !!clip.light }));
+      setMode('i2v');
+    }
+    const inStrip = sources.find((f) => f.continues === clip.id);
+    const asGuide = reference.firstFrame?.continues === clip.id;
+    const wantsGuide = continuesAsReference(clip);
+    if (inStrip && (asGuide || !wantsGuide)) {
+      toast.info(`Clip #${clip.id} is already armed — its last frame is queued to be continued.`);
+      return;
+    }
+    if (inStrip && wantsGuide) {
+      armAsReference(clip, inStrip.image, { fresh: false });
+      toast.success(`Clip #${clip.id} is armed again with its references, on its last frame.`);
+      return;
+    }
+    if (asGuide) {
+      /* Armed on the guide alone. For a take that continues WITH its cast
+         there is nothing to repair — the guide IS the right place — so this
+         only brings the mode back. Copying it into the strip instead, as this
+         branch first did, armed an image continuation of a References take:
+         launched from "From an image" it joined behind the parent WITHOUT its
+         references, and the amber warning that had been saying so disappeared
+         (verification, 2026-09-07). */
+      if (wantsGuide) {
+        setMode('ref2va');
+        toast.info(`Clip #${clip.id} is armed on the first frame guide — back to References to continue it.`);
+        return;
+      }
+      addSources([{ key: `continue:${clip.id}`, image: reference.firstFrame.image, ratio: null,
+        preview: clipLastFramePngUrl(clip.id), continues: clip.id }]);
+      toast.success(`Clip #${clip.id} is armed again in the start frames.`);
       return;
     }
     setContinueBusy(clip.id);
+    const asReference = continuesAsReference(clip);
     try {
       const r = await postJson(clipLastFrameUrl(clip.id), {});
-      setMode('i2v');
+      // ONE staged picture, armed in BOTH places a launch can start from: the
+      // strip "From an image" walks, and the guide a reference launch pins at
+      // frame 0. The mode picked below decides which one runs — and a change
+      // of mode afterwards changes HOW the clip is continued instead of
+      // dropping the continuation (measured 2026-09-07: armed in the strip
+      // alone, a click back on References hid it and Generate rendered a
+      // fresh clip in silence).
       addSources([{ key: `continue:${clip.id}`, image: r.image, ratio: r.ratio,
         preview: clipLastFramePngUrl(clip.id), continues: clip.id }]);
-      toast.success(`Last frame of clip #${clip.id} staged — write the next motion, then Generate. The result plays as clip #${clip.id} followed by the new one.`);
+      if (asReference) {
+        armAsReference(clip, r.image);
+      } else {
+        // The BASE follows the clip being continued, whatever box is ticked
+        // right now: the joined render starts from that clip's last frame, and
+        // a change of base at the seam would show. The dials stay yours.
+        setOpts((o) => ({ ...o, eros: !!clip.eros, light: !!clip.light }));
+      }
+      setMode(asReference ? 'ref2va' : 'i2v');
+      toast.success(asReference
+        ? `Last frame of clip #${clip.id} staged as the first frame guide, with its ${clip.references.length} reference${clip.references.length === 1 ? '' : 's'} — write the next motion, then Generate. The result plays as clip #${clip.id} followed by the new one.`
+        : `Last frame of clip #${clip.id} staged — write the next motion, then Generate. The result plays as clip #${clip.id} followed by the new one.`);
       const el = document.getElementById('vs-motion');
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) {
@@ -538,7 +870,26 @@ export default function VideoTestStudio() {
       setContinueBusy(null);
     }
   };
-  const continuing = sources.filter((f) => f.continues);
+  const applyAuto = () => auto.act('update', { session_id: auto.session?.id,
+    direction: autoDirection, max_clips: autoLimit(autoMaxClips) });
+  const stopAuto = () => auto.act('stop', { session_id: auto.session?.id });
+  const resumeAuto = async () => {
+    if (await applyAuto()) await auto.act('resume', { session_id: auto.session?.id });
+  };
+  const toggleAuto = async (clip, checked) => {
+    if (!checked) { await stopAuto(); return; }
+    if (!canAutoContinue(clip, mode)) {
+      toast.info('Auto continuation uses image-to-video clips. Switch to From an image to start a loop.'); return;
+    }
+    const limit = autoLimit(autoMaxClips);
+    if (limit === null) { toast.error('Choose a whole number of clips, or 0 for no limit.'); return; }
+    const settings = buildGeneratePayload({ mode: 'i2v', prompt: '',
+      lora: lora.lora, loraStrength: strength, runId: lora.runId,
+      datasetId: lora.datasetId, ...opts });
+    const started = await auto.act('start', { clip_id: clip.id, direction: autoDirection,
+      max_clips: limit, model: motionModel || null, settings });
+    if (started) toast.success(`Auto continuation started from clip #${clip.id}.`);
+  };
   const generateButton = (
     <button type="button" onClick={generate} disabled={blocked}
       className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-primary px-4 py-2 text-sm font-semibold text-gray-950 disabled:opacity-40 min-h-10">
@@ -563,7 +914,8 @@ export default function VideoTestStudio() {
           MiniMax H3 · beta
         </span>
         <span className="hidden text-xs text-content-subtle sm:inline">
-          One clip per start frame — compare in time, same seed, one dial changed.
+          {isReference ? 'One clip from your references — keep identities, motion and sound together.'
+            : 'One clip per start frame — compare in time, same seed, one dial changed.'}
         </span>
       </header>
 
@@ -571,7 +923,7 @@ export default function VideoTestStudio() {
           without the weights, every control below is a promise the lane cannot
           keep. It names the missing files by what they do and points at the one
           screen that installs them. */}
-      {options && options.ready === false && (
+      {!isReference && options && options.ready === false && (
         <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 text-sm">
           <p className="font-semibold text-amber-200">This lane is not installed yet</p>
           <p className="mt-1 text-content-muted">
@@ -615,18 +967,58 @@ export default function VideoTestStudio() {
           </div>
 
           <div id="vs-source" className="scroll-mt-16">
-            <VideoSourcePicker mode={mode} onMode={setMode} frames={sources}
+            {isReference ? <>
+              <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-2">
+                <div role="group" aria-label="Video input mode" className="flex w-full gap-1">
+                  {[['i2v', 'From an image'], ['t2v', 'Text only'], ['ref2va', 'References']].map(([id, text]) => (
+                    <button key={id} type="button" aria-pressed={mode === id} disabled={busy || reference.staging} onClick={() => setMode(id)}
+                      className={`min-h-10 flex-1 rounded-md px-2 py-1 text-xs lg:min-h-0 ${mode === id ? 'bg-primary text-white' : 'text-content-muted hover:text-content'}`}>{text}</button>
+                  ))}
+                </div>
+                {/* ⏭ A continuation has no shape of its own: it renders at its
+                    parent's, which the server takes from the seam picture. The
+                    control says so and stops offering a choice that would be
+                    overridden — the same shape the format of a reference video
+                    already gives it. */}
+                <label className="flex w-full items-center gap-2 text-xs text-content-muted">Output shape
+                  <select value={guideContinues ? 'continuation' : formatReference ? 'reference' : reference.settings.aspect}
+                    disabled={!!formatReference || !!guideContinues}
+                    title={guideContinues ? `The part follows clip #${guideContinues}, so the join has nothing to rescale.`
+                      : formatReference ? 'Uncheck the video’s format option to choose a shape.' : undefined}
+                    onChange={(e) => reference.setSettings({ aspect: e.target.value })} className="min-h-10 min-w-0 flex-1 rounded-md border border-border bg-app px-2 text-content disabled:opacity-70 lg:min-h-0 lg:py-1">
+                    {guideContinues && <option value="continuation">From clip #{guideContinues}</option>}
+                    {formatReference && <option value="reference">From {formatReference.tag}{referenceFormatSize(formatReference) ? ` · ${referenceFormatSize(formatReference)}` : ''}</option>}
+                    <option value="landscape">Landscape · 16:9</option><option value="portrait">Portrait · 9:16</option><option value="square">Square · 1:1</option>
+                  </select>
+                </label>
+              </div>
+              <VideoReferencesPanel value={reference} limits={options?.reference?.limits} history={clips} disabled={busy}
+                onInsertTag={(tag) => setPrompt((p) => `${p}${p && !/\s$/.test(p) ? ' ' : ''}${tag} `)} />
+            </> : <VideoSourcePicker mode={mode} onMode={setMode} frames={sources} identityReferences={useRefmods}
               aspect={aspect} onAspect={setAspect}
-              onAdd={addSources} onRemove={removeSource} onClear={clearSources} />
-            {mode === 'i2v' && continuing.length > 0 && (
-              <p className="rounded-lg border border-border bg-surface-raised px-2.5 py-1.5 text-[0.6875rem] text-content-muted">
-                ⏭ {continuing.map((f) => `clip #${f.continues}`).join(', ')}: the render lands joined behind it —
-                one video, that clip then the new motion. Remove the frame from the strip to launch a plain clip instead.
-              </p>
-            )}
+              onAdd={addSources} onRemove={removeSource} onClear={clearSources}
+              history={clips} onOpen={openFrame}
+              endFrame={endFrame} onSetEnd={setEndFrame} onClearEnd={() => setEndFrame(null)} onOpenEnd={openEndFrame} />}
+            {/* ⏭ What this launch does with what is armed — in EVERY mode,
+                including the two that do not run it. The strip is not even
+                rendered in References mode, so a continuation staged from a
+                card could otherwise go out as a fresh clip with nothing on
+                screen to show it had been dropped (measured 2026-09-07). */}
+            {!isReference && <div className="mt-3 space-y-2">
+              {useRefmods && launchMode === 't2v' && mode === 'i2v' && <label className="flex items-center gap-2 text-xs text-content-muted">Shape
+                <select aria-label="RefMods video shape" value={ASPECTS.includes(aspect) ? aspect : 'landscape'} disabled={busy}
+                  onChange={e => setAspect(e.target.value)} className="rounded-md border border-border bg-app px-2 py-1 text-content">
+                  <option value="landscape">16:9</option><option value="portrait">9:16</option><option value="square">1:1</option>
+                </select>
+              </label>}
+              <VideoReferencesPanel value={reference} identitiesOnly limits={{ image: 2, video: 0, audio: 0 }} disabled={busy}
+                onInsertTag={tag => setPrompt(p => `${p}${p && !/\s$/.test(p) ? ' ' : ''}${tag} `)} />
+            </div>}
+            <VideoContinuationNotice state={continuation} mode={mode} isReference={isReference}
+              onMode={setMode} onDrop={disarmContinuation} />
           </div>
 
-          <div id="vs-motion" className="flex flex-col gap-1.5 rounded-xl border border-border bg-surface p-3 scroll-mt-16">
+          <div id="vs-motion" data-probe-panel="video-studio-motion" className="flex flex-col gap-1.5 rounded-xl border border-border bg-surface p-3 scroll-mt-16">
             <span className="flex flex-wrap items-center gap-1.5">
               <label htmlFor="vs-motion-text" className="text-sm font-semibold text-content">Motion</label>
               <HelpBadge topic="video-studio-motion-writer" />
@@ -636,8 +1028,8 @@ export default function VideoTestStudio() {
                   theirs to edit. Auto needs a frame; without one it says so
                   rather than proposing a movement for no picture. */}
               <button type="button" onClick={autoMotion}
-                disabled={!!motionBusy || mode === 't2v' || !source.image}
-                title={mode === 't2v'
+                disabled={busy || reference.staging || !!motionBusy || ((isReference || useRefmods) ? !reference.references.length : launchMode === 't2v' || !source.image)}
+                title={(isReference || useRefmods) ? 'Write the motion using the references and their roles' : mode === 't2v'
                   ? 'Auto reads the start frame — switch to “From an image” to use it'
                   : (source.image ? 'Write the movement from the start frame'
                     : 'Pick a start frame first')}
@@ -645,14 +1037,26 @@ export default function VideoTestStudio() {
                 {motionBusy === 'auto' ? '…' : '✨ Auto'}
               </button>
               <button type="button" onClick={enhanceMotion}
-                disabled={!!motionBusy || !prompt.trim()}
+                disabled={busy || reference.staging || !!motionBusy || !prompt.trim()}
                 title="Rewrite what is written with more of the detail a sampler can use"
                 className="min-h-10 rounded-lg border border-border px-2 py-1 text-[0.6875rem] text-content-muted hover:text-content disabled:opacity-40 lg:min-h-0">
                 {motionBusy === 'enhance' ? '…' : '✨ Enrich'}
               </button>
-              {/* ⚙ opens the model window — the list belongs at the moment
-                  somebody wonders about it, not permanently beside the two
-                  buttons that use it. */}
+              {/* ⌫ Clear: one press empties the field. A textarea that only
+                  empties by select-all + delete is a chore on a phone, and the
+                  two ✨ buttons read the field as a steer — a leftover sentence
+                  from the last clip quietly shapes the next proposal. Disabled
+                  on an empty field rather than hidden: the row keeps its shape. */}
+              <button type="button" onClick={() => setPrompt('')}
+                disabled={!!motionBusy || !prompt}
+                title="Clear the motion field"
+                aria-label="Clear the motion field"
+                className="min-h-10 rounded-lg border border-border px-2 py-1 text-[0.6875rem] text-content-muted hover:text-content disabled:opacity-40 lg:min-h-0">
+                ⌫ Clear
+              </button>
+              {/* ⚙ opens the writer window — the model and its dials belong at
+                  the moment somebody wonders about them, not permanently
+                  beside the buttons that use them. */}
               <button type="button" onClick={() => setModelOpen(true)}
                 title="Which model writes the motion"
                 aria-label="Which model writes the motion"
@@ -661,17 +1065,61 @@ export default function VideoTestStudio() {
               </button>
             </span>
             <textarea id="vs-motion-text" value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={5}
-              placeholder="What happens in the shot — she turns her head and smiles, the camera pushes in slowly…"
+              placeholder={isReference ? 'The person in <Picture 1> wears the outfit from <Picture 2> and follows the movement in <Video 1>…'
+                : 'What happens in the shot — she turns her head and smiles, the camera pushes in slowly…'}
               className="w-full resize-y rounded-lg border border-border bg-app px-2.5 py-2 text-sm text-content" />
             <span className="text-[0.6875rem] text-content-subtle">
-              Describe the movement, not the picture: the start frame already says
+              {isReference ? 'Name the tags above to say what each reference contributes. Auto and Enrich read the references together and keep those roles in H3’s reference prompt.' : <>Describe the movement, not the picture: the start frame already says
               what the scene looks like. ✨ Auto and ✨ Enrich answer in H3’s own
-              three-field prompt, paced to the clip length you set.
+              three-field prompt, paced to the clip length you set.</>}
             </span>
+            {isReference && reference.references.some((r) => r.kind === 'audio' || (r.kind === 'video' && r.include_audio)) && (
+              <p className="text-[0.6875rem] text-amber-200">The prompt writer does not transcribe reference audio. Describe speech, rhythm or ambience in its role; the audio still conditions the generated clip.</p>
+            )}
+            {writerNotice && <p role="status" className="text-xs text-amber-200">{writerNotice}</p>}
+            {/* 🎬 Shots. The server has always known how to cut a clip into
+                timecoded shots — `shots` on every writer route — but nothing
+                on this screen ever asked, so a fifteen-second clip enriched
+                as one continuous take and never showed a timecode (reported
+                by the maintainer, 2026-09-04). Six choices in a segmented
+                row — single characters, shown all at once; a select could not
+                grey the ones the length cannot hold. 1 is the default and
+                today's behaviour. The row is STRETCHED like the batch's, so a
+                segment stays a finger wide on a phone; the columns follow
+                SHOT_CHOICES so a moved MAX_SHOTS cannot wrap the row. What the
+                length cannot hold is greyed AND said in the sentence — a title
+                on a disabled button never shows on a phone. */}
+            <div data-testid="video-shots" className="flex flex-col gap-1 text-[0.6875rem]">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-content">Shots</span>
+                <div role="radiogroup" aria-label="Shots"
+                  className="grid min-w-[16rem] flex-1 gap-1 rounded-lg border border-border bg-app p-0.5"
+                  style={{ gridTemplateColumns: `repeat(${SHOT_CHOICES.length}, minmax(0, 1fr))` }}>
+                  {SHOT_CHOICES.map((n) => (
+                    <button key={n} type="button" role="radio" aria-checked={opts.shots === n}
+                      disabled={n > shotsCap}
+                      onClick={() => setOpts((o) => ({ ...o, shots: n }))}
+                      title={n > shotsCap ? shotsCapNote : undefined}
+                      className={`min-h-10 rounded-md px-2 py-1 text-xs font-semibold lg:min-h-0 disabled:opacity-40 ${
+                        opts.shots === n ? 'bg-primary text-white' : 'text-content-muted hover:text-content'}`}>
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <span className="text-content-subtle">
+                {shotsCap === 1
+                  ? `Too short to cut: ${shotsCapNote}. Lengthen the clip for timecoded shots.`
+                  : opts.shots > 1
+                    ? `${opts.shots} shots: ✨ cuts the clip evenly, each cut written as “[Shot K] At mm:ss.mmm, the camera cuts to…”.`
+                    : `One continuous take: no cuts, no timecodes. Pick 2 or more for timecoded shots${
+                      shotsCap < SHOT_CHOICES.length ? ` (${shotsCapNote})` : ''}.`}
+              </span>
+            </div>
             {/* The presets, under the field they write into. They APPEND, like
                 ✨ Enrich leaves your text alone — so the picker can be used on a
                 half-written prompt without eating it. */}
-            <VideoQuickPrompts mode={mode}
+            <VideoQuickPrompts mode={mode} hasReferenceImages={reference.references.some((r) => r.kind === 'image')}
               onAppend={(text) => setPrompt((p) => appendQuickPrompt(p, text))} />
             <OllamaFenceNotice fence={fence} onUnload={unloadAndRetry} onStop={stopWaiting} />
             {/* The toggle enriches AT LAUNCH — what runs is what the clip
@@ -717,7 +1165,13 @@ export default function VideoTestStudio() {
         {/* THE RENDER RAIL — sticky on a wide screen so the dials and the
             button never leave the eye while the take scrolls. */}
         <aside id="vs-render" className="flex min-w-0 flex-col gap-3 scroll-mt-16 lg:sticky lg:top-3">
-          <VideoOptionsPanel options={options} value={opts} onChange={setOpts} />
+          <VideoBestSettings state={best.state} busy={best.busy || busy} error={best.error}
+            referenceMode={isReference}
+            onApply={applyBest} onRemove={async () => {
+              if (await best.remove()) setLora((current) => ({ ...current, runId: null, datasetId: null }));
+            }} />
+          <VideoOptionsPanel options={options} value={renderOpts} onChange={isReference ? reference.setSettings : setOpts} referenceMode={isReference}
+            onRefresh={() => apiFetch(optionsUrl()).then(setOptions).catch((e) => toast.error(e?.message || 'Could not refresh model availability.'))} />
           <div className="flex flex-col gap-2 rounded-xl border border-border bg-surface p-3">
             <p className="break-words font-mono text-[0.6875rem] leading-snug text-content-muted">
               {readback}
@@ -734,10 +1188,18 @@ export default function VideoTestStudio() {
         <h2 className="font-mono text-[0.625rem] uppercase tracking-[0.18em] text-content-subtle">
           Clips — newest first
         </h2>
-        <VideoClipHistory clips={clips} onRate={rate} onDelete={remove} onReuse={reuse} onVfi={setVfiClip} vfiBusy={vfiBusy}
+        <AutoContinuePanel session={auto.session} ready={auto.ready} busy={auto.busy} error={auto.error}
+          referenceMode={isReference}
+          direction={autoDirection} maxClips={autoMaxClips} onDirection={setAutoDirection}
+          onMaxClips={setAutoMaxClips} onApply={applyAuto} onStop={stopAuto} onResume={resumeAuto} />
+        <VideoClipHistory clips={clips} render={renderProgress} onRate={rate} onDelete={remove} onReuse={reuse} onVfi={setVfiClip} vfiBusy={vfiBusy}
+          onBest={best.save} bestBusy={best.busy} bestClipId={best.state?.best_settings?.clip_id}
           onNeuralRender={hasContributions('video.neural-render-dialog', 'studio') ? (clip) => setNrClip(clip) : null} nrBusy={nrBusy}
           onCompare={hasContributions('video.neural-compare', 'studio') ? (clip) => setCompareClip(clip) : null}
           onJumpTo={jumpTo} onContinue={continueFrom} continueBusy={continueBusy}
+          onAuto={toggleAuto} autoSession={auto.session} autoMode={mode}
+          autoDisabled={auto.busy || !auto.ready || (autoLimit(autoMaxClips) === null && !auto.session?.enabled)}
+          autoRunning={autoIsBusy(auto.session)}
           hasMore={hasMore} loadingMore={loadingMore} onLoadMore={loadMore} />
       </section>
 
@@ -770,6 +1232,16 @@ export default function VideoTestStudio() {
           title={`clip #${compareClip.nr_of} → neural render #${compareClip.id}`}
           exportHref={clipComparisonUrl(compareClip.id)}
           onClose={() => setCompareClip(null)} />
+      )}
+      {zoom && (
+        <GeneratedImageLightbox img={zoom.img} alt={zoom.index < 0 ? 'Last frame' : `Start frame ${zoom.index + 1}`}
+          onClose={() => setZoom(null)}
+          onImprove={canImproveCanvasImage(zoom.img) ? improveImage : undefined}
+          onUseImproveSettings={restoreImproveSettings}
+          datasetId={zoom.img?.dataset_id ?? null}
+          onRowChanged={() => restageFrame(zoom.index, zoom.img)}
+          onPrev={zoom.index > 0 ? () => openFrame(sources[zoom.index - 1], zoom.index - 1) : null}
+          onNext={zoom.index >= 0 && zoom.index < sources.length - 1 ? () => openFrame(sources[zoom.index + 1], zoom.index + 1) : null} />
       )}
       {/* ⚙ The model that writes the motion, on demand. */}
       {modelOpen && (

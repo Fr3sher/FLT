@@ -30,28 +30,66 @@ database: the whole option matrix is testable without a GPU, which is the only
 reason the pitfalls below can be pinned by tests at all.
 """
 
-from lds_sdk.h3_render import (  # noqa: F401 - public compatibility aliases
+import sqlalchemy as sa
+import logging
+import json
+import os
+import subprocess
+import re
+import uuid
+
+from lds_video import video_reference_catalog as vrc
+
+logger = logging.getLogger(__name__)
+
+
+N_CLIP = '13'           # CLIPLoader — Qwen3-VL text encoder
+N_VAE_AUDIO = '24'
+
+
+VIDEO_VAE_FP16 = 'minimax_h3_video_vae_fp16.safetensors'
+
+
+from lds_sdk.h3_render import (  # noqa: F401 — retain the Video module's existing aliases
     sage_available as sage_available,
-    ACCELERATIONS as ACCELERATIONS,
-    ACCEL_IDS as ACCEL_IDS,
+    vdn_node_compatible as vdn_node_compatible,
+    ATTN_EDGE_PCT as ATTN_EDGE_PCT,
+    ATTN_FAST_BACKENDS as ATTN_FAST_BACKENDS,
+    ATTN_KITCHEN as ATTN_KITCHEN,
+    ATTN_PYTORCH as ATTN_PYTORCH,
+    ATTN_SAGE as ATTN_SAGE,
     BASE_EROS as BASE_EROS,
+    BASE_LIGHT as BASE_LIGHT,
     BASE_OFFICIAL as BASE_OFFICIAL,
+    BLOCK_ATTN_CLASS as BLOCK_ATTN_CLASS,
+    BLOCK_ATTN_INSTALL_ACTION as BLOCK_ATTN_INSTALL_ACTION,
+    CARD_SETUP_PATH as CARD_SETUP_PATH,
     DARETIES_LORA as DARETIES_LORA,
     DEFAULT_STEPS as DEFAULT_STEPS,
     FAST_DISK_MIN_COMFYUI as FAST_DISK_MIN_COMFYUI,
     FAST_DISK_RAM_FLOOR_GB as FAST_DISK_RAM_FLOOR_GB,
     FRAMES_DEFAULT as FRAMES_DEFAULT,
+    FRAMES_MAX as FRAMES_MAX,
+    FRAMES_MIN as FRAMES_MIN,
     H3_HOST_RAM_GB as H3_HOST_RAM_GB,
+    LIGHT_MIN_COMFY as LIGHT_MIN_COMFY,
+    LIGHT_MIN_COMFY_LABEL as LIGHT_MIN_COMFY_LABEL,
     LORA_EXT as LORA_EXT,
     LORA_SUBDIR as LORA_SUBDIR,
+    MP_DEFAULT as MP_DEFAULT,
+    MP_MAX as MP_MAX,
+    MP_MIN as MP_MIN,
     N_ACCEL_LORA as N_ACCEL_LORA,
+    N_BLOCK_ATTN as N_BLOCK_ATTN,
     N_COND as N_COND,
     N_CREATE_VIDEO as N_CREATE_VIDEO,
     N_DECODE_AUDIO as N_DECODE_AUDIO,
     N_DECODE_VIDEO as N_DECODE_VIDEO,
     N_GUIDER as N_GUIDER,
+    N_LOAD_END as N_LOAD_END,
     N_LOAD_IMAGE as N_LOAD_IMAGE,
     N_NOISE as N_NOISE,
+    N_REF_SPARSE_MEMORY as N_REF_SPARSE_MEMORY,
     N_SAGE as N_SAGE,
     N_SAMPLER as N_SAMPLER,
     N_SAMPLER_SELECT as N_SAMPLER_SELECT,
@@ -69,6 +107,7 @@ from lds_sdk.h3_render import (  # noqa: F401 - public compatibility aliases
     N_UPSCALE_PARAMS as N_UPSCALE_PARAMS,
     N_UPSCALE_SPLIT as N_UPSCALE_SPLIT,
     N_VAE_VIDEO as N_VAE_VIDEO,
+    N_VDN as N_VDN,
     OPTIONAL_WEIGHTS as OPTIONAL_WEIGHTS,
     OPTION_NODE_PACKS as OPTION_NODE_PACKS,
     PARASYTE_LORA as PARASYTE_LORA,
@@ -83,31 +122,55 @@ from lds_sdk.h3_render import (  # noqa: F401 - public compatibility aliases
     TURBO_STEPS as TURBO_STEPS,
     UNFETCHABLE as UNFETCHABLE,
     UPSCALE_MODEL as UPSCALE_MODEL,
+    VDN_BRANCH_FILE as VDN_BRANCH_FILE,
+    VDN_BRANCH_FILE_INT8 as VDN_BRANCH_FILE_INT8,
+    VDN_CLASS as VDN_CLASS,
+    VDN_FOLDER as VDN_FOLDER,
+    VDN_LIGHT_ADVICE as VDN_LIGHT_ADVICE,
+    VDN_LIGHT_ADVICE_VRAM_GB as VDN_LIGHT_ADVICE_VRAM_GB,
+    VDN_MODES as VDN_MODES,
+    VDN_NODE_INPUTS as VDN_NODE_INPUTS,
+    VDN_SETUP_PATH as VDN_SETUP_PATH,
+    VDN_STAGE as VDN_STAGE,
+    VDN_STAGE_REQUIRED as VDN_STAGE_REQUIRED,
+    VDN_STEPS as VDN_STEPS,
+    VDN_WINDOW_LATENT_FRAMES as VDN_WINDOW_LATENT_FRAMES,
+    VIDEO_VAE_INT8 as VIDEO_VAE_INT8,
     WORKFLOW_FILENAME as WORKFLOW_FILENAME,
     DYNAMIC_VRAM_FORCE as _DYNAMIC_VRAM_FORCE,
     DYNAMIC_VRAM_OFF_MODES as _DYNAMIC_VRAM_OFF_MODES,
     DYNAMIC_VRAM_SWITCH as _DYNAMIC_VRAM_SWITCH,
     FAST_DISK_FLAG as _FAST_DISK_FLAG,
+    FRAME_MOD as _FRAME_MOD,
+    FRAME_OFFSET as _FRAME_OFFSET,
     HIGH_RAM_FLAG as _HIGH_RAM_FLAG,
+    ROW_PRESENT as _ROW_PRESENT,
     VERSION_RE as _VERSION_RE,
     drop_sage as _drop_sage,
+    graft_block_attention as _graft_block_attention,
     graft_latent_upscale as _graft_latent_upscale,
+    graft_reference_accel as _graft_reference_accel,
     graft_sparse as _graft_sparse,
     graft_stock_accel as _graft_stock_accel,
     graft_test_lora as _graft_test_lora,
     graft_turbo as _graft_turbo,
+    graft_vdn as _graft_vdn,
     insert_into_chain as _insert_into_chain,
     loras_write_dir as _loras_write_dir,
     make_t2v as _make_t2v,
     model_readers as _model_readers,
+    parse_comfy_version as _parse_comfy_version,
     profile as _profile,
+    vdn_row_present as _vdn_row_present,
     video_runs as _video_runs,
     weight_present as _weight_present,
-    accel_spec as accel_spec,
-    accelerations_status as accelerations_status,
-    build_workflow as build_workflow,
+    attention_spec as attention_spec,
+    block_attention_backends as block_attention_backends,
+    block_attention_missing_nodes as block_attention_missing_nodes,
+    block_attention_pack_installed as block_attention_pack_installed,
     clamp_megapixels as clamp_megapixels,
     comfyui_launch_facts as comfyui_launch_facts,
+    comfyui_vram_gb as comfyui_vram_gb,
     deploy_checkpoint as deploy_checkpoint,
     deploy_file as deploy_file,
     deployed_loras as deployed_loras,
@@ -116,140 +179,40 @@ from lds_sdk.h3_render import (  # noqa: F401 - public compatibility aliases
     knows_fast_disk as knows_fast_disk,
     last_frame_command as last_frame_command,
     launch_advice as launch_advice,
+    light_on_disk as light_on_disk,
+    light_status as light_status,
+    light_usable as light_usable,
     load_base_workflow as load_base_workflow,
-    missing_weights as missing_weights,
+    local_attention_backends as local_attention_backends,
     new_prefix as new_prefix,
-    normalise_accel as normalise_accel,
+    normalise_mode as normalise_mode,
     normalise_sparse as normalise_sparse,
     option_availability as option_availability,
     preflight as preflight,
+    reference_accel_spec as reference_accel_spec,
+    reference_sparse_compatible as reference_sparse_compatible,
+    reference_status as reference_status,
+    reference_weight_name as reference_weight_name,
     registered_classes as registered_classes,
     snap_frames as snap_frames,
     studio_ready as studio_ready,
     trained_loras as trained_loras,
     undeploy_lora as undeploy_lora,
+    vdn_branch_active as vdn_branch_active,
+    vdn_latent_frames as vdn_latent_frames,
+    vdn_node_checkpoints as vdn_node_checkpoints,
+    vdn_node_unwritten_required as vdn_node_unwritten_required,
+    vdn_roots as vdn_roots,
+    vdn_stage_missing as vdn_stage_missing,
+    vdn_stage_missing_under as vdn_stage_missing_under,
+    vdn_stage_present as vdn_stage_present,
     workflow_path as workflow_path,
 )
-
-import os
-import subprocess
-import re
-import uuid
-
-
-# ── The base graph ───────────────────────────────────────────────────────────
-# 18 nodes: loaders (6/13/11/24), the image branch (114 → 119 → 120), the H3
-# conditioner (104), sampling (15/16/17/9/14), decode (10/23) and mux (91/92),
-# plus SageAttention (600) sitting between the UNET and everything that reads
-# the model.
-
-# Node ids of the base graph that the grafts read or rewrite. Named because
-# `workflow["9"]` five hundred lines from here says nothing about which node
-# just had its step count changed.
-N_CLIP = '13'           # CLIPLoader — Qwen3-VL text encoder
-N_VAE_AUDIO = '24'
-
-# Grafted ids. The ranges are deliberately spread out: a collision would
-# overwrite a node with no message at all, in a dict where every key is a
-# string that looks like every other key.
-
-# ── The weights this graph names ─────────────────────────────────────────────
-# The OFFICIAL base. Kept as a constant rather than read off the JSON because
-# the 10Eros swap has to be able to say which base a run actually used.
-
-# 🔥 10Eros-Max — a THIRD-PARTY finetune of H3 (cicalooo), int8 convrot, in the
-# `skip_edges` variant (blocks 0/1/48/49 kept in BF16, which its own SKIP_EDGES
-# note calls "the safer starting point when comparing quality").
-#
-# Never elected in silence: the option is off by default and the official base
-# stays the graph's. It also imposes its own faces, which is exactly wrong when
-# the thing being tested is whether YOUR LoRA reproduces an identity — the UI
-# says so, and the identity recipe measured on this pipeline uses the official
-# base for that reason.
-
-# ⚡ The 6-step distillation LoRA (larryvrh v4, step 600 EMA — the top row of the
-# multimodalart H3 acceleration arena at 6 steps), applied through its OWN node, not
-# a standard loader. Both halves of that sentence were paid for:
-#
-#   * the file uses H3's bare key naming (`blocks.0.attn…`) plus 102 adaln keys.
-#     `MiniMaxH3TurboLoRA` re-prefixes the keys AND re-injects the adaln that the
-#     pruned base collapsed into a curve. Hand the same file to a standard
-#     loader and the adaln half is simply missing.
-#   * a standard loader MERGES into the weights (`add_patches`). On an int8
-#     base that pushes modules into lowvram patches and re-quantises on every
-#     forward pass — measured elsewhere at step 1 unfinished after 6 min 37,
-#     against ~9 s/step without. The dedicated node runs the LoRA alongside the
-#     base instead (bypass), immune to where the weights happen to sit.
-
-# Six, not four. The model card is explicit — "4 steps is the recommended
-# MINIMUM; 4-8 is the useful range. 6-8 steps look noticeably better than 4" —
-# and at 4 steps with fast motion this checkpoint trails ghosting.
-
-# ⚡ The accelerations the Render panel offers: the top three rows of the
-# multimodalart MiniMax-H3 acceleration arena (human preference Elo, ~7 400
-# votes per task, 95 % intervals about ±26 — so the three are statistical
-# ties), every one of them at 6 steps and about 4× the 28-step reference.
-# `turbo` is larryvrh's LoRA through its OWN nodes (a LoRA node and the
-# double-clock sampler, see _graft_turbo). The other two are ordinary LoRAs
-# for the stock loader, run on the stock euler sampler at the sigma shift
-# their cards and the arena ran them at (video 8, audio 3; the base's own
-# grid is 12/3). Strengths are the arena's verified settings, not 1.0: the
-# Parasyte file's alpha convention wants 4-5, the merge's card says 0.6-0.8.
-
-
-
-
-
-# Without turbo the base is not distilled and needs a real schedule.
-
-# ⚡ Sparse attention (H3-Optimizations, Zironic). Both levels are the AUTHOR's,
-# not ours: `default` is the node's own defaults, `conservative` raises the
-# budget and holds the schedule's edges denser — the exact shape of the node's
-# "Denser Early/Late" toggle applied to a higher budget.
-#
-# `max` carries the same numbers as `default` and differs only in WHERE it is
-# applied (see `_graft_sparse`): it is the one level that lets the sparse graph
-# touch the base sampling pass as well.
-
-# Backend left at the node's embedded default. FROST BF16 exists on SM89 but an
-# explicitly named backend FAILS when it is unavailable, and this graph is also
-# meant to run on a rented GPU nobody inspected.
-
-# 🔬 The latent upscaler. H3 emits an INTERLEAVED latent — 24 video channels and
-# 32 audio channels in one tensor — which image upscalers cannot read; they have
-# to decode to pixels, enlarge, and re-encode, which is where the re-muxed audio
-# and the tile seams come from. This one enlarges inside the model's own domain
-# and the audio passes through untouched.
-
-# The profile key in the shared target catalogue. The studio takes fps and the
-# legal clip lengths from there rather than restating them, so a clip generated
-# here and a clip cut for training cannot drift apart.
-
-
-
-# H3's VAE packs 17 pixel frames per chunk, so a legal length is ≡ 5 (mod 17).
-_FRAME_MOD, _FRAME_OFFSET = 17, 5
-# Generation reaches further than training does. The catalogue stops at 209
-# because that is where TRAINING clip lengths stop being useful; the model
-# itself renders to ~15 s at 24 fps, and refusing that here would cap the studio
-# at 8.7 s for a reason that has nothing to do with the studio.
-FRAMES_MIN, FRAMES_MAX = 22, 362
-
-# And the default is the STUDIO's, not the catalogue's. The catalogue's
-# `frame_default` is 39 because that is how long a TRAINING clip should be; the
-# same preset carries 107 on its preview line, and reading the wrong one of those
-# two numbers has already cost this project a wrong default once. A test clip
-# wants enough motion to judge (39 frames is 1.6 s — barely a gesture) without
-# paying the ~2.7x per-step cost of 107, so it sits between them.
-
-# Resolution, in megapixels at node 119. The ceiling is the MODEL's, not a
-# card's: the sweet spot for faces sits near 1.0 MP and the machine that runs
-# the job decides what it can hold.
-MP_MIN, MP_MAX, MP_DEFAULT = 0.1, 2.0, 0.3
-
-# Where the studio deploys a trained video LoRA so ComfyUI can list it. `h3` is
-# the subfolder the H3 LoRAs of this ecosystem already live in; `lds` keeps the
-# app's own deployments distinct from files the user put there by hand.
+from .h3_chimera import (
+    ACCELERATIONS as ACCELERATIONS, ACCEL_IDS as ACCEL_IDS,
+    accel_spec as accel_spec, accelerations_status as accelerations_status,
+    build_workflow, missing_weights as missing_weights, normalise_accel as normalise_accel,
+)
 
 
 class VideoStudioAssetsMissing(Exception):
@@ -267,73 +230,7 @@ class VideoStudioAssetsMissing(Exception):
                          f'{len(self.missing_nodes)} node(s)')
 
 
-
-
-
-
-
-
-
-
-
-
-# ── The build ────────────────────────────────────────────────────────────────
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# The runtime half: what is on disk, what ComfyUI can see, and the queue.
-# Everything above this line is pure; everything below touches the world.
-# ═══════════════════════════════════════════════════════════════════════════
-
-import logging
-
-logger = logging.getLogger(__name__)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# A LoRA is one safetensors file. The extension is not decoration here: it is
-# what ComfyUI's LoraLoader reads, and copying a .ckpt or a .pt into the folder
-# would put an entry in the picker that fails at generation time.
-
-
-
-
-
-
+import shutil
 
 
 def clips_dir(create=True):
@@ -350,11 +247,14 @@ def clips_dir(create=True):
     return root
 
 
-def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, lora=None,
+def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, end_image=None, lora=None,
                  lora_strength=1.0, run_id=None, dataset_id=None, seed=None,
                  steps=None, frames=None, megapixels=MP_DEFAULT, aspect='auto',
-                 turbo=False, accel=None, eros=False, sparse='', latent_upscale=False,
-                 source_ratio=None, skip_preflight=False, continues=None) -> dict:
+                 turbo=False, accel=None, eros=False, light=False, sparse='',
+                 latent_upscale=False,
+                 references=None, ref_base='official', ref_image_size='match', refmods=False,
+                 source_ratio=None, skip_preflight=False, continues=None,
+                 _prepared=None, _record=None, _remote=None) -> dict:
     """Build the graph, record the clip, queue the job — in that order.
 
     The row is written BEFORE the queue insert and in the SAME transaction, so a
@@ -365,13 +265,40 @@ def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, lora=None,
     from lds_video.models import db
     from lds_sdk.video_runtime import queue as queue_manager
     from lds_video.models import VideoTestClip
+    from lds_video import video_references as refs
 
-    # Keep the T2V canvas choice with the clip so Reuse cannot inherit a later
-    # render's format. I2V follows its source image instead of a canvas preset.
-    mode = 't2v' if str(mode or 'i2v').lower() == 't2v' else 'i2v'
+    mode = normalise_mode(mode)
+    if _remote is not None and (mode != 'ref2va' or _prepared is not None or latent_upscale):
+        raise ValueError('The battle GPU supports Reference clips without latent upscale.')
+    from lds_video.h3_refmods import validate as validate_refmods
+    validate_refmods(mode, image, references, refmods)
+    # Reference/text canvases are chosen independently of the inputs. Keep the
+    # same normalized choice the builder uses, so Reuse cannot inherit a later
+    # clip's format. An image-to-video canvas follows its source image.
     aspect = str(aspect or 'auto').strip().lower()
     if mode == 'i2v' or aspect not in ('auto', 'portrait', 'landscape', 'square'):
         aspect = 'auto'
+    references = (refs.validate_references(references, user_id=user_id)
+                  if mode == 'ref2va' or refmods else [])
+    # A reference clip continues WITH its references (2026-09-07): the take
+    # keeps the cast it was made with, and the seam is the H3 guide at frame 0
+    # -- the parent's last frame, staged like any other first frame guide. The
+    # blanket refusal this replaces was written on 2026-09-04, with the
+    # reference mode itself and before those guides existed.
+    # The picture is what makes it a continuation: without it the join would
+    # cut to a clip that starts wherever the sampler took it, so the launch
+    # says what is missing rather than rendering a jump.
+    if mode == 'ref2va' and continues and not image:
+        raise ValueError('A reference continuation starts on the last frame of the clip '
+                         'it continues: stage it as the first frame guide.')
+
+    from lds_video.video_best_settings import resolve_lora
+    if _prepared is None:
+        dataset_id, run_id = resolve_lora(user_id, lora, run_id=run_id, dataset_id=dataset_id)
+    else:
+        # Internal batch preparation already verified the exact checkpoint and
+        # froze its weight. HTTP routes never accept these private arguments.
+        dataset_id, run_id = _prepared['origin']
 
     # ONE /object_info read for the whole launch, and it decides two things:
     # whether SageAttention goes into the graph at all, and (through the
@@ -383,40 +310,99 @@ def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, lora=None,
     parent = None
     if continues:
         parent = VideoTestClip.query.filter_by(id=int(continues)).first()
-        if parent is None or parent.status != 'done' or not parent.filename:
+        # Two different situations, two sentences: a clip that is GONE is not
+        # a clip that has not finished, and telling somebody to wait for a
+        # render they deleted is a refusal they cannot act on. The continuation
+        # outlives the card (it is kept in this browser), so this is reachable
+        # by deleting the parent and coming back (verification, 2026-09-07).
+        if parent is None:
+            raise ValueError(f'clip #{int(continues)} no longer exists — drop the continuation '
+                             'to launch a clip of its own')
+        if parent.status != 'done' or not parent.filename:
             raise ValueError('the clip to continue has not finished rendering')
-    classes = registered_classes()
-    built = build_workflow(
-        prompt=prompt, mode=mode, image=image, seed=seed, steps=steps,
-        frames=frames, megapixels=megapixels, aspect=aspect, lora=lora,
-        lora_strength=lora_strength, turbo=turbo, accel=accel, eros=eros,
-        eros_on_disk=eros_on_disk() if eros else False, sparse=sparse,
-        latent_upscale=latent_upscale, source_ratio=source_ratio,
-        sage=sage_available(classes), filename_prefix=new_prefix(user_id))
-    if not skip_preflight:
+        if parent.user_id not in (None, str(user_id)):
+            raise ValueError('the clip to continue belongs to another workspace')
+    if _prepared is None:
+        classes = set() if _remote is not None else registered_classes()
+        light_ok, light_note = light_usable() if light else (False, '')
+        built = build_workflow(
+            prompt=prompt, mode=mode, image=image, end_image=end_image, seed=seed, steps=steps,
+            frames=frames, megapixels=megapixels, aspect=aspect, lora=lora,
+            lora_strength=lora_strength, turbo=turbo, accel=accel, eros=eros,
+            eros_on_disk=eros_on_disk() if eros else False,
+            light=light, light_on_disk=light_ok, light_note=light_note, sparse=sparse,
+            latent_upscale=latent_upscale, source_ratio=source_ratio,
+            references=references, ref_base=ref_base, ref_image_size=ref_image_size, refmods=refmods,
+            sage=sage_available(classes), filename_prefix=new_prefix(user_id))
+    else:
+        built = _prepared['built']
+    if mode == 'ref2va' and _remote is None:
+        if ref_base == 'light':
+            _argv, _ram, version = comfyui_launch_facts()
+            parsed = _parse_comfy_version(version)
+            if parsed is not None and parsed < LIGHT_MIN_COMFY:
+                raise ValueError(f'Reference W4A8 needs ComfyUI {LIGHT_MIN_COMFY_LABEL} or later.')
+        _resolve_reference_weights(built['workflow'])
+    if _remote is not None:
+        _remote.validate_workflow(built['workflow'])
+        built['generation_settings'].update(execution='battle_cloud', cloud_session_id=_remote.id)
+    elif not skip_preflight:
         preflight(built['workflow'])
 
     job_id = str(uuid.uuid4())
     clip = VideoTestClip(
         run_id=run_id, dataset_id=dataset_id, job_id=job_id, status='pending',
-        prompt=prompt, mode=mode, aspect=aspect,
-        source_image=image, seed=built['seed'], steps=built['steps'],
+        prompt=prompt, mode=mode, user_id=str(user_id), aspect=aspect,
+        references_json=json.dumps(references) if references else None,
+        ref_base=ref_base if mode == 'ref2va' else None,
+        ref_image_size=ref_image_size if mode == 'ref2va' else None,
+        source_image=image, end_image=(end_image or None), seed=built['seed'], steps=built['steps'],
         frames=built['frames'], megapixels=built['megapixels'],
         fps=float(_profile().get('fps') or 24.0), base_model=built['base'],
-        lora=lora, lora_strength=float(lora_strength) if lora else None,
+        lora=lora, lora_strength=built['generation_settings']['lora_strength'],
+        generation_settings=json.dumps(built['generation_settings']),
         turbo=(built['accel'] == 'turbo'), accel=(built['accel'] or None),
         sparse=normalise_sparse(sparse), latent_upscale=bool(latent_upscale),
         continues_of=(parent.id if parent else None))
     db.session.add(clip)
     db.session.flush()          # mint the id inside the same transaction
+    try:
+        refs.keep_clip_references(clip.id, references, user_id=user_id)
+        if _record is not None:
+            _record(clip)
+    except Exception:
+        db.session.rollback()
+        raise
+    if _remote is not None:
+        db.session.commit()
+        try:
+            keep_clip_frames(clip.id, image=image, end_image=end_image)
+            _remote.submit(clip.id, built['workflow'], references=references, image=image,
+                           end_image=end_image, lora=lora, user_id=user_id)
+        except Exception:
+            db.session.rollback()
+            link_completed_clip(job_id, None, failed=True, reason='The cloud clip could not be started. Retry this turn.')
+            raise
+        return {'clip_id': clip.id, 'job_id': job_id, 'seed': built['seed'],
+                'frames': built['frames'], 'steps': built['steps'], 'notes': built['notes'],
+                'execution': 'battle_cloud', 'cloud_session_id': _remote.id}
     queue_manager.add_job(job_type='image', user_id=str(user_id),
                           workflow_data=built['workflow'], prompt=prompt or '',
                           job_id=job_id,
                           metadata={'model_name': 'video_lora_test',
                                     'is_video_test': True,
-                                    'clip_id': clip.id},
+                                    'clip_id': clip.id,
+                                    # Spared by the boot sweep while the
+                                    # job is live (see job_queue); never
+                                    # under `staged_inputs`, which drops
+                                    # per job — a last frame is shared.
+                                    'inputs_in_use': ([n for n in (image, end_image) if n]
+                                                      + [r['name'] for r in references])},
                           commit=False)
     db.session.commit()
+    # 🎬 The clip keeps its own copy of the pictures it was conditioned on:
+    # ComfyUI's input folder is swept, the app's clips folder is not.
+    keep_clip_frames(clip.id, image=image, end_image=end_image)
     logger.info('video studio: queued clip %s (%s)', clip.id,
                 ', '.join(built['notes']) or 'no options')
     return {'clip_id': clip.id, 'job_id': job_id, 'seed': built['seed'],
@@ -424,17 +410,21 @@ def enqueue_clip(user_id, *, prompt, mode='i2v', image=None, lora=None,
             'notes': built['notes']}
 
 
-# ↗ VFI. The checkpoint, the multiplier and every dial below are read from the
-# maintainer's image generator (workflows/video-generation/vfi.json) rather than
-# chosen here: the two apps drive the same ComfyUI, and a clip smoothed in one
-# should be the clip smoothed in the other. rife49 is what that graph loads;
-# `fast_mode` and `ensemble` are its settings; the cache is cleared every 16
-# frames, which is what keeps a 200-frame clip inside VRAM.
+def _resolve_reference_weights(workflow):
+    for node in workflow.values():
+        inputs = node.get('inputs', {})
+        if node.get('class_type') == 'UNETLoader':
+            key, folders = 'unet_name', ('diffusion_models', 'unet')
+        elif node.get('class_type') == vrc.REF_LORA_CLASS:
+            key, folders = 'lora_name', ('loras',)
+        else:
+            continue
+        inputs[key] = reference_weight_name(folders, inputs[key]) or inputs[key]
+
+
 VFI_CKPT = 'rife49.pth'
 VFI_MULTIPLIER = 2
 VFI_CLEAR_CACHE_EVERY = 16
-# h264 at crf 19, yuv420p — the same container the generator writes, so the
-# smoothed clip plays anywhere the original did.
 VFI_CRF = 19
 
 N_VFI_LOAD, N_VFI_RIFE, N_VFI_SAVE = 'v1', 'v2', 'v3'
@@ -448,8 +438,9 @@ def build_vfi_workflow(*, video_path, fps, multiplier=VFI_MULTIPLIER,
     folder (clips_dir), never in ComfyUI's output, and VHS_LoadVideoPath takes a
     path rather than a name precisely so a file outside that tree can be read.
     The output rate is the source's times the multiplier, which is what makes
-    this a SMOOTHING rather than a slow motion — the clip keeps its duration and
-    gains frames.
+    this a SMOOTHING rather than a slow motion. RIFE inserts between pairs:
+    N input frames produce (N - 1) * multiplier + 1 frames, so the encoded
+    duration is slightly shorter (by less than one source frame).
     """
     rate = round(float(fps or 24) * int(multiplier), 3)
     return {
@@ -471,6 +462,9 @@ def build_vfi_workflow(*, video_path, fps, multiplier=VFI_MULTIPLIER,
         N_VFI_SAVE: {
             'class_type': 'VHS_VideoCombine',
             'inputs': {'images': [N_VFI_RIFE, 0], 'frame_rate': rate,
+                       # VHS lazily reads this optional audio output. Its
+                       # combine node also accepts a source with no audio.
+                       'audio': [N_VFI_LOAD, 2],
                        'loop_count': 0,
                        'filename_prefix': filename_prefix or 'lds_vfi',
                        'format': 'video/h264-mp4', 'pix_fmt': 'yuv420p',
@@ -498,6 +492,8 @@ def interpolate_clip(user_id, clip_id, multiplier=VFI_MULTIPLIER) -> dict:
     from lds_video.models import VideoTestClip
 
     src = VideoTestClip.query.filter_by(id=int(clip_id)).first()
+    if src is not None and src.user_id not in (None, str(user_id)):
+        raise ValueError('clip not found')
     if src is None:
         raise ValueError('clip not found')
     if src.status != 'done' or not src.filename:
@@ -505,6 +501,8 @@ def interpolate_clip(user_id, clip_id, multiplier=VFI_MULTIPLIER) -> dict:
     path = os.path.join(str(clips_dir()), os.path.basename(src.filename))
     if not os.path.isfile(path):
         raise ValueError('that clip is no longer on disk')
+    if src.frames is not None and 0 < src.frames < 2:
+        raise ValueError('Smooth needs at least 2 frames in the source clip')
 
     classes = registered_classes()
     spec = OPTION_NODE_PACKS['vfi']
@@ -523,19 +521,29 @@ def interpolate_clip(user_id, clip_id, multiplier=VFI_MULTIPLIER) -> dict:
                                   filename_prefix=new_prefix(user_id))
     clip = VideoTestClip(
         run_id=src.run_id, dataset_id=src.dataset_id, job_id=job_id,
-        status='pending', prompt=src.prompt, mode=src.mode,
-        aspect=src.aspect or 'auto', accel=src.accel,
-        source_image=src.source_image, seed=src.seed, steps=src.steps,
-        # The frame COUNT grows with the rate, so the clip lasts exactly as
-        # long — RIFE inserts between frames, it does not slow anything down.
-        frames=(src.frames or 0) * mult if src.frames else None,
-        megapixels=src.megapixels, fps=float(src.fps or 24) * mult,
+        generation_settings=src.generation_settings,
+        status='pending', prompt=src.prompt, mode=src.mode, aspect=src.aspect or 'auto',
+        user_id=str(user_id), references_json=src.references_json,
+        ref_base=src.ref_base, ref_image_size=src.ref_image_size,
+        accel=src.accel,
+        source_image=src.source_image, end_image=getattr(src, 'end_image', None),
+        seed=src.seed, steps=src.steps,
+        # RIFE writes each endpoint once, plus mult-1 frames between each pair.
+        # Unknown legacy counts stay unknown; the source row is never edited.
+        frames=(src.frames - 1) * mult + 1 if src.frames and src.frames > 0 else None,
+        megapixels=src.megapixels, fps=round(float(src.fps or 24) * mult, 3),
         base_model=src.base_model, lora=src.lora,
         lora_strength=src.lora_strength, turbo=bool(src.turbo),
         sparse=src.sparse, latent_upscale=bool(src.latent_upscale),
         vfi_of=src.id)
     db.session.add(clip)
     db.session.flush()
+    from lds_video import video_references as refs
+    try:
+        refs.keep_clip_references(clip.id, refs.references_of(src), user_id=user_id)
+    except Exception:
+        db.session.rollback()
+        raise
     queue_manager.add_job(job_type='image', user_id=str(user_id),
                           workflow_data=workflow, prompt=src.prompt or '',
                           job_id=job_id,
@@ -550,7 +558,7 @@ def interpolate_clip(user_id, clip_id, multiplier=VFI_MULTIPLIER) -> dict:
             'fps': clip.fps}
 
 
-def link_completed_clip(job_id, filename, failed=False, reason=None):
+def link_completed_clip(job_id, filename, failed=False, reason=None, *, render_seconds=None, postprocess=True):
     """Attach a finished ComfyUI job to its clip row.
 
     Runs in the queue monitor thread, whose session may hold a stale read
@@ -576,7 +584,7 @@ def link_completed_clip(job_id, filename, failed=False, reason=None):
         return
     # Read before the row settles, on the failure path too: a clip that died
     # after four minutes of rendering says something a bare "failed" does not.
-    clip.render_seconds = _render_seconds(job_id)
+    clip.render_seconds = _render_seconds(job_id) if render_seconds is None else round(max(0, render_seconds), 1)
     if failed:
         clip.status = 'failed'
         clip.error = (reason or 'Generation failed (see the server log in '
@@ -586,19 +594,30 @@ def link_completed_clip(job_id, filename, failed=False, reason=None):
     clip.filename = filename
     clip.status = 'done'
     _bring_clip_home(filename)
-    continues = getattr(clip, 'continues_of', None)
     clip_id = clip.id
     # Committed BEFORE any join: from here the row is a valid render (the
     # part), and the encode below runs with no write transaction open. It ran
     # inside this one once — measured: every other writer got "database is
     # locked" for the length of ffmpeg (up to its 600 s timeout).
     db.session.commit()
-    if continues:
-        # ⏭ The part becomes the whole: parent, then this render.
-        _join_continuation(clip_id)
+    if not postprocess:
+        # Cloud settles the row under its short cancellation lock, then joins
+        # locally outside that lock so Stop can release the paid GPU at once.
+        return clip_id
+    postprocess_completed_clip(clip_id)
 
 
-# ── ⏭ Continue: the last frame as the next start frame, the clips joined ──
+def _collect_last_frame_quietly(clip_id):
+    """`collect_last_frame` from the completion callback: a clip that landed
+    is done whatever happens to its frame, so nothing raised here reaches the
+    monitor thread — it is logged, and the clip is a clip. A missing ffmpeg
+    is the usual reason (the video extra is not installed)."""
+    try:
+        collect_last_frame(clip_id)
+    except Exception as exc:                      # noqa: BLE001
+        logger.warning('video studio: the last frame of clip %s was not collected '
+                       'into the Gallery: %s', clip_id, exc)
+
 
 def _run_ffmpeg(cmd, timeout=600):
     """The app's subprocess convention for ffmpeg (video_bank_service has the
@@ -609,15 +628,291 @@ def _run_ffmpeg(cmd, timeout=600):
                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
 
+STAGED_FRAME_NAME = re.compile(r'^lds_vstudio_[0-9a-f]{10}\.png$')
+FRAME_CHECKPOINT = 'start frame'
+LAST_FRAME_CHECKPOINT = 'last frame'   # the same sentinel for a clip's collected last frame
+FRAMES_DATASET_NAME = 'Video Test Studio · frames'
+FRAMES_DATASET_LEGACY_NAMES = ('Video Test Studio · start frames',)
+FRAME_COPIES_MAX = 100
+
+
+def staged_frame_path(name: str, role: str = 'start') -> str:
+    """The file behind a staged start (or last) frame — by its NAME only, under ComfyUI's
+    input folder. Anything that is not the exact shape `/source` hands out is
+    refused before the filesystem is touched: the name comes from the client,
+    and a name that walks is how a viewer becomes a file reader."""
+    from lds_sdk.video_host import config as cfg
+    base = os.path.basename(str(name or ''))
+    if not STAGED_FRAME_NAME.match(base):
+        raise ValueError('not a staged start frame')
+    folder = cfg.comfyui_dir('input')
+    if not folder:
+        raise ValueError("ComfyUI's input folder is not configured — set the ComfyUI folder in Settings")
+    path = os.path.join(str(folder), base)
+    if not os.path.isfile(path):
+        raise LookupError(f'that {role} frame is no longer staged — pick it again')
+    return path
+
+
+def frames_dataset_id(user_id) -> int:
+    """The holding dataset for the Video Test Studio's frames — start frames
+    opened in the viewer, and every finished clip's collected last frame —
+    created on first use. It is an ordinary dataset: it shows in the Datasets
+    list under its name, and deleting it drops every frame with it. Found
+    under a name it had before, it is renamed, so no install ends up with two."""
+    from lds_sdk import video_frames
+    return video_frames.ensure_collection(user_id, FRAMES_DATASET_NAME,
+        legacy_names=FRAMES_DATASET_LEGACY_NAMES, trigger_word='videoframe')
+
+
+def _as_int(value, what):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f'{what} must be a number') from None
+
+
+def adopt_frame(dataset_id=None, *, image=None, gallery_image_id=None, user_id='local'):
+    """🔍 Give a start frame a library row, so the shared viewer's verbs can
+    address it.
+
+    The viewer every surface of the app opens on a picture (✨ improve, 🔍
+    upscale, ✦ repair, 📷 camera angles, 📤 Civitai) works on `lora_test_image`
+    rows — that is what its routes resolve. A staged start frame is a file in
+    ComfyUI's input folder with no row, so the SAME buttons the Gallery shows
+    would be dead on it. Adopting it means: the picture copied into a dataset's
+    folder (where every library image lives and is served from) and one row
+    that says what it is — `derivation_kind` VIDEO_START_FRAME, so it is never
+    read as a cell of the Test Studio.
+
+    Two ways in: a picture the Gallery already owns (`gallery_image_id` — the
+    row itself, no copy) or a staged name (`image`; a clip's last frame arrives
+    this way too, `/clip/<id>/last-frame` having staged it). `dataset_id` is
+    the page's image dataset when the Studio was opened from one; None means
+    the holding dataset (`frames_dataset_id`).
+
+    CONTENT-ADDRESSED: the copy is named by the hash of the bytes, so the same
+    picture opened twice, or staged from two tabs, is ONE row and an improve
+    result lands next to it rather than next to a duplicate. And the name is
+    re-checked against the bytes: ✦ Repair rewrites a library file in place,
+    so a copy whose bytes moved on is left alone and the same source takes the
+    next free name — re-picking the original must not reopen the repaired one.
+    """
+    import hashlib
+    from lds_sdk import video_frames
+    if gallery_image_id is not None and gallery_image_id != '':
+        row = video_frames.gallery(user_id, _as_int(gallery_image_id, 'gallery_image_id'))
+        if row is None or not row.filename:
+            raise LookupError('that generated image is not in the gallery any more')
+        return row
+    if not image:
+        raise ValueError('name a staged frame or a gallery image')
+    restage_frame(image)                  # back from the clip's copy if the sweep took it
+    src = staged_frame_path(image, role=frame_role(image))
+    if dataset_id is None or dataset_id == '':
+        ds_id = frames_dataset_id(user_id)
+    else:
+        ds_id = _as_int(dataset_id, 'dataset_id')
+        if video_frames.collection(user_id, ds_id) is None:
+            raise LookupError('dataset not found')
+    with open(src, 'rb') as fh:
+        digest = hashlib.sha1(fh.read()).hexdigest()[:16]
+    folder = str(video_frames.dataset_directory(user_id, ds_id))
+
+    def same_bytes(path):
+        try:
+            with open(path, 'rb') as fh:
+                return hashlib.sha1(fh.read()).hexdigest()[:16] == digest
+        except OSError:
+            return False
+
+    dest = None
+    for n in range(FRAME_COPIES_MAX):
+        cand = f'vsframe_{digest}.png' if n == 0 else f'vsframe_{digest}_{n + 1}.png'
+        if not os.path.isfile(os.path.join(folder, cand)) or same_bytes(os.path.join(folder, cand)):
+            dest = cand
+            break
+    if dest is None:
+        raise ValueError('too many copies of this frame')
+    target = os.path.join(folder, dest)
+    # Copy first, then look for the row: a row whose file went missing gets
+    # its file back and stays ONE row, rather than a second row on the same name.
+    if not os.path.isfile(target):
+        shutil.copy2(src, target)
+    existing = video_frames.existing(user_id, ds_id, dest)
+    if existing is not None:
+        return existing
+    return video_frames.create_frame(user_id, ds_id, filename=dest,
+        checkpoint=FRAME_CHECKPOINT, prompt='Start frame of the Video Test Studio — a staged start frame.',
+        derivation_kind='video_start_frame')
+
+
+def clip_frame_sidecar(clip_id, which) -> str:
+    """`clip_<id>_first.png` / `clip_<id>_end.png` beside the mp4: the clip's
+    own copy of the picture it starts from / ends on (`clip_<id>_last.png` is
+    the extracted last frame, see `last_frame_png`)."""
+    return os.path.join(str(clips_dir()), f'clip_{int(clip_id)}_{which}.png')
+
+
+def keep_clip_frames(clip_id, *, image=None, end_image=None) -> None:
+    """🎬 Copy the clip's staged frames from ComfyUI's input folder to the app's
+    own clips folder, at enqueue time — the one moment they are surely there.
+
+    ComfyUI's input folder is not ours: the boot sweep clears every staged
+    picture older than 48 h (`comfy_fs`), and before it did, a start frame
+    staged once stayed there for good (415 MB on one install). The clip's
+    folder IS ours, lives as long as the clip, and is where ↻ Reuse finds the
+    picture again (`restage_frame`). Best-effort: a copy that fails is a
+    warning, never a launch refused.
+    """
+    from lds_sdk.video_host import config as cfg
+    folder = cfg.comfyui_dir('input')
+    if not folder:
+        return
+    for which, name in (('first', image), ('end', end_image)):
+        base = os.path.basename(str(name or ''))
+        if not base:
+            continue
+        src = os.path.join(str(folder), base)
+        try:
+            if os.path.isfile(src):
+                shutil.copy2(src, clip_frame_sidecar(clip_id, which))
+        except OSError as exc:
+            logger.warning('video studio: the %s frame of clip %s was not kept: %s', which, clip_id, exc)
+
+
+def keep_frames_of_existing_clips() -> tuple[int, set]:
+    """🎬 Once per boot, BEFORE the sweep: clips rendered before the copies
+    existed get theirs from ComfyUI's input folder, while their frames are
+    still there. Without this, the first boot after the update would have
+    cleared every frame an existing clip could be reused from. Returns how
+    many copies were made and the NAMES that could not be copied (disk
+    full, a file held open): the sweep spares those, so a copy that failed
+    never costs the only picture left (found in verification, 2026-09-04).
+    A clip whose copy exists, or whose frame is already gone, costs one stat."""
+    from lds_sdk.video_host import config as cfg
+    from lds_video.models import VideoTestClip
+    folder = cfg.comfyui_dir('input')
+    if not folder or not os.path.isdir(str(folder)):
+        return 0, set()
+    made = 0
+    failed = set()
+    rows = VideoTestClip.query.filter(sa.or_(VideoTestClip.source_image.isnot(None),
+                                             VideoTestClip.end_image.isnot(None))).all()
+    for clip in rows:
+        for which, name in (('first', clip.source_image), ('end', clip.end_image)):
+            base = os.path.basename(str(name or ''))
+            if not base or not STAGED_FRAME_NAME.match(base):
+                continue
+            side = clip_frame_sidecar(clip.id, which)
+            src = os.path.join(str(folder), base)
+            if os.path.isfile(side) or not os.path.isfile(src):
+                continue
+            try:
+                shutil.copy2(src, side)
+                made += 1
+            except OSError as exc:
+                failed.add(base)
+                logger.warning('video studio: the %s frame of clip %s was not kept: %s', which, clip.id, exc)
+    if made:
+        logger.info('video studio: kept the frames of %s existing clip(s) beside them', made)
+    return made, failed
+
+
+def frame_role(name) -> str:
+    """'last' when the staged name is known as a clip's END frame and not as
+    any clip's start — for the sentence a viewer gets on a frame that is
+    gone; 'start' otherwise."""
+    from lds_video.models import VideoTestClip
+    base = os.path.basename(str(name or ''))
+    if not base:
+        return 'start'
+    if VideoTestClip.query.filter(VideoTestClip.source_image == base).first() is not None:
+        return 'start'
+    if VideoTestClip.query.filter(VideoTestClip.end_image == base).first() is not None:
+        return 'last'
+    return 'start'
+
+
+def restage_frame(name) -> bool:
+    """A staged frame back in ComfyUI's input folder, from the copy a clip kept.
+
+    ↻ Reuse and the viewer address a frame by its staged NAME; once the boot
+    sweep has cleared it (48 h), the name points at nothing and ComfyUI would
+    refuse the graph a minute later. So: present → True; gone but kept by a
+    clip that started from it or ended on it → copied back under the same
+    name, True; gone and kept by nobody (a clip deleted since, a frame staged
+    before the copies existed) → False, and the caller says "pick it again".
+    A name that is not one this app staged is not judged here (True).
+    """
+    from lds_sdk.video_host import config as cfg
+    from lds_video.models import VideoTestClip
+    base = os.path.basename(str(name or ''))
+    if not base or not STAGED_FRAME_NAME.match(base):
+        return True
+    from lds_sdk.video_host import comfy_fs
+    folder = cfg.comfyui_dir('input')
+    if not folder:
+        return False
+    dest = os.path.join(str(folder), base)
+    if os.path.isfile(dest):
+        return True
+    # The folder is checked, never created: an unmounted or read-only input
+    # folder must raise the named ComfyFolderUnavailable (-> 409 with the
+    # Settings hint) exactly as staging does, not be conjured up locally
+    # where ComfyUI would never read it.
+    comfy_fs.ensure_input_usable(folder)
+    for which, column in (('first', VideoTestClip.source_image), ('end', VideoTestClip.end_image)):
+        for clip in VideoTestClip.query.filter(column == base).order_by(VideoTestClip.id.desc()).all():
+            side = clip_frame_sidecar(clip.id, which)
+            if not os.path.isfile(side):
+                continue
+            try:
+                shutil.copy2(side, dest)
+            except OSError as exc:
+                logger.warning('video studio: %s could not be restaged from clip %s: %s', base, clip.id, exc)
+                continue
+            logger.info('video studio: restaged %s from clip %s', base, clip.id)
+            return True
+    return False
+
+
+PREVIOUS_PARTS_MAX = 3
+
+
+def previous_parts(clip_id, limit=PREVIOUS_PARTS_MAX) -> list:
+    """⏭ The prompts of the parts a continuation follows, most recent first:
+    the clip being continued, then the one IT continued, up to `limit` — what
+    the ✨ writers are handed so the next part carries the take on instead of
+    starting over. An unknown id yields nothing; a chain that loops cannot run
+    past `limit`; a part without a prompt is skipped, not counted."""
+    from lds_video.models import VideoTestClip
+    from lds_sdk.video_host.config import LOCAL_USER
+    out = []
+    seen = set()
+    try:
+        cur = int(clip_id)
+    except (TypeError, ValueError):
+        return out
+    while cur and cur not in seen and len(out) < limit:
+        seen.add(cur)
+        clip = VideoTestClip.query.filter_by(id=cur).first()
+        if clip is None or clip.user_id not in (None, str(LOCAL_USER)):
+            break
+        if str(clip.prompt or '').strip():
+            out.append(str(clip.prompt))
+        cur = clip.continues_of
+    return out
 
 
 def last_frame_png(clip_id) -> str:
     """The clip's last frame as a PNG next to its mp4 (`clip_<id>_last.png`),
     extracted once and kept; the picture the next clip starts from."""
     from lds_video.models import VideoTestClip
+    from lds_sdk.video_host.config import LOCAL_USER
     from lds_sdk.video_host import ffmpeg_tools
     clip = VideoTestClip.query.filter_by(id=int(clip_id)).first()
-    if clip is None:
+    if clip is None or clip.user_id not in (None, str(LOCAL_USER)):
         raise LookupError('clip not found')
     if clip.status != 'done' or not clip.filename:
         raise ValueError('that clip has not finished rendering yet')
@@ -631,8 +926,12 @@ def last_frame_png(clip_id) -> str:
     ffmpeg = ffmpeg_tools.ffmpeg_path()
     if not ffmpeg:
         raise ValueError('ffmpeg is needed to read the last frame — install the video extra from Setup')
-    # Concurrent previews and continuations must never see a partial PNG. Keep
-    # the previous complete image until ffmpeg succeeds, then publish in place.
+    # Extracted under a name of its own, then published in one rename: the
+    # completion hook and the Rendered clip tab's preview both ask for this
+    # picture within a second of each other, and two ffmpegs writing the
+    # same path could leave a half-written PNG in the Gallery for good
+    # (found in verification, 2026-09-04). Same extension, so ffmpeg still
+    # picks the PNG muxer from the name.
     tmp = os.path.join(root, f'.clip_{int(clip_id)}_last.{uuid.uuid4().hex[:8]}.png')
     try:
         r = _run_ffmpeg(last_frame_command(ffmpeg, src, tmp), timeout=120)
@@ -640,18 +939,74 @@ def last_frame_png(clip_id) -> str:
             raise ValueError(f'the last frame could not be read: {(r.stderr or "")[-300:]}')
         os.replace(tmp, dst)
     finally:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        if os.path.isfile(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     return dst
+
+
+def collected_frame_name(clip_id, job_id) -> str:
+    """The Gallery copy of a clip's last frame: `vslast_<clip id>_<job head>.png`.
+    The job head (the first 8 hex of the queue's uuid) is what makes the name
+    survive SQLite handing the clip's id to a later clip."""
+    head = re.sub(r'[^0-9a-zA-Z]', '', str(job_id or ''))[:8]
+    return f'vslast_{int(clip_id)}_{head}.png' if head else f'vslast_{int(clip_id)}.png'
+
+
+def collect_last_frame(clip_id, user_id='local'):
+    """🖼 The last frame of a finished clip, given to the Gallery — ONCE per clip.
+
+    "The last frames collected must end up in the Gallery" (the maintainer,
+    2026-09-04): a rendered clip's last image is the picture the next clip can
+    start from or end on, and the Rendered clip tab is one place to find it — but the
+    Gallery is where every picture of the app is offered, viewed and improved.
+    So when a clip lands, its last frame is extracted (`last_frame_png`) and
+    copied into the holding dataset (`frames_dataset_id`) as one library row,
+    `derivation_kind` VIDEO_LAST_FRAME: blank LoRA facts in every viewer, filed
+    with the renders, never a cell of the Test Studio.
+
+    ONE ROW PER CLIP, keyed by the copy's NAME (`collected_frame_name`: the clip
+    id AND the head of its queue job id), not by content like `adopt_frame`: a
+    ⏭ join rewrites the clip's file behind it and re-encodes the same last
+    picture into slightly different bytes, and a content key would file one
+    frame twice. The clip id alone is not a key either: SQLite hands a deleted
+    clip's id to the next one (the delete route already knows, for the
+    sidecar), and a name built on it alone kept the deleted clip's picture
+    while the new clip's frame was never collected (found in verification,
+    2026-09-04). The job id is the queue's uuid and never comes back. The copy is taken on the FIRST
+    collection and left alone after — a ✦ Repair on the Gallery copy is the
+    user's, and a later re-extraction must not undo it. A row whose file went
+    missing gets its file back and stays one row.
+
+    Raises what `last_frame_png` raises (not done, file gone, no ffmpeg): the
+    completion hook logs it and moves on — the clip is a clip, its frame simply
+    not in the Gallery.
+    """
+    from lds_sdk import video_frames
+    from lds_video.models import VideoTestClip
+    png = last_frame_png(clip_id)
+    ds_id = frames_dataset_id(user_id)
+    clip = VideoTestClip.query.filter_by(id=int(clip_id)).first()
+    name = collected_frame_name(clip_id, getattr(clip, 'job_id', None))
+    target = os.path.join(str(video_frames.dataset_directory(user_id, ds_id)), name)
+    existing = video_frames.existing(user_id, ds_id, name)
+    if existing is None or not os.path.isfile(target):
+        shutil.copy2(png, target)
+    if existing is not None:
+        return existing
+    return video_frames.create_frame(user_id, ds_id, filename=name,
+        checkpoint=LAST_FRAME_CHECKPOINT,
+        prompt=f'Last frame of clip #{int(clip_id)} — collected by the Video Test Studio when the clip finished.',
+        derivation_kind='video_last_frame')
 
 
 def _probe_media(ffmpeg, path) -> dict:
     """What ffmpeg sees in a file, read off its own `-i` banner: whether it
-    has a sound track, and how long it plays. The join needs both — a smoothed
-    clip has no sound (its VHS_VideoCombine is given pictures only), and a
-    silent side joined to a sounding one must be padded with silence of ITS
+    has a sound track, and how long it plays. The join needs both — a source
+    (or an older smoothed clip) can be silent, and a silent side joined to a
+    sounding one must be padded with silence of ITS
     length, not muted along with the other side (found in verification,
     2026-09-03: the blind `-an` fallback threw the new part's sound away)."""
     r = _run_ffmpeg([ffmpeg, '-hide_banner', '-i', path], timeout=60)
@@ -832,8 +1187,8 @@ def _render_seconds(job_id):
     "failed after 6 h" would be a lie. A number here is a measurement, never a
     guess.
     """
-    from lds_sdk.video_host.models import ImageGenerationQueue
-    job = ImageGenerationQueue.query.filter_by(job_id=job_id).first()
+    from lds_sdk.video_runtime import job as queue_job
+    job = queue_job(job_id)
     if job is None or job.status not in ('completed', 'failed'):
         return None
     if not job.started_at or not job.completed_at:
@@ -879,101 +1234,22 @@ def _bring_clip_home(filename):
         logger.exception('video studio: could not bring %s home', filename)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# What a machine needs before this lane can render anything — and what it is
-# still missing right now.
-#
-# The Setup screen turns each key below into a button, so these names are not
-# labels: they are `setup_installer.INSTALL_ACTIONS` entries. A name that does
-# not exist there is a dead end by construction, which a contract test catches.
-# ═══════════════════════════════════════════════════════════════════════════
-
-# (setup action, ComfyUI subfolders it may live in, filename, why it is needed).
-# REQUIRED first: a message built from this list reads worst-first.
-
-# Optional weights: each one belongs to ONE checkbox, and its absence disables
-# that checkbox rather than the lane.
-
-# The weights the app will NOT fetch for you, and why — stated here rather than
-# discovered as a silent gap:
-#   * the latent upscaler has no authoritative home. The node's own README names
-#     the FOLDER it reads and no download; the copies on the model hub are
-#     community re-uploads whose provenance cannot be checked. Shipping an
-#     installer button that pulls an unverifiable 0.6 GB file into somebody
-#     else's ComfyUI is not a thing this app should do, so the preflight names
-#     the folder instead and the checkbox says the file is missing.
-#   * the 10Eros base is a third-party finetune, opt-in by design.
-
-# Custom-node packs, per option. The BASE graph is deliberately absent from this
-# table: it runs on a stock ComfyUI, which is what lets a new user render their
-# first clip with nothing but the weights.
-#
-# SageAttention is absent too, and that is the same decision seen from the other
-# side: it is a speed patch, its pack declares pip dependencies, and this app
-# never pip-installs a third-party requirements file — so it is used when the
-# target ComfyUI already has it and skipped when it does not.
-# WHY THESE ARE LINKS AND NOT BUTTONS (maintainer's call, 2026-08-31)
-# "Downloading models is fine, but we do not take responsibility for breaking a
-# ComfyUI install." A weight is an inert file; a custom node is code ComfyUI
-# imports at startup, and one bad import takes the server down for every other
-# lane. So the app names the pack, links it, and lets the user install it on the
-# ComfyUI side — where they can see what they are adding.
-
-# SageAttention. Not an option and not a checkbox: a speed patch the graph keeps
-# when the target ComfyUI has it and drops when it does not. Linked for the same
-# reason as the three above, and installed the same way — by the user.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ⏱ How ComfyUI was STARTED decides more than any dial on this screen.
-#
-# The H3 set the graph loads weighs about 43 GB (DiT int8 21 + text encoder
-# nvfp4 16 + the two VAEs 6), and ComfyUI's default loader keeps a copy of every
-# weight it offloads in system RAM. On a machine whose RAM cannot hold that set
-# beside the OS and the desktop, the models page through the swap file at every
-# node change — measured per node on a 48 GB machine: a 56-frame clip took
-# 348 s (319 s of them decoding the VAE), the next one 302-315 s. Started with
-# `--fast-disk`, ComfyUI reads the weights back from the safetensors files
-# instead: the same clip took 30 s cold and 21-24 s warm, RAM left alone.
-#
-# LDS's own launcher passes the flag (`comfyui_control._spawn`). A ComfyUI the
-# user starts some other way — a .bat, a Desktop install, another machine —
-# is not ours to configure, so the Studio asks the running instance what it
-# was started with (`/system_stats` echoes its argv, its RAM and its version)
-# and SAYS so when the flag is missing on a machine that needs it. Every
-# "cannot tell" case stays silent: advice built on a guess would name a flag
-# the user may already be passing, or one their ComfyUI does not know.
-# psutil reports the RAM the OS can use, a little under the nominal size: the
-# 48 GB machine above reads 47.7, a 64 GB one about 63.7. The floor sits under
-# the nominal 64 GB it means, or that class of machine would get the card the
-# comment above says it should not. Calibrated on one point (48 GB of RAM,
-# 43 GB of weights); nothing in between has been measured.
-# `--fast-disk` was declared in ComfyUI v0.23.0 (2026-06-01). argparse answers
-# an unknown flag with an exit before the server exists, so advising it to an
-# older instance would stop that ComfyUI from starting — the exact failure the
-# launcher guards against by reading cli_args.py. Below this version, or
-# without one, the advice stays silent.
-# `--high-ram` is the user saying "I prefer the page file to model loading" —
-# the opposite choice, made on purpose, whatever the loader. Never argued with.
-# `--fast-disk` only steers ComfyUI's DYNAMIC loader (its whole effect runs
-# through the vbar path). With that loader off the flag is inert, so advising
-# it alone would send the user to a change that changes nothing. ComfyUI's own
-# rule (`enables_dynamic_vram`): `--enable-dynamic-vram` forces the loader on;
-# otherwise `--disable-dynamic-vram` or any of the memory modes below turns it
-# off. The switch is what a launcher tuned for an older ComfyUI still carries
-# (the maintainer's own did, calibrated on a 20 GB image model, and ComfyUI now
-# announces it as "will be removed soon") — that one is named, to be removed.
-# The modes are a choice, and the advice stays silent rather than argue.
+def postprocess_completed_clip(clip_id):
+    """Join and collect a committed render, without holding a rental lock."""
+    from lds_video.models import db
+    from lds_video.models import VideoTestClip
+    clip = db.session.get(VideoTestClip, clip_id)
+    if clip is None or clip.status != 'done':
+        return
+    continues = getattr(clip, 'continues_of', None)
+    copy_of = getattr(clip, 'vfi_of', None) or getattr(clip, 'nr_of', None)
+    if continues:
+        # ⏭ The part becomes the whole: parent, then this render.
+        _join_continuation(clip_id)
+    if not copy_of:
+        # 🖼 The last frame collected into the Gallery — after the join, so a
+        # continued clip's frame is read off the whole; not for a copy, whose
+        # last picture the Gallery already has from its source.
+        _collect_last_frame_quietly(clip_id)

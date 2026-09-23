@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { VIDEO_QUICK_PROMPT_CATEGORIES, promptForMode } from './videoPromptPresets.js';
+import { VIDEO_QUICK_PROMPT_CATEGORIES, promptForMode } from './videoPromptPresets';
 
 const CATEGORY_KEY = 'ldsVideoQuickPrompts.category';
 
@@ -26,7 +26,7 @@ function storedCategory() {
  * breakpoint, unchanged on a desktop — the responsive contract, not a style
  * choice.
  */
-export default function VideoQuickPrompts({ mode, onAppend }) {
+export default function VideoQuickPrompts({ mode, onAppend, hasReferenceImages = true }) {
   const [activeId, setActiveId] = useState(storedCategory);
 
   useEffect(() => {
@@ -60,8 +60,8 @@ export default function VideoQuickPrompts({ mode, onAppend }) {
       <div className="flex flex-wrap gap-1.5">
         {active.prompts.map((p) => (
           <button key={p.label} type="button"
-            onClick={() => onAppend?.(promptForMode(p.prompt, mode))}
-            title={promptForMode(p.prompt, mode)}
+            onClick={() => onAppend?.(promptForMode(p.prompt, mode, hasReferenceImages))}
+            title={promptForMode(p.prompt, mode, hasReferenceImages)}
             className="min-h-10 rounded-full border border-border bg-surface px-3 py-1 text-[0.6875rem] font-medium text-content hover:border-primary hover:text-content lg:min-h-0">
             {p.label}
           </button>
@@ -70,7 +70,9 @@ export default function VideoQuickPrompts({ mode, onAppend }) {
 
       <span className="text-[0.6875rem] text-content-subtle">
         Each chip adds a line — stack a scenario, a camera move and an audio bed.
-        {mode === 't2v'
+        {mode === 'ref2va'
+          ? (hasReferenceImages ? ' Picture 1 supplies the visual subject. Edit the tags to use your other references.' : ' Add picture references to use their identity; these presets currently describe the scene without a picture tag.')
+          : mode === 't2v'
           ? ' Text-to-video: the presets drop their reference to a start frame, since there is none.'
           : ' The scenarios point at your start frame the way H3’s own template does.'}
       </span>

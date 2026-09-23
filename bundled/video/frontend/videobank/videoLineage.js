@@ -5,6 +5,8 @@
    place, so a pill on the graph and a row in the list offer exactly the same
    actions for the same save — a verb that differed between the two would be
    the drift CLAUDE.md's parity rule is about, inside a single section. */
+import { MUTED_CLS, ROW_CLS } from '@lds/plugin-sdk/ui';
+export { MUTED_CLS, ROW_CLS }
 import { stepActionModel, stepKey } from './videoCheckpoints.js'
 
 /* The two row styles the image lane's checkpoint popover draws with
@@ -12,9 +14,6 @@ import { stepActionModel, stepKey } from './videoCheckpoints.js'
    this lane: a verb learned on one surface has to LOOK like itself on the
    other. Here rather than in a component, because both components import
    this module and neither should import the other. */
-export const ROW_CLS = 'flex min-h-10 items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875rem] font-medium lg:min-h-0 '
-  + 'disabled:cursor-not-allowed disabled:opacity-60'
-export const MUTED_CLS = 'rounded-md border border-border bg-app/40 px-2 py-1 text-content-subtle text-[0.625rem]'
 
 /** The GROUP a tree node stands for, in the list's vocabulary. */
 export function nodeGroup(node) {
@@ -40,6 +39,8 @@ export function pillStep(pill) {
     final: !!pill?.final,
     deployed: pill?.testable === true,
     files: pill?.files || [],
+    civitai: pill?.civitai ?? null,
+    best_settings: !!pill?.best_settings,
   }
 }
 
@@ -62,11 +63,18 @@ export function pillPreview(pill) {
     count: Number(pill.preview_count) || (pill.preview_url ? 1 : 0) }
 }
 
+/** A rendered preview is a movie; graph tiles must only fetch its still. */
+export function graphPillPreview(pill) {
+  const p = pill?.generated_preview
+  return p ? { status: p.status, url: p.poster_url || null, count: p.count || 0 } : pillPreview(pill)
+}
+
 /** The deploy sentence of a pill's title on this lane — true of ITS verbs: the
  * image pill's says "tick it and 🎨 Generate will deploy it first", and there
  * is no such bar here. */
 export function videoDeployHint(pill) {
   if (pill?.present === false) return ' — this save is no longer on disk'
+  if (pill?.render_capability?.ok) return ' — select for Generate previews; its LoRA is copied automatically'
   if (pill?.testable === true) return ' — deployed to ComfyUI (the Video Studio lists it)'
   return ' — not deployed — 📦 Deploy from its actions to test it in the Studio'
 }
@@ -83,19 +91,12 @@ export function graphSummary(tree) {
   const nodes = tree?.nodes || []
   const saves = nodes.reduce((n, node) => n + (node.checkpoints?.length || 0), 0)
   const previews = nodes.reduce((n, node) => n
-    + (node.checkpoints || []).reduce((m, p) => m + (Number(p.preview_count) || 0), 0), 0)
+    + (node.checkpoints || []).reduce((m, p) => m + (Number(p.preview_count) || 0) + (Number(p.generated_preview?.count) || 0), 0), 0)
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
   return `${plural(nodes.length, 'run')} · ${plural(saves, 'save')} · ${plural(previews, 'preview')}`
 }
 
-/* Why the graph has no "Generate previews" bar YET, unlike the image one. Not
-   a difference of nature — the refuter checked: the Video Studio's
-   `enqueue_clip` can already render one clip for one deployed save, and the
-   image bar queues its previews the same way — but the fan-out over selected
-   saves is not written. Said on screen as work not done, so nobody reads the
-   missing bar as a rule. */
-export const PREVIEWS_NOTE = 'Previews are the samples ai-toolkit rendered while training '
-  + '(one per prompt, every save). Rendering new ones from a deployed save is not wired '
-  + 'here yet — pick the save in the Studio\'s Video tab.'
+export const PREVIEWS_NOTE = 'Select H3 checkpoints to render with the same prompt and seed using the Video Studio engine. '
+  + 'Training samples remain available in each save’s actions. Wan, LTX and References renders are not available here yet.'
 
 export const EMPTY_GRAPH_NOTE = 'No run to draw yet — the graph appears once a training has saved something.'

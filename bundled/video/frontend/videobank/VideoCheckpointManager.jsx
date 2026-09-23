@@ -1,22 +1,25 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Trash2 } from 'lucide-react'
-import { apiFetch, del, postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
-import { postWithConfirmations } from '@lds/plugin-sdk/training'
-import { ensureLicenceAck } from './licenceAck.js'
+import { apiFetch, del, postJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
+import { postWithConfirmations } from '@lds/plugin-sdk/training';
+import { ensureLicenceAck } from './licenceAck'
 import {
   videoDatasetCheckpointsUrl, videoDatasetCheckpointDeployUrl,
   videoDatasetCheckpointUndeployUrl, videoDatasetCheckpointDeleteUrl,
   videoDatasetCloudContinueUrl, videoDatasetCloudRunUrl, videoDatasetLineageUrl,
-} from './videoBankApi.js'
-import VideoLineageGraph from './VideoLineageGraph.jsx'
-import VideoSampleLightbox from './VideoSampleLightbox.jsx'
-import { EMPTY_GRAPH_NOTE, MUTED_CLS, PREVIEWS_NOTE, ROW_CLS, graphSummary, nodeGroup } from './videoLineage.js'
+} from './videoBankApi'
+import VideoLineageGraph from './VideoLineageGraph'
+import VideoSampleLightbox from './VideoSampleLightbox'
+import VideoPreviewDialog from './VideoPreviewDialog'
+import { hasPendingPreviews, previewKey, previewSelector, videoPreviewsUrl } from './videoPreviewSelection.js'
+import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui';
+import { EMPTY_GRAPH_NOTE, MUTED_CLS, PREVIEWS_NOTE, ROW_CLS, graphSummary, nodeGroup } from './videoLineage'
 import {
   EMPTY_NOTE, checkpointGroups, continueBody, deleteReport, deployReport,
   describeStepDelete, describeUndeploy, detailsRows, fmtSize, groupSub, groupTitle,
-  runDeleteConfirmation, stepActionModel, stepKey, undeployReport,
-} from './videoCheckpoints.js'
+  runDeleteConfirmation, stepActionModel, stepKey, stepUsesBest, undeployReport,
+} from './videoCheckpoints'
 
 // The row styles are the lane's shared ones (videoLineage.js): the list and
 // the graph popover draw a verb the same way.
@@ -31,11 +34,16 @@ const MUTED = MUTED_CLS
  * (video-checkpoints-render.test.mjs) without a server behind it.
  *
  * The unit is the STEP: a Wan 2.2 save is two files at one step, and one row
- * per step with one ⬇ per file is the only shape that never offers half a LoRA. */
+ * per step with one ⬇ per file is the only shape that never offers half a LoRA.
+ *
+ * A plugin's row (📤 Civitai) mounts on `checkpoint.action`, surface `video`;
+ * `ds` is the dataset its context needs — a list rendered from a bare payload
+ * (the render tests) passes none and gets no plugin row. */
 export function VideoCheckpointList({
   datasetId, payload, busy = null, details = null, continueTarget = null,
   extraSteps = 1000, onExtraSteps, onConfirmContinue, onCancelContinue,
-  onDeploy, onUndeploy, onDelete, onDeleteRun, onContinue, onDetails,
+  onDeploy, onUndeploy, onDelete, onDeleteRun, onContinue, onDetails, ds = null,
+  cloudAvailable = true,
 }) {
   const groups = checkpointGroups(payload)
   if (!groups.length) {
@@ -45,6 +53,7 @@ export function VideoCheckpointList({
     canDeploy: payload?.can_deploy !== false,
     deployFolder: payload?.deploy_folder || 'h3/lds',
     deleteMode: payload?.delete_mode,
+    cloudAvailable,
   }
   return (
     <div className="flex flex-col gap-3">
@@ -86,6 +95,7 @@ export function VideoCheckpointList({
                   className="flex flex-col gap-1 rounded border border-border bg-surface-raised px-2 py-1.5">
                   <div className="flex flex-wrap items-center gap-1.5 text-[0.6875rem]">
                     <span className="font-medium text-content">{a.label}</span>
+                    {stepUsesBest(s, payload?.best_settings_loras) && <span className="text-amber-200" title="Used by the dataset’s best settings">★ Best settings</span>}
                     {a.deployed && (
                       <span className="rounded bg-emerald-500/15 px-1 py-px text-[0.5625rem] font-semibold uppercase text-emerald-200">
                         Deployed
@@ -134,6 +144,7 @@ export function VideoCheckpointList({
                     ) : (
                       <span className={MUTED}><span aria-hidden>📦</span> {a.deploy?.reason}</span>
                     ))}
+                    <PluginSlot slot="checkpoint.action" surface="video" ds={ds} group={g} step={s} busy={rowBusy} />
                     {a.details && (
                       <button type="button" disabled={rowBusy} onClick={() => onDetails?.(g)}
                         title="What this run was launched with: GPU, price, steps, target, timing"
@@ -154,7 +165,7 @@ export function VideoCheckpointList({
                       <span className={MUTED + ' ml-auto'}><span aria-hidden>🗑</span> {a.del.reason}</span>
                     )}
                   </div>
-                  {continueTarget === a.key && (
+                  {cloudAvailable && continueTarget === a.key && (
                     <form className="flex flex-wrap items-center gap-1.5 border-t border-border pt-1 text-[0.6875rem]"
                       onSubmit={(e) => { e.preventDefault(); onConfirmContinue?.(g, s) }}>
                       <label className="flex items-center gap-1 text-content-muted">
@@ -191,10 +202,15 @@ export function VideoCheckpointList({
  * `refreshKey` — the training block reports its save count through it, so a
  * run that just harvested shows up here without a second poll of its own. */
 export default function VideoCheckpointManager({ ds, refreshKey = 0, onSavesChange }) {
+  const cloudAvailable = hasContributions('training.launch', 'video')
   const toast = useToast()
   const [payload, setPayload] = useState(null)
   const [tree, setTree] = useState(null)
   const [sampleTarget, setSampleTarget] = useState(null)
+  const [previewTarget, setPreviewTarget] = useState(null)
+  const [selected, setSelected] = useState([])
+  const [previews, setPreviews] = useState([])
+  const [previewError, setPreviewError] = useState('')
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(null)
   const [details, setDetails] = useState(null)
@@ -216,6 +232,20 @@ export default function VideoCheckpointManager({ ds, refreshKey = 0, onSavesChan
     } catch { setTree(null) }
   }, [ds.id])
   useEffect(() => { load() }, [load, refreshKey])
+  const loadPreviews = useCallback(async () => {
+    try {
+      const result = await apiFetch(videoPreviewsUrl(ds.id), { background: true })
+      setPreviews(result.previews || []); setPreviewError('')
+    } catch (e) { setPreviewError(e.message || 'Could not read preview history.') }
+  }, [ds.id])
+  useEffect(() => { setSelected([]); setPreviews([]); setPreviewTarget(null); loadPreviews() }, [loadPreviews])
+  const pendingPreviews = hasPendingPreviews(previews)
+  useEffect(() => {
+    if (!pendingPreviews) return undefined
+    // Video renders can take minutes. Follow until terminal status, including after reload.
+    const timer = setInterval(() => { loadPreviews(); load() }, 4000)
+    return () => clearInterval(timer)
+  }, [pendingPreviews, loadPreviews, load])
 
   // After a verb changed what is on disk: this list re-reads, and the training
   // block is told so its "Train further" does not offer a run that is gone.
@@ -240,7 +270,7 @@ export default function VideoCheckpointManager({ ds, refreshKey = 0, onSavesChan
   })
 
   const undeploy = (g, s) => {
-    if (!window.confirm(describeUndeploy(s, payload?.delete_mode))) return
+    if (!window.confirm(describeUndeploy(s, payload?.delete_mode, payload?.best_settings_loras))) return
     act(`${stepKey(g, s)}:undeploy`, async () => {
       for (const f of s.files || []) {
         if (f.deployed_as && f.undeployable) {
@@ -253,7 +283,7 @@ export default function VideoCheckpointManager({ ds, refreshKey = 0, onSavesChan
   }
 
   const remove = (g, s) => {
-    if (!window.confirm(describeStepDelete(g, s, payload?.delete_mode))) return
+    if (!window.confirm(describeStepDelete(g, s, payload?.delete_mode, payload?.best_settings_loras))) return
     act(`${stepKey(g, s)}:delete`, async () => {
       const d = await postJson(videoDatasetCheckpointDeleteUrl(ds.id),
         { run_id: g.run_id, step: s.step, final: !!s.final })
@@ -263,7 +293,7 @@ export default function VideoCheckpointManager({ ds, refreshKey = 0, onSavesChan
   }
 
   const removeRun = (g) => {
-    if (!window.confirm(runDeleteConfirmation(g))) return
+    if (!window.confirm(runDeleteConfirmation(g, payload?.best_settings_loras))) return
     act(`${g.key}:run`, async () => {
       const d = await del(videoDatasetCloudRunUrl(ds.id, g.run_id))
       toast.success(`Run #${d.deleted} deleted — ${d.files} file(s) removed.`)
@@ -284,6 +314,7 @@ export default function VideoCheckpointManager({ ds, refreshKey = 0, onSavesChan
   // owes: the licence question first, then the confirmations loop that turns
   // the server's `PARALLEL_RUN:` refusal into a question rather than an error.
   const confirmContinue = (g, s) => {
+    if (!cloudAvailable) return
     if (!ensureLicenceAck(ds, { storage: window.localStorage, confirmFn: window.confirm })) return
     act(`${stepKey(g, s)}:continue`, async () => {
       const url = videoDatasetCloudContinueUrl(ds.id)
@@ -308,6 +339,7 @@ export default function VideoCheckpointManager({ ds, refreshKey = 0, onSavesChan
   // ▶ from a graph pill opens the SAME inline form as the list row, and brings
   // that row into view: one place to type the extra steps, one POST.
   const continueFrom = (g, s) => {
+    if (!cloudAvailable) return
     const key = stepKey(g, s)
     setContinueTarget(key)
     requestAnimationFrame(() => {
@@ -315,6 +347,15 @@ export default function VideoCheckpointManager({ ds, refreshKey = 0, onSavesChan
     })
   }
   const hasGraph = (tree?.nodes?.length || 0) > 0
+  const generatePreviews = (node, pill) => {
+    if (node && pill) setSelected([previewKey(previewSelector(node, pill))])
+    setPreviewTarget({ tab: 'render' }); loadPreviews()
+  }
+  const renderedPreviews = (node, pill) => {
+    setPreviewTarget({ tab: 'history', filter: node && pill ? previewKey(previewSelector(node, pill)) : null })
+    loadPreviews()
+  }
+  const refreshPreviews = () => { loadPreviews(); load() }
   return (
     <div className="flex flex-col gap-3">
       <details open className="rounded-lg border border-border bg-surface-raised p-2"
@@ -323,24 +364,39 @@ export default function VideoCheckpointManager({ ds, refreshKey = 0, onSavesChan
           ◉ Run graph{hasGraph ? ` — ${graphSummary(tree)}` : ''}
         </summary>
         <p className="m-0 mt-1 mb-1.5 text-[0.6875rem] text-content-muted">{hasGraph ? PREVIEWS_NOTE : EMPTY_GRAPH_NOTE}</p>
+        {!hasGraph && previews.length > 0 && <button type="button" onClick={() => renderedPreviews()}
+          className="min-h-10 rounded border border-border px-3 py-1 text-xs text-content lg:min-h-0">Rendered previews ({previews.length})</button>}
         {hasGraph && (
           <VideoLineageGraph datasetId={ds.id} tree={tree} busy={busy}
-            ctx={{ canDeploy: payload?.can_deploy !== false,
+            ctx={{ cloudAvailable, canDeploy: payload?.can_deploy !== false,
               deployFolder: payload?.deploy_folder || 'h3/lds', deleteMode: payload?.delete_mode }}
             onDeploy={deploy} onUndeploy={undeploy} onDelete={remove}
             onContinue={continueFrom} onDetails={(node) => showDetails(nodeGroup(node))}
+            ds={ds}
+            selected={selected} onSelection={setSelected} onGenerate={generatePreviews}
+            onRenderedPreviews={renderedPreviews} renderedCount={previews.length}
             onPlaySample={(node, pill) => setSampleTarget({ node, pill })} />
         )}
       </details>
+      {previewError && <p role="alert" className="text-xs text-amber-200">{previewError}</p>}
       <VideoCheckpointList datasetId={ds.id} payload={payload} busy={busy} details={details}
+        cloudAvailable={cloudAvailable}
         continueTarget={continueTarget} extraSteps={extraSteps} onExtraSteps={setExtraSteps}
         onConfirmContinue={confirmContinue} onCancelContinue={() => setContinueTarget(null)}
         onDeploy={deploy} onUndeploy={undeploy} onDelete={remove} onDeleteRun={removeRun}
-        onContinue={continueFrom} onDetails={showDetails} />
+        onContinue={continueFrom} onDetails={showDetails} ds={ds} />
+      {/* The dialog of a plugin's row (📤 Civitai) lives here and outlives the
+          popover; the saves are re-read on close (a link stamps the pill). */}
+      <PluginSlot slot="checkpoint.layer" surface="video" onChanged={() => load()} />
       {sampleTarget && (
         <VideoSampleLightbox datasetId={ds.id} target={sampleTarget}
           onClose={() => setSampleTarget(null)} />
       )}
+      {previewTarget && <VideoPreviewDialog key={ds.id} datasetId={ds.id} tree={tree}
+        selected={selected} onSelection={setSelected} previews={previews} loadError={previewError}
+        initialTab={previewTarget.tab} initialFilter={previewTarget.filter}
+        onRefresh={refreshPreviews} onQueued={(result) => { if (result.previews) setPreviews(result.previews); refreshPreviews() }}
+        onClose={() => setPreviewTarget(null)} />}
     </div>
   )
 }

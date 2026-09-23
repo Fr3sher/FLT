@@ -19,11 +19,15 @@ def test_registration_owns_only_public_video_and_never_live(monkeypatch):
         'lds_video.routes.video_bank': {'bp': object()},
         'lds_video.routes.video_datasets': {'bp': object()},
         'lds_video.routes.video_studio': {'bp': object()},
+        'lds_video.video_reference_catalog': {'reference_downloads': lambda: {}},
+        'lds_video.video_references': {'MAX_UPLOAD_BYTES': 1024},
     }.items():
         module = ModuleType(name)
         module.__dict__.update(attrs)
         monkeypatch.setitem(sys.modules, name, module)
     ctx = SimpleNamespace(dir=ROOT,
+        register_node_pack=lambda key: None,
+        register_request_limit=lambda *args: None,
         register_install_action=lambda key, **kw: installs.update({key: kw}),
         register_model_download=lambda key, **kw: downloads.update({key: kw}),
         register_probe=lambda key, fn: probes.update({key: fn}),

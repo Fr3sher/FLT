@@ -92,7 +92,11 @@ export function statusFilterCount(counts, key) {
 export function emptyGridMessage({ status, sourceName, counts }) {
   const c = counts || {}
   if (!Number(c.sources)) return 'This bank has no files yet.'
-  if (!Number(c.clips)) return 'No shots yet — run ▶ Run everything to cut your files into shots.'
+  if (!Number(c.clips)) {
+    return (Number(c.probed) || 0) < Number(c.sources)
+      ? 'No shots yet — use Scan files, then open Files → Cut a shot by hand.'
+      : 'No shots yet — open Files → Cut a shot by hand to create your first shot.'
+  }
   if (sourceName && status && status !== 'all') {
     return `No ${statusWord(status)} shot in ${sourceName}.`
   }

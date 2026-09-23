@@ -7,11 +7,19 @@
  * then the accelerators, then the numbers that make a run repeatable. */
 import { neuralRenderTags } from '../../videobank/neuralRenderMetadata.js';
 import { accelLabel, clipAccel } from './videoStudioApi.js';
+import { referenceSummary } from './videoReferences.js';
 
 export function clipTags(clip) {
   if (!clip) return [];
   const tags = [];
+  if (clip.mode === 'ref2va') {
+    tags.push(`${clip.ref_base || 'official'} reference base`);
+    const refs = referenceSummary(clip.references);
+    if (refs) tags.push(refs);
+    if (clip.ref_image_size === 'max') tags.push('more reference detail');
+  }
   if (clip.eros) tags.push('10Eros base');
+  if (clip.light) tags.push('W4A8 base');
   if (clip.lora) {
     const name = String(clip.lora).replace(/\\/g, '/').split('/').pop()
       .replace(/\.safetensors$/i, '');
@@ -33,6 +41,9 @@ export function clipTags(clip) {
   // join failed — `joined` is null while the part still renders, and that is
   // no verdict, so the pill says nothing about it yet.
   if (clip.continues_of) tags.push(clip.joined === false ? `continues #${clip.continues_of} (not joined)` : `continues #${clip.continues_of}`);
+  // 🎞 The picture it ended on — without it, two clips apart by their last
+  // frame alone are two identical cards.
+  if (clip.end_image) tags.push('ends on a picture');
   if (clip.steps) tags.push(`${clip.steps} steps`);
   if (clip.seed !== null && clip.seed !== undefined) tags.push(`seed ${clip.seed}`);
   return tags;

@@ -31,7 +31,9 @@ import json
 import logging
 import os
 
-from lds_sdk.video_host import cloud_run_dataset as crd
+from lds_sdk.video_host import run_dataset as crd
+from lds_sdk import run_history as rg
+from lds_sdk.video_host.checkpoint_names import group_saves_by_step
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +49,13 @@ def lineage_dir(run) -> str | None:
     Creates nothing. `read` calls this too, and a reader that makes a directory
     on disk as a side effect of answering "is there a manifest?" is a surprise
     nobody goes looking for; `record` does the one mkdir, where it belongs."""
-    from lds_sdk import cloud_training as ct
-    return ct.checkpoint_store_dir(run, create=False) or run.staging_dir or None
+    from lds_sdk import run_history as rg
+    return rg.checkpoint_store_dir(run, create=False) or run.staging_dir or None
 
 
 def build(run) -> dict:
     """The manifest. Names only — no path, no user, no machine."""
-    from lds_sdk import cloud_training as ct
+    from lds_sdk import run_history as rg
     params = {}
     try:
         params = json.loads(run.train_params or '{}')
@@ -80,7 +82,7 @@ def build(run) -> dict:
         'gpu': run.gpu_name,
         'status': run.status,
         'finished_at': run.finished_at.isoformat() if run.finished_at else None,
-        'files': sorted(ct.run_checkpoint_files(run)),
+        'files': sorted(rg.run_checkpoint_files(run)),
     }
 
 
@@ -117,3 +119,20 @@ def read(run) -> dict | None:
     except (OSError, ValueError):
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def harvested_steps(run) -> list:
+    """This run's harvested saves GROUPED BY STEP, ascending.
+
+    Grouping is not presentation here, it is correctness. A Wan 2.2 MoE
+    checkpoint is two files at ONE step, and every operation that treats a save
+    as a single file gets it wrong in a way that raises nothing — a download
+    that serves one half, a continue that seeds one expert. So the unit this
+    lane works in is the step, and its files travel together.
+
+    The FINAL save carries no number in ai-toolkit's naming; it is reported at
+    the run's total step count and flagged `final`."""
+    saves = rg.run_checkpoint_files(run)
+    if not saves:
+        return []
+    return group_saves_by_step(saves, target=int(rg.run_param(run, 'steps') or 0))

@@ -11,15 +11,22 @@
  * talking the moment it loads is a list nobody leaves open. The controls are
  * there for whoever wants to hear it.
  */
-import { Trash2, ThumbsDown, ThumbsUp, RotateCcw, SkipForward, Loader2, Waves, Sparkles } from 'lucide-react';
-import { clipVideoUrl, isRunning, renderTimeLabel } from './videoStudioApi.js';
-import { clipTags } from './videoClipTags.js';
+import { Trash2, ThumbsDown, ThumbsUp, RotateCcw, SkipForward, Loader2, Waves, Sparkles, Star } from 'lucide-react';
+import { clipVideoUrl, isRunning, renderTimeLabel } from './videoStudioApi';
+import { clipTags } from './videoClipTags';
+import { canAutoContinue } from './videoAutoContinue';
+import { continuesAsReference } from './videoContinuation.js';
+import { progressLabel, renderForJob } from '@lds/plugin-sdk/ui';
 
 const ACTION = 'flex items-center justify-center gap-1 rounded-lg border px-2 py-1 text-[0.6875rem] min-h-10 lg:min-h-0';
 
 export default function VideoClipHistory({
   clips, onRate, onDelete, onReuse, onVfi, vfiBusy, onNeuralRender, nrBusy, onCompare, onContinue, continueBusy,
+  onRedo, redoClipId, redoDisabled = false, discardedClipIds = [], continueDisabled = false,
+  onAuto, autoSession, autoDisabled = false, autoRunning = false, autoMode = 'i2v',
   onJumpTo, hasMore = false, loadingMore = false, onLoadMore,
+  onBest, bestBusy = false, bestClipId = null,
+  render = null,
 }) {
   if (!clips.length) {
     return (
@@ -32,6 +39,11 @@ export default function VideoClipHistory({
     <section data-probe-panel="video-studio-clips" className="flex flex-col gap-2">
       {clips.map((clip) => {
         const running = isRunning(clip);
+        // Where THIS render is, from ComfyUI's own progress bar — the listing
+        // carries one bar, for the one job on the GPU. A minute and a night
+        // used to spin the same way; "step 3/4 · about 1 h left" is the
+        // difference between waiting and giving up.
+        const progress = running ? progressLabel(renderForJob(render, clip.job_id)?.progress) : null;
         return (
           <article key={clip.id} id={`video-clip-${clip.id}`} tabIndex={-1}
             className={`flex flex-col gap-2 rounded-xl border bg-surface p-2 sm:flex-row ${
@@ -47,10 +59,17 @@ export default function VideoClipHistory({
                     : 'border-dashed border-amber-400/40 bg-amber-400/5 text-amber-200'}`}>
                   {running && <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />}
                   <span className="px-3 text-center">{running ? 'Rendering…' : (clip.error || 'Failed')}</span>
+                  {progress && (
+                    <span className="px-3 text-center text-[0.6875rem] text-amber-200/80"
+                      data-testid="clip-render-progress">
+                      {progress}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              {discardedClipIds.includes(clip.id) && <p className="text-xs text-amber-300">Discarded attempt · excluded from battle</p>}
               <p className="line-clamp-2 break-words text-sm text-content">{clip.prompt}</p>
               {/* Where a render came from, as a link that scrolls to it: the
                   source is older than its render by construction, and a pair
@@ -82,7 +101,7 @@ export default function VideoClipHistory({
                 ))}
               </div>
               <p className="text-[0.6875rem] text-content-subtle">
-                {clip.mode === 't2v' ? 'text-to-video' : 'image-to-video'}
+                {clip.mode === 'ref2va' ? 'reference-to-video' : clip.mode === 't2v' ? 'text-to-video' : 'image-to-video'}
                 {clip.seconds ? ` · ${clip.seconds}s` : ''}
                 {clip.megapixels ? ` · ${clip.megapixels} MP` : ''}
                 {/* ⏱ What the user waited for, model loading included — the
@@ -94,6 +113,13 @@ export default function VideoClipHistory({
                   : ''}
               </p>
               <div className="mt-auto flex flex-wrap items-center gap-1">
+                {clip.status === 'done' && onBest && (
+                  <button type="button" onClick={() => onBest(clip)} disabled={bestBusy || clip.mode === 'ref2va'}
+                    aria-pressed={bestClipId === clip.id} title={clip.mode === 'ref2va' ? 'Best settings do not support References yet. Use Reuse on this clip.' : 'Save these generation settings as best for this video dataset'}
+                    className={`${ACTION} ${bestClipId === clip.id ? 'border-primary bg-primary/10 text-primary' : 'border-border text-content-muted hover:text-content'} disabled:opacity-50`}>
+                    <Star aria-hidden="true" className="h-3.5 w-3.5" />Best
+                  </button>
+                )}
                 <button type="button" onClick={() => onRate(clip, clip.rating === 1 ? 0 : 1)}
                   title="Keep this one" aria-pressed={clip.rating === 1}
                   className={`${ACTION} ${clip.rating === 1 ? 'border-primary bg-primary/10 text-content' : 'border-border text-content-muted hover:text-content'}`}>
@@ -113,11 +139,32 @@ export default function VideoClipHistory({
                     motion is yours to write again, and the render lands joined
                     behind this clip: one video, this one then the new motion. */}
                 {clip.status === 'done' && onContinue && (
-                  <button type="button" onClick={() => onContinue(clip)} disabled={continueBusy === clip.id}
-                    title="Use the last frame as the next start frame — the result is this clip followed by the new one"
+                  <button type="button" onClick={() => onContinue(clip)} disabled={continueBusy === clip.id || continueDisabled}
+                    title={continuesAsReference(clip)
+                      ? 'Continue this take with the same references, starting on its last frame — the result is this clip followed by the new one'
+                      : 'Use the last frame as the next start frame — the result is this clip followed by the new one'}
                     className={`${ACTION} border-border text-content-muted hover:text-content`}>
                     <SkipForward aria-hidden="true" className="h-3.5 w-3.5" />Continue
                   </button>
+                )}
+                {onRedo && clip.id === redoClipId && ['done', 'failed', 'cancelled'].includes(clip.status) && (
+                  <button type="button" onClick={() => onRedo(clip)} disabled={redoDisabled}
+                    title="Discard this attempt and restore its turn for another render; keep the clip until you delete it"
+                    className={`${ACTION} border-border text-content-muted hover:text-content disabled:opacity-40`}>
+                    <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />Redo this turn
+                  </button>
+                )}
+                {canAutoContinue(clip) && onAuto && (
+                  <label className={`${ACTION} border-border text-content-muted has-[:checked]:border-primary has-[:checked]:text-content`}
+                    title="Automatically continue from this clip using the direction and limit above">
+                    <input type="checkbox" checked={!!autoSession?.enabled && autoSession.root_clip_id === clip.id}
+                      aria-label={`Auto continue from clip #${clip.id}`}
+                      disabled={autoDisabled || (autoRunning && autoSession?.root_clip_id !== clip.id)
+                        || (!canAutoContinue(clip, autoMode) && !(autoSession?.enabled && autoSession.root_clip_id === clip.id))
+                        || (!!autoSession?.draining)}
+                      onChange={(e) => onAuto(clip, e.target.checked)} />
+                    Auto
+                  </label>
                 )}
                 {/* ↗ VFI — the same RIFE pass the image generator runs, on a
                     clip that has finished. Offered only there: interpolating a

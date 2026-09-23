@@ -14,8 +14,8 @@
  * not to a chain someone starts before walking away.
  */
 import { useEffect, useState } from 'react'
-import { PASS_LABELS } from './videoBankStatus.js'
-import { passBlockedBy } from '../lib/videoCapability.js'
+import { PASS_LABELS } from './videoBankStatus'
+import { passBlockedBy } from '../lib/videoCapability.js';
 
 /* The order the chain runs them in — inputs first. Each row says what it BUYS,
    because "measure" alone does not tell anyone whether they want it. */

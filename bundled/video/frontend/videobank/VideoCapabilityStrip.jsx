@@ -1,4 +1,4 @@
-import { videoCapabilityNotice } from '../lib/videoCapability.js'
+import { videoCapabilityNotice } from '../lib/videoCapability.js';
 
 /** 🎬 What the video extra is missing — piece by piece, with what still works.
  *

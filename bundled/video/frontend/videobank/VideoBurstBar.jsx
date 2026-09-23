@@ -1,7 +1,7 @@
-import { HelpBadge } from '@lds/plugin-sdk'
+import { HelpBadge } from '@lds/plugin-sdk';
 import {
   BURST_SHORTCUTS, BURST_HINT, burstProgressLine, burstEndNote, undoLine,
-} from './videoBurstTriage.js'
+} from './videoBurstTriage'
 
 /** ⌨ The burst-mode bar — the only chrome the keyboard run needs.
  *

@@ -27,13 +27,15 @@ clips' removal does (`video_bank_service.remove_dataset_clips`) — never
 """
 import json
 import os
+from pathlib import Path
 
-from lds_sdk.video_host.models import CloudTrainingRun
+from lds_sdk import cloud_runs
 from lds_video.models import VideoDataset
-from lds_sdk.video_host import cloud_run_dataset as crd
-from lds_sdk import cloud_training as ct
-from lds_sdk.video_host import cloud_video_training as cvt
+from lds_sdk.video_host import run_dataset as crd
+from lds_sdk import run_history as rg
+from lds_video import video_run_lineage as checkpoint_steps
 from lds_sdk.video_host import trash
+from lds_video import video_targets
 from lds_video import video_test_studio as vts
 from lds_video import video_training_local as vtl
 
@@ -48,7 +50,7 @@ DELETE_MODE = 'app_trash'
 _PUBLIC_PARAMS = ('train_type', 'steps', 'base_model', 'low_vram', 'do_i2v',
                   'distillation', 'target_profile', 'frames', 'requested_gpu',
                   'resume_step', 'parent_run_id', 'auto_retry_of',
-                  'sample_prompts')
+                  'sample_prompts', 'rank')
 
 
 def _dataset(user_id, dataset_id):
@@ -62,7 +64,7 @@ def _cloud_run(ds, run_id):
     """One cloud run OF THIS VIDEO DATASET, active or not, or LookupError.
     Ownership is the (id, table) pair — the face lane shares the id space."""
     try:
-        run = ct.get_run(ds.user_id, run_id, dataset_id=ds.id, dataset_table=crd.VIDEO)
+        run = cloud_runs.get(int(run_id))
     except (TypeError, ValueError):
         run = None
     if run is None or not crd.owns(run, ds.id, crd.VIDEO):
@@ -137,12 +139,14 @@ def local_group(ds, deployed=None) -> dict | None:
         return None
     if deployed is None:
         deployed = _deployed_index()
-    steps = cvt.group_saves_by_step(saves, target=None)
+    steps = checkpoint_steps.group_saves_by_step(saves, target=None)
+    rows = _step_rows(steps, saves.get, deployed)
+    _annotate_steps(ds, None, rows, saves)
     return {
         'run_name': vtl.local_run_name(ds),
         'folder': str(vtl.save_root(ds)),
         'active': bool(vtl.video_training_progress(ds.id, ds.user_id)['active']),
-        'steps': _step_rows(steps, saves.get, deployed),
+        'steps': rows,
     }
 
 
@@ -154,25 +158,92 @@ def cloud_groups(ds, deployed=None) -> list:
     if deployed is None:
         deployed = _deployed_index()
     out = []
-    for run in (CloudTrainingRun.query.filter_by(dataset_id=ds.id)
-                .order_by(CloudTrainingRun.id.desc()).all()):
+    for run in (cloud_runs.for_dataset(ds.id, newest_first=True)):
         if not crd.owns(run, ds.id, crd.VIDEO):
             continue
-        steps = cvt.harvested_steps(run)
+        steps = checkpoint_steps.harvested_steps(run)
         if not steps:
             continue
-        paths = ct.run_checkpoint_files(run)
+        paths = rg.run_checkpoint_files(run)
+        rows = _step_rows(steps, paths.get, deployed)
+        _annotate_steps(ds, run.id, rows, paths)
         out.append({
             'run_id': run.id, 'status': run.status,
-            'active': run.status in ct.ACTIVE_STATES,
+            'active': run.status in rg.ACTIVE_STATES,
             'gpu': run.gpu_name, 'price_per_hour': run.price_per_hour,
-            'target_profile': ct._run_param(run, 'target_profile'),
-            'parent_run_id': ct._run_param(run, 'parent_run_id'),
+            'target_profile': rg.run_param(run, 'target_profile'),
+            'parent_run_id': rg.run_param(run, 'parent_run_id'),
             'created_at': run.created_at.isoformat() if run.created_at else None,
             'finished_at': run.finished_at.isoformat() if run.finished_at else None,
-            'steps': _step_rows(steps, paths.get, deployed),
+            'steps': rows,
         })
     return out
+
+
+def _annotate_steps(ds, run_id, rows, paths):
+    from lds_sdk.video_runtime import annotate_checkpoint_steps
+    from lds_video import video_best_settings as best
+    chosen = best.read_best(ds)
+    for row in rows:
+        row['best_settings'] = bool(chosen and chosen.get('run_id') == run_id and any(
+            f['filename'] == chosen.get('lora_filename') for f in row['files']))
+    # What a plugin knows about a step — the Civitai publisher stamps the
+    # version a save IS (`row['civitai']`) — one call per run, never per step.
+    stamped = annotate_checkpoint_steps(rows, ds.id, run_id, paths)
+    if stamped is not rows and isinstance(stamped, list):
+        rows[:] = stamped
+
+
+def _json_file(path) -> dict:
+    try:
+        with open(path, encoding='utf-8') as fh:
+            value = json.load(fh)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _params_json(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else None
+    except ValueError:
+        parsed = None
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def run_provenance(ds, run) -> dict:
+    """What a save was trained AS: a cloud run's recorded params (plus the
+    target's architecture); for the local run, the job config that ran, then
+    its run marker — never the dataset's CURRENT target, which can change after
+    training and cannot describe an old save. Read by the graph previews (which
+    pipeline can render a step) and by the Civitai publisher (the base model a
+    version declares) — the video lane's fact, so the video lane's function."""
+    if run is not None:
+        params = _params_json(run.train_params)
+        profile = video_targets.get(params.get('target_profile')) or {}
+        return {**params, 'arch': profile.get('aitk_arch'), 'base_recorded': 'base_model' in params}
+    root = Path(vtl.save_root(ds))
+    marker = _json_file(root.parent / vtl._RUN_MARKER)
+    if marker.get('dataset_id') != ds.id:
+        marker = {}
+    config = {}
+    try:
+        from lds_sdk import video_training_runtime as lt
+        job = _json_file(Path(lt.jobs_dir()) / f'{vtl.local_run_name(ds)}.json')
+        if (job.get('config') or {}).get('name') == vtl.local_run_name(ds):
+            processes = job['config'].get('process') or []
+            config = processes[0] if processes and isinstance(processes[0], dict) else {}
+    except (RuntimeError, TypeError, OSError):
+        pass
+    model = config.get('model') or {}
+    return {'target_profile': marker.get('target_profile'),
+            'arch': model.get('arch') or marker.get('arch'),
+            'base_model': model.get('name_or_path') or '',
+            'base_recorded': bool(model.get('name_or_path')),
+            'steps': (config.get('train') or {}).get('steps'),
+            'rank': (config.get('network') or {}).get('linear')}
 
 
 def list_checkpoints(user_id, dataset_id) -> dict:
@@ -181,6 +252,7 @@ def list_checkpoints(user_id, dataset_id) -> dict:
     `can_deploy` is whether ComfyUI has a loras root at all on this install —
     the one fact that turns every 📦 into a stated refusal rather than a click
     that fails."""
+    from lds_video import video_best_settings as best
     from lds_sdk.video_host import comfy_model_paths
     ds = _dataset(user_id, dataset_id)
     deployed = _deployed_index()
@@ -190,6 +262,8 @@ def list_checkpoints(user_id, dataset_id) -> dict:
         'can_deploy': bool(comfy_model_paths.search_roots('loras')),
         'deploy_folder': vts.LORA_SUBDIR.replace(os.sep, '/'),
         'delete_mode': DELETE_MODE,
+        'best_settings': best.read_best(ds),
+        'best_settings_loras': best.best_settings_loras(ds),
     }
 
 
@@ -199,12 +273,12 @@ def _step_files(ds, run_id, step, final) -> list:
     a deploy or a delete must never act on "the nearest" save."""
     if run_id is None:
         saves = _local_saves(ds)
-        steps = cvt.group_saves_by_step(saves, target=None)
+        steps = checkpoint_steps.group_saves_by_step(saves, target=None)
         paths = saves
     else:
         run = _cloud_run(ds, run_id)
-        steps = cvt.harvested_steps(run)
-        paths = ct.run_checkpoint_files(run)
+        steps = checkpoint_steps.harvested_steps(run)
+        paths = rg.run_checkpoint_files(run)
     final = bool(final)
     for s in steps:
         if bool(s['final']) != final:
@@ -250,7 +324,7 @@ def delete_step(user_id, dataset_id, run_id, step, final=False) -> dict:
         run = None
     else:
         run = _cloud_run(ds, run_id)
-        if run.status in ct.ACTIVE_STATES:
+        if run.status in rg.ACTIVE_STATES:
             raise RuntimeError('this cloud run is still active — its save would '
                                'just be re-synced; stop the run first')
     files = _step_files(ds, run_id, step, final)
@@ -260,7 +334,7 @@ def delete_step(user_id, dataset_id, run_id, step, final=False) -> dict:
             if run is None:
                 trash.send_to_trash(path, context=f'videockpt_ds{ds.id}')
             else:
-                ct.delete_cloud_checkpoint(ds.id, run.id, name, dataset_table=crd.VIDEO)
+                rg.delete_cloud_checkpoint(ds.id, run.id, name, dataset_table=crd.VIDEO)
         except trash.TrashLockError:
             kept.append(name)
             continue
@@ -300,6 +374,6 @@ def run_details(user_id, dataset_id, run_id) -> dict:
         'created_at': run.created_at.isoformat() if run.created_at else None,
         'finished_at': run.finished_at.isoformat() if run.finished_at else None,
         'parent_run_id': params.get('parent_run_id'),
-        'saves': len(ct.run_checkpoint_files(run)),
+        'saves': len(rg.run_checkpoint_files(run)),
         'params': {k: params[k] for k in _PUBLIC_PARAMS if k in params},
     }

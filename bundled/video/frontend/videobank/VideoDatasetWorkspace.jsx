@@ -1,37 +1,39 @@
 import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Clapperboard, Copy, Folder } from 'lucide-react'
+import {
+  ArrowLeft, Clapperboard, Copy, Folder, GraduationCap, Package, Paperclip, PenLine, Puzzle, SlidersHorizontal, Upload,
+} from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
-import { apiFetch, postForm, postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
-import { HelpBadge } from '@lds/plugin-sdk'
-import { captionFrequencyEntries } from '@lds/plugin-sdk/data'
-import { TrainingReadiness } from '@lds/plugin-sdk/training'
-import VideoTrainingBlock from './VideoTrainingBlock.jsx'
-import VideoCheckpointManager from './VideoCheckpointManager.jsx'
-import { videoPreflightUrl } from './videoCloudLaunch.js'
-import VideoDatasetGrid from './VideoDatasetGrid.jsx'
+import { apiFetch, postForm, postJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
+import { HelpBadge } from '@lds/plugin-sdk';
+import { captionFrequencyEntries } from '@lds/plugin-sdk/data';
+import { TrainingReadiness } from '@lds/plugin-sdk/training';
+import VideoTrainingBlock from './VideoTrainingBlock'
+import VideoCheckpointManager from './VideoCheckpointManager'
+import { videoPreflightUrl } from './videoBankApi'
+import VideoDatasetGrid from './VideoDatasetGrid'
+import VideoDatasetLightbox from './VideoDatasetLightbox'
 import VideoDatasetImportPanel from './VideoDatasetImportPanel.jsx'
-import VideoDatasetLightbox from './VideoDatasetLightbox.jsx'
 import {
   videoDatasetClipCaptionUrl, videoDatasetClipOriginalUrl, videoDatasetNeuralRenderCancelUrl,
   videoDatasetNeuralRenderRestoreUrl,
   videoDatasetNeuralRenderUrl, videoDatasetReferencesUrl, videoDatasetRemoveClipsUrl,
-} from './videoBankApi.js'
-import { toggleSelection, selectRange } from './videoTriage.js'
-import { VIDEO_DATASET_SECTIONS } from './videoDatasetSections.js'
+} from './videoBankApi'
+import { toggleSelection, selectRange } from './videoTriage'
+import { VIDEO_DATASET_SECTIONS } from './videoDatasetSections'
 import {
   getVideoDatasetPanels, resolveVideoDatasetLocation, visibleVideoDatasetSections,
   withVideoDatasetLocation,
-} from './videoDatasetNavigation.js'
+} from './videoDatasetNavigation'
 import {
   CLIP_FILTERS, CLIP_SORTS, captionCoverageNote, clipCounts, clipFilterCount,
   hasCaption, lightboxTargets, purgeDraft, removeClipsConfirmation, removeClipsReport,
   visibleClips,
-} from './videoDatasetClips.js'
+} from './videoDatasetClips'
 import {
   captionEditConfirmation, captionEditPlan, captionEditProgressLabel, captionEditReport,
-} from './videoDatasetCaptionTools.js'
+} from './videoDatasetCaptionTools'
 
 /** 🎬 ONE video dataset, worked on — the surface this lane did not have.
  *
@@ -56,6 +58,18 @@ import {
  *  · an export section. A video dataset IS its output folder — a flat directory
  *    of .mp4 and homonym .txt, which is exactly what every trainer reads.
  */
+// The rail's section icons, by the NAME videoDatasetSections.js carries (that
+// module stays lucide-free so node tests can import it); an unknown name gets
+// the plugin piece rather than a crash.
+const SECTION_ICONS = {
+  upload: Upload, clapperboard: Clapperboard, 'graduation-cap': GraduationCap, package: Package, paperclip: Paperclip,
+  'pen-line': PenLine, 'sliders-horizontal': SlidersHorizontal,
+}
+function SectionIcon({ name, className }) {
+  const Icon = SECTION_ICONS[name] || Puzzle
+  return <Icon aria-hidden="true" className={className} />
+}
+
 export default function VideoDatasetWorkspace({ ds, items, refresh, onBack }) {
   const toast = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -316,7 +330,7 @@ export default function VideoDatasetWorkspace({ ds, items, refresh, onBack }) {
         {!chip && isActive && (
           <span aria-hidden className="absolute bottom-1.5 left-0 top-1.5 w-0.5 rounded bg-gradient-primary" />
         )}
-        <s.icon aria-hidden="true" className="h-4 w-4 shrink-0" />
+        <SectionIcon name={s.icon} className="h-4 w-4 shrink-0" />
         <span>{s.title}</span>
       </button>
     )

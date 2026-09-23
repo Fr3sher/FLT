@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Clapperboard } from 'lucide-react';
 import { useNavigate } from 'react-router'
-import { apiFetch, del, postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
-import { HelpBadge } from '@lds/plugin-sdk'
+import { apiFetch, del, postJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
+import { HelpBadge } from '@lds/plugin-sdk';
 
 /** 🎬 Video training sets, in the library, next to the image datasets.
  *

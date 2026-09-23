@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Trash2 } from 'lucide-react'
-import { buildLineageGraph, CARD_W } from '@lds/plugin-sdk/lineage'
-import { GraphCard, CheckpointPill } from '@lds/plugin-sdk/lineage'
-import { LineageEdgeDefs, LineageEdges } from '@lds/plugin-sdk/lineage'
-import { clampPopoverToViewport, POPOVER_W } from '@lds/plugin-sdk/lineage'
-import { useFocusTrap } from '@lds/plugin-sdk/ui'
-import { fmtSize } from './videoCheckpoints.js'
+import { buildLineageGraph, CARD_W } from '@lds/plugin-sdk/lineage';
+import { GraphCard, CheckpointPill } from '@lds/plugin-sdk/lineage';
+import { LineageEdgeDefs, LineageEdges } from '@lds/plugin-sdk/lineage';
+import { clampPopoverToViewport, POPOVER_W, popoverHeight } from '@lds/plugin-sdk/lineage';
+import { useFocusTrap } from '@lds/plugin-sdk/ui';
+import { fmtSize } from './videoCheckpoints'
+import { PluginSlot } from '@lds/plugin-sdk/ui';
+import { MAX_PREVIEW_CHECKPOINTS, previewKey, previewSelector } from './videoPreviewSelection.js'
 import {
-  MUTED_CLS, ROW_CLS, nodeGroup, pillActionModel, pillPreview, pillStep, videoDeployHint,
-} from './videoLineage.js'
+  MUTED_CLS, ROW_CLS, graphPillPreview, nodeGroup, pillActionModel, pillPreview, pillStep, videoDeployHint,
+} from './videoLineage'
 
 // Same fit rules as the image graph (RunLineageGraph): shrink to the panel's
 // width down to this scale, then pan; never taller than this before scrolling.
@@ -25,9 +27,8 @@ function FloatingVideoMenu({ anchor, onClose, children }) {
     const place = () => {
       const next = clampPopoverToViewport(anchor,
         { width: window.innerWidth, height: window.innerHeight },
-        { height: ref.current?.getBoundingClientRect().height || 264 })
-      setPosition((prev) => prev.left === next.left && prev.top === next.top && prev.width === next.width
-        ? prev : next)
+        { height: ref.current?.getBoundingClientRect().height || popoverHeight('video') })
+      setPosition((prev) => prev.left === next.left && prev.top === next.top && prev.width === next.width ? prev : next)
     }
     place()
     const observer = new ResizeObserver(place)
@@ -41,17 +42,12 @@ function FloatingVideoMenu({ anchor, onClose, children }) {
     document.addEventListener('pointerdown', outside)
     document.addEventListener('keydown', escape)
     ref.current?.querySelector('button[aria-label="Close"]')?.focus()
-    return () => {
-      document.removeEventListener('pointerdown', outside)
-      document.removeEventListener('keydown', escape)
-    }
+    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape) }
   }, [onClose])
-  return createPortal(
-    <div ref={ref} data-probe-layer data-probe-chrome="video-checkpoint-menu"
-      style={{ ...position, position: 'fixed', zIndex: 1100,
-        maxHeight: 'calc(100dvh - 16px)', overflowY: 'auto' }}>
-      {children}
-    </div>, document.body)
+  return createPortal(<div ref={ref} data-probe-layer data-probe-chrome="video-checkpoint-menu"
+    style={{ ...position, position: 'fixed', zIndex: 1100, maxHeight: 'calc(100dvh - 16px)', overflowY: 'auto' }}>
+    {children}
+  </div>, document.body)
 }
 
 /** 📦 The actions popover of ONE pill on the video graph — the list's verbs,
@@ -61,7 +57,7 @@ function FloatingVideoMenu({ anchor, onClose, children }) {
  * owns: ⬇ is one link PER FILE, because a Wan pair is two files at one step. */
 export function VideoCheckpointPopover({
   node, pill, a, busy = null, onDeploy, onUndeploy, onDelete, onContinue, onDetails,
-  onPlaySample, onClose,
+  onPlaySample, onClose, ds = null, onGenerate, onRenderedPreviews,
 }) {
   if (!a) return null
   const g = nodeGroup(node)
@@ -84,6 +80,13 @@ export function VideoCheckpointPopover({
           aria-label="Close">✕</button>
       </div>
       <div className="flex flex-col gap-1">
+        {onGenerate && (pill.render_capability?.ok ? <button type="button" disabled={rowBusy}
+          onClick={() => { onGenerate(node, pill); onClose?.() }}
+          className={ROW_CLS + ' border-primary/40 bg-primary/20 text-content'}>Generate preview…</button>
+          : <span className={MUTED_CLS}>{pill.render_capability?.reason || 'Rendering availability unknown.'}</span>)}
+        {pill.generated_preview && onRenderedPreviews && <button type="button"
+          onClick={() => { onRenderedPreviews(node, pill); onClose?.() }}
+          className={ROW_CLS + ' border-sky-400/40 bg-sky-500/15 text-sky-100'}>Rendered previews</button>}
         {a.files.map((f) => (
           <a key={f.filename} href={f.url} download title={f.filename} onClick={onClose}
             aria-label={`Download ${f.filename}`}
@@ -122,6 +125,7 @@ export function VideoCheckpointPopover({
         ) : (
           <span className={MUTED_CLS}><span aria-hidden>📦</span> {a.deploy?.reason}</span>
         ))}
+        <PluginSlot slot="checkpoint.action" surface="video" ds={ds} group={g} step={s} busy={rowBusy} onClose={onClose} />
         {a.details && (
           <button type="button" onClick={() => { onDetails?.(node); onClose?.() }}
             className={ROW_CLS + ' border-border bg-app/60 text-content hover:border-indigo-400/50'}>
@@ -131,7 +135,7 @@ export function VideoCheckpointPopover({
         {a.del.ok ? (
           <button type="button" disabled={rowBusy} onClick={() => onDelete?.(g, s, node, pill)}
             title={a.del.title}
-            className="mt-1 flex min-h-10 items-center gap-1.5 border-t border-border px-2 pt-1.5 pb-0.5 text-left text-content-subtle text-[0.625rem] hover:text-rose-200 disabled:opacity-60 lg:min-h-0">
+            className="mt-1 min-h-10 lg:min-h-0 flex items-center gap-1.5 border-t border-border px-2 pt-1.5 pb-0.5 text-left text-content-subtle text-[0.625rem] hover:text-rose-200 disabled:opacity-60">
             <Trash2 aria-hidden="true" className="h-3.5 w-3.5" /> {a.del.label}
           </button>
         ) : (
@@ -149,11 +153,12 @@ export function VideoCheckpointPopover({
  * continuation curves — one rendering for both surfaces, so a lineage reads
  * the same whichever dataset it belongs to. What is this lane's own is what a
  * click DOES: a pill opens the video popover (per STEP, the list's verbs), a
- * card opens the run's details, a thumbnail plays the training sample. There
- * is no compare, no notes and no "Generate previews" bar — see PREVIEWS_NOTE. */
+ * card opens the run's details. Generated previews and training samples keep
+ * separate actions; selecting a save enters the shared take. */
 export default function VideoLineageGraph({
   datasetId, tree, ctx = {}, busy = null,
-  onDeploy, onUndeploy, onDelete, onContinue, onDetails, onPlaySample,
+  onDeploy, onUndeploy, onDelete, onContinue, onDetails, onPlaySample, ds = null,
+  selected = [], onSelection, onGenerate, onRenderedPreviews, renderedCount = 0,
 }) {
   const [bigPreviews, setBigPreviews] = useState(() => {
     try { return localStorage.getItem('lds.videoGraphBigPreviews') === '1' } catch { return false }
@@ -169,8 +174,8 @@ export default function VideoLineageGraph({
   const scrollRef = useRef(null)
   const [scale, setScale] = useState(1)
   const [hoverId, setHoverId] = useState(null)
-  // The open popover: `laid` identifies the drawn pill, `pill` carries its
-  // files, and `anchor` positions the menu in viewport pixels.
+  // The open popover: { node, laid, pill } — `laid` is the laid-out pill (its
+  // box places the popover), `pill` the tree's own (it carries `files`).
   const [openCk, setOpenCk] = useState(null)
   const closePopover = useCallback(() => setOpenCk(null), [])
 
@@ -223,19 +228,30 @@ export default function VideoLineageGraph({
     .find((c) => c.step === laid.step && !!c.final === !!laid.final) || laid
   const vw = g.width * scale
   const vh = g.height * scale
+  const toggleSelection = (node, pill) => {
+    const key = previewKey(previewSelector(node, pill))
+    onSelection?.(selected.includes(key) ? selected.filter((k) => k !== key)
+      : selected.length < MAX_PREVIEW_CHECKPOINTS ? [...selected, key] : selected)
+  }
+  const openResults = (node, pill) => pill.generated_preview && onRenderedPreviews
+    ? onRenderedPreviews(node, pill) : onPlaySample?.(node, pill)
 
   return (
     <>
-      <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[0.625rem] text-content-subtle">
+      <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[0.625rem] text-content-subtle" data-probe-reading data-probe-chrome="video-preview-toolbar">
+        {onGenerate && <button type="button" onClick={() => onGenerate()}
+          className="min-h-10 rounded-md border border-primary/50 bg-primary/15 px-3 py-1 text-xs font-semibold text-content lg:min-h-0">Generate previews…{selected.length ? ` (${selected.length})` : ''}</button>}
+        {onRenderedPreviews && <button type="button" onClick={() => onRenderedPreviews()}
+          className="min-h-10 rounded-md border border-border px-2 py-1 text-xs text-content lg:min-h-0">Rendered previews ({renderedCount})</button>}
         <button type="button" onClick={toggleBigPreviews} aria-pressed={bigPreviews}
           title={bigPreviews ? 'Back to compact pills' : 'Enlarge the sample stills to compare steps at a glance'}
-          className={'rounded-md border px-2 py-0.5 text-[0.625rem] font-semibold transition-colors '
+          className={'min-h-10 lg:min-h-0 rounded-md border px-2 py-0.5 text-[0.625rem] font-semibold transition-colors '
             + (bigPreviews
               ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-100 '
               : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
           🔍 Big previews
         </button>
-        <span>Click a save for its actions · a run card for its details · a still to play the sample</span>
+        <span>Click a save for its actions · a run card for its details · a still to open its previews</span>
       </div>
       <div ref={scrollRef} className="lds-lgraph-scroll relative overflow-auto rounded-xl"
         style={{ maxHeight: MAX_H }} data-probe-panel="video-lineage-graph"
@@ -261,18 +277,21 @@ export default function VideoLineageGraph({
                   {n.checkpoints.map((p) => (
                     <CheckpointPill key={`${p.step}-${p.filename ?? p.x}`}
                       pill={p} offX={p.x - n.x} offY={p.y - n.y}
-                      active={openCk?.laid === p} selected={false}
-                      preview={pillPreview(originalOf(n.node, p))} big={bigPreviews}
-                      resultNoun="sample" resultIcon="🎬" deployHint={videoDeployHint}
+                      active={openCk?.laid === p} selected={selected.includes(previewKey(previewSelector(n.node, p)))}
+                      selectable={originalOf(n.node, p).render_capability?.ok === true}
+                      onToggleSelect={onSelection ? () => toggleSelection(n.node, originalOf(n.node, p)) : undefined}
+                      boardScale={scale}
+                      preview={graphPillPreview(originalOf(n.node, p))} big={bigPreviews}
+                      resultNoun={originalOf(n.node, p).generated_preview ? 'preview' : 'sample'} resultIcon="🎬" deployHint={videoDeployHint}
                       onOpen={(laid, event) => {
                         const rect = event.currentTarget.getBoundingClientRect()
                         setOpenCk({ node: n.node, laid, pill: originalOf(n.node, laid),
                           anchor: { x: rect.left + rect.width / 2, y: rect.bottom } })
                       }}
                       onOpenGallery={typeof onPlaySample === 'function'
-                        ? (laid) => onPlaySample(n.node, originalOf(n.node, laid)) : undefined}
+                        ? (laid) => openResults(n.node, originalOf(n.node, laid)) : undefined}
                       onZoomPreview={typeof onPlaySample === 'function'
-                        ? () => onPlaySample(n.node, originalOf(n.node, p)) : undefined} />
+                        ? () => openResults(n.node, originalOf(n.node, p)) : undefined} />
                   ))}
                 </div>
               </foreignObject>
@@ -282,12 +301,13 @@ export default function VideoLineageGraph({
       </div>
       {openCk && (
         <FloatingVideoMenu anchor={openCk.anchor} onClose={closePopover}>
-          <VideoCheckpointPopover node={openCk.node} pill={openCk.pill}
-            a={pillActionModel(datasetId, openCk.node, openCk.pill, ctx)}
-            busy={busy}
-            onDeploy={onDeploy} onUndeploy={onUndeploy} onDelete={onDelete}
-            onContinue={onContinue} onDetails={onDetails} onPlaySample={onPlaySample}
-            onClose={closePopover} />
+                  <VideoCheckpointPopover node={openCk.node} pill={openCk.pill}
+                    a={pillActionModel(datasetId, openCk.node, openCk.pill, ctx)}
+                    busy={busy}
+                    onDeploy={onDeploy} onUndeploy={onUndeploy} onDelete={onDelete}
+                    onContinue={onContinue} onDetails={onDetails} onPlaySample={onPlaySample} ds={ds}
+                    onGenerate={onGenerate} onRenderedPreviews={onRenderedPreviews}
+                    onClose={closePopover} />
         </FloatingVideoMenu>
       )}
     </>

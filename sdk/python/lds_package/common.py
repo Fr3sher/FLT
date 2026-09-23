@@ -100,6 +100,16 @@ def literals(path: Path):
     tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
     values = {}
     for node in tree.body:
+        if (isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name)
+                and node.target.id == '__all__' and isinstance(node.op, ast.Add)
+                and isinstance(values.get('__all__'), list)):
+            try:
+                extra = ast.literal_eval(node.value)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(extra, list) and all(isinstance(name, str) for name in extra):
+                values['__all__'] += extra
+            continue
         if isinstance(node, ast.Assign):
             value = node.value
             if (any(isinstance(target, ast.Name) and target.id == '__all__' for target in node.targets)

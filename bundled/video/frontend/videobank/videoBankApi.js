@@ -280,3 +280,9 @@ export function videoDatasetSamplesUrl(datasetId, runId = null) {
   const q = p.toString()
   return `/api/video-dataset/${datasetId}/train/samples${q ? `?${q}` : ''}`
 }
+
+/** Readiness belongs to the dataset, including when no cloud plugin is loaded. */
+export function videoPreflightUrl(datasetId, lane) {
+  const base = `${videoDatasetUrl(datasetId)}/train/preflight`
+  return lane === 'cloud' ? `${base}?lane=cloud` : base
+}

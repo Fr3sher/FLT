@@ -27,9 +27,7 @@ import logging
 import math
 
 from lds_video.models import db
-from lds_video.models import VideoBank
-from lds_video.models import VideoClip
-from lds_video.models import VideoSource
+from lds_video.models import VideoBank, VideoClip, VideoSource
 from lds_video import video_metrics
 
 logger = logging.getLogger(__name__)

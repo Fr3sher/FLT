@@ -4,8 +4,8 @@
  * The interpolator (RIFE) works by WHOLE factors: the choices are the source
  * rate times 2, 3 and 4 — 48, 72 and 96 fps for a clip authored at 24 — and
  * not any number, because a 30 or 60 fps target would mean throwing frames
- * away unevenly after the pass, which reads as judder. The clip keeps its
- * length (frames are added between the existing ones, never slowed down) and
+ * away unevenly after the pass, which reads as judder. Motion keeps its speed
+ * (frames are added between the existing ones, never slowed down) and
  * the work grows with the frames written: ×3 costs about twice ×2, ×4 about
  * three times. The result is a NEW clip in the list; the original stays.
  *
@@ -17,12 +17,13 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Waves } from 'lucide-react';
 import { HelpBadge } from '@lds/plugin-sdk';
-import { smoothTargets } from './videoStudioApi.js';
+import { smoothTargets } from './videoStudioApi';
 
 export default function SmoothDialog({ clip, busy, onSmooth, onClose }) {
   const targets = smoothTargets(clip);
   const [multiplier, setMultiplier] = useState(targets[0].multiplier);
   const picked = targets.find((t) => t.multiplier === multiplier) || targets[0];
+  const tooFewFrames = Number(clip.frames) > 0 && Number(clip.frames) < 2;
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !busy) onClose?.(); };
@@ -32,17 +33,19 @@ export default function SmoothDialog({ clip, busy, onSmooth, onClose }) {
 
   const submit = (e) => {
     e.preventDefault();
-    if (!busy) onSmooth?.(picked.multiplier);
+    if (!busy && !tooFewFrames) onSmooth?.(picked.multiplier);
   };
 
   const costLine = picked.cost === 1
     ? 'The quickest pass.'
     : `About ${picked.cost}× the time of the ×2 pass.`;
 
+  // Match the other Studio dialogs above the fixed action bar (z-9960).
+  // A landscape phone otherwise exposes the footer behind that bar.
   return createPortal(
     <div role="dialog" aria-modal="true" aria-label={`Smooth clip #${clip.id}`}
       data-probe-chrome="smooth-dialog" data-probe-layer
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-4"
+      className="fixed inset-0 z-[9990] flex items-center justify-center bg-black/80 p-2 sm:p-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose?.(); }}>
       <form onSubmit={submit}
         className="flex w-full max-w-md max-h-[92vh] flex-col overflow-hidden rounded-xl border border-border bg-surface-overlay shadow-2xl">
@@ -53,8 +56,8 @@ export default function SmoothDialog({ clip, busy, onSmooth, onClose }) {
             <HelpBadge topic="video-smooth-rate" />
           </h2>
           <p className="text-sm text-content-muted">
-            Frames are added between the existing ones: the clip keeps its length and plays at the
-            rate you pick. A NEW clip in the list; this one stays as it is.
+            Frames are added between the existing ones, keeping the motion speed at the rate
+            you pick. Audio is kept when present. A NEW clip in the list; this one stays as it is.
           </p>
         </header>
 
@@ -75,13 +78,17 @@ export default function SmoothDialog({ clip, busy, onSmooth, onClose }) {
           </div>
           <p className="text-xs text-content-muted">
             {picked.frames
-              ? `${clip.frames} → ${picked.frames} frames, same length. `
-              : `${picked.fps} fps, same length. `}
+              ? `${clip.frames} → ${picked.frames} frames. `
+              : `${picked.fps} fps. `}
             {costLine}
           </p>
+          {tooFewFrames && <p role="alert" className="text-xs text-content-muted">
+            Smooth needs at least 2 frames in the source clip.
+          </p>}
           <p className="text-[0.6875rem] text-content-subtle">
             Whole factors only: the interpolator writes 1, 2 or 3 frames between each pair. Any other
             rate would mean dropping frames unevenly afterwards, which reads as judder.
+            {' '}The saved video can be slightly shorter, by less than one source frame.
           </p>
         </div>
 
@@ -91,7 +98,7 @@ export default function SmoothDialog({ clip, busy, onSmooth, onClose }) {
               className="min-h-10 rounded-md border border-border px-3 py-1.5 text-sm text-content-muted hover:bg-surface-raised hover:text-content disabled:opacity-50 lg:min-h-0">
               Cancel
             </button>
-            <button type="submit" disabled={busy}
+            <button type="submit" disabled={busy || tooFewFrames}
               className="flex min-h-10 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50 lg:min-h-0">
               <Waves aria-hidden="true" className="h-3.5 w-3.5" />
               {busy ? 'Queuing…' : `Smooth to ${picked.fps} fps`}

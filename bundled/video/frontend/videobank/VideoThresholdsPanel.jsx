@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { postJson, putJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
+import { postJson, putJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
 import {
   cutSummary, draftThresholds, editThreshold, payloadFromDraft, thresholdFields,
-} from './videoMetricsFilter.js'
+} from './videoMetricsFilter'
 
 /** 🎚 The quality cuts, edited as a DRAFT with a mandatory preview.
  *
@@ -43,7 +43,7 @@ export default function VideoThresholdsPanel({ bankId, saved, totalClips, onAppl
     try {
       // The full field set is sent, nulls included: applying a draft that
       // CLEARED a cut must clear it in config too, not silently keep it.
-      await putJson('/api/settings?plugin=video', { config: { video_bank: draft } })
+      await putJson('/api/settings', { config: { video_bank: draft } })
       setPreview(null)
       onApplied?.()
       toast.success('Cuts applied — the grid re-flags instantly, nothing is deleted.')

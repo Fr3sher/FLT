@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
-import { videoRecutUrl, videoShotDryRunUrl, videoShotThresholdUrl } from './videoBankApi.js'
+import { postJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
+import { videoRecutUrl, videoShotDryRunUrl, videoShotThresholdUrl } from './videoBankApi'
 import {
   dryRunSummary, parseThreshold, recutSummary, sweepRows, thresholdLabel,
-} from './videoShotCuts.js'
+} from './videoShotCuts'
 
 /** 🎬 Where the cuts get argued with.
  *

@@ -38,7 +38,7 @@
  *    it is the part that decides what happens when a user out-types the network.
  */
 
-import { ownsTypedKeys, reviewKeyAction } from '@lds/plugin-sdk/ui'
+import { ownsTypedKeys, reviewKeyAction } from '@lds/plugin-sdk/ui';
 import { TRIAGE_STATUSES } from './videoTriage.js'
 import { clipLabel } from './videoClipFragment.js'
 
@@ -61,6 +61,19 @@ export const BURST_SHORTCUTS = [
 
 /** The one-liner under the burst bar. Short enough for 400 px. */
 export const BURST_HINT = 'K keep · R reject · P untriaged · S skip · U undo · ? help'
+
+/** The open shot keeps caption typing and selection separate from triage. */
+export function shotKeyAction(event) {
+  if (!event || event.defaultPrevented || event.isComposing
+    || event.metaKey || event.ctrlKey || event.altKey || ownsTypedKeys(event.target)) return null
+  const key = event.key
+  if (key === 'Escape') return 'close'
+  if (key === 'ArrowLeft') return event.shiftKey ? null : 'prev'
+  if (key === 'ArrowRight') return event.shiftKey ? null : 'next'
+  if (key === 'k' || key === 'K') return 'keep'
+  if (key === 'r' || key === 'R') return 'reject'
+  return null
+}
 
 /**
  * What this keystroke means in burst mode:

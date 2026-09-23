@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { apiFetch } from '@lds/plugin-sdk'
-import { videoDatasetSamplesUrl } from './videoBankApi.js'
-import { samplesOfStep } from './videoLineage.js'
-import { stepLabel } from './videoCloudStatus.js'
+import { apiFetch } from '@lds/plugin-sdk';
+import { videoDatasetSamplesUrl } from './videoBankApi'
+import { samplesOfStep } from './videoLineage'
+import { stepLabel } from './videoCheckpoints'
 
 /** 🎬 The samples ai-toolkit rendered at ONE step, played one at a time.
  *

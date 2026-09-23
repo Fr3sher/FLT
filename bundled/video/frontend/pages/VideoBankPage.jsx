@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Clapperboard } from 'lucide-react';
-import { apiFetch, del, postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
-import { HelpBadge } from '@lds/plugin-sdk'
-import { FolderPickerField } from '@lds/plugin-sdk/ui'
-import { BankLaneTabs } from '@lds/plugin-sdk/bank'
-import { PluginSlot } from '@lds/plugin-sdk/ui'
-import VideoBankWorkspace from '../videobank/VideoBankWorkspace.jsx'
-import VideoCapabilityStrip from '../videobank/VideoCapabilityStrip.jsx'
-import { countsSummary } from '../videobank/videoBankStatus.js'
+import { apiFetch, del, postJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
+import { HelpBadge } from '@lds/plugin-sdk';
+import { FolderPickerField } from '@lds/plugin-sdk/ui';
+import { BankLaneTabs } from '@lds/plugin-sdk/bank';
+import { PluginSlot } from '@lds/plugin-sdk/ui';
+import VideoBankWorkspace from '../videobank/VideoBankWorkspace'
+import VideoCapabilityStrip from '../videobank/VideoCapabilityStrip'
+import { countsSummary } from '../videobank/videoBankStatus'
 
 const CURRENT_KEY = 'videoBankCurrentId'
 
@@ -116,7 +116,7 @@ export default function VideoBankPage() {
           </span>
         </h1>
         <HelpBadge topic="page-video-bank" />
-        <BankLaneTabs className="w-full sm:ml-auto sm:w-auto" />
+        <BankLaneTabs surface="videoBank" className="w-full sm:ml-auto sm:w-auto" />
       </header>
       <p className="max-w-3xl text-sm text-content-muted">
         Point the app at a folder of rushes and turn it into a video training set: each

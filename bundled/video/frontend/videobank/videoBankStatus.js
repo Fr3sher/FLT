@@ -10,7 +10,7 @@
  *
  * PURE: no JSX, no fetch.
  */
-import { etaPhrase } from '@lds/plugin-sdk/bank'
+import { etaPhrase } from '@lds/plugin-sdk/bank';
 
 const n = (v) => Number(v) || 0
 
@@ -232,9 +232,15 @@ export function nextStep(counts, capability, blockedBy) {
     return blocked ? { pass, text, blocked } : { pass, text }
   }
   if (n(c.probed) < n(c.sources)) {
+    if (blockedBy?.(capability, 'pipeline')) {
+      return step('probe', 'Start with Scan files, then open Files → Cut a shot by hand. You can trim or split it in the player.')
+    }
     return step('pipeline', 'Start with ▶ Run everything — it scans your files, finds the shots and makes the thumbnails in one go.')
   }
   if (!n(c.clips)) {
+    if (blockedBy?.(capability, 'detect')) {
+      return { pass: null, text: 'Your files are scanned. Open Files → Cut a shot by hand, then trim or split it in the player. No shot detector is needed.' }
+    }
     return step('detect', 'Your files are scanned. Find the shots next.')
   }
   if (n(c.thumbs) < n(c.clips)) {

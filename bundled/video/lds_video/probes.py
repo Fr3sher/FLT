@@ -1,9 +1,20 @@
-"""Public Video capability probes; ComfyUI results cached for one poll."""
+"""The video lane's capability rows, as the core's Setup and cards read them.
+
+The same capability names the core computed before extraction are retained.
+DLSS 5 owns its independent probe and preparation. With Video off the core
+publishes its own honest defaults
+for the same keys — every verdict off, "not part of this install".
+
+ComfyUI is asked ONCE per poll for its class set, not once per key: the core's
+``probe()`` calls each plugin probe on its own, so the reachability verdict and
+the registered classes are cached here for a few seconds — the poll cadence,
+never a stale minute.
+"""
 from __future__ import annotations
 
+from copy import deepcopy
 import threading
 import time
-from copy import deepcopy
 
 _TTL_S = 8.0
 _lock = threading.Lock()
@@ -41,6 +52,10 @@ def video_studio_ready():
     return vts.studio_ready(vts.missing_weights())
 
 
+def video_studio_reference():
+    from . import video_test_studio as vts
+    _ok, classes = _comfy()
+    return vts.reference_status(classes=classes)
 
 
 def video_studio_options():
@@ -59,8 +74,17 @@ def video_studio_sage():
     return {**vts.SAGE_PACK, 'present': vts.sage_available() if ok else None}
 
 
+def h3_attention_nodes_missing():
+    # 🔴 The MiniMax H3 block-attention switch (the live channel's speed lever):
+    # it gates nothing — the lane is complete without it.
+    from . import video_test_studio as vts
+    ok, _classes = _comfy()
+    return vts.block_attention_missing_nodes() if ok else []
 
 
+def h3_attention_nodes_installed():
+    from . import video_test_studio as vts
+    return vts.block_attention_pack_installed()
 
 
 
@@ -103,10 +127,12 @@ PROBES = {
     'video_host_ready': video_host_ready,
     'comfyui.video_studio_missing': video_studio_missing,
     'comfyui.video_studio_ready': video_studio_ready,
+    'comfyui.video_studio_reference': video_studio_reference,
     'comfyui.video_studio_options': video_studio_options,
     'comfyui.video_studio_sage': video_studio_sage,
+    'comfyui.h3_attention_nodes_missing': h3_attention_nodes_missing,
+    'comfyui.h3_attention_nodes_installed': h3_attention_nodes_installed,
 }
 
-_EMPTY_PROBES = {'video_detail': '', 'comfyui.video_studio_missing': [],
-                 'comfyui.video_studio_options': {}, 'comfyui.video_studio_sage': {}}
+_EMPTY_PROBES = {'video_detail': '', 'comfyui.video_studio_missing': [], 'comfyui.video_studio_options': {}, 'comfyui.video_studio_sage': {}, 'comfyui.video_studio_reference': {}, 'comfyui.h3_attention_nodes_missing': []}
 PROBES = {key: _when_enabled(fn, _EMPTY_PROBES.get(key, False)) for key, fn in PROBES.items()}

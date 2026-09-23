@@ -43,12 +43,8 @@ import shutil
 import tempfile
 
 from lds_video.models import db
-from lds_video.models import VideoBank
-from lds_video.models import VideoClip
-from lds_video.models import VideoSource
-from lds_video.video_pass_scaffold import clip_summary as _summary
-from lds_video.video_pass_scaffold import empty_scratch as _empty
-from lds_video.video_pass_scaffold import retry_when_idle as _retry_when_idle
+from lds_video.models import VideoBank, VideoClip, VideoSource
+from lds_video.video_pass_scaffold import clip_summary as _summary, empty_scratch as _empty, retry_when_idle as _retry_when_idle
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +122,7 @@ SCAN_FIELDS = ('path', 'state', 'score', 'regions', 'fingerprint', 'error')
 def _scan_frames(paths, **kwargs):
     """The detector seam. A generator of one ``SCAN_FIELDS``-shaped tuple per
     image, in input order — the image lane's own contract, borrowed whole."""
-    from lds_sdk.video_host.watermark_detector import scan
+    from lds_sdk.video_host.watermark import scan
     return scan(paths, **kwargs)
 
 

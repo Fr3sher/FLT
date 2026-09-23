@@ -1,8 +1,10 @@
 /** The motion typed in the video studio, kept in this browser across a
- * reload (2026-09-06: refreshing the page emptied the one thing typed by
- * hand, while the Studio's own form has been refresh-safe for months). Read
- * once at mount, written on every change, best effort — a browser without
- * storage still renders the take. The text is kept as typed. */
+ * reload (2026-09-06: refreshing the page gave the references, their roles
+ * and the render dials back and emptied the one thing typed by hand). Same
+ * shape as the reference draft: read once at mount, written on every change,
+ * best effort — a browser without storage still renders the take. The text
+ * is kept as typed, tags included: the reference draft it names is written
+ * to the same storage, so the two come back together. */
 export const PROMPT_STORAGE = 'lds.videoPromptDraft.v1';
 
 export function readPromptDraft(storage) {

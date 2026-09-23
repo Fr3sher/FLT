@@ -21,23 +21,23 @@
  * .mp4 + homonym .txt — so "export" has no destination yet that the folder does
  * not already provide).
  */
-import {
-  Clapperboard, GraduationCap, Package, Paperclip, PenLine, SlidersHorizontal, Upload,
-} from 'lucide-react';
+// No lucide-react import here: node --test imports this data module from the
+// core's help contract, and bundled/ has no node_modules — the icons are NAMES,
+// mapped to components where the rail renders them (VideoDatasetWorkspace).
 
 export const VIDEO_DATASET_SECTIONS = [
-  { id: 'import', title: 'Add videos', icon: Upload, eyebrow: 'sources',
+  { id: 'import', title: 'Add videos', icon: 'upload', eyebrow: 'sources',
     helpTopic: 'video-dataset-import', when: 'takesVideos',
     description: 'Add video files or scan a website and import the clips you choose.',
     panels: [{ id: 'sources', title: 'Import videos', targetId: 'vds-import-sources', when: 'always' }] },
-  { id: 'clips', title: 'Clips', icon: Clapperboard, eyebrow: 'overview',
+  { id: 'clips', title: 'Clips', icon: 'clapperboard', eyebrow: 'overview',
     helpTopic: 'video-dataset-clips',
     description: 'Every clip in the set — play one, read what it will train as, and drop the ones that should never have been cut.',
     panels: [
       { id: 'review', title: 'Review clips', targetId: 'vds-clips-review', when: 'always' },
       { id: 'bulk', title: 'Bulk actions', targetId: 'vds-clips-bulk', when: 'hasSelection' },
     ] },
-  { id: 'captions', title: 'Captions', icon: PenLine, eyebrow: 'text',
+  { id: 'captions', title: 'Captions', icon: 'pen-line', eyebrow: 'text',
     helpTopic: 'video-dataset-captions',
     // Said here because it is the one fact that makes this section different
     // from the image one: the trainer reads the FILE, never our database.
@@ -53,13 +53,13 @@ export const VIDEO_DATASET_SECTIONS = [
   // Only for a target that TRAINS on control images (MiniMax H3 ref2va). For
   // every other profile the section would be a permanently empty rail entry, so
   // it is not in the rail at all — see visibleVideoDatasetSections.
-  { id: 'references', title: 'References', icon: Paperclip, eyebrow: 'identity',
+  { id: 'references', title: 'References', icon: 'paperclip', eyebrow: 'identity',
     helpTopic: 'video-dataset-references', when: 'requiresReferences',
     description: 'The identity images this target trains against. Without them the trainer runs unconditioned in silence, so the server refuses the launch instead.',
     panels: [
       { id: 'attach', title: 'Attach references', targetId: 'vds-references-attach', when: 'always' },
     ] },
-  { id: 'training', title: 'Training', icon: GraduationCap, eyebrow: 'train',
+  { id: 'training', title: 'Training', icon: 'graduation-cap', eyebrow: 'train',
     helpTopic: 'video-dataset-training',
     description: 'Turn the clips into a video LoRA — on this machine or on a rented pod. One set of dials, two destinations.',
     panels: [
@@ -71,13 +71,13 @@ export const VIDEO_DATASET_SECTIONS = [
   // dataset's saves have (deploy, undeploy, continue from a step, details,
   // delete) was missing. Always in the rail, like its image twin: an empty
   // section says "no checkpoints yet" where a vanished entry says nothing.
-  { id: 'checkpoints', title: 'Checkpoints & LoRAs', icon: Package, eyebrow: 'results',
+  { id: 'checkpoints', title: 'Checkpoints & LoRAs', icon: 'package', eyebrow: 'results',
     helpTopic: 'video-dataset-checkpoints',
     description: 'Every save either lane brought back, step by step — download it, deploy it into ComfyUI, train further from it, or clear it. A Wan 2.2 save is two files at one step, and they travel together here.',
     panels: [
       { id: 'manager', title: 'Saves & LoRAs', targetId: 'vds-checkpoints-manager', when: 'always' },
     ] },
-  { id: 'studio', title: 'Studio', icon: SlidersHorizontal, eyebrow: 'test',
+  { id: 'studio', title: 'Studio', icon: 'sliders-horizontal', eyebrow: 'test',
     helpTopic: 'video-dataset-studio',
     description: 'Judge a deployed video LoRA on the clip it renders, not on its loss curve — the Video tab of the Test Studio, next door.',
     panels: [

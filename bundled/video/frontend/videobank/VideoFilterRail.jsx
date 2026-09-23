@@ -13,12 +13,12 @@
  * two-column status grid with their status colours, because "which pile am I
  * looking at" is the glance both lanes are read by.
  */
-import VideoClipSearchBox from './VideoClipSearchBox.jsx'
-import VideoSourceList from './VideoSourceList.jsx'
-import VideoThresholdsPanel from './VideoThresholdsPanel.jsx'
-import { Chip, FilterGroup, GroupLabel } from '@lds/plugin-sdk/ui'
-import { STATUS_FILTERS, statusFilterCount } from './videoTriage.js'
-import { CAMERA_FACET_NOTE, CAMERA_HINTS } from './videoCameraMotion.js'
+import VideoClipSearchBox from './VideoClipSearchBox'
+import VideoSourceList from './VideoSourceList'
+import VideoThresholdsPanel from './VideoThresholdsPanel'
+import { Chip, FilterGroup, GroupLabel } from '@lds/plugin-sdk/ui';
+import { STATUS_FILTERS, statusFilterCount } from './videoTriage'
+import { CAMERA_FACET_NOTE, CAMERA_HINTS } from './videoCameraMotion'
 
 /* The status colours are the app-wide triage vocabulary — amber to do, green
    kept, red rejected — identical to the image rail's status block. */

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { apiFetch } from '@lds/plugin-sdk'
-import { videoDatasetUrl } from '../videobank/videoBankApi.js'
-import VideoDatasetWorkspace from '../videobank/VideoDatasetWorkspace.jsx'
-import { shouldEjectOnLoadError, staleNote } from './videoDatasetLoad.js'
+import { apiFetch } from '@lds/plugin-sdk';
+import { videoDatasetUrl } from '../videobank/videoBankApi'
+import VideoDatasetWorkspace from '../videobank/VideoDatasetWorkspace'
+import { shouldEjectOnLoadError, staleNote } from './videoDatasetLoad'
 
 /** 🎬 One video training set, on its own page.
  *

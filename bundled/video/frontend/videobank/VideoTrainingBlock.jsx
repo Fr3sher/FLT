@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { apiFetch, postJson } from '@lds/plugin-sdk'
-import { useToast } from '@lds/plugin-sdk'
-import { HelpBadge } from '@lds/plugin-sdk'
-import { PluginSlot, hasContributions } from '@lds/plugin-sdk/ui'
-import { ensureLicenceAck } from './licenceAck.js'
+import { apiFetch, postJson } from '@lds/plugin-sdk';
+import { useToast } from '@lds/plugin-sdk';
+import { HelpBadge } from '@lds/plugin-sdk';
+import { PluginSlot } from '@lds/plugin-sdk/ui';
+import { videoDatasetCloudUrl, videoPreflightUrl } from './videoBankApi'
+import { ensureLicenceAck } from './licenceAck'
+import VideoTrainingControls from './VideoTrainingControls'
+import { videoTrainingControls } from './videoTrainingSettings'
 
 /** Targets that have been trained end to end at least once — locally or on a
  * rented pod, it does not matter which: what the note below cares about is
@@ -56,18 +59,16 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
   // what the user types is what trains, wherever it trains.
   const [steps, setSteps] = useState(ds?.suggested_steps || 2000)
   const [doI2v, setDoI2v] = useState(false)
+  const [controls, setControls] = useState({ rank: 16, memory: 'auto', prompts: '' })
+  let controlsError = ''
+  try { videoTrainingControls(controls, 'local') } catch (e) { controlsError = e.message }
 
   // Local lane.
   const [progress, setProgress] = useState(null)
   const [busyLocal, setBusyLocal] = useState(false)
 
-  // Cloud Training contributes the optional lane; Video keeps the shared dials.
-  const [launchHost, setLaunchHost] = useState(null)
   const [cloudSaveCount, setCloudSaveCount] = useState(0)
-  const cloudAvailable = hasContributions('training.launch', 'video')
-  const confirmLicence = () => ensureLicenceAck(ds, {
-    storage: window.localStorage, confirmFn: window.confirm,
-  })
+  const [cloudLaunchHost, setCloudLaunchHost] = useState(null)
 
   const pollLocal = useCallback(async () => {
     try {
@@ -84,13 +85,23 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
     return () => clearInterval(t)
   }, [localActive, pollLocal])
 
-  // Report both destinations through the workspace's existing refresh signal.
-  const saveCount = (cloudAvailable ? cloudSaveCount : 0)
+  // Told, rather than guessed at from outside: these two polls are the only
+  // things that know when a save lands, and the workspace's Checkpoints & LoRAs
+  // section re-reads on the number they report. A COUNT of steps (cloud) and
+  // files (local), so a caller passing an inline arrow does not re-fire it on
+  // every render — and a harvest that adds a step changes it.
+  const saveCount = cloudSaveCount
     + (progress?.checkpoints?.length || 0)
   useEffect(() => { onSaveCount?.(saveCount) }, [saveCount, onSaveCount])
-  useEffect(() => { if (refreshKey) pollLocal() }, [refreshKey, pollLocal])
+  // The other direction: that section deleted a run or a save, and this card's
+  // "Train further" must not offer what is gone.
+  useEffect(() => {
+    if (!refreshKey) return
+    pollLocal()
+  }, [refreshKey, pollLocal])
 
   const startLocal = async (acceptDownload = false) => {
+    if (controlsError) { toast.error(controlsError); return undefined }
     // The licence question comes BEFORE anything is spent — not after the
     // download confirm, whose 43 GB would already be an investment in a run
     // the licence answer might forbid.
@@ -100,7 +111,8 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
     setBusyLocal(true)
     try {
       const r = await postJson(`/api/video-dataset/${ds.id}/train`,
-        { steps, do_i2v: doI2v, accept_download: acceptDownload })
+        { steps, do_i2v: doI2v, accept_download: acceptDownload,
+          ...videoTrainingControls(controls, 'local') })
       toast.success(`Training started — ${r.clips} clips, ${r.steps} steps.`)
       // Things the run will not fail on but that change what to expect from it.
       ;(r.warnings || []).forEach((w) => toast.warning(w))
@@ -152,13 +164,14 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
       {localActive ? (
         <div className="flex flex-wrap items-center gap-1.5">
           <button type="button" onClick={stopLocal}
-            className="rounded border border-rose-500/60 bg-rose-500/10 px-2 py-1 text-[0.6875rem] font-semibold text-rose-100 hover:bg-rose-500/20">
+            className="min-h-10 lg:min-h-0 rounded border border-rose-500/60 bg-rose-500/10 px-2 py-1 text-[0.6875rem] font-semibold text-rose-100 hover:bg-rose-500/20">
             ⏹ Stop training
           </button>
           <HelpBadge topic="video-train-local" />
         </div>
       ) : (
         <>
+          <VideoTrainingControls value={controls} onChange={setControls} error={controlsError} />
           <div className="flex flex-wrap items-center gap-1.5">
             <label className="flex items-center gap-1 text-[0.6875rem] text-content-muted">
               Steps
@@ -188,12 +201,12 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
               Beta
             </span>
             <button type="button" onClick={() => startLocal(false)}
-              disabled={busyLocal || !ds.clips}
-              className="rounded border border-border bg-surface-raised px-2 py-1 text-[0.6875rem] font-semibold text-content hover:bg-surface disabled:opacity-50">
+              disabled={busyLocal || !ds.clips || Boolean(controlsError)}
+              className="min-h-10 lg:min-h-0 rounded border border-border bg-surface-raised px-2 py-1 text-[0.6875rem] font-semibold text-content hover:bg-surface disabled:opacity-50">
               {busyLocal ? 'Starting…' : '▶ Train on this PC'}
             </button>
             <HelpBadge topic="video-train-local" />
-            <span ref={setLaunchHost} className="contents" />
+            <span className="contents" ref={setCloudLaunchHost} />
           </div>
         </>
       )}
@@ -207,6 +220,14 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
               : 'Starting up…'}
         </p>
       )}
+
+      <PluginSlot slot="training.launch" surface="video" ds={ds} steps={steps}
+        doI2v={doI2v} controlsError={controlsError}
+        cloudControls={() => videoTrainingControls(controls, 'cloud')}
+        confirmLicence={() => ensureLicenceAck(ds, { storage: window.localStorage, confirmFn: window.confirm })}
+        cloudUrl={videoDatasetCloudUrl(ds.id)} preflightUrl={videoPreflightUrl(ds.id, 'cloud')}
+        launchHost={cloudLaunchHost} localActive={localActive}
+        onSaveCount={setCloudSaveCount} refreshKey={refreshKey} />
 
       {!localActive && !PROVEN_TARGETS.has(ds.target_profile) && (
         <p className="text-[0.6875rem] text-content-subtle">
@@ -228,12 +249,6 @@ export default function VideoTrainingBlock({ ds, onSaveCount, refreshKey = 0 }) 
         </p>
       )}
 
-      <PluginSlot slot="training.launch" surface="video"
-        ds={ds} steps={steps} doI2v={doI2v} confirmLicence={confirmLicence}
-        cloudUrl={`/api/video-dataset/${ds.id}/train/cloud`}
-        preflightUrl={`/api/video-dataset/${ds.id}/train/preflight?lane=cloud`}
-        launchHost={launchHost} localActive={localActive}
-        onSaveCount={setCloudSaveCount} refreshKey={refreshKey} />
     </section>
   )
 }

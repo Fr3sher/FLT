@@ -10,8 +10,7 @@
    wording where the behaviour is the same, and a DIFFERENT sentence where it is
    not (a local video run cannot pick a step to continue from; see
    CONTINUE_LOCAL_REASON), which is CLAUDE.md's parity rule made literal. */
-import { deleteDestination, isRecoverable } from '@lds/plugin-sdk/data'
-import { stepLabel } from './videoCloudStatus.js'
+import { deleteDestination, isRecoverable } from '@lds/plugin-sdk/data';
 import { videoDatasetCheckpointUrl, videoDatasetLocalCheckpointUrl } from './videoBankApi.js'
 
 export const EMPTY_NOTE = 'No checkpoints yet — train this set on this PC or in the '
@@ -139,6 +138,7 @@ export function stepActionModel(datasetId, group, step, ctx = {}) {
 
   let cont
   if (!cloud) cont = { reason: CONTINUE_LOCAL_REASON }
+  else if (ctx.cloudAvailable === false) cont = { reason: 'Enable Cloud training to continue this run on a rented GPU.' }
   else if (group.active) cont = { reason: ACTIVE_CLOUD_REASON }
   else cont = { ok: true }
 
@@ -170,9 +170,18 @@ export function stepActionModel(datasetId, group, step, ctx = {}) {
 
 const quoted = (files) => (files || []).map((f) => `“${f.filename}”`).join(' + ')
 
+export function stepUsesBest(step, loras = []) {
+  const normalize = (name) => String(name || '').replaceAll('\\', '/')
+  const pins = new Set(loras.map(normalize).filter(Boolean))
+  return !!step?.best_settings || (step?.files || []).some((f) => f.deployed_as && pins.has(normalize(f.deployed_as)))
+}
+
+const BEST_WARNING = '\n\n★ This checkpoint is used by the dataset’s best settings. '
+  + 'The saved settings are kept; applying them requires this LoRA to be available in ComfyUI.'
+
 /** The 🗑 confirmation. Names every file the click moves and the destination —
  * from the app-wide wording, never a sentence of this file's own. */
-export function describeStepDelete(group, step, mode) {
+export function describeStepDelete(group, step, mode, bestLoras = []) {
   const files = step.files || []
   const many = files.length > 1
   const where = deleteDestination(mode)
@@ -188,28 +197,29 @@ export function describeStepDelete(group, step, mode) {
   if (deployed(step)) {
     lines.push('', 'The copy deployed into ComfyUI is a separate file and is KEPT — use ⏏ Undeploy for that one.')
   }
-  return lines.join('\n')
+  return lines.join('\n') + (stepUsesBest(step, bestLoras) ? BEST_WARNING : '')
 }
 
 const deployed = (step) => !!step?.deployed
 
-export function describeUndeploy(step, mode = 'app_trash') {
+export function describeUndeploy(step, mode = 'app_trash', bestLoras = []) {
   const files = (step.files || []).filter((f) => f.deployed_as)
   return [
     `UNDEPLOY — REMOVE FROM COMFYUI — ${quoted(files)} (${stepLabel(step)})?`, '',
     `Only the copy in ComfyUI's loras folder goes to ${deleteDestination(mode)}.`,
     'The training save is KEPT — this step offers to deploy again right after.',
-  ].join('\n')
+  ].join('\n') + (stepUsesBest(step, bestLoras) ? BEST_WARNING : '')
 }
 
 /** The run-level 🗑 the training block used to carry, moved here unchanged:
  * this one removes the run's files and its history line for good (the server
  * deletes the store directory by name — no trash), and says so. */
-export function runDeleteConfirmation(group) {
+export function runDeleteConfirmation(group, bestLoras = []) {
   const n = (group.steps || []).reduce((sum, s) => sum + (s.files?.length || 0), 0)
   return `Delete run #${group.run_id} and its ${n} LoRA file(s) from disk?\n\n`
     + 'The dataset and its clips are untouched — only this run’s '
     + 'checkpoints and its history line go. This cannot be undone.'
+    + ((group.steps || []).some((s) => stepUsesBest(s, bestLoras)) ? BEST_WARNING : '')
 }
 
 export function deleteReport(res = {}) {
@@ -273,4 +283,20 @@ export function detailsRows(d = {}) {
     ['Error', d.error || null],
   ]
   return rows.filter(([, v]) => v != null && v !== '').map(([k, v]) => [k, String(v)])
+}
+
+/** The label of one harvested step, pair-aware.
+ *
+ * A Wan 2.2 checkpoint is TWO files at one step. Labelling them separately is
+ * how a UI ends up offering half a LoRA — so the step is the unit, and the file
+ * count is stated rather than implied. */
+export function stepLabel(step) {
+  if (!step) return ''
+  const n = step.files?.length || 0
+  // A LOCAL run's final save carries no number (the lane stamps no step count
+  // the listing can read): "Final", and never "Final (step null)".
+  const head = step.final
+    ? (step.step != null ? `Final (step ${step.step})` : 'Final')
+    : `Step ${step.step}`
+  return n > 1 ? `${head} — ${n} files (both experts)` : head
 }

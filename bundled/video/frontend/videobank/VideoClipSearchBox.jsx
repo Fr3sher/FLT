@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { apiFetch } from '@lds/plugin-sdk'
-import { HelpBadge } from '@lds/plugin-sdk'
-import { videoSearchUrl } from './videoBankApi.js'
+import { apiFetch } from '@lds/plugin-sdk';
+import { HelpBadge } from '@lds/plugin-sdk';
+import { videoSearchUrl } from './videoBankApi'
 import {
   searchUnavailableReason, summarize, readinessHint, pendingLabel,
   suggestPushDown, limitsSentence, VIDEO_CLIP_LIMITS, searchBasisNote,
   captionModelNote,
-} from './videoClipSearch.js'
+} from './videoClipSearch'
 
 /** 🔎 Find scenes — type a word, get the shots that look like it.
  *

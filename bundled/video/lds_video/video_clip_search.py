@@ -61,9 +61,7 @@ import shutil
 import tempfile
 
 from lds_video.models import db
-from lds_video.models import VideoBank
-from lds_video.models import VideoClip
-from lds_video.models import VideoSource
+from lds_video.models import VideoBank, VideoClip, VideoSource
 from lds_sdk.video_host import atomic_npz
 from lds_sdk.video_host import clip_text_encoder
 
@@ -567,7 +565,7 @@ def run_embed(bank_id, reembed=False, *, on_clip=None, should_stop=None,
 # number comes from; it is imported rather than re-derived so the two lanes cannot
 # drift into two different meanings of the same control.
 def _push_down_weight(value):
-    from lds_sdk.video_host.image_bank_service import _push_down_weight as image_weight
+    from lds_sdk.video_media_library import similarity_push_down_weight as image_weight
     return image_weight(value)
 
 
@@ -641,9 +639,7 @@ def search(user_id, bank_id, query, n=60, *, push_down=None,
     interpreter here can run CLIP at all. Those are two different sentences to a
     user: one is "do this first", the other is "this install cannot do this"."""
     import numpy as np
-    from lds_video.video_bank_service import _clip_row
-    from lds_video.video_bank_service import get_bank
-    from lds_video.video_bank_service import metric_thresholds
+    from lds_video.video_bank_service import _clip_row, get_bank, metric_thresholds
     bank = get_bank(user_id, bank_id)
     if bank is None:
         raise ValueError('video bank not found')

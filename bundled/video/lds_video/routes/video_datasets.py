@@ -15,12 +15,19 @@ OUTPUTS — a user must not discover that in a forum thread after building a set
 """
 import logging
 import mimetypes
+import os
+
 from flask import Blueprint, current_app, jsonify, request, send_file
 
 from lds_sdk.video_host.config import LOCAL_USER
+from lds_sdk.plugin_services import ServiceUnavailable
 from lds_video import video_bank_service as svc
 from lds_video import neural_render_media as nr
 from lds_video import video_targets
+from lds_sdk.video_host.http import map_error as _map_error
+from lds_sdk.video_host.http import require_comfyui as _require_comfyui
+from lds_sdk.video_host.http import require_no_stalled_comfyui as _require_no_stalled_comfyui
+from lds_sdk.video_host.http import studio_missing_response as _studio_missing_response
 from lds_video import video_dataset_import as intake
 from lds_sdk.video_host import bank_jobs
 
@@ -143,6 +150,56 @@ def video_dataset_get(dataset_id):
     if payload is None:
         return _missing(dataset_id)
     return jsonify(payload)
+
+
+@bp.get('/video-dataset/<int:dataset_id>/train/previews')
+def video_dataset_previews(dataset_id):
+    from lds_video import video_checkpoint_previews as previews
+    try:
+        return jsonify(previews.list_previews(LOCAL_USER, dataset_id))
+    except LookupError:
+        return _missing(dataset_id)
+
+
+@bp.post('/video-dataset/<int:dataset_id>/train/previews')
+def video_dataset_render_previews(dataset_id):
+    from lds_video import video_checkpoint_previews as previews
+    from lds_sdk.video_host.studio import StudioAssetsMissing
+    blocked = _require_comfyui() or _require_no_stalled_comfyui()
+    if blocked:
+        return blocked
+    try:
+        payload = previews.start_previews(LOCAL_USER, dataset_id, request.get_json(silent=True))
+    except previews.PreviewSelectionError as exc:
+        return jsonify({'ok': False, 'error': str(exc), 'queued': [], 'failures': exc.failures}), 400
+    except StudioAssetsMissing as exc:
+        return _studio_missing_response(exc)
+    except LookupError:
+        return _missing(dataset_id)
+    except (ValueError, TypeError, RuntimeError, OSError) as exc:
+        return _map_error(ValueError(previews._safe_error(exc)))
+    return jsonify(payload)
+
+
+@bp.get('/video-dataset/<int:dataset_id>/best-settings')
+def video_dataset_best_settings(dataset_id):
+    from lds_video import video_best_settings as best
+    try:
+        ds = best.get_dataset(LOCAL_USER, dataset_id)
+    except LookupError:
+        return _missing(dataset_id)
+    return jsonify({'best_settings': best.read_best(ds),
+                    'best_settings_loras': best.best_settings_loras(ds)})
+
+
+@bp.delete('/video-dataset/<int:dataset_id>/best-settings')
+def video_dataset_remove_best_settings(dataset_id):
+    from lds_video import video_best_settings as best
+    try:
+        best.remove_best(LOCAL_USER, dataset_id)
+    except LookupError:
+        return _missing(dataset_id)
+    return jsonify({'ok': True})
 
 
 @bp.get('/video-dataset/<int:dataset_id>/clip/<int:clip_id>/media')
@@ -284,6 +341,8 @@ def video_dataset_train_local(dataset_id):
             steps=body.get('steps') or 1000,
             base_model=(body.get('base_model') or '').strip() or None,
             low_vram=bool(body.get('low_vram', True)),
+            rank=body.get('rank', 16),
+            sample_prompts=body.get('sample_prompts'),
             do_i2v=bool(body.get('do_i2v', False)),
             accept_download=bool(body.get('accept_download', False))))
     except vtl.VideoWeightsMissing as e:
@@ -332,8 +391,8 @@ def video_dataset_train_stop(dataset_id):
     killing the face dataset of the same number. `ok: false` is the honest answer
     when the fence names another run — the click was refused, not silently
     ignored."""
-    from lds_sdk.video_host import cloud_run_dataset as crd
-    from lds_sdk.video_host import lora_training as lt
+    from lds_sdk.video_host import run_dataset as crd
+    from lds_sdk import video_training_runtime as lt
     stopped = lt.stop_training(expected_dataset_id=dataset_id,
                                expected_dataset_table=crd.VIDEO)
     return jsonify({'ok': bool(stopped)})
@@ -352,7 +411,7 @@ def video_dataset_train_cloud(dataset_id):
     A target we have no verified base for is a 400, not a 500: the user picked a
     model this build cannot train unattended, and that is a choice they can
     correct — the message names what to do."""
-    from lds_sdk.video_host import cloud_video_training as cvt
+    from lds_sdk import cloud_video_training as cvt
     from lds_video import video_training
     body = request.get_json(silent=True) or {}
     try:
@@ -361,6 +420,7 @@ def video_dataset_train_cloud(dataset_id):
             steps=body.get('steps') or 1000,
             base_model=(body.get('base_model') or '').strip() or None,
             low_vram=bool(body.get('low_vram', False)),
+            rank=body.get('rank', 16),
             do_i2v=bool(body.get('do_i2v', False)),
             sample_prompts=body.get('sample_prompts'),
             distillation=body.get('distillation') or 'auto',
@@ -375,6 +435,8 @@ def video_dataset_train_cloud(dataset_id):
         if 'not found' in str(e):
             return _missing(dataset_id)
         return jsonify({'error': str(e)}), 400
+    except ServiceUnavailable:
+        raise
     except RuntimeError as e:
         # The launch guard: already running, fleet limit, budget. 409 — the
         # request was well-formed, the state refuses it.
@@ -411,7 +473,7 @@ def video_dataset_cloud_offers(dataset_id):
     """Live GPU tiers for the launch — price/h, VRAM, and a rough time+cost per
     class. Read-only: rents nothing. Estimates are one-measured-run rough and
     the payload labels them so."""
-    from lds_sdk.video_host import cloud_video_training as cvt
+    from lds_sdk import cloud_video_training as cvt
     try:
         data = cvt.video_gpu_tiers(LOCAL_USER, dataset_id,
                                    steps=request.args.get('steps', type=int))
@@ -419,6 +481,8 @@ def video_dataset_cloud_offers(dataset_id):
         if 'not found' in str(e):
             return _missing(dataset_id)
         return jsonify({'error': str(e)}), 400
+    except ServiceUnavailable:
+        raise
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 409
     return jsonify({'ok': True, **data})
@@ -431,9 +495,9 @@ def video_dataset_train_cloud_progress(dataset_id):
     Scoped to the video table explicitly. Resolved by integer alone it would
     return the face dataset of the same id's run — the same phase, cost and
     progress bar, for a training the user is not watching."""
-    from lds_sdk.video_host import cloud_run_dataset as crd
-    from lds_sdk import cloud_training as ct
-    run = ct.latest_run_for(dataset_id, dataset_table=crd.VIDEO)
+    from lds_sdk.video_host import run_dataset as crd
+    from lds_sdk import run_history as rg
+    run = rg.latest_run_for(dataset_id, dataset_table=crd.VIDEO)
     if run is None:
         return jsonify({'run_id': None, 'status': None})
     return jsonify({
@@ -441,8 +505,8 @@ def video_dataset_train_cloud_progress(dataset_id):
         'phase_detail': run.phase_detail or '',
         'gpu': run.gpu_name, 'price_per_hour': run.price_per_hour,
         'error': run.error,
-        'steps': ct._run_param(run, 'steps'),
-        'saves': len(ct.run_checkpoint_files(run)),
+        'steps': rg.run_param(run, 'steps'),
+        'saves': len(rg.run_checkpoint_files(run)),
         'created_at': run.created_at.isoformat() if run.created_at else None,
         'finished_at': run.finished_at.isoformat() if run.finished_at else None,
     })
@@ -454,9 +518,13 @@ def _video_run(dataset_id, run_id):
     The ownership test is the PAIR (id, table), never the id alone: a face run
     carrying the same integer is a different training on someone else's data,
     and these three routes serve its weights and relaunch it."""
-    from lds_sdk import cloud_training
-    from lds_sdk.video_host import cloud_run_dataset as crd
-    return cloud_training.get_run(LOCAL_USER, run_id, dataset_id=dataset_id, dataset_table=crd.VIDEO)
+    from lds_sdk import cloud_runs
+    from lds_sdk.video_host import run_dataset as crd
+    try:
+        run = cloud_runs.get(int(run_id))
+    except (TypeError, ValueError):
+        return None
+    return run if run and crd.owns(run, dataset_id, crd.VIDEO) else None
 
 
 @bp.get('/video-dataset/<int:dataset_id>/train/cloud/checkpoints')
@@ -469,26 +537,25 @@ def video_dataset_cloud_checkpoints(dataset_id):
     to offer half a LoRA. MiniMax H3 has one file per step (ai-toolkit's
     `MinimaxH3Model` defines no `save_lora`, so the generic single-file save
     applies), and the same shape carries it without a special case."""
-    from lds_sdk.video_host.models import CloudTrainingRun
-    from lds_sdk.video_host import cloud_run_dataset as crd
-    from lds_sdk import cloud_training as ct
-    from lds_sdk.video_host import cloud_video_training as cvt
+    from lds_sdk import cloud_runs
+    from lds_sdk.video_host import run_dataset as crd
+    from lds_sdk import run_history as rg
+    from lds_video import video_run_lineage as checkpoint_steps
     if not svc.get_video_dataset(LOCAL_USER, dataset_id):
         return _missing(dataset_id)
     groups = []
-    for run in (CloudTrainingRun.query.filter_by(dataset_id=dataset_id)
-                .order_by(CloudTrainingRun.id.desc()).all()):
+    for run in (cloud_runs.for_dataset(dataset_id, newest_first=True)):
         if not crd.owns(run, dataset_id, crd.VIDEO):
             continue
-        steps = cvt.harvested_steps(run)
+        steps = checkpoint_steps.harvested_steps(run)
         if not steps:
             continue
         groups.append({
             'run_id': run.id, 'status': run.status,
-            'active': run.status in ct.ACTIVE_STATES,
+            'active': run.status in rg.ACTIVE_STATES,
             'gpu': run.gpu_name, 'price_per_hour': run.price_per_hour,
-            'target_profile': ct._run_param(run, 'target_profile'),
-            'parent_run_id': ct._run_param(run, 'parent_run_id'),
+            'target_profile': rg.run_param(run, 'target_profile'),
+            'parent_run_id': rg.run_param(run, 'parent_run_id'),
             'created_at': run.created_at.isoformat() if run.created_at else None,
             'finished_at': run.finished_at.isoformat() if run.finished_at else None,
             # Paths stay server-side: the client asks for a file by NAME and the
@@ -508,14 +575,13 @@ def video_dataset_cloud_checkpoint(dataset_id):
     every loader downstream; two files is what ai-toolkit wrote and what the
     loaders expect side by side."""
     from flask import abort
-    from lds_sdk import cloud_training as ct
-    import os
+    from lds_sdk import run_history as rg
     run = _video_run(dataset_id, request.args.get('run_id'))
     if not run:
         abort(404)
     # Resolved through the run's own save list, which is basename-only by
     # construction — the client can never point this at a path of its choosing.
-    path = ct.run_checkpoint_path(run, request.args.get('filename'))
+    path = rg.run_checkpoint_path(run, request.args.get('filename'))
     if not path or not os.path.isfile(path):
         abort(404)
     return send_file(path, as_attachment=True)
@@ -526,12 +592,14 @@ def video_dataset_cloud_run_delete(dataset_id, run_id):
     """🗑 Remove one terminal run — its harvested LoRA files and its history
     line. Ownership is the (id, table) pair like every other run route; an
     active run answers 409 (its pod is on the clock — stop it first)."""
-    from lds_sdk.video_host import cloud_video_training as cvt
+    from lds_sdk import cloud_runs
     run = _video_run(dataset_id, run_id)
     if not run:
         return _missing(dataset_id)
     try:
-        return jsonify(cvt.delete_cloud_video_run(LOCAL_USER, run.id))
+        return jsonify(cloud_runs.delete_video_run(LOCAL_USER, dataset_id, run.id))
+    except LookupError:
+        return _missing(dataset_id)
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 409
     except ValueError as e:
@@ -541,7 +609,7 @@ def video_dataset_cloud_run_delete(dataset_id, run_id):
 @bp.post('/video-dataset/<int:dataset_id>/train/cloud/retry')
 def video_dataset_cloud_retry(dataset_id):
     """↻ Relaunch a failed run of this dataset on a fresh pod."""
-    from lds_sdk.video_host import cloud_video_training as cvt
+    from lds_sdk import cloud_video_training as cvt
     body = request.get_json(silent=True) or {}
     run = _video_run(dataset_id, body.get('run_id'))
     if not run:
@@ -556,7 +624,7 @@ def video_dataset_cloud_retry(dataset_id):
 def video_dataset_cloud_continue(dataset_id):
     """▶ Train an existing LoRA of this dataset further, from one of its
     harvested steps."""
-    from lds_sdk.video_host import cloud_video_training as cvt
+    from lds_sdk import cloud_video_training as cvt
     body = request.get_json(silent=True) or {}
     run = _video_run(dataset_id, body.get('run_id'))
     if not run:
@@ -580,6 +648,8 @@ def _relaunch(call):
         return jsonify({'ok': True, **call()})
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    except ServiceUnavailable:
+        raise
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 409
 
@@ -681,7 +751,7 @@ def video_dataset_cloud_run_details(dataset_id, run_id):
 @bp.get('/video-dataset/<int:dataset_id>/train/lineage')
 def video_dataset_lineage(dataset_id):
     """🌳 Every run of this video dataset as ONE genealogy forest, in the shape
-    the image workspace's graph draws (`cloud_training.dataset_lineage`):
+    the image workspace's graph draws (`run_graph.dataset_lineage`):
     cloud runs linked by the step they continued from, plus the local run."""
     from lds_video import video_lineage
     try:

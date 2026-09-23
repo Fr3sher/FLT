@@ -1,6 +1,6 @@
 /** The size of a start-frame tile in the Video Test Studio's picker.
  *
- * One dial for the three grids (Bank, Gallery, Dataset clip): a frame is
+ * One dial for the four grids (Bank, Gallery, Dataset clip, Rendered clip): a frame is
  * chosen by eye, and at 96 px a face is a smudge. The size lives per browser,
  * under its own key — the same range and step as the concept sources' 🔍,
  * so the two dials feel like one — and is clamped on the way in, because a

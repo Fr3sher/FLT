@@ -34,6 +34,7 @@ making one — so overwriting a human's words requires asking for it by name.
 """
 from __future__ import annotations
 
+import sqlalchemy as sa
 import json
 import logging
 import os
@@ -42,9 +43,7 @@ import shutil
 import tempfile
 
 from lds_video.models import db
-from lds_video.models import VideoBank
-from lds_video.models import VideoClip
-from lds_video.models import VideoSource
+from lds_video.models import VideoBank, VideoClip, VideoSource
 
 from lds_video import caption_fields
 
@@ -592,9 +591,9 @@ def pending_clips(bank_id, recaption=False, include_edited=False):
         # NULL caption OR a state that never produced one. A cleared caption puts
         # the clip back in the queue, which is what "clear it and run again"
         # has to mean.
-        q = q.filter(db.or_(VideoClip.caption.is_(None), VideoClip.caption == ''))
+        q = q.filter(sa.or_(VideoClip.caption.is_(None), VideoClip.caption == ''))
     elif not include_edited:
-        q = q.filter(db.or_(VideoClip.caption_state.is_(None),
+        q = q.filter(sa.or_(VideoClip.caption_state.is_(None),
                             VideoClip.caption_state != 'edited'))
     return q.order_by(VideoClip.id.asc())
 
@@ -674,8 +673,7 @@ def run_captions(bank_id, recaption=False, *, include_edited=False, on_clip=None
     `should_stop` is polled at each clip BOUNDARY — a graceful cancel, the same
     contract as the image lane's caption batch: what is done is kept, and the
     next run starts where this one stopped."""
-    from lds_video.video_caption_worker import CaptionWorker
-    from lds_video.video_caption_worker import LocalLlmCaptionWorker
+    from lds_video.video_caption_worker import CaptionWorker, LocalLlmCaptionWorker
     bank = db.session.get(VideoBank, bank_id)
     if bank is None:
         return {'captioned': 0, 'failed': 0, 'model': model or configured_model(),
@@ -743,9 +741,7 @@ def set_caption(user_id, bank_id, clip_id, text):
     Marked 'edited' so a bulk re-run leaves it alone. Clearing it puts the clip
     back in the queue — which is what "clear it and run the pass again" has to
     mean, and the only way back from a caption someone regrets."""
-    from lds_video.video_bank_service import _clip_of_bank
-    from lds_video.video_bank_service import _clip_row_for
-    from lds_video.video_bank_service import get_bank
+    from lds_video.video_bank_service import _clip_of_bank, _clip_row_for, get_bank
     if get_bank(user_id, bank_id) is None:
         return None
     clip = _clip_of_bank(bank_id, clip_id)
