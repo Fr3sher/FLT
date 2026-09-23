@@ -6083,12 +6083,18 @@ def _pull_log_and_samples(run, remote, job_id):
 
 def _newest_remote_checkpoint(remote, job_id):
     """The newest .safetensors file entry ({'path', 'size'}), or None.
-    ai-toolkit zero-pads step numbers, so lexicographic order IS step order."""
+    AI Toolkit's final save has the output folder's name and no step suffix.
+    It must outrank numbered saves, which otherwise sort after it."""
     files = [f for f in remote.list_files(job_id)
              if f.get('path', '').endswith('.safetensors')]
     if not files:
         return None
-    return sorted(files, key=lambda f: f['path'])[-1]
+    def order(file):
+        path = file['path'].replace('\\', '/')
+        folder, _, name = path.rpartition('/')
+        final = bool(folder) and name == folder.rsplit('/', 1)[-1] + '.safetensors'
+        return final, path
+    return max(files, key=order)
 
 def _fetch_checkpoint(run, remote, ckpt, timeout=None, attempts=3,
                       on_progress=None, resume=False, should_cancel=None) -> str:
