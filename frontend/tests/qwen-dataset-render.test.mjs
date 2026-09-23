@@ -39,7 +39,7 @@ test('an unprepared engine leaves its settings link outside the disabled checkbo
 
 test('a disabled engine points to its plugin settings engine toggle', () => {
   const html = card({ enabledInSettings: false })
-  assert.match(html, /href="#\/plugins\/qwen_dataset\/settings"/)
+  assert.match(html, /href="#\/plugins\/qwen_dataset\/settings\?focus=plugin-enabled-engines"/)
   assert.match(html, /Enable this engine/)
 })
 

@@ -80,3 +80,18 @@ Use `store/tools/repository.py` to publish immutable package versions. Keep
 signing keys outside the served directory. Private sources and their packages
 do not belong in the public LDS checkout. The ordinary app updater continues
 to use the public LDS repository.
+
+## Adding products while preserving older clients
+
+API 1.23 hosts can declare `additional_catalog_targets` in their trusted Store
+configuration, for example `["catalog-v2-extra.json"]`. Each named JSON target
+must be signed by the same TUF repository and follows the ordinary catalog
+schema. The client combines their products with `catalog.json`; duplicate
+identities or unauthorized publishers remain invalid. A catalog cannot enable
+this option itself.
+
+The public catalog keeps its original products in `catalog.json`. New first-party
+identifiers, starting with Dataset Forge, live in `catalog-v2-extra.json`, read
+only by hosts that authorize them. Publishers must preserve and renew both signed
+targets and their archives; changing one product must not drop the other target.
+This lets older clients continue to receive their existing plugin updates.

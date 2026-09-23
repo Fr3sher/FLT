@@ -46,7 +46,7 @@ export default function PluginSettingsGroups({ pluginId, groups, ...props }) {
   const improves = contributions('improve.engine').some(item => item.plugin === pluginId)
   const engines = contributions('engine.spec').filter(item => item.plugin === pluginId)
   return <div className="space-y-4">
-    {engines.length > 0 && <fieldset className="rounded-lg border border-border p-4">
+    {engines.length > 0 && <fieldset id="plugin-enabled-engines" className="rounded-lg border border-border p-4">
       <legend className="px-1 text-sm font-medium">Enabled engines</legend>
       <div className="flex flex-wrap gap-4">{engines.map(engine => <label key={engine.id} className="inline-flex min-h-10 items-center gap-2 text-sm">
         <input type="checkbox" checked={(props.config.engines?.enabled || []).includes(engine.id)}

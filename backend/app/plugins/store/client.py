@@ -11,6 +11,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,6 +72,7 @@ class StoreConfig:
     official_ids: frozenset
     external_ids: frozenset = frozenset()
     scoped_ids: frozenset = frozenset()
+    additional_catalog_targets: tuple = ()
 
     def __post_init__(self):
         object.__setattr__(self, 'metadata_url', _base_url(self.metadata_url))
@@ -88,6 +90,13 @@ class StoreConfig:
                 or (self.scoped_ids and self.scoped_ids != self.official_ids | self.external_ids)):
             raise StoreError('Catalog permissions must match its selected plugin identifiers.')
         object.__setattr__(self, 'scoped_ids', frozenset(self.scoped_ids))
+        targets = self.additional_catalog_targets
+        if (not isinstance(targets, (tuple, list)) or len(targets) > 4
+                or any(not isinstance(name, str)
+                       or not re.fullmatch(r'catalog-[a-z0-9][a-z0-9_.-]{0,80}\.json', name)
+                       for name in targets) or len(set(targets)) != len(targets)):
+            raise StoreError('Additional catalogs must name distinct signed catalog targets.')
+        object.__setattr__(self, 'additional_catalog_targets', tuple(targets))
 
     @property
     def selected_ids(self):
@@ -96,6 +105,8 @@ class StoreConfig:
     @property
     def identity(self):
         scope = json.dumps(sorted(self.selected_ids)).encode() if self.selected_ids else b''
+        if self.additional_catalog_targets:
+            scope += b'\0' + json.dumps(self.additional_catalog_targets).encode()
         return hashlib.sha256(self.root + self.metadata_url.encode() + b'\0' + self.target_url.encode() + scope).hexdigest()
 
 
@@ -121,7 +132,8 @@ def _read_config(data, directory, *, external_ids=frozenset(), scoped_ids=frozen
                 or any(not isinstance(pid, str) or pid not in OFFICIAL_IDS for pid in ids)):
             raise ValueError('invalid trust configuration')
         return StoreConfig(_base_url(data['metadata_url']), _base_url(data['target_url']), root,
-                           frozenset(ids), external_ids, scoped_ids)
+                           frozenset(ids), external_ids, scoped_ids,
+                           data.get('additional_catalog_targets', ()))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise StoreError('The store trust configuration cannot be verified.') from exc
 
@@ -266,7 +278,20 @@ class StoreSession:
             raise StoreError('The package download failed verification. No installed plugin was changed.') from exc
 
     def catalog(self):
-        path, _ = self.target(CATALOG_TARGET, maximum=MAX_CATALOG_BYTES)
+        catalog = self._catalog_target(CATALOG_TARGET)
+        if not self.config.additional_catalog_targets:
+            return catalog
+        for name in self.config.additional_catalog_targets:
+            extra = self._catalog_target(name)
+            for value in (catalog, extra):
+                if (not isinstance(value, dict) or value.get('schema_version') != 1
+                        or not isinstance(value.get('products'), list)):
+                    raise StoreError('The catalog format is not supported by this app.')
+            catalog = {**catalog, 'products': [*catalog['products'], *extra['products']]}
+        return catalog
+
+    def _catalog_target(self, name):
+        path, _ = self.target(name, maximum=MAX_CATALOG_BYTES)
         try:
             return json.loads(path.read_text(encoding='utf-8'))
         except (OSError, ValueError) as exc:

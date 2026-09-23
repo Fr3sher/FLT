@@ -601,6 +601,20 @@ class PublicHistoryTests(unittest.TestCase):
             kind='reviewed_product_release', sources=[])
         self.refused()
 
+    def test_new_qwen_dataset_source_requires_exact_reviewed_manifest(self):
+        self.port_fixture()
+        self.write('bundled/qwen_dataset/engine.py', 'NATIVE_DATASET_ENGINE = True\n')
+        self.tip = self.commit('new public dataset engine fixture')
+        self.manifest = self.manifest_for(self.tip)
+        for commit in self.manifest['commits']:
+            for entry in commit['exceptions']:
+                if entry['path'].startswith('bundled/qwen_dataset/'):
+                    entry['provenance'].update(kind='reviewed_infrastructure', sources=[])
+        self.assertFalse(self.inspect(private_source=self.private_source)['allowed'])
+        self.assertTrue(self.approved()['allowed'])
+        self.write('bundled/qwen_dataset/engine.py', 'UNREVIEWED_CHANGE = True\n')
+        self.refused(tip=self.commit('unreviewed engine change'))
+
     def test_exact_reviewed_port_and_unchanged_public_move_are_allowed(self):
         self.port_fixture(unchanged=True)
         self.assertFalse(self.inspect(private_source=self.private_source)['allowed'])

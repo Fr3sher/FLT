@@ -788,6 +788,7 @@ def test_prompt_and_aspect_lookup_cover_nsfw_labels(app):
         assert aspect_for_label('Corps, nu douche') == '9:16'
 
 
+@pytest.mark.plugins('api_engines')
 def test_generate_route_refuses_nsfw_on_api_engines(client):
     resp = client.post('/api/dataset/1/generate', json={
         'generator': 'nanobanana', 'multiplier': 1,

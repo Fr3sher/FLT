@@ -24,7 +24,7 @@ export default function QwenCard({ spec, checked, available, generating, onToggl
     {/* Keep preparation reachable while the engine checkbox is disabled. */}
     <div className="flex min-h-10 items-center px-2 lg:min-h-0">
       {enabledInSettings === false
-        ? <SettingsLink pluginId="qwen_dataset" tone="warning">Enable this engine</SettingsLink>
+        ? <SettingsLink pluginId="qwen_dataset" focus="plugin-enabled-engines" tone="warning">Enable this engine</SettingsLink>
         : <SettingsLink pluginId="qwen_dataset" focus={available ? undefined : 'qwen-dataset-preparation'}
           tone={available ? 'subtle' : 'warning'}>Dataset Forge settings &amp; preparation</SettingsLink>}
     </div>

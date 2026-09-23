@@ -5328,12 +5328,10 @@ def _image_engine(img):
         return metadata['engine']
     if not value:
         return None
-    if value in api_engine_ids():
-        return value
-    # Krea 2 Edit rows store the engine id here, like the API ones: the engine
-    # resolves its base model deterministically at enqueue AND at regenerate
-    # (krea_edit_helper.resolve_krea_unet), so there is no per-row model to keep.
-    if value in local_engine_ids():
+    # Historical rows predate generation_meta. Their append-only engine tags
+    # remain provenance even when a provider is disabled or uninstalled; only
+    # generation admission depends on the current registry.
+    if value in KNOWN_ENGINES or value in known_engine_ids():
         return value
     return 'klein'   # a local model file name — the row was rendered on the GPU
 

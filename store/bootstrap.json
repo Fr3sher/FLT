@@ -2,6 +2,7 @@
   "metadata_url": "https://raw.githubusercontent.com/perfectgf/lora-dataset-studio-public-plugins/main/public/metadata/",
   "target_url": "https://raw.githubusercontent.com/perfectgf/lora-dataset-studio-public-plugins/main/public/targets/",
   "root_path": "public-root.json",
+  "additional_catalog_targets": ["catalog-v2-extra.json"],
   "official_ids": [
     "api_engines",
     "camera_angles",
@@ -12,6 +13,7 @@
     "image_upscale",
     "live",
     "model_tools",
+    "qwen_dataset",
     "resource_monitor",
     "scrape",
     "seedvr2",

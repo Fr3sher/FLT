@@ -30,7 +30,7 @@ export default function QwenPreparation({ caps = {}, onDone }) {
         className="text-primary underline">Qwen Research licence (non-commercial)</a>.
     </p>
     {!caps.comfyui?.dir_valid && <p className="text-sm text-content-muted">
-      <SettingsLink section="local-tools" tone="warning">Connect your local ComfyUI folder</SettingsLink>
+      <SettingsLink section="local-tools" focus="comfyui-base-dir" tone="warning">Connect your local ComfyUI folder</SettingsLink>
     </p>}
     <div className="space-y-3">
       {modelPreparationRows(caps).map(row => <div key={row.action} className="space-y-1">
