@@ -320,17 +320,35 @@ def test_no_message_or_log_record_ever_carries_a_credential(app, monkeypatch, ca
 
 # --- 4. the API-key lane, which already worked, still works ------------------
 
-def test_the_api_lane_success_path_is_untouched(app, monkeypatch):
-    """The anti-regression that decides whether this change was worth making."""
+@pytest.mark.parametrize('setting,env_model,override,expected', [
+    ('', None, None, 'gpt-image-2.5-sunburst'),
+    ('  ', '  ', None, 'gpt-image-2.5-sunburst'),
+    ('gpt-image-2', None, None, 'gpt-image-2'),
+    ('', 'gpt-image-2', None, 'gpt-image-2'),
+    (' gpt-image-2.5-flare ', 'gpt-image-2', None, 'gpt-image-2.5-flare'),
+    ('gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-sunburst'),
+])
+def test_the_api_lane_success_path_is_untouched(app, monkeypatch, setting,
+                                              env_model, override, expected):
+    """Upgrade the implicit model while preserving references and explicit choices."""
     monkeypatch.setenv('OPENAI_API_KEY', KEY)
+    monkeypatch.delenv('CHATGPT_IMAGE_MODEL', raising=False)
+    if env_model is not None:
+        monkeypatch.setenv('CHATGPT_IMAGE_MODEL', env_model)
+    monkeypatch.setenv('CHATGPT_IMAGE_QUALITY', 'high')
     from lds_api_engines import chatgpt_image
+    from lds_sdk import config
+    config.save_config({'engines': {'chatgpt_image_model': setting}})
     ok = _resp(200, {'data': [{'b64_json': base64.b64encode(PNG).decode()}]})
     with patch('lds_api_engines.chatgpt_image.requests.post', return_value=ok) as post:
         out = chatgpt_image.generate_variation([b'a', b'b'], 'a portrait',
-                                               aspect_ratio='3:4')
+                                               aspect_ratio='3:4', model=override,
+                                               force_lane='api')
     assert out == PNG
     assert '/images/edits' in post.call_args.args[0]
     sent = post.call_args.kwargs
+    assert sent['data']['model'] == expected
+    assert sent['data']['quality'] == 'high'
     assert sent['data']['size'] == '1024x1536'
     assert 'input_fidelity' not in sent['data']         # gpt-image-2 400s on it
     assert len(sent['files']) == 2

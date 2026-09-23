@@ -58,7 +58,7 @@ export default {
       ['nano banana', 'nanobanana', 'gemini', 'model', 'image model', 'gemini-3-pro-image',
         'change model', 'choose model', 'reference images', 'NANOBANANA_MODEL']),
     setting('engines.chatgpt_image_model', 'engines', 'engines-chatgpt_image_model', 'ChatGPT (OpenAI) image model',
-      ['chatgpt', 'openai', 'gpt-image', 'gpt-image-2', 'gpt-image-1.5', 'model', 'image model',
+      ['chatgpt', 'openai', 'gpt-image', 'gpt-image-2.5', 'sunburst', 'flare', 'gpt-image-2', 'model', 'image model',
         'change model', 'choose model', '403', 'organization verification', 'verified',
         'reference images', 'CHATGPT_IMAGE_MODEL']),
     // Two properties of the Gemini engine that change what you get, and that no
@@ -74,6 +74,11 @@ export default {
       guide: { chapter: 'settings-reference', anchor: 'image-engines' },
       app: { route: '/datasets?section=add' } },
   ]).map(guideHelp),
-  whatsNew: MIGRATED_NEWS,
+  whatsNew: [{
+    id: '2026-09-23-gpt-image-25',
+    date: '2026-09-23',
+    title: 'Generate and edit with GPT Image 2.5 Sunburst',
+    blurb: 'The ChatGPT API-key engine now defaults to GPT Image 2.5 Sunburst for reference-photo edits and dataset generation. Existing model choices and environment overrides still take priority. In plugin settings, enter gpt-image-2.5-flare for faster generation or gpt-image-2 to keep the previous model. Image size and quality settings stay the same; provider costs depend on the model and request. The ChatGPT subscription lane continues to use the image model selected by your plan.',
+  }, ...MIGRATED_NEWS],
   paritySkip: [],
 }

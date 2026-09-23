@@ -27,7 +27,7 @@ export default function ChatgptSetupLane({ keyField, caps, refresh, toast, secre
     <div className="space-y-3">
       <div>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium text-content">ChatGPT (gpt-image-2)</span>
+          <span className="text-sm font-medium text-content">ChatGPT images</span>
           <span className={`text-xs ${chatgpt.ready ? 'text-emerald-400' : 'text-content-subtle'}`}>
             {chatgpt.ready ? '✓ Ready' : '○ Not set up'}
           </span>

@@ -1,4 +1,4 @@
-"""ChatGPT image (OpenAI gpt-image-2) variation generator for the face Dataset Maker.
+"""ChatGPT image variation generator, defaulting to GPT Image 2.5 Sunburst.
 
 Same contract as `nanobanana.generate_variation` so the dataset fan-out treats
 both API engines uniformly: reference photo(s) + variation prompt -> generated
@@ -21,7 +21,7 @@ DEFAULT_IMAGE_MODEL (see config.DEFAULTS['engines']).
 
 SCOPE: this is the image model of the API-KEY lane. The subscription lane renders
 through OpenAI's own `image_generation` tool, which serves that plan's image model
-(gpt-image-2 today) and takes no slug from us — so the setting does not apply
+and takes no slug from us — so the setting does not apply
 there, and the field says so. `engines.chatgpt_subscription_model` is a third
 thing again: the Codex ROUTER model of that lane, which decides nothing about the
 pixels. None of the three are ever merged.
@@ -81,10 +81,10 @@ logger = logging.getLogger(__name__)
 
 # Built-in fallback when neither the plugin setting nor environment selects a
 # model. The default does not imply access for every account or project.
-DEFAULT_IMAGE_MODEL = 'gpt-image-2'
+DEFAULT_IMAGE_MODEL = 'gpt-image-2.5-sunburst'
 _ENV_VAR = 'CHATGPT_IMAGE_MODEL'
-# Dataset images are final training material -> default to 'high' (≈ Nano
-# Banana's price point). Override with CHATGPT_IMAGE_QUALITY=medium to iterate.
+# Dataset images are final training material -> keep 'high' quality.
+# Override with CHATGPT_IMAGE_QUALITY=medium to iterate.
 CHATGPT_IMAGE_QUALITY = os.environ.get('CHATGPT_IMAGE_QUALITY', 'high')
 _API = "https://api.openai.com/v1/images/edits"
 
@@ -126,12 +126,12 @@ _AMBIGUOUS = ('a content-policy refusal and a transient API error look '
               'identical here')
 
 # --- Subscription lane (Codex OAuth) -----------------------------------------
-# EXPERIMENTAL: renders gpt-image-2 on the user's ChatGPT subscription quota via
+# EXPERIMENTAL: renders images on the user's ChatGPT subscription quota via
 # the Codex Responses backend. Undocumented lane — may break if OpenAI closes it.
 CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 # The Codex lane accepts far fewer input images than /images/edits (16).
 SUBSCRIPTION_MAX_REFS = 5
-SUBSCRIPTION_ROUTER_MODEL = 'gpt-5.4-mini'   # routing model only; images are gpt-image-2
+SUBSCRIPTION_ROUTER_MODEL = 'gpt-5.4-mini'   # routing model only; image model is plan-selected
 
 
 class ChatGPTImageError(EngineError):

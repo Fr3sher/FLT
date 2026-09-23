@@ -21,7 +21,7 @@ import ChatgptSubscriptionConnect from './ChatgptSubscriptionConnect.jsx'
 const ENGINE_SECRETS = [
   { key: 'GEMINI_API_KEY', label: 'Gemini API key', testTarget: 'gemini', help: 'Powers the Nano Banana engine.' },
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', testTarget: 'openai',
-    help: 'Powers the ChatGPT engine (gpt-image-2 by default). Optional if you connect a ChatGPT subscription below.' },
+    help: 'Powers the ChatGPT engine (GPT Image 2.5 Sunburst by default). Optional if you connect a ChatGPT subscription below.' },
   { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API key', testTarget: 'openrouter',
     help: 'Powers the OpenRouter engine: one account and one balance in front of the same '
       + 'upstream image models, including the ones the two engines above call directly. '
@@ -38,7 +38,7 @@ const ENGINE_SECRETS = [
    than this app ships releases, so a dropdown baked into a build would be stale
    the day it landed and would lock people out of a model that works.
 
-   Blank = the historical default, so a field appearing changes nobody's result.
+   Blank follows the environment override or the plugin's current default.
    The resolution order is documented next to each backend engine:
    setting > environment variable > built-in default — a NANOBANANA_MODEL /
    CHATGPT_IMAGE_MODEL exported before these fields existed is still honoured and
@@ -79,7 +79,7 @@ function ImageModelsCard({ config, setField, configDefaults }) {
     <Card
       id="engine-image-models"
       title="Image models"
-      help="Which model each API engine asks for. Free text on purpose: providers publish new image models far faster than this app publishes releases, and a fixed menu would be out of date the day it shipped. Leave a field blank to keep the model the engine has always used — an empty field changes nothing about your results. All three must accept REFERENCE IMAGES: the dataset generator always sends your reference photos with the prompt, so a text-to-image-only model cannot work here; when a provider refuses one, the failed tile names the model and the provider's own reason instead of blaming your prompt, and the run stops rather than paying for the same refusal once per image."
+      help="Which model each API engine asks for. Free text on purpose: providers publish new image models far faster than this app publishes releases, and a fixed menu would be out of date the day it shipped. Leave a field blank to use its environment override or the current plugin default shown below. Type a model to keep that choice across updates. All three must accept REFERENCE IMAGES: the dataset generator always sends your reference photos with the prompt, so a text-to-image-only model cannot work here; when a provider refuses one, the failed tile names the model and the provider's own reason instead of blaming your prompt, and the run stops rather than paying for the same refusal once per image."
     >
       <ModelField {...shared} id="engines-nanobanana_model" configKey="nanobanana_model"
         label="Nano Banana (Gemini) model" placeholder="gemini-3-pro-image">
@@ -91,9 +91,11 @@ function ImageModelsCard({ config, setField, configDefaults }) {
       </ModelField>
 
       <ModelField {...shared} id="engines-chatgpt_image_model" configKey="chatgpt_image_model"
-        label="ChatGPT (OpenAI) image model" placeholder="gpt-image-2">
+        label="ChatGPT (OpenAI) image model" placeholder="gpt-image-2.5-sunburst">
         Blank uses <code className="break-all">CHATGPT_IMAGE_MODEL</code> if set, otherwise{' '}
-        <code className="break-all">gpt-image-2</code>, this plugin's default.
+        <code className="break-all">gpt-image-2.5-sunburst</code>, this plugin's default.
+        Choose <code className="break-all">gpt-image-2.5-flare</code> for faster generation,
+        or enter <code className="break-all">gpt-image-2</code> to keep the previous model.
         If a request returns HTTP 403, read the provider's error and check your key's
         project permissions and the requested model's access requirements.
         The status alone does not confirm that the key is valid or that organization

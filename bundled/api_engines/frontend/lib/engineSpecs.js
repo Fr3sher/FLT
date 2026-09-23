@@ -46,7 +46,7 @@ export const API_ENGINE_SPECS = [
     rate: 0.17, remote: true, billable: true, secret: 'OPENAI_API_KEY', keyTestTarget: 'openai',
     recommended: true, modelSettingKey: 'chatgpt_image_model',
     settingsLabel: 'ChatGPT (OpenAI)', shortLabel: 'ChatGPT',
-    setupRow: { label: 'ChatGPT (gpt-image-2)',
+    setupRow: { label: 'ChatGPT images',
       what: "Generates test images — OpenAI's cloud engine (API key)", topic: 'engines.chatgpt_auth' },
     // NOT "Powers ChatGPT (gpt-image-2)". That sentence was true and still
     // misleading: it made the paid API key read as the only way in, on the

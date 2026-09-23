@@ -31,8 +31,8 @@ export default function ChatgptCard({ spec, checked, available, generating, onTo
           {/* The subscription lane renders on the plan's own image model and
               ignores the Settings field, so only the API lane names it. */}
           {viaSub
-            ? `gpt-image-2 · uses your ChatGPT ${planLabel} quota`
-            : <><span className="break-all">{imageModel || 'gpt-image-2'}</span>
+            ? `Uses your ChatGPT ${planLabel} image quota`
+            : <><span className="break-all">{imageModel || 'gpt-image-2.5-sunburst'}</span>
                 {` · ${share} image(s) ≈ $${(share * spec.rate).toFixed(2)}`}</>}
         </span>
       ) : (

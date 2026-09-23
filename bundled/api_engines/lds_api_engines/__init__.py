@@ -24,7 +24,7 @@ manifest's ``owns.config_keys_in_shared_sections``.
 """
 from . import probes
 
-__version__ = '1.0.6'
+__version__ = '1.1.0'
 
 
 def _nanobanana_generate():
@@ -71,7 +71,7 @@ ENGINES = (
          counts_as_recommended=True, tracked_capability='ChatGPT (gpt-image-2)',
          file_tag='GPTFace', model_setting_key='chatgpt_image_model',
          settings_label='ChatGPT (OpenAI)',
-         setup_row={'label': 'ChatGPT (gpt-image-2)',
+         setup_row={'label': 'ChatGPT images',
                     'what': "Generates test images — OpenAI's cloud engine (API key)",
                     'topic': 'engines.chatgpt_auth'},
          generate=_chatgpt_generate, generate_kwargs=_chatgpt_kwargs,
