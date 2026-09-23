@@ -1519,19 +1519,31 @@ def _weight_present(subfolders, filename) -> bool:
     extra_model_paths root is present, whatever the app would have chosen.
     """
     from lds_sdk.video_host import comfy_model_paths
+
+    def current(path):
+        if not os.path.isfile(path):
+            return False
+        if filename == VIDEO_VAE_INT8:
+            from lds_sdk.h3_downloads import H3_DOWNLOADS
+            try:
+                return os.path.getsize(path) not in H3_DOWNLOADS['h3_video_vae_int8']['superseded_bytes']
+            except OSError:
+                return False
+        return True
+
     for sub in subfolders:
         try:
             roots = comfy_model_paths.search_roots(sub)
         except Exception:
             roots = []
         for root in roots:
-            if os.path.isfile(os.path.join(str(root), filename)):
+            if current(os.path.join(str(root), filename)):
                 return True
             try:
-                names = {n.lower() for n in os.listdir(str(root))}
+                names = {n.lower(): n for n in os.listdir(str(root))}
             except OSError:
                 continue
-            if filename.lower() in names:
+            if filename.lower() in names and current(os.path.join(str(root), names[filename.lower()])):
                 return True
     return False
 

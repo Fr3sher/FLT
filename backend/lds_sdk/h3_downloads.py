@@ -84,18 +84,17 @@ H3_DOWNLOADS = {
         'min_free_gb': 3, 'gated': False, 'min_bytes': 512 * 1024 ** 2,
         'license_url': 'https://huggingface.co/silveroxides/MiniMax-H3_tests',
     },
-    # 🔴 The video VAE quantized to int8 (Kijai's experimental repack, 3.17 GB
-    # against 5.21 for fp16). Not faster to decode by much (jacokon measured
-    # 9.2 s → 6.5 s at 362 frames on a 5090) but 2.3 GB lighter in host RAM,
-    # which is what a machine holding two ComfyUI instances is short of. The
-    # repository declares no licence of its own; the weights underneath stay
-    # under MiniMax's community licence, as every H3 file here. Reads only on
-    # ComfyUI >= 0.31.0 (older builds decode a quantized VAE to black frames).
+    # Official optimized INT8 VAE, 2.81 GB. ComfyUI 0.36+ provides the faster
+    # kernels; --fast fp16_accumulation enables the additional fast path.
+    # The experimental 3.17 GB file used the SAME name: replace it on download.
     'h3_video_vae_int8': {
-        'url': 'https://huggingface.co/Kijai/MiniMax-H3-experimental/resolve/main/minimax_h3_video_vae_int8_convrot.safetensors',
+        'url': 'https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/7a2065e37f5ff9d3c4e605f164d4cac388eff8e8/vae/minimax_h3_video_vae_int8_convrot.safetensors',
         'dest': ('vae', 'minimax_h3_video_vae_int8_convrot.safetensors'),
         'min_free_gb': 5, 'gated': False, 'min_bytes': 2 * 1024 ** 3,
-        'license_url': 'https://huggingface.co/Kijai/MiniMax-H3-experimental',
+        'expected_bytes': 2811065184,
+        'sha256': '52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e',
+        'superseded_bytes': (3171670912,),
+        'license_url': 'https://huggingface.co/Comfy-Org/MiniMax-H3',
     },
 }
 

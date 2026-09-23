@@ -2134,8 +2134,8 @@ _CAPABILITY_EXTRA_CHECKS = {'video': _verify_video_encoder}
 
 
 def _is_blocking_invalid(path, spec) -> bool:
-    """Is the file at `path` present but impossible to load (an HTML licence page, a
-    truncated/garbage download)? Advisory `too_small` is NOT counted, and a checker
+    """Is the file at `path` a declared superseded revision or impossible to load
+    (an HTML licence page, a truncated/garbage download)? `too_small` is NOT counted, and a checker
     that cannot answer says False — no skip is ever turned into a re-download on a
     guess.
 
@@ -2146,6 +2146,8 @@ def _is_blocking_invalid(path, spec) -> bool:
     that file either — so the corrupted-weight dead end simply came back through a
     different door. Same validator, same rule, all four."""
     try:
+        if os.path.getsize(path) in spec.get('superseded_bytes', ()):
+            return True
         from .services import model_integrity
         res = model_integrity.validate_model_file(path, min_bytes=spec.get('min_bytes'))
     except Exception:
@@ -2379,12 +2381,14 @@ def _unloadable_reason(action, path, spec):
     """Why the file at `path` is unusable weights, or None if it is keepable. PURE
     CHECK — it deletes nothing, which is the whole point of splitting it out.
 
-    Condemning a user's file is not done lightly, hence the narrow rule: ONLY a
+    Replacement is limited to explicitly declared superseded revisions or a
     blocking verdict (model_integrity: an HTML gate page, or a header the file is
     too short to satisfy), which is a file no loader can open under any
     circumstances. Advisory `too_small` is the user's business. A failing checker
     is never grounds to condemn either — no answer means keep."""
     try:
+        if os.path.getsize(path) in spec.get('superseded_bytes', ()):
+            return 'superseded model revision; download the current official file'
         from .services import model_integrity
         res = model_integrity.validate_model_file(path, min_bytes=spec.get('min_bytes'))
     except Exception:
@@ -3505,7 +3509,7 @@ def _run_primary_download(action) -> int:
         if not reason:
             _append(action, f'already present: {dest}')
             return 0
-        _append(action, f'the file already here cannot be loaded: {reason}')
+        _append(action, f'the file already here needs replacing: {reason}')
         # It is NOT deleted now. `dest` is written by os.replace(part, dest) at the
         # end of a successful download, which overwrites it atomically, so there is
         # nothing to clear beforehand — and clearing it beforehand is exactly how a

@@ -12,7 +12,7 @@ export const VIDEO_INSTALL_LABELS = {
   h3_base_light: 'Video model, lighter: Winnougan W4A8 (12.5 GB, ComfyUI 0.31+, fast on RTX 30-series and newer)',
   h3_text_encoder: 'Video prompt encoder (Qwen3-VL)',
   h3_video_vae: 'Video decoder (VAE)',
-  h3_video_vae_int8: 'Video decoder, int8 (Kijai repack, 3.2 GB, ComfyUI 0.31+)',
+  h3_video_vae_int8: 'Video decoder, int8 (Comfy official, 2.81 GB; optimized on ComfyUI 0.36+)',
   h3_audio_vae: 'Video sound decoder (VAE)',
   h3_attention_nodes: 'MiniMax H3 block attention switch (live channel speed lever)',
   h3_turbo_lora: 'Video acceleration: larryvrh Turbo v4 (arena #1, 6 steps)',
