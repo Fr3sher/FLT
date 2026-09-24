@@ -298,6 +298,8 @@ def test_windows_launcher_handles_spaces_and_shell_metacharacters(tmp_path):
     root.mkdir()
     result = subprocess.run([os.environ['COMSPEC'], '/d', '/c', str(launcher)],
                             input=str(root) + '\n\n', text=True, capture_output=True,
-                            timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+                            timeout=30, creationflags=subprocess.CREATE_NO_WINDOW,
+                            env={**os.environ, 'PATH': str(Path(os.sys.executable).parent)
+                                 + os.pathsep + os.environ.get('PATH', '')})
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'ARGS=' + json.dumps(['--root', str(root)]) in result.stdout
