@@ -3,13 +3,13 @@ name: CI
 # Heavy jobs are expensive, so we only pay for them when a run is worth it:
 #   * pull_request        -> always (external contributions are the most valuable to gate)
 #   * workflow_dispatch   -> always (manual button)
-#   * push to v2          -> when large enough OR when a Torch-sensitive path changes.
-# A docs-only or small ordinary UI nudge to v2 therefore costs one cheap gate job.
+#   * push to main        -> when large enough OR when a Torch-sensitive path changes.
+# A docs-only or small ordinary UI nudge to main therefore costs one cheap gate job.
 on:
   workflow_dispatch:
   pull_request:
   push:
-    branches: [v2]
+    branches: [main]
 
 permissions:
   contents: read
