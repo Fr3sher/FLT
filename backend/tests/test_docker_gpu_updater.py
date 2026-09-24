@@ -456,7 +456,7 @@ def test_static_contract_is_portable_stable_by_default_and_single_logic():
 
 
 @pytest.mark.parametrize('channel', ['v2', 'main'])
-def test_commit_channel_resolves_v2_including_legacy_alias(tmp_path, channel):
+def test_commit_channel_resolves_main_including_v2_alias(tmp_path, channel):
     # Execute the actual resolver with a local commit lookup, without running
     # the updater or contacting GitHub. A renamed branch must not strand users.
     harness = tmp_path / 'resolve.ps1'
@@ -469,7 +469,7 @@ $function = $ast.Find({ param($node)
 Invoke-Expression $function.Extent.Text
 function Assert-RepositoryName { param($Repo) }
 function Get-ImmutableCommit { param($Repo, $Reference)
-    if ($Reference -ne 'v2') { throw "Unexpected branch: $Reference" }
+    if ($Reference -ne 'main') { throw "Unexpected branch: $Reference" }
     return ('1' * 40)
 }
 Resolve-ArchiveSource -SelectedChannel $Channel -Repo 'sample/project' | ConvertTo-Json -Compress
@@ -478,7 +478,7 @@ Resolve-ArchiveSource -SelectedChannel $Channel -Repo 'sample/project' | Convert
                              str(UPDATER), channel], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     source = json.loads(result.stdout)
-    assert source['Tag'] == 'v2'
+    assert source['Tag'] == 'main'
     assert source['Commit'] == TEST_COMMIT
 
 

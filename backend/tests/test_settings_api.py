@@ -230,8 +230,9 @@ def test_delete_pexels_api_key_clears_runtime_secret_without_leak(client):
     assert pexels_api_key() is None
 
 
-def test_put_settings_accepts_canvas_section_from_full_setup_save(client):
-    response = client.put('/api/settings', json={'config': {'canvas': {}}})
+@pytest.mark.plugins('canvas')
+def test_put_settings_accepts_canvas_section_from_plugin_save(client):
+    response = client.put('/api/settings?plugin=canvas', json={'config': {'canvas': {}}})
     assert response.status_code == 200, response.get_json()
     # The merged defaults are applied on save (empty external-LoRA board list).
     assert response.get_json()['config']['canvas'] == {'external_loras': []}

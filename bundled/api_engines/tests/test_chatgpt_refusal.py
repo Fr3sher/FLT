@@ -444,6 +444,16 @@ def test_a_model_blaming_400_is_still_fatal_and_still_blames_the_model(app, monk
 
 # --- 5. the 400 that used to mean four things -------------------------------
 
+def test_a_400_naming_no_cause_stays_honestly_unexplained(app, monkeypatch):
+    """An unclassified provider response must not invent a cause or retry advice."""
+    from lds_api_engines import chatgpt_image
+
+    monkeypatch.setenv('OPENAI_API_KEY', KEY)
+    with patch('lds_api_engines.chatgpt_image.requests.post',
+               return_value=_openai_err('something went wrong')):
+        assert chatgpt_image.generate_variation(b'r', 'p', force_lane='api') is None
+
+
 def test_a_moderation_400_is_named_a_refusal_and_does_not_stop_the_batch(app, monkeypatch):
     """It used to return None: the tile said "empty response", which reads as an
     app failure. It is not — it is OpenAI declining, and it must stay per-row."""

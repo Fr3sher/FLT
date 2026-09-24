@@ -115,7 +115,7 @@ def main() -> int:
     language_model = getattr(model, "language_model", None) or _core.language_model
     # NF4 quantization breaks the vision attention out_proj; recreate it
     # as bfloat16 Linear (fpgaminer/joycaption issue #3).
-    att = vision_tower.vision_model.head.attention
+    att = vision_tower.head.attention
     att.out_proj = torch.nn.Linear(att.embed_dim, att.embed_dim,
                                    device=model.device, dtype=torch.bfloat16)
     _log("[joycaption] model loaded")
@@ -127,7 +127,7 @@ def main() -> int:
     image_seq_length = getattr(cfg, "image_seq_length", None) or 729
     eoh_id = tokenizer.convert_tokens_to_ids("<|end_header_id|>")
     eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
-    _emb = vision_tower.vision_model.embeddings.patch_embedding.weight
+    _emb = vision_tower.embeddings.patch_embedding.weight
     vision_dtype = _emb.dtype
     vision_device = _emb.device
     lang_device = language_model.get_input_embeddings().weight.device
