@@ -265,10 +265,10 @@ def test_a_replayed_run_keeps_every_stamped_training_flag():
     from lds_cloud_training.cloud_video_training import _relaunch_args
     args = _relaunch_args({'base_model': '', 'low_vram': True, 'do_i2v': True,
                            'sample_prompts': ['a wave'], 'distillation': 'off',
-                           'requested_gpu': 'A100 SXM4'})
+                           'requested_gpu': 'A100 SXM4', 'rank': 32})
     assert args == {'base_model': None, 'low_vram': True, 'do_i2v': True,
                     'sample_prompts': ['a wave'], 'distillation': 'off',
-                    'gpu_name': 'A100 SXM4'}
+                    'gpu_name': 'A100 SXM4', 'rank': 32}
 
 
 def test_previews_and_the_distillation_override_ride_the_stamp(

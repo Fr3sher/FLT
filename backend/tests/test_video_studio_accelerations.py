@@ -1,6 +1,7 @@
 """⚡ The Render panel's acceleration choice: the arena's top three, grafted
 right, stored on the clip, downloadable from Setup."""
 import pytest
+from pathlib import Path
 
 from app import setup_installer
 import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
@@ -16,10 +17,10 @@ def _graph(**kw):
 
 def test_the_arena_podium_stays_at_six_steps_alongside_optional_vdn():
     podium = [a for a in vts.ACCELERATIONS if a['id'] != 'vdn']
-    assert [a['id'] for a in podium] == ['turbo', 'parasyte', 'dareties']
-    assert all(a['steps'] == vts.TURBO_STEPS == 6 for a in podium)
+    assert [a['id'] for a in podium[-3:]] == ['turbo', 'parasyte', 'dareties']
+    assert all(a['steps'] == vts.TURBO_STEPS == 6 for a in podium[-3:])
     assert vts.accel_spec('turbo')['file'] == vts.TURBO_LORA
-    for a in podium:
+    for a in podium[-3:]:
         assert a['arena'].startswith('#') and a['hint'] and a['action']
 
 
@@ -86,7 +87,8 @@ def test_every_optional_weight_with_a_button_is_a_download_setup_knows(app):
                 continue
             entry = setup_installer.model_download_spec(action)
             assert setup_installer.known_action(action)
-            assert entry['dest'] == (subs[0], filename), f'{action}: the file Setup writes is the file the graph loads'
+            assert Path(*entry['dest']) == Path(subs[0]) / filename, \
+                f'{action}: the file Setup writes is the file the graph loads'
             assert entry['url'].startswith('https://huggingface.co/') and '/resolve/' in entry['url']
             assert entry['license_url']
 

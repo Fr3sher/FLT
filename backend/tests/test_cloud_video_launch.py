@@ -657,17 +657,16 @@ def test_a_replayed_run_keeps_every_stamped_training_flag():
     from lds_cloud_training.cloud_video_training import _relaunch_args
     args = _relaunch_args({'base_model': '', 'low_vram': True, 'do_i2v': True,
                            'sample_prompts': ['a wave'], 'distillation': 'off',
-                           'requested_gpu': 'A100 SXM4'})
+                           'requested_gpu': 'A100 SXM4', 'rank': 32})
     assert args == {'base_model': None, 'low_vram': True, 'do_i2v': True,
                     'sample_prompts': ['a wave'], 'distillation': 'off',
-                    'gpu_name': 'A100 SXM4'}
+                    'gpu_name': 'A100 SXM4', 'rank': 32}
 
 
 def test_previews_and_the_distillation_override_ride_the_stamp(
         app, tmp_path, monkeypatch):
     """Two launch-time levers, both stamped so the pod rebuild minutes later
-    replays the launch and not the present: `sample_prompts` (capped at 4 -
-    each preview is a full video generation on the paid GPU) and
+    replays the launch and not the present: all requested `sample_prompts` and
     `distillation: off`, which exists for MEASUREMENT - it is the only way to
     run one dataset with and without upstream's de-distillation recipe and
     compare the previews. 'auto' stamps nothing and keeps the gated default."""
@@ -677,17 +676,20 @@ def test_previews_and_the_distillation_override_ride_the_stamp(
         vid = _video_dataset(tmp_path, 'surf clips')
         monkeypatch.setattr(cvt, '_start_pod', lambda run: calls.append(run))
         out = cvt.launch_cloud_video_training(
-            'local', vid.id, steps=100, sample_prompts=['a wave', '  ', 'a dog'],
+            'local', vid.id, steps=100,
+            sample_prompts=['a wave', '  ', 'a dog', 'a cat', 'a bird', 'a boat'],
             distillation='off', _provision=lambda run: calls.append(run))
         from app.models import CloudTrainingRun
         run = db.session.get(CloudTrainingRun, out['run_id'])
         p = json.loads(run.train_params)
-        assert p['sample_prompts'] == ['a wave', 'a dog']    # blanks dropped
+        assert p['sample_prompts'] == ['a wave', 'a dog', 'a cat', 'a bird', 'a boat']
         assert p['distillation'] == 'off'
+        run.status = 'done'
+        db.session.commit()
         with pytest.raises(ValueError):
             cvt.launch_cloud_video_training(
                 'local', vid.id, steps=100,
-                sample_prompts=['1', '2', '3', '4', '5'],
+                sample_prompts='not a list',
                 _provision=lambda run: None)
         with pytest.raises(ValueError):
             cvt.launch_cloud_video_training(
@@ -707,7 +709,7 @@ def test_the_off_stamp_beats_a_capable_image_and_prompts_reach_the_config(
         run.train_params = json.dumps({
             'train_type': 'video', 'steps': 100,
             'target_profile': vid.target_profile, 'frames': vid.frames,
-            'distillation': 'off', 'sample_prompts': ['a wave at dusk']})
+            'distillation': 'off', 'sample_prompts': ['a wave at dusk'], 'rank': 32})
         db.session.commit()
         monkeypatch.setattr(ct.cfg, 'get', lambda k=None: {
             'video_image': 'vastai/ostris-ai-toolkit:x-2026-08-27-cuda-12.9'}
@@ -721,6 +723,7 @@ def test_the_off_stamp_beats_a_capable_image_and_prompts_reach_the_config(
         assert proc['sample']['prompts'] == ['a wave at dusk']
         assert proc['sample']['num_frames'] == vid.frames
         assert proc['sample']['fps'] == vid.fps
+        assert proc['network']['linear'] == 32
 
 
 def test_the_automatic_retry_of_a_video_run_goes_down_the_video_lane(

@@ -70,11 +70,12 @@ def test_nanobanana_raises_a_named_fatal_without_key(app, monkeypatch):
 
 def _sub_connected(monkeypatch):
     """Wire a fake connected subscription into chatgpt_image's oauth module."""
-    from lds_api_engines import chatgpt_oauth
+    from lds_api_engines import chatgpt_models, chatgpt_oauth
     monkeypatch.setattr(chatgpt_oauth, 'access_token', lambda force_refresh=False: 'at-x')
     monkeypatch.setattr(chatgpt_oauth, 'account_id', lambda: 'acc-x')
     monkeypatch.setattr(chatgpt_oauth, 'status',
                         lambda: {'connected': True, 'email': 'u@x.io', 'plan': 'plus'})
+    monkeypatch.setattr(chatgpt_models, 'resolve_model', lambda: 'gpt-5.4-mini')
 
 
 def _codex_ok_response():
@@ -151,13 +152,14 @@ def test_subscription_429_raises_quota_exceeded(app, monkeypatch):
 
 
 def test_subscription_401_refreshes_and_retries_once(app, monkeypatch):
-    from lds_api_engines import chatgpt_oauth
+    from lds_api_engines import chatgpt_models, chatgpt_oauth
     calls = []
     monkeypatch.setattr(chatgpt_oauth, 'access_token',
                         lambda force_refresh=False: calls.append(force_refresh) or 'at-x')
     monkeypatch.setattr(chatgpt_oauth, 'account_id', lambda: 'acc-x')
     monkeypatch.setattr(chatgpt_oauth, 'status',
                         lambda: {'connected': True, 'email': None, 'plan': None})
+    monkeypatch.setattr(chatgpt_models, 'resolve_model', lambda: 'gpt-5.4-mini')
     from lds_api_engines import chatgpt_image
     stale = MagicMock(status_code=401, text='expired', headers={'content-type': ''})
     with patch('lds_api_engines.chatgpt_image.requests.post',

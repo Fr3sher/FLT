@@ -8,8 +8,7 @@ REQUEST we build and how we read an answer we hand ourselves.
 The invariants, in order of how badly they hurt when broken:
   1. the model the user configured is the model actually SENT (a setting that
      doesn't reach the wire is worse than no setting at all);
-  2. a blank setting keeps the historical default — nobody's behaviour changes
-     because a field appeared;
+  2. a blank setting uses the v2 default while an explicit choice stays intact;
   3. the documented precedence holds, including for someone who had set the
      pre-existing environment variable: setting > env var > built-in default;
   4. a model the provider refuses fails with a NAMED cause that says it is the
@@ -133,19 +132,19 @@ def test_a_blank_setting_keeps_the_historical_nanobanana_model(app, monkeypatch,
 
 
 @pytest.mark.parametrize('blank', ['', '   '])
-def test_a_blank_setting_keeps_the_historical_chatgpt_model(app, monkeypatch, blank):
+def test_a_blank_setting_uses_the_v2_chatgpt_model(app, monkeypatch, blank):
     monkeypatch.setenv('OPENAI_API_KEY', OPENAI_KEY)
     monkeypatch.delenv('CHATGPT_IMAGE_MODEL', raising=False)
     from app import config as cfg
     from lds_api_engines import chatgpt_image
     with app.app_context():
         cfg.save_config({'engines': {'chatgpt_image_model': blank}})
-        assert chatgpt_image.get_image_model() == 'gpt-image-2' \
+        assert chatgpt_image.get_image_model() == 'gpt-image-2.5-sunburst' \
             == chatgpt_image.DEFAULT_IMAGE_MODEL
         with patch('lds_api_engines.chatgpt_image.requests.post',
                    return_value=_resp(200, _openai_ok())) as post:
             chatgpt_image.generate_variation(b'r', 'p')
-    assert post.call_args.kwargs['data']['model'] == 'gpt-image-2'
+    assert post.call_args.kwargs['data']['model'] == 'gpt-image-2.5-sunburst'
 
 
 def test_a_fresh_install_ships_the_two_model_settings_blank(app):
@@ -189,7 +188,7 @@ def test_nanobanana_precedence_is_setting_then_env_then_default(app, monkeypatch
     ('',                  'gpt-from-env', 'gpt-from-env'),
     ('   ',               'gpt-from-env', 'gpt-from-env'),
     ('gpt-from-settings', None,           'gpt-from-settings'),
-    ('',                  None,           'gpt-image-2'),
+    ('',                  None,           'gpt-image-2.5-sunburst'),
 ])
 def test_chatgpt_precedence_is_setting_then_env_then_default(app, monkeypatch,
                                                              setting, env, expected):

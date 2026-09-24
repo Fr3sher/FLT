@@ -144,7 +144,7 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
                                 resume_ckpt_paths=None, resume_step=None,
                                 parent_run_id=None, auto_retry_of=None,
                                 auto_retry_count=0, allow_parallel_run=False,
-                                _provision=None) -> dict:
+                                _provision=None, rank=16) -> dict:
     """Rent a pod and train a LoRA on a built video dataset.
 
     `low_vram` defaults to FALSE here and True in the builder, and the asymmetry
@@ -195,7 +195,14 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
     # Keep the complete requested sample list in the launch stamp. Each
     # preview adds a full generation on the rented GPU; the UI explains the
     # cost and leaves sampling off by default.
-    prompts = [str(x).strip() for x in (sample_prompts or []) if str(x).strip()]
+    if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= 256:
+        raise ValueError('LoRA rank must be an integer between 1 and 256')
+    if sample_prompts is not None and (not isinstance(sample_prompts, list)
+                                       or any(not isinstance(p, str) for p in sample_prompts)):
+        raise ValueError('sample_prompts must be a list of text prompts')
+    prompts = [p.strip() for p in (sample_prompts or []) if p.strip()]
+    if any(len(p) > 2000 for p in prompts):
+        raise ValueError('each sample prompt must be at most 2000 characters')
     if distillation not in ('auto', 'off'):
         raise ValueError("distillation must be 'auto' or 'off'")
     # Built HERE, before the reservation, purely so an unsupported target raises
@@ -204,7 +211,8 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
     # params at pod boot.
     video_training.build_job_config(
         ds, str(ds.output_dir), n_steps, training_folder='__POD__',
-        base_model=base_model, low_vram=low_vram, do_i2v=bool(do_i2v),
+        base_model=base_model, low_vram=low_vram, do_i2v=bool(do_i2v), rank=rank,
+        sample_prompts=prompts,
         # The validation build needs the SHAPE, not the pod paths — local dirs
         # prove the target's precondition; the monitor rebuilds with pod names.
         control_dirs=[str(d) for d in _ref_dirs] or None)
@@ -226,6 +234,7 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
                 'steps': n_steps,
                 'base_model': base_model or '',
                 'low_vram': bool(low_vram),
+                'rank': rank,
                 # Stamped like low_vram: the pod rebuild happens minutes later
                 # and must not re-read a toggle the user may have moved since.
                 'do_i2v': bool(do_i2v),
@@ -308,6 +317,7 @@ def _relaunch_args(p) -> dict:
         'sample_prompts': p.get('sample_prompts') or None,
         'distillation': p.get('distillation') or 'auto',
         'gpu_name': p.get('requested_gpu'),
+        'rank': p.get('rank', 16),
     }
 
 

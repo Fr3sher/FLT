@@ -80,11 +80,14 @@ setuptools==84.0.0
 # installs them into dedicated environments on demand (see requirements-ml.txt).
 # A handful of suites — test_watermarks.py above all — exercise real numpy/OpenCV
 # pixel maths and the Telea fallback that runs when LaMa is absent, so these
-# (and ONLY these in the lightweight base: Torch has its own overlay, while
+# (and only these plus PyAV in the lightweight base: Torch has its own overlay, while
 # LaMa stays absent) make those tests run for real while keeping "LaMa absent"
 # true.
 numpy>=1.26,<2
 opencv-python-headless>=4.9
+# Video import contracts encode and decode real clips; the Video plugin normally
+# installs this host extra, while CI's shared base must declare it explicitly.
+av>=13,<19
 
 # safetensors belongs HERE and not in the Torch overlay: that overlay carries
 # `--index-url .../whl/cpu`, so anything added to it resolves from PyTorch's

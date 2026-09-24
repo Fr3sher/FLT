@@ -1493,7 +1493,7 @@ def test_resume_run_matches_opposite_separator_whitelist(app, monkeypatch):
             ],
         )
         monkeypatch.setattr(lts, '_target_node_classes', lambda: None)
-        monkeypatch.setattr(lts, 'get_zimage_models', lambda: [])
+        monkeypatch.setattr(lts, 'get_zimage_models', lambda: ['test-zimage-base'])
         monkeypatch.setattr(lts, '_build_cell_workflow', lambda *_args, **_kwargs: {'1': {}})
         monkeypatch.setattr(lts, '_enqueue_cell', lambda *_args, **_kwargs: 'resume-job')
 

@@ -36,14 +36,24 @@ def _rental_released(run):
         return True
     try:
         params = json.loads(run.train_params or '{}')
-        receipt = params.get('_lds_rental_cleanup')
         context = params.get('_lds_rental_context')
         fingerprint = context.get('fingerprint')
     except (TypeError, ValueError, AttributeError):
         return False
-    return (isinstance(fingerprint, str) and len(fingerprint) == 64
-            and all(c in '0123456789abcdef' for c in fingerprint)
-            and context == {'version': 1, 'run_id': run.id, 'fingerprint': fingerprint}
+    if not (isinstance(fingerprint, str) and len(fingerprint) == 64
+            and all(c in '0123456789abcdef' for c in fingerprint)):
+        return False
+    # The bundled Cloud product records a durable release on its v2 identity.
+    # Keep accepting the earlier cleanup receipt for existing installations.
+    if context.get('version') == 2:
+        return (context.get('run_id') == run.id
+                and context.get('label') == run.vast_label
+                and type(context.get('pending')) is bool and not context['pending']
+                and type(context.get('released')) is bool and context['released']
+                and type(context.get('delete_pending')) is bool and not context['delete_pending']
+                and isinstance(context.get('released_at'), str) and bool(context['released_at']))
+    receipt = params.get('_lds_rental_cleanup')
+    return (context == {'version': 1, 'run_id': run.id, 'fingerprint': fingerprint}
             and receipt == {'version': 2, 'run_id': run.id,
                             'instance_id': run.vast_instance_id, 'label': run.vast_label,
                             'credential': fingerprint})

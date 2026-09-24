@@ -427,7 +427,8 @@ def test_video_http_cannot_erase_pending_rental_provenance(host, monkeypatch):
         assert ct.reconcile_orphans(app) == 1
         monkeypatch.setattr(ct, 'run_checkpoint_files', lambda _r: {})
         monkeypatch.setattr(ct, 'checkpoint_store_dir', lambda _r: None)
-    assert app.test_client().delete(route).status_code == 200
+    final_response = app.test_client().delete(route)
+    assert final_response.status_code == 200, final_response.get_json()
     with app.app_context():
         assert ct.db.session.get(ct.CloudTrainingRun, run_id) is None
 
@@ -452,7 +453,7 @@ def test_video_local_checkpoints_work_with_cloud_off(host, monkeypatch):
     monkeypatch.setattr(vck.vtl, 'local_run_name', lambda _ds: 'fixture')
     monkeypatch.setattr(vck.vtl, 'save_root', lambda _ds: '/fixture')
     monkeypatch.setattr(vck.vtl, 'video_training_progress', lambda *_a: {'active': False})
-    ds = SimpleNamespace(id=1, user_id='local')
+    ds = SimpleNamespace(id=1, user_id='local', best_settings=None)
     with host[0].app_context():
         assert vck.local_group(ds, deployed={})['steps'][0]['step'] == 100
         assert facade.group_saves_by_step({'fixture_000000100.safetensors': '/fixture/local'})
@@ -491,7 +492,7 @@ def test_video_http_refuses_foreign_user_or_dataset_type(host, owner, table):
         assert ct.db.session.get(ct.CloudTrainingRun, run_id) is not None
 
 
-def test_video_http_off_refuses_cloud_mutation_but_serves_local_catalog(host):
+def test_video_http_off_deletes_released_history_and_serves_local_catalog(host):
     activate(host, {'video'})
     from app.models import VideoDataset, CloudTrainingRun
     from app.extensions import db
@@ -506,7 +507,7 @@ def test_video_http_off_refuses_cloud_mutation_but_serves_local_catalog(host):
         route = f'/api/video-dataset/{video.id}/train/cloud/run/{run.id}'
     client = host[0].test_client()
     response = client.delete(route)
-    assert response.status_code == 409 and 'disabled' in response.json['error']
+    assert response.status_code == 200
     assert client.get('/api/video/targets').status_code == 200
 
 
