@@ -1,4 +1,4 @@
-# Getting help & reporting problems
+const e=`# Getting help & reporting problems
 
 Stuck, found a bug, or missing a feature? Two doors, both watched:
 
@@ -50,3 +50,4 @@ you time and you want to help development, you can sponsor it on
 monthly, and 100% of it goes to the project (GitHub charges no fees).
 The best free ways to help are just as welcome: report bugs, share ideas on
 Discord, and star the repo.
+`;export{e as default};

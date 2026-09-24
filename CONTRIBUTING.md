@@ -147,9 +147,9 @@ branch is now `v1`, read-only and no longer maintained.
 
 ## Already running your own fork?
 
-Several people run a modified copy, and that is exactly what the MIT licence is
-for — take it wherever you need it, no permission required, no obligation to
-send anything back.
+Several people run a modified copy. The current [PolyForm Noncommercial
+license](LICENSE) allows noncommercial use, changes and distribution when its
+terms and notices are preserved. Commercial use requires separate permission.
 
 But if you have fixed something along the way that would help everyone, we would
 genuinely like it. A fork usually carries two very different kinds of change:
