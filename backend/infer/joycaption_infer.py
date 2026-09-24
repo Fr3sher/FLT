@@ -1,22 +1,20 @@
-"""JoyCaption Beta One — batch image captioner (uncensored, prose).
+"""JoyCaption Beta One batch image captioner (uncensored prose).
 
-Lancé par le PYTHON DU VENV ai-toolkit (torch+transformers+bitsandbytes), PAS le
-Python 3.14 de Flask — même pattern que convert_comfy_zimage_to_diffusers.py. Flask
-appelle ce script en subprocess pour capter un dataset LoRA entier en UN seul
-chargement de modèle (charger le 8B NF4 par image serait inexploitable).
+Run with ai-toolkit's Python venv (torch/transformers/bitsandbytes), not
+Flask's Python 3.14, like convert_comfy_zimage_to_diffusers.py. Flask
+uses one subprocess/model load for the entire dataset; loading the
+8B NF4 model per image would be impractical.
 
-Inférence basée sur le script OFFICIEL `scripts/batch-caption.py` livré avec le repo
-JoyCaption : preprocessing image MANUEL (resize 384², normalize 0.5) + AutoTokenizer +
-expansion manuelle des image-tokens. C'est ce qui rend l'inférence ROBUSTE aux versions
-de transformers (le chemin `AutoProcessor(text, images)` casse en transformers 5.x :
-« mat1 and mat2 shapes cannot be multiplied »). Inclut le fix NF4 du vision head
-(out_proj recréé, cf. github fpgaminer/joycaption issue #3).
+Based on JoyCaption's official scripts/batch-caption.py: manual
+384-square image preprocessing with 0.5 normalization, AutoTokenizer
+and manual image-token expansion. This remains robust across
+transformers versions; AutoProcessor(text, images) breaks on 5.x with
+a matrix-shape error. Includes the NF4 vision-head out_proj repair
+(fpgaminer/joycaption issue #3).
 
-Protocole : lit un JSON sur stdin :
-    {"images": ["C:/.../a.png", ...], "prompt": "<consigne>", "max_tokens": 300}
-Imprime sur stdout UNE ligne JSON : {"captions": {path: caption}, "errors": {path: msg}}.
-Logs/progress → stderr (pour ne pas polluer la sortie JSON).
-"""
+stdin JSON: {images: [paths], prompt: instruction, max_tokens: 300}.
+stdout: one JSON line {captions: {path: caption}, errors: {path: message}}.
+Logs/progress go to stderr, keeping JSON output clean."""
 from __future__ import annotations
 
 import io
@@ -55,7 +53,7 @@ def _model_is_cached() -> bool:
 
 
 def _trim(input_ids, eoh_id, eot_id):
-    """Retire le prompt (tout jusqu'au dernier <|end_header_id|>) puis la fin (<|eot_id|>)."""
+    """Remove the prompt (through the last <|end_header_id|>) and ending (<|eot_id|>)."""
     while True:
         try:
             i = input_ids.index(eoh_id)
@@ -110,14 +108,14 @@ def main() -> int:
     _dtype_kw = 'dtype' if int(transformers.__version__.split('.')[0]) >= 5 else 'torch_dtype'
     model = LlavaForConditionalGeneration.from_pretrained(
         MODEL_ID, quantization_config=nf4, **{_dtype_kw: "bfloat16"}).eval()
-    # transformers 5.x déplace les sous-modules sous `.model` (vision_tower/language_model
-    # ne sont plus top-level). On résout des deux façons pour rester compatible 4.x/5.x.
+    # transformers 5.x moves vision_tower/language_model under .model.
+    # Resolve both layouts for 4.x/5.x compatibility.
     _core = getattr(model, "model", model)
     vision_tower = getattr(model, "vision_tower", None) or _core.vision_tower
     language_model = getattr(model, "language_model", None) or _core.language_model
-    # Fix NF4 : la quantization casse l'out_proj de l'attention du vision head → on le
-    # recrée en Linear bfloat16 (cf. fpgaminer/joycaption issue #3).
-    att = vision_tower.vision_model.head.attention
+    # NF4 quantization breaks the vision attention out_proj; recreate it
+    # as bfloat16 Linear (fpgaminer/joycaption issue #3).
+    att = vision_tower.head.attention
     att.out_proj = torch.nn.Linear(att.embed_dim, att.embed_dim,
                                    device=model.device, dtype=torch.bfloat16)
     _log("[joycaption] model loaded")
@@ -129,7 +127,7 @@ def main() -> int:
     image_seq_length = getattr(cfg, "image_seq_length", None) or 729
     eoh_id = tokenizer.convert_tokens_to_ids("<|end_header_id|>")
     eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
-    _emb = vision_tower.vision_model.embeddings.patch_embedding.weight
+    _emb = vision_tower.embeddings.patch_embedding.weight
     vision_dtype = _emb.dtype
     vision_device = _emb.device
     lang_device = language_model.get_input_embeddings().weight.device
@@ -138,7 +136,7 @@ def main() -> int:
              {"role": "user", "content": prompt}]
     convo_string = tokenizer.apply_chat_template(convo, tokenize=False, add_generation_prompt=True)
     convo_tokens = tokenizer.encode(convo_string, add_special_tokens=False, truncation=False)
-    # Expansion manuelle des image-tokens (image_seq_length copies).
+    # Expand image tokens manually into image_seq_length copies.
     input_tokens = []
     for t in convo_tokens:
         input_tokens.extend([image_token_id] * image_seq_length if t == image_token_id else [t])
@@ -175,7 +173,7 @@ def main() -> int:
             # next — possibly long — generate() call.
             print(json.dumps({"i": i, "path": path, "caption": caption}), flush=True)
             _log(f"[joycaption] {i}/{len(images)} ok ({len(caption)} chars)")
-        except Exception as e:  # une image ratée ne casse pas le batch
+        except Exception as e:  # One failed image must not break the batch.
             errors[path] = str(e)
             print(json.dumps({"i": i, "path": path, "error": str(e)}), flush=True)
             _log(f"[joycaption] {i}/{len(images)} ERROR: {e}")

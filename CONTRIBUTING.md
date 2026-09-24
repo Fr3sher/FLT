@@ -130,8 +130,11 @@ A branch named for the job means someone is on it. If it looks like yours, say
 so in the issue or on Discord — overlapping is easy to sort out beforehand and
 miserable to discover afterwards. If nothing matches, it is free.
 
-`main` stays releasable at all times. A branch may be broken while it cooks;
-`main` may not.
+Target pull requests at `v2`, the maintained default branch. The former `main`
+branch is now `v1`, read-only and no longer maintained.
+
+`v2` stays releasable at all times. A branch may be broken while it cooks;
+`v2` may not.
 
 ## Pull requests
 
@@ -144,9 +147,9 @@ miserable to discover afterwards. If nothing matches, it is free.
 
 ## Already running your own fork?
 
-Several people run a modified copy, and that is exactly what the MIT licence is
-for — take it wherever you need it, no permission required, no obligation to
-send anything back.
+Several people run a modified copy. The current [PolyForm Noncommercial
+license](LICENSE) allows noncommercial use, changes and distribution when its
+terms and notices are preserved. Commercial use requires separate permission.
 
 But if you have fixed something along the way that would help everyone, we would
 genuinely like it. A fork usually carries two very different kinds of change:

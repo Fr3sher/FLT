@@ -9,10 +9,14 @@ The line: THE MASTER IS NEVER SENT TO COMFYUI. Not by a button, not by an
 endpoint, not by a filename that happens to sort first. Several tests here exist
 only to hold that.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 import os
 
 import pytest
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _dense_run(dataset_id, tmp_path, *, files=(), status='done',
@@ -55,7 +59,7 @@ def _lora_run(dataset_id, tmp_path):
 # --- what the lane lists ---------------------------------------------------------
 
 def test_a_lora_only_dataset_has_no_full_models(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         _lora_run(1, tmp_path)
         assert da.list_dense_models(1) == []
@@ -64,7 +68,7 @@ def test_a_lora_only_dataset_has_no_full_models(app, tmp_path):
 def test_a_hub_only_run_is_listed_with_no_local_file(app, tmp_path):
     """Every dense run trained before the local delivery is in this state. Hiding
     those is exactly what made the dense lane invisible."""
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         _dense_run(2, tmp_path, delivery='hub')
         [entry] = da.list_dense_models(2)
@@ -78,7 +82,7 @@ def test_a_hub_only_run_is_listed_with_no_local_file(app, tmp_path):
 def test_a_delivered_run_names_the_master_by_the_shared_rule(app, tmp_path):
     """`dense_weights.pick_master` decides, here as everywhere: the FINAL save
     beats every step snapshot, even though it sorts before them."""
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         _dense_run(3, tmp_path, files=(
             ('Krea_full_x.safetensors', 40),                 # the final
@@ -95,7 +99,7 @@ def test_a_delivered_run_names_the_master_by_the_shared_rule(app, tmp_path):
 
 
 def test_the_fp8_twin_is_never_mistaken_for_the_master(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         _dense_run(4, tmp_path, files=(('Krea_full_x_fp8.safetensors', 20),))
         [entry] = da.list_dense_models(4)
@@ -104,7 +108,7 @@ def test_the_fp8_twin_is_never_mistaken_for_the_master(app, tmp_path):
 
 
 def test_the_entry_carries_the_raw_sampler_settings_and_the_trainer_stamp(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         _dense_run(5, tmp_path, files=(('Krea_full_x.safetensors', 40),))
         [entry] = da.list_dense_models(5)
@@ -115,7 +119,7 @@ def test_the_entry_carries_the_raw_sampler_settings_and_the_trainer_stamp(app, t
 
 
 def test_an_active_run_offers_nothing_yet(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         _dense_run(6, tmp_path, status='training',
                    files=(('Krea_full_x.safetensors', 40),))
@@ -127,7 +131,7 @@ def test_an_active_run_offers_nothing_yet(app, tmp_path):
 
 
 def test_quantizing_is_offered_only_when_there_is_no_twin_yet(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         _dense_run(7, tmp_path, files=(('Krea_full_x.safetensors', 40),))
         assert da.list_dense_models(7)[0]['can_quantize'] is True
@@ -137,7 +141,7 @@ def test_quantizing_is_offered_only_when_there_is_no_twin_yet(app, tmp_path):
 
 
 def test_the_family_filter_does_not_hide_a_run_with_no_stamped_family(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         _dense_run(9, tmp_path, files=(('Krea_full_x.safetensors', 40),),
                    train_type=None)
@@ -162,7 +166,7 @@ def test_the_endpoint_carries_the_lane(app, client, tmp_path):
 def test_sending_refuses_a_run_that_has_only_a_master(app, tmp_path):
     """The master is 26 GB of the wrong format. There is no flag, no override and
     no filename that turns this refusal into a copy."""
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _dense_run(10, tmp_path, files=(('Krea_full_x.safetensors', 40),))
         plan = da.send_plan(10, run.id)
@@ -173,7 +177,7 @@ def test_sending_refuses_a_run_that_has_only_a_master(app, tmp_path):
 
 
 def test_the_send_plan_only_ever_names_the_twin(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _dense_run(11, tmp_path, files=(('Krea_full_x.safetensors', 40),
                                               ('Krea_full_x_fp8.safetensors', 20)))
@@ -188,7 +192,7 @@ def test_the_send_plan_only_ever_names_the_twin(app, tmp_path):
 
 
 def test_sending_lands_the_twin_and_says_how(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _dense_run(12, tmp_path, files=(('Krea_full_x_fp8.safetensors', 20),))
         out = da.send_to_comfyui(app, 12, run.id)
@@ -210,7 +214,7 @@ def test_sending_lands_the_twin_and_says_how(app, tmp_path):
 
 
 def test_sending_never_overwrites_a_file_already_there(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _dense_run(13, tmp_path, files=(('Krea_full_x_fp8.safetensors', 20),))
         da.send_to_comfyui(app, 13, run.id)
@@ -222,7 +226,8 @@ def test_sending_never_overwrites_a_file_already_there(app, tmp_path):
 def test_a_twin_ComfyUI_really_lists_is_testable_in_the_studio(app, tmp_path, monkeypatch):
     """The other half of the pair: when the destination IS a ComfyUI folder, the
     twin gets a loader-relative name and the Studio link may appear."""
-    from app.services import comfy_model_paths, dense_artifacts as da
+    from app.services import comfy_model_paths
+    from lds_cloud_training import dense_artifacts as da
     comfy = tmp_path / 'ComfyUI' / 'models' / 'diffusion_models'
     comfy.mkdir(parents=True)
     monkeypatch.setattr(comfy_model_paths, 'search_roots',
@@ -240,7 +245,8 @@ def test_the_store_sitting_inside_a_model_root_is_not_a_deployment(app, tmp_path
     """A checkpoint store declared as a model root would make every twin look
     deployed — and hide the one action that matters."""
     from app import config as cfg
-    from app.services import comfy_model_paths, dense_artifacts as da
+    from app.services import comfy_model_paths
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         store = str(cfg.checkpoints_root(create=True))
         monkeypatch.setattr(comfy_model_paths, 'search_roots',
@@ -255,7 +261,7 @@ def test_the_store_sitting_inside_a_model_root_is_not_a_deployment(app, tmp_path
 
 
 def test_a_run_of_another_dataset_is_refused(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _dense_run(14, tmp_path, files=(('Krea_full_x_fp8.safetensors', 20),))
         assert da.send_plan(99, run.id)['ok'] is False
@@ -264,7 +270,7 @@ def test_a_run_of_another_dataset_is_refused(app, tmp_path):
 
 
 def test_a_lora_run_cannot_be_driven_through_this_lane(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _lora_run(15, tmp_path)
         with pytest.raises(da.DenseArtifactError):
@@ -274,7 +280,7 @@ def test_a_lora_run_cannot_be_driven_through_this_lane(app, tmp_path):
 # --- the trash --------------------------------------------------------------------
 
 def test_deleting_moves_the_file_to_the_trash_and_the_lane_follows(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _dense_run(16, tmp_path, files=(('Krea_full_x.safetensors', 40),
                                               ('Krea_full_x_fp8.safetensors', 20)))
@@ -287,7 +293,7 @@ def test_deleting_moves_the_file_to_the_trash_and_the_lane_follows(app, tmp_path
 
 
 def test_deleting_is_whitelisted_against_this_run_only(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _dense_run(17, tmp_path, files=(('Krea_full_x.safetensors', 40),))
         for bad in ('nope.safetensors', '../../secret.safetensors',
@@ -297,7 +303,7 @@ def test_deleting_is_whitelisted_against_this_run_only(app, tmp_path):
 
 
 def test_deleting_is_refused_while_the_run_is_working(app, tmp_path):
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _dense_run(18, tmp_path, status='training',
                          files=(('Krea_full_x.safetensors', 40),))

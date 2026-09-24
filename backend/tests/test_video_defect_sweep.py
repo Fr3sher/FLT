@@ -18,8 +18,11 @@ import json
 
 import pytest
 
-from app.services import video_defect_sweep as sweep
-from app.services import video_metrics, video_probe
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_defect_sweep as sweep
+from lds_video import video_metrics, video_probe
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- captured output, from a real run on a forged file -----------------------------
@@ -632,7 +635,7 @@ def _bank(app, *, clips_per_source=(2,), probe_state='ok'):
     """A bank with one source per entry of `clips_per_source`. Returns
     (bank_id, [[clip ids of source 0], ...])."""
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -657,7 +660,7 @@ def _bank(app, *, clips_per_source=(2,), probe_state='ok'):
 
 
 def _summaries(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return {c.id: (json.loads(c.metrics_json) if c.metrics_json else {})
                 for c in VideoClip.query.filter_by(bank_id=bank_id).all()}
@@ -774,7 +777,7 @@ def test_one_new_shot_puts_its_whole_file_back_in_the_queue(app, monkeypatch):
     file is what the one-decode argument buys — and the alternative, leaving the
     new shot permanently unswept, is a silent hole."""
     from app.extensions import db
-    from app.models import VideoClip, VideoSource
+    from lds_video.models import VideoClip, VideoSource
     bank_id, per_source = _bank(app, clips_per_source=(2,))
     calls = []
     _fake_sweep(monkeypatch, calls)
@@ -815,7 +818,7 @@ def test_a_broken_file_costs_that_file_and_leaves_its_shots_in_the_queue(app, mo
 def test_the_pass_keeps_every_measurement_the_other_passes_made(app, monkeypatch):
     """metrics_json is shared with five other passes; this one must add to it."""
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     bank_id, per_source = _bank(app, clips_per_source=(1,))
     _fake_sweep(monkeypatch)
 
@@ -853,7 +856,7 @@ def test_the_cuts_ship_with_no_number():
 
 
 def test_the_threshold_reader_hands_the_new_cuts_through(app):
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     with app.app_context():
         reader = svc.metric_thresholds()
     for key in ('dup_frames_max', 'block_max', 'blur_max'):

@@ -6,6 +6,7 @@ import PinokioUpdateInstructions from '../common/PinokioUpdateInstructions'
 import { installMode, zipUpdateHeadline, progressLabel, progressPercent } from './updateStatus'
 import { Card } from './primitives'
 import { versionLabel } from '../../utils/versionLabel'
+import UsageStatisticsCard from './UsageStatisticsCard'
 
 /* In-app updater: "Check for updates" hits the git-aware check (commits-behind for a
    clone, release tag for a packaged build). "Update & restart" pulls (git) or downloads
@@ -19,11 +20,11 @@ function UpdatesCard() {
   const [phase, setPhase] = useState('')     // '' | 'pulling' | 'restarting'
   const [progress, setProgress] = useState(null)   // ZIP mode: {phase, downloaded, total}
 
-  // Passive check on mount (cached server-side, no git fetch): the card shows
-  // the current build immediately instead of waiting for a manual check.
+  // Same cached Git/release check as the nav badge and banner, so a Git clone
+  // never advertises a release ZIP instead of its configured branch.
   useEffect(() => {
     let alive = true
-    apiFetch('/api/update/check')
+    apiFetch('/api/update/check?auto=1', { background: true })
       .then((d) => { if (alive) setStatus((prev) => prev || d) })
       .catch(() => { /* best-effort — the manual button stays available */ })
     return () => { alive = false }
@@ -177,7 +178,7 @@ function UpdatesCard() {
                 <span aria-hidden>⬆</span>{' '}
                 Update available{s.latest ? ` — v${s.latest}` : ''}. The running container cannot replace its own image.
               </p>
-              <DockerUpdateInstructions />
+              <DockerUpdateInstructions status={s} />
             </div>
           ) : pinokioMode && s.update_available ? (
             <div className="space-y-2">
@@ -284,6 +285,7 @@ function LogViewer() {
 export default function MaintenanceSection() {
   return (
     <div className="space-y-6">
+      <UsageStatisticsCard />
       <UpdatesCard />
       <DiagnosticReport />
       <LogViewer />

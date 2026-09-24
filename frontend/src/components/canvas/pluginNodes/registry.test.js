@@ -1,6 +1,9 @@
 import test from 'node:test';
+import { installRuntimeHost } from '../../../../tests/support/runtimeHost.mjs';
+
+test.beforeEach(installRuntimeHost);
 import assert from 'node:assert/strict';
-import { PLUGIN_NODE_TYPES, nodeKey, knownType } from './registry.js';
+import { BOARD_NODE_TYPES as PLUGIN_NODE_TYPES, nodeKey, knownType } from "../../../../../bundled/canvas/frontend/components/canvas/boardNodes/registry.js";
 
 test('external-lora is a registered type with the full contract', () => {
   const t = PLUGIN_NODE_TYPES['external-lora'];

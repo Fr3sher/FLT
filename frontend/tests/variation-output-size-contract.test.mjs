@@ -71,9 +71,9 @@ test('the dial sits outside both engine tuning blocks', () => {
   assert.ok(dial < presets, 'the dial belongs above the shot cards');
 });
 
-test('the panel shows the dial for either local engine, never only for one', () => {
-  const guard = panel.indexOf('{(isKlein || isKrea)');
-  assert.ok(guard > -1, 'the shared dial needs a guard naming BOTH local engines');
+test('the panel shows the dial for every selected available local engine, including plugins', () => {
+  const guard = panel.indexOf('{localEngineIds().some((id) => engines.includes(id) && available[id])');
+  assert.ok(guard > -1, 'the shared dial must use the local engine catalog');
   const dial = panel.indexOf('variation-output-size-dial');
   assert.ok(guard < dial && dial < panel.indexOf('/>Klein tuning'),
     'the dial must sit inside that shared guard, above the engine tuning blocks');

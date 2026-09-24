@@ -1,41 +1,23 @@
-// Historique des prompts de test : une BANDE des plus récents + la porte vers
-// 📚 Saved prompts, qui porte tout le reste.
-//
-// CE QUI A CHANGÉ ET POURQUOI (2026-09-01). Ce composant rendait la totalité de
-// l'historique d'un bloc — 167 entrées sur une install réelle — en vignettes de
-// 32×40 px avec ~30 caractères de prompt, sans hauteur bornée ni recherche. À
-// cette largeur le texte ne distinguait rien (62 de ces 167 entrées partageaient
-// leurs 30 premiers caractères avec une autre), donc la seule chose capable
-// d'identifier un prompt était son image — et c'est elle qu'on avait réduite au
-// plus petit format de l'app, sept fois plus petite que les propres résultats du
-// Studio (`ResultTile`, 80×112) et quatorze fois plus petite que le navigateur
-// de prompts 🌐 Civitai (`CivitaiBrowserModal`, 112×160), pour exactement le
-// même geste : choisir un prompt en regardant ce qu'il produit.
-//
-// La bande garde donc les quelques derniers, à une taille où on les reconnaît,
-// et le mur devient une fenêtre — cherchable, où le prompt se lit en entier.
-//
-// 📝 LOT — chaque carte porte une case à cocher. Cocher n'écrit RIEN dans le
-// champ prompt (c'est le rôle du clic sur la carte, inchangé) : la coche décrit
-// ce que le prochain lancement doit rejouer, une génération par prompt coché,
-// avec les réglages courants du panneau. Aucune case cochée = le panneau se
-// comporte exactement comme avant, prompt du champ compris.
-//
-// Le composant est monté par les DEUX surfaces (Test Studio du dataset et
-// panneau « Generate from the board » du canvas) via PromptField/RunSetupPanel :
-// la bande, la fenêtre et le lot existent des deux côtés par construction, pas
-// par duplication.
+// Prompt history shows a STRIP of recent items and opens Saved prompts for the rest. The
+// 2026-09-01 redesign replaces an unbounded wall of 167 entries with 32x40 thumbnails and about 30
+// prompt characters, no search; 62 entries shared their first 30 characters, leaving tiny images
+// as the only identifier. Those images were seven times smaller than Studio ResultTile (80x112)
+// and fourteen times smaller than CivitaiBrowserModal (112x160). Keep a few recognizable recent
+// images and move the full searchable history into a dialog with complete prompts. Each card's
+// BATCH checkbox changes only the next launch's replay selection; clicking the card still fills
+// the prompt. Checked prompts generate with current settings; none checked preserves the normal
+// field behavior. Both Test Studio and Canvas mount this through PromptField/RunSetupPanel,
+// sharing strip, browser and batch without duplication.
 import { useState } from 'react';
 import { HelpBadge } from '../../../help/HelpMode';
 import { datasetThumbUrl } from '../../../utils/datasetThumbUrl';
 import SavedPromptsModal from './SavedPromptsModal';
 import { normalizeSavedPrompt } from './savedPrompts';
 
-// Combien de prompts restent sous la main, sans ouvrir la fenêtre. Six tient sur
-// une rangée en large et sur deux à 400 px, et couvre le cas courant (« reprends
-// celui d'il y a deux essais ») ; au-delà, chercher bat faire défiler.
+// Keep six prompts immediately available: one wide row or two at 400 px, enough for returning to a
+// recent attempt. Beyond that, searching beats scrolling.
 const INLINE = 6;
-// Barreau de vignette : la tuile fait 96×128 CSS, 256 la sert nette en écran 2×.
+// Thumbnail size: 96x128 CSS pixels; a 256-pixel source stays sharp at 2x density.
 const THUMB_SIDE = 256;
 
 export default function RecentPrompts({
@@ -43,8 +25,8 @@ export default function RecentPrompts({
   batch = null, onToggleBatch = null, onClearBatch = null,
 }) {
   const [browserOpen, setBrowserOpen] = useState(false);
-  // Le lot n'est proposé que si l'hôte l'accepte — un appelant qui ne passe pas
-  // onToggleBatch garde le composant sans cases à cocher, des deux côtés.
+  // Offer batching only when the host accepts it. Without onToggleBatch, neither surface shows
+  // checkboxes.
   const batchable = typeof onToggleBatch === 'function';
   const picked = Array.isArray(batch) ? batch : [];
   const total = items.length;
@@ -80,17 +62,14 @@ export default function RecentPrompts({
           const p = normalizeSavedPrompt(item);
           const sel = selectedPrompt === p.prompt;
           const inBatch = picked.includes(p.prompt);
-          // La carte porte la bordure ; cocher et supprimer sont des boutons
-          // POSÉS DESSUS (frères du bouton de rechargement, jamais imbriqués) —
-          // et toujours visibles, pas révélés au survol : il n'y a pas de survol
-          // sur un écran tactile.
+          // The card owns the border; checkbox and delete are OVERLAID buttons, siblings of the
+          // reload button rather than nested inside it. Keep them visible without hover because
+          // touchscreens have none.
           return (
             <div key={p.prompt}
-              // `shrink-0` : la tuile a une largeur voulue, pas négociable. Sans
-              // lui elle reste un élément flex compressible, et une rangée
-              // serrée la rognerait — une vignette qui rétrécit toute seule est
-              // exactement la panne que cette refonte corrige. Elle passe à la
-              // ligne, elle ne maigrit pas.
+              // shrink-0 preserves the intended tile width. Otherwise a tight flex row compresses
+              // thumbnails, recreating the defect this redesign fixes. Tiles wrap rather than
+              // shrink.
               className={`relative w-24 shrink-0 overflow-hidden rounded-lg border ${
                 inBatch
                   ? 'border-purple-400 bg-purple-500/25'
@@ -115,16 +94,14 @@ export default function RecentPrompts({
                     </span>
                   )}
                 </span>
-                {/* ⚠️ Le clamp est sur ce SPAN, jamais sur le bouton : mesuré en
-                    navigateur, `-webkit-line-clamp` est SANS EFFET sur un
-                    <button> (Blink refuse de lui donner un display -webkit-box)
-                    et la boîte grandit alors avec le texte. Sur un span à
-                    l'intérieur du bouton, il coupe correctement. Pas de `block`
-                    non plus : les deux utilitaires écrivent `display`.
-                    La hauteur est fixée EN PLUS du clamp — h-9 (36px) = py-1 ×2
-                    + 2 × leading 14px, un multiple exact de la ligne — pour que
-                    la coupe tombe entre deux lignes et jamais au milieu des
-                    lettres, quel que soit l'arrondi du navigateur. */}
+                {/*
+                 * Clamp this SPAN, never the button: measured in Blink, -webkit-line-clamp has no
+                 * effect on button because it rejects display:-webkit-box, letting the box grow
+                 * with text. An inner span clamps correctly. Do not also add block because both
+                 * utilities set display. Set h-9 (36px) as well: two py-1 paddings plus two 14px
+                 * lines make an exact line boundary, preventing clipping through letters despite
+                 * browser rounding.
+                 */}
                 <span className={`h-9 px-1 py-1 text-[0.625rem] leading-[0.875rem] line-clamp-2 ${
                   sel ? 'text-purple-200' : 'text-content-muted'}`}>
                   {p.prompt}
@@ -170,9 +147,10 @@ export default function RecentPrompts({
         </button>
       </div>
 
-      {/* Montée SEULEMENT à l'ouverture, pas rendue-puis-cachée : elle dessine
-          tout l'historique (~170 lignes) et elle lit le contexte des toasts.
-          Une fenêtre fermée ne doit coûter ni l'un ni l'autre à ses hôtes. */}
+      {/*
+       * Mount ONLY while open, rather than rendering hidden: it draws roughly 170 history rows and
+       * reads toast context. Closed dialogs should impose neither cost on hosts.
+       */}
       {browserOpen && (
         <SavedPromptsModal
           open onClose={() => setBrowserOpen(false)}

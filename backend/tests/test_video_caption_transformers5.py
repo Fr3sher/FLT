@@ -14,8 +14,8 @@ holds it to the model handshake.
 import ast
 from pathlib import Path
 
-INFER = Path(__file__).resolve().parents[1] / 'infer' / 'video_caption_infer.py'
-WORKER = Path(__file__).resolve().parents[1] / 'app' / 'services' / 'video_caption_worker.py'
+INFER = Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'infer' / 'video_caption_infer.py'
+WORKER = Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'lds_video' / 'video_caption_worker.py'
 
 
 def _code_without_docstrings(path):

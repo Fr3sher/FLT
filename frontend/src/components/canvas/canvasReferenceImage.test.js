@@ -13,9 +13,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const canvas = fs.readFileSync(new URL('./LineageCanvas.jsx', import.meta.url), 'utf8');
+const canvas = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
 const page = fs.readFileSync(
-  new URL('../../pages/CanvasPage.jsx', import.meta.url), 'utf8');
+  new URL("../../../../bundled/canvas/frontend/pages/CanvasPage.jsx", import.meta.url), 'utf8');
 const lightbox = fs.readFileSync(
   new URL('../shared/GeneratedImageLightbox.jsx', import.meta.url), 'utf8');
 

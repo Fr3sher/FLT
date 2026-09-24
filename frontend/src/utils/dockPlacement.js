@@ -1,20 +1,12 @@
 /** Where a bottom-left dock may sit, per route.
- *
- * Some screens already own the bottom of the window with a fixed bar. The Test
- * Studio's is the loud one: `StudioActionBar` is `fixed bottom-0 inset-x-0
- * z-[9960]` with an opaque background, so anything at `bottom-4` with an
- * ordinary z-index is not merely overlapped — it is invisible AND unclickable,
- * because the clicks land on the bar.
- *
- * This is not a new discovery. `StudioActionBar`'s own header still says the
- * old jobs FAB "est relevé au-dessus via PAGES_WITH_BOTTOM_BAR ('/studio')" —
- * that constant is gone from the codebase, the comment outlived it, and the
- * next thing to occupy that corner (the generation-queue dock, GitHub #44)
- * walked straight into the same wall. So the rule gets written down again,
- * here, with a test, instead of living in a comment about a deleted symbol.
- *
- * Raising the dock ABOVE the bar is the wrong answer: it would cover the Run
- * button, which is the whole point of that bar. It moves up instead.
+ * Test Studio owns the bottom edge through StudioActionBar (fixed bottom-0
+ * inset-x-0 z-[9960], opaque). A normal bottom-4 dock becomes invisible and
+ * unclickable because the bar intercepts clicks.
+ * The former PAGES_WITH_BOTTOM_BAR mechanism disappeared while its comment
+ * remained. The generation-queue dock repeated the issue (GitHub #44). Keep
+ * this placement rule here with a test, not in a comment about a deleted symbol.
+ * Move the dock upward, not above the bar in z-order: covering the Run button
+ * would defeat the purpose of that bar.
  */
 
 // Routes whose screen can put a fixed bar at the bottom of the window.

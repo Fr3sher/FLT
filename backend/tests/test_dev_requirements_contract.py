@@ -230,3 +230,22 @@ def test_pytest_ini_still_blocks_the_plugin_that_caused_the_red_release():
     ini = (_ROOT / 'backend' / 'pytest.ini').read_text(encoding='utf-8')
     assert '-p no:flask' in ini, \
         'without this, a machine carrying pytest-flask runs a different suite than CI'
+
+
+@pytest.mark.parametrize('workflow', [_CI, _RELEASE], ids=['ci', 'release'])
+def test_isolated_plugin_contracts_prepare_temp_parent_and_run_before_core(workflow):
+    steps = _workflow_steps(workflow.read_text(encoding='utf-8'))
+    plugin_steps = [step for step in steps if 'pytest $tests' in step]
+    core_steps = [step for step in steps if 'pytest backend/tests scripts/tests' in step]
+    assert len(plugin_steps) == len(core_steps) == 1
+    plugin_step, core_step = plugin_steps[0], core_steps[0]
+    assert steps.index(plugin_step) < steps.index(core_step), \
+        'isolated plugin harness failures must surface before the long core suite'
+    parent_setup = plugin_step.find("New-Item -ItemType Directory -Path 'D:/pt'")
+    loop_start = plugin_step.find('foreach ($plugin')
+    assert 0 <= parent_setup < loop_start, \
+        'pytest creates each basetemp leaf, not its parent on a fresh runner'
+    assert '-ErrorAction Stop' in plugin_step[parent_setup:loop_start]
+    assert '-p no:flask "--basetemp=D:/pt/$($plugin.Name)"' in plugin_step
+    assert "if ($LASTEXITCODE -ne 0) { throw" in plugin_step
+    assert "if ($tested -eq 0) { throw" in plugin_step

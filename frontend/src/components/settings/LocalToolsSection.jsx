@@ -10,6 +10,8 @@ import {
 import ResetToDefault from './ResetToDefault'
 import LmStudioDownload from './LmStudioDownload'
 import { defaultValueAt } from './settingDefaults.js'
+import TimeoutSettings from './TimeoutSettings'
+import LocalLlmModelSelect from './LocalLlmModelSelect'
 
 /* HF token is for gated TRAINING bases (Krea 2 / FLUX.1 / FLUX.2 Klein) and reading
    your private custom-base repos — it lives with the ComfyUI card because that's
@@ -46,38 +48,6 @@ const HF_SECRET = {
   ),
 }
 
-const HF_CLOUD_SECRET = {
-  key: 'HF_CLOUD_TOKEN', label: 'Dedicated Hugging Face cloud token', testTarget: 'hf_cloud',
-  help: (
-    <>
-      Required only for full-model Krea 2 cloud training. Recommended: create a separate fine-grained token with zero global permissions and grant{' '}
-      <strong className="font-semibold text-content">repo.content.read exactly on krea/Krea-2-Raw</strong>
-      {', then '}
-      <strong className="font-semibold text-content">repo.content.read + repo.write on one dedicated HF user/org namespace that contains only LDS deliveries</strong>
-      {'. A per-run repository does not exist yet when the token is created, so scope write access to that single dedicated namespace. A global write token is also accepted, but LDS will warn because it can modify every repository this account can write to.'}
-    </>
-  ),
-  guide: (
-    <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1">
-      <a
-        href="https://huggingface.co/settings/tokens/new?tokenType=fineGrained"
-        target="_blank"
-        rel="noreferrer"
-        className="inline-block max-w-full text-xs font-medium text-sky-300 underline underline-offset-2 hover:text-sky-200"
-      >
-        Create a fine-grained token on Hugging Face ↗
-      </a>
-      <a
-        href="https://huggingface.co/settings/tokens/new?tokenType=write"
-        target="_blank"
-        rel="noreferrer"
-        className="inline-block max-w-full text-xs font-medium text-sky-300 underline underline-offset-2 hover:text-sky-200"
-      >
-        Create a global write token on Hugging Face ↗
-      </a>
-    </div>
-  ),
-}
 
 /* Ollama's three live states, from capabilities (installed + reachable):
      not installed   → install hint (the app can't start what isn't there)
@@ -373,7 +343,7 @@ export default function LocalToolsSection(props) {
   // Summary + collapsible groups, one per tool — same shells as Image engines
   // (SettingsGroupsView), and the ?focus= reveal opens a collapsed group on
   // its own, so every deep-link and search result keeps landing.
-  const [comfyGroup, ollamaGroup, aitkGroup] = LOCAL_TOOLS_GROUPS
+  const [comfyGroup, ollamaGroup, aitkGroup, timeoutGroup] = LOCAL_TOOLS_GROUPS
   const groupProps = useSettingsGroupProps('local-tools')
   return (
     <div className="space-y-4">
@@ -435,10 +405,27 @@ export default function LocalToolsSection(props) {
           <ResetToDefault label="ComfyUI response timeout" section="comfyui" field="object_info_timeout_s"
             config={config} configDefaults={configDefaults} setField={setField} />
         </div>
-        <SecretField field={HF_SECRET} {...props} />
-        <div className="rounded-lg border border-sky-400/25 bg-sky-400/5 p-3">
-          <SecretField field={HF_CLOUD_SECRET} {...props} />
+        <div>
+          <label htmlFor="comfyui-local-queue-limit" className="block text-sm font-medium text-content">Local generation queue limit</label>
+          <input id="comfyui-local-queue-limit" type="number" min="1" max="10000" step="1"
+            value={config.comfyui.local_queue_limit ?? comfyDefault('local_queue_limit')}
+            onChange={(e) => setField('comfyui', 'local_queue_limit', Number(e.target.value))}
+            className={INPUT_CLASS} />
+          <p className="mt-1 text-xs text-content-muted">Maximum unfinished images per dataset for local generation. Queue a long run and let ComfyUI render it one image at a time. Batches using API engines keep their separate limit.</p>
+          <ResetToDefault label="Local generation queue limit" section="comfyui" field="local_queue_limit"
+            config={config} configDefaults={configDefaults} setField={setField} />
         </div>
+        <div>
+          <label htmlFor="comfyui-generation-timeout" className="block text-sm font-medium text-content">Generation time limit (minutes)</label>
+          <input id="comfyui-generation-timeout" type="number" min="0" max="1440" step="1"
+            value={config.comfyui.generation_timeout_minutes ?? comfyDefault('generation_timeout_minutes')}
+            onChange={(e) => setField('comfyui', 'generation_timeout_minutes', Number(e.target.value))}
+            className={INPUT_CLASS} />
+          <p className="mt-1 text-xs text-content-muted">How long LDS waits for each submitted ComfyUI job. Increase it for slow renders, or use 0 for no time limit. Stop and checks for an unreachable worker remain active. Applies to jobs started after saving.</p>
+          <ResetToDefault label="Generation time limit" section="comfyui" field="generation_timeout_minutes"
+            config={config} configDefaults={configDefaults} setField={setField} />
+        </div>
+        <SecretField field={HF_SECRET} {...props} />
       </Card>
 
       </SettingsGroup>
@@ -464,8 +451,8 @@ export default function LocalToolsSection(props) {
           <p className="mt-1 text-xs text-content-muted">
             Both cards below stay editable whichever you pick, so you can set the other one up
             and press Test before switching to it. Only the selected provider is used — and only
-            it is checked when the app refreshes its status, so nothing pays for a server you are
-            not running.
+            it is checked when the app refreshes its status. Each model list below reads its
+            own server, so you can prepare either provider before switching.
           </p>
         </div>
       </Card>
@@ -481,7 +468,7 @@ export default function LocalToolsSection(props) {
       >
         <OllamaStatus caps={caps} refreshCaps={refreshCaps} toast={toast} />
         <div className="flex items-end gap-3">
-          <div className="flex-1 space-y-4">
+          <div className="min-w-0 flex-1 space-y-4">
             <TextField
               id="ollama-url"
               label="Ollama URL"
@@ -489,12 +476,14 @@ export default function LocalToolsSection(props) {
               onChange={(v) => setField('ollama', 'url', v)}
               placeholder="http://127.0.0.1:11434"
             />
-            <TextField
+            <LocalLlmModelSelect
               id="ollama-vision-model"
               label="Ollama vision model"
+              provider="ollama"
+              url={config.ollama.url || ollamaDefault('url')}
+              refreshKey={caps?.ollama?.reachable}
               value={config.ollama.vision_model}
               onChange={(v) => setField('ollama', 'vision_model', v)}
-              placeholder="huihui_ai/qwen3-vl-abliterated:8b-instruct"
             />
             <TestResult result={testResults.ollama} />
           </div>
@@ -560,12 +549,12 @@ export default function LocalToolsSection(props) {
       <Card
         title={provider === 'lmstudio' ? 'LM Studio — in use'
           : 'LM Studio — not in use (Test still works)'}
-        help="A local model server with a graphical app. Unlike Ollama it cannot be started from here, and it only serves a model that is already loaded."
+        help="A local model server with a graphical app. Choose a detected model, or keep automatic selection."
       >
         <LmStudioStatus caps={caps} active={provider === 'lmstudio'}
           refreshCaps={refreshCaps} toast={toast} />
         <div className="flex items-end gap-3">
-          <div className="flex-1 space-y-4">
+          <div className="min-w-0 flex-1 space-y-4">
             <TextField
               id="lmstudio-url"
               label="LM Studio URL"
@@ -579,13 +568,14 @@ export default function LocalToolsSection(props) {
                   + 'sure its server is reachable from Docker.'
                 : "The server root. LM Studio's Developer tab shows it with /v1 on the end — either form is accepted."}
             />
-            <TextField
+            <LocalLlmModelSelect
               id="lmstudio-vision-model"
               label="LM Studio model"
+              provider="lmstudio"
+              url={(config.lmstudio || {}).url || lmstudioDefault('url')}
+              refreshKey={caps?.lmstudio?.reachable}
               value={(config.lmstudio || {}).vision_model || ''}
               onChange={(v) => setField('lmstudio', 'vision_model', v)}
-              placeholder="leave empty to use whatever is loaded"
-              help="Left empty, the app uses whichever model LM Studio has loaded — usually what you want, since it only serves a loaded one."
             />
             {/* ⏬ The missing half of the Ollama pull, asked for in those words.
                 The job runs inside LM Studio itself, so it survives navigation
@@ -717,6 +707,9 @@ export default function LocalToolsSection(props) {
           </div>
         </details>
       </Card>
+      </SettingsGroup>
+      <SettingsGroup {...groupProps(timeoutGroup)}>
+        <TimeoutSettings config={config} configDefaults={configDefaults} setField={setField} />
       </SettingsGroup>
     </div>
   )

@@ -10,8 +10,8 @@ const bankWs = readFileSync(new URL('../components/bank/BankWorkspace.jsx', impo
 const bankTile = readFileSync(new URL('../components/bank/BankTile.jsx', import.meta.url), 'utf8');
 const resultsGrid = readFileSync(new URL('../components/dataset/studio/ResultsGrid.jsx', import.meta.url), 'utf8');
 const resultTile = readFileSync(new URL('../components/dataset/studio/ResultTile.jsx', import.meta.url), 'utf8');
-const concept = readFileSync(new URL('../components/dataset/ConceptSourcesPanel.jsx', import.meta.url), 'utf8');
-const videoGrid = readFileSync(new URL('../components/videobank/VideoClipGrid.jsx', import.meta.url), 'utf8');
+const concept = readFileSync(new URL('../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx', import.meta.url), 'utf8');
+const videoGrid = readFileSync(new URL('../../../bundled/video/frontend/videobank/VideoClipGrid.jsx', import.meta.url), 'utf8');
 
 test('bank grid batches its thumbs through /bank/<id>/thumbs', () => {
   assert.match(bankWs, /import useBatchThumbs/);
@@ -33,16 +33,16 @@ test('studio results grid batches finished-tile thumbs through /dataset/<id>/thu
 });
 
 test('concept-source picker batches scraped thumbs through /scrape/thumbs', () => {
-  assert.match(concept, /import useBatchThumbs/);
+  assert.match(concept, /import \{ useBatchThumbs, Progress \} from '@lds\/plugin-sdk\/ui'/);
   assert.match(concept, /\/api\/scrape\/thumbs/);
   assert.match(concept, /useBatchThumbs\(/);
   assert.match(concept, /getScrapeThumb\(thumbSource\)/);
-  assert.match(concept, /const displayThumb = batchedThumb \|\|/);
+  assert.match(concept, /const displayThumb = posterBroken\.has\(it\.url\) \? null : \(batchedThumb \|\| thumb\)/);
   assert.match(concept, /scrapeItemMediaKind\(it\) === 'image' \? it\.url : null/);
 });
 
 test('video bank grid batches clip thumbs through /video-bank/<id>/clip-thumbs', () => {
-  assert.match(videoGrid, /import useBatchThumbs/);
+  assert.match(videoGrid, /import \{ useBatchThumbs \} from '@lds\/plugin-sdk\/ui'/);
   assert.match(videoGrid, /\/api\/video-bank\/\$\{bankId\}\/clip-thumbs/);
   assert.match(videoGrid, /useBatchThumbs\(/);
   assert.match(videoGrid, /thumbUrlFor\(clip\.id\) \|\| videoClipThumbUrl/);

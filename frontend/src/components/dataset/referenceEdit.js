@@ -10,28 +10,32 @@
    engine set can edit — and the two free ones now cover the most exploratory
    gesture in the app, the one you repeat until it looks right. */
 import {
-  primaryEngine, readEngines, ENGINES, API_ENGINES, LOCAL_ENGINES, ENGINE_LABELS,
+  primaryEngine, readEngines, apiEngineIds, engineLabel, localEngineIds,
 } from './engineSelection.js';
+import { engineCatalog } from '../../engines/catalog.js';
 
 /** Engines that can edit the reference — DERIVED from the canonical engine list,
  *  never a second hardcoded list. The server accepts exactly
  *  svc.editable_engines() on /ref/edit, and a private copy here is how the modal
- *  ends up offering what the route refuses (or, as happened with OpenRouter and
+ *  ends up offering what the route refuses (or, as happened with a new API engine and
  *  then with BOTH local engines, hiding what the route would have accepted).
- *  Copied, not aliased, so a caller can't mutate the generation list through this
- *  one. Order = canonical engine order = toggle order in the modal, which puts
+ *  A fresh copy at each call, so a caller can't mutate the catalog through this
+ *  one — and a call, not a constant, so an engine a plugin registered at load is
+ *  in it. Order = canonical engine order = toggle order in the modal, which puts
  *  the FREE local engines first — cheapest option first is not a ranking, it is
  *  the honest reading order for a gesture billed per press. */
-export const EDIT_ENGINES = [...ENGINES];
+export function editEngines() {
+  return engineCatalog().filter((spec) => spec.referenceEdit !== false).map((spec) => spec.id);
+}
 
 /** The refusal shown for a non-editable engine, DERIVED from EDIT_ENGINES:
- *  "Pick Klein, Krea 2 Edit, Nano Banana Pro, ChatGPT or OpenRouter". The old
+ *  "Pick Klein, Krea 2 Edit, <each API engine> or <the last one>". The old
  *  sentence named two engines and kept naming two after a third became editable —
  *  a hardcoded list inside a message rots exactly like a hardcoded list anywhere
  *  else. It is now unreachable in practice (every engine edits) and kept as the
  *  guard for a client that sends something else entirely. */
 export function editEngineNames() {
-  const names = EDIT_ENGINES.map((e) => ENGINE_LABELS[e] || e);
+  const names = editEngines().map((e) => engineLabel(e));
   if (!names.length) return '';
   const last = names[names.length - 1];
   const head = names.slice(0, -1);
@@ -44,16 +48,19 @@ export function editEngineChoiceMessage() {
 }
 
 /** The engine the modal opens on: the workspace's PRIMARY generation engine when
- *  it can edit, else ChatGPT. Every engine can edit now, so the fallback only
+ *  it can edit, else the first API engine that can, else the first engine that
+ *  can. Every engine can edit now, so the fallback only
  *  fires on an empty/corrupt selection — or, with the optional `usable`
  *  predicate, when the primary is a local engine THIS install can't run (no
  *  ComfyUI, missing weights). Opening on a dead selection would make the modal's
  *  first impression a disabled button. */
 export function defaultEditEngine(storage, usable = null) {
-  const ok = (e) => EDIT_ENGINES.includes(e) && (typeof usable !== 'function' || usable(e));
+  const list = editEngines();
+  const ok = (e) => list.includes(e) && (typeof usable !== 'function' || usable(e));
   const primary = primaryEngine(readEngines(storage));
   if (ok(primary)) return primary;
-  return EDIT_ENGINES.find((e) => API_ENGINES.includes(e) && ok(e)) || 'chatgpt';
+  const api = apiEngineIds();
+  return list.find((e) => api.includes(e) && ok(e)) || list.find(ok) || list[0] || null;
 }
 
 /** Ceiling on the dialog's own uploads, mirroring
@@ -106,8 +113,8 @@ export function acceptsExtraEditRefs(engine) {
 }
 
 /** How many uploads the picker may hold for the CURRENT selection: the most
- *  generous consumer wins, so a Krea+ChatGPT batch still allows three (ChatGPT
- *  reads them all) while Krea alone stops at the one its graph has room for.
+ *  generous consumer wins, so a Krea + API-engine batch still allows three (the
+ *  API engine reads them all) while Krea alone stops at the one its graph has room for.
  *  Capping at the strictest would silently shrink what the API engine can use. */
 export function maxEditRefsForBatch(engines) {
   return Array.from(engines || [])
@@ -132,7 +139,7 @@ export function acceptsExtraEditRefsForBatch(engines) {
  *  disappearance reads as a bug. */
 export function editRefNote(engine, { datasetExtraCount = 0 } = {}) {
   const support = editRefSupport(engine);
-  const label = ENGINE_LABELS[engine] || engine;
+  const label = engineLabel(engine);
   const n = Math.max(0, Number(datasetExtraCount) || 0);
   if (support === 'all') return null;
 
@@ -173,11 +180,13 @@ export function editCostNote(engineOrEngines) {
     ? [...new Set(engineOrEngines)]
     : [engineOrEngines].filter(Boolean);
   if (!engines.length) return 'Select at least one engine to see its cost.';
-  const paid = engines.filter((engine) => API_ENGINES.includes(engine)).length;
-  const local = engines.filter((engine) => LOCAL_ENGINES.includes(engine)).length;
+  const apiIds = apiEngineIds();
+  const localIds = localEngineIds();
+  const paid = engines.filter((engine) => apiIds.includes(engine)).length;
+  const local = engines.filter((engine) => localIds.includes(engine)).length;
   if (engines.length === 1 && local === 1) {
     const engine = engines[0];
-    return `${ENGINE_LABELS[engine] || engine} renders on your own ComfyUI — no API key, no `
+    return `${engineLabel(engine)} renders on your own ComfyUI — no API key, no `
       + 'bill, nothing leaves your machine, so you can retry a prompt as often as you like. '
       + 'It queues behind any generation already running on your GPU.';
   }
@@ -197,7 +206,7 @@ export function editCostNote(engineOrEngines) {
 
 /** The line under Before/After, which also claimed a refund that never existed. */
 export function editKeepNote(engine) {
-  const money = LOCAL_ENGINES.includes(engine)
+  const money = localEngineIds().includes(engine)
     ? 'Discarding costs you nothing — it ran on your own GPU.'
     : 'Discard doesn’t refund the edit.';
   return 'Keep replaces the reference — this can’t be undone after you Keep it. It changes only '
@@ -214,10 +223,10 @@ export function editKeepNote(engine) {
  *  VariationCatalog): the modal passes the SAME functions the generation panel
  *  uses, so one gap is never explained two different ways. */
 function editEngineBlockedBy(engine, { available = {}, reasonFor = null } = {}) {
-  if (!LOCAL_ENGINES.includes(engine)) return null;
+  if (!localEngineIds().includes(engine)) return null;
   if (available[engine]) return null;
   const reason = typeof reasonFor === 'function' ? reasonFor(engine) : null;
-  return reason || `⚠ ${ENGINE_LABELS[engine] || engine} is not available on this install`;
+  return reason || `⚠ ${engineLabel(engine)} is not available on this install`;
 }
 
 /** The engines the modal actually renders, with their state.
@@ -228,11 +237,12 @@ function editEngineBlockedBy(engine, { available = {}, reasonFor = null } = {}) 
  *  action away, so the engine stays visible and says which action. */
 export function editEngineOptions({ comfyuiConfigured = false, available = {},
                                     reasonFor = null } = {}) {
-  return EDIT_ENGINES
-    .filter((e) => !LOCAL_ENGINES.includes(e) || comfyuiConfigured)
+  const local = localEngineIds();
+  return editEngines()
+    .filter((e) => !local.includes(e) || comfyuiConfigured)
     .map((engine) => {
       const blocked = editEngineBlockedBy(engine, { available, reasonFor });
-      return { engine, label: ENGINE_LABELS[engine] || engine, blocked, usable: !blocked };
+      return { engine, label: engineLabel(engine), blocked, usable: !blocked };
     });
 }
 
@@ -241,7 +251,7 @@ export function editEngineOptions({ comfyuiConfigured = false, available = {},
  *  free-form, but it needs SOMETHING). The engine reason comes FIRST — typing a
  *  prompt would not make a missing node pack appear. */
 export function editBlockedReason(prompt, engine, engineBlocked = null) {
-  if (!EDIT_ENGINES.includes(engine)) return editEngineChoiceMessage();
+  if (!editEngines().includes(engine)) return editEngineChoiceMessage();
   // A local engine this install can't run: say WHICH action fixes it (the caller
   // passes the same diagnostic the generation panel shows), never just grey out.
   if (engineBlocked) return engineBlocked;
@@ -255,7 +265,8 @@ export function editBlockedReason(prompt, engine, engineBlocked = null) {
 export function editBatchBlockedReason(prompt, engines, options = []) {
   const selected = [...new Set(Array.from(engines || []))];
   if (!selected.length) return 'Select at least one engine';
-  if (selected.some((engine) => !EDIT_ENGINES.includes(engine))) {
+  const list = editEngines();
+  if (selected.some((engine) => !list.includes(engine))) {
     return editEngineChoiceMessage();
   }
   const blocked = selected
@@ -359,4 +370,4 @@ export function batchLiveNote(activity) {
 }
 
 // Re-exported so the modal imports one module for all edit constants.
-export { API_ENGINES, LOCAL_ENGINES, ENGINE_LABELS };
+export { apiEngineIds, localEngineIds, engineLabel };

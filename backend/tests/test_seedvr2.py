@@ -15,10 +15,14 @@ What these tests pin is what would silently ruin the feature:
 * the improve lane staying engine-agnostic ABOVE the dispatch, and the stored
   ids (`derivation_kind`, `action`) not moving when the engine does.
 """
+
+import pytest
+
+pytestmark = pytest.mark.plugins('seedvr2')
+
 import os
 import struct
 
-import pytest
 
 
 def _make_comfyui(root):
@@ -46,7 +50,7 @@ def _install_weights(base, *names):
 def test_node_class_names_match_the_packs_code_not_its_readme():
     """`SeedVR2VideoUpscaler`, not `SeedVR2_VideoUpscaler`. Read from the pack's
     own define_schema on 2026-08-02. If this ever changes, every preflight lies."""
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     assert svr.SEEDVR2_NODE_CLASSES == ('SeedVR2LoadDiTModel',
                                         'SeedVR2LoadVAEModel',
                                         'SeedVR2VideoUpscaler')
@@ -58,7 +62,7 @@ def test_workflow_wires_the_three_nodes_and_pins_batch_size_to_one():
     """One image per job. The node's batch_size is a VIDEO window whose frames
     share temporal attention — grouping unrelated dataset photos would let them
     bleed into each other, which is why no batch-size setting is shipped."""
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     g = svr.build_workflow('src.png', dit='dit.safetensors', vae='vae.safetensors',
                            seed=42, resolution=1440, max_res=2048,
                            color_correct='wavelet', swap_blocks=12,
@@ -89,7 +93,7 @@ def test_workflow_wires_the_three_nodes_and_pins_batch_size_to_one():
 def test_build_workflow_is_pure(app, tmp_path, monkeypatch):
     """No config read, no disk access — a graph assertion must not need a
     ComfyUI, and a settings change must not silently rewrite an enqueued job."""
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     monkeypatch.setattr(svr.cfg, 'get', lambda *a, **k: pytest.fail('config read'))
     svr.build_workflow('s.png', dit='d', vae='v', seed=1)
 
@@ -98,7 +102,8 @@ def test_build_workflow_is_pure(app, tmp_path, monkeypatch):
 
 def test_weights_land_where_the_resolvers_actually_look(app, tmp_path):
     from app import setup_installer, config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     with app.app_context():
         config.save_config({'comfyui': {'base_dir': str(base)}})
@@ -129,7 +134,8 @@ def test_the_vae_is_never_offered_as_a_dit_build(app, tmp_path):
     """Both files live in ONE folder. Handing the VAE to the DiT loader fails deep
     inside the node with an unreadable error, so the picker must not list it."""
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     _install_weights(base, svr.CANONICAL_DIT, svr.CANONICAL_VAE)
     with app.app_context():
@@ -146,7 +152,8 @@ def _enqueue_and_capture(app, tmp_path, monkeypatch, settings, source_px=(800, 1
     perfectly fine in a unit test of either half."""
     from PIL import Image
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     (base / 'input').mkdir(exist_ok=True)
     (base / 'output').mkdir(exist_ok=True)
@@ -174,15 +181,14 @@ def _enqueue_and_capture(app, tmp_path, monkeypatch, settings, source_px=(800, 1
 
 def test_the_tile_size_setting_reaches_the_submitted_workflow(app, tmp_path, monkeypatch):
     """THE propagation proof for issue #32's settings half. A non-default tile
-    side must appear in the graph ComfyUI is actually handed — in the TTP tiler
+    side must appear in the graph ComfyUI is actually handed — in its source crops
     (what a pass holds) AND in the VAE's tiled encode/decode (the same memory
     decision, one node down)."""
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     g = _enqueue_and_capture(app, tmp_path, monkeypatch,
                              {'seedvr2': {'resolution': 2160, 'tile_px': 768}})
-    tiler = next(n for n in g.values() if n['class_type'] == 'TTP_Image_Tile_Batch')
-    assert tiler['inputs']['tile_width'] == 768
-    assert tiler['inputs']['tile_height'] == 768
+    crops = [n['inputs'] for n in g.values() if n['class_type'] == 'ImageCrop' and n['inputs']['image'] == ['4', 0]]
+    assert crops and all(c['width'] == 768 and c['height'] == 768 for c in crops)
     vae = next(n for n in g.values() if n['class_type'] == 'SeedVR2LoadVAEModel')
     assert vae['inputs']['encode_tile_size'] == 768
     assert vae['inputs']['decode_tile_size'] == 768
@@ -192,8 +198,10 @@ def test_the_tile_size_setting_reaches_the_submitted_workflow(app, tmp_path, mon
     assert up['inputs']['resolution'] == 768
     # …and the default still submits the contributed 1024.
     d = _enqueue_and_capture(app, tmp_path, monkeypatch, {'seedvr2': {'resolution': 2160}})
-    assert next(n for n in d.values()
-                if n['class_type'] == 'TTP_Image_Tile_Batch')['inputs']['tile_width'] == svr.TILE_PX
+    default_crops = [n['inputs'] for n in d.values()
+                     if n['class_type'] == 'ImageCrop' and n['inputs']['image'] == ['4', 0]]
+    assert default_crops and all(c['width'] == svr.TILE_PX and c['height'] == svr.TILE_PX
+                                 for c in default_crops)
 
 
 def test_the_tile_size_also_reaches_the_FULL_frame_lane(app, tmp_path, monkeypatch):
@@ -224,7 +232,7 @@ def test_the_tiling_threshold_setting_decides_the_lane(app, tmp_path, monkeypatc
 
 
 def test_the_pinned_vae_reaches_the_loader_node(app, tmp_path, monkeypatch):
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     g = _enqueue_and_capture(app, tmp_path, monkeypatch, {'seedvr2': {}})
     vae = next(n for n in g.values() if n['class_type'] == 'SeedVR2LoadVAEModel')
     assert vae['inputs']['model'] == svr.CANONICAL_VAE
@@ -237,7 +245,8 @@ def test_a_vae_named_nothing_like_one_can_be_pinned(app, tmp_path):
     A pin is therefore matched against the whole folder, not re-filtered through
     the heuristic that failed."""
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     _install_weights(base, svr.CANONICAL_DIT, 'seedvr2_ema_decoder.safetensors')
     with app.app_context():
@@ -259,7 +268,8 @@ def test_a_pinned_vae_that_is_absent_falls_back_instead_of_being_submitted(app, 
     """Same rule as the DiT pin: the loader DOWNLOADS an unknown name, so a stale
     pin must degrade to what is on disk, never be passed through."""
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     _install_weights(base, svr.CANONICAL_DIT, svr.CANONICAL_VAE)
     with app.app_context():
@@ -277,7 +287,8 @@ def test_only_an_installed_build_is_ever_submitted(app, tmp_path):
     passed through — otherwise a dropdown starts a multi-gigabyte download from a
     button that promised an upscale."""
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     _install_weights(base, 'seedvr2_ema_3b_fp16.safetensors', svr.CANONICAL_VAE)
     with app.app_context():
@@ -290,7 +301,8 @@ def test_only_an_installed_build_is_ever_submitted(app, tmp_path):
 
 def test_nothing_on_disk_resolves_to_nothing(app, tmp_path):
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     with app.app_context():
         config.save_config({'comfyui': {'base_dir': str(base)}})
@@ -302,7 +314,8 @@ def test_nothing_on_disk_resolves_to_nothing(app, tmp_path):
 
 def test_a_pinned_build_is_honoured_when_it_is_present(app, tmp_path):
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     _install_weights(base, svr.CANONICAL_DIT, 'seedvr2_ema_7b_fp8_e4m3fn.safetensors',
                      svr.CANONICAL_VAE)
@@ -319,7 +332,8 @@ def test_a_gguf_build_is_usable_here_even_though_other_engines_refuse_one(app, t
     loaders cannot read one. THIS pack ships its own GGUF loader, and on a small
     card the quantised build is the only one that fits."""
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     _install_weights(base, svr.CANONICAL_VAE)
     (base / 'models' / 'SEEDVR2' / 'seedvr2_ema_3b-Q8_0.gguf').write_bytes(b'GGUF' * 64)
@@ -338,7 +352,8 @@ def test_an_html_gate_page_saved_as_weights_is_reported_invalid(app, tmp_path):
     """Present, not loadable — the state between 'missing' and 'ready'. Same
     verdict shape as klein_invalid / krea_invalid so one banner covers all."""
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     folder = base / 'models' / 'SEEDVR2'
     folder.mkdir(parents=True, exist_ok=True)
@@ -358,7 +373,8 @@ def test_an_html_gate_page_saved_as_weights_is_reported_invalid(app, tmp_path):
 
 def test_preflight_raises_before_anything_is_queued(app, tmp_path, monkeypatch):
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     monkeypatch.setattr(svr, 'seedvr2_missing_nodes', lambda: [])
     with app.app_context():
@@ -373,7 +389,7 @@ def test_preflight_raises_before_anything_is_queued(app, tmp_path, monkeypatch):
 def test_missing_nodes_fails_open_when_comfyui_is_unreachable(app, monkeypatch):
     """A transient probe failure must never block a pass — the job would fail
     with ComfyUI's own error, and two red flags for one cause is noise."""
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     svr.clear_nodes_cache()
     monkeypatch.setattr('app.utils.comfyui.fetch_object_info_classes', lambda: None)
     with app.app_context():
@@ -381,7 +397,7 @@ def test_missing_nodes_fails_open_when_comfyui_is_unreachable(app, monkeypatch):
 
 
 def test_missing_nodes_lists_exactly_what_object_info_lacks(app, monkeypatch):
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     svr.clear_nodes_cache()
     monkeypatch.setattr('app.utils.comfyui.fetch_object_info_classes',
                         lambda: {'SeedVR2LoadDiTModel', 'LoadImage'})
@@ -397,7 +413,7 @@ def test_a_pack_installed_under_another_folder_name_still_counts(app, tmp_path):
     is 'install the pack' vs 'restart ComfyUI', and getting it wrong tells someone
     to install what they just installed."""
     from app import config
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     base = _make_comfyui(tmp_path)
     pack = base / 'custom_nodes' / 'seedvr2_videoupscaler'
     pack.mkdir(parents=True)
@@ -409,33 +425,33 @@ def test_a_pack_installed_under_another_folder_name_still_counts(app, tmp_path):
 
 def test_no_comfyui_means_we_do_not_know_rather_than_installed(app, tmp_path):
     from app import config
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     with app.app_context():
         config.save_config({'comfyui': {'base_dir': str(tmp_path / 'nope')}})
         assert svr.seedvr2_node_pack_installed() is False
 
 
-# --- The node pack is deliberately NOT auto-installed ------------------------
+# --- The node pack is installed explicitly through its managed recipe -------
 
-def test_the_node_pack_is_not_an_install_action():
-    """It declares thirteen pip dependencies that belong in ComfyUI's
-    interpreter, which this app does not own and must never pip into. Cloning it
-    alone would land a pack that fails to import."""
+def test_the_node_pack_is_an_explicit_managed_comfy_install_action(app):
+    """The owner now provides a pinned node recipe, never an implicit pip bundle."""
     from app import setup_installer
     assert 'seedvr2_nodes' not in setup_installer.INSTALL_ACTIONS
-    assert not any('seedvr2' in p for p in setup_installer._NODE_PACKS)
-    assert setup_installer._INSTALL_GROUPS['seedvr2'] == ('seedvr2_model',
-                                                          'seedvr2_vae')
+    assert setup_installer.known_action('seedvr2_nodes')
+    assert setup_installer.plugin_action_spec('seedvr2_nodes')['plugin'] == 'seedvr2'
+    assert setup_installer.install_groups()['seedvr2'] == (
+        'seedvr2_nodes', 'seedvr2_model', 'seedvr2_vae')
 
 
-def test_install_actions_and_workers_cover_the_weights():
+
+def test_install_actions_and_workers_cover_the_weights(app):
     from app import setup_installer
     for a in ('seedvr2_model', 'seedvr2_vae'):
-        assert a in setup_installer.INSTALL_ACTIONS
-        assert a in setup_installer._WORKERS
+        assert setup_installer.known_action(a)
+        assert setup_installer._worker_for(a) is setup_installer._run_model_download
 
 
-def test_seedvr2_stays_out_of_install_everything():
+def test_seedvr2_stays_out_of_install_everything(app):
     """"Install everything" runs unattended from a Setup button. SeedVR2 is an
     explicit pick like Krea, not a 3.9 GB surprise on a metered link."""
     from app import setup_installer
@@ -444,10 +460,11 @@ def test_seedvr2_stays_out_of_install_everything():
     assert 'seedvr2_model' not in setup_installer.install_all_plan(caps)
 
 
-def test_the_group_plan_only_queues_what_is_missing():
+def test_the_group_plan_only_queues_what_is_missing(app):
     from app import setup_installer
     caps = {'comfyui': {'dir_valid': True, 'reachable': True,
-                        'seedvr2_missing': ['seedvr2_vae'], 'seedvr2_invalid': []}}
+                        'seedvr2_missing': ['seedvr2_vae'], 'seedvr2_invalid': [],
+                        'seedvr2_nodes_installed': True, 'seedvr2_nodes_missing': []}}
     assert setup_installer.install_group_plan('seedvr2', caps) == ['seedvr2_vae']
     # A file that is present but not loadable is not "installed".
     caps['comfyui']['seedvr2_missing'] = []
@@ -475,7 +492,7 @@ def test_krea_group_planning_is_unchanged_by_the_generalisation():
 
 def test_settings_clamp_and_never_pass_an_invalid_enum_through(app):
     from app import config
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     with app.app_context():
         config.save_config({'seedvr2': {'resolution': 99999, 'max_resolution': 1081,
                                         'color_correction': 'sepia',
@@ -492,7 +509,7 @@ def test_settings_clamp_and_never_pass_an_invalid_enum_through(app):
 
 def test_shipped_defaults_are_the_conservative_ones(app):
     from app import config
-    from app.services import seedvr2_helper as svr
+    from lds_seedvr2 import seedvr2_helper as svr
     with app.app_context():
         assert svr.target_resolution() == 1080
         assert svr.max_resolution() == 0
@@ -503,6 +520,7 @@ def test_shipped_defaults_are_the_conservative_ones(app):
 
 # --- The improve lane -------------------------------------------------------
 
+@pytest.mark.plugins('seedvr2', 'image_upscale')
 def test_improve_engine_resolution_falls_back_instead_of_raising(app):
     """A stale tab naming an engine that no longer exists must degrade to the
     historical behaviour, not refuse a 250-image batch."""
@@ -540,7 +558,8 @@ def test_preflight_raises_the_engines_own_exception_type(app, tmp_path, monkeypa
     pack' vs 'place the weights' — collapsing them loses that distinction."""
     from app import config
     from app.services import face_dataset_service as svc
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     monkeypatch.setattr(svr, 'seedvr2_missing_nodes', lambda: [])
     with app.app_context():
@@ -555,7 +574,8 @@ def test_the_bulk_batch_refuses_once_not_once_per_image(app, tmp_path, monkeypat
     exists, not 250 broken tiles."""
     from app import config
     from app.services import face_dataset_service as svc
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     monkeypatch.setattr(svr, 'seedvr2_missing_nodes', lambda: [])
     with app.app_context():
@@ -569,7 +589,8 @@ def test_the_bulk_batch_refuses_once_not_once_per_image(app, tmp_path, monkeypat
 def test_the_batch_endpoint_answers_a_structured_409(app, client, tmp_path, monkeypatch):
     from app import config
     from app.services import face_dataset_service as svc
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     monkeypatch.setattr(svr, 'seedvr2_missing_nodes', lambda: ['SeedVR2VideoUpscaler'])
     with app.app_context():
@@ -596,7 +617,8 @@ def test_capabilities_publishes_every_gap_separately(app, tmp_path, monkeypatch)
     """"Download the weights" and "install the node pack" are different actions
     with different buttons, so they are different keys."""
     from app import capabilities, config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     monkeypatch.setattr(svr, 'seedvr2_missing_nodes', lambda: [])
     with app.app_context():
@@ -612,7 +634,8 @@ def test_capabilities_publishes_every_gap_separately(app, tmp_path, monkeypatch)
 
 def test_the_models_endpoint_only_offers_installed_builds(app, client, tmp_path):
     from app import config
-    from app.services import seedvr2_helper as svr, comfy_model_paths
+    from lds_seedvr2 import seedvr2_helper as svr
+    from app.services import comfy_model_paths
     base = _make_comfyui(tmp_path)
     _install_weights(base, svr.CANONICAL_DIT, svr.CANONICAL_VAE)
     with app.app_context():

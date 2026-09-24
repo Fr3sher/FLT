@@ -38,9 +38,9 @@ export function useStudioRun(runId) {
     } catch { /* transient network error — the poll retries */ }
   }, [runId]);
 
-  // Vide la grille DÈS que le run change : sinon on garde les cellules du run
-  // précédent tant que le refetch n'a pas répondu (et si le fetch échoue ça reste
-  // bloqué sur l'ancien run). null = pas de run sélectionné → studio vierge.
+  // Clear the grid immediately when the run changes. Otherwise previous cells
+  // remain until refetch completes, or indefinitely on failure. null means no
+  // selected run and an empty studio.
   useEffect(() => { setData(null); }, [runId]);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -52,7 +52,7 @@ export function useStudioRun(runId) {
     return () => clearInterval(id);
   }, [data, refresh]);
 
-  // Vote sur une image de test — réutilise la route existante lora-test/rate.
+  // Vote on a test image through the existing lora-test/rate route.
   const rate = useCallback(async (imageId, rating) => {
     const d = await postJson(`/api/dataset/lora-test/image/${imageId}/rate`, { rating });
     if (!d.ok) toast.error(d.error);
@@ -70,11 +70,18 @@ export function useStudioRun(runId) {
 
   const resume = useCallback(async () => {
     if (!runId) return undefined;
-    const d = await postJson(`/api/studio/run/${runId}/resume`);
-    if (d.ok) toast.success(`${d.resumed} cell(s) restarted with their settings`);
-    else toast.error(d.error);
-    await refresh();
-    return d;
+    try {
+      const d = await postJson(`/api/studio/run/${runId}/resume`);
+      if (d.ok) toast.success(`${d.resumed} cell(s) restarted with their settings`);
+      else toast.error(d.error);
+      return d;
+    } catch (e) {
+      const message = e.message || 'Could not resume this run';
+      toast.error(message);
+      return { ok: false, error: message };
+    } finally {
+      await refresh();
+    }
   }, [runId, refresh, toast]);
 
   // A timed-out ComfyUI submit has no safe automatic retry. The backend accepts

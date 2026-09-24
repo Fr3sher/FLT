@@ -1,9 +1,14 @@
+
+import pytest
+
+pytestmark = pytest.mark.plugins('api_engines')
+
 from unittest.mock import patch, MagicMock
 import base64
 
 
 def test_size_for_aspect_three_sizes_only():
-    from app.services.chatgpt_image import size_for_aspect
+    from lds_api_engines.chatgpt_image import size_for_aspect
     assert size_for_aspect('1:1') == '1024x1024'
     assert size_for_aspect('3:4') == '1024x1536'
     assert size_for_aspect('16:9') == '1536x1024'
@@ -11,10 +16,10 @@ def test_size_for_aspect_three_sizes_only():
 
 def test_chatgpt_never_sends_input_fidelity(app, monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-x')
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     resp = MagicMock(status_code=200)
     resp.json.return_value = {'data': [{'b64_json': base64.b64encode(b'png').decode()}]}
-    with patch('app.services.chatgpt_image.requests.post', return_value=resp) as post:
+    with patch('lds_api_engines.chatgpt_image.requests.post', return_value=resp) as post:
         out = chatgpt_image.generate_variation(b'ref', 'a portrait', aspect_ratio='3:4')
     assert out == b'png'
     sent = post.call_args
@@ -31,8 +36,8 @@ def test_chatgpt_raises_a_named_fatal_without_key(app, monkeypatch):
     named and the batch stops — the contract OpenRouter already had."""
     import pytest
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
-    from app.services import chatgpt_image
-    with patch('app.services.chatgpt_image.requests.post') as post:
+    from lds_api_engines import chatgpt_image
+    with patch('lds_api_engines.chatgpt_image.requests.post') as post:
         with pytest.raises(chatgpt_image.ChatGPTImageFatal, match='OPENAI_API_KEY'):
             chatgpt_image.generate_variation(b'r', 'p')
     post.assert_not_called()
@@ -40,11 +45,11 @@ def test_chatgpt_raises_a_named_fatal_without_key(app, monkeypatch):
 
 def test_nanobanana_sends_aspect_config(app, monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY', 'g-x')
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     inline = {'inlineData': {'data': base64.b64encode(b'img').decode(), 'mimeType': 'image/webp'}}
     resp = MagicMock(status_code=200)
     resp.json.return_value = {'candidates': [{'content': {'parts': [inline]}}]}
-    with patch('app.services.nanobanana.requests.post', return_value=resp) as post:
+    with patch('lds_api_engines.nanobanana.requests.post', return_value=resp) as post:
         out = nanobanana.generate_variation([b'a', b'b'], 'p', aspect_ratio='3:4')
     assert out == b'img'
     body = post.call_args.kwargs['json']
@@ -56,8 +61,8 @@ def test_nanobanana_raises_a_named_fatal_without_key(app, monkeypatch):
     """Same change of contract as the ChatGPT one above, same reason."""
     import pytest
     monkeypatch.delenv('GEMINI_API_KEY', raising=False)
-    from app.services import nanobanana
-    with patch('app.services.nanobanana.requests.post') as post:
+    from lds_api_engines import nanobanana
+    with patch('lds_api_engines.nanobanana.requests.post') as post:
         with pytest.raises(nanobanana.NanoBananaFatal, match='GEMINI_API_KEY'):
             nanobanana.generate_variation(b'r', 'p')
     post.assert_not_called()
@@ -65,11 +70,12 @@ def test_nanobanana_raises_a_named_fatal_without_key(app, monkeypatch):
 
 def _sub_connected(monkeypatch):
     """Wire a fake connected subscription into chatgpt_image's oauth module."""
-    from app.services import chatgpt_oauth
+    from lds_api_engines import chatgpt_models, chatgpt_oauth
     monkeypatch.setattr(chatgpt_oauth, 'access_token', lambda force_refresh=False: 'at-x')
     monkeypatch.setattr(chatgpt_oauth, 'account_id', lambda: 'acc-x')
     monkeypatch.setattr(chatgpt_oauth, 'status',
                         lambda: {'connected': True, 'email': 'u@x.io', 'plan': 'plus'})
+    monkeypatch.setattr(chatgpt_models, 'resolve_model', lambda: 'gpt-5.4-mini')
 
 
 def _codex_ok_response():
@@ -87,8 +93,8 @@ def _codex_ok_response():
 def test_chatgpt_auto_routes_to_subscription_when_connected(app, monkeypatch):
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     _sub_connected(monkeypatch)
-    from app.services import chatgpt_image
-    with patch('app.services.chatgpt_image.requests.post',
+    from lds_api_engines import chatgpt_image
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                return_value=_codex_ok_response()) as post:
         out = chatgpt_image.generate_variation([b'a'] * 7, 'a portrait', aspect_ratio='3:4')
     assert out == b'img'
@@ -113,10 +119,10 @@ def test_chatgpt_auto_routes_to_subscription_when_connected(app, monkeypatch):
 
 def test_chatgpt_auto_uses_api_key_when_not_connected(app, monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-x')
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     resp = MagicMock(status_code=200)
     resp.json.return_value = {'data': [{'b64_json': base64.b64encode(b'png').decode()}]}
-    with patch('app.services.chatgpt_image.requests.post', return_value=resp) as post:
+    with patch('lds_api_engines.chatgpt_image.requests.post', return_value=resp) as post:
         assert chatgpt_image.generate_variation(b'ref', 'p') == b'png'
     assert '/images/edits' in post.call_args.args[0]
 
@@ -126,10 +132,10 @@ def test_chatgpt_forced_api_ignores_subscription(app, monkeypatch):
     cfg.save_config({'engines': {'chatgpt_auth': 'api'}})
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-x')
     _sub_connected(monkeypatch)
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     resp = MagicMock(status_code=200)
     resp.json.return_value = {'data': [{'b64_json': base64.b64encode(b'png').decode()}]}
-    with patch('app.services.chatgpt_image.requests.post', return_value=resp) as post:
+    with patch('lds_api_engines.chatgpt_image.requests.post', return_value=resp) as post:
         assert chatgpt_image.generate_variation(b'ref', 'p') == b'png'
     assert '/images/edits' in post.call_args.args[0]
 
@@ -137,25 +143,26 @@ def test_chatgpt_forced_api_ignores_subscription(app, monkeypatch):
 def test_subscription_429_raises_quota_exceeded(app, monkeypatch):
     import pytest
     _sub_connected(monkeypatch)
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     resp = MagicMock(status_code=429, text='usage limit reached',
                      headers={'content-type': 'application/json'})
-    with patch('app.services.chatgpt_image.requests.post', return_value=resp):
+    with patch('lds_api_engines.chatgpt_image.requests.post', return_value=resp):
         with pytest.raises(chatgpt_image.SubscriptionQuotaExceeded):
             chatgpt_image.generate_variation(b'r', 'p')
 
 
 def test_subscription_401_refreshes_and_retries_once(app, monkeypatch):
-    from app.services import chatgpt_oauth
+    from lds_api_engines import chatgpt_models, chatgpt_oauth
     calls = []
     monkeypatch.setattr(chatgpt_oauth, 'access_token',
                         lambda force_refresh=False: calls.append(force_refresh) or 'at-x')
     monkeypatch.setattr(chatgpt_oauth, 'account_id', lambda: 'acc-x')
     monkeypatch.setattr(chatgpt_oauth, 'status',
                         lambda: {'connected': True, 'email': None, 'plan': None})
-    from app.services import chatgpt_image
+    monkeypatch.setattr(chatgpt_models, 'resolve_model', lambda: 'gpt-5.4-mini')
+    from lds_api_engines import chatgpt_image
     stale = MagicMock(status_code=401, text='expired', headers={'content-type': ''})
-    with patch('app.services.chatgpt_image.requests.post',
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                side_effect=[stale, _codex_ok_response()]) as post:
         assert chatgpt_image.generate_variation(b'r', 'p') == b'img'
     assert post.call_count == 2
@@ -169,14 +176,14 @@ def test_subscription_parses_sse_without_content_type(app, monkeypatch):
     response.completed ships an empty output (store:false), so that per-item
     event is the only place the base64 result appears."""
     _sub_connected(monkeypatch)
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     b64 = base64.b64encode(b'sse-img').decode()
     resp = MagicMock(status_code=200, headers={})          # Codex sends no content-type
     resp.text = ('data: {"type":"response.output_item.done","item":'
                  '{"type":"image_generation_call","result":"' + b64 + '"}}\n\n'
                  'data: {"type":"response.completed","response":{"output":[]}}\n\n'
                  'data: [DONE]\n')
-    with patch('app.services.chatgpt_image.requests.post', return_value=resp):
+    with patch('lds_api_engines.chatgpt_image.requests.post', return_value=resp):
         assert chatgpt_image.generate_variation(b'r', 'p') == b'sse-img'
 
 
@@ -184,9 +191,9 @@ def test_subscription_mode_without_connection_returns_none(app, monkeypatch):
     import pytest
     import app.config as cfg
     cfg.save_config({'engines': {'chatgpt_auth': 'subscription'}})
-    from app.services import chatgpt_oauth, chatgpt_image
+    from lds_api_engines import chatgpt_oauth, chatgpt_image
     monkeypatch.setattr(chatgpt_oauth, 'access_token', lambda force_refresh=False: None)
-    with patch('app.services.chatgpt_image.requests.post') as post:
+    with patch('lds_api_engines.chatgpt_image.requests.post') as post:
         with pytest.raises(chatgpt_image.SubscriptionUnavailable):
             chatgpt_image.generate_variation(b'r', 'p')
     post.assert_not_called()
@@ -198,10 +205,10 @@ def test_force_lane_api_ignores_connected_subscription(app, monkeypatch):
     later rows)."""
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-x')
     _sub_connected(monkeypatch)
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     resp = MagicMock(status_code=200)
     resp.json.return_value = {'data': [{'b64_json': base64.b64encode(b'png').decode()}]}
-    with patch('app.services.chatgpt_image.requests.post', return_value=resp) as post:
+    with patch('lds_api_engines.chatgpt_image.requests.post', return_value=resp) as post:
         out = chatgpt_image.generate_variation(b'ref', 'p', force_lane='api')
     assert out == b'png'
     assert '/images/edits' in post.call_args.args[0]
@@ -212,8 +219,8 @@ def test_force_lane_subscription_used_even_without_auto_detect(app, monkeypatch)
     endpoint when the connection is present."""
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     _sub_connected(monkeypatch)
-    from app.services import chatgpt_image
-    with patch('app.services.chatgpt_image.requests.post',
+    from lds_api_engines import chatgpt_image
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                return_value=_codex_ok_response()) as post:
         out = chatgpt_image.generate_variation(b'ref', 'p', force_lane='subscription')
     assert out == b'img'

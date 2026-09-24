@@ -15,6 +15,8 @@ migration safe: an untouched dataset keeps the historical default (ON), and an
 explicit OFF is a stored VALUE that survives (never a falsy no-op that the next
 read re-enables).
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 import os
 
@@ -25,6 +27,8 @@ from app.extensions import db
 from app.models import FaceDatasetImage
 from app.services import face_dataset_service as svc
 from app.config import LOCAL_USER, save_config
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _dataset(tmp_path, kind='character', n=3, trigger='msk_one', desc='balancing a spoon'):
@@ -200,7 +204,7 @@ def test_cloud_staging_generates_masks_from_the_stored_setting(app, tmp_path, mo
     uploaded, so `_prepare_staging` is the cloud lane's only masking decision —
     and it reads the run params that `launch_cloud_training` stamped from the
     dataset setting."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import checkpoint_registry
     from app.services import lora_training as lt
     from app.models import CloudTrainingRun
@@ -242,7 +246,7 @@ def test_cloud_staging_refuses_when_dataset_changed_after_launch(
         app, tmp_path, monkeypatch):
     from app.models import CloudTrainingRun
     from app.services import checkpoint_registry
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import dataset_activity
 
     with app.app_context():
@@ -289,7 +293,7 @@ def test_cloud_route_forwards_absent_masked_as_none(client, monkeypatch):
     ds = client.post('/api/dataset/create',
                      json={'name': 'Msk', 'trigger_word': 'mskroute'}).get_json()['id']
     seen = {}
-    monkeypatch.setattr('app.services.cloud_training.launch_cloud_training',
+    monkeypatch.setattr('lds_cloud_training.cloud_training.launch_cloud_training',
                         lambda user_id, dataset_id, **kw: (
                             seen.update(kw),
                             {'run_id': 1, 'status': 'preparing', 'job_name': 'j',

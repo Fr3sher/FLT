@@ -14,7 +14,7 @@ const read = readSource
 const chrome = read('src/components/dataset/lineageChrome.jsx')
 const graph = read('src/components/dataset/lineageNodes.jsx')
 const list = read('src/components/dataset/RunLineageTree.jsx')
-const panel = read('src/components/dataset/DenseModelsPanel.jsx')
+const panel = read('../bundled/cloud_training/frontend/dataset/DenseModelsPanel.jsx')
 
 test('the "full model" badge is declared ONCE, in the shared vocabulary', () => {
   assert.ok(chrome.includes('export function ModeChip'))

@@ -1,15 +1,13 @@
-"""Watermark inpainting — simple-lama-inpainting (LaMa), lance par l'interprete ML
-DEDIE (le paquet est absent du venv Flask). Meme pattern subprocess que
-face_score_infer.py / mask_infer.py.
+"""LaMa watermark inpainting with a dedicated ML interpreter, since
+simple-lama-inpainting is absent from the Flask venv. Uses the same
+subprocess pattern as face_score_infer.py/mask_infer.py.
 
-stdin  : {"image_path": path, "bboxes": [[x1, y1, x2, y2], ...]}
-         ou l'ancien champ "bbox" (coordonnees normalisees [0,1])
-stdout : DERNIERE ligne = JSON {"ok": bool, "error"?: str}
-Logs -> stderr.
+stdin: {image_path: path, bboxes: [[x1,y1,x2,y2], ...]}, or legacy bbox,
+with normalized [0,1] coordinates. The final stdout line is JSON
+{ok: bool, error?: str}; logs go to stderr.
 
-LaMa est NON-generatif : seuls les pixels du rectangle masque changent. Le device
-est fourni par l'appelant, qui prend la fenetre GPU exclusive quand CUDA est choisi.
-"""
+LaMa only changes pixels inside the masked rectangle. The caller selects
+the device and acquires the exclusive GPU window when using CUDA."""
 import json
 import math
 import os
@@ -44,7 +42,7 @@ def _log(msg):
 
 
 def build_mask(size, bboxes):
-    """Construit un masque binaire unique couvrant tous les rectangles normalises."""
+    """Build one binary mask covering all normalized rectangles."""
     from PIL import Image, ImageDraw
 
     width, height = size
@@ -124,7 +122,7 @@ def main() -> int:
         import torch
         from simple_lama_inpainting import SimpleLama
     except Exception as e:
-        # import KO (paquet absent / torch casse) -> JSON propre, pas de traceback muet.
+        # Failed imports (missing package/broken torch) return clean JSON, not a silent traceback.
         print(json.dumps({"ok": False, "error": f"import: {type(e).__name__}: {e}"}))
         return 1
     try:

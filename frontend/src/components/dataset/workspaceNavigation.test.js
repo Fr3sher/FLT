@@ -1,3 +1,5 @@
+import hfPublish from '../../../../bundled/hf_publish/frontend/index.js';
+import { installPublicOwners } from '../../../tests/support/publicOwners.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { WORKSPACE_SECTIONS } from './workspaceSections.js';
@@ -7,6 +9,8 @@ import {
   resolveWorkspaceLocation,
   withWorkspaceLocation,
 } from './workspaceNavigation.js';
+
+test.beforeEach(t => installPublicOwners(t, [hfPublish]));
 
 const BASE = Object.freeze({
   kind: 'character',

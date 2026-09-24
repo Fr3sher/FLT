@@ -11,10 +11,9 @@ class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    // Log en PROD aussi : rester silencieux hors DEV donnait zéro diagnostic quand
-    // un vrai testeur tombait sur le crash plein écran. On émet message + stack +
-    // component-stack dans la console du navigateur pour pouvoir remonter la cause
-    // racine exacte (ex. « tel composant lève sur tel champ undefined »).
+    // Log in production too: staying silent outside DEV left no diagnostics for full-screen
+    // crashes. Send the message, stack and component stack to the browser console so the exact
+    // cause can be traced, such as a component reading an undefined field.
     try {
       console.error(
         '[ErrorBoundary]',

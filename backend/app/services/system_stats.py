@@ -23,6 +23,7 @@ same timeout, same CREATE_NO_WINDOW so no console window flashes on the
 server's desktop) — that call is cached 10 min for a total that never changes,
 which is why the live one cannot simply reuse it.
 """
+from ..timeout_settings import processing_timeout
 import logging
 import subprocess
 import threading
@@ -104,7 +105,7 @@ def _gpu_sample():
             ['nvidia-smi',
              '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu',
              '--format=csv,noheader,nounits'],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=processing_timeout(5),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (OSError, ValueError, subprocess.SubprocessError):
         return None

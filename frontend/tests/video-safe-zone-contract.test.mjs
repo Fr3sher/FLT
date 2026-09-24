@@ -21,11 +21,11 @@ import { readFileSync } from 'node:fs'
 import {
   FLAG_LABELS, thresholdFields, flagChips, flagCounts, filterByFlag,
   payloadFromDraft, draftThresholds,
-} from '../src/components/videobank/videoMetricsFilter.js'
+} from "../../bundled/video/frontend/videobank/videoMetricsFilter.js"
 import { PASS_LABELS, PASS_RUNNING_LABELS, passLabel }
-  from '../src/components/videobank/videoBankStatus.js'
+  from "../../bundled/video/frontend/videobank/videoBankStatus.js"
 import { passBlockedBy, PASS_REQUIREMENTS }
-  from '../src/components/videobank/videoCapability.js'
+  from "../../bundled/video/frontend/lib/videoCapability.js"
 
 const field = (key) => thresholdFields().find((f) => f.key === key)
 // Hints are re-wrapped every time somebody edits a sentence. Compare the VALUE,

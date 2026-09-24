@@ -9,10 +9,13 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.plugins('video')
+
 np = pytest.importorskip('numpy')
 
 from app.services import atomic_npz          # noqa: E402
-from app.services import video_clip_search as vcs   # noqa: E402
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_clip_search as vcs   # noqa: E402
 
 
 @pytest.fixture(autouse=True)

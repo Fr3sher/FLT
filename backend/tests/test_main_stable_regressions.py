@@ -4,13 +4,19 @@ from types import SimpleNamespace
 import os
 
 import pytest
+from public_dense_test_io import restrict_to_owned_loopback
+
+
+@pytest.fixture
+def no_dense_provider_io(monkeypatch):
+    restrict_to_owned_loopback(monkeypatch)
 
 
 @pytest.fixture
 def queue_capture(app, monkeypatch):
     from app import capabilities
     from app.job_queue import queue_manager
-    from app.services import video_test_studio as vts
+    from lds_video import video_test_studio as vts
     monkeypatch.setattr(capabilities, 'probe_comfyui',
                         lambda: {'ok': True, 'status': 'ok', 'detail': '', 'hint': ''})
     monkeypatch.setattr(vts, 'preflight', lambda wf: None)
@@ -20,20 +26,31 @@ def queue_capture(app, monkeypatch):
     return captured
 
 
+@pytest.mark.plugins('cloud_training')
+@pytest.mark.usefixtures('no_dense_provider_io')
 def test_training_reconcile_spares_other_lanes_and_keeps_active_training(app, monkeypatch):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     monkeypatch.setenv('VAST_API_KEY', 'test-key')
     labels = ['lds-123', 'lds-234', 'lds-quantize-abcd', 'lds-live-abcd',
               'lds-user-box', 'lds-123-extra', 'lds-123\n', 'lds-\u0661', 'unrelated']
-    fleet = [{'instance_id': str(i), 'label': label} for i, label in enumerate(labels)]
+    fleet = [{'instance_id': str(i + 100), 'label': label} for i, label in enumerate(labels)]
     destroyed = []
-    monkeypatch.setattr(ct, 'get_active_runs',
-                        lambda: [SimpleNamespace(vast_instance_id='1')])
-    monkeypatch.setattr(ct.vast_client, 'list_instances', lambda: fleet)
+    with app.app_context():
+        ct.db.session.add_all([
+            ct.CloudTrainingRun(dataset_id=1, status='error', job_name='old',
+                                vast_instance_id='100', vast_label='lds-123'),
+            ct.CloudTrainingRun(dataset_id=2, status='training', job_name='live',
+                                vast_instance_id='101', vast_label='lds-234'),
+        ])
+        ct.db.session.commit()
+    monkeypatch.setattr(ct.vast_client, 'list_instances', lambda **_kw: fleet)
+    monkeypatch.setattr(ct.vast_client, 'get_instance',
+                        lambda ident, **_kw: next(item for item in fleet
+                                                if item['instance_id'] == ident))
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda ident: destroyed.append(ident) or True)
+                        lambda ident, **_kw: destroyed.append(ident) or True)
     assert ct.reconcile_orphans(app) == 1
-    assert destroyed == ['0'], 'only an orphan carrying an exact training label may be destroyed'
+    assert destroyed == ['100'], 'only a locally owned orphan with its exact provider identity may be destroyed'
 
 
 @pytest.mark.parametrize('fails', [False, True])
@@ -75,6 +92,7 @@ def test_last_frame_is_published_only_after_successful_extraction(app, tmp_path,
     assert sorted(p.name for p in clip_dir.iterdir()) == sorted([source.name, dest.name])
 
 
+@pytest.mark.plugins('video')
 @pytest.mark.parametrize('aspect', ['portrait', 'landscape', 'square'])
 def test_t2v_history_replays_its_original_canvas(client, queue_capture, aspect):
     body = {'mode': 't2v', 'prompt': 'A person turns.', 'aspect': aspect, 'seed': 42}
@@ -93,6 +111,7 @@ def test_t2v_history_replays_its_original_canvas(client, queue_capture, aspect):
     assert (replay['width'], replay['height']) == original_size
 
 
+@pytest.mark.plugins('video')
 @pytest.mark.parametrize('mode,aspect,expected', [
     ('t2v', ' PORTRAIT ', 'portrait'), ('t2v', 'unknown', 'auto'),
     ('i2v', 'landscape', 'auto'),
@@ -105,13 +124,15 @@ def test_recorded_aspect_matches_the_canvas_choice(client, queue_capture, mode, 
     assert clip.get('aspect') == expected
 
 
+@pytest.mark.plugins('video', 'dlss5')
 @pytest.mark.parametrize('operation', ['vfi', 'neural-render'])
 @pytest.mark.parametrize('accel', ['parasyte', 'dareties'])
 def test_derived_clips_keep_existing_acceleration_and_canvas(
         app, client, monkeypatch, queue_capture, operation, accel):
     from app.extensions import db
-    from app.models import VideoTestClip
-    from app.services import neural_render as nr, video_test_studio as vts
+    from lds_video.models import VideoTestClip
+    from lds_video import neural_render_media as nr, video_test_studio as vts
+    from lds_dlss5 import neural_render as engine
     response = client.post('/api/video-studio/generate', json={
         'mode': 't2v', 'prompt': 'A person turns.', 'aspect': 'portrait', 'accel': accel})
     assert response.status_code == 200, response.get_json()
@@ -122,13 +143,13 @@ def test_derived_clips_keep_existing_acceleration_and_canvas(
         source.filename = 'source.mp4'
         (vts.clips_dir() / source.filename).write_bytes(b'test video')
         db.session.commit()
-    monkeypatch.setattr(nr, 'status', lambda: {'ready': True, 'missing': []})
+    monkeypatch.setattr(engine, 'status', lambda: {'ready': True, 'missing': []})
 
     def render(source, destination, params):
         Path(destination).write_bytes(b'test derived video')
         return {'frames': 56, 'mode_note': 'test'}
 
-    monkeypatch.setattr(nr, 'render_video', render)
+    monkeypatch.setattr(engine, 'render_video', render)
     try:
         derived = client.post(f'/api/video-studio/clip/{ident}/{operation}', json={})
         assert derived.status_code == 200, derived.get_json()
@@ -144,6 +165,7 @@ def test_derived_clips_keep_existing_acceleration_and_canvas(
             thread.join(timeout=5)
 
 
+@pytest.mark.plugins('video')
 def test_legacy_aspect_migration_defaults_to_auto_and_can_repeat(app, client):
     from sqlalchemy import text
     from app import _apply_additive_migrations

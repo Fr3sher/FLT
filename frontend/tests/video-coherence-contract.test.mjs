@@ -4,16 +4,16 @@ import { readFileSync } from 'node:fs'
 
 import {
   FLAG_LABELS, thresholdFields, flagChips,
-} from '../src/components/videobank/videoMetricsFilter.js'
+} from "../../bundled/video/frontend/videobank/videoMetricsFilter.js"
 
 // 🔗 The coherence cut in the panel, held to what the backend actually honours
 // and to what the calibration actually found. The hints in this table are the
 // only place a user meets those numbers, so they are pinned like behaviour.
 
 const backend = readFileSync(
-  new URL('../../backend/app/services/video_metrics.py', import.meta.url), 'utf8')
-const guide = readFileSync(
-  new URL('../../docs/guide/using-the-app.md', import.meta.url), 'utf8')
+  new URL('../../bundled/video/lds_video/video_metrics.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+import { GUIDE } from '../../bundled/video/frontend/guide.js'
+const guide = GUIDE.sections.filter(section => section.chapter === 'using-the-app').map(section => section.markdown).join('\n')
 
 const field = () => thresholdFields().find((f) => f.key === 'coherence_floor')
 

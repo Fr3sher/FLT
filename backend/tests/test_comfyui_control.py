@@ -169,7 +169,7 @@ def test_spawn_uses_only_the_fixed_safe_argv(tmp_path, monkeypatch):
     assert len(calls) == 1
     argv, kwargs = calls[0]
     assert argv == [
-        os.path.normcase(str(base.parent / 'python_embeded' / 'python.exe')), '-s', 'main.py',
+        os.path.normcase(str(base.parent / 'python_embeded' / 'python.exe')), '-X', 'utf8', '-s', 'main.py',
         '--windows-standalone-build', '--disable-auto-launch',
         '--preview-method', 'none',
         '--listen', '127.0.0.1', '--port', '8188',

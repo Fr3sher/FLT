@@ -64,7 +64,7 @@ test('the bank stops pointing at Settings for what it now offers', () => {
 test('the app-wide sentence is true on a bank, not only in a dataset', () => {
   // The panel states its own reach unconditionally; on a bank the old wording
   // ("in every dataset") described a scope the reader is not even in.
-  const editor = readSource('src/components/dataset/kleinImproveEditor.js')
+  const editor = readSource('../bundled/image_upscale/frontend/lib/kleinImproveEditor.js')
   const scope = editor.split('export const IMPROVE_SCOPE_NOTE =')[1].split(';')[0]
   assert.match(scope, /every dataset/)
   assert.match(scope, /every bank/)

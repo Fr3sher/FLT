@@ -4,7 +4,7 @@ import IdentityPromptModal from './IdentityPromptModal';
 // this tooltip ended up naming two engines while a third could already edit.
 import { editEngineNames, pendingEditNote } from './referenceEdit';
 
-// Cap identique à MAX_EXTRA_REFS côté backend (face_dataset_service).
+// Same limit as backend MAX_EXTRA_REFS in face_dataset_service.
 const MAX_EXTRA_REFS = 3;
 
 export default function ReferencePanel({ refFilename, datasetId, onSetRef, onCropRef, onEditRef, busy,
@@ -75,14 +75,14 @@ export default function ReferencePanel({ refFilename, datasetId, onSetRef, onCro
         </div>
       </div>
 
-      {/* Références additionnelles — identité multi-angles : Nano Banana &
-          ChatGPT (jointes à l'appel API) et Klein (chaînées en ReferenceLatent
-          natifs). PAS Krea 2 Edit : son unique slot secondaire a été entraîné
-          pour un sujet DIFFÉRENT, donc il lit une image ajoutée dans la modale
-          ✦ Edit reference, jamais ce vivier-ci (cf. LOCAL_EDIT_REF_SUPPORT).
-          Ne pas réécrire « tous les moteurs » ici sans vérifier cette table.
-          Recadrables une par une (✂ sur la vignette) ; le scoring reste sur la
-          principale. */}
+      {/*
+       * Additional references provide identity from multiple angles: attached to Nano Banana and
+       * ChatGPT API calls, and chained as native ReferenceLatent inputs for Klein. NOT Krea 2
+       * Edit: its single secondary slot was trained for a DIFFERENT subject, so it uses an image
+       * added in Edit reference, never this pool (see LOCAL_EDIT_REF_SUPPORT). Do not claim all
+       * engines support this without checking that table. Each thumbnail can be cropped
+       * individually; scoring still uses the main reference.
+       */}
       {refFilename && (
         <div className="flex items-center gap-2 flex-wrap border-t border-border pt-2">
           <span className="text-content-subtle text-[0.6875rem]">

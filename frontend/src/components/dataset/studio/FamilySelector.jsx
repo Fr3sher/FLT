@@ -1,15 +1,13 @@
 // react-frontend/src/components/dataset/studio/FamilySelector.jsx
 /**
- * Sélecteur de FAMILLE (pipeline) du studio de test. Un même dataset peut avoir été
- * entraîné sous plusieurs pipelines (ZIT / SDXL / Krea), chacune avec ses propres
- * checkpoints (dossiers loras/<famille>). On n'affiche QUE les familles réellement
- * présentes (`payload.available_families`). La famille choisie re-scope tout le studio
- * (pool de checkpoints, base, dimensions, workflow, meilleur réglage mémorisé).
+ * Test Studio FAMILY/pipeline selector. One dataset may have checkpoints from ZIT, SDXL and Krea
+ * in separate loras/<family> folders. Show ONLY payload.available_families. Selecting a family
+ * scopes checkpoints, base, dimensions, workflow and remembered best settings across the Studio.
  */
 import { FAMILY_LABELS } from './constants';
 
 export default function FamilySelector({ families = [], active, onSelect }) {
-  if (!families || families.length < 2) return null;  // 0/1 famille → aucun choix à offrir
+  if (!families || families.length < 2) return null;  // With zero or one family, there is no choice to offer.
   return (
     <div className="flex items-center gap-2 flex-wrap" role="group" aria-label="Training pipeline">
       <span className="text-content-muted text-[0.6875rem] uppercase tracking-wide">Trained in</span>

@@ -33,7 +33,7 @@ ZT_NODE_UNET = "1"
 ZT_NODE_CLIP = "2"
 ZT_NODE_VAE = "3"
 ZT_NODE_PROMPT = "4"
-ZT_NODE_NEGATIVE = "5"   # CLIPTextEncode négatif (inerte à cfg=1, agit dès z_cfg>1)
+ZT_NODE_NEGATIVE = "5"   # Negative CLIPTextEncode: inert at CFG 1, active above it.
 ZT_NODE_LATENT = "6"
 ZT_NODE_STEPS = "7"
 ZT_NODE_CFG = "9"
@@ -141,8 +141,8 @@ def apply_zimage_settings(workflow, *, z_steps=None, z_cfg=None, z_model=None,
     # --- Studio-side extras (None = leave the workflow value untouched) -----
     if prompt is not None and ZT_NODE_PROMPT in workflow:
         workflow[ZT_NODE_PROMPT]["inputs"]["text"] = prompt
-    # Négatif : écrit UNIQUEMENT s'il est non vide (comme la route generate) — un
-    # négatif vide laisse le défaut du workflow. Inerte à cfg=1, agit dès z_cfg>1.
+    # Write negative text only when nonempty, matching Generate. Empty
+    # input preserves the workflow default. Inert at CFG 1, active above it.
     if negative and ZT_NODE_NEGATIVE in workflow and "text" in workflow[ZT_NODE_NEGATIVE].get("inputs", {}):
         workflow[ZT_NODE_NEGATIVE]["inputs"]["text"] = negative
     if seed is not None and ZT_NODE_SEED in workflow:

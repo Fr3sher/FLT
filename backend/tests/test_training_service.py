@@ -165,8 +165,8 @@ def test_score_checkpoint_samples_picks_best_step(app, tmp_path, monkeypatch):
         # step 250 scores 0.40/0.44 ; step 500 scores 0.62/0.58 -> best = 500
         sims = {by_step[250][0]: 0.40, by_step[250][1]: 0.44,
                 by_step[500][0]: 0.62, by_step[500][1]: 0.58}
-        # score_checkpoint_samples importe face_similarity À L'APPEL → patcher le
-        # module suffit (pas de référence figée à contourner).
+        # score_checkpoint_samples imports face_similarity at CALL TIME, so patching its
+        # module suffices; no frozen reference needs replacement.
         from app.services import face_similarity as fsim
         monkeypatch.setattr(fsim, 'is_available', lambda: True)
         monkeypatch.setattr(fsim, 'score_dataset_faces',
@@ -234,7 +234,7 @@ def test_recommended_steps_concept_scales_sublinearly(app):
         for _ in range(391):                               # -> 400 images
             svc.db.session.add(FaceDatasetImage(dataset_id=ds.id, status='keep', filename='y.webp'))
         svc.db.session.commit()
-        assert lt.recommended_steps(ds.id) == 9500        # 475*20=9500, dans [2000,12000]
+        assert lt.recommended_steps(ds.id) == 9500        # 475*20=9500, within [2000,12000].
         info = lt.recommended_steps_info(ds.id)
         assert info['kind'] == 'concept' and info['steps'] == 9500 and info['n_images'] == 400
         assert 'generalizes' in info['rationale']
@@ -262,7 +262,7 @@ def test_style_dataset_job_config_and_steps(app, tmp_path):
         assert lt.recommended_steps_info(ds.id)['kind'] == 'style'
         cfg_ = lt.build_job_config(ds, str(tmp_path), steps=2000)
         proc = cfg_['config']['process'][0]
-        assert 'trigger_word' not in proc                  # style = pas de trigger
+        assert 'trigger_word' not in proc                  # Style has no trigger.
         assert proc['datasets'][0]['caption_dropout_rate'] == 0.05
         assert proc['train']['timestep_type'] == 'sigmoid'
         assert all('zsty' not in p for p in proc['sample']['prompts'])
@@ -474,7 +474,7 @@ def test_style_default_trigger_salted_no_collision(app):
         assert b.trigger_word == f'zsty_{b.id}'
         assert a.trigger_word != b.trigger_word
         c = svc.create_dataset(LOCAL_USER, 'SC', 'zsty_ink', kind='style')
-        assert c.trigger_word == 'zsty_ink'   # un trigger explicite est respecté
+        assert c.trigger_word == 'zsty_ink'   # An explicit trigger is honored.
 
 
 def test_style_preview_strips_only_legacy_trigger_prefix(app):
@@ -1300,9 +1300,9 @@ def test_imported_list_shows_cloud_named_checkpoints(app, tmp_path):
 
 
 def test_default_variant_is_family_aware():
-    """Raw is the default ONLY for Krea (official « train on Raw » reco); every
-    other family keeps Turbo. This is what makes « Raw par défaut » hold on the
-    launch/queue paths even when no variant is passed."""
+    """Raw is the default ONLY for Krea, following the official training
+    recommendation. Other families retain Turbo. This also applies on launch/queue
+    paths when no variant is provided."""
     from app.services import lora_training as lt
     assert lt._default_variant_for('krea') == 'base'      # -> Krea-2-Raw
     assert lt._default_variant_for('zimage') == 'turbo'
@@ -1536,9 +1536,9 @@ def test_build_job_config_krea_raw_default_and_turbo_optin(app, tmp_path):
 
 
 def test_open_training_folder_fixed_targets_and_creates(app, tmp_path, monkeypatch):
-    """'loras' → dossier d'import ComfyUI de la famille ; 'run' → dossier du run.
-    Chemins résolus serveur, créés au besoin, ouverts via l'explorateur (seam
-    os.startfile patché) ; cible inconnue → ValueError."""
+    """loras opens the family import folder in ComfyUI; run opens the run directory.
+    Resolve paths server-side, create them as needed, and use the file explorer
+    through mocked os.startfile. Unknown targets raise ValueError."""
     import os as _os
     from app.services import lora_training as lt
     from app.services import face_dataset_service as svc
@@ -1553,7 +1553,7 @@ def test_open_training_folder_fixed_targets_and_creates(app, tmp_path, monkeypat
         ds = svc.create_dataset(LOCAL_USER, 'K', 'foldertrig', train_type='krea')
         p1 = lt.open_training_folder(LOCAL_USER, ds.id, target='loras')
         assert p1.replace('/', _os.sep).endswith(_os.sep.join(('models', 'loras', 'krea')))
-        assert _os.path.isdir(p1)                       # créé au besoin
+        assert _os.path.isdir(p1)                       # Created when needed.
         p2 = lt.open_training_folder(LOCAL_USER, ds.id, target='run')
         assert 'foldertrig' in p2 and _os.path.isdir(p2)
         assert opened == [p1, p2]
@@ -1562,8 +1562,8 @@ def test_open_training_folder_fixed_targets_and_creates(app, tmp_path, monkeypat
 
 
 def test_archive_previous_run_renames_never_deletes(app, tmp_path):
-    """fresh=True écarte le run existant par RENAME `*_archived_<ts>` (checkpoints
-    conservés sur disque, purgeables via le préfixe trigger) ; sans run → None."""
+    """fresh=True RENAMES an existing run to *_archived_<timestamp>, preserving
+    checkpoints and trigger-prefix cleanup. No existing run returns None."""
     import os
     from app.services import lora_training as lt
     from app.services import face_dataset_service as svc
@@ -1572,16 +1572,15 @@ def test_archive_previous_run_renames_never_deletes(app, tmp_path):
     with app.app_context():
         cfg.save_config({'aitoolkit': {'dir': str(tmp_path / 'aitoolkit')}})
         ds = svc.create_dataset(LOCAL_USER, 'K', 'freshtrig', train_type='krea')
-        assert lt.archive_previous_run(ds) is None          # aucun run → no-op
+        assert lt.archive_previous_run(ds) is None          # No run means no-op.
         run_dir = lt._output_dir() / lt._run_name(ds)
         run_dir.mkdir(parents=True)
         (run_dir / 'lora_freshtrig_000002000.safetensors').write_bytes(b'ck')
         dest = lt.archive_previous_run(ds)
-        assert dest and not run_dir.exists()                # écarté, pas détruit
+        assert dest and not run_dir.exists()                # Archived, not destroyed.
         assert os.path.isfile(os.path.join(dest, 'lora_freshtrig_000002000.safetensors'))
-        # Le nom archivé reste sur la frontière du run (u<user>_<trigger>, le
-        # préfixe que purge_training_artifacts balaie) → la suppression du
-        # dataset emporte aussi les archives.
+        # The archived name retains the run boundary prefix u<user>_<trigger> used by
+        # purge_training_artifacts, so deleting the dataset also removes its archives.
         assert lt._trigger_boundary(os.path.basename(dest), 'ulocal_freshtrig')
         # Un relancement voit maintenant un dossier vierge → plus d'auto-resume.
         assert lt.archive_previous_run(ds) is None
@@ -1635,11 +1634,12 @@ def test_update_train_settings_persists_validates_and_applies(app, tmp_path):
         ds = svc.create_dataset(LOCAL_USER, 'K', 'kt', train_type='krea')
         eff = lt.update_train_settings(LOCAL_USER, ds.id, {'rank': 64, 'resolution': '1024', 'save_every': 500})
         assert eff['rank'] == 64 and eff['resolution'] == '1024' and eff['save_every'] == 500
-        # '768' seul = levier basse-VRAM (GPU < 24 GB) → accepté et appliqué au job.
+        # Resolution768 alone is accepted for lower-VRAM GPUs below24GB and applied to
+        # the job.
         assert lt.update_train_settings(LOCAL_USER, ds.id, {'resolution': '768'})['resolution'] == '768'
         p768 = lt.build_job_config(ds, str(folder), 1500)['config']['process'][0]
         assert p768['datasets'][0]['resolution'] == [768]
-        lt.update_train_settings(LOCAL_USER, ds.id, {'resolution': '1024'})   # restore pour la suite
+        lt.update_train_settings(LOCAL_USER, ds.id, {'resolution': '1024'})   # Restore for subsequent tests.
         p = lt.build_job_config(ds, str(folder), 1500)['config']['process'][0]
         assert p['network']['linear'] == 64 and p['network']['linear_alpha'] == 64
         assert p['datasets'][0]['resolution'] == [1024] and p['save']['save_every'] == 500

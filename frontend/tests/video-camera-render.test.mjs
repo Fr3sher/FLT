@@ -23,9 +23,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { render } from './support/mountJsx.mjs'
+import { installRuntimeHost } from './support/runtimeHost.mjs'
+
+test.beforeEach((t) => installRuntimeHost(t))
 
 const { default: VideoClipGrid } =
-  await import('../src/components/videobank/VideoClipGrid.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoClipGrid.jsx")
 
 const base = {
   source_id: 7, relpath: 'day1/a.mp4', start_s: 0, end_s: 5, duration_s: 5,

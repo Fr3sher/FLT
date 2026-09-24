@@ -65,11 +65,11 @@ test('🌐 Civitai picks join the batch after the history picks, once each', asy
 });
 
 test('the merge compares TRIMMED but sends the original string', () => {
-  // Le moteur (`_prompt_axis`) strippe puis dédoublonne. Une règle différente
-  // ici ferait annoncer au compteur une cellule que le run ne rendra jamais.
+  // Engine _prompt_axis trims then deduplicates; a different rule here would count cells the run
+  // never renders.
   assert.deepEqual(mergeBatches(['a prompt'], ['  a prompt  ']), ['a prompt']);
-  // …et la chaîne d'origine part telle quelle quand elle est seule.
+  // A lone original string is sent unchanged.
   assert.deepEqual(mergeBatches(['a prompt\n'], []), ['a prompt\n']);
-  // Les vides et les non-chaînes n'atteignent jamais le corps du lancement.
+  // Empty and non-string entries never enter the launch body.
   assert.deepEqual(mergeBatches(['keep', '', '   ', null, 42], [undefined]), ['keep']);
 });

@@ -31,6 +31,7 @@ an export — the very failure the split above exists to prevent — so
 `ffmpeg_ready()` runs the binary once and believes the exit code, not the
 directory entry.
 """
+from ..timeout_settings import processing_timeout
 import os
 import shutil
 import subprocess
@@ -112,7 +113,7 @@ def _measure_ready() -> dict:
     try:
         proc = subprocess.run([path, '-version'], capture_output=True, text=True,
                               encoding='utf-8', errors='replace',
-                              timeout=_PROBE_TIMEOUT,
+                              timeout=processing_timeout(_PROBE_TIMEOUT),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         return {'ok': True, 'path': path,

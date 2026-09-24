@@ -7,8 +7,8 @@ import {
   IMPROVE_SCOPE_NOTE, PRESET_LORA_STRENGTH_MAX, clampPresetStrength, createImproveSaver,
   effectiveImprovePrompt, improveEditorState, improveSettingsPatch,
   presetChainRows, withPresetRowStrength,
-} from './kleinImproveEditor.js';
-import { readImproveInstruction } from './kleinImproveHint.js';
+} from "../../../../bundled/image_upscale/frontend/lib/kleinImproveEditor.js";
+import { readImproveInstruction } from "../../../../bundled/image_upscale/frontend/lib/kleinImproveHint.js";
 
 const SHIPPED = 'add detailed texture, add sharp details, add candid shot, add soft focus effect';
 

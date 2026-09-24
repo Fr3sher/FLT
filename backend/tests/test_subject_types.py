@@ -204,8 +204,9 @@ def test_all_catalog_prompts_and_labels_are_english():
     accents = re.compile(r'[àâäéèêëïîôöùûüç]', re.I)
     french_words = re.compile(
         r'\b(objet|corps|visage|debout|assis|couch\w+|derriere|tete|cote)\b', re.I)
-    # Non-human catalogs only: the human catalog legitimately carries the English
-    # loanword "café" (its own test guards its French), and is byte-frozen here.
+    # Non-human catalogs only: the human catalog legitimately contains the English
+    # loanword cafe with an accent, has its own language check, and remains byte-frozen
+    # here.
     non_human = (fv.ANIMAL_CATALOG + fv.CREATURE_CATALOG + fv.OBJECT_CATALOG
                  + fv.OTHER_CATALOG + fv.ANIME_CATALOG)
     for e in non_human:

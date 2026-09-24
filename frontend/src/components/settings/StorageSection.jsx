@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
-import { Card, INPUT_CLASS } from './primitives'
+import { Card } from './primitives'
 import { SettingsGroup, SettingsGroupsToc, useSettingsGroupProps } from './SettingsGroupsView'
 import { STORAGE_GROUPS } from './settingsGroups'
-import ResetToDefault from './ResetToDefault'
-import HfStorageCard from './HfStorageCard'
-import Fp8QuantizeTool from '../dataset/Fp8QuantizeTool'
+import { LocationEditor } from '../shared/LocationEditor.jsx'
 import {
-  formatSize, locationRows, moveLabel, movePercent, relocationChoices,
+  formatSize, locationRows,
 } from './storageLocations.js'
 
 /* Settings › Storage — everything that answers "where does this live and how
@@ -26,252 +24,6 @@ import {
 
 /* One relocatable root. Type a path, check it, then pick what happens to the
    files already there — the two answers are spelled out before anything runs. */
-function LocationEditor({
-  id, storageKey, label, help, section, field, current, sizeBytes,
-  config, setField, configDefaults, saveConfigPatch, toast, onChanged,
-}) {
-  const stored = (config[section] || {})[field] || ''
-  const [draft, setDraft] = useState(stored)
-  const [check, setCheck] = useState(null)
-  const [checking, setChecking] = useState(false)
-  const [job, setJob] = useState(null)
-
-  useEffect(() => { setDraft(stored) }, [stored])
-
-  const validate = async () => {
-    setChecking(true)
-    try {
-      setCheck(await postJson('/api/storage/validate', { key: storageKey, path: draft }))
-    } catch (e) {
-      setCheck({ ok: false, reason: e.message || 'Could not check that folder.' })
-    } finally {
-      setChecking(false)
-    }
-  }
-
-  const persist = async (value) => {
-    // Saved through the explicit patch, not setField + a section save: the state
-    // update is not visible to this callback, so that version saved nothing at
-    // all while reporting success (caught headless before it shipped).
-    await saveConfigPatch(section, { [field]: value })
-    onChanged?.()
-  }
-
-  const adopt = async () => {
-    try {
-      await persist(check?.default ? '' : (check?.path || draft))
-      toast?.success(check?.default ? 'Back to the default folder.' : 'New folder in use.')
-      setCheck(null)
-    } catch (e) {
-      toast?.error(e.message || 'Could not save the new location.')
-    }
-  }
-
-  const move = async () => {
-    let started
-    try {
-      started = await postJson('/api/storage/move', { key: storageKey, path: check.path })
-    } catch (e) {
-      toast?.error(e.message || 'Could not start the move.')
-      return
-    }
-    setJob({ phase: 'scanning' })
-    for (let i = 0; i < 100000; i += 1) {
-      await new Promise((r) => setTimeout(r, 700))
-      let state
-      try {
-        state = (await apiFetch(`/api/storage/move/progress?job_id=${started.job_id}`,
-          { background: true })).job
-      } catch { continue }
-      setJob(state)
-      if (state?.phase === 'error') { toast?.error(state.error || 'The move failed.'); return }
-      if (state?.phase === 'done') break
-    }
-    // The config only points at the new folder once every byte is there.
-    try {
-      await persist(check.path)
-      toast?.success('Files moved and the new folder is in use.')
-      setCheck(null)
-    } catch (e) {
-      toast?.error(e.message || 'Files moved, but the location could not be saved.')
-    }
-  }
-
-  const choices = relocationChoices({ validation: check, currentSize: sizeBytes })
-  const busy = job && ['scanning', 'copying'].includes(job.phase)
-  return (
-    <Card title={label} help={help}>
-      <p className="break-all text-xs text-content-subtle">
-        <span className="text-content-muted">In use now:</span> {current || '—'}
-      </p>
-      <div>
-        <label htmlFor={id} className="block text-sm font-medium text-content">
-          Folder (leave empty for the default)
-        </label>
-        {/* Column on a phone: a path field and two buttons never share 400 px. */}
-        <div className="mt-1 flex flex-col gap-2 sm:flex-row">
-          <input id={id} type="text" value={draft} disabled={busy}
-            onChange={(e) => { setDraft(e.target.value); setCheck(null) }}
-            placeholder="Defaults to the app’s data folder"
-            className={`${INPUT_CLASS} sm:flex-1`} />
-          <button type="button" onClick={validate} disabled={checking || busy}
-            className="shrink-0 rounded-md border border-border-strong px-3 py-1.5 text-sm font-medium text-content hover:bg-surface-raised disabled:opacity-50">
-            {checking ? 'Checking…' : 'Check folder'}
-          </button>
-        </div>
-        <div className="mt-1">
-          <ResetToDefault label={label} section={section} field={field}
-            config={config} configDefaults={configDefaults} setField={setField} />
-        </div>
-      </div>
-
-      {check && !check.ok && (
-        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-xs text-rose-200">
-          <span aria-hidden>⚠</span> {check.reason}
-        </p>
-      )}
-
-      {choices.length > 0 && !busy && (
-        <div className="space-y-2 rounded-lg border border-border bg-surface-raised p-3">
-          <p className="text-xs text-content-muted">
-            {check.default
-              ? 'This goes back to the folder inside the app’s data directory.'
-              : `${check.path} is writable${check.empty === false ? ' and already has files in it' : ''}.`}
-          </p>
-          {choices.map((choice) => (
-            <div key={choice.id} className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-              <p className="min-w-0 text-xs text-content-subtle">{choice.detail}</p>
-              <button type="button" disabled={choice.disabled}
-                onClick={() => (choice.id === 'move' ? move() : adopt())}
-                className="shrink-0 self-start rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium text-content hover:bg-surface-raised disabled:opacity-40">
-                {choice.label}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {job && (
-        <div className="space-y-1" role="status" aria-live="polite">
-          <p className="text-xs text-content-muted">{moveLabel(job)}</p>
-          {busy && (
-            <div className="h-1.5 w-full max-w-sm overflow-hidden rounded-full bg-surface-raised">
-              <div className="h-full rounded-full bg-gradient-primary transition-[width] duration-300"
-                style={{ width: `${movePercent(job) ?? 15}%` }} />
-            </div>
-          )}
-        </div>
-      )}
-    </Card>
-  )
-}
-
-/* The cleanup that used to destroy weights, and the folders it used to ignore.
-   Both live here rather than on the Runs hub: this is the disk tab. */
-function CloudRunHousekeeping({ toast, onChanged }) {
-  const [orphans, setOrphans] = useState(null)
-  const [busy, setBusy] = useState('')
-
-  const scan = async () => {
-    setBusy('scan')
-    try {
-      setOrphans((await apiFetch('/api/dataset/train/cloud/orphans')).orphans || [])
-    } catch (e) {
-      toast?.error(e.message || 'Could not scan the run folders.')
-    } finally {
-      setBusy('')
-    }
-  }
-
-  const purge = async () => {
-    const total = (orphans || []).reduce((n, o) => n + (o.size_bytes || 0), 0)
-    const withCkpt = (orphans || []).filter((o) => o.checkpoints > 0).length
-    if (!window.confirm(
-      `Move ${orphans.length} unclaimed run folder(s) (${formatSize(total)}) to the trash?\n\n`
-      + (withCkpt ? `${withCkpt} of them still hold a checkpoint — those are moved into the checkpoint store first, never deleted.\n\n` : '')
-      + 'Files go to the trash on this same disk; the space comes back when you empty it.',
-    )) return
-    setBusy('purge')
-    try {
-      const res = await postJson('/api/dataset/train/cloud/purge-orphans', {})
-      toast?.success(`${res.purged_dirs} folder(s) moved to the trash`
-        + (res.rescued_checkpoints ? `, ${res.rescued_checkpoints} checkpoint(s) rescued` : '')
-        + '.')
-      await scan()
-      onChanged?.()
-    } catch (e) {
-      toast?.error(e.message || 'Could not clean those folders.')
-    } finally {
-      setBusy('')
-    }
-  }
-
-  const adopt = async () => {
-    setBusy('adopt')
-    try {
-      const res = await postJson('/api/storage/adopt-checkpoints', {})
-      toast?.success(res.moved
-        ? `${res.moved} checkpoint(s) moved out of the run folders and into the store.`
-        : 'Every checkpoint is already in the store.')
-      onChanged?.()
-    } catch (e) {
-      toast?.error(e.message || 'Could not move the checkpoints.')
-    } finally {
-      setBusy('')
-    }
-  }
-
-  return (
-    <Card title="Cloud run housekeeping"
-      help="Cleaning a finished run trashes its dataset copy, its sample images and its logs — never a checkpoint. Everything goes to the trash on the same disk, so the space only comes back when you empty it.">
-      <div className="flex flex-wrap items-center gap-2">
-        <button id="storage-scan-orphans" type="button" onClick={scan} disabled={!!busy}
-          className="rounded-md border border-border-strong px-3 py-1.5 text-sm font-medium text-content hover:bg-surface-raised disabled:opacity-50">
-          {busy === 'scan' ? 'Scanning…' : 'Find unclaimed run folders'}
-        </button>
-        <button id="storage-adopt-checkpoints" type="button" onClick={adopt} disabled={!!busy}
-          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-content hover:bg-surface-raised disabled:opacity-50">
-          {busy === 'adopt' ? 'Moving…' : 'Move stray checkpoints into the store'}
-        </button>
-      </div>
-      {orphans && orphans.length === 0 && (
-        <p className="text-xs text-content-muted">
-          Every run folder on disk belongs to a run this app knows about.
-        </p>
-      )}
-      {orphans && orphans.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-sm text-content">
-            {orphans.length} folder(s) no run points at —{' '}
-            <span className="font-semibold tabular-nums">
-              {formatSize(orphans.reduce((n, o) => n + (o.size_bytes || 0), 0))}
-            </span>.
-          </p>
-          <ul className="space-y-1 text-xs text-content-subtle">
-            {orphans.map((o) => (
-              <li key={o.name} className="break-all">
-                {o.name} — {formatSize(o.size_bytes)}
-                {o.checkpoints > 0 && (
-                  <span className="text-amber-300">
-                    {' '}· holds {o.checkpoints} checkpoint(s), which will be rescued
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-          <button type="button" onClick={purge} disabled={!!busy}
-            className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-sm font-medium text-red-300 disabled:opacity-40">
-            {busy === 'purge' ? 'Cleaning…' : 'Move them to the trash'}
-          </button>
-        </div>
-      )}
-    </Card>
-  )
-}
-
-/* App-wide trash: everything the app "deletes" (checkpoints, cloud staging,
-   deployed LoRAs) is MOVED here — this card is the only place bytes actually
-   die. Size fetched once on mount (no poll). */
 function TrashCard({ reloadKey }) {
   const [size, setSize] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -414,11 +166,12 @@ export default function StorageSection({
 
   // Summary + collapsible groups — same shells as Image engines; deep-links
   // and search open a collapsed group on their own.
-  const [overviewGroup, locationsGroup, housekeepingGroup, modelsGroup] = STORAGE_GROUPS
+  const [overviewGroup, locationsGroup, housekeepingGroup] = STORAGE_GROUPS
   const groupProps = useSettingsGroupProps('storage')
+  const groups = STORAGE_GROUPS.filter(group => group.id !== 'models')
   return (
     <div className="space-y-4">
-      <SettingsGroupsToc sectionId="storage" groups={STORAGE_GROUPS} />
+      <SettingsGroupsToc sectionId="storage" groups={groups} />
 
       <SettingsGroup {...groupProps(overviewGroup)}>
       <Card title="What lives where"
@@ -470,41 +223,19 @@ export default function StorageSection({
         help="Where dataset images live on disk — usually the biggest folder of all."
         {...shared('datasets')} />
 
-      <LocationEditor id="cloud-runs-dir" storageKey="cloud_runs"
-        label="Cloud run staging" section="paths" field="cloud_runs_dir"
-        help="Working files of cloud training runs — the exported dataset copy, the sample images and the logs. This is the folder that grows to tens of gigabytes; cleaning a finished run empties it without ever touching a checkpoint."
-        {...shared('cloud_runs')} />
 
       <LocationEditor id="checkpoints-dir" storageKey="checkpoints"
         label="Checkpoint store" section="paths" field="checkpoints_dir"
-        help="Where the .safetensors your cloud runs produce are kept for good. No cleanup in the app ever removes a file from here — only you can, from the Checkpoints panel or by emptying the trash."
+        help="Where completed training checkpoints are kept for good. No cleanup in the app ever removes a file from here — only you can, from the Checkpoints panel or by emptying the trash."
         {...shared('checkpoints')} />
 
       </SettingsGroup>
 
       <SettingsGroup {...groupProps(housekeepingGroup)}>
-      <CloudRunHousekeeping toast={toast} onChanged={changed} />
       <TrashCard reloadKey={reloadKey} />
       <RunArchiveCard />
       </SettingsGroup>
 
-      <SettingsGroup {...groupProps(modelsGroup)}>
-
-      {/* The SAME component the full-model recipe card renders — imported, not
-          copied, so the refusals (already quantized, LoRA, overwriting the
-          source) and the read-back verification can never differ between the two
-          doors. It is here because its first door is inside a dense dataset's
-          recipe, which somebody who downloaded a 26 GB model from Hugging Face
-          and has no dataset at all never opens — and "this file is too big" is a
-          disk question, asked on this tab. `framed={false}` drops its own accent
-          box and title: the Card below already says both. */}
-      <Card id="storage-fp8-quantize" title="Quantize an existing model to fp8"
-        help="A full-precision model — downloaded from Hugging Face, or delivered by a full-model run — is about 2.5× the size ComfyUI needs to generate with it. Point this at one and it writes the ~10 GB fp8 version next to the original, on this machine, without ever modifying the source.">
-        <Fp8QuantizeTool framed={false} />
-      </Card>
-
-      <HfStorageCard config={config} setField={setField} configDefaults={configDefaults} />
-      </SettingsGroup>
     </div>
   )
 }

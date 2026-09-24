@@ -12,7 +12,15 @@
     "output_dir": "",
     "input_dir": "",
     "models_dir": "",
-    "loras_dir": ""
+    "loras_dir": "",
+    "object_info_timeout_s": 45,
+    "generation_timeout_minutes": 15,
+    "repair_timeout_minutes": 5,
+    "improve_timeout_minutes": 30
+  },
+  "timeouts": {
+    "processing_multiplier": 1.0,
+    "network_multiplier": 1.0
   },
   "ollama": {
     "url": "http://127.0.0.1:11434",

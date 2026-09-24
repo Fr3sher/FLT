@@ -1,8 +1,12 @@
 # app/scrape/sources/instagram.py
-"""Scraper Instagram — énumération des médias d'un profil / post / reel.
+"""Instagram profile/post/reel media scraper.
 
-Port autonome du scraper Instagram du projet `redgifs_downloader`
-(`api/instagram.py`), réduit au strict nécessaire pour l'app ImageGen :
+Standalone port of redgifs_downloader/api/instagram.py, reduced to this
+app's needs. No config/settings module or global-instance dependency;
+limits are SCAN_LIMIT/PROFILE_SCAN_TIMEOUT constants. Authentication
+reuses an on-disk Instaloader session, falling back to browser_cookie3.
+Auth/403/rate-limit/login-required failures return a short English error
+rather than raising. scan() never raises.
 
   * pas de dépendance au module `config`/`settings` ni à des instances globales
     (constantes en dur, voir `SCAN_LIMIT` / `PROFILE_SCAN_TIMEOUT`) ;
@@ -39,14 +43,14 @@ from .gdl import GdlError
 try:
     import instaloader
     INSTALOADER_AVAILABLE = True
-except ImportError:  # pragma: no cover - dépendance absente
+except ImportError:  # pragma: no cover - dependency unavailable
     instaloader = None
     INSTALOADER_AVAILABLE = False
 
 try:
     import browser_cookie3
     BROWSER_COOKIE3_AVAILABLE = True
-except ImportError:  # pragma: no cover - dépendance absente
+except ImportError:  # pragma: no cover - dependency unavailable
     browser_cookie3 = None
     BROWSER_COOKIE3_AVAILABLE = False
 
@@ -67,7 +71,7 @@ _STALE_CURSOR_SKIP = SCAN_LIMIT * 5  # posts à dépasser avant d'abandonner un 
 PROFILE_SCAN_TIMEOUT = 120     # secondes — plafond global d'un scan de profil
 SESSION_TIMEOUT = 20          # secondes — timeout HTTP de la session instaloader
 
-# Message d'erreur unique pour tout refus côté Instagram (auth / 403 / rate-limit).
+# One error message covers Instagram authentication, 403 and rate-limit refusals.
 _AUTH_ERROR = "Instagram blocked access (login required / rate-limit)."
 
 # Cookie domaines réels capturés une fois depuis le jar requests d'origine
@@ -104,11 +108,10 @@ def _is_throttle(error) -> bool:
 # Auth — session instaloader + auto-import cookies navigateur.
 # --------------------------------------------------------------------------- #
 def _detect_session_username():
-    """Détecte un fichier de session instaloader existant sur disque.
+    """Find an existing Instaloader session file on disk.
 
-    Instaloader range ses sessions dans ``~/.config/instaloader/session-USER``.
-    Retourne le username associé, ou None si aucune session trouvée.
-    """
+    Instaloader stores sessions under ~/.config/instaloader/session-USER.
+    Return its associated username, or None if no session is found."""
     try:
         config_dir = Path.home() / ".config" / "instaloader"
         if config_dir.exists():
@@ -116,19 +119,18 @@ def _detect_session_username():
                 if f.name.startswith("session-"):
                     username = f.name[len("session-"):]
                     if username:
-                        logger.info("Session Instagram détectée : %s", username)
+                        logger.info("Instagram session detected: %s", username)
                         return username
-    except Exception as e:  # pragma: no cover - I/O improbable en test
-        logger.debug("Détection session Instagram échouée : %s", e)
+    except Exception as e:  # pragma: no cover - I/O unlikely in tests
+        logger.debug("Instagram session detection failed: %s", e)
     return None
 
 
 def _auto_import_browser_cookies(loader):
-    """Injecte les cookies Instagram du navigateur (Firefox puis Chrome).
+    """Import Instagram browser cookies, trying Firefox then Chrome.
 
-    Retourne True si un cookie `sessionid` (preuve de login) a été importé.
-    Ne lève jamais : tout échec → False.
-    """
+    Return True when a sessionid login cookie was imported. Never raises;
+    return False for any failure."""
     if not BROWSER_COOKIE3_AVAILABLE:
         return False
 
@@ -140,18 +142,18 @@ def _auto_import_browser_cookies(loader):
             cookie_list = list(browser_fn(domain_name="instagram.com"))
             if not cookie_list:
                 continue
-            # Le cookie `sessionid` atteste qu'on est connecté.
+            # The sessionid cookie indicates a logged-in session.
             if not any(c.name == "sessionid" for c in cookie_list):
-                logger.debug("%s : cookies trouvés mais pas de sessionid", browser_name)
+                logger.debug("%s: cookies found but no sessionid", browser_name)
                 continue
             session = loader.context._session
             for cookie in cookie_list:
                 session.cookies.set(cookie.name, cookie.value, domain=cookie.domain)
-            logger.info("Auto-import cookies %s : %d cookies (sessionid présent)",
+            logger.info("Auto-imported cookies from %s: %d cookies (sessionid present)",
                         browser_name, len(cookie_list))
             return True
         except Exception as e:
-            logger.debug("Auto-import %s échoué : %s", browser_name, e)
+            logger.debug("Auto-import from %s failed: %s", browser_name, e)
             continue
     return False
 
@@ -291,11 +293,10 @@ class _FastRateController(instaloader.RateController):
 
 
 def _build_loader():
-    """Construit une instance Instaloader authentifiée (session ou cookies).
+    """Build an Instaloader instance using a session or browser cookies.
 
-    Retourne le loader (authentifié ou non — Instagram acceptera certains
-    profils publics sans session). Lève si instaloader est indisponible.
-    """
+    Return the loader even without authentication: Instagram may allow some
+    public profiles. Raises if Instaloader is unavailable."""
     loader = instaloader.Instaloader(
         download_pictures=False,
         download_videos=False,
@@ -308,31 +309,32 @@ def _build_loader():
         rate_controller=lambda ctx: _FastRateController(ctx),
         max_connection_attempts=3,
     )
-    # Timeout HTTP court pour éviter qu'un scan ne pende indéfiniment.
+    # Use a short HTTP timeout so scans cannot hang indefinitely.
     try:
-        loader.context._session.timeout = SESSION_TIMEOUT
+        from ...timeout_settings import network_timeout
+        loader.context._session.timeout = network_timeout(SESSION_TIMEOUT)
     except (AttributeError, TypeError) as e:  # pragma: no cover
-        logger.debug("Config timeout session échouée : %s", e)
+        logger.debug("Session timeout configuration failed: %s", e)
 
-    # 1) Charger une session instaloader existante si présente.
+    # 1) Load an existing Instaloader session if available.
     session_loaded = False
     username = _detect_session_username()
     if username:
         try:
             loader.load_session_from_file(username)
-            logger.info("Session Instagram chargée : %s", username)
+            logger.info("Instagram session loaded: %s", username)
             session_loaded = True
         except Exception as e:
-            logger.warning("Chargement session Instagram échoué : %s", e)
+            logger.warning("Instagram session load failed: %s", e)
 
-    # 2) Sinon, auto-import des cookies du navigateur.
+    # 2) Otherwise import browser cookies automatically.
     if not session_loaded and _auto_import_browser_cookies(loader):
         session_loaded = True
 
     if not session_loaded:
         logger.warning(
-            "Aucune session Instagram (ni fichier, ni cookies navigateur). "
-            "Les profils privés / rate-limit échoueront."
+            "No Instagram session (neither file nor browser cookies). "
+            "Private profiles / rate-limited requests will fail."
         )
     # 3) Impersonation curl_cffi (après chargement session/cookies) :
     #    le TLS-fingerprint Chrome évite le 429 anti-bot d'Instagram.
@@ -394,18 +396,16 @@ def _save_cursor(username, shortcode):
 # Helpers de mapping post -> item(s) du schéma commun.
 # --------------------------------------------------------------------------- #
 def _post_page_url(shortcode):
-    """URL stable de la page d'un post/reel (acceptée par yt-dlp en download)."""
+    """Return the stable post/reel page URL accepted by yt-dlp downloads."""
     return f"https://www.instagram.com/p/{shortcode}/"
 
 
 def _items_from_post(post, original_url=None):
-    """Convertit un `instaloader.Post` en liste d'items du schéma commun.
+    """Convert an instaloader.Post into shared-schema items.
 
-    Gère les carrousels (GraphSidecar → plusieurs médias). Chaque accès aux
-    attributs instaloader peut lever ; on isole pour ne pas perdre tout le post.
-    `original_url` (si fourni) prime sur l'URL reconstruite — utile pour un
-    post/reel unique fourni par l'utilisateur (préserve /reel/ vs /p/).
-    """
+    A GraphSidecar carousel can yield multiple media items. Isolate attribute
+    access failures so one does not discard the entire post. When supplied,
+    original_url takes precedence, preserving a user-provided /reel/ versus /p/."""
     items = []
     try:
         shortcode = post.shortcode
@@ -419,7 +419,7 @@ def _items_from_post(post, original_url=None):
     except Exception:
         typename = None
 
-    # Carrousel : plusieurs slides (images et/ou vidéos).
+    # Carousel: multiple image and/or video slides.
     if typename == "GraphSidecar":
         try:
             nodes = list(post.get_sidecar_nodes())
@@ -440,7 +440,7 @@ def _items_from_post(post, original_url=None):
             })
         return items
 
-    # Post simple : image ou vidéo unique.
+    # Single post: one image or video.
     try:
         is_video = bool(post.is_video)
         thumbnail = post.url
@@ -459,7 +459,7 @@ def _items_from_post(post, original_url=None):
 
 
 def _looks_like_block(exc):
-    """True si l'exception ressemble à un blocage anti-bot (auth/403/rate-limit)."""
+    """Return whether the exception indicates anti-bot blocking (auth/403/rate limit)."""
     msg = str(exc).lower()
     return any(hint in msg for hint in _BLOCK_HINTS)
 
@@ -512,6 +512,8 @@ def _scan_profile(loader, username, resume_from=None, save_cursor=False):
     posts_failed = 0
     timed_out = False
     capped = False
+    from ...timeout_settings import network_timeout
+    scan_timeout = network_timeout(PROFILE_SCAN_TIMEOUT)
     started = time.time()
     posts_iter = profile.get_posts()
     if resume_from:
@@ -541,55 +543,46 @@ def _scan_profile(loader, username, resume_from=None, save_cursor=False):
         last_shortcode = None
         for post in posts_iter:
             if len(items) >= SCAN_LIMIT:
-                # Plafond SCAN_LIMIT atteint : on ne regarde jamais le post
-                # suivant, donc on ne peut pas savoir si le profil s'arrêtait
-                # PILE là ou continuait — même limite de détection que
-                # picazor.py (cf. son commentaire). Côté honnête : PARTIEL même
-                # au risque d'un faux positif rare sur un profil qui aurait
-                # EXACTEMENT SCAN_LIMIT publications.
+                # At SCAN_LIMIT we never inspect the next post, so we cannot tell
+                # whether the profile ends here or has more items. Mark it partial,
+                # accepting a rare false positive for exactly SCAN_LIMIT posts,
+                # as with the Picazor limit.
                 capped = True
                 break
-            if time.time() - started > PROFILE_SCAN_TIMEOUT:
-                logger.warning("Timeout scan profil %s (%ds), %d items.",
-                               username, PROFILE_SCAN_TIMEOUT, len(items))
+            if time.time() - started > scan_timeout:
+                logger.warning("Profile scan timeout for %s (%ds), %d items.",
+                               username, scan_timeout, len(items))
                 timed_out = True
                 break
             posts_seen += 1
             try:
                 converted = _items_from_post(post)
             except Exception as e:
-                # Un post cassé ne doit pas tuer le scan entier.
-                logger.debug("Post ignoré (%s) : %s", username, e)
+                # One broken post must not abort the entire scan.
+                logger.debug("Post skipped (%s): %s", username, e)
                 posts_failed += 1
                 continue
             if not converted:
-                # Post chargé sans lever mais aucun média extractible (chaque
-                # accès attribut de `_items_from_post` est déjà isolé dans son
-                # propre `except` — cf. sa docstring) : conversion ratée, compte
-                # comme un échec de post, pas comme « rien à ajouter ».
+                # A loaded post without extractable media indicates conversion failure.
+                # _items_from_post already isolates attribute errors, so count this as
+                # a failed post rather than an ordinary empty result.
                 posts_failed += 1
                 continue
             last_shortcode = post.shortcode
             for item in converted:
                 items.append(item)
                 if len(items) >= SCAN_LIMIT:
-                    # Même plafond, atteint cette fois en cours de carrousel :
-                    # même limite de détection / même choix honnête que ci-dessus.
+                    # The same cap was reached within a carousel: apply the same
+                    # conservative partial-result policy.
                     capped = True
                     break
     except Exception as e:
-        # Erreur pendant l'itération paginée (souvent rate-limit en cours de route).
+        # Paginated iteration failed, commonly due to a mid-scan rate limit.
         if items:
-            # On a déjà des items utiles → on les retourne sans erreur, mais la
-            # récolte n'est PAS garantie complète (cas le plus courant : rate-limit
-            # en cours de route) — signal `partial`, même convention que
-            # `base.ResultList.partial` / le cas `timed_out`/`posts_failed`
-            # juste en dessous (réutilisée telle quelle), lue par `routes/scrape.py`
-            # sur l'objet retourné sans changement côté route. Avant cette
-            # correction ce chemin renvoyait `items[:SCAN_LIMIT], None` — une
-            # liste ordinaire sans signal de troncature, présentant une récolte
-            # coupée comme complète.
-            logger.warning("Itération profil %s interrompue après %d items : %s",
+            # Keep useful collected items, but mark the interrupted scan partial.
+            # base.ResultList carries this metadata to routes without requiring
+            # source-specific handling.
+            logger.warning("Profile %s iteration interrupted after %d items: %s",
                            username, len(items), e)
             result = ResultList(items[:SCAN_LIMIT])
             result.partial = True
@@ -597,7 +590,7 @@ def _scan_profile(loader, username, resume_from=None, save_cursor=False):
             if save_cursor and last_shortcode:
                 _save_cursor(username, last_shortcode)
             return result, None
-        logger.warning("Itération profil %s échouée : %s", username, e)
+        logger.warning("Profile %s iteration failed: %s", username, e)
         return None, _AUTH_ERROR
 
     if save_cursor and last_shortcode:
@@ -605,40 +598,27 @@ def _scan_profile(loader, username, resume_from=None, save_cursor=False):
 
     if not items:
         if timed_out:
-            # Le rate-controller d'instaloader DORT au lieu de lever (cf. docstring
-            # de module) : un profil throttled peut heurter `PROFILE_SCAN_TIMEOUT`
-            # sans jamais produire d'exception ni un seul item. Un vrai échec, pas
-            # « le profil n'a rien publié » — avant cette correction ce chemin
-            # retombait dans le kind='empty' juste en dessous.
+            # Instaloader's rate controller sleeps instead of raising, so a
+            # throttled profile may hit PROFILE_SCAN_TIMEOUT without any item or
+            # exception. Report a failure rather than an empty profile.
             return None, (f"Instagram profile scan timed out after "
-                          f"{PROFILE_SCAN_TIMEOUT}s ({posts_seen} post(s) checked, "
+                          f"{scan_timeout}s ({posts_seen} post(s) checked, "
                           f"no media collected): {username}.")
         if posts_failed:
-            # Des posts ont été vus mais AUCUN n'a survécu à la conversion
-            # (typiquement un changement de mise en page côté Instagram) : échec
-            # systématique, pas un profil vide.
+            # Posts were present but every conversion failed, often after an
+            # Instagram layout change. This is a systematic failure, not an empty
+            # profile.
             return None, (f"Instagram: {posts_failed} post(s) found for {username} "
                           f"but none could be read (layout change?).")
-        # `profile.get_posts()` a itéré jusqu'au bout PROPREMENT — sans lever
-        # (le `except` ci-dessus l'aurait intercepté), sans timeout (`timed_out`
-        # resterait False) et sans produire un seul post traitable
-        # (`posts_failed` resterait 0 aussi) : compte public légitimement sans
-        # publication, pas un échec. Résultat vide légitime, même convention que
-        # gdl.GdlError kind='empty'.
+        # Iteration completed without an exception, timeout or failed post.
+        # This is a legitimately empty public profile: use the same 'empty'
+        # kind as gdl.GdlError.
         return None, GdlError(f"No media found for profile {username}.", 'empty')
 
     if timed_out or posts_failed or capped:
-        # Récolte non garantie complète : soit le plafond de temps a coupé
-        # l'itération avant la fin, soit certains posts ont échoué à la
-        # conversion pendant que d'autres réussissaient, soit le plafond
-        # SCAN_LIMIT a été atteint (`capped` — avant cette correction ce
-        # troisième cas retombait tout droit dans le `return items[:SCAN_LIMIT],
-        # None` final, une liste ordinaire sans signal de troncature : un
-        # profil de 5000 posts ressemblait à un profil de 50). Les items
-        # présents restent valides — signal `partial` plutôt que de les jeter,
-        # même convention que `base.ResultList.partial` (réutilisée telle
-        # quelle), lue par `routes/scrape.py` sur l'objet retourné sans
-        # changement côté route.
+        # Timeouts, individual conversion failures or SCAN_LIMIT can leave an
+        # incomplete scan. Preserve valid items and mark ResultList.partial so
+        # routes do not present truncated results as complete.
         result = ResultList(items[:SCAN_LIMIT])
         result.partial = True
         # Priority: a timeout or conversion failures are real problems; the
@@ -655,7 +635,7 @@ def _scan_profile(loader, username, resume_from=None, save_cursor=False):
 
 
 def _scan_single(loader, shortcode, original_url=None):
-    """Récupère un post/reel unique. Retourne (items, error)."""
+    """Fetch an individual post/reel and return (items, error)."""
     try:
         post = instaloader.Post.from_shortcode(loader.context, shortcode)
     except instaloader.QueryReturnedNotFoundException:
@@ -665,23 +645,19 @@ def _scan_single(loader, shortcode, original_url=None):
         return None, ("Instagram rate-limit: trop de requêtes. "
                       "Attends ~10 min avant de relancer.")
     except Exception as e:
-        logger.warning("Chargement post %s échoué : %s", shortcode, e)
+        logger.warning("Post %s load failed: %s", shortcode, e)
         return None, _AUTH_ERROR
 
     try:
         items = _items_from_post(post, original_url=original_url)
     except Exception as e:
-        logger.warning("Conversion post %s échouée : %s", shortcode, e)
+        logger.warning("Post %s conversion failed: %s", shortcode, e)
         return None, _AUTH_ERROR
 
     if not items:
-        # PAS un résultat vide légitime (kind='empty', finding #3) : un
-        # post/reel Instagram valide PORTE toujours au moins un média — s'il a
-        # chargé sans lever (le `except` ci-dessus l'aurait intercepté) et que
-        # `_items_from_post` renvoie quand même une liste vide, c'est que
-        # chaque accès attribut (shortcode/typename/is_video/url…) a échoué en
-        # silence (chacun est déjà encapsulé dans son propre `except` — cf.
-        # `_items_from_post`) : un vrai échec de conversion, pas « rien ici ».
+        # A valid loaded post/reel has at least one media item. An empty list
+        # here means every protected attribute/conversion attempt failed.
+        # Report a conversion failure rather than a legitimate empty result.
         return None, f"No usable media for {shortcode}."
     return items[:SCAN_LIMIT], None
 
@@ -722,7 +698,7 @@ def scan(validation, resume=False, save_cursor=False):
         try:
             loader = _build_loader()
         except Exception as e:
-            logger.warning("Construction loader Instagram échouée : %s", e)
+            logger.warning("Instagram loader creation failed: %s", e)
             return None, _AUTH_ERROR
 
         if url_type == URLType.PROFILE:
@@ -735,8 +711,8 @@ def scan(validation, resume=False, save_cursor=False):
         return None, f"Unsupported Instagram URL type: {getattr(url_type, 'value', url_type)}."
 
     except Exception as e:
-        # Filet de sécurité absolu — scan() ne doit jamais propager d'exception.
-        logger.warning("Erreur inattendue scan Instagram : %s", e)
+        # Final safety net: scan() must never propagate an exception.
+        logger.warning("Unexpected Instagram scan error: %s", e)
         if _looks_like_block(e):
             return None, _AUTH_ERROR
         return None, "Instagram scan error."
@@ -749,7 +725,7 @@ from . import registry
 class InstagramSource(Source):
     name = 'instagram'
     priority = 100
-    category = 'image'   # classé image (choix produit) → ouvert aux non-admins
+    category = 'image'   # product classification: available to non-admins
     capabilities = Capabilities(can_enumerate_profile=True, needs_auth=True, own_downloader=False)
 
     def match(self, url):

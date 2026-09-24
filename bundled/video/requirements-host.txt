@@ -1,0 +1,6 @@
+# Optional CPU media tools used in the LDS process. Setup protects core pins.
+av>=13,<19
+imageio-ffmpeg>=0.5,<1
+numpy>=1.26,<2
+opencv-python-headless>=4.9,<6
+curl_cffi>=0.7,<1

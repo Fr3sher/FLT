@@ -5,9 +5,13 @@ An external LoRA is ANY models/loras file stacked on top of a run's cells via
 resolve under a loras root is a hard error (never a silent skip — the 2026-07
 privacy-guard lesson), and the arch preflight covers externals so a wrong-family
 file 409s before any row exists."""
-import json
 
 import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
+import json
+
 
 _ST = (b'\x08\x00\x00\x00\x00\x00\x00\x00{"__metadata__":{}}'
        .ljust(32, b'\x00'))

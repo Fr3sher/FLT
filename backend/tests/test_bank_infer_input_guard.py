@@ -387,10 +387,9 @@ def test_joycaption_reports_rejected_snapshot_in_errors(tmp_path, monkeypatch, c
 
     weight = types.SimpleNamespace(dtype='bfloat16', device='vision')
     vision = types.SimpleNamespace(
-        vision_model=types.SimpleNamespace(
-            head=types.SimpleNamespace(attention=types.SimpleNamespace(embed_dim=1)),
-            embeddings=types.SimpleNamespace(
-                patch_embedding=types.SimpleNamespace(weight=weight))))
+        head=types.SimpleNamespace(attention=types.SimpleNamespace(embed_dim=1)),
+        embeddings=types.SimpleNamespace(
+            patch_embedding=types.SimpleNamespace(weight=weight)))
     language = types.SimpleNamespace(
         get_input_embeddings=lambda: types.SimpleNamespace(weight=types.SimpleNamespace(device='language')))
 

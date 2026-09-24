@@ -4,7 +4,7 @@ The user defines named combinations (`klein.generation_lora_presets`, entries
 {name, loras: [{file, strength}]}); per run only a preset NAME is sent and the
 backend resolves the chain from CONFIG (fail-closed). These tests pin:
 (a) the graph wiring 114 -> consistency -> gen_1 -> ... -> gen_N -> 139 for a
-    preset with N > 2, order preserved, caps (8 rows/preset, 12 presets);
+    preset with N > 2, order preserved, bounded active chains, every saved preset retained;
 (b) the two-stage soft migration: very old single-slot keys -> flat list ->
     ONE 'My LoRAs' preset; idempotent, legacy keys dropped, purged from the
     file on save, deleted preset never resurrects;
@@ -213,7 +213,8 @@ def test_configured_presets_sanitized_ordered_capped(app):
             {'name': 'Big', 'loras': []},               # duplicate name -> dropped
         ] + many_presets}})
         out = keh.configured_generation_lora_presets()
-        assert len(out) == keh.MAX_GENERATION_LORA_PRESETS
+        assert len(out) == 16
+        assert out[-1]['name'] == 'P14'
         big = out[0]
         assert big['name'] == 'Big'
         assert len(big['loras']) == keh.MAX_GENERATION_LORAS

@@ -1,21 +1,11 @@
 // react-frontend/src/components/dataset/studio/StackVariantsGrid.jsx
 /**
- * Vue résultats d'une PILE 🧬 : une COLONNE par VARIANTE DE POIDS de la même pile,
- * pas par LoRA.
- *
- * La grille de comparaison (colonnes = LoRA, lignes = strength) est le bon outil pour
- * opposer des LoRA ; sur une pile elle produit une colonne unique à une ligne. Ce qui
- * varie d'un run de pile à l'autre, ce sont les POIDS — donc les colonnes sont les
- * relances (backend : `stack_variants`, même composition, run courant compris), les
- * lignes sont les LoRA de la pile avec leur poids, et les images de chaque variante
- * sont posées sous sa colonne, votables sur place.
- *
- * Chaque variante donne deux gestes : « Open » (la charger comme run courant, pour
- * voter/relancer dessus) et « Use these weights » (recharger ses poids dans les
- * curseurs du panneau de lancement, pour repartir de là).
- *
- * Responsive : le tableau vit dans son PROPRE conteneur `overflow-x-auto` — à 400 px
- * il défile horizontalement au lieu de faire déborder la page.
+ * STACK results use one column per WEIGHT VARIANT, not per LoRA. The normal
+ * LoRA-column/strength-row comparison collapses to one cell for stacks, whose meaningful variation
+ * is weight. Columns are backend stack_variants with the same composition, including the current
+ * run; rows list LoRAs and weights, with votable images below each column. Open loads a variant as
+ * the current run; Use these weights restores its weights to launch sliders. Keep the table inside
+ * its OWN overflow-x-auto container so it scrolls at 400 px without overflowing the page.
  */
 import { fmt } from '../../../utils/studioFormat';
 import { HelpBadge } from '../../../help/HelpMode';

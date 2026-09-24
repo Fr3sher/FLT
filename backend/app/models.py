@@ -11,27 +11,27 @@ class FaceDataset(db.Model):
     name = db.Column(String(100), nullable=False)
     trigger_word = db.Column(String(60), nullable=False)
     ref_filename = db.Column(String(255), nullable=True)
-    # Original PLEIN CADRE de la référence (aspect conservé, capé ~2048), gardé pour
-    # que le recadrage manuel puisse RÉÉLARGIR au lieu de seulement resserrer le crop
-    # déjà fait. ref_filename = le carré dérivé (auto head-crop ou recadrage manuel).
+    # Original full-frame reference, aspect preserved and capped near 2048,
+    # kept so manual cropping can widen a previous crop. ref_filename is
+    # the derived square from automatic head cropping or manual cropping.
     ref_original_filename = db.Column(String(255), nullable=True)
-    # Références ADDITIONNELLES (JSON list de filenames, cap côté service) : envoyées
-    # en plus à Nano Banana pour renforcer la cohérence d'identité. La principale
-    # (ref_filename) reste la seule source de Klein, du crop et du scoring InsightFace.
+    # Additional references (JSON filename list, capped in the service) sent
+    # to Nano Banana to reinforce identity consistency. The main ref_filename
+    # remains the sole input for Klein, cropping and InsightFace scoring.
     ref_extra_filenames = db.Column(Text, nullable=True)
-    # Réglages gagnants du Studio de test LoRA (JSON: {lora_filename, strength,
-    # z_model, seed, decided_at}). Écrit par l'humain via « ★ Définir comme
-    # meilleur réglage », jamais automatiquement.
+    # Winning LoRA Test Studio settings: JSON {lora_filename, strength,
+    # z_model, seed, decided_at}. Written by the user through Set as best
+    # settings, never automatically.
     best_settings = db.Column(Text, nullable=True)
-    # Entraînement sur base CUSTOM : modèle de base ComfyUI choisi (z_model value ;
-    # None = officiel Z-Image-Turbo) + variante (turbo|base|deturbo) qui règle
-    # l'adapter de de-distillation. Isole aussi le run d'entraînement par base.
+    # Custom training base: selected ComfyUI z_model (None means official
+    # Z-Image-Turbo) and turbo/base/deturbo variant controlling the
+    # de-distillation adapter. Also isolates training runs by base.
     train_base_model = db.Column(Text, nullable=True)
     train_variant = db.Column(String(20), nullable=True)
-    # « Custom weights… » (V1, local-only) : quand train_base_model est un chemin
-    # ABSOLU vers un .safetensors, c'est un poids custom de la MÊME architecture
-    # (krea/flux/flux2klein/sdxl). Overrides SDXL UNIQUEMENT (ai-toolkit ne les
-    # honore top-level que pour SDXL) : chemin VAE et chemin/te repo-id du TE.
+    # Custom weights (V1, local only): an absolute .safetensors path in
+    # train_base_model denotes weights of the same architecture
+    # (krea/flux/flux2klein/sdxl). VAE and text-encoder path/repo overrides
+    # are SDXL-only, the only family ai-toolkit honors at the top level.
     train_vae_path = db.Column(Text, nullable=True)
     train_te_path = db.Column(Text, nullable=True)
     # Per-FAMILY memory of (base, variant). `train_base_model`/`train_variant`
@@ -57,8 +57,8 @@ class FaceDataset(db.Model):
     # Anima on a family switch — silently, and it changes the LoRA that comes out.
     # Additive + nullable migration in create_app; NULL = nothing remembered yet.
     train_family_settings = db.Column(Text, nullable=True)
-    # Réglages ai-toolkit avancés éditables par dataset (JSON) : rank, resolution,
-    # save_every. NULL = défauts family-aware. Cf. lora_training._train_settings.
+    # Per-dataset editable ai-toolkit settings: JSON rank/resolution/save_every.
+    # NULL uses family-specific defaults; see lora_training._train_settings.
     train_settings = db.Column(Text, nullable=True)
     # Slider LoRA mode (Beta, ai-toolkit `concept_slider` trainer). JSON:
     # {enabled, positive, negative, target_class, anchor, guidance, anchor_strength}.
@@ -66,30 +66,30 @@ class FaceDataset(db.Model):
     # preset — which REPLACES train_settings — can never silently wipe a slider
     # setup. Cf. lora_training._slider_settings. Additive migration in create_app.
     train_slider = db.Column(Text, nullable=True)
-    # Famille de modèle entraînée : 'zimage' (défaut/None) ou 'sdxl'. Pilote la
-    # branche de build_job_config (arch/scheduler/base) et le dossier loras d'import.
+    # Trained model family: zimage (default/None) or sdxl. Controls the
+    # build_job_config architecture/scheduler/base branch and LoRA import folder.
     train_type = db.Column(String(16), nullable=True)
-    # Nature des poids optimisés. `lora` est le comportement historique et reste
-    # le défaut explicite des nouvelles lignes comme des bases migrées. Le MVP
-    # dense (`full_transformer`) entraîne uniquement le transformer Krea 2 Raw et
-    # n'est exécutable que dans la lane cloud (voir services.lora_training).
+    # Weight optimization type. lora preserves historical behavior and is the
+    # explicit default for new and migrated rows. The dense full_transformer
+    # MVP trains only the Krea 2 Raw transformer in the cloud lane
+    # (services.lora_training).
     training_mode = db.Column(String(32), nullable=False, default='lora',
                               server_default='lora')
-    # Nature du dataset : NULL/'character' (défaut historique) ou 'concept'. Orthogonale
-    # à train_type — un concept s'entraîne sur n'importe quelle base. Inverse la logique
-    # import/caption (cf face_dataset_service : is_concept). Colonne ajoutée après coup
-    # → migration additive idempotente dans create_app (db.create_all n'ALTER jamais).
+    # Dataset kind: NULL/character (historical default) or concept. Independent
+    # of train_type: concepts can train on any base. Reverses import/caption
+    # logic (face_dataset_service.is_concept). Added through an idempotent
+    # create_app migration; db.create_all never alters existing columns.
     kind = db.Column(String(16), nullable=True)
-    # WHAT the subject is: NULL/'human' (historique) or animal/creature/object/other.
-    # ORTHOGONALE à `kind` (character/concept/style) — un chien précis = character+animal,
-    # « les chiens en général » = concept+animal. Steers the generation catalog + the
-    # identity lock so the prompts stop assuming a person; NULL behaves exactly as
-    # 'human' (byte-identical). Colonne additive (migration in create_app).
+    # Subject type: NULL/human (historical), animal/creature/object/other.
+    # Independent of kind: a specific dog is character+animal; dogs in general
+    # are concept+animal. Controls generation catalog and identity lock so
+    # prompts do not assume a person. NULL is byte-identical to human.
+    # Additive column migrated in create_app.
     subject_type = db.Column(String(16), nullable=True)
-    # Cible de fidélité (datasets personnage) : NULL/'face' (historique) ou 'body'.
-    # 'body' = le LoRA doit reproduire AUSSI la morphologie/les marques corporelles →
-    # captions bannissent en plus tatouages/cicatrices/grains de beauté (ils se lient
-    # au trigger), composition cible plus de bustes/corps, import plein cadre par défaut.
+    # Character-dataset fidelity target: NULL/face (historical) or body.
+    # body also reproduces body shape and markings: captions omit tattoos,
+    # scars and moles so they bind to the trigger; composition favors bust/body
+    # shots and imports default to full frame.
     fidelity = db.Column(String(8), nullable=True)
     # Concept datasets only: what recurring act/concept must be OMITTED from every
     # caption so it binds to the trigger (the inverse of a character LoRA). Feeds the
@@ -178,25 +178,22 @@ class FaceDatasetImage(db.Model):
     # gain one, and a dangling id must read as "not promoted", never as a boot
     # error. Additive column (migration in create_app).
     bank_image_id = db.Column(Integer, nullable=True, index=True)
-    # Ressemblance faciale vs la reference (face analyzer Lot A). face_score = cosinus
-    # ArcFace brut (NULL si non note) ; face_state = scorable|no_face|low_det|too_small|
-    # extreme_pose|unreadable|error. Score brut persiste -> seuils recalibrables cote UI.
+    # Facial similarity to the reference (face analyzer phase A). face_score = cosine
+    # Raw ArcFace value (NULL if not scored); face_state = scorable|no_face|low_det|too_small|
+    # extreme_pose|unreadable|error. Persist the raw score so the UI can recalibrate thresholds.
     face_score = db.Column(Float, nullable=True)
     face_state = db.Column(String(16), nullable=True)
-    # Pourquoi status='failed' : message d'erreur du moteur (API/sauvegarde/queue),
-    # affiché sur la tuile — sinon l'échec est muet et l'utilisateur relance à
-    # l'aveugle. Nettoyé au regenerate. Colonne additive (migration create_app).
+    # Reason for status=failed: engine API/save/queue error shown on the tile
+    # so users do not retry blindly. Cleared by regenerate. Additive column
+    # migrated in create_app.
     fail_reason = db.Column(Text, nullable=True)
-    # Ce que fail_reason raconte, en UN mot machine — pour COMPTER les échecs par
-    # nature sans relire la phrase (une phrase se réécrit, une clé non) :
-    #   'refused' = le fournisseur a répondu normalement et a refusé l'image
-    #               (filtre de sortie) — ce n'est pas une panne ;
-    #   'empty'   = 200 sans image, sans raison exploitable (moteurs qui ne
-    #               savent pas distinguer refus et hoquet) ;
-    #   'error'   = vraie panne (réseau, clé, quota, 5xx, sauvegarde, queue).
-    # NULL = ligne d'avant la colonne, ou échec non classé : l'UI ne compte alors
-    # que ce qu'elle sait, elle ne devine pas. Colonne additive (migration
-    # create_app). Valeurs = clés stockées en base : ne jamais les renommer.
+    # Stable machine-readable category for fail_reason, used to count failures
+    # without parsing changeable wording. refused means the provider returned
+    # normally but rejected the image through output filtering; empty means
+    # HTTP 200 without an image or usable reason; error means a real network,
+    # key, quota, 5xx, save or queue failure. NULL means a historical or
+    # unclassified failure; UI counters do not guess. Additive create_app
+    # migration. These values are stored database keys: never rename them.
     fail_kind = db.Column(String(16), nullable=True)
     # 📷 The camera position this row was rendered AT ('azimuth/elevation/
     # distance', services/camera_angles.pose_id) — same contract as
@@ -217,32 +214,27 @@ class FaceDatasetImage(db.Model):
     # image payload (parsed, never raw JSON). Additive column
     # (_SCHEMA_ADDITIONS).
     generation_meta = db.Column(Text, nullable=True)
-    # De combien la box recadrée (head-crop auto à l'import OU recadrage manuel) est
-    # en-dessous de la résolution d'entraînement : size / côté_de_la_box. NULL =
-    # jamais croppé (import plein cadre) ou pas encore recalculé (anciennes lignes).
-    # >1 = la box était plus petite que 1024. Deux producteurs, pixels différents,
-    # MÊME sens et même remède :
-    #   - import head-crop : la box est agrandie (LANCZOS) → texture inventée ;
-    #   - recadrage manuel : depuis la fin de l'agrandissement, la tuile garde ses
-    #     pixels et reste donc simplement sous la résolution d'entraînement.
-    # Dans les deux cas le cadrage est « rempli en recadrant », pas par une vraie
-    # prise native. Valeur et échelle INCHANGÉES (ne pas plafonner : le seuil
-    # UPSCALE_WARN_THRESHOLD et les lignes existantes en dépendent). Colonne additive
-    # (migration create_app). Alimente composition_upscaled (dataset_payload).
+    # Crop shortfall relative to training resolution: size / crop-box side,
+    # for automatic import head crops and manual crops. NULL means uncropped
+    # or an old row awaiting recalculation. Values above 1 mean a box smaller
+    # than 1024. Import head crops upscale with LANCZOS, synthesizing texture;
+    # manual crops now preserve pixels and remain below training resolution.
+    # Both fill the frame by cropping rather than using a native close shot.
+    # Keep value/scale unchanged and uncapped: existing rows and
+    # UPSCALE_WARN_THRESHOLD depend on it. Additive create_app migration;
+    # feeds dataset_payload.composition_upscaled.
     upscale_ratio = db.Column(Float, nullable=True)
-    # Watermark auto-correction (V1) : détection + suppression des watermarks INCRUSTÉS
-    # (logo de site, URL, pseudo, texte de studio ajouté PAR-DESSUS la photo scrapée) —
-    # sinon le LoRA les apprend. watermark_state : NULL (jamais scanné) | 'none' (propre)
-    # | 'detected' (trouvé, pas encore traité / à revoir manuellement) | 'dismissed'
-    # (l'utilisateur a jugé en review que c'est un FAUX positif → plus de 🚩, et les
-    # prochains scans le sautent) | 'cleaned' (crop ou inpaint LaMa appliqué) | 'failed'.
-    # watermark_bbox : JSON [x1,y1,x2,y2] normalisé
-    # [0,1] du watermark (NULL si aucun). Les bbox VLM sont GROSSIÈRES → déjà élargies
-    # d'une marge avant stockage. Colonnes additives (migration create_app).
+    # Watermark correction (V1): detect/remove overlaid site logos, URLs,
+    # usernames or studio text so the LoRA does not learn them. States:
+    # NULL=unscanned, none=clean, detected=awaiting treatment/review,
+    # dismissed=user-confirmed false positive (no flag; later scans skip it),
+    # cleaned=crop/LaMa applied, failed=failure. watermark_bbox is normalized
+    # JSON [x1,y1,x2,y2] in [0,1], or NULL. Coarse VLM boxes are expanded
+    # before storage. Additive create_app migrations.
     watermark_state = db.Column(String(16), nullable=True)
     watermark_bbox = db.Column(Text, nullable=True)
-    # Correction manuelle : JSON list de bbox normalisées. NULL conserve le bbox
-    # automatique comme source effective ; [] est un override explicite vide.
+    # Manual correction: JSON list of normalized boxes. NULL uses the
+    # automatic box; [] explicitly overrides with no boxes.
     watermark_regions = db.Column(Text, nullable=True)
     # WHICH detector ruled on this row: 'detector' (the SigLIP2 cascade extra) |
     # 'vision' (the Ollama vision model) | NULL = unknown, never guessed. Same
@@ -262,9 +254,9 @@ class FaceDatasetImage(db.Model):
     # watermark_state + watermark_regions (one funnel, one undo, one editor);
     # this column only lets the pass resume and report. Additive (create_app).
     text_state = db.Column(String(16), nullable=True)
-    # Métadonnées de provenance génériques, sérialisées en JSON. La première
-    # intégration prise en charge est Pexels : plateforme, page photo et crédit
-    # photographe. Toute écriture passe par la validation stricte du service.
+    # Generic JSON provenance metadata. Pexels is the first integration:
+    # platform, photo page and photographer credit. All writes pass strict
+    # service validation.
     source_metadata = db.Column(Text, nullable=True)
     # Cached CONTENT hash of the file (sha1 of its bytes) and the `size:mtime` it
     # was computed for. The run snapshot needs to know whether the PIXELS changed
@@ -745,6 +737,12 @@ class BankFolderProbe(db.Model):
                 f'{self.subfolder!r} {self.verdict}>')
 
 
+VIDEO_START_FRAME = 'video_start_frame'
+VIDEO_LAST_FRAME = 'video_last_frame'
+VIDEO_FRAME_KINDS = (VIDEO_START_FRAME, VIDEO_LAST_FRAME)
+VIDEO_FRAME_CHECKPOINTS = ('start frame', 'last frame')
+
+
 class LoraTestImage(db.Model):
     """One cell image of a LoRA Test-Studio run (checkpoint x strength grid).
 
@@ -762,51 +760,47 @@ class LoraTestImage(db.Model):
     job_id = db.Column(String(36), nullable=True, index=True)
     rating = db.Column(Integer, nullable=False, default=0)  # 1 (like) | -1 (dislike) | 0 (unrated)
     seed = db.Column(db.BigInteger, nullable=True)
-    # Seed de BASE du lancement : toutes les cellules d'un même « Lancer le test »
-    # partagent ce run_seed (regroupe les N seeds d'un batch). null = anciens runs
-    # (un seul seed/lancement) → on retombe sur `seed` côté UI.
+    # Base launch seed: all cells in one test launch share run_seed, grouping
+    # N seeds in a batch. NULL marks old single-seed runs; the UI falls back to seed.
     run_seed = db.Column(db.BigInteger, nullable=True)
-    # Groupe toutes les cellules d'UN lancement ; une comparaison multi-LoRA a des
-    # cellules de dataset_id différents partageant ce run_id. null = anciens runs
-    # (backfillés par add_lora_test_run_id).
+    # Groups every cell of one launch. Multi-LoRA comparisons share run_id
+    # across dataset IDs. NULL marks old runs, backfilled by add_lora_test_run_id.
     run_id = db.Column(String(36), nullable=True, index=True)
     status = db.Column(String(10), nullable=False, default='pending')  # pending|done|failed|cancelled
-    # Pourquoi status='failed' : raison réelle remontée du chemin de génération
-    # ComfyUI (validation 400 « modèle/node introuvable », node error, timeout,
-    # enqueue raté…) — affichée au survol de la tuile en échec. Sinon l'échec est
-    # muet et l'utilisateur relance à l'aveugle (P0-b). Colonne additive (migration
-    # create_app). Les cellules en échec sont exclues du classement (cf. cell_scores).
+    # Actual ComfyUI failure reason (missing model/node 400, node error, timeout,
+    # enqueue failure), displayed on failed-tile hover to avoid blind retries.
+    # Additive create_app migration. Failed cells are excluded from cell_scores.
     error = db.Column(Text, nullable=True)
-    # Réglages du run (pour afficher TOUS les paramètres du meilleur résultat).
-    z_model = db.Column(String(255), nullable=True)   # modèle Z-Image de base
+    # Run settings: show every parameter of the best result.
+    z_model = db.Column(String(255), nullable=True)   # Base Z-Image model.
     aspect = db.Column(String(16), nullable=True)     # format d'image (9:16, 4:3, …)
-    prompt = db.Column(db.Text, nullable=True)        # prompt de test utilisé
-    cfg = db.Column(Float, nullable=True)             # CFG testé (axe optionnel)
-    steps = db.Column(Integer, nullable=True)         # steps pass 1 (KSampler) ; axe optionnel
+    prompt = db.Column(db.Text, nullable=True)        # Test prompt used.
+    cfg = db.Column(Float, nullable=True)             # Tested CFG (optional axis).
+    steps = db.Column(Integer, nullable=True)         # pass 1 steps (KSampler); optional axis
     steps2 = db.Column(Integer, nullable=True)        # SDXL : steps pass 2 (detail daemon, node 57) ; NULL = pass 1
-    extra_loras = db.Column(Text, nullable=True)      # LoRA always-on (style/utilitaire) JSON [{filename,strength}] ; appliqués à CHAQUE cellule (hors batch)
+    extra_loras = db.Column(Text, nullable=True)      # Always-on style/utility LoRAs: JSON [{filename,strength}], applied to every cell outside the batch axis.
     # LEGACY (2026-09-02): the Krea conditioning rebalance was retired — nothing
     # writes this any more (see utils/comfyui, "Retired"). Kept nullable so the
     # rows that carry a value keep it (and so the series signature in
     # checkpoint_timeline stays stable); a resume renders without it.
     krea_rebalance = db.Column(Float, nullable=True)
-    # Parité Generate (2026-07-01) — réglages persistés par cellule pour un resume fidèle.
-    negative = db.Column(Text, nullable=True)             # Z-Image : prompt négatif (node 5)
+    # Generate parity (2026-07-01): settings persisted per cell for faithful resume.
+    negative = db.Column(Text, nullable=True)             # Z-Image negative prompt (node 5).
     sampler = db.Column(String(32), nullable=True)        # Krea : node 26 sampler_name
-    # Krea : preset du sampler maison (voie SamplerCustomAdvanced). NULL = off,
-    # c.-a-d. le KSampler standard — et donc aucun node maison dans le graphe.
+    # Krea custom sampler preset (SamplerCustomAdvanced). NULL means off:
+    # use standard KSampler with no custom node in the graph.
     sampler_preset = db.Column(String(24), nullable=True)
     scheduler = db.Column(String(32), nullable=True)      # Krea : node 26 scheduler
-    weight_dtype = db.Column(String(24), nullable=True)   # Krea : node 20 précision UNET (weight_dtype)
+    weight_dtype = db.Column(String(24), nullable=True)   # Krea node 20 UNET precision (weight_dtype).
     # LEGACY (2026-09-02): the Krea2T-Enhancer toggle was retired — nothing writes
     # this any more. Kept nullable so the rows that carry a value keep it (and so
     # the series signature in checkpoint_timeline stays stable); a resume of such
     # a cell renders without the patcher.
     enhancer_strength = db.Column(Float, nullable=True)
-    detail_amount = db.Column(Float, nullable=True)       # SDXL : DetailDaemon detail_amount (NULL=défaut)
+    detail_amount = db.Column(Float, nullable=True)       # SDXL DetailDaemon detail_amount (NULL=default).
     resolution_tier = db.Column(String(12), nullable=True)  # fast|standard|hq|max (compute_tier_dims) ; NULL=table fixe
-    resolution_multiplier = db.Column(Float, nullable=True)  # multiplicateur linéaire du palier [1.0,1.9] ; NULL/1.0=palier inchangé (resume fidèle)
-    init_image = db.Column(String(255), nullable=True)    # Krea img2img : fichier init copié dans COMFYUI_INPUT_DIR
+    resolution_multiplier = db.Column(Float, nullable=True)  # Linear resolution multiplier [1.0,1.9]; NULL/1.0 leaves the tier unchanged for faithful resume.
+    init_image = db.Column(String(255), nullable=True)    # Krea img2img initial image copied to COMFYUI_INPUT_DIR.
     denoise = db.Column(Float, nullable=True)             # Krea img2img : node 26 denoise
     # Krea hi-res fix, PER RUN. NULL = the `krea_hires.*` setting at the time the
     # cell is (re)built; 1.0 = explicitly off for this run, whatever the setting
@@ -819,14 +813,13 @@ class LoraTestImage(db.Model):
     # to — only the two engine-agnostic passes exist here.
     finish_sharpen = db.Column(Float, nullable=True)
     finish_grain = db.Column(Float, nullable=True)
-    # Case « Trigger word » du Studio : False = le prompt de cette cellule est
-    # parti SANS le trigger word du dataset (aucune injection au montage du
-    # workflow). NULL = lignes d'avant la colonne / défaut → trigger injecté,
-    # ce qui est le comportement historique. Le resume relit cette colonne.
+    # Studio Trigger word checkbox: False means this cell's prompt had no
+    # dataset trigger injected during workflow assembly. NULL is the historical
+    # default (trigger injected). Resume reads this column.
     inject_trigger = db.Column(db.Boolean, nullable=True)
-    # Scoring facial objectif (« best epoch », méthode jandordoe) : similarité
-    # cosinus InsightFace vs la référence du dataset + état de scorabilité
-    # ('scorable'/'no_face'/'low_det'/…). NULL = cellule pas encore scorée.
+    # Objective facial scoring (best epoch, jandordoe method): InsightFace
+    # cosine similarity against the dataset reference plus scorable/no_face/
+    # low_det/etc. state. NULL means the cell has not yet been scored.
     face_score = db.Column(Float, nullable=True)
     face_state = db.Column(String(16), nullable=True)
     # WHICH training checkpoint produced this image — the run's record id and the
@@ -931,7 +924,7 @@ class JobQueueMixin:
         self.last_heartbeat = naive_utcnow()
 
 class ImageGenerationQueue(JobQueueMixin, db.Model):
-    """Modèle pour la file d'attente de génération d'images"""
+    """Model for the image-generation queue."""
     __tablename__ = 'image_generation_queue'
 
     id = db.Column(Integer, primary_key=True)
@@ -949,7 +942,7 @@ class ImageGenerationQueue(JobQueueMixin, db.Model):
     completed_at = db.Column(DateTime, nullable=True)
     last_heartbeat = db.Column(DateTime, nullable=True)
     comfyui_prompt_id = db.Column(String(100), nullable=True)
-    worker_id = db.Column(String(36), nullable=True)  # Worker GPU qui traite ce job
+    worker_id = db.Column(String(36), nullable=True)  # GPU worker processing this job
     job_metadata = db.Column(Text, nullable=True)
 
     __table_args__ = (
@@ -960,7 +953,7 @@ class ImageGenerationQueue(JobQueueMixin, db.Model):
     )
 
     def to_dict(self):
-        """Convertit le job en dictionnaire pour l'API"""
+        """Convert the job to an API dictionary."""
         metadata = {}
         if self.job_metadata:
             try:
@@ -991,7 +984,7 @@ class ImageGenerationQueue(JobQueueMixin, db.Model):
         }
 
     def to_status_dict(self):
-        """Version allégée de to_dict() pour le polling /status (sans workflow_data)"""
+        """Lightweight to_dict for /status polling, excluding workflow_data."""
         metadata = {}
         if self.job_metadata:
             try:
@@ -1807,3 +1800,7 @@ class VideoTestClip(db.Model):
 
     def __repr__(self):
         return f'<VideoTestClip {self.id} {self.status} lora={self.lora}>'
+
+
+# Persistent public contracts are also present in minimal embedded hosts.
+from lds_sdk import _legacy_schema, _video_schema  # noqa: E402,F401

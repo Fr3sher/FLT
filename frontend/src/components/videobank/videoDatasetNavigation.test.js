@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { VIDEO_DATASET_SECTIONS, isVideoDatasetSection } from './videoDatasetSections.js'
+import { VIDEO_DATASET_SECTIONS, isVideoDatasetSection } from "../../../../bundled/video/frontend/videobank/videoDatasetSections.js"
 import {
   PANEL_STATUS, visibleVideoDatasetSections, getVideoDatasetPanel,
   getVideoDatasetPanelStatus, getVideoDatasetPanels,
   resolveVideoDatasetLocation, withVideoDatasetLocation,
-} from './videoDatasetNavigation.js'
+} from "../../../../bundled/video/frontend/videobank/videoDatasetNavigation.js"
 
 // A dataset with everything switched on, so a test can turn ONE thing off.
 const full = {

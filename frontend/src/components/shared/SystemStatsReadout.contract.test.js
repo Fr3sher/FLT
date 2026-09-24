@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 // contract pins that the readout goes THROUGH that module and nowhere else,
 // sends the forced form for the job the offer named, and shows the armed state
 // on the button for as long as the offer lives.
-const src = readFileSync(new URL('./SystemStatsReadout.jsx', import.meta.url), 'utf8');
+const src = readFileSync(new URL("../../../../bundled/resource_monitor/frontend/components/SystemStatsReadout.jsx", import.meta.url), 'utf8');
 
 test('the readout arms only through the module, from the refusal body, and spends the arming on the next press', () => {
   assert.match(src, /import \{ OFFER_TOAST_MS, armFrom, armedUntil, consume \} from '\.\/maintenanceArming'/);

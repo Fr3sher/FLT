@@ -70,6 +70,8 @@ def test_preview_returns_a_caption_and_writes_nothing(client, app, tmp_path, mon
     assert body['caption'] == 'a candidate caption'
     assert body['chars'] == len('a candidate caption')
     assert 'duration_ms' in body and body['cancelled'] is False
+    from app.services.face_variations import DESCRIPTIVE_CAPTION_PROMPT
+    assert body['prompt'] == DESCRIPTIVE_CAPTION_PROMPT
 
     # A bench never writes — the same promise the dataset side makes.
     with app.app_context():

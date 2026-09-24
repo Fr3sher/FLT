@@ -6,19 +6,14 @@ import DatasetCaptionControl from './DatasetCaptionControl';
 import EnhancePromptButton from './EnhancePromptButton';
 import CivitaiBrowserButton from './CivitaiBrowserButton';
 
-// Champ prompt de test : textarea + « ↺ défaut » + « ✨ Enhance » + « 🔎 Describe » + prompts récents.
-// Extrait behavior-preserving de LoraTestStudio.jsx (bloc « Prompt de test »).
-// `value` = effectivePrompt, `placeholder` = d.prompt, `isCustom` = prompt édité ≠ défaut.
-// Le rendu de <RecentPrompts> reste conditionné à la présence de d.recent_prompts :
-// on ne passe `recentPrompts` que si la liste est non vide.
-// 📝 `batchPrompts`/`onToggleBatchPrompt`/`onClearBatchPrompts` : le lot de prompts
-// à rejouer en un run (cases à cocher de l'historique). Purement traversant — l'état
-// vit dans RunSetupPanel, qui est le seul à savoir ce qu'un lancement envoie.
-// 🔤 `injectTrigger`/`onInjectTrigger` : la case « Trigger word » (préfixer ou non le
-// trigger du dataset au prompt monté). Même règle : traversant, l'état vit au panneau.
-// 🌐 `civitaiPicks`/`onToggleCivitaiPick`/`onClearCivitaiPicks` : les prompts cochés
-// dans le navigateur Civitai, passes du même lot sans passer par l'historique.
-// Traversant, comme le lot ; sans handler le navigateur garde son seul ⤵ Use prompt.
+// Test prompt field: textarea, reset-to-default, Enhance, Describe and recent prompts, extracted
+// unchanged from LoraTestStudio.jsx. value is effectivePrompt, placeholder is d.prompt, and
+// isCustom means edited from default. Render RecentPrompts only for a non-empty list.
+// batchPrompts/onToggleBatchPrompt/onClearBatchPrompts pass through the replay batch; state
+// belongs to RunSetupPanel, which builds launch requests. injectTrigger/onInjectTrigger likewise
+// pass through the Trigger word checkbox. civitaiPicks/onToggleCivitaiPick/onClearCivitaiPicks add
+// checked Civitai prompts directly to the same batch, outside history. Without handlers, the
+// browser retains only Use prompt.
 export default function PromptField({ value, placeholder, onChange, onReset, isCustom, recentPrompts, datasetId, onDeletePrompt,
   batchPrompts = null, onToggleBatchPrompt = null, onClearBatchPrompts = null,
   civitaiPicks = null, onToggleCivitaiPick = null, onClearCivitaiPicks = null,
@@ -62,10 +57,10 @@ export default function PromptField({ value, placeholder, onChange, onReset, isC
             picks={civitaiPicks} onTogglePick={onToggleCivitaiPick} />
         </div>
       </div>
-      {/* 🌐 Ce que le lot tient du navigateur Civitai — visible ICI, sous le
-          champ, parce que l'historique (qui porte son propre compteur) peut
-          être vide sur un dataset neuf, et un lot invisible se lance à
-          l'aveugle. */}
+      {/*
+       * Show Civitai batch selections HERE below the field: history, with its own count, may be
+       * empty on a new dataset. An invisible batch would launch blindly.
+       */}
       {Array.isArray(civitaiPicks) && civitaiPicks.length > 0 && (
         <p className="m-0 flex flex-wrap items-center gap-1.5 text-[0.625rem] text-content-subtle"
           data-testid="civitai-batch-count">

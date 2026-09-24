@@ -1,0 +1,8 @@
+{
+  "optional_host_dependencies": {
+    "curl_cffi": {"distribution": "curl_cffi", "requirements": "requirements.txt", "setup_action": "scrape_extras"},
+    "instaloader": {"distribution": "instaloader", "requirements": "requirements.txt", "setup_action": "scrape_extras"},
+    "browser_cookie3": {"distribution": "browser-cookie3", "requirements": "requirements.txt", "setup_action": "scrape_extras"},
+    "ddgs": {"distribution": "ddgs", "requirements": "requirements.txt", "setup_action": "scrape_extras"}
+  }
+}

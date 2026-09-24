@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   FLAG_LABELS, filterByFlag, flagChips, flagFilterNote,
-} from './videoMetricsFilter.js'
+} from "../../../../bundled/video/frontend/videobank/videoMetricsFilter.js"
 
 /** ⚑ The flag chips — the half of the verdict story that was missing.
  *

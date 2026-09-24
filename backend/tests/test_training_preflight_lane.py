@@ -247,7 +247,8 @@ def test_route_without_lane_is_unchanged(app, client, tmp_path):
     with app.app_context():
         ds = _dataset(tmp_path)
         dsid = ds.id
-    with patch.object(capabilities, 'probe',
+    with patch.object(capabilities, 'probe_aitoolkit', return_value={'ok': True}), \
+            patch.object(capabilities, 'probe',
                       return_value={'aitoolkit': {'valid': True}, 'cloud_training': True}):
         plain = client.get(f'/api/dataset/{dsid}/train/preflight').get_json()
         local = client.get(f'/api/dataset/{dsid}/train/preflight?lane=local').get_json()
@@ -261,7 +262,8 @@ def test_route_lane_cloud_filters_the_machine_rows(app, client, tmp_path):
         ds = _dataset(tmp_path)
         dsid = ds.id
     vram_p, torch_p = _machine_probes()
-    with patch.object(capabilities, 'probe',
+    with patch.object(capabilities, 'probe_aitoolkit', return_value={'ok': True}), \
+            patch.object(capabilities, 'probe',
                       return_value={'aitoolkit': {'valid': True}, 'cloud_training': True}), \
             vram_p, torch_p:
         cloud = client.get(f'/api/dataset/{dsid}/train/preflight?lane=cloud').get_json()
@@ -279,7 +281,8 @@ def test_cloud_only_install_still_gets_its_cloud_preflight(app, client, tmp_path
     with app.app_context():
         ds = _dataset(tmp_path)
         dsid = ds.id
-    with patch.object(capabilities, 'probe',
+    with patch.object(capabilities, 'probe_aitoolkit', return_value={'ok': False}), \
+            patch.object(capabilities, 'probe',
                       return_value={'aitoolkit': {'valid': False}, 'cloud_training': True}):
         cloud = client.get(f'/api/dataset/{dsid}/train/preflight?lane=cloud')
         local = client.get(f'/api/dataset/{dsid}/train/preflight')

@@ -2001,7 +2001,8 @@ def test_run_klein_job_wires_workflow_and_returns_filled(app, monkeypatch, tmp_p
 
     assert err is None and filled is not None and filled.size == (64, 64)
     wf = captured['workflow_data']
-    assert captured['metadata'] == {'model_name': 'watermark_klein'}
+    assert captured['metadata'] == {'model_name': 'watermark_klein',
+                                    'processing_timeout_seconds': 300}
     assert wf['114']['inputs']['unet_name'] == 'klein\\unet.safetensors'
     assert wf['10']['inputs']['vae_name'] == 'flux2-vae.safetensors'
     assert wf['90']['inputs']['clip_name'] == 'qwen_3_8b_fp8mixed.safetensors'
@@ -2363,7 +2364,8 @@ def test_klein_clean_wires_the_recipe_into_the_shipped_graph(app, monkeypatch, t
     wf = captured['workflow_data']
     assert wf['6']['inputs']['text'] == 'remove watermark'
     assert captured['prompt'] == 'remove watermark'         # what the job list shows
-    assert captured['metadata'] == {'model_name': 'watermark_klein'}
+    assert captured['metadata'] == {'model_name': 'watermark_klein',
+                                    'processing_timeout_seconds': 300}
     assert wf['77']['inputs']['steps'] == 4
     assert wf['77']['inputs']['sampler_name'] == 'euler'
     assert wf['77']['inputs']['cfg'] == 1

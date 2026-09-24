@@ -14,9 +14,9 @@ const instructions = read('../common/DockerUpdateInstructions.jsx');
 test('settings and the global banner share one Docker update presentation', () => {
   assert.match(maintenance, /import DockerUpdateInstructions from ['"]\.\.\/common\/DockerUpdateInstructions['"]/);
   assert.match(app, /import DockerUpdateInstructions from ['"]\.\/components\/common\/DockerUpdateInstructions['"]/);
-  assert.match(maintenance, /dockerMode && s\.update_available[\s\S]{0,500}<DockerUpdateInstructions \/>/,
+  assert.match(maintenance, /dockerMode && s\.update_available[\s\S]{0,500}<DockerUpdateInstructions status=\{s\} \/>/,
     'the Settings update branch must replace the apply action with host commands');
-  assert.match(app, /dockerMode \? \([\s\S]{0,120}<DockerUpdateInstructions \/>/,
+  assert.match(app, /dockerMode \? \([\s\S]{0,120}<DockerUpdateInstructions status=\{info\} \/>/,
     'the global banner must replace its apply action with the same host commands');
 });
 
@@ -26,9 +26,9 @@ test('both apply callbacks refuse Docker mode even if stale UI invokes them', ()
 });
 
 test('the shared presentation renders the exact command contract and guide link', () => {
-  assert.match(instructions, /DOCKER_UPDATE_COMMANDS\.map\(/);
+  assert.match(instructions, /dockerUpdateCommands\(status\)\.map\(/);
   assert.match(instructions, /href=\{DOCKER_UPDATE_GUIDE_URL\}/);
-  assert.match(instructions, /Docker GPU update guide/);
+  assert.match(instructions, /Docker update guide/);
   assert.doesNotMatch(instructions, /Update &(?:amp;)? restart/);
 });
 
@@ -48,7 +48,8 @@ test('a managed bind disables both port and host controls', () => {
 
 test('managed-bind guidance names the host variable and an explicit recreate', () => {
   assert.match(server, /LDS_HOST_PORT/);
-  assert.match(server, /docker compose -f docker-compose\.gpu\.yml up -d --force-recreate/);
+  assert.match(server, /same Compose files as at launch/);
+  assert.match(server, /up -d --force-recreate studio/);
   assert.match(server, /Host and port are managed by Docker Compose/);
   assert.match(server, /\{!bindManaged && \([\s\S]{0,180}<ResetToDefault/,
     'the disabled port must not keep an apparently actionable reset control');

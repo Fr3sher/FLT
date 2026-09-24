@@ -10,7 +10,7 @@ import {
   videoBankScrapeDestination,
   videoBankScrapeFolderNotice,
   videoBankScrapeNextStep,
-} from './videoBankScrapeImport.js';
+} from "../../../../bundled/scrape/frontend/lib/videoBankScrapeImport.js";
 
 const bank = (id, scrapable) => ({ id, name: `b${id}`, scrapable, counts: { sources: 3 } });
 const items = (n) => Array.from({ length: n }, (_, i) => ({ url: `https://x/${i}.mp4` }));

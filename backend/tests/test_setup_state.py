@@ -10,10 +10,11 @@ import json
 from app import setup_state
 
 
+# The core's own working engine (Klein): these tests must hold on a checkout
+# without the API-engines plugin, whose ids a caps payload may or may not carry.
 WORKING = {
     'configured': True,
-    'engines': {'nanobanana': True, 'chatgpt': False, 'openrouter': False,
-                'klein': False, 'krea': False},
+    'engines': {'klein': True, 'krea': False},
     'comfyui': {'reachable': True, 'dir_valid': True},
     'ollama': {'reachable': True, 'installed': True, 'vision_model_ready': True},
     'aitoolkit': {'valid': True},
@@ -24,7 +25,7 @@ WORKING = {
 
 FRESH = {
     'configured': False,
-    'engines': {'nanobanana': False, 'chatgpt': False, 'openrouter': False, 'klein': False},
+    'engines': {'klein': False, 'krea': False},
     'comfyui': {'reachable': False, 'dir_valid': False},
     'ollama': {'reachable': False, 'installed': False},
     'aitoolkit': {'valid': False},
@@ -54,7 +55,7 @@ def test_fresh_install_is_not_verified(app):
 def test_configured_without_any_engine_is_not_verified(app):
     """config.json existing is not proof of a set-up machine — being able to
     generate an image is. Otherwise a half-finished wizard would silence itself."""
-    caps = _caps(engines={'nanobanana': False})
+    caps = _caps(engines={'klein': False})
     assert setup_state.install_works(caps) is False
     assert setup_state.observe(caps)['verified'] is False
 
@@ -196,5 +197,5 @@ def test_every_tracked_key_exists_in_a_real_capabilities_payload(app):
     from app import capabilities
     with app.app_context():
         caps = capabilities.probe(force=True)
-    missing = [k for k in setup_state.TRACKED_KEYS if setup_state._dig(caps, k) is None]
+    missing = [k for k in setup_state.tracked_keys() if setup_state._dig(caps, k) is None]
     assert missing == []

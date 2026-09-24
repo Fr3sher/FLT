@@ -21,10 +21,13 @@ import json
 
 import pytest
 
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_bank_service as svc
 
 from _video_extra import detect_source_stub
-from app.services import video_metrics as vm
+from lds_video import video_metrics as vm
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- the rule ------------------------------------------------------------------
@@ -118,11 +121,13 @@ def _detected_bank(client, tmp_path):
 
 
 def test_the_flash_cut_is_flagged_in_the_grid_with_nothing_measured(
-        client, tmp_path, seams, app):
+        client, tmp_path, seams, app, monkeypatch):
     """End to end on the state that produced the complaint: detected, never
     measured. The 0.5 s shot carries the chip, the 8 s one does not."""
+    monkeypatch.setattr('app.routes.settings._lan_ip', lambda: '127.0.0.1')
+    monkeypatch.setattr('app.routes.settings._tailscale_ip', lambda: None)
     bank_id = _detected_bank(client, tmp_path)
-    assert client.put('/api/settings',
+    assert client.put('/api/settings?plugin=video',
                       json={'config': {'video_bank': {'min_duration_s': 1.0}}}
                       ).status_code == 200
 
@@ -152,7 +157,7 @@ def test_the_dry_run_sees_clips_the_metrics_pass_never_touched(
     duration cut is the wrong population: the flash cuts are exactly the ones a
     user has not bothered measuring yet."""
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     bank_id = _detected_bank(client, tmp_path)
     with app.app_context():
         measured = (VideoClip.query.filter_by(bank_id=bank_id)
@@ -174,7 +179,7 @@ def test_a_shot_longer_than_the_cut_is_flagged_lengthy_and_only_then():
     maximum? Because nothing showed the shots the export TRUNCATES — it takes
     the first N frames of a shot and the rest never trains. `lengthy` names
     them; like every flag in this lane it describes, it never rejects."""
-    from app.services.video_metrics import verdicts
+    from lds_video.video_metrics import verdicts
     cuts = {'max_duration_s': 8.0}
     assert 'lengthy' in verdicts({}, cuts, duration_s=15.0)
     assert 'lengthy' not in verdicts({}, cuts, duration_s=8.0)     # equal fits
@@ -187,7 +192,7 @@ def test_a_shot_longer_than_the_cut_is_flagged_lengthy_and_only_then():
 def test_the_two_length_cuts_are_independent_and_can_both_fire_on_a_bank():
     """They are the two ends of one question and must not collapse into each
     other: a bank can hold slivers AND overlong takes at the same time."""
-    from app.services.video_metrics import verdicts
+    from lds_video.video_metrics import verdicts
     cuts = {'min_duration_s': 1.0, 'max_duration_s': 8.0}
     assert verdicts({}, cuts, duration_s=0.5) == {'brief'}
     assert verdicts({}, cuts, duration_s=20.0) == {'lengthy'}

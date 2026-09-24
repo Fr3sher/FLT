@@ -18,27 +18,67 @@ def test_status_idle_when_never_started():
     assert 'manual_command' in s   # always present so the UI can show a correct fallback
 
 
-def test_manual_command_ml_extras_is_scoped_to_this_interpreter():
-    """The manual fallback must target THIS app's interpreter (sys.executable),
-    not a bare `pip` on PATH -- otherwise a copy-paste installs into the wrong
-    environment and the extras stay unimportable. It installs the Flask-safe subset
-    (requirements-ml.txt pinned as a -c constraint) with Pillow pinned, and NEVER
-    the Pillow-incompatible extra (that one needs its own env)."""
-    import sys
+def test_manual_command_ml_extras_is_scoped_to_this_interpreter(app):
+    """Manual guidance cannot bypass managed-runtime creation or target borrowed Python."""
     from app import setup_installer
-    cmd = setup_installer.manual_command('ml_extras')
-    assert sys.executable in cmd
-    assert '-m pip install' in cmd
-    assert '-c ' in cmd and 'requirements-ml.txt' in cmd   # the file rides as a constraint
-    assert 'simple-lama-inpainting' not in cmd             # the poison never lands here
-    assert 'Pillow==' in cmd                               # app's Pillow pinned as a guard
-    assert not cmd.startswith('pip ')   # never bare pip
+    command = setup_installer.manual_command('ml_extras')
+    assert 'Install in Setup' in command and 'isolated Python' in command
+    assert '-m pip install' not in command
 
-def test_manual_command_quotes_paths_with_spaces(monkeypatch):
+def test_manual_command_uses_managed_runtime_even_when_host_path_has_spaces(monkeypatch):
     from app import setup_installer
     monkeypatch.setattr(setup_installer.sys, 'executable', r'C:\FLT - Fresh LoRa Trainer\python\python.exe')
     cmd = setup_installer.manual_command('ml_extras')
-    assert '"C:\\FLT - Fresh LoRa Trainer\\python\\python.exe"' in cmd
+    assert 'Install in Setup' in cmd and 'isolated Python' in cmd
+    assert 'C:\\FLT - Fresh LoRa Trainer' not in cmd
+
+
+@pytest.mark.parametrize('conflict', [False, True])
+def test_app_plugin_resolves_host_extras_and_preserves_pins(tmp_path, monkeypatch, conflict):
+    """Exercise real pip offline, without installing into the test interpreter."""
+    import json
+    import subprocess
+    import zipfile
+
+    from app import setup_installer
+
+    def wheel(name, version, dependencies=''):
+        module = name.replace('-', '_')
+        info = f'{module}-{version}.dist-info'
+        path = tmp_path / f'{module}-{version}-py3-none-any.whl'
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr(f'{info}/WHEEL', 'Wheel-Version: 1.0\nRoot-Is-Purelib: true\n')
+            archive.writestr(f'{info}/METADATA',
+                            f'Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n{dependencies}')
+
+    wheel('example-host', '1.0',
+          'Provides-Extra: crypto\nRequires-Dist: example-security==1.0; extra == "crypto"\n')
+    wheel('example-host', '2.0')
+    wheel('example-security', '1.0')
+    wheel('example-plugin', '1.0', f'Requires-Dist: example-host>={2 if conflict else 1}.0\n')
+    host = tmp_path / 'host.txt'
+    host.write_text('example-host[crypto]==1.0\n', encoding='utf-8')
+    plugin = tmp_path / 'plugin.txt'
+    plugin.write_text('example-plugin==1.0\n', encoding='utf-8')
+    monkeypatch.setattr(setup_installer, '_APP_REQUIREMENTS', host)
+    command = setup_installer._plugin_action_command({'python': 'app', 'requirements': plugin})
+    report = tmp_path / 'report.json'
+    result = subprocess.run(
+        [*command, '--isolated', '--dry-run', '--ignore-installed', '--no-index',
+         '--no-cache-dir', '--disable-pip-version-check', '--find-links', str(tmp_path),
+         '--report', str(report)],
+        capture_output=True, text=True, timeout=30,
+    )
+    if conflict:
+        assert result.returncode != 0
+        assert 'ResolutionImpossible' in result.stderr
+        assert not report.exists()
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        resolved = {item['metadata']['name']: item['metadata']['version']
+                    for item in json.loads(report.read_text(encoding='utf-8'))['install']}
+        assert resolved == {'example-host': '1.0', 'example-security': '1.0', 'example-plugin': '1.0'}
+
 
 def test_ollama_model_has_no_cli_fallback():
     from app import setup_installer
@@ -49,7 +89,7 @@ def test_status_includes_manual_command_while_running():
     from app import setup_installer
     setup_installer._runs['ml_extras'] = {'state': 'running', 'returncode': None, 'log': ['x']}
     s = setup_installer.status('ml_extras')
-    assert s['state'] == 'running' and 'requirements-ml.txt' in s['manual_command']
+    assert s['state'] == 'running' and 'Install in Setup' in s['manual_command']
 
 
 def test_start_unknown_action_raises():
@@ -124,8 +164,9 @@ def test_execute_worker_exception_is_captured(monkeypatch):
     assert any('nope' in line for line in setup_installer._runs['ml_extras']['log'])
 
 
-def test_run_ml_extras_captures_output(monkeypatch):
+def test_run_ml_extras_captures_output(app, monkeypatch):
     from app import setup_installer
+    _quality_target(monkeypatch)
     class FakeProc:
         stdout = iter(['Collecting rembg\n', 'Successfully installed\n'])
         returncode = 0
@@ -343,12 +384,68 @@ def test_klein_model_dest_is_unet_klein(app, tmp_path):
                                       'flux-2-klein-9b-kv-fp8.safetensors'))
 
 
-def test_download_dest_path_requires_valid_comfyui(app, tmp_path):
+@pytest.mark.parametrize('action', ['klein_lora', 'studio_qwenimage21_diffusion_model'])
+def test_download_dest_path_requires_valid_comfyui(app, tmp_path, action):
     from app import setup_installer, config
     with app.app_context():
-        config.save_config({'comfyui': {'base_dir': str(tmp_path / 'not-comfyui')}})
+        override = tmp_path / 'custom-models'
+        override.mkdir()
+        config.save_config({'comfyui': {'base_dir': str(tmp_path / 'not-comfyui'),
+                                        'models_dir': str(override)}})
         with pytest.raises(setup_installer.Precondition):
-            setup_installer._download_dest_path('klein_lora')
+            setup_installer._download_dest_path(action)
+
+
+@pytest.mark.parametrize('slot', ['diffusion_model', 'text_encoder', 'vae'])
+def test_studio_model_download_lands_in_the_configured_discovery_root(app, tmp_path, monkeypatch, slot):
+    import struct
+    from app import config, setup_installer
+    from app.services import trained_image_models
+    base = _make_comfyui(tmp_path)
+    override = tmp_path / 'custom-models'
+    action = f'studio_qwenimage21_{slot}'
+    header = b'{"weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}'
+    payload = struct.pack('<Q', len(header)) + header + b'\0' * 4
+    monkeypatch.setattr(setup_installer.requests, 'get', _FakeGet(payload=payload))
+    with app.app_context():
+        config.save_config({'comfyui': {'base_dir': str(base), 'models_dir': str(override)}})
+        spec = setup_installer.model_download_spec(action)
+        dest = setup_installer._download_dest_path(action)
+        assert dest == str(override.joinpath(*spec['dest']))
+        setup_installer._runs[action] = setup_installer._new_run()
+        assert setup_installer._run_model_download(action) == 0
+        assert action not in trained_image_models.missing_assets('qwenimage21')
+        assert os.path.isfile(dest) and not os.path.exists(dest + '.part')
+        # This change is scoped to Studio actions; existing install destinations stay stable.
+        assert setup_installer._download_dest_path('klein_lora').startswith(str(base / 'models'))
+        assert not base.joinpath('models', *spec['dest']).exists()
+
+
+def test_studio_model_download_reuses_existing_extra_root_with_models_override(app, tmp_path, monkeypatch):
+    import struct
+    from app import config, setup_installer
+    from app.services import trained_image_models
+    base = _make_comfyui(tmp_path)
+    override = tmp_path / 'custom-models'
+    shared = tmp_path / 'shared-encoders'
+    shared.mkdir()
+    existing = shared / 'qwen3vl_8b_bf16.safetensors'
+    header = b'{"weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}'
+    payload = struct.pack('<Q', len(header)) + header + b'\0' * 4
+    existing.write_bytes(payload)
+    (base / 'extra_model_paths.yaml').write_text(
+        f'shared:\n  text_encoders: {shared.as_posix()}\n', encoding='utf-8')
+    def refuse_network(*_a, **_kw):
+        raise AssertionError('An existing compatible encoder must be reused')
+    monkeypatch.setattr(setup_installer.requests, 'get', refuse_network)
+    action = 'studio_qwenimage21_text_encoder'
+    with app.app_context():
+        config.save_config({'comfyui': {'base_dir': str(base), 'models_dir': str(override)}})
+        setup_installer._runs[action] = setup_installer._new_run()
+        assert setup_installer._run_model_download(action) == 0
+        assert action not in trained_image_models.missing_assets('qwenimage21')
+        assert not os.path.exists(setup_installer._download_dest_path(action))
+    assert existing.read_bytes() == payload
 
 
 def test_manual_command_klein_lora_is_curl_to_real_url(app, tmp_path):
@@ -656,17 +753,11 @@ def test_requirement_spec_canonicalises_name_and_falls_back(tmp_path):
 
 
 def test_manual_command_watermark_inpaint_scoped_and_quoted(app):
-    """Copy-paste command must target the WRAPPER's interpreter and quote the
-    spec ('>=' is shell redirection unquoted). The version reflects the file."""
-    from app import setup_installer, config
-    with app.app_context():
-        config.save_config({'watermark': {'python': r'C:\ml env\python.exe'}})
-        cmd = setup_installer.manual_command('watermark_inpaint')
-        spec = setup_installer._requirement_spec('simple-lama-inpainting')
-    assert '"C:\\ml env\\python.exe"' in cmd     # resolved interpreter, quoted for spaces
-    assert '-m pip install' in cmd
-    assert f'"{spec}"' in cmd                     # spec quoted whole
-    assert not cmd.startswith('pip ')             # never bare pip
+    """Manual guidance cannot bypass managed-runtime creation or target borrowed Python."""
+    from app import setup_installer
+    command = setup_installer.manual_command('watermark_inpaint')
+    assert 'Install in Setup' in command and 'isolated Python' in command
+    assert '-m pip install' not in command
 
 
 def _fake_popen_capturing(seen, returncode=0, lines=()):
@@ -690,9 +781,9 @@ def _fake_popen_capturing(seen, returncode=0, lines=()):
     return fake_popen
 
 
-def test_run_watermark_inpaint_targets_watermark_python(app, monkeypatch):
-    """watermark.python wins the interpreter resolution and the pip target IS it,
-    with the parsed spec and a constraints file pinned (-c).
+def test_run_watermark_inpaint_targets_managed_python(app, monkeypatch):
+    """The managed watermark environment receives the parsed spec and filtered
+    constraints, even when a borrowed runtime is selected.
 
     This used to assert the constraint was requirements-ml.txt ITSELF, and that
     assertion pinned the bug of GitHub #59: the app's own `pillow>=12,<13` rode
@@ -700,6 +791,7 @@ def test_run_watermark_inpaint_targets_watermark_python(app, monkeypatch):
     passed — the floors it carries are worth having — it is simply no longer the
     raw file. What it must NOT contain is asserted in the test below."""
     from app import setup_installer, config
+    target = _watermark_target(monkeypatch)
     seen = {}
     monkeypatch.setattr(setup_installer.subprocess, 'Popen',
                         _fake_popen_capturing(seen, 0))
@@ -711,7 +803,7 @@ def test_run_watermark_inpaint_targets_watermark_python(app, monkeypatch):
         spec = setup_installer._requirement_spec('simple-lama-inpainting')
     assert rc == 0
     cmd = seen['cmd']
-    assert cmd[0] == '/wm/py'                      # exact interpreter, not sys.executable
+    assert cmd[0] == target                      # exact interpreter, not sys.executable
     assert cmd[1:4] == ['-m', 'pip', 'install']
     assert spec in cmd
     assert '-c' in cmd
@@ -733,6 +825,7 @@ def test_the_watermark_install_never_inherits_the_apps_pillow_pin(app, monkeypat
     The other floors must survive, or the constraint would stop earning its keep
     (it is what keeps a torch pull from bumping numpy past insightface's <2)."""
     from app import setup_installer, config
+    _watermark_target(monkeypatch)
     seen = {}
     monkeypatch.setattr(setup_installer.subprocess, 'Popen',
                         _fake_popen_capturing(seen, 0))
@@ -754,10 +847,10 @@ def test_the_watermark_install_never_inherits_the_apps_pillow_pin(app, monkeypat
             'minus Pillow, not an empty one')
 
 
-def test_run_watermark_inpaint_falls_back_to_masks_python(app, monkeypatch):
-    """No dedicated watermark.python -> reuse the ML env (masks.python), matching
-    the wrapper's own fallback chain."""
+def test_run_watermark_inpaint_does_not_install_in_masks_python(app, monkeypatch):
+    """Watermark installation stays isolated from the selected masks runtime."""
     from app import setup_installer, config
+    target = _watermark_target(monkeypatch)
     seen = {}
     monkeypatch.setattr(setup_installer.subprocess, 'Popen',
                         _fake_popen_capturing(seen, 0))
@@ -765,13 +858,14 @@ def test_run_watermark_inpaint_falls_back_to_masks_python(app, monkeypatch):
         config.save_config({'masks': {'python': '/masks/py'}})
         setup_installer._runs['watermark_inpaint'] = setup_installer._new_run()
         setup_installer._run_watermark_inpaint('watermark_inpaint')
-    assert seen['cmd'][0] == '/masks/py'
+    assert seen['cmd'][0] == target
 
 
 def test_run_watermark_inpaint_nonzero_returncode_propagates(app, monkeypatch):
     """A failing pip surfaces its non-zero return code (→ _execute marks 'error',
     the front shows the pip log tail — never a silent success)."""
     from app import setup_installer, config
+    _watermark_target(monkeypatch)
     seen = {}
     monkeypatch.setattr(setup_installer.subprocess, 'Popen',
                         _fake_popen_capturing(seen, 1, lines=['ERROR: could not build\n']))
@@ -828,6 +922,7 @@ def test_run_watermark_inpaint_verifies_import_after_install(app, monkeypatch, t
     from app import setup_installer, config
     monkeypatch.setattr(setup_installer.subprocess, 'Popen', _fake_popen_capturing({}, 0))
     py = tmp_path / 'py.exe'; py.write_text('x')       # a real path so the isfile guard passes
+    monkeypatch.setattr(setup_installer, '_ensure_watermark_env', lambda a: str(py))
     seen = {}
     def fake_run(cmd, **kw):
         seen['cmd'] = cmd
@@ -854,6 +949,7 @@ def test_run_watermark_inpaint_fails_when_package_does_not_import(app, monkeypat
     from app import setup_installer, config
     monkeypatch.setattr(setup_installer.subprocess, 'Popen', _fake_popen_capturing({}, 0))
     py = tmp_path / 'py.exe'; py.write_text('x')
+    monkeypatch.setattr(setup_installer, '_ensure_watermark_env', lambda a: str(py))
     def fake_run(cmd, **kw):
         class R:
             returncode, stdout = 1, ''
@@ -866,17 +962,17 @@ def test_run_watermark_inpaint_fails_when_package_does_not_import(app, monkeypat
         rc = setup_installer._run_watermark_inpaint('watermark_inpaint')
     assert rc == 1
     log = setup_installer._runs['watermark_inpaint']['log']
-    assert any('does not import' in l for l in log)
-    assert any('DLL load failed' in l for l in log)   # the actionable stderr tail is surfaced
+    assert any('still does' in l for l in log)
+    assert any('DLL load failed' in l for l in log)
 
 
-def test_run_watermark_inpaint_slow_import_still_succeeds(app, monkeypatch, tmp_path):
-    """A cold import slower than the warm budget is 'still warming', not broken — the
-    install stays successful (pip already succeeded) and the capability greens on the
-    next probe; a slow first import must never fail a good install."""
+def test_run_watermark_inpaint_slow_import_waits_for_verified_retry(app, monkeypatch, tmp_path):
+    """A slow import remains retryable until it finishes; pip success alone
+    cannot publish an unverified runtime."""
     from app import setup_installer, config
     monkeypatch.setattr(setup_installer.subprocess, 'Popen', _fake_popen_capturing({}, 0))
     py = tmp_path / 'py.exe'; py.write_text('x')
+    monkeypatch.setattr(setup_installer, '_ensure_watermark_env', lambda a: str(py))
     def fake_run(cmd, **kw):
         raise setup_installer.subprocess.TimeoutExpired(cmd, setup_installer._WARM_IMPORT_TIMEOUT)
     monkeypatch.setattr(setup_installer.subprocess, 'run', fake_run)
@@ -884,7 +980,7 @@ def test_run_watermark_inpaint_slow_import_still_succeeds(app, monkeypatch, tmp_
         config.save_config({'watermark': {'python': str(py)}})
         setup_installer._runs['watermark_inpaint'] = setup_installer._new_run()
         rc = setup_installer._run_watermark_inpaint('watermark_inpaint')
-    assert rc == 0
+    assert rc == 1
     assert any('warming' in l for l in setup_installer._runs['watermark_inpaint']['log'])
 
 
@@ -923,11 +1019,11 @@ def test_no_orphan_ml_package():
     assert not phantom, f'_CAPABILITY_PACKAGES names absent from requirements-ml.txt: {phantom}'
 
 
-def test_run_face_scoring_targets_face_scoring_python(app, monkeypatch):
-    """face_scoring.python wins the interpreter resolution (matching
-    probe_face_scoring) and the pip target IS it, with insightface + onnxruntime
-    from the file and requirements-ml.txt pinned as a -c constraint."""
+def test_run_face_scoring_installs_managed_without_replacing_selected_python(app, monkeypatch):
+    """The scoped install targets managed quality Python with insightface +
+    onnxruntime and requirements-ml.txt pinned as a constraint."""
     from app import setup_installer, config
+    target = _quality_target(monkeypatch)
     seen = {}
     monkeypatch.setattr(setup_installer.subprocess, 'Popen',
                         _fake_popen_capturing(seen, 0))
@@ -939,14 +1035,15 @@ def test_run_face_scoring_targets_face_scoring_python(app, monkeypatch):
         onnx = setup_installer._requirement_spec('onnxruntime')
     assert rc == 0
     cmd = seen['cmd']
-    assert cmd[0] == '/fs/py'                       # exact interpreter, not sys.executable
+    assert cmd[0] == target                       # exact interpreter, not sys.executable
     assert cmd[1:4] == ['-m', 'pip', 'install']
     assert insight in cmd and onnx in cmd           # the version-pinned lines from the file
     assert '-c' in cmd and any('requirements-ml.txt' in str(p) for p in cmd)
 
 
-def test_run_masks_targets_masks_python_and_installs_rembg(app, monkeypatch):
+def test_run_masks_installs_managed_rembg(app, monkeypatch):
     from app import setup_installer, config
+    target = _quality_target(monkeypatch)
     seen = {}
     monkeypatch.setattr(setup_installer.subprocess, 'Popen',
                         _fake_popen_capturing(seen, 0))
@@ -956,32 +1053,32 @@ def test_run_masks_targets_masks_python_and_installs_rembg(app, monkeypatch):
         setup_installer._run_ml_capability('masks')
         rembg = setup_installer._requirement_spec('rembg')
     cmd = seen['cmd']
-    assert cmd[0] == '/masks/py'
+    assert cmd[0] == target
     assert rembg in cmd
     assert '-c' in cmd and any('requirements-ml.txt' in str(p) for p in cmd)
 
 
-def test_run_face_scoring_falls_back_to_sys_executable(app, monkeypatch):
-    """No dedicated face_scoring.python -> install into THIS interpreter (same
-    fallback probe_face_scoring uses)."""
-    import sys
+def test_run_face_scoring_selects_managed_python_when_unconfigured(app, monkeypatch):
+    """No dedicated face_scoring.python -> select the managed quality Python."""
     from app import setup_installer, config
+    target = _quality_target(monkeypatch)
     seen = {}
     monkeypatch.setattr(setup_installer.subprocess, 'Popen',
                         _fake_popen_capturing(seen, 0))
     # Same reason as the Pillow test below: keep the captured command line the PIP one.
     monkeypatch.setattr(setup_installer, '_onnxruntime_provided', lambda p: False)
-    monkeypatch.setattr(setup_installer, '_verify_capability_import', lambda a, p: True)
+    monkeypatch.setattr(setup_installer, '_verify_capability_import', lambda *a, **kw: True)
     with app.app_context():
         config.save_config({})   # no face_scoring.python
         setup_installer._runs['face_scoring'] = setup_installer._new_run()
         setup_installer._run_ml_capability('face_scoring')
-    assert seen['cmd'][0] == sys.executable
+    assert seen['cmd'][0] == target
     assert seen['cmd'][1:4] == ['-m', 'pip', 'install']
 
 
 def test_run_ml_capability_nonzero_returncode_propagates(app, monkeypatch):
     from app import setup_installer, config
+    _quality_target(monkeypatch)
     seen = {}
     monkeypatch.setattr(setup_installer.subprocess, 'Popen',
                         _fake_popen_capturing(seen, 1, lines=['ERROR: no wheel\n']))
@@ -1018,29 +1115,19 @@ def test_execute_ml_capability_error_skips_cache_clear(action, monkeypatch):
 
 
 def test_manual_command_face_scoring_scoped_and_constrained(app):
-    """Copy-paste command targets face_scoring's interpreter, quotes each spec
-    ('>=' / '<' are shell redirection unquoted), and pins the -c constraint."""
-    from app import setup_installer, config
-    with app.app_context():
-        config.save_config({'face_scoring': {'python': r'C:\ml env\python.exe'}})
-        cmd = setup_installer.manual_command('face_scoring')
-        insight = setup_installer._requirement_spec('insightface')
-    assert '"C:\\ml env\\python.exe"' in cmd        # resolved interpreter, quoted for spaces
-    assert '-m pip install' in cmd
-    assert f'"{insight}"' in cmd                     # spec quoted whole
-    assert '-c ' in cmd and 'requirements-ml.txt' in cmd
-    assert not cmd.startswith('pip ')               # never bare pip
+    """Manual guidance cannot bypass managed-runtime creation or target borrowed Python."""
+    from app import setup_installer
+    command = setup_installer.manual_command('face_scoring')
+    assert 'Install in Setup' in command and 'isolated Python' in command
+    assert '-m pip install' not in command
 
 
 def test_manual_command_masks_scoped(app):
-    from app import setup_installer, config
-    with app.app_context():
-        config.save_config({'masks': {'python': '/masks/py'}})
-        cmd = setup_installer.manual_command('masks')
-        rembg = setup_installer._requirement_spec('rembg')
-    assert '/masks/py' in cmd
-    assert f'"{rembg}"' in cmd
-    assert '-c ' in cmd and 'requirements-ml.txt' in cmd
+    """Manual guidance cannot bypass managed-runtime creation or target borrowed Python."""
+    from app import setup_installer
+    command = setup_installer.manual_command('masks')
+    assert 'Install in Setup' in command and 'isolated Python' in command
+    assert '-m pip install' not in command
 
 
 # --- Flask-venv Pillow isolation ------------------------------------------
@@ -1082,76 +1169,36 @@ def test_flask_pillow_guard_only_for_flask_venv(monkeypatch):
     assert setup_installer._flask_pillow_guard('/some/other/ml/python') == []
 
 
-def test_flask_venv_detector_does_not_follow_managed_python_symlink(
-        monkeypatch, tmp_path):
-    """A managed venv launcher may symlink to the app Python on POSIX.
-
-    That still is a distinct environment: classifying it as the Flask runtime
-    prevents its dedicated installer from running.
-    """
-    from app import setup_installer
-
-    app_root = tmp_path / 'app'
-    managed_root = tmp_path / 'managed'
-    app_python = app_root / 'bin' / 'python'
-    managed_python = managed_root / 'bin' / 'python'
-    app_python.parent.mkdir(parents=True)
-    managed_python.parent.mkdir(parents=True)
-    (app_root / 'pyvenv.cfg').write_text('home = /usr/bin\n')
-    (managed_root / 'pyvenv.cfg').write_text('home = /usr/bin\n')
-    app_python.touch()
-    try:
-        managed_python.symlink_to(app_python)
-    except (OSError, NotImplementedError):
-        pytest.skip('symlink support is unavailable')
-
-    monkeypatch.setattr(setup_installer.sys, 'executable', str(app_python))
-    assert setup_installer._is_flask_venv(str(app_python)) is True
-    assert setup_installer._is_flask_venv(str(managed_python)) is False
-
-
-def test_run_ml_extras_installs_flask_safe_set_and_pins_pillow(monkeypatch):
-    """The core guarantee: ml_extras installs the safe subset into THIS interpreter
-    with Pillow pinned, never the Pillow-incompatible extra — so a full Setup can't
-    downgrade the Flask venv's Pillow."""
-    import sys
-    from app import setup_installer
-    seen = {}
-    monkeypatch.setattr(setup_installer.subprocess, 'Popen',
-                        _fake_popen_capturing(seen, 0))
-    setup_installer._runs['ml_extras'] = setup_installer._new_run()
-    rc = setup_installer._run_ml_extras('ml_extras')
-    assert rc == 0
-    cmd = seen['cmd']
-    assert cmd[0] == sys.executable and cmd[1:4] == ['-m', 'pip', 'install']
-    assert any('rembg' in str(p) for p in cmd)
-    assert any('insightface' in str(p) for p in cmd)
-    assert not any('simple' in str(p).lower() and 'lama' in str(p).lower() for p in cmd)
-    assert '-c' in cmd and any('requirements-ml.txt' in str(p) for p in cmd)
-    assert any(str(p).lower().startswith('pillow==') for p in cmd)   # Pillow guarded
-    # the log directs the user to the safe way to add inpainting
-    assert any('simple-lama-inpainting' in l and "own Python" in l
-               for l in setup_installer._runs['ml_extras']['log'])
-
-
-def test_run_watermark_inpaint_refuses_explicit_flask_venv(app, monkeypatch):
-    """A user who EXPLICITLY points watermark.python at the app's own Python is
-    refused (return 1, no pip) — installing simple-lama there would downgrade Pillow.
-    The auto-provision path is NOT taken (we respect the user's explicit, if broken,
-    value rather than silently overwriting it)."""
-    import sys
+def test_legacy_ml_extras_installs_only_shared_quality_in_managed_python(app, monkeypatch):
     from app import setup_installer, config
-    def boom(*a, **k):
-        raise AssertionError('must not run pip against the Flask venv')
-    monkeypatch.setattr(setup_installer.subprocess, 'Popen', boom)
+    target = _quality_target(monkeypatch)
+    seen = {}
+    monkeypatch.setattr(setup_installer.subprocess, 'Popen', _fake_popen_capturing(seen, 0))
+    with app.app_context():
+        assert setup_installer._run_ml_extras('ml_extras') == 0
+        assert config.get('face_scoring.python') == target
+        assert config.get('masks.python') == target
+    cmd = seen['cmd']
+    assert cmd[0] == target
+    assert '--only-binary=:all:' in cmd
+    assert any('insightface' in part for part in cmd)
+    assert any('rembg' in part for part in cmd)
+    assert not any(any(pkg in part for pkg in ('torch', 'simple-lama', 'transnet', 'transformers')) for part in cmd)
+    assert '-c' in cmd and any('requirements-ml.txt' in part for part in cmd)
+
+
+def test_watermark_install_migrates_explicit_flask_target_to_managed(app, monkeypatch):
+    from app import setup_installer, config
+    import sys
+    target = _watermark_target(monkeypatch)
+    calls = []
+    monkeypatch.setattr(setup_installer, '_pip_install_watermark',
+                        lambda a, python, **kw: calls.append((python, kw)) or 0)
     with app.app_context():
         config.save_config({'watermark': {'python': sys.executable}})
-        setup_installer._runs['watermark_inpaint'] = setup_installer._new_run()
-        rc = setup_installer._run_watermark_inpaint('watermark_inpaint')
-    assert rc == 1
-    log = setup_installer._runs['watermark_inpaint']['log']
-    assert any('Pillow<10' in l for l in log)
-    assert any('watermark.python' in l for l in log)
+        assert setup_installer._run_watermark_inpaint('watermark_inpaint') == 0
+        assert config.get('watermark.python') == target
+    assert calls == [(target, {'managed': True})]
 
 
 # --- watermark inpainting: one-click auto-provision -----------------------
@@ -1214,41 +1261,25 @@ def test_run_watermark_inpaint_auto_provisions_when_unconfigured(app, monkeypatc
     assert saved == managed          # watermark.python recorded -> probe resolves here
 
 
-def test_run_watermark_inpaint_no_base_python_actionable_message(app, monkeypatch):
-    """A truly bare machine (no Python 3.10-3.12) -> a short actionable message (install
-    Python 3.12 / winget, then re-click) and NO pip. Never a copy-paste pip as the path."""
-    from app import setup_installer, config
-    def boom(*a, **k):
-        raise AssertionError('no pip should run without a base Python')
-    monkeypatch.setattr(setup_installer, '_find_base_python', lambda a: '')
-    monkeypatch.setattr(setup_installer.subprocess, 'Popen', boom)
+def test_watermark_prepare_failure_never_installs_packages(app, monkeypatch):
+    from app import setup_installer
+    monkeypatch.setattr(setup_installer, '_ensure_watermark_env', lambda a: '')
+    monkeypatch.setattr(setup_installer, '_pip_install_watermark', lambda *a, **kw: pytest.fail('pip must not run'))
     with app.app_context():
-        config.save_config({})
-        setup_installer._runs['watermark_inpaint'] = setup_installer._new_run()
-        rc = setup_installer._run_watermark_inpaint('watermark_inpaint')
-    assert rc == 1
-    log = '\n'.join(setup_installer._runs['watermark_inpaint']['log'])
-    assert 'Python 3.12' in log and 'winget' in log
+        assert setup_installer._run_watermark_inpaint('watermark_inpaint') == 1
 
 
-def test_run_watermark_inpaint_respects_user_python_no_torch_no_overwrite(app, monkeypatch):
-    """A user's OWN watermark.python is used verbatim: install simple-lama there,
-    do NOT force-install CPU torch (never downgrade their CUDA build), and NEVER
-    overwrite their value with the managed venv."""
+def test_watermark_install_preserves_borrowed_selection_and_installs_managed_cpu(app, monkeypatch):
     from app import setup_installer, config
-    seen = []
-    monkeypatch.setattr(setup_installer.subprocess, 'Popen', _fake_venv_popen(seen))
+    target = _watermark_target(monkeypatch)
+    calls = []
+    monkeypatch.setattr(setup_installer, '_pip_install_watermark',
+                        lambda a, python, **kw: calls.append((python, kw)) or 0)
     with app.app_context():
-        config.save_config({'watermark': {'python': r'C:\ml\python.exe'}})
-        setup_installer._runs['watermark_inpaint'] = setup_installer._new_run()
-        rc = setup_installer._run_watermark_inpaint('watermark_inpaint')
-        saved = config.get('watermark.python')
-    assert rc == 0
-    assert not any('torch' in c and '--index-url' in c for c in seen)   # no forced CPU torch
-    assert not any(c[1:3] == ['-m', 'venv'] for c in seen)              # no venv built
-    lama_cmd = next(c for c in seen if any('simple-lama' in str(p) for p in c))
-    assert lama_cmd[0] == r'C:\ml\python.exe'
-    assert saved == r'C:\ml\python.exe'                                  # value untouched
+        config.save_config({'watermark': {'python': '/borrowed/python'}})
+        assert setup_installer._run_watermark_inpaint('watermark_inpaint') == 0
+        assert config.get('watermark.python') == '/borrowed/python'
+    assert calls == [(target, {'managed': True})]
 
 
 def test_run_watermark_inpaint_idempotent_reuses_existing_env(app, monkeypatch):
@@ -1358,13 +1389,13 @@ def test_find_base_python_picks_first_in_range(monkeypatch):
     assert setup_installer._find_base_python('watermark_inpaint') == '/py312'
 
 
-def test_find_base_python_empty_when_none_in_range(monkeypatch):
+def test_find_base_python_empty_when_automatic_provisioning_also_fails(monkeypatch):
     from app import setup_installer
-    monkeypatch.setattr(setup_installer, '_base_python_candidates', lambda: ['/py313', '/py39'])
-    monkeypatch.setattr(setup_installer, '_python_minor',
-                        lambda e: {'/py313': (3, 13), '/py39': (3, 9)}[e])
-    setup_installer._runs['watermark_inpaint'] = setup_installer._new_run()
-    assert setup_installer._find_base_python('watermark_inpaint') == ''
+    monkeypatch.setattr(setup_installer, '_base_python_candidates', lambda: ['/py314'])
+    monkeypatch.setattr(setup_installer, '_python_minor', lambda _: (3, 14))
+    setup_installer._runs['masks'] = setup_installer._new_run()
+    assert setup_installer._find_base_python('masks') == ''
+    assert 'retry' in '\n'.join(setup_installer._runs['masks']['log'])
 
 
 def test_base_python_candidates_includes_sys_executable(app):
@@ -1481,17 +1512,11 @@ def test_run_pip_does_not_retry_a_real_build_failure(monkeypatch):
 
 
 def test_manual_command_watermark_inpaint_points_to_managed_env_when_unconfigured(app):
-    """No dedicated env -> the debug/diagnostic command must NOT target the app's own
-    Python (that would break Pillow); it points at the app-managed venv the Install
-    button auto-builds. (This string is a debug aid now — the button installs itself.)"""
-    import sys
+    """Manual guidance cannot bypass managed-runtime creation or target borrowed Python."""
     from app import setup_installer
-    with app.app_context():
-        cmd = setup_installer.manual_command('watermark_inpaint')
-    assert 'envs' in cmd and 'watermark' in cmd            # the app-managed venv path
-    assert sys.executable not in cmd                        # never the app's own Python
-    assert 'pip install' in cmd and 'simple-lama-inpainting' in cmd
-    assert not cmd.startswith('pip ')
+    command = setup_installer.manual_command('watermark_inpaint')
+    assert 'Install in Setup' in command and 'isolated Python' in command
+    assert '-m pip install' not in command
 
 
 # --- "Install everything" orchestrator (plan / start_all / batched status) -------
@@ -1527,7 +1552,7 @@ def test_install_all_plan_none_and_empty_caps_are_safe():
     tiles read missing (default present=falsey) and Ollama/ComfyUI are absent so their
     gated actions are skipped; only the always-runnable extras remain."""
     from app import setup_installer
-    ungated = ['scrape_extras', 'face_scoring', 'masks', 'watermark_inpaint']
+    ungated = ['face_scoring', 'masks', 'watermark_inpaint']
     assert setup_installer.install_all_plan(None) == ungated
     assert setup_installer.install_all_plan({}) == ungated
 
@@ -1538,27 +1563,23 @@ def test_install_all_plan_lists_missing_ml_extras():
     assert setup_installer.install_all_plan(caps) == ['face_scoring', 'masks', 'watermark_inpaint']
 
 
-def test_install_all_plan_skips_face_masks_on_unsupported_python():
-    """face_scoring/masks install into the app's own Python — outside the ML wheel range
-    they'd only source-build and fail, so the plan omits them. watermark_inpaint builds
-    its OWN 3.10-3.12 venv, so it stays in even on a 3.14 interpreter."""
+def test_install_all_uses_managed_ml_support_independently_from_host_version():
     from app import setup_installer
-    caps = _caps(python={'ml_supported': False},
-                 face_scoring=False, masks=False, watermark_inpaint=False)
-    assert setup_installer.install_all_plan(caps) == ['watermark_inpaint']
-    # scrape_extras is pure-python, so the SAME unsupported interpreter still gets it.
-    caps = _caps(python={'ml_supported': False}, scrape_deps=False,
-                 face_scoring=False, masks=False, watermark_inpaint=False)
-    assert setup_installer.install_all_plan(caps) == ['scrape_extras', 'watermark_inpaint']
+    caps = _caps(python={'ml_supported': False, 'managed_ml': {'available': True}},
+                 face_scoring=False, masks=False)
+    plan = setup_installer.install_all_plan(caps)
+    assert 'face_scoring' in plan and 'masks' in plan
+    caps['python']['managed_ml']['available'] = False
+    plan = setup_installer.install_all_plan(caps)
+    assert 'face_scoring' not in plan and 'masks' not in plan
 
 
-def test_install_all_plan_includes_missing_scrape_extras():
-    """Regression: scrape_extras had a worker, an action id and a UI button but no entry
-    in _INSTALL_ALL_ORDER, so 'Install everything' could never repair the scraper stack —
-    a user missing one package (instaloader) was told everything was already in place and
-    kept hitting the runtime error. Present deps => absent from the plan (idempotent)."""
+@pytest.mark.plugins('scrape')
+def test_install_all_plan_leaves_scrape_preparation_to_its_owner(app):
+    """A known plugin installer remains explicit, even when its dependency is absent."""
     from app import setup_installer
-    assert setup_installer.install_all_plan(_caps(scrape_deps=False)) == ['scrape_extras']
+    assert setup_installer.known_action('scrape_extras')
+    assert setup_installer.install_all_plan(_caps(scrape_deps=False)) == []
     assert setup_installer.install_all_plan(_caps(scrape_deps=True)) == []
 
 
@@ -1597,7 +1618,7 @@ def test_install_all_plan_full_order():
         comfyui={'dir_valid': True,
                  'klein_missing': ['klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora']})
     assert setup_installer.install_all_plan(caps) == [
-        'scrape_extras', 'face_scoring', 'masks', 'watermark_inpaint',
+        'face_scoring', 'masks', 'watermark_inpaint',
         'klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora']
 
 
@@ -1653,27 +1674,17 @@ def test_status_many_returns_only_known_actions():
     assert out['face_scoring']['state'] == 'idle'
 
 
-def test_run_ml_capability_pins_pillow_when_targeting_flask_venv(app, monkeypatch):
-    """A scoped face_scoring/masks install that falls back to the Flask venv pins
-    Pillow too, so pulling insightface/rembg deps can't downgrade it."""
+def test_masks_installer_migrates_flask_selection_without_touching_flask(app, monkeypatch):
     import sys
     from app import setup_installer, config
-    seen = {}
-    monkeypatch.setattr(setup_installer.subprocess, 'Popen',
-                        _fake_popen_capturing(seen, 0))
-    # The worker also runs two SHORT probes around pip (does this env already have
-    # an onnxruntime? does the capability import once pip is done?), and this crude
-    # global Popen fake would capture their command lines instead of the pip one.
-    # They have their own tests — stub them out and keep this one about pip.
-    monkeypatch.setattr(setup_installer, '_onnxruntime_provided', lambda p: False)
-    monkeypatch.setattr(setup_installer, '_verify_capability_import', lambda a, p: True)
+    target = _quality_target(monkeypatch)
+    calls = []
+    monkeypatch.setattr(setup_installer, '_run_pip', lambda a, cmd: calls.append(cmd) or 0)
     with app.app_context():
-        config.save_config({})   # no masks.python -> Flask venv
-        setup_installer._runs['masks'] = setup_installer._new_run()
-        setup_installer._run_ml_capability('masks')
-    cmd = seen['cmd']
-    assert cmd[0] == sys.executable
-    assert any(str(p).lower().startswith('pillow==') for p in cmd)
+        config.save_config({'masks': {'python': sys.executable}})
+        assert setup_installer._run_ml_capability('masks') == 0
+        assert config.get('masks.python') == target
+    assert all(cmd[0] == target and cmd[0] != sys.executable for cmd in calls)
 
 
 # --- bank scoring: a BORROWED interpreter is never installed into --------------
@@ -1984,7 +1995,7 @@ def test_bank_siglip2_install_ignores_borrowed_semantic_interpreter(
         setup_installer, '_run_pip',
         lambda action, command: calls.append(tuple(command)) or 0)
     monkeypatch.setattr(setup_installer, '_verify_capability_import',
-                        lambda action, python: True)
+                        lambda action, python, **kw: True)
     monkeypatch.setattr(assets, 'weights_present', lambda root=None: True)
     with app.app_context():
         config.save_config({'bank_semantic': {'python': str(borrowed)}})
@@ -2098,7 +2109,7 @@ def test_run_bank_siglip2_reports_failure_when_semantic_python_cannot_be_saved(
         assert setup_installer._run_bank_siglip2('bank_siglip2') == 1
     assert len(calls) == 3, 'save is attempted only after packages and weights'
     log = setup_installer._runs['bank_siglip2']['log']
-    assert any('could not be saved' in line for line in log)
+    assert any('Could not select' in line for line in log)
     assert not any(line.startswith('SigLIP2 ready') for line in log)
 
 
@@ -2141,3 +2152,43 @@ def test_shot_detect_capability_probe_imports_what_the_worker_imports():
     probe that skips av says "ready" about a worker that cannot open one file."""
     from app import capabilities
     assert 'av' in capabilities.CAPABILITY_IMPORTS['shot_detect']
+
+
+@pytest.fixture(autouse=True)
+def _unit_runtime_io(monkeypatch):
+    from app import setup_installer
+    monkeypatch.setattr('requests.sessions.Session.request',
+                        lambda *a, **kw: pytest.fail('Unexpected network in installer unit tests'))
+    monkeypatch.setattr(setup_installer, '_managed_env_valid',
+                        lambda python: __import__('os').path.isfile(python))
+    monkeypatch.setattr(setup_installer.managed_python, 'ensure_python',
+                        lambda log: (_ for _ in ()).throw(OSError('offline unit fixture')))
+
+
+def _quality_target(monkeypatch):
+    from app import setup_installer
+    monkeypatch.setattr(setup_installer, '_ensure_managed_ml_env', lambda *a: '/managed/quality/python')
+    monkeypatch.setattr(setup_installer, '_verify_capability_import', lambda *a, **k: True)
+    monkeypatch.setattr(setup_installer, '_onnxruntime_provided', lambda p: False)
+    return '/managed/quality/python'
+
+
+def _watermark_target(monkeypatch, python='/managed/watermark/python'):
+    from app import setup_installer
+    monkeypatch.setattr(setup_installer, '_ensure_watermark_env', lambda a: python)
+    monkeypatch.setattr(setup_installer, '_verify_watermark_import', lambda *a: True)
+    monkeypatch.setattr(setup_installer, '_verify_capability_import', lambda *a, **kw: True)
+    return python
+
+
+def test_install_all_rejects_plugin_actions_even_in_a_stale_batch_order(monkeypatch):
+    """Neither a legacy managed action nor a registered extension enters the core batch."""
+    from app import setup_installer
+    plugin_actions = ('scrape_extras', 'sample_optional_cpu', 'example_cpu')
+    monkeypatch.setattr(setup_installer, '_INSTALL_ALL_ORDER', ('face_scoring', *plugin_actions))
+    monkeypatch.setattr(setup_installer, 'known_action', lambda action: True)
+    monkeypatch.setattr(setup_installer, '_action_needed', lambda action, caps: True)
+    dispatched = []
+    monkeypatch.setattr(setup_installer, 'start', lambda action: dispatched.append(action) or {'state': 'running'})
+    assert setup_installer.start_all({})['plan'] == ['face_scoring']
+    assert dispatched == ['face_scoring']

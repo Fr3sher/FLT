@@ -31,30 +31,32 @@ def test_every_generation_family_has_a_workflow_on_disk():
              'krea': studio.WORKFLOW_KREA_TURBO_PATH,
              'zimage': studio.WORKFLOW_ZTURBO_PATH,
              'flux2klein': studio.WORKFLOW_FLUX2KLEIN_PATH}
-    assert set(paths) == set(studio.GENERATION_FAMILIES), (
+    from app.utils.trained_image_workflows import DEFAULTS, build_trained_image_workflow
+    assert callable(build_trained_image_workflow)
+    assert set(paths) | set(DEFAULTS) == set(studio.GENERATION_FAMILIES), (
         'GENERATION_FAMILIES changed without this map: name the workflow the '
         'new family generates through, or it will silently borrow another one')
     for fam, p in paths.items():
         assert p.is_file(), f'{fam} is offered for generation but {p.name} is missing'
 
 
-def test_a_deployable_family_without_a_lane_is_known_to_be_one():
-    """The exact shape of #53: deployable, visible, NOT generatable."""
-    # Klein GAINED its lane (see test_flux2_klein_lane.py). FLUX.1 and Anima
-    # have not: the app holds no unet/vae/text-encoder setting for them at all,
-    # so there is nothing to generate with until they get an engine config.
-    for fam in ('flux', 'anima'):
+def test_all_deployable_families_have_a_lane():
+    """Deployable families have explicit graphs; unknown ones still fail closed."""
+    from app.services.face_dataset_service import TRAIN_TYPES
+    assert set(TRAIN_TYPES) <= set(studio.GENERATION_FAMILIES), (
+        'Every trainable image family must also have a generation workflow')
+    for fam in studio.FAMILIES:
         assert fam in studio.FAMILIES, f'{fam} must stay visible (GitHub #52)'
-        assert not studio.can_generate_with(fam)
-    assert studio.can_generate_with('flux2klein')
+        assert studio.can_generate_with(fam)
+    assert not studio.can_generate_with('unknown-family')
 
 
 def test_the_refusal_names_the_family_asked_for_and_never_z_image():
     """The message is the whole fix. It must name what the user chose, and must
     not send them looking for a Z-Image model they never wanted."""
-    err = studio._no_generation_lane('flux')
+    err = studio._no_generation_lane('unknown-family')
     text = str(err)
-    assert 'FLUX.1' in text, 'the refusal must name the family the user picked'
+    assert 'unknown-family' in text, 'the refusal must name the family the user picked'
     assert 'Z-Image' not in text, 'blaming Z-Image is exactly the bug (#53)'
     # And it must not read as "your install is broken": the LoRA is fine.
     assert 'deploy' in text.lower()
@@ -66,15 +68,14 @@ def test_the_picker_does_not_offer_a_family_it_cannot_serve(monkeypatch):
     monkeypatch.setattr(studio, 'list_test_checkpoints',
                         lambda ds, fam: [{'filename': f'{fam}/x.safetensors'}])
     fams = [f['family'] for f in studio.available_families(object())]
-    assert 'flux' not in fams and 'anima' not in fams
     assert set(fams) == set(studio.GENERATION_FAMILIES)
 
 
 def test_the_workflow_builder_refuses_rather_than_borrowing_z_image():
     """Belt and braces: even reached directly, a laneless family must not be
     handed the Z-Image graph with a Klein LoRA bolted onto it."""
-    with pytest.raises(ValueError, match='FLUX.1'):
+    with pytest.raises(ValueError, match='unknown-family'):
         studio._build_cell_workflow(
-            'u', 'flux/lora_x.safetensors', 1.0, 'p', 1, None,
-            allowed_loras={'flux/lora_x.safetensors'},
-            dataset_id=1, train_type='flux')
+            'u', 'unknown-family/lora_x.safetensors', 1.0, 'p', 1, None,
+            allowed_loras={'unknown-family/lora_x.safetensors'},
+            dataset_id=1, train_type='unknown-family')

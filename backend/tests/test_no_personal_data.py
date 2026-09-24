@@ -141,15 +141,15 @@ def _name_list():
 
 
 def _unpushed_range():
-    """`origin/main..HEAD`, or '' when there is nothing to check (no remote yet,
+    """`origin/v2..HEAD`, or '' when there is nothing to check (no remote yet,
     or everything already pushed). These commits are the last ones that can still
     be fixed for free: once a name is on the public remote, removing it means
     rewriting history, which breaks `pull --ff-only` for every install."""
-    out = subprocess.run(['git', 'rev-list', '--count', 'origin/main..HEAD'],
+    out = subprocess.run(['git', 'rev-list', '--count', 'origin/v2..HEAD'],
                          cwd=_REPO, capture_output=True, text=True, timeout=60)
     if out.returncode != 0 or out.stdout.strip() in ('', '0'):
         return ''
-    return 'origin/main..HEAD'
+    return 'origin/v2..HEAD'
 
 
 def _unpushed_text(rev_range):

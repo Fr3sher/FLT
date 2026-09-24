@@ -29,9 +29,12 @@ from pathlib import Path
 
 import pytest
 
-from app.services import video_metrics
-from app.services import video_safe_zone as sz
-from app.services import video_safe_zone_geometry as geo
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_metrics
+from lds_video import video_safe_zone as sz
+from lds_video import video_safe_zone_geometry as geo
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- the band rule ------------------------------------------------------------------
@@ -337,7 +340,7 @@ def test_the_cuts_ship_with_no_number():
 
 
 def test_the_threshold_reader_hands_the_cuts_through(app):
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     with app.app_context():
         reader = svc.metric_thresholds()
     for key in ('bars_max', 'text_coverage_max', 'safe_area_min'):
@@ -650,7 +653,7 @@ def test_the_pass_never_changes_a_triage_decision(app, monkeypatch):
     _fake_text(monkeypatch, {'*': [(0.0, 0.0, 1.0, 1.0)]})
 
     with app.app_context():
-        from app.models import VideoClip
+        from lds_video.models import VideoClip
         sz.run_safe_zone(bank_id)
         assert {c.status for c in VideoClip.query.filter_by(bank_id=bank_id)} \
             == {'pending'}
@@ -715,7 +718,7 @@ def test_the_pass_has_a_button_that_reaches_it(app, monkeypatch):
     """A feature nobody can start is dead code. The job kind is what the labels,
     the progress line and the 409 all key on, so it is pinned here."""
     from app.services import bank_jobs
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     bank_id, _ids = _bank_with_clips(app, 1)
     started = {}
     monkeypatch.setattr(bank_jobs, 'start',
@@ -739,7 +742,7 @@ def test_the_route_is_mounted_and_refuses_only_a_missing_decoder(app, monkeypatc
 
     monkeypatch.setattr(capabilities, 'probe_video',
                         lambda: {'decode': True, 'detail': 'ok'})
-    monkeypatch.setattr('app.services.video_bank_service.start_safe_zone',
+    monkeypatch.setattr('lds_video.video_bank_service.start_safe_zone',
                         lambda *a, **k: None)
     assert client.post(f'/api/video-bank/{bank_id}/safezone').status_code == 202
 
@@ -749,7 +752,7 @@ def test_the_job_says_what_it_could_not_do_instead_of_reporting_a_clean_bank(
     """A run with no OCR engine finishes successfully and finds no text. Silence
     there leaves a bank whose text cut flags nothing, with nothing to explain
     why."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     bank_id, _ids = _bank_with_clips(app, 1)
     _fake_frames(monkeypatch, bands=_letterboxed(100, 100, 12))
     monkeypatch.setattr(sz, 'text_engine_reason', lambda: 'RapidOCR is not installed')
@@ -767,7 +770,7 @@ def test_the_capability_the_workspace_reads_rides_the_bank_payload(app, monkeypa
     """The button never greys out for a missing OCR engine — it says "bands
     only" instead — and it can only do that if the payload carries the answer."""
     from app import capabilities
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     monkeypatch.setattr(capabilities, 'probe_video_text',
                         lambda: {'ok': False, 'detail': 'install it from Setup'})
     with app.app_context():
@@ -865,6 +868,7 @@ def test_the_text_extra_can_be_installed_from_setup():
 # --- helpers ---------------------------------------------------------------------------
 
 def _infer_dir():
+    # The CPU OCR worker remains a shared host primitive used through the SDK.
     return Path(__file__).resolve().parents[1] / 'infer'
 
 
@@ -874,7 +878,7 @@ def _infer_source(name):
 
 def _bank_with_clips(app, n, probe_state='ok'):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -920,7 +924,7 @@ def _fake_text(monkeypatch, per_key):
 
 def _measured(app, sharpness_by_id):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         for cid, sharp in sharpness_by_id.items():
             db.session.get(VideoClip, cid).metrics_json = json.dumps(
@@ -929,7 +933,7 @@ def _measured(app, sharpness_by_id):
 
 
 def _summaries(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         rows = VideoClip.query.filter_by(bank_id=bank_id).all()
         return {r.id: (json.loads(r.metrics_json) if r.metrics_json else {})

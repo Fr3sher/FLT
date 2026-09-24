@@ -1,8 +1,7 @@
 // react-frontend/src/components/dataset/studio/RunSelector.jsx
 /**
- * En-tête de la zone résultats : toggle « 📊 Résultats » (repli), bouton
- * « 🗳 Voter (N) » (file de vote rapide) et sélecteur du run à afficher.
- * Extraction behavior-preserving du bloc d'en-tête de l'ancien LoraTestStudio.jsx.
+ * Results header: collapse toggle, Vote (N) quick-vote button and displayed-run picker, extracted
+ * unchanged from old LoraTestStudio.jsx.
  */
 export default function RunSelector({
   runs,
@@ -50,15 +49,14 @@ export default function RunSelector({
           aria-label="Choose the test run to display"
           className="ml-auto rounded-lg border border-border bg-surface px-2 py-1 text-[0.6875rem] text-content max-w-[280px]">
           {runs.map((r, i) => {
-            // Taux de 👍 parmi les votes du run (likes / votés), comme le « % 👍 »
-            // affiché par cellule. Caché si aucun vote (division par zéro).
+            // Positive-vote rate within the run, likes divided by votes, matching per-cell
+            // percentages. Hide with no votes to avoid division by zero.
             const voted = r.likes + r.dislikes;
             const pct = voted ? Math.round((r.likes / voted) * 100) : null;
             return (
               <option key={r.key} value={r.key}>
-                {/* `promptLabel` = le prompt du run, ou « N prompts » quand c'est
-                    un lot 📝 : nommer un seul des cinq laisserait croire que le
-                    run n'en porte qu'un. */}
+                {/* promptLabel shows the run's prompt or N prompts for a batch.
+                    Naming only one of five would imply a single-prompt run. */}
                 {i === 0 ? '● Current run' : `Run #${runs.length - i}`} — {r.modelLabel || '?'} · 👍{r.likes} 👎{r.dislikes}{pct !== null ? ` · ${pct}% 👍` : ''} · “{(r.promptLabel || r.prompt || '').slice(0, 22)}”
               </option>
             );

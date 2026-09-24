@@ -10,7 +10,7 @@ import {
   checkpointGroups, continueBody, deleteReport, deployReport, describeStepDelete,
   describeUndeploy, detailsRows, downloadLinks, fileShortName, fmtSize, groupSub,
   groupTitle, runDeleteConfirmation, stepActionModel, stepKey, timeAgo, undeployReport,
-} from './videoCheckpoints.js'
+} from "../../../../bundled/video/frontend/videobank/videoCheckpoints.js"
 import { deleteDestination } from '../../utils/deletionWording.js'
 
 const file = (filename, extra = {}) => ({ filename, size: 300 * 1024 * 1024, deployed_as: null, undeployable: false, ...extra })

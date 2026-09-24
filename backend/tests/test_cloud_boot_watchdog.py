@@ -15,6 +15,9 @@ import pytest
 from app.extensions import db
 
 from test_cloud_training_monitor import ct, FakeRemote, _launch    # noqa: F401
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _coarse_clock(ct, monkeypatch, step=600.0):
@@ -24,9 +27,9 @@ def _coarse_clock(ct, monkeypatch, step=600.0):
     return clock
 
 
-def _instance(status, *, ports=False, msg=None):
+def _instance(status, *, ports=False, msg=None, label='lds-1'):
     rec = {'instance_id': '777', 'actual_status': status,
-           'public_ipaddr': '1.2.3.4', 'label': 'lds-x',
+           'public_ipaddr': '1.2.3.4', 'label': label,
            'jupyter_token': 'jtok-vast'}
     if ports:
         rec['ports'] = {'18675/tcp': [{'HostPort': '40123'}]}
@@ -68,13 +71,13 @@ def test_a_pod_whose_boot_advances_is_never_killed_at_the_deadline(
     ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
     calls = {'n': 0}
 
-    def booting(iid):
+    def booting(iid, **_kw):
         calls['n'] += 1
         if calls['n'] <= 5:
-            return _instance('loading',
+            return _instance('loading', label=remote.rental['label'],
                              msg=f'Pulling image {calls["n"] * 5}.1GB/26.1GB '
                                  f'[0{calls["n"]}:10<01:44:02]')
-        return _instance('running', ports=True, msg='container started')
+        return _instance('running', label=remote.rental['label'], ports=True, msg='container started')
 
     monkeypatch.setattr(ct.vast_client, 'get_instance', booting)
     _coarse_clock(ct, monkeypatch)
@@ -101,9 +104,9 @@ def test_a_pod_that_shows_nothing_still_dies_on_the_idle_budget(
     ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
     polls = {'n': 0}
 
-    def frozen(iid):
+    def frozen(iid, **_kw):
         polls['n'] += 1
-        return _instance('loading', msg='waiting for host')
+        return _instance('loading', label=remote.rental['label'], msg='waiting for host')
 
     monkeypatch.setattr(ct.vast_client, 'get_instance', frozen)
     _coarse_clock(ct, monkeypatch)
@@ -136,9 +139,9 @@ def test_the_boot_budget_caps_a_pod_that_would_never_finish(
     ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
     calls = {'n': 0}
 
-    def crawling(iid):
+    def crawling(iid, **_kw):
         calls['n'] += 1
-        return _instance('loading',
+        return _instance('loading', label=remote.rental['label'],
                          msg=f'Pulling image 1.{calls["n"]}GB/26.1GB')
 
     monkeypatch.setattr(ct.vast_client, 'get_instance', crawling)
@@ -164,9 +167,9 @@ def test_a_host_killed_while_still_booting_is_skipped_for_hours_not_days(
     ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
     calls = {'n': 0}
 
-    def crawling(iid):
+    def crawling(iid, **_kw):
         calls['n'] += 1
-        return _instance('loading', msg=f'Pulling image 1.{calls["n"]}GB/26.1GB')
+        return _instance('loading', label=remote.rental['label'], msg=f'Pulling image 1.{calls["n"]}GB/26.1GB')
 
     monkeypatch.setattr(ct.vast_client, 'get_instance', crawling)
     clock = _coarse_clock(ct, monkeypatch)

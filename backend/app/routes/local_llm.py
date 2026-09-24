@@ -62,13 +62,41 @@ def pull_status():
     return jsonify(ollama_control.pull_status()), 200
 
 
-@bp.get('/models')
+@bp.route('/models', methods=['GET', 'POST'])
 def list_models():
-    """Models the CONFIGURED provider can caption with.
+    """Models the configured provider, or a Settings draft, can caption with.
 
-    Always 200 — {ok, reachable, provider, models:[...]}. An unreachable server
+    GET keeps the configured-provider contract. A Settings draft uses a
+    CSRF-protected POST: LM Studio discovery may forward its saved API key, so
+    a cross-site GET must never be able to choose the destination.
+
+    Valid requests answer 200 — {ok, reachable, provider, models:[...]}. An unreachable server
     is a handled outcome (empty list), never a server fault: every picker that
     reads this degrades to "no models" rather than showing an error nobody can act
-    on from a dropdown.
+    on from a dropdown. JSON provider/url overrides only inspect that server;
+    they never save settings. Invalid overrides answer 400 before any request.
     """
-    return jsonify(vision_llm.list_models()), 200
+    if request.method == 'GET':
+        if 'url' in request.args:
+            return jsonify({'error': 'Use POST to inspect a draft server URL.'}), 400
+        return jsonify(vision_llm.list_models()), 200
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Expected an object with a provider and server URL.'}), 400
+    name = data.get('provider')
+    if name is not None and name not in vision_llm.PROVIDERS:
+        return jsonify({'error': 'Choose Ollama or LM Studio.'}), 400
+    url = data.get('url')
+    if 'url' in data:
+        if (name or vision_llm.provider()) == vision_llm.LMSTUDIO:
+            from ..services.vision_lmstudio import _suffix_free
+            try:
+                url = _suffix_free(url)
+            except ValueError:
+                url = ''
+        else:
+            from ..capabilities import _validated_setup_http_base
+            url = _validated_setup_http_base(url)
+        if not url:
+            return jsonify({'error': 'Enter a valid HTTP or HTTPS server URL without credentials.'}), 400
+    return jsonify(vision_llm.list_models(name=name, url=url)), 200

@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 
 /**
- * File de vote rapide du Studio : queue + swipe tactile + clavier (←/→/Échap).
- * Espace n'est PAS intercepté (sinon preventDefault global volerait l'activation
- * native du bouton focalisé — correctif a11y). `rate(imageId, rating)` vient de
- * useLoraTestStudio (référence stable, useCallback).
+ * Studio quick voting: queue, touch swipe, and keyboard (left/right/Escape).
+ * Do not intercept Space: global preventDefault would steal the focused
+ * button native activation (accessibility). rate(imageId, rating) comes
+ * from useLoraTestStudio as a stable useCallback reference.
  */
 export function useQuickVote(rate) {
   const [voteQueue, setVoteQueue] = useState(null);
   const [voteIdx, setVoteIdx] = useState(0);
-  // Titre de mode optionnel (ex. « Reconfirmer les 👍 ») : distingue visuellement
-  // une 2e passe sur les votés d'une 1re passe sur les non-votés (sinon le modal
-  // est identique et on risque de 👎 par erreur en croyant voter des nouvelles).
+  // Optional mode title (e.g. reconfirm liked images) distinguishes a second
+  // pass over voted images from initial voting, preventing accidental rejection
+  // when users mistake previously voted images for new ones.
   const [voteTitle, setVoteTitle] = useState(null);
   const touchRef = useRef(null);
 
@@ -38,14 +38,14 @@ export function useQuickVote(rate) {
     if (!st || !t) return;
     const dx = t.clientX - st.x; const dy = t.clientY - st.y;
     if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-    voteCurrent(dx > 0 ? 1 : -1); // droite = 👍, gauche = 👎
+    voteCurrent(dx > 0 ? 1 : -1); // right = 👍, left = 👎
   };
 
   useEffect(() => {
     if (!voteQueue) return undefined;
     const onKey = (e) => {
       if (e.key === 'Escape') { close(); return; }
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return; // Espace volontairement ignoré (a11y)
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return; // Space deliberately ignored for accessibility
       e.preventDefault();
       voteCurrent(e.key === 'ArrowRight' ? 1 : -1);
     };

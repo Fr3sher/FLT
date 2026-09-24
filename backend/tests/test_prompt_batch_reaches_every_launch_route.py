@@ -1,22 +1,10 @@
-"""📝 Le lot de prompts doit atteindre CHAQUE route de lancement.
-
-Pourquoi ce fichier existe : l'axe `prompts` vivait dans le moteur depuis le
-début — `create_comparison_run` l'acceptait — mais `POST /api/studio/run` ne le
-transmettait pas. Résultat : sur la surface de comparaison multi-LoRA, AUCUNE
-des trois sources de lot (historique, 🎬 scènes, 🌐 Civitai) ne pouvait produire
-quoi que ce soit, et rien ne rougissait. Le moteur avait le paramètre, la route
-l'ignorait, et le silence a duré.
-
-Deux gardes complémentaires, parce qu'aucune des deux seule n'aurait attrapé ça :
-
-1. Une garde EXERCÉE sur la route réparée : on poste un lot, on lit ce que le
-   moteur a réellement reçu.
-2. Une garde STRUCTURELLE qui s'ÉNUMÈRE elle-même : toute fonction moteur dont
-   la signature accepte `prompts` doit se voir passer `prompts=` par CHACUN de
-   ses appelants dans `app/routes/`. Elle ne compte rien en dur — une quatrième
-   route de lancement ajoutée demain est découverte et exigée d'office. C'est
-   exactement la forme du bug : un appelant de plus qui oublie l'axe.
-"""
+"""Prompt batches must reach EVERY launch route. create_comparison_run accepted
+prompts, but POST /api/studio/run did not forward them. Consequently history,
+scenes and Civitai batches silently failed on multi-LoRA comparison. Two
+complementary guards cover this: post a batch through the repaired route and
+inspect the engine input; then discover every engine function accepting prompts
+and require every app/routes caller to pass prompts=. New routes or engine entry
+points enter the check automatically instead of relying on a fixed list."""
 import ast
 import inspect
 import pathlib
@@ -30,10 +18,10 @@ def _comfy(monkeypatch, reachable=True):
     monkeypatch.setattr('app.capabilities.probe_comfyui', lambda: {'ok': reachable, 'status': 'ok' if reachable else 'unreachable', 'detail': '', 'hint': 'Check the URL'})
 
 
-# --- 1. La garde EXERCÉE : la route réparée transmet vraiment -----------------
+# 1) Execute the guard: the repaired route really forwards the batch.
 
 def test_studio_run_forwards_the_prompt_batch_to_the_engine(client, monkeypatch):
-    """La comparaison multi-LoRA : le lot posté doit arriver au moteur."""
+    """Multi-LoRA comparison must forward the posted batch to the engine."""
     _comfy(monkeypatch)
     seen = {}
 
@@ -51,7 +39,7 @@ def test_studio_run_forwards_the_prompt_batch_to_the_engine(client, monkeypatch)
 
 
 def test_studio_run_without_a_batch_sends_none(client, monkeypatch):
-    """Rien de coché ⇒ `prompts=None` : le comportement d'avant, à l'identique."""
+    """No selection means prompts=None, preserving previous behavior."""
     _comfy(monkeypatch)
     seen = {}
 
@@ -66,13 +54,12 @@ def test_studio_run_without_a_batch_sends_none(client, monkeypatch):
     assert seen.get('prompts') is None
 
 
-# --- 2. La garde STRUCTURELLE, qui s'énumère elle-même ------------------------
+# 2) Structural guard discovers its own scope.
 
 def _engine_functions_accepting_prompts():
-    """{nom: module} de chaque entrée moteur dont la signature accepte `prompts`.
-
-    Découvert par introspection, jamais listé en dur : une nouvelle entrée
-    moteur qui gagne l'axe entre dans la garde sans qu'on y pense."""
+    """Discover {name: module} for engine entry points accepting prompts through
+    introspection, never a fixed list, so new entry points are covered
+    automatically."""
     from app.services import cloud_training, lora_test_studio
     found = {}
     for mod in (lora_test_studio, cloud_training):
@@ -80,7 +67,7 @@ def _engine_functions_accepting_prompts():
             if name.startswith('_') or not inspect.isfunction(obj):
                 continue
             if getattr(obj, '__module__', None) != mod.__name__:
-                continue            # ré-export : il sera vu chez son propriétaire
+                continue            # Re-export: checked in its owning module.
             try:
                 if 'prompts' in inspect.signature(obj).parameters:
                     found[name] = mod.__name__
@@ -90,9 +77,8 @@ def _engine_functions_accepting_prompts():
 
 
 def _call_sites(func_names):
-    """[(fichier, ligne, nom, passe_prompts)] pour chaque appel d'une de ces
-    fonctions trouvé dans app/routes/, quel que soit l'alias du module
-    (`lts.create_run`, `ct.canvas_generate`, ou l'appel nu)."""
+    """Return (file, line, name, passes_prompts) for every matching call in
+    app/routes, including module aliases and direct function imports."""
     out = []
     for path in sorted(ROUTES_DIR.rglob('*.py')):
         tree = ast.parse(path.read_text(encoding='utf-8'))
@@ -109,17 +95,17 @@ def _call_sites(func_names):
 
 def test_every_route_that_launches_a_run_forwards_the_prompt_batch():
     engines = _engine_functions_accepting_prompts()
-    assert engines, "aucune entrée moteur n'accepte `prompts` — la garde ne garde rien"
+    assert engines, "no engine entry point accepts prompts; the guard covers nothing"
 
     sites = _call_sites(set(engines))
     assert sites, (
-        "aucun appelant trouvé dans app/routes/ pour "
-        f"{sorted(engines)} — la garde ne peut rien prouver"
+        "no callers found in app/routes/ for "
+        f"{sorted(engines)}; the guard cannot verify forwarding"
     )
 
     missing = [(f, ln, n) for (f, ln, n, ok) in sites if not ok]
     assert not missing, (
-        'Ces routes lancent un run SANS transmettre le lot de prompts — '
-        "l'axe y est inatteignable et rien d'autre ne le dira :\n"
-        + '\n'.join(f'  {f}:{ln} -> {n}(…)  [prompts= absent]' for f, ln, n in missing)
+        'These routes launch a run WITHOUT forwarding the prompt batch; '
+        "the prompt axis is unreachable through them:\n"
+        + '\n'.join(f'  {f}:{ln} -> {n}(…)  [prompts= missing]' for f, ln, n in missing)
     )

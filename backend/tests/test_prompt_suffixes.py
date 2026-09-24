@@ -10,6 +10,8 @@ variation at WRAP time only:
     then the global suffix,
   - empty suffix -> byte-identical prompts (regression invariant).
 """
+
+import pytest
 import io
 import json
 import os
@@ -217,6 +219,7 @@ def test_klein_regenerate_applies_current_suffix_exactly_once(app, monkeypatch):
 
 
 # --- 5) Application at generation time (API engines) --------------------------
+@pytest.mark.plugins('api_engines')
 def test_api_fanout_items_carry_composed_suffix(app, monkeypatch):
     from app.models import FaceDatasetImage
     from app.services import face_dataset_service as svc
@@ -270,6 +273,7 @@ def test_api_batch_wraps_with_suffix_and_legacy_items_unchanged(app, monkeypatch
         assert prompts[1] == wrap_variation('close-up portrait')   # legacy = unchanged
 
 
+@pytest.mark.plugins('api_engines')
 def test_api_regenerate_sync_path_applies_suffix_once(app, monkeypatch):
     """regenerate_image on an API-engine row (app=None -> synchronous path) wraps
     with the dataset suffix, exactly once, and keeps the stored prompt raw."""

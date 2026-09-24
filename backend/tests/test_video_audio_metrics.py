@@ -32,8 +32,11 @@ import math
 
 import pytest
 
-from app.services import video_metrics as vm
-from app.services import video_metrics_scan as scan
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_metrics as vm
+from lds_video import video_metrics_scan as scan
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- the summary ---------------------------------------------------------------
@@ -219,7 +222,7 @@ def test_the_audio_cuts_are_readable_as_thresholds(app):
     feature that exists only in the source. This lane already carries one — see
     `first_frame_floor`, supported since wave 2 and absent from the config
     reader, so `soft_start` can never fire — and it must not gain a second."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     with app.app_context():
         keys = set(svc.metric_thresholds())
 
@@ -232,7 +235,7 @@ def test_the_dry_run_counts_the_audio_cuts_instead_of_dropping_them(app, client)
     reassures. Asserted through the COUNT rather than through an echo of the
     request — what matters is that the cut reached the counting."""
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     bank_id = _bank_with_clips(app, 1)
     with app.app_context():
         clip = VideoClip.query.filter_by(bank_id=bank_id).first()
@@ -310,7 +313,7 @@ def _frames(n=24, luma=0.5, sharp=100.0, motion=0.003):
 
 def _bank_with_clips(app, n):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -327,7 +330,7 @@ def _bank_with_clips(app, n):
 
 
 def _summaries(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         rows = VideoClip.query.filter_by(bank_id=bank_id).order_by(VideoClip.id).all()
         return [json.loads(r.metrics_json) if r.metrics_json else {} for r in rows]

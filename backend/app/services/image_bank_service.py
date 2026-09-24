@@ -55,9 +55,12 @@ from PIL import Image, ImageOps
 from sqlalchemy import and_, case, func, or_, text
 
 from .. import config as cfg
+from ..generation_limits import improve_timeout_seconds
+from ..timeout_settings import processing_timeout
 from ..extensions import db
 from ..models import (BankDupDistinct, BankImage, FaceDataset, FaceDatasetImage,
                       ImageBank)
+from ..utils.redact import redact_tokens, redact_user_paths
 from . import (bank_jobs, bank_semantic_engine, bank_transfer_metadata, bank_undo, caption_origin,
                dataset_activity, face_models, image_encoding, path_guard, trash)
 # The scope vocabulary is a leaf (pass_scopes.py) so face_dataset_service never
@@ -756,7 +759,7 @@ def create_bank(user_id, name, folder):
     image file. Instant (no decode) — scoring is the separate scan pass.
     Returns (bank, added). ValueError on a missing folder / too many files."""
     name = (name or '').strip()
-    # Windows «Copier en tant que chemin» pastes the path quoted — unquote so
+    # Windows "Copy as path" pastes the path quoted — unquote so
     # the direct paste works first try (same nicety as the dataset folder import).
     folder = (folder or '').strip().strip('"\'')
     if not name:
@@ -7643,12 +7646,27 @@ def _score_job(bank_id, rescore=False):
         # (below). It counts PATHS it was handed, so it is the wrong thing to
         # report as "scored": see the counter in the write-back loop.
         ok = [r for r in results.values() if r.get('state') == 'ok']
+        failed = sum(r.get('state') == 'error' for r in results.values())
+        if failed:
+            job['_usage_result'] = 'partial' if ok else 'failed'
+        failure_note = ''
+        if failed:
+            failure_note = (f'{failed} image(s) failed; run Score again to retry '
+                            'them. Successful cached images are kept.')
+            causes = list(dict.fromkeys(
+                redact_user_paths(redact_tokens(str(reason)))
+                for reason in (data.get('image_errors') or [])[:3]))
+            if causes:
+                failure_note += ' ' + ' · '.join(causes)
+        if failed and not ok:
+            bank_jobs.fail(job, 'Scoring failed — ' + failure_note)
+            return
         # Name any head that produced nothing, so a degraded pass says so out loud
         # (graceful degradation must be visible, never a silent gap).
         missing = []
-        if ok and not any('aesthetic' in r for r in ok):
+        if ok and any('aesthetic' not in r for r in ok):
             missing.append('aesthetic')
-        if ok and not any('nsfw' in r for r in ok):
+        if ok and any('nsfw' not in r for r in ok):
             missing.append('NSFW')
         detail = (f'done — scored {scored} image(s), '
                   + group_summary(sizes.values(), 'style group',
@@ -7665,6 +7683,8 @@ def _score_job(bank_id, rescore=False):
             detail += (f' · {computed} newly computed, '
                        f'{reused} reused from cache')
         detail += skipped
+        if failure_note:
+            detail += ' · ' + failure_note
         if missing:
             detail += f' ({" + ".join(missing)} head unavailable'
             # WHY, when the child said so. Both heads fetch their weights over the
@@ -7676,7 +7696,8 @@ def _score_job(bank_id, rescore=False):
             # exactly what it said before rather than growing an empty bracket.
             why = data.get('head_errors') or {}
             causes = list(dict.fromkeys(
-                str(why[k]) for k in ('aesthetic', 'nsfw') if why.get(k)))
+                redact_user_paths(redact_tokens(str(why[k])))
+                for k in ('aesthetic', 'nsfw') if why.get(k)))
             if causes:
                 detail += ' — ' + ' · '.join(causes)
             detail += ')'
@@ -9077,7 +9098,7 @@ def _await_queue_job(job_id, timeout, *, should_cancel=None):
     while True:
         db.session.rollback()
         row = ImageGenerationQueue.query.filter_by(job_id=job_id).first()
-        if row is not None and row.status in ('completed', 'failed', 'cancelled'):
+        if row is not None and row.status in ('completed', 'failed', 'cancelled', 'stalled', 'cancel_requested'):
             return row.status, row.result_filename, row.error_message
         if should_cancel is not None and should_cancel():
             return 'cancelled', None, None
@@ -9260,6 +9281,13 @@ def _improve_job(bank_id, engine, statuses=None, ids=None):
                 # GPU round-trip runs: the poll below reads across threads, and a
                 # held SQLite lock is how a long pass starves everything else.
                 db.session.commit()
+                timeout = improve_timeout_seconds()
+                timeout_metadata = {}
+                # Preserve the original 15-minute worker limit at defaults;
+                # explicitly changed improve budgets must reach that worker.
+                if (timeout != _IMPROVE_TIMEOUT_SECONDS
+                        or processing_timeout(_IMPROVE_TIMEOUT_SECONDS) != _IMPROVE_TIMEOUT_SECONDS):
+                    timeout_metadata['processing_timeout_seconds'] = 0 if math.isinf(timeout) else timeout
                 try:
                     job_id = fds._enqueue_improve(
                         engine, user_id=bank.user_id, source=row,
@@ -9267,7 +9295,7 @@ def _improve_job(bank_id, engine, statuses=None, ids=None):
                         label=None, dataset=None,
                         extra_metadata={'is_bank_improve': True,
                                         'bank_id': bank_id,
-                                        'bank_image_id': row.id})
+                                        'bank_image_id': row.id, **timeout_metadata})
                 except Exception as exc:
                     logger.warning('bank improve: image %s could not be queued: %s',
                                    rid, exc)
@@ -9275,7 +9303,7 @@ def _improve_job(bank_id, engine, statuses=None, ids=None):
                     bank_jobs.bump(job)
                     continue
                 status, filename, err = _await_queue_job(
-                    job_id, _IMPROVE_TIMEOUT_SECONDS,
+                    job_id, timeout,
                     should_cancel=lambda: bank_jobs.cancelled(job))
                 if status != 'completed':
                     if status != 'cancelled':
@@ -10810,6 +10838,8 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             # user has to be able to see afterwards that the protection did
             # something, otherwise it is a promise with no evidence.
             skipped += f', {skipped_asserted} kept (written by you)'
+        if any(left.get(key, 0) for key in ('failed', 'fenced', 'unanswered')):
+            job['_usage_result'] = 'partial' if captioned else 'failed'
         skipped += _skipped_note(vanished=vanished, stale=stale,
                                  fenced=left.get('fenced', 0),
                                  fence_reason=left.get('fence_reason', ''),

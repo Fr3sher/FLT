@@ -12,7 +12,7 @@ const canvasSetup = readFileSync(new URL('./StudioRunSetup.jsx', import.meta.url
 const legacyStudio = readFileSync(new URL('./LegacyDatasetStudio.jsx', import.meta.url), 'utf8');
 const topics = readFileSync(new URL('../../../help/topics/pages.js', import.meta.url), 'utf8');
 
-/** La valeur d'un `const NOM = <nombre>;` dans une source. */
+/** Read the numeric value of a const declaration in source text. */
 const constant = (source, name) => {
   const m = new RegExp(`const ${name} = (\\d+);`).exec(source);
   assert.ok(m, `${name} must stay a named constant — a magic number is not testable`);
@@ -20,10 +20,9 @@ const constant = (source, name) => {
 };
 
 test('both launch surfaces reach the browser through the same component', () => {
-  // Parité des surfaces de génération : le Studio de test du dataset et
-  // « Generate from the board » montent tous deux RecentPrompts, et c'est
-  // RecentPrompts qui monte la fenêtre. Ajouter le navigateur d'un seul côté est
-  // exactement la divergence silencieuse que les gens remontent comme un bug.
+  // Generation-surface parity: Dataset Test Studio and Generate from the board both mount
+  // RecentPrompts, which mounts the browser. Adding it on one surface only creates the silent
+  // divergence users report as a bug.
   assert.match(promptField, /<RecentPrompts items=\{recentPrompts\}/);
   assert.match(canvasSetup, /<RecentPrompts items=\{recentPrompts\}/);
   assert.match(strip, /import SavedPromptsModal from '\.\/SavedPromptsModal'/);
@@ -31,8 +30,8 @@ test('both launch surfaces reach the browser through the same component', () => 
 });
 
 test('the browser gets the WHOLE history, the strip only its head', () => {
-  // « Browse all 167 » doit ouvrir 167 entrées. Passer la tranche affichée à la
-  // fenêtre ferait un bouton qui ment sur son propre compte.
+  // Browse all 167 must open 167 entries. Passing only the visible slice would contradict the
+  // button's count.
   assert.match(strip, /<SavedPromptsModal[\s\S]*?items=\{items\}/);
   assert.match(strip, /items\.slice\(0, INLINE\)/);
   assert.ok(constant(strip, 'INLINE') > 0 && constant(strip, 'INLINE') <= 12,
@@ -40,23 +39,21 @@ test('the browser gets the WHOLE history, the strip only its head', () => {
 });
 
 test('the picture is drawn at a size a person can recognise', () => {
-  // La panne d'origine : la vignette était en `w-8 h-10` (32×40 px) alors que
-  // l'image est le SEUL signal qui distingue deux prompts de 500 caractères qui
-  // commencent pareil. Ce test est là pour que personne ne la rétrécisse à
-  // nouveau sans s'en rendre compte.
+  // Original defect: w-8 h-10 made thumbnails 32x40 even though images are the ONLY way to
+  // distinguish similar 500-character prompts. Prevent shrinking them unnoticed again.
   assert.doesNotMatch(strip, /className="w-8 h-10/,
     'the 32x40 thumbnail is the bug this browser exists to fix');
   assert.match(strip, /h-32 w-24 object-cover/);
-  // La fenêtre fait le MÊME geste que le navigateur 🌐 Civitai — choisir un
-  // prompt en regardant son image — donc elle le fait à la même taille.
+  // This dialog and Civitai browser perform the SAME action, choosing prompts by their images, so
+  // use the same image size.
   const rung = 'w-28 sm:w-36 h-40 sm:h-48';
   assert.ok(civitai.includes(rung), 'the Civitai browser is the published reference size');
   assert.ok(modal.includes(rung), 'same job as the Civitai browser, same picture size');
 });
 
 test('both thumbnail rungs are ones the server actually materialises', () => {
-  // `dataset_thumbs.THUMB_SIDES` : demander un barreau absent ne rend pas une
-  // image plus nette, il fait resservir un autre barreau côté serveur.
+  // Use dataset_thumbs.THUMB_SIDES: requesting a nonexistent size does not improve sharpness; the
+  // server serves another supported size instead.
   for (const [name, source] of [['strip', strip], ['modal', modal]]) {
     const side = constant(source, 'THUMB_SIDE');
     assert.ok(THUMB_SIDES.includes(side), `${name}: ${side} is not a served thumbnail rung`);
@@ -65,34 +62,33 @@ test('both thumbnail rungs are ones the server actually materialises', () => {
 });
 
 test('every verb the strip offers has a destination in the browser', () => {
-  // Porter une feature sur une seconde surface, c'est donner une destination à
-  // CHAQUE verbe : recharger, cocher pour le lot, supprimer. Un verbe qui n'existe
-  // que dans la bande devient injoignable dès le 7e prompt.
+  // Porting to another surface must expose EVERY action: reuse, batch selection and deletion. An
+  // action limited to the recent strip becomes unreachable beyond the sixth prompt.
   for (const verb of [/onPick\(/, /onToggleBatch\(/, /onDelete\(/]) {
     assert.match(strip, verb);
     assert.match(modal, verb);
   }
-  // …et le lot n'est proposé, des deux côtés, que si l'hôte le passe : « Generate
-  // from the board » ne le passe pas, la case ne doit pas y apparaître.
+  // Offer batch selection on both views only when the host supplies it. Generate from the board
+  // without that handler must not show checkboxes.
   for (const source of [strip, modal]) {
     assert.match(source, /const batchable = typeof onToggleBatch === 'function';/);
   }
 });
 
 test('ticking for the batch never writes into the prompt field', () => {
-  // Le contrat du lot : cocher DÉCRIT ce que le prochain lancement rejoue, seul
-  // « ⤵ Use prompt » (ou le clic sur une carte) remplit le champ.
+  // Batch contract: checking DESCRIBES the next launch's replay selection. Only Use prompt or
+  // clicking a card fills the field.
   assert.match(modal, /onClick=\{\(\) => onToggleBatch\(p\.prompt\)\}/);
   assert.match(modal, /const use = \(p\) => \{ onPick\(p\); onClose\(\); \};/);
 });
 
 test('the browser can be searched and says what it is showing', () => {
-  // À ~170 entrées, chercher est le seul moyen de retrouver un prompt — et c'est
-  // la forme (`type="search"`) que la Bank, le Canvas et Caption Lab emploient.
+  // At roughly 170 entries, search is essential. Use type=search consistently with Bank, Canvas
+  // and Caption Lab.
   assert.match(modal, /type="search"/);
   assert.match(modal, /filterSavedPrompts\(items, query\)/);
   assert.match(modal, /\$\{shown\.length\} of \$\{total\}/);
-  // Un filtre qui ne rend rien doit le DIRE, sinon la fenêtre a l'air cassée.
+  // An empty filtered result must explain itself; otherwise the dialog looks broken.
   assert.match(modal, /No saved prompt contains every word of/);
 });
 
@@ -100,28 +96,27 @@ test('the browser is a real dialog', () => {
   assert.match(modal, /role="dialog" aria-modal="true"/);
   assert.match(modal, /useFocusTrap\(ref, open\)/);
   assert.match(modal, /e\.key === 'Escape'/);
-  // Clic sur le fond = fermer, mais UNIQUEMENT sur le fond (pas sur une carte).
+  // Background click closes the dialog, but ONLY the background, never a card.
   assert.match(modal, /if \(e\.target === e\.currentTarget\) onClose\(\)/);
 });
 
 test('the browser is portalled out of the launch panel, and the reason still holds', () => {
-  // Mesuré en navigateur : sans portail, l'en-tête de l'app et des morceaux de
-  // la page se peignaient PAR-DESSUS la fenêtre, et au-delà de `lg` le scroll de
-  // l'aside la découpait. Cause : `position: sticky` ouvre un contexte
-  // d'empilement, donc aucun z-index posé dedans ne peut en sortir.
+  // Browser measurements showed the header and page fragments ABOVE the unportaled dialog, with
+  // aside scrolling clipping it beyond lg. Sticky creates a stacking context that no descendant
+  // z-index can escape.
   assert.match(modal, /createPortal\(<SavedPromptsPanel \{\.\.\.props\} \/>, document\.body\)/);
-  // La prémisse. Si l'aside cesse d'être sticky/scrollable, ce portail se
-  // rediscute — il ne se supprime pas en passant.
+  // Pin the premise: if the aside stops being sticky/scrollable, reconsider the portal
+  // deliberately rather than removing it incidentally.
   assert.match(legacyStudio, /<aside className="[^"]*lg:sticky[^"]*lg:overflow-auto/,
     'the launch panel still lives in a sticky, scrollable aside');
-  // Marqué pour la sonde responsive : un dialogue non marqué n'est pas mesuré.
+  // Mark for the responsive probe; unmarked dialogs are unmeasured.
   assert.match(modal, /data-probe-chrome="saved-prompts" data-probe-layer/);
 });
 
 test('the help topic the browser badges actually exists', () => {
   assert.match(modal, /<HelpBadge topic="studio-saved-prompts"/);
   assert.match(topics, /action\('studio-saved-prompts',/);
-  // Ce que quelqu'un tape quand il vit le symptôme d'origine.
+  // Search terms a user experiencing the original symptom would type.
   for (const kw of ['search prompts', 'find a prompt', 'preview too small', 'browse all prompts']) {
     assert.ok(topics.includes(`'${kw}'`), `help keywords must carry “${kw}”`);
   }

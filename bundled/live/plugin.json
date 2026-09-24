@@ -1,0 +1,94 @@
+{
+  "schema_version": 2,
+  "id": "live",
+  "bundled": true,
+  "name": "Live channels",
+  "version": "1.0.2",
+  "api": 1,
+  "publisher": {
+    "id": "lds",
+    "name": "LDS"
+  },
+  "description": "Run a continuous local H3 channel from scripted scenes, with a browser player and VLC stream. Includes its own setup and LoRA controls; no other LDS plugin is required.",
+  "requires": [],
+  "python_package": "lds_live",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": true,
+  "owns": {
+    "install_actions": [
+      "live_encoder",
+      "live_h3_base",
+      "live_h3_text_encoder",
+      "live_h3_video_vae",
+      "live_h3_audio_vae",
+      "live_h3_turbo_lora"
+    ],
+    "install_groups": [],
+    "probes": [
+      "live"
+    ],
+    "engines": [],
+    "config_sections": [],
+    "config_keys_in_shared_sections": {},
+    "help_topics": [
+      "page-video-live",
+      "setup-live"
+    ],
+    "tables": [],
+    "whats_new_ids": [
+      "2026-09-03-video-live-channel"
+    ],
+    "model_slots": [],
+    "job_kinds": [
+      "is_live"
+    ]
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "comfyui",
+    "gpu",
+    "filesystem",
+    "network"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Open Live",
+        "path": "/studio?lane=live"
+      }
+    ],
+    "setup": {
+      "label": "Prepare Live",
+      "path": "/plugins/live/settings"
+    },
+    "setup_hint": "Prepare the stream encoder and H3 in ComfyUI. Existing compatible H3 files are reused. No other LDS plugin is required.",
+    "surfaces": [
+      "Live studio",
+      "Live setup"
+    ]
+  },
+  "compatibility": {
+    "lds": ">=2026.9.4",
+    "api": ">=1.21,<2",
+    "python": ">=3.10,<4",
+    "os": [
+      "windows",
+      "linux",
+      "darwin"
+    ],
+    "arch": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "using-the-app#a-live-channel-from-your-video-lora",
+      "using-the-app#install-live"
+    ]
+  }
+}

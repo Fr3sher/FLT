@@ -1,26 +1,13 @@
 // react-frontend/src/components/dataset/studio/loraStack.js
 /**
- * Logique PURE du mode « pile » (🧬 Blend) du Test Studio — extraite du JSX pour
- * être testable sous `node --test` (le runner ne parse pas le JSX). Le ◉ LoRA
- * Canvas monte ce MÊME module (cf. utils/canvasGeneration) : un seul clamp, une
- * seule règle « ≥2 LoRA d'une seule famille », donc les deux écrans ne peuvent
- * pas répondre deux choses.
- *
- * ⚠️ Le mode s'affiche « 🧬 Blend » depuis le 03/08/2026 et s'affichait
- * « 🧬 Combine » avant. La valeur du mode, la clé d'API et les noms exportés
- * ici gardent le mot `combine` EXPRÈS : ils sont stockés (localStorage) ou
- * publics (POST), et un libellé ne renomme pas une donnée.
- *
- * Deux modes, une seule sélection de LoRA :
- *   - 'compare' : chaque LoRA coché est testé SEUL, une colonne par LoRA
- *                 (comportement historique) ; l'axe strengths balaye chacun.
- *   - 'combine' : (affiché « 🧬 Blend ») les LoRA cochés sont chargés ENSEMBLE
- *                 dans la même génération, chacun à SON poids ; l'axe strengths
- *                 n'a plus de sens et disparaît de l'UI comme du payload.
- *
- * Les poids vivent hors de la sélection (le LoraPicker n'en connaît pas) : une map
- * `{ "<dataset_id>:<checkpoint>": poids }`, pour qu'un poids réglé survive au
- * décochage/recochage d'un autre LoRA et à un changement de checkpoint.
+ * PURE Test Studio Blend-stack logic extracted from JSX for node --test. Canvas uses the SAME
+ * module through utils/canvasGeneration, sharing clamps and the at-least-two-LoRAs/one-family
+ * rule. The visible label changed from Combine to Blend on 2026-08-03; mode values, API keys and
+ * exports intentionally keep combine because they are persisted or public. compare tests each
+ * selected LoRA ALONE in its column across strengths. combine loads them TOGETHER at individual
+ * weights and removes the irrelevant strengths axis from UI/payload. Store weights independently
+ * of LoraPicker selection in a dataset_id:checkpoint map so other LoRAs being unchecked/rechecked
+ * or checkpoints changing do not discard them.
  */
 
 /* Extension spelled out: this module is imported directly by `node --test`,
@@ -28,46 +15,33 @@
 import { runCost } from './runCost.js';
 
 export const COMBINE_MIN_WEIGHT = 0;
-/* Plafond d'un poids de blend.
- *
- * 2.0 pendant longtemps, et c'était un plafond de CONFORT déguisé en limite
- * technique : rien côté ComfyUI n'interdit de charger un LoRA au-delà, et les
- * usages où ça sert existent (un LoRA entraîné faible qu'on pousse, un style
- * qu'on veut écrasant, un slider poussé à fond). Le curseur s'arrêtait donc
- * avant la zone que les gens allaient chercher à la main dans un workflow.
- *
- * 5.0 est le nouveau plafond, et il reste un plafond : au-delà, ce n'est plus
- * « fort », c'est du bruit — et une valeur illisible/aberrante doit encore être
- * ramenée dans une plage que le backend accepte. ⚠️ Le MÊME nombre est écrit
- * dans backend/app/services/lora_test_studio.COMBINE_MAX_WEIGHT : les deux
- * clampent, et deux plafonds différents feraient mentir le curseur (l'UI
- * annoncerait 4.5, le serveur rendrait 2.0 sans rien dire).
- *
- * La zone > 2 est délibérément atteignable au CURSEUR *et* au clavier : le
- * champ à droite accepte la saisie libre au centième, comme les axes du Test
- * Studio, parce qu'un pas de 0.05 pour aller de 1 à 5 est une invitation à
- * abandonner. */
+/*
+ * Blend-weight ceiling. The old 2.0 limit was a comfort choice, not a ComfyUI restriction, and
+ * prevented useful weak-LoRA, dominant-style and strong-slider tests. The ceiling is now 5.0;
+ * larger values become noise and invalid input still needs a backend-compatible clamp. Keep
+ * IDENTICAL to backend/app/services/lora_test_studio.COMBINE_MAX_WEIGHT because both sides clamp:
+ * differing limits would make displayed weights disagree with rendered ones. Values above 2 are
+ * reachable through slider AND keyboard, with hundredth precision, avoiding excessive 0.05 slider
+ * steps from 1 to 5.
+ */
 export const COMBINE_MAX_WEIGHT = 5;
 const COMBINE_DEFAULT_WEIGHT = 1;
 
-/** Une saisie CLAVIER de poids, ramenée dans la plage — ou `null` si elle ne
- *  veut rien dire encore.
- *
- *  `null` n'est pas un échec : c'est « ne touche pas au poids ». Un champ vidé
- *  pour être retapé, un `-` seul, un `1.` en cours de frappe passent tous par
- *  ici, et remplacer ça par 0 (ou par 1) ferait sauter le curseur sous les
- *  doigts à chaque caractère. Seule une valeur finie est clampée et rendue. */
+/**
+ * Parse a KEYBOARD weight and clamp it, or return null while input is not meaningful. null means
+ * leave the weight untouched, not failure: empty text, a lone minus and partial 1. input must not
+ * jump the slider to zero or one with each character. Return only finite clamped values.
+ */
 export function clampBlendWeight(raw) {
   const n = Number(raw);
   if (raw === '' || raw == null || !Number.isFinite(n)) return null;
   return Math.round(Math.min(COMBINE_MAX_WEIGHT, Math.max(COMBINE_MIN_WEIGHT, n)) * 100) / 100;
 }
 
-/** Clé stable d'un LoRA sélectionné dans la map de poids. */
+/* Stable selected-LoRA key in the weight map. */
 export const stackKey = (sel) => `${sel?.dataset_id}:${sel?.checkpoint}`;
 
-/** Poids retenu pour une sélection : clampé 0..COMBINE_MAX_WEIGHT, arrondi au
- *  centième, 1 par défaut. */
+/* Selected weight: clamp from 0 to COMBINE_MAX_WEIGHT, round to hundredths, default to 1. */
 export function stackWeight(weights, sel) {
   const raw = Number((weights || {})[stackKey(sel)]);
   if (!Number.isFinite(raw)) return COMBINE_DEFAULT_WEIGHT;
@@ -75,9 +49,9 @@ export function stackWeight(weights, sel) {
 }
 
 /**
- * Le mode combine exige ≥2 LoRA d'une MÊME famille. Retourne null si tout va bien,
- * sinon le message (anglais) à afficher — le backend refuse aussi, mais l'utilisateur
- * doit le savoir AVANT de dépenser du GPU.
+ * Combine requires at least two LoRAs from the SAME family. Return null when valid, otherwise the
+ * English message to display. The backend also rejects invalid selection, but users need to know
+ * BEFORE spending GPU time.
  */
 export function combineBlocker(selection) {
   const sel = selection || [];
@@ -91,10 +65,9 @@ export function combineBlocker(selection) {
 }
 
 /**
- * Corps `selections` du POST /api/studio/run. En combine, chaque entrée porte son
- * `weight` (le backend chaîne les LoRA au-delà du premier dans le même graphe et
- * injecte TOUS les triggers) ; en comparaison le payload reste celui d'avant, sans
- * `weight`, pour ne rien changer aux runs existants.
+ * Build POST /api/studio/run selections. Combine entries carry weight; backend chains extra LoRAs
+ * in one graph and injects ALL triggers. Comparison preserves the old payload without weight so
+ * existing runs are unchanged.
  */
 export function buildSelectionsPayload(selection, { combine = false, weights = {}, sets = {} } = {}) {
   return (selection || []).map((s) => {
@@ -103,51 +76,41 @@ export function buildSelectionsPayload(selection, { combine = false, weights = {
     return {
       dataset_id: s.dataset_id,
       checkpoint: s.checkpoint,
-      // `weight` (scalaire) reste envoyé EN PLUS de `weights` : cette app se met à
-      // jour par `git pull`, donc un frontend neuf peut tourner quelques minutes
-      // contre un backend qui ne connaît pas encore le balayage. Il rend alors la
-      // tête de liste — une image au lieu de N, dégradé et juste, pas cassé.
+      // Send scalar weight ALONGSIDE weights. Git-pull updates can temporarily run a new frontend
+      // against a backend without sweep support; that backend renders the leading weight,
+      // producing one correct image rather than N, instead of breaking.
       weight: list[0],
       weights: list,
     };
   });
 }
 
-/* ---------------------------------------------------------------------------
-   🧬 BLEND SWEEP — plusieurs poids COCHÉS par LoRA → un lot de combinaisons.
+/*
+ * BLEND SWEEP: checked weights per LoRA form a Cartesian product of combinations, one cell each in
+ * ONE run, replacing separate launches to compare weight assignments. No checked weights means the
+ * slider governs with existing hundredth precision and off-grid values. Any checks make the
+ * CHECKBOXES authoritative; one check still produces one configuration. No hard cap by design,
+ * matching server build_matrix: execution is serial and users see count/time first. Like strength
+ * sweeps, exceeding BLEND_WARN_CELLS warns about real cost without rejecting. A future hard-cap
+ * policy would use this single constant as a bound instead of a warning threshold.
+ */
 
-   Le curseur donne UN poids par LoRA : une pile = une image, et comparer
-   « 0.8/0.6 » à « 0.6/0.8 » demandait deux lancements et deux attentes. Les
-   cases de poids remplacent ça par un balayage : chaque LoRA porte un ENSEMBLE
-   de poids, et le lancement rend le PRODUIT CARTÉSIEN des combinaisons, une
-   cellule chacune, dans un seul run.
-
-   Règle du curseur, explicite parce qu'elle décide de tout le reste :
-   AUCUNE case cochée = le curseur gouverne (comportement d'avant, au centième
-   près, valeurs hors grille comprises). Dès qu'une case est cochée, ce sont LES
-   CASES qui gouvernent — une seule case = une seule configuration, donc
-   exactement une image, comme avant.
-
-   Pas de plafond dur, délibérément : `build_matrix` côté serveur porte la même
-   règle écrite (« PAS de plafond sur le nombre de cellules : la file est
-   sérielle et l'utilisateur voit le compte + l'estimation de durée avant de
-   lancer »). Un blend sweep est un sweep comme l'axe strengths, il obéit donc à
-   la même règle plutôt qu'à une seconde. Au-delà de BLEND_WARN_CELLS on AVERTIT
-   (le coût est réel), on n'interdit pas. Passer à un plafond dur = utiliser
-   cette constante comme borne au lieu d'un seuil, à UN endroit.
-   --------------------------------------------------------------------------- */
-
-/** Grille de cases proposée sous chaque curseur. Des valeurs rondes qui couvrent
- *  la plage utile d'un blend ; le curseur reste là pour le hors-grille. */
+/**
+ * Checkbox grid below each slider uses round values covering useful blend weights; the slider
+ * still supports off-grid values.
+ */
 export const BLEND_WEIGHT_CHIPS = [0.4, 0.6, 0.8, 1.0];
 
-/** Seuil d'AVERTISSEMENT (pas de refus) sur le nombre d'images d'un lancement.
- *  Aligné sur `MAX_TEST_IMAGES` du backend, qui n'était jusqu'ici qu'un nombre
- *  annoncé au frontend sans que rien ne le vérifie. */
+/**
+ * Image-count WARNING threshold, never rejection. Matches backend MAX_TEST_IMAGES, previously only
+ * reported to the frontend without enforcement.
+ */
 export const BLEND_WARN_CELLS = 24;
 
-/** Les poids COCHÉS d'une sélection : clampés, arrondis, dédupliqués, triés.
- *  Vide = aucune case cochée. */
+/**
+ * Checked weights for a selection: clamp, round, deduplicate and sort. Empty means no boxes
+ * checked.
+ */
 export function stackWeightSet(sets, sel) {
   const raw = (sets || {})[stackKey(sel)];
   if (!Array.isArray(raw)) return [];
@@ -161,24 +124,27 @@ export function stackWeightSet(sets, sel) {
   return out.sort((a, b) => a - b);
 }
 
-/** Les poids que CE LoRA va réellement balayer : ses cases si elle en a, sinon
- *  la valeur du curseur. Jamais vide — un LoRA contribue toujours un poids. */
+/**
+ * Weights this LoRA actually sweeps: checked values if any, otherwise its slider value. Never
+ * empty; each LoRA contributes at least one weight.
+ */
 export function stackWeightList(weights, sets, sel) {
   const chosen = stackWeightSet(sets, sel);
   return chosen.length ? chosen : [stackWeight(weights, sel)];
 }
 
-/** Toutes les combinaisons de poids, produit cartésien dans l'ordre de la
- *  sélection, le DERNIER LoRA variant le plus vite (l'ordre de lecture d'un
- *  tableau : on parcourt les poids du second en gardant le premier). Chaque
- *  combinaison est un tableau de poids aligné sur `selection`. */
+/**
+ * Cartesian product in selection order, with the LAST LoRA varying fastest, like table reading
+ * across the second LoRA while holding the first fixed. Each combination is a weight array aligned
+ * with selection.
+ */
 export function blendCombinations(selection, { weights = {}, sets = {} } = {}) {
   const lists = (selection || []).map((s) => stackWeightList(weights, sets, s));
   if (!lists.length) return [];
   return lists.reduce((acc, list) => acc.flatMap((combo) => list.map((w) => [...combo, w])), [[]]);
 }
 
-/** Combien de configurations le lancement va rendre (hors seeds et axe batch). */
+/** Number of configurations to render, excluding seeds and the batch axis. */
 export function blendConfigCount(selection, opts = {}) {
   return (selection || []).length
     ? (selection || []).reduce(
@@ -192,27 +158,28 @@ const fmtWeight = (w) => {
   return String(Math.round(n * 100) / 100);
 };
 
-/** L'étiquette d'UNE combinaison, telle qu'elle est montrée sur sa cellule :
- *  « margot 0.8 × telegram 0.6 ». Le nom vient de la sélection (`lora_label`),
- *  le poids de la combinaison — les deux surfaces alimentent `lora_label`, donc
- *  l'étiquette est fabriquée ici et pas deux fois. */
+/**
+ * Label ONE combination on its cell, such as subject 0.8 x style 0.6. Names come from
+ * selection.lora_label and weights from the combination. Both surfaces provide lora_label, so
+ * build labels once here.
+ */
 export function blendComboLabel(selection, combo) {
   return (selection || [])
     .map((s, i) => `${s.lora_label || s.checkpoint || `LoRA ${i + 1}`} ${fmtWeight((combo || [])[i])}`)
     .join(' × ');
 }
 
-/** Ce que le bouton doit dire du COÛT avant de lancer, et quand s'en inquiéter.
- *  `warn` ne bloque JAMAIS : il colore et il chiffre. */
+/**
+ * Describe launch COST and when to warn before clicking. warn NEVER blocks; it changes color and
+ * displays estimates.
+ */
 export function blendSweepCost({ configCount, count = 1, batchMult = 1,
   secondsPerImage = null }) {
   const cells = Math.max(0, Number(configCount) || 0)
     * Math.max(1, Number(count) || 0) * Math.max(1, Number(batchMult) || 1);
-  // Même estimation que SeedControls : deux compteurs qui annonceraient deux
-  // durées pour un seul lancement seraient pires que zéro. Les deux passent
-  // désormais par `runCost`, donc par le rythme MESURÉ de la machine quand il
-  // existe — le « 12 s » d'avant était le chiffre d'une 4090 servi à tout le
-  // monde, et il mentait d'un facteur cinq sur une carte lente.
+  // Use the same estimate as SeedControls: conflicting durations for one launch would be worse
+  // than none. Both use runCost and this machine's MEASURED pace when available. The old universal
+  // 12-second figure came from a 4090 and was five times wrong on a slow card.
   const cost = runCost(cells, secondsPerImage);
   return {
     configs: Math.max(0, Number(configCount) || 0),
@@ -225,19 +192,19 @@ export function blendSweepCost({ configCount, count = 1, batchMult = 1,
 }
 
 /**
- * Nombre de cellules annoncé AVANT lancement. Une pile combinée valait UNE
- * configuration ; avec des cases de poids elle en vaut `configCount` (le produit
- * cartésien), d'où `configCount × count × batchMult`. `configCount` absent =
- * 1 configuration, c'est-à-dire exactement le comportement d'avant les cases.
+ * Cell count announced BEFORE launch. A stack is one configuration unless checked weights yield
+ * configCount Cartesian combinations; total is configCount x count x batchMult. Missing
+ * configCount defaults to one, preserving pre-checkbox behavior.
  */
-/* `axisTotal` = le produit des axes de rendu (CFG × steps × 2e passe) que le
-   panneau propose désormais aussi en comparaison/blend. 1 par défaut : un appelant
-   qui ne balaye aucun de ces axes obtient le compte d'avant, à l'identique. */
-/* `promptCount` = la taille du 📝 lot de prompts, qui est un axe de PLUS : le
-   serveur rend chaque configuration une fois par prompt coché. Il est à part de
-   `axisTotal` exprès — l'infobulle du compteur nomme les axes un par un, et
-   ranger les prompts dans « CFG / steps » lui ferait dire une chose fausse.
-   1 par défaut (aucun lot) = le compte d'avant, à l'identique. */
+/*
+ * axisTotal multiplies the render axes CFG, steps and second pass now offered in comparison/blend
+ * too. Default one preserves previous counts when none are swept.
+ */
+/*
+ * promptCount adds the prompt-batch axis: each configuration renders once per selected prompt.
+ * Keep it separate from axisTotal because tooltips name axes individually; hiding prompts under
+ * CFG/steps would be inaccurate. Default one, no batch, preserves previous counts.
+ */
 export function cellCount({ selectionCount, strengthCount, count, batchMult = 1,
   combine = false, configCount = 1, axisTotal = 1, promptCount = 1 }) {
   const n = Math.max(0, Number(count) || 0);

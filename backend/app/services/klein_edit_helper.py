@@ -603,18 +603,17 @@ def _consistency_lora():
     return _configured_lora('klein.consistency_lora')
 
 
-# Hard caps on the optional generation-LoRA presets (Idea by @waltm): bound
-# the graph size and the Settings UI alike — the UI shows the same numbers.
+# Bound the active LoRA chain. Saved presets are choices, not simultaneous
+# model loads, so their count does not consume GPU memory (Idea by @waltm).
 MAX_GENERATION_LORAS = 8          # LoRAs chained per preset
-MAX_GENERATION_LORA_PRESETS = 12  # named presets
 
 
 def configured_generation_lora_presets():
     """Sanitized `klein.generation_lora_presets`: ordered
     [{name, loras: [{file, strength}]}] with blank/duplicate names and
     blank/malformed rows dropped, strengths clamped to [0, 1.5] (junk -> the
-    0.6 default), rows capped at MAX_GENERATION_LORAS per preset and presets
-    capped at MAX_GENERATION_LORA_PRESETS. This is the single source of truth
+    0.6 default), rows capped at MAX_GENERATION_LORAS per preset. Every named
+    preset is retained. This is the single source of truth
     for WHICH files may chain and in WHAT order — a /generate request can only
     NAME a preset that exists here, never define files or an order."""
     raw = cfg.get('klein.generation_lora_presets')
@@ -642,8 +641,6 @@ def configured_generation_lora_presets():
                 break
         seen.add(name)
         out.append({'name': name, 'loras': rows})
-        if len(out) >= MAX_GENERATION_LORA_PRESETS:
-            break
     return out
 
 

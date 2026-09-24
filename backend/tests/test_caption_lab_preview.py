@@ -1,6 +1,7 @@
 """🧪 Caption Lab — per-candidate preview endpoint. Runs ONE caption config on ONE
 image and returns the text WITHOUT persisting it (ephemeral A/B probe). The Ollama
 vision seam is mocked so the pass is hermetic, exactly like the image-bank tests."""
+import json
 import os
 
 import pytest
@@ -95,7 +96,7 @@ def test_preview_default_backend_leaves_prompt_clean(client, app, monkeypatch):
 
     r = _preview(client, ds_id, img_id)
     assert r.status_code == 200
-    # No vocabulary, no instructions → the descriptive prompt is not augmented.
+    # No vocabulary, no instructions → the dataset prompt is not augmented.
     assert 'crude anatomical terms' not in capture['prompt']
 
 
@@ -207,3 +208,93 @@ def test_preview_appends_length_preset(client, app, monkeypatch):
     assert 'Keep the caption SHORT' in capture['prompt']
 
     assert _preview(client, ds_id, img_id, length='epic').status_code == 400
+
+
+@pytest.mark.parametrize('kind,train_type,fidelity', [
+    ('character', 'zimage', 'face'),
+    ('character', 'sdxl', 'body'),
+    ('style', 'zimage', 'face'),
+    ('style', 'sdxl', 'face'),
+    ('concept', 'zimage', 'face'),
+])
+@pytest.mark.parametrize('backend', ['ollama', 'joycaption'])
+def test_lab_sends_the_same_prompt_as_the_dataset_batch(
+        client, app, monkeypatch, kind, train_type, fidelity, backend):
+    """Issue #68: compare actual inference arguments, not two prompt builders."""
+    from app.config import LOCAL_USER
+    from app.models import FaceDatasetImage
+    from app.services import face_dataset_service as svc, joycaption, vision_ollama
+
+    ds_id, img_id = _dataset_with_image(client, app)
+    calls = []
+    answer = 'full body shot, wearing a blue jacket beside a window, warm afternoon light'
+
+    def describe(image, prompt, **kwargs):
+        calls.append((prompt, kwargs.get('model')))
+        return answer
+
+    def joy(paths, prompt, **kwargs):
+        calls.append((prompt, None))
+        return dict.fromkeys(paths, answer)
+
+    monkeypatch.setattr(vision_ollama, 'describe_image_ollama', describe)
+    monkeypatch.setattr(vision_ollama, 'unload_vision_model', lambda **kw: True)
+    monkeypatch.setattr(joycaption, 'is_available', lambda: True)
+    monkeypatch.setattr(joycaption, 'caption_images_joycaption', joy)
+    # No expansion call/cached write is needed to exercise the concept caption prompt.
+    monkeypatch.setattr(svc, '_get_concept_terms', lambda *a, **kw: [])
+    with app.app_context():
+        ds = svc.get_dataset(LOCAL_USER, ds_id)
+        ds.kind, ds.train_type, ds.fidelity = kind, train_type, fidelity
+        ds.concept_desc = 'holding an umbrella'
+        ds.caption_options = json.dumps({
+            'backend': backend, 'ollama_model': 'candidate:latest',
+            'vocabulary': 'clinical', 'length': 'detailed',
+            'instructions': 'Mention visible clothing colors.',
+            'appearance': {'hair': 'describe', 'makeup': 'describe',
+                           'facial_hair': 'omit', 'glasses': 'describe'},
+        })
+        svc.db.session.commit()
+        original_options = ds.caption_options
+
+    response = _preview(client, ds_id, img_id)
+    assert response.status_code == 200, response.get_json()
+    preview = response.get_json()
+    preview_calls = list(calls)
+    assert len(preview_calls) == 1
+    assert preview['prompt'] == preview_calls[0][0]
+    assert 'Mention visible clothing colors.' in preview['prompt']
+    assert bool(preview.get('prompt_note')) == (kind == 'concept')
+    calls.clear()
+    with app.app_context():
+        # Preview must neither write a caption nor change the saved method.
+        assert not svc.db.session.get(FaceDatasetImage, img_id).caption
+        assert svc.get_dataset(LOCAL_USER, ds_id).caption_options == original_options
+        assert svc.caption_images(LOCAL_USER, ds_id) == 1
+        assert calls == preview_calls
+        assert svc.db.session.get(FaceDatasetImage, img_id).caption == preview['caption']
+
+
+def test_candidate_can_clear_saved_options_without_changing_them(client, app, monkeypatch):
+    from app.config import LOCAL_USER
+    from app.services import face_dataset_service as svc
+
+    _use_ollama_backend(app)
+    ds_id, img_id = _dataset_with_image(client, app)
+    capture = {}
+    _mock_vision(monkeypatch, capture=capture)
+    with app.app_context():
+        saved = svc.set_caption_options(LOCAL_USER, ds_id, {
+            'backend': 'joycaption', 'ollama_model': 'saved:latest',
+            'vocabulary': 'explicit', 'length': 'detailed', 'instructions': 'Saved steer.',
+        })
+    r = _preview(client, ds_id, img_id, backend='', ollama_model='',
+                 vocabulary='', length='', instructions='')
+    assert r.status_code == 200, r.get_json()
+    assert capture['model'] is None
+    assert 'Saved steer.' not in capture['prompt']
+    assert 'crude anatomical terms' not in capture['prompt']
+    with app.app_context():
+        ds = svc.get_dataset(LOCAL_USER, ds_id)
+        assert svc.caption_options(ds) == saved
+        assert capture['prompt'] == svc._dataset_caption_recipe(ds, saved)[0]

@@ -25,7 +25,7 @@ test('the restart-control is visible only for the backend’s unknown-submit rec
   for (const source of [singleStudio, comparisonStudio]) {
     assert.match(source, /comfyui_recovery\?\.requires_comfyui_restart_confirmation/,
       'the control must be gated by the backend recovery contract');
-    assert.match(source, /J’ai redémarré ComfyUI/,
+    assert.match(source, /I restarted ComfyUI/,
       'the button must make the restart claim explicit');
     assert.match(source, /confirmComfyuiRestart/,
       'the explicit gesture must invoke the confirmation hook');

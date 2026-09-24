@@ -1,4 +1,4 @@
-"""Automatisation de l'entraînement LoRA Z-Image via ai-toolkit.
+"""Automate LoRA training through ai-toolkit.
 
 L'app prépare (export dataset + job-config) et lance l'UI ai-toolkit ; elle ne
 réimplémente pas l'entraîneur. Pause GPU via le flag system_state
@@ -640,7 +640,8 @@ def _loras_root():
 # Family -> its subfolder under a loras root. Single source for the deploy
 # accessors AND for the multi-root read helpers below.
 _FAMILY_SUBDIR = {'zimage': 'z image', 'sdxl': 'sdxl', 'krea': 'krea',
-                  'flux': 'flux', 'flux2klein': 'flux2klein', 'anima': 'anima'}
+                  'flux': 'flux', 'flux2klein': 'flux2klein', 'anima': 'anima',
+                  'qwenimage21': 'qwenimage21'}
 
 
 def _lora_dest_dir_zimage():
@@ -721,7 +722,7 @@ def _sdxl_checkpoints_dir():
 
 
 def is_installed() -> bool:
-    """ai-toolkit est-il installé (venv python présent) ?"""
+    """Return whether ai-toolkit is installed with its virtual-environment Python."""
     p = cfg.aitoolkit_path('venv_python')
     return bool(p) and p.is_file()
 
@@ -772,19 +773,13 @@ def assert_interpreter_ready() -> None:
 
 
 def _aitoolkit_supports_krea() -> bool:
-    """L'ai-toolkit installé connaît-il l'arch Krea 2 ? C'est CRITIQUE : ai-toolkit
-    fait `if ModelClass.arch == config.arch` puis, sans match, retombe
-    SILENCIEUSEMENT sur le loader SD legacy (get_model.py:get_model_class) - aucune
-    erreur levée. Une config `arch:'krea2'` sur un ai-toolkit pas à jour chargerait
-    donc Krea-2-Turbo comme un checkpoint SD et planterait de façon confuse. On
-    scanne les sources d'archs (extensions_built_in) ; lecture fraîche → dès que
-    le mainteneur fait `git pull`, la détection passe à True sans redémarrage.
+    """Check whether the installed ai-toolkit declares the exact Krea 2 architecture.
 
-    On exige l'arch EXACTE `arch = "krea2"` (la chaîne émise par _build_job_config_krea),
-    pas la simple sous-chaîne « krea » : sinon une mention incidente (commentaire,
-    variable) ferait un FAUX POSITIF, et surtout si l'arch upstream diffère (ex.
-    « krea2_turbo ») la garde donnerait un feu vert alors que get_model_class ne
-    matcherait pas → fallback SD silencieux, précisément ce qu'on veut empêcher."""
+    get_model_class silently falls back to legacy SD when no ModelClass.arch matches.
+    An outdated checkout would therefore misload Krea-2-Turbo. Scan extension source
+    for the exact arch = "krea2" emitted by the recipe, not an incidental "krea"
+    substring or a different upstream architecture name. Read fresh each time so
+    a checkout update takes effect without restarting."""
     root = cfg.aitoolkit_path('dir')
     if not root:
         return False
@@ -806,15 +801,11 @@ def _aitoolkit_supports_krea() -> bool:
 
 
 def _aitoolkit_supports_flux2klein() -> bool:
-    """L'ai-toolkit installé connaît-il FLUX.2 Klein ? Même enjeu CRITIQUE que
-    _aitoolkit_supports_krea (lire son commentaire) : les archs flux2_klein_4b/9b
-    sont des EXTENSIONS (extensions_built_in/diffusion_models/flux2), pas des archs
-    cœur comme 'flux' — un ai-toolkit pas à jour ne les connaît pas et
-    get_model_class retomberait SILENCIEUSEMENT sur le loader SD legacy → LoRA
-    corrompu. On exige l'arch EXACTE `arch = "flux2_klein_4b"` ou `"..._9b"` (les
-    chaînes émises par _build_job_config_flux2klein), jamais la sous-chaîne
-    « klein » seule — une mention incidente ferait un faux positif. Lecture
-    fraîche : un `git pull` du mainteneur passe la détection à True sans restart."""
+    """Check exact FLUX.2 Klein extension architectures in installed ai-toolkit.
+
+    Require flux2_klein_4b/9b, matching the recipe; incidental "klein" text is not
+    sufficient. An outdated checkout otherwise falls back silently to legacy SD
+    and produces incompatible training. Read sources fresh so updates need no restart."""
     root = cfg.aitoolkit_path('dir')
     if not root:
         return False
@@ -836,18 +827,13 @@ def _aitoolkit_supports_flux2klein() -> bool:
 
 
 def _aitoolkit_supports_anima() -> bool:
-    """L'ai-toolkit installé connaît-il Anima ? Même enjeu CRITIQUE que
-    _aitoolkit_supports_krea (lire son commentaire) : l'arch 'anima' est une
-    EXTENSION (extensions_built_in/diffusion_models/anima, PR ostris/ai-toolkit
-    #860 mergée le 2026-07-15), pas une arch cœur — un ai-toolkit antérieur ne la
-    connaît pas et get_model_class retomberait SILENCIEUSEMENT sur le loader SD
-    legacy → LoRA corrompu. On exige l'arch EXACTE `arch = "anima"` (la chaîne
-    émise par _build_job_config_anima). Lecture fraîche : un `git pull` du
-    mainteneur passe la détection à True sans restart. ⚠️ Cette garde vérifie la
-    PRÉSENCE de l'arch dans les sources, PAS la version de diffusers : Anima exige
-    aussi un diffusers récent (AnimaModularPipeline/CosmosTransformer3DModel) —
-    un checkout à jour mais un venv ancien lèvera un ImportError au chargement
-    (même angle mort que krea2/flux2_klein)."""
+    """Check the exact Anima extension architecture in installed ai-toolkit.
+
+    Anima arrived in upstream PR #860 on 2026-07-15. Earlier checkouts can silently
+    fall back to legacy SD. Require arch = "anima", as emitted by the recipe, and
+    read fresh after updates. This verifies source presence, not the diffusers
+    version: Anima also needs AnimaModularPipeline/CosmosTransformer3DModel, so an
+    updated checkout with an old virtual environment may still raise ImportError."""
     root = cfg.aitoolkit_path('dir')
     if not root:
         return False
@@ -866,6 +852,27 @@ def _aitoolkit_supports_anima() -> bool:
             except OSError:
                 continue   # unreadable log: not the one this grep is looking for
     return False
+
+
+def _aitoolkit_supports_qwenimage21() -> bool:
+    """Require the dedicated 2.1 architecture, never the older Qwen Image loader."""
+    root = cfg.aitoolkit_path('dir')
+    if not root:
+        return False
+    source = root / 'extensions_built_in/diffusion_models/qwen_image_2/qwen_image_2.py'
+    try:
+        return bool(re.search(r'^\s*arch\s*=\s*[\'\"]qwen_image_2[\'\"]',
+                              source.read_text(encoding='utf-8'), re.MULTILINE))
+    except OSError:
+        return False
+
+
+def _assert_qwenimage21_ready(family) -> None:
+    if family == 'qwenimage21' and not _aitoolkit_supports_qwenimage21():
+        raise ValueError(
+            'Qwen-Image 2.1 needs a recent AI Toolkit (qwen_image_2 arch missing). '
+            'Update it (git pull) and install its current requirements in its own '
+            'Python environment before training.')
 
 
 def _aitoolkit_supports_automagic3() -> bool:
@@ -897,19 +904,18 @@ def _safe_trigger(ds) -> str:
 
 
 def _train_type(ds, family=None) -> str:
-    """Famille de modèle entraînée : 'zimage' (défaut/None), 'sdxl', 'krea',
-    'flux' ou 'flux2klein'.
-    `family` (override) prime sur le train_type persisté quand fourni (non vide) -
-    c'est ce qui permet au sélecteur de famille de l'UI de piloter la lecture des
-    runs/checkpoints/déploiements SANS écraser le train_type persisté du dataset."""
+    """Resolve the training family, defaulting to zimage.
+
+    A nonempty family override takes precedence over persisted train_type, allowing
+    the UI to browse runs, checkpoints and deployments without changing the dataset."""
     return ((family or None) or getattr(ds, 'train_type', None) or 'zimage').lower()
 
 
 def _lora_dest_dir(ds, family=None) -> str:
-    """Dossier loras ComfyUI où DÉPLOYER le LoRA entraîné, routé par famille :
-    krea → loras/krea/ (pour qu'il apparaisse dans le menu de génération Krea via
-    get_krea_loras), sdxl → loras/sdxl/, zimage (défaut) → « z image/ ». Garde les
-    familles séparées (un LoRA Krea ne doit pas polluer le Test Studio Z-Image)."""
+    """Resolve the family-specific ComfyUI LoRA deployment folder.
+
+    Keep families separate: Krea uses loras/krea/, SDXL uses loras/sdxl/, and
+    Z-Image defaults to "z image/", preventing incompatible Studio choices."""
     fam = _train_type(ds, family)
     if fam == 'sdxl':
         return str(_lora_dest_dir_sdxl())
@@ -921,19 +927,17 @@ def _lora_dest_dir(ds, family=None) -> str:
         return str(_lora_dest_dir_flux2klein())
     if fam == 'anima':
         return str(_lora_dest_dir_anima())
+    if fam == 'qwenimage21':
+        return os.path.join(_loras_root(), 'qwenimage21')
     return str(_lora_dest_dir_zimage())
 
 
 def _sdxl_base_choices() -> set:
-    """Whitelist serveur des bases SDXL = basenames des checkpoints ComfyUI.
-    include_hidden=True pour ne pas exclure un checkpoint masqué légitime, et
-    pour récupérer une forme stable quelle que soit la variante de retour.
+    """Server allowlist of SDXL checkpoint basenames.
 
-    Union with every checkpoint reachable through ``extra_model_paths.yaml``:
-    get_checkpoint_models only knows ``<base>/models/checkpoints``, so on a
-    portable / Stability-Matrix / A1111-shared install this whitelist rejected
-    ('unknown SDXL checkpoint') bases that ComfyUI itself loads. Strictly ADDITIVE
-    — with no yaml the extra set is empty and this is byte-for-byte the old one."""
+    Include hidden checkpoints for stable, complete choices. Union local checkpoints
+    with every root in extra_model_paths.yaml so portable/shared installations
+    accept models ComfyUI itself can load. With no YAML, the additional set is empty."""
     from ..utils.comfyui import get_checkpoint_models
     out = set()
     for c in (get_checkpoint_models(include_hidden=True) or []):
@@ -948,19 +952,13 @@ def _sdxl_base_choices() -> set:
 
 
 def _sdxl_base_path(base_model: str) -> str:
-    """Résout le .safetensors SDXL parmi TOUTES les racines `checkpoints` que
-    ComfyUI utiliserait (``<base>/models/checkpoints`` + les racines déclarées dans
-    ``extra_model_paths.yaml``), dans l'ordre de priorité de ComfyUI. get_checkpoint_models
-    APLATIT en basename (l'info de sous-dossier - ex. Biglove/ - est perdue) → la
-    recherche par basename est conservée. Refuse chemin absolu / '..' (anti-traversal ;
-    la whitelist amont _sdxl_base_choices garantit déjà un basename connu).
+    """Resolve an SDXL safetensors file across ComfyUI checkpoint roots in order.
 
-    Raises ValueError NAMING the file when nothing matches. The old code returned the
-    bare name here, which is what made this hole expensive rather than merely wrong:
-    ai-toolkit received `bigLove_photo5.safetensors`, resolved it against its OWN
-    working directory, and died with a message about a path the user never typed. A
-    model we cannot find has to be said here, by name, while we still know which name
-    was asked for."""
+    Search the base models/checkpoints folder and extra_model_paths.yaml roots.
+    The upstream listing flattens paths to basenames, so retain basename matching;
+    reject absolute paths and '..' for traversal protection. The caller already
+    checks the basename allowlist. If nothing matches, raise ValueError naming the
+    file here instead of letting ai-toolkit resolve it against its own directory."""
     name = str(base_model or '')
     parts = name.replace('\\', '/').split('/')
     if os.path.isabs(name) or '..' in parts:
@@ -1120,14 +1118,16 @@ def _detect_safetensors_arch(keys) -> str | None:
 # Verdict = FAMILY key ('zimage'|'sdxl'|'krea'|'flux'|'flux2klein') or None
 # (undetectable → callers MUST NOT block; the guarantee is simply absent).
 _LORA_ARCH_LABEL = {'zimage': 'Z-Image', 'sdxl': 'SDXL', 'krea': 'Krea 2',
-                    'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein'}
+                    'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein',
+                    'qwenimage21': 'Qwen-Image 2.1'}
 # Key-namespace GROUP: two families in the SAME group share the tensor namespace,
 # so a wrong file loads its keys (a version mismatch then fails LOUDLY on a shape
 # error, not silently). Different groups = disjoint names = SILENT drop = the
 # danger we block. FLUX.1 and FLUX.2 Klein share the double/single-stream layout,
 # so they're one group (a name-only sniff can't tell them apart anyway).
 _LORA_ARCH_NAMESPACE = {'zimage': 'zimage', 'sdxl': 'sdxl', 'krea': 'krea',
-                        'flux': 'flux', 'flux2klein': 'flux', 'anima': 'anima'}
+                        'flux': 'flux', 'flux2klein': 'flux', 'anima': 'anima',
+                        'qwenimage21': 'qwenimage21'}
 
 
 def _family_from_base_model_version(value) -> str | None:
@@ -1139,6 +1139,8 @@ def _family_from_base_model_version(value) -> str | None:
     v = str(value or '').strip().lower()
     if not v:
         return None
+    if v == 'qwen_image_2':
+        return 'qwenimage21'
     if 'anima' in v:                     # AnimaModel.get_base_model_version() → 'anima'
         return 'anima'
     if v.startswith(('flux2_klein', 'flux2klein')):
@@ -1175,6 +1177,8 @@ def _lora_arch_from_keys(keys) -> str | None:
         return any(sub in k for k in keys)
     if has('lora_unet_') or has('lora_te'):
         return 'sdxl'
+    if has('transformer_blocks.') and has('.img_mlp.gate_up.'):
+        return 'qwenimage21'
     if has('double_blocks.') or has('single_blocks.') \
             or has('single_transformer_blocks.'):
         return 'flux'
@@ -1255,7 +1259,8 @@ _ARCH_LABEL = {'sdxl': 'an SDXL', 'sd15': 'a Stable Diffusion 1.5',
 # had no effect at all. The two are merged, with 'zimage' kept (the runtime
 # behaviour of the surviving definition), and the lower one deleted.
 _FAMILY_LABEL = {'zimage': 'Z-Image', 'sdxl': 'SDXL', 'krea': 'Krea 2',
-                 'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein', 'anima': 'Anima'}
+                 'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein', 'anima': 'Anima',
+                 'qwenimage21': 'Qwen-Image 2.1'}
 # Caption FORM each family is prompted with — the only input of the
 # MISMATCH_CAPTION guard (assert_trainable). Three values:
 #   'booru'  the model is tag-native (SDXL booru checkpoints, e.g. bigLove);
@@ -1324,13 +1329,13 @@ def preflight_custom_paths(family, weights=None, vae_path=None, te_path=None,
         raise ValueError(f'text-encoder path not found: {te_path}')
 
 
-# Sentinelle « base non fournie » : distingue l'absence d'argument (→ base
-# PERSISTÉE du dataset) de la valeur '' (= base officielle, un choix explicite).
+# Distinguish an omitted base argument (use the persisted dataset base) from
+# an explicit empty string (choose the official base).
 _PERSISTED = object()
 
 
 def _base_tag_for(base_model) -> str:
-    """Suffixe de run pour une base EXPLICITE ('' / None = officiel → '')."""
+    """Return a run suffix for an explicit base; empty/None means the official base."""
     if not base_model:
         return ''
     base = os.path.basename(str(base_model).replace('\\', '/')).rsplit('.', 1)[0]
@@ -1339,9 +1344,9 @@ def _base_tag_for(base_model) -> str:
 
 
 def _base_tag(ds) -> str:
-    """Suffixe de run dérivé de la base d'entraînement PERSISTÉE (vide = officiel).
-    Isole les checkpoints d'un run sur merge de ceux du run officiel du même
-    dataset (sinon ai-toolkit auto-resume depuis le mauvais base → mélange)."""
+    """Derive a run suffix from the persisted training base (empty means official).
+    Keep merged-base checkpoints separate to prevent ai-toolkit from automatically
+    resuming an incompatible official-base run."""
     return _base_tag_for(getattr(ds, 'train_base_model', None))
 
 
@@ -1377,20 +1382,21 @@ def official_base_repo(ds, family=None, variant=_PERSISTED):
         return ZIMAGE_BASE if var == 'base' else ZIMAGE_TURBO_BASE
     if fam == 'anima':
         return ANIMA_BASE           # public, non-gated → the pre-rent HEAD returns 200
+    if fam == 'qwenimage21':
+        return QWENIMAGE21_BASE
     return None
 
 
 KREA_BASE_LABEL = 'Krea-2-Turbo'   # mirrors name_or_path 'krea/Krea-2-Turbo'
-# Flux a une seule base officielle (FLUX.1-dev). Sans point dans le label (sinon
-# _base_tag_for le prendrait pour une extension et tronquerait à « FLUX ») → tag
-# stable '_FLUX-1-dev' qui isole les runs/LoRA Flux des runs Z-Image officiels
-# (tag vide) au même trigger — même garde anti-collision que Krea (cf. _dest_base_tag).
+QWENIMAGE21_BASE = 'Comfy-Org/Qwen-Image-2.1'
+QWENIMAGE21_EXTRAS = 'Qwen/Qwen-Image-2.1'
+# Flux has one official base. Avoid a dot so _base_tag_for cannot mistake it
+# for an extension. The stable '_FLUX-1-dev' suffix prevents collisions with
+# official Z-Image runs sharing a trigger, as with Krea.
 FLUX_BASE_LABEL = 'FLUX-1-dev'
-# FLUX.2 Klein a DEUX bases officielles (4B et 9B) → tags DISTINCTS obligatoires :
-# les poids 4B et 9B sont incompatibles, et un même trigger entraîné sur les deux
-# variantes partagerait sinon le même dossier de run (auto-resume croisé → LoRA
-# corrompu) et le même nom de LoRA déployé. Sans point dans les labels (même piège
-# d'extension que FLUX_BASE_LABEL : _base_tag_for tronque après un '.').
+# FLUX.2 Klein's 4B and 9B bases require distinct tags: their weights are
+# incompatible, and sharing a trigger must not share a run or deployment name.
+# Avoid dots because _base_tag_for strips apparent extensions.
 FLUX2KLEIN_BASE_LABELS = {'4b': 'FLUX2-Klein-4B', '9b': 'FLUX2-Klein-9B'}
 # Anima (circlestone-labs, Cosmos Predict2 DiT, 2B) has a single OFFICIAL base and
 # it is PUBLIC/non-gated (unlike Krea/FLUX/Klein) — the pre-rent HEAD in
@@ -1499,7 +1505,7 @@ def assert_zimage_custom_recipe_confirmed(family, base_model, variant,
 # can only have been picked on another family (their builders gate on
 # `_is_custom_weights`, so they ignore it outright — see the `name_or_path` lines
 # in _build_job_config_krea/_flux/_flux2klein/_anima).
-_ABSOLUTE_BASE_FAMILIES = ('krea', 'flux', 'flux2klein', 'anima')
+_ABSOLUTE_BASE_FAMILIES = ('krea', 'flux', 'flux2klein', 'anima', 'qwenimage21')
 
 
 def foreign_base_reason(family, base_model) -> str | None:
@@ -1625,11 +1631,11 @@ def _flux2klein_is_9b(ds, variant=_PERSISTED) -> bool:
 
 
 def _default_variant_for(family) -> str:
-    """Variante par défaut d'une famille quand aucune n'est fournie NI persistée :
-    Krea → 'base' (Raw, reco officielle), FLUX.2 Klein → '4b' (la voie locale
-    16-24 Go ; le 9B est la voie cloud), sinon 'turbo'. Utilisé par tous les
-    chemins de lancement (direct / file / reprise / cloud) pour que le défaut
-    tienne de bout en bout, pas seulement quand l'UI envoie explicitement la variante."""
+    """Resolve the family default when no variant is supplied or persisted.
+
+    Krea uses base (Raw), FLUX.2 Klein uses local-friendly 4b (9b targets cloud),
+    and other families use turbo. Apply this across direct, queued, resumed and
+    cloud launches rather than relying on an explicit UI value."""
     fam = family or 'zimage'
     if fam == 'krea':
         return 'base'
@@ -1639,28 +1645,25 @@ def _default_variant_for(family) -> str:
 
 
 def _valid_variants_for(family) -> tuple:
-    """Variantes acceptées au lancement, PAR FAMILLE : flux2klein n'a que ses deux
-    tailles de modèle ('4b'/'9b') ; les familles historiques gardent l'enum
-    turbo/base/deturbo (comportement inchangé). Une variante hors liste retombe
-    sur le défaut de la famille (jamais d'erreur) : c'est ce qui neutralise une
-    variante PERSISTÉE d'une autre famille quand l'utilisateur change de type
-    (ex. un dataset ex-Krea avec train_variant='base' lancé en flux2klein)."""
+    """Validate a launch variant against its family, falling back without raising.
+
+    FLUX.2 Klein accepts 4b/9b; historical families retain turbo/base/deturbo.
+    A family change must not carry an incompatible persisted variant, such as
+    Krea's base value into a Klein run."""
     return ('4b', '9b') if (family or 'zimage') == 'flux2klein' \
         else ('turbo', 'base', 'deturbo')
 
 
-# --- Réglages ai-toolkit avancés, éditables par dataset (persistés en JSON dans
-#     `train_settings`). Absent/NULL → défaut family-aware issu de la recherche
-#     (cf. Research vault 2026-07-10). Toute valeur hors des listes autorisées
-#     retombe sur le défaut : on ne pousse JAMAIS une config invalide à ai-toolkit. ---
-_DEFAULT_RANK = {'zimage': 16, 'krea': 32, 'sdxl': 32, 'flux': 16, 'flux2klein': 16, 'anima': 32}   # Z-Image reste 16 (choix user) ; Krea/SDXL 32 ; Flux/FLUX.2 Klein 16 (défaut des exemples officiels) ; Anima 32 (defaultLinearRank ai-toolkit options.ts, PR #860)
-# FLUX.2 Klein STYLE only : linear 128 (+ Conv2d 64) — la recette dominante du sweep
-# Calvin Herbst (64 runs, fév. 2026) ET l'exemple de training officiel BFL, tous deux
-# sur les dims 128/64/64/32 (ratio 4:2:2:1). Les AUTRES kinds Klein gardent 16.
+# Advanced per-dataset ai-toolkit settings, persisted as train_settings JSON.
+# Missing, null or invalid values use family-specific defaults; never send
+# an invalid configuration to ai-toolkit.
+_DEFAULT_RANK = {'zimage': 16, 'krea': 32, 'sdxl': 32, 'flux': 16, 'flux2klein': 16, 'anima': 32, 'qwenimage21': 32}
+# Klein STYLE uses linear 128/alpha 64 and Conv2d 64/alpha 32 (4:2:2:1), matching
+# the 64-run February 2026 sweep and BFL example. Other Klein kinds retain 16.
 _KLEIN_STYLE_RANK = 128
 _RANK_CHOICES = (8, 16, 24, 32, 48, 64)
-# multi-échelle par défaut ; '768' seul = LE levier basse-VRAM (Krea 12B : 1024
-# sature un 24 GB à ~180 s/it, 768 mesuré ~3,5 s/it — cf. commentaire de tête).
+# Default to multiple resolutions. Selecting only 768 reduces VRAM usage;
+# see the measured Krea 12B comparison at the top of this module.
 _RES_CHOICES = {
     '512,768': [512, 768],
     '768,1024': [768, 1024],
@@ -1683,13 +1686,14 @@ _TIMESTEP_TYPE_CHOICES = ('sigmoid', 'linear', 'weighted', 'shift')  # pondérat
 # Les deux voies ne tournent PAS sur le même ai-toolkit : local (mouvant) pour
 # les LoRA, image du pod (épinglée) pour le dense.
 _DEFAULT_TIMESTEP = {'zimage': 'sigmoid', 'krea': 'linear', 'flux': 'sigmoid',
-                     'flux2klein': 'weighted', 'anima': 'weighted'}   # ce que « Auto » résout (sdxl : aucun) ; flux subject → sigmoid (reco ai-toolkit) ; flux2klein → weighted (défaut canonique options.ts, PAS sigmoid) ; anima → weighted (défaut options.ts PR #860)
-# Batch 2 — optimiseur / planning du LR / batch effectif (valeurs VÉRIFIÉES dans
-# ai-toolkit : get_optimizer + toolkit/scheduler.py). CAME n'est PAS supporté.
+                                          'flux2klein': 'weighted', 'anima': 'weighted',
+                                          'qwenimage21': 'shift'}   # resolved Auto defaults; SDXL has none
+                     # Optimizer, LR schedule and effective batch values verified against
+                     # ai-toolkit get_optimizer and toolkit/scheduler.py. CAME is unsupported.
 _OPTIMIZER_CHOICES = (
     'adamw8bit', 'adafactor', 'automagic', 'automagic2', 'automagic3', 'prodigy')
 _LR_SCHEDULER_CHOICES = ('constant', 'linear', 'cosine', 'cosine_with_restarts', 'constant_with_warmup')
-_WARMUP_CHOICES = (50, 100, 200, 500)          # num_warmup_steps ; UNIQUEMENT avec constant_with_warmup
+_WARMUP_CHOICES = (50, 100, 200, 500)          # num_warmup_steps; constant_with_warmup only
 _GRAD_ACCUM_CHOICES = (1, 2, 4)
 # Per-device micro-batch. It is deliberately separate from gradient accumulation:
 # this allocates real activation memory and is limited to Krea LoRA below.
@@ -1700,15 +1704,11 @@ _KREA_LORA_BATCH_SIZE_CHOICES = tuple(range(1, 13))
 # noisy. Kept separate from grad_accum, which fakes a bigger batch WITHOUT the
 # memory (and without the speed).
 _BATCH_SIZE_CHOICES = (1, 2, 4)
-# Network variant + EMA — both VÉRIFIÉS arch-génériques dans ai-toolkit installé :
-#   - network.type='lokr' : LoRASpecialNetwork choisit LokrModule pour TOUTE arch
-#     (toolkit/lora_special.py L384 `elif self.network_type.lower() == "lokr"`) et
-#     'lokr' est dans le Literal NetworkType (toolkit/config_modules.py L165). Aucune
-#     famille exclue → PAS de whitelist. NB : use_old_lokr_format diffère selon l'arch
-#     (nommage des poids seulement, pas le support) — krea2/flux2_klein = nouveau
-#     format, zimage/sdxl/flux = ancien ; les deux s'entraînent et se chargent.
-#   - train.ema_config={use_ema, ema_decay} : knob niveau TrainConfig, arch-agnostique
-#     (config_modules.py L525-533 + EMAConfig L794-797, défaut ema_decay=0.999).
+# Network variants and EMA are architecture-independent in ai-toolkit.
+# LoRASpecialNetwork selects LokrModule for network.type='lokr', a supported
+# NetworkType for every family. use_old_lokr_format changes weight naming,
+# not support: Krea/Klein use the new format, Z-Image/SDXL/Flux the old one.
+# EMA uses TrainConfig.ema_config with use_ema and ema_decay (default 0.999).
 _NETWORK_TYPE_CHOICES = ('lora', 'lokr')
 _LOKR_FACTOR_CHOICES = (4, 8, 16, 32)
 _EMA_CHOICES = (0.99, 0.999)
@@ -1730,27 +1730,16 @@ _QTYPE_CHOICES = ('qfloat8', 'float8', 'int8', 'convrot8')
 _SAVE_DTYPE_CHOICES = ('float16', 'bf16')
 _OFFLOADING_PERCENT_RANGE = (0.0, 1.0)
 
-# --- Memory-saving levers (quantisation + low-VRAM loading) ----------------------
-# Community request (GitHub issue #14, bobba84): the recipes hard-coded quantize /
-# quantize_te / low_vram, calibrated so a 12B DiT fits in 24 GB. On a card with MORE
-# than the target, that calibration is a tax nobody asked for — quantisation costs
-# precision and low_vram costs start-up time: ai-toolkit parks the transformer (and,
-# on Krea 2 and FLUX.2 Klein, the text encoder) in system RAM while it loads and
-# quantises, then moves it to the card for the run — a loading strategy, not block
-# streaming during the steps (krea2.py, flux2_model.py, z_image.py and
-# stable_diffusion_model.py, local copy and upstream, 2026-09-05).
-#
-# VÉRIFIÉ dans l'ai-toolkit installé : `quantize`, `quantize_te`, `qtype` et
-# `low_vram` sont des champs de ModelConfig (toolkit/config_modules.py L658-662),
-# arch-agnostiques, tous à False/'qfloat8' par défaut. Donc AUCUNE whitelist par
-# famille : le levier existe partout, et sa valeur par défaut reste celle que la
-# recette de CHAQUE famille a calibrée (table ci-dessous). Un utilisateur qui n'y
-# touche pas obtient un job-config byte-for-byte identique à avant.
-#
-# `qtype` n'est PAS exposé : il ne s'applique que quand la quantisation est ON, et
-# 'qfloat8' est déjà l'option la plus fidèle qu'ai-toolkit offre là (int8/uint8
-# échangent de la qualité contre de la place). Un knob qui ne peut que dégrader
-# n'est pas un choix, c'est un piège.
+# Memory-saving settings (quantization and low-VRAM loading).
+# Recipes are calibrated for 24 GB cards; larger cards may disable these costs.
+# Quantization reduces precision. low_vram loads/quantizes the transformer and,
+# for Krea/Klein, text encoder in system RAM before moving them to the GPU;
+# it is a loading strategy, not block streaming during training steps.
+# ModelConfig exposes quantize, quantize_te, qtype and low_vram for every
+# architecture, defaulting to False/qfloat8. Preserve each recipe's calibrated
+# defaults so unchanged user settings produce the same job configuration.
+# Do not expose qtype: it matters only with quantization, and qfloat8 is already
+# the highest-fidelity supported choice; int8/uint8 trade quality for space.
 _MEMORY_SETTING_KEYS = ('quantize', 'quantize_te', 'low_vram')
 # Human names, mirrored from the panel's MEMORY_LABELS (memorySavingAdvice.js) so
 # a preflight sentence names the checkbox the user has to go and tick back.
@@ -1758,57 +1747,49 @@ _MEMORY_LABELS = {'quantize': 'Quantise base model',
                   'quantize_te': 'Quantise text encoder',
                   'low_vram': 'Low-VRAM loading'}
 
-# Ce que chaque famille émet quand l'utilisateur ne choisit rien. NE PAS TOUCHER :
-# la majorité du parc est à 24 Go ou moins et c'est ce qui fait tenir l'entraînement.
+# Preserve calibrated family defaults: most installations have 24 GB or less.
 _DEFAULT_MEMORY_SAVING = {
     'zimage':     {'quantize': True,  'quantize_te': True,  'low_vram': True},
     'krea':       {'quantize': True,  'quantize_te': True,  'low_vram': True},
     'flux':       {'quantize': True,  'quantize_te': True,  'low_vram': True},
     'flux2klein': {'quantize': True,  'quantize_te': True,  'low_vram': True},
-    # 2B DiT — les defaults options.ts d'ai-toolkit sont déjà « pas de quantisation ».
-    # Le levier reste offert dans l'AUTRE sens : une petite carte peut l'activer.
+    'qwenimage21': {'quantize': True, 'quantize_te': True, 'low_vram': True},
+    # The 2B DiT defaults to no quantization in ai-toolkit. Keep the toggle
+    # available so smaller cards can enable it.
     'anima':      {'quantize': False, 'quantize_te': False, 'low_vram': False},
     'sdxl':       {'quantize': False, 'quantize_te': False, 'low_vram': False},
 }
 
-# VRAM (Gio) qu'il faut RAISONNABLEMENT pour entraîner cette famille sans
-# quantisation ni streaming basse-VRAM. ESTIMÉ, pas mesuré carte par carte :
-# poids du DiT en bf16 (2 octets × paramètres) + ~6 Gio d'activations/optimiseur
-# LoRA/marge. Sert UNIQUEMENT à formuler un conseil ; ne bloque jamais rien.
-#   zimage 6B → ~12 + 6      krea/flux 12B → ~24 + 6
-#   flux2klein 9B → ~18 + 6  flux2klein 4B → ~8 + 6
+# Estimated GiB needed without quantization or low-VRAM loading, not measured
+# on every card: bf16 transformer weights plus roughly 6 GiB for activations,
+# LoRA optimizer and headroom. Advisory only, never a launch gate.
+# Z-Image 6B: 12+6; Krea/Flux 12B: 24+6; Klein 9B: 18+6; Klein 4B: 8+6.
 _UNQUANTISED_VRAM_GB = {'zimage': 18, 'krea': 30, 'flux': 30,
                         'flux2klein': 24, 'flux2klein_4b': 14,
                         'anima': 10, 'sdxl': 10}
 
 
 def _memory_saving_defaults(ds, family) -> dict:
-    """Les trois défauts calibrés de la famille (copie — l'appelant les mute)."""
+    """Return a mutable copy of the three calibrated family defaults."""
     return dict(_DEFAULT_MEMORY_SAVING.get(family or '',
                                            _DEFAULT_MEMORY_SAVING['zimage']))
 
 
 def _memory_flag_eff(ds, key: str, default: bool) -> bool:
-    """Valeur EFFECTIVE d'un levier mémoire : le booléen stocké s'il y en a un,
-    sinon le défaut de la famille. Tri-état volontaire — `False` STOCKÉ doit
-    survivre (c'est précisément la demande « disable »), donc on teste le type et
-    jamais la véracité, contrairement à `dual_captions` où falsy = clé retirée."""
+    """Resolve a memory setting from a stored boolean or the family default.
+
+    Preserve explicit False: this is a tri-state setting, unlike dual_captions
+    where falsy means removal. Check the type rather than truthiness."""
     v = _train_settings(ds).get(key)
     return v if isinstance(v, bool) else default
 
 
 def _model_memory_block(ds, family) -> dict:
-    """Fragment `model` à fusionner dans la recette de chaque famille.
+    """Build the model fragment while preserving existing default configurations.
 
-    Forme d'émission choisie pour que le défaut reste BYTE-IDENTIQUE à l'existant :
-      * `quantize` / `quantize_te` : toujours émis (les 6 recettes les émettaient
-        déjà, dans les deux sens) ;
-      * `low_vram` : émis SEULEMENT quand True — le défaut ModelConfig est False,
-        donc omettre == False, et anima/sdxl (qui ne l'émettaient pas) ne gagnent
-        pas une clé ;
-      * `qtype` : émis seulement si au moins une quantisation est active — sans
-        quantisation la clé ne veut rien dire.
-    """
+    Always emit quantize and quantize_te. Emit low_vram only when True, matching
+    ModelConfig's False default without adding keys to Anima/SDXL recipes. Emit
+    qtype only when at least one quantization option is enabled."""
     d = _memory_saving_defaults(ds, family)
     q = _memory_flag_eff(ds, 'quantize', d['quantize'])
     qte = _memory_flag_eff(ds, 'quantize_te', d['quantize_te'])
@@ -1819,9 +1800,11 @@ def _model_memory_block(ds, family) -> dict:
         out['low_vram'] = True
     if q or qte:
         out['qtype'] = (s.get('qtype') if s.get('qtype') in _QTYPE_CHOICES
-                        else 'qfloat8')
+                        else 'convrot8' if family == 'qwenimage21' else 'qfloat8')
     if s.get('qtype_te') in _QTYPE_CHOICES:
         out['qtype_te'] = s['qtype_te']
+    elif family == 'qwenimage21' and qte:
+        out['qtype_te'] = 'convrot8'
     # `compile` is a MODEL-block key upstream (ModelConfig.compile), which is why
     # it lives here rather than with the train knobs. Emitted only when asked, so
     # an untouched dataset produces the exact same config as before.
@@ -1841,35 +1824,29 @@ def _model_memory_block(ds, family) -> dict:
 
 
 def _unquantised_vram_need(ds, family) -> int:
-    """Estimation Gio pour tourner sans quantisation. FLUX.2 Klein a deux tailles
-    de base (9B/4B) : le 4B tient beaucoup plus bas, le dire serait faux sinon."""
+    """Estimate GiB needed without quantization, distinguishing Klein 4B and 9B."""
     if family == 'flux2klein' and not _flux2klein_is_9b(ds):
         return _UNQUANTISED_VRAM_GB['flux2klein_4b']
     return _UNQUANTISED_VRAM_GB.get(family or '', 24)
 
 
 def _memory_saving_advice(ds, family) -> dict:
-    """Conseil INDEXÉ SUR LA CARTE RÉELLE pour les leviers mémoire.
+    """Advise on memory settings using the detected GPU.
 
-    `verdict` :
-      * 'unknown'  — pas de nvidia-smi, GPU non-NVIDIA, machine sans carte, ou
-                     famille non quantisée par défaut : texte générique côté UI ;
-      * 'can_disable' — la VRAM détectée couvre le besoin estimé sans quantisation ;
-      * 'keep_on'  — elle ne le couvre pas.
-
-    Conseiller n'est PAS décider : rien ici n'écrit dans train_settings, rien ne
-    bloque un lancement, et un échec de sonde (fail-open, mémoïsé 10 min côté
-    run_environment) retombe simplement sur 'unknown'."""
+    Verdicts: unknown for unavailable NVIDIA detection or nonquantized defaults;
+    can_disable when detected VRAM covers the estimate; keep_on otherwise.
+    Advice never changes train_settings or blocks launches. Probe failures return
+    unknown; run_environment caches detection for ten minutes."""
     try:
         from . import run_environment
         vram = run_environment.local_vram_gb()
         gpu = (run_environment.gpu_info() or {}).get('name')
-    except Exception:                                   # sonde absolument jamais fatale
+    except Exception:                                   # probe failures are never fatal
         vram, gpu = None, None
     need = _unquantised_vram_need(ds, family)
     if not vram:
         verdict = 'unknown'
-    elif vram + 0.5 >= need:        # 0.5 Gio : nvidia-smi rapporte 23.99 pour « 24 Go »
+    elif vram + 0.5 >= need:        # 0.5 GiB tolerance: nvidia-smi reports 23.99 for a 24 GB card
         verdict = 'can_disable'
     else:
         verdict = 'keep_on'
@@ -2027,7 +2004,7 @@ def clear_active_preset_settings(settings: dict) -> dict:
 
 
 def _train_settings(ds) -> dict:
-    """Parse le blob JSON `train_settings` en dict (jamais lève ; {} si absent/cassé)."""
+    """Parse train_settings JSON into a dict; return {} for absent/invalid data, never raise."""
     raw = getattr(ds, 'train_settings', None)
     if not raw:
         return {}
@@ -2050,10 +2027,9 @@ def _train_settings(ds) -> dict:
 
 
 def _klein_style(ds, family) -> bool:
-    """FLUX.2 Klein STYLE LoRA — la SEULE combinaison famille×kind qui s'écarte du
-    schéma linear-only / alpha=rank : réseau 128/64 + Conv2d 64/32 (ratio 4:2:2:1).
-    Le sweep Herbst (64 runs) et l'exemple officiel BFL convergent dessus ; les
-    autres kinds Klein (character/concept/slider) gardent le défaut linear-only."""
+    """Klein STYLE is the only family/kind using more than linear-only alpha=rank:
+    linear 128/64 and Conv2d 64/32, matching the 64-run sweep and BFL example.
+    Other Klein kinds retain linear-only defaults."""
     return (family or '') == 'flux2klein' and fds.is_style(ds)
 
 
@@ -2074,11 +2050,9 @@ def _lora_rank(ds, family) -> int:
 
 
 def _lora_alpha(rank, family, ds=None) -> int:
-    """Alpha dérivé du rank. Défaut alpha = rank (échelle 1.0) pour zimage/krea/flux.
-    Trois écarts délibérés, tous sourcés : SDXL = rank/2 (« demi-force », recherche) ;
-    FLUX.2 Klein style = rank/2 (dims 128/64 du sweep Herbst + exemple BFL) ; slider =
-    alpha 4 fixe (notebook Ostris « bigger is not always better, especially for
-    sliders » — rank 8 / alpha 4, échelle 0.5)."""
+    """Derive alpha from rank: Z-Image/Krea/Flux default to rank (scale 1.0).
+    SDXL and Klein style use rank/2. Sliders use fixed alpha 4 with default rank 8,
+    matching the upstream slider recipe's scale of 0.5."""
     if ds is not None and slider_mode_enabled(ds):
         return _SLIDER_DEFAULT_ALPHA
     if family == 'sdxl' or _klein_style(ds, family):
@@ -2098,17 +2072,16 @@ def _numeric_choice(value, choices):
 
 
 def _lora_alpha_eff(ds, rank, family) -> int:
-    """Alpha EFFECTIF : un `alpha` explicite dans train_settings prime sur le dérivé.
-    Découpler alpha du rank = levier de LR « doux » (échelle effective = alpha/rank).
-    En mode slider, l'utilisateur peut ainsi remettre alpha 8 (défaut 4) via ce knob."""
+    """An explicit train_settings alpha overrides the derived value.
+    Independent alpha changes the effective alpha/rank scale; slider users can,
+    for example, choose alpha 8 instead of the default 4."""
     a = _numeric_choice(_train_settings(ds).get('alpha'), _ALPHA_CHOICES)
     return a if a is not None else _lora_alpha(rank, family, ds)
 
 
 def _network_type_eff(ds) -> str:
-    """'lora' (défaut) ou 'lokr' — validé contre l'enum ai-toolkit ; inconnu → 'lora'.
-    LoKr est arch-générique (LokrModule sur toutes les familles), aucune garde
-    par famille nécessaire."""
+    """Return validated lora/lokr, defaulting to lora for unknown values.
+    LoKr supports all architectures through LokrModule; no family gate is needed."""
     t = _train_settings(ds).get('network_type')
     return t if t in _NETWORK_TYPE_CHOICES else 'lora'
 
@@ -2136,12 +2109,11 @@ def _lokr_full_rank_eff(ds) -> bool:
 
 
 def _network_block(ds, rank, family) -> dict:
-    """Bloc `network` LoRA/LoKr partagé par les 5 job-configs : type + rank + alpha
-    (override-aware) + dropout optionnel (régularisateur anti-overfit, clé omise quand
-    off). A normal LDS LoKr run pins `lokr_full_rank=False` because ai-toolkit has
-    changed its implicit default; an explicit value from a frozen continuation
-    snapshot is replayed verbatim so the weights' topology is not changed.
-    `lokr_factor` remains auto unless explicitly chosen."""
+    """Shared network block: type, rank, effective alpha and optional dropout.
+
+    Normal LDS LoKr runs pin lokr_full_rank=False because upstream defaults changed.
+    Replay explicit frozen continuation values verbatim to preserve weight topology.
+    lokr_factor remains automatic unless explicitly chosen."""
     network_type = _network_type_eff(ds)
     net = {'type': network_type, 'linear': rank,
            'linear_alpha': _lora_alpha_eff(ds, rank, family)}
@@ -2157,11 +2129,10 @@ def _network_block(ds, rank, family) -> dict:
         conv_alpha = _numeric_choice(s.get('conv_alpha'), _ALPHA_CHOICES)
         net['conv_alpha'] = conv_alpha if conv_alpha is not None else explicit_conv
     elif _klein_style(ds, family) and net['type'] == 'lora':
-        # FLUX.2 Klein STYLE : ajoute un LoRA Conv2d aux moitiés du linear (conv_alpha
-        # au quart) → dims 128/64/64/32 au rank par défaut. Combo dominant du sweep
-        # Herbst (64 runs, fév. 2026) et de l'exemple de training officiel BFL. Clés
-        # ai-toolkit VÉRIFIÉES : NetworkConfig lit conv/conv_alpha au même niveau que
-        # linear/linear_alpha (toolkit/config_modules.py). LoKr garde le linear-only.
+        # Klein STYLE adds Conv2d at half the linear rank and quarter alpha,
+        # yielding 128/64/64/32 by default. This matches the sweep and BFL recipe;
+        # ai-toolkit NetworkConfig reads conv/conv_alpha beside linear/linear_alpha.
+        # LoKr remains linear-only.
         net['conv'] = max(1, rank // 2)
         net['conv_alpha'] = max(1, rank // 4)
     d = _train_settings(ds).get('dropout')
@@ -2213,8 +2184,7 @@ def _train_serializer_fields(ds) -> dict:
 
 
 def _timestep_type_eff(ds, default: str) -> str:
-    """Pondération des timesteps : override la valeur family-default si l'utilisateur en
-    a choisi une valide (gardé à l'enum ai-toolkit ; inconnu → le défaut)."""
+    """Use a valid explicit timestep weighting or the family default."""
     t = _train_settings(ds).get('timestep_type')
     return t if t in _TIMESTEP_TYPE_CHOICES else default
 
@@ -2317,10 +2287,9 @@ def _krea_lora_gradient_checkpointing(ds) -> bool:
 
 
 def _lr_sched_fields(ds) -> dict:
-    """{} par défaut (= 'constant' d'ai-toolkit). Sinon {lr_scheduler [+ lr_scheduler_params
-    {num_warmup_steps} pour constant_with_warmup]} à fusionner dans le bloc train. Le warmup
-    n'est câblé QUE pour constant_with_warmup : les schedulers torch (cosine/linear/constant)
-    n'acceptent pas num_warmup_steps → le passer les ferait planter (cf. toolkit/scheduler.py)."""
+    """Build scheduler settings, returning {} for ai-toolkit's constant default.
+    Only constant_with_warmup receives lr_scheduler_params.num_warmup_steps;
+    Torch cosine/linear/constant schedulers reject that parameter."""
     s = _train_settings(ds).get('lr_scheduler')
     if s not in _LR_SCHEDULER_CHOICES or s == 'constant':
         return {}
@@ -2332,15 +2301,15 @@ def _lr_sched_fields(ds) -> dict:
 
 
 def _ema_eff(ds):
-    """Décroissance EMA choisie (0.99/0.999) ou None (= off). Inconnu → None."""
+    """Return a selected EMA decay (0.99/0.999), or None for off/unknown."""
     v = _train_settings(ds).get('ema')
     return v if v in _EMA_CHOICES else None
 
 
 def _ema_fields(ds) -> dict:
-    """{} par défaut (= ai-toolkit use_ema=False) → à fusionner dans le bloc `train`.
-    Sinon {ema_config: {use_ema, ema_decay}} : moyenne mobile exponentielle des poids,
-    checkpoints plus lisses (clés VÉRIFIÉES config_modules.py EMAConfig L794-797)."""
+    """Return {} when EMA is off, otherwise an ema_config train fragment.
+    use_ema and ema_decay configure exponential weight averaging for smoother
+    checkpoints, as supported by ai-toolkit EMAConfig."""
     v = _ema_eff(ds)
     if v is None:
         return {}
@@ -2583,9 +2552,9 @@ def _save_every(ds) -> int:
     return v if v in _SAVE_CHOICES else 250
 
 
-# Combien de saves intermédiaires ai-toolkit CONSERVE pendant le run (local et
-# cloud) : au-delà, il supprime les plus anciens lui-même. L'historique (10)
-# laissait s'accumuler ~10 Go de checkpoints par run Krea.
+# Intermediate checkpoints retained during local/cloud training. ai-toolkit
+# deletes older saves above this limit; the former value of ten could consume
+# roughly 10 GB per Krea run.
 _MAX_SAVES_CHOICES = (2, 3, 4, 6, 10)
 
 
@@ -2594,14 +2563,11 @@ def _max_step_saves(ds) -> int:
     return v if v in _MAX_SAVES_CHOICES else 4
 
 
-# --- Prompts de preview (sample) -----------------------------------------------
-# ai-toolkit génère une image par prompt tous les `sample_every` steps pendant le
-# run (dossier .../samples), pour voir le LoRA converger. Les défauts historiques
-# décrivaient un VISAGE (« close-up portrait, headshot… ») — hors sujet pour un
-# dataset « concept ». D'où un défaut distinct selon le kind, et un override total
-# par l'utilisateur (Advanced options → Preview prompts).
+# Preview prompts: ai-toolkit renders each prompt every sample_every steps.
+# Choose defaults by dataset kind: portrait/headshot prompts are unsuitable for
+# concept datasets. Users can replace them in Advanced options.
 _SAMPLE_EVERY_CHOICES = (100, 250, 500, 1000)
-_MAX_SAMPLE_PROMPTS = 8   # 1 image générée / prompt / palier → borne le coût des previews
+_MAX_SAMPLE_PROMPTS = 8   # one image per prompt per interval; bound preview cost
 
 _DEFAULT_SAMPLE_PROMPTS_CHARACTER = [
     '{trigger}, close-up portrait, neutral expression',
@@ -2609,8 +2575,7 @@ _DEFAULT_SAMPLE_PROMPTS_CHARACTER = [
     '{trigger}, full body, walking outdoors, smiling',
     '{trigger}, sitting in a cafe, casual outfit',
 ]
-# Un concept n'est pas un visage : on l'exerce seul sous quelques cadrages neutres
-# (le vocabulaire « portrait / headshot » tirerait un LoRA non-visage hors sujet).
+# Exercise concepts alone with neutral framing; portrait/headshot vocabulary would steer a non-face LoRA off topic.
 _DEFAULT_SAMPLE_PROMPTS_CONCEPT = [
     '{trigger}',
     '{trigger}, high detail, sharp focus',
@@ -2619,9 +2584,8 @@ _DEFAULT_SAMPLE_PROMPTS_CONCEPT = [
 ]
 
 
-# Un style n'a PAS de trigger : le LoRA teinte toute image dès qu'il est chargé.
-# Les previews sont donc des scènes génériques variées — si le style s'y voit,
-# l'entraînement prend ; le vocabulaire portrait/headshot tirerait hors sujet.
+# Style LoRAs affect every image without a trigger. Use varied generic scenes
+# to reveal style convergence rather than steering previews toward portraits.
 _DEFAULT_SAMPLE_PROMPTS_STYLE = [
     'a woman reading in a sunlit cafe',
     'a city street at night, rain',
@@ -2638,9 +2602,8 @@ def _default_sample_prompts(ds) -> list:
 
 
 def _inject_trigger(prompt: str, trigger: str) -> str:
-    """Une preview DOIT solliciter le LoRA : si la ligne ne mentionne pas déjà le
-    trigger (insensible à la casse), on le préfixe — sinon l'image teste le modèle
-    de base, pas l'entraînement en cours."""
+    """Ensure a preview exercises the LoRA: prepend its trigger unless already
+    present case-insensitively. Otherwise the preview may only test the base model."""
     p = (prompt or '').strip()
     if not trigger:
         return p
@@ -2671,24 +2634,23 @@ def _strip_style_trigger(prompt: str, trigger: str) -> str:
 
 
 def _resolved_default_sample_prompts(ds, trigger) -> list:
-    """Défauts (selon le kind) avec `{trigger}` substitué — pour l'aperçu UI."""
-    if fds.is_style(ds):   # style : pas de trigger, jamais injecté
+    """Resolve kind-specific defaults with {trigger} substituted for the UI preview."""
+    if fds.is_style(ds):   # styles never inject a trigger
         return list(_default_sample_prompts(ds))
     return [_inject_trigger(l.replace('{trigger}', trigger), trigger)
             for l in _default_sample_prompts(ds)]
 
 
 def _sample_prompts(ds, trigger) -> list:
-    """Prompts de preview effectifs : liste custom de train_settings si présente,
-    sinon défaut selon le kind. `{trigger}` (placeholder explicite) ET le trigger en
-    clair sont gérés ; le trigger est auto-préfixé s'il manque. Toujours ≥1 prompt,
-    ≤_MAX_SAMPLE_PROMPTS (borne le nombre d'images générées par palier)."""
+    """Resolve custom preview prompts or kind-specific defaults.
+    Handle both {trigger} placeholders and literal triggers; prepend a missing
+    trigger. Always return between one and _MAX_SAMPLE_PROMPTS entries."""
     raw = _train_settings(ds).get('sample_prompts')
     tmpl = raw if (isinstance(raw, list)
                    and any(isinstance(x, str) and x.strip() for x in raw)) \
         else _default_sample_prompts(ds)
-    # STYLE : aucun trigger — le LoRA teinte tout, une preview générique le
-    # sollicite déjà. Le token persisté ne sert qu'à nommer/isoler le run.
+    # Styles need no trigger; a generic prompt already exercises the LoRA.
+    # The persisted token only names and isolates the run.
     style = fds.is_style(ds)
     out = []
     for line in tmpl:
@@ -2742,6 +2704,7 @@ _SAMPLE_RECIPE_DEFAULTS = {
     'flux': (20, 4),          # FLUX.1-dev : guidance ~4 (notebook officiel)
     'flux2klein': (25, 4),
     'anima': (25, 4),
+    'qwenimage21': (40, 3),
     'sdxl': (28, 6),
 }
 
@@ -2754,7 +2717,7 @@ def _sample_recipe_defaults(ds, family=None) -> tuple:
     if fam == 'krea':
         if _is_full_transformer(ds):
             return (FULL_TRANSFORMER_SAMPLE_STEPS, FULL_TRANSFORMER_SAMPLE_GUIDANCE)
-        # Turbo (distillé) : cfg 1 / 8 steps ; Raw (non distillé) : cfg 4 / 25 steps.
+        # Turbo: CFG 1 / 8 steps; undistilled Raw: CFG 4 / 25 steps.
         return (25, 4) if _krea_is_raw(ds) else (8, 1)
     if fam == 'zimage':
         try:
@@ -2828,11 +2791,11 @@ def resolve_masked_for(user_id, dataset_id, requested=None) -> bool:
 
 
 def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
-    """Les réglages EFFECTIFS envoyés à ai-toolkit pour CE lancement — défauts
-    résolus, pas les choix stockés. Stampé dans le registre de provenance
-    (TrainingRunRecord.settings) par chaque launch local et cloud ; la page
-    Runs l'affiche par run (« quels réglages sont partis ? »). Compact : les
-    leviers experts n'apparaissent que s'ils dévient du défaut."""
+    """Return effective settings sent to ai-toolkit for this launch.
+
+    Every local/cloud launch records resolved values in TrainingRunRecord.settings
+    for the Runs page. Keep it compact: expert settings appear only when they
+    differ from defaults."""
     fam = family or _train_type(ds)
     mode = training_mode(ds)
     if mode == 'full_transformer':
@@ -3033,14 +2996,24 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
     ):
         if _k in s:
             snap[_k] = s[_k]
+    if fam == 'qwenimage21':
+        memory = _model_memory_block(ds, fam)
+        snap.update({
+            'model_arch': 'qwen_image_2',
+            'effective_base': _weights if _is_custom_weights(_weights) else QWENIMAGE21_BASE,
+            'extras_name_or_path': QWENIMAGE21_EXTRAS,
+            'qtype': memory.get('qtype'), 'qtype_te': memory.get('qtype_te'),
+            'cache_text_embeddings': _cache_text_embeddings_eff(ds, fam),
+            'unload_text_encoder': False,
+        })
     return snap
 
 
 def effective_train_settings(ds, family=None) -> dict:
-    """Réglages pour la famille courante — ce que « Advanced options » affiche et
-    ce que build_job_config enverra. `rank` = choix STOCKÉ (None = auto/défaut) pour
-    que le select re-coche « Auto » ; `effective_rank`/`alpha`/`default_rank` = ce
-    qui sera réellement utilisé (pour le libellé explicatif)."""
+    """Expose current-family settings for Advanced options and job configuration.
+
+    rank is the stored choice (None means Auto); effective_rank, alpha and
+    default_rank describe the values actually used in explanatory UI labels."""
     fam = family or _train_type(ds)
     s = _train_settings(ds)
     stored_rank = s.get('rank') if s.get('rank') in _RANK_CHOICES else None
@@ -3049,11 +3022,11 @@ def effective_train_settings(ds, family=None) -> dict:
     trig = _safe_trigger(ds)
     stored_prompts = s.get('sample_prompts')
     network = _network_block(ds, eff_rank, fam)
-    return {'rank': stored_rank,                       # None → Auto (défaut family-aware)
-            'effective_rank': eff_rank,                # ce qui part à ai-toolkit
-            'alpha': _lora_alpha_eff(ds, eff_rank, fam),   # alpha EFFECTIF (override-aware) — libellé
+    return {'rank': stored_rank,                       # None means family-aware Auto
+            'effective_rank': eff_rank,                # sent to ai-toolkit
+            'alpha': _lora_alpha_eff(ds, eff_rank, fam),   # effective override-aware alpha
             'default_rank': _default_rank_for(ds, fam),
-            # --- Expert levers (None/off = comportement actuel ; le select recoche « Auto ») ---
+            # --- Expert controls (None/off preserves behavior; the selector returns to Auto) ---
             'alpha_setting': _numeric_choice(s.get('alpha'), _ALPHA_CHOICES),
             'default_alpha': _lora_alpha(eff_rank, fam, ds),
             'alpha_choices': list(_ALPHA_CHOICES),
@@ -3061,7 +3034,7 @@ def effective_train_settings(ds, family=None) -> dict:
             'dropout_choices': list(_DROPOUT_CHOICES),
             'timestep_type': s.get('timestep_type') if s.get('timestep_type') in _TIMESTEP_TYPE_CHOICES else None,
             'timestep_type_choices': list(_TIMESTEP_TYPE_CHOICES),
-            'default_timestep_type': _DEFAULT_TIMESTEP.get(fam),   # None pour sdxl → contrôle masqué
+            'default_timestep_type': _DEFAULT_TIMESTEP.get(fam),   # None for SDXL hides the control
             'timestep_type_supported': fam != 'sdxl',
             'optimizer': s.get('optimizer') if s.get('optimizer') in _OPTIMIZER_CHOICES else None,   # None → adamw8bit
             'optimizer_choices': list(_OPTIMIZER_CHOICES),
@@ -3133,12 +3106,10 @@ def effective_train_settings(ds, family=None) -> dict:
             'masked': person_masking_enabled(ds),
             'masked_supported': not fds.is_conceptual(ds) and not slider_mode_enabled(ds),
             'masked_stored': fds.person_masking_stored(ds),
-            # --- Memory strategy (issue #14) -----------------------------------
-            # `memory_saving` = le choix STOCKÉ par clé (None = « Auto », le panel
-            # recoche le défaut de la famille) ; `memory_saving_default` = ce que
-            # la recette calibrée émet ; `memory_saving_effective` = ce qui partira
-            # vraiment. `memory_advice` porte le conseil indexé sur la carte réelle
-            # (verdict/vram_gb/gpu) — purement consultatif, jamais appliqué seul.
+            # Memory strategy: memory_saving holds stored choices (None means Auto);
+            # memory_saving_default holds calibrated defaults; memory_saving_effective
+            # holds actual launch values. memory_advice reports GPU-based guidance
+            # (verdict/vram_gb/gpu), never automatically applied.
             'memory_saving': {k: (s.get(k) if isinstance(s.get(k), bool) else None)
                               for k in _MEMORY_SETTING_KEYS},
             'memory_saving_default': _memory_saving_defaults(ds, fam),
@@ -3202,9 +3173,9 @@ def effective_train_settings(ds, family=None) -> dict:
             'sample_guidance_default': _sample_recipe_defaults(ds, fam)[1],
             'sample_steps_range': list(_SAMPLE_STEPS_RANGE),
             'sample_guidance_range': list(_SAMPLE_GUIDANCE_RANGE),
-            # liste STOCKÉE brute (telle que tapée) ou [] → textarea vide = « défauts ».
+            # Raw stored prompts, or [] so an empty textarea means defaults.
             'sample_prompts': stored_prompts if isinstance(stored_prompts, list) else [],
-            # défaut résolu (kind + trigger courant) : placeholder/aperçu quand vide.
+            # Resolved kind/trigger defaults provide placeholders and the empty-state preview.
             'sample_prompts_default': _resolved_default_sample_prompts(ds, trig),
             'sample_every_choices': list(_SAMPLE_EVERY_CHOICES),
             'max_sample_prompts': _MAX_SAMPLE_PROMPTS,
@@ -3420,7 +3391,7 @@ def _ts_apply_sampling_and_saves(patch, cur):
     if 'sample_steps' in patch:
         v = patch['sample_steps']
         if v in (None, 'auto', ''):
-            cur.pop('sample_steps', None)                 # retour au défaut famille
+            cur.pop('sample_steps', None)                 # restore the family default
         elif _valid_sample_steps(v):
             cur['sample_steps'] = v
         else:
@@ -3432,7 +3403,7 @@ def _ts_apply_sampling_and_saves(patch, cur):
         if v in (None, 'auto', ''):
             cur.pop('sample_guidance', None)
         elif _valid_sample_guidance(v):
-            # Stocké tel quel : un entier reste un entier (cf. _sample_guidance).
+            # Preserve the value type: integers stay integers; see _sample_guidance.
             cur['sample_guidance'] = v
         else:
             raise ValueError(
@@ -3440,11 +3411,11 @@ def _ts_apply_sampling_and_saves(patch, cur):
                 f'and {_SAMPLE_GUIDANCE_RANGE[1]} (or auto)')
     if 'sample_prompts' in patch:
         v = patch['sample_prompts']
-        # Accepte aussi une string multi-lignes (une par prompt) pour le confort UI.
+        # Also accept multiline text with one prompt per line for the UI.
         if isinstance(v, str):
             v = v.splitlines()
         if v in (None, ''):
-            cur.pop('sample_prompts', None)               # vide → retour aux défauts kind-aware
+            cur.pop('sample_prompts', None)               # empty restores kind-specific defaults
         elif isinstance(v, list):
             cleaned = [str(x).strip() for x in v if str(x).strip()][:_MAX_SAMPLE_PROMPTS]
             if cleaned:
@@ -3570,7 +3541,7 @@ def _ts_apply_regularisation(patch, cur):
     if 'dropout' in patch:
         v = patch['dropout']
         if v in (None, 0, 0.0, 'off', ''):
-            cur.pop('dropout', None)                       # off → clé retirée
+            cur.pop('dropout', None)                       # off removes the key
         elif v in _DROPOUT_CHOICES:
             cur['dropout'] = v
         else:
@@ -3578,7 +3549,7 @@ def _ts_apply_regularisation(patch, cur):
     if 'alpha' in patch:
         v = patch['alpha']
         if v in (None, 'auto'):
-            cur.pop('alpha', None)                         # auto → alpha dérivé du rank
+            cur.pop('alpha', None)                         # Auto derives alpha from rank
         elif type(v) is int and v in _ALPHA_CHOICES:
             cur['alpha'] = v
         else:
@@ -3586,7 +3557,7 @@ def _ts_apply_regularisation(patch, cur):
     if 'timestep_type' in patch:
         v = patch['timestep_type']
         if v in (None, 'auto', ''):
-            cur.pop('timestep_type', None)                 # auto → défaut family-aware
+            cur.pop('timestep_type', None)                 # Auto uses the family default
         elif v in _TIMESTEP_TYPE_CHOICES:
             cur['timestep_type'] = v
         else:
@@ -3600,7 +3571,7 @@ def _ts_apply_optim(patch, cur):
     if 'optimizer' in patch:
         v = patch['optimizer']
         if v in (None, 'auto', '', 'adamw8bit'):
-            cur.pop('optimizer', None)                     # défaut → clé retirée
+            cur.pop('optimizer', None)                     # default removes the key
         elif v in _OPTIMIZER_CHOICES:
             if (v == 'automagic3'
                     and _numeric_choice(cur.get('grad_accum'),
@@ -3614,7 +3585,7 @@ def _ts_apply_optim(patch, cur):
     if 'lr_scheduler' in patch:
         v = patch['lr_scheduler']
         if v in (None, 'auto', '', 'constant'):
-            cur.pop('lr_scheduler', None)                  # constant = défaut → clé retirée
+            cur.pop('lr_scheduler', None)                  # constant is the default; remove the key
         elif v in _LR_SCHEDULER_CHOICES:
             cur['lr_scheduler'] = v
         else:
@@ -3630,7 +3601,7 @@ def _ts_apply_optim(patch, cur):
     if 'grad_accum' in patch:
         v = patch['grad_accum']
         if v in (None, 'auto') or (type(v) is int and v == 1):
-            cur.pop('grad_accum', None)                    # 1 = défaut → clé retirée
+            cur.pop('grad_accum', None)                    # one is the default; remove the key
         elif type(v) is int and v in _GRAD_ACCUM_CHOICES:
             if v > 1 and cur.get('optimizer') == 'automagic3':
                 raise ValueError(
@@ -3647,7 +3618,7 @@ def _ts_apply_network_arch(patch, cur):
     if 'network_type' in patch:
         v = patch['network_type']
         if v in (None, 'auto', '', 'lora'):
-            cur.pop('network_type', None)                  # lora = défaut → clé retirée
+            cur.pop('network_type', None)                  # lora is the default; remove the key
         elif v in _NETWORK_TYPE_CHOICES:
             cur['network_type'] = v
         else:
@@ -3681,7 +3652,7 @@ def _ts_apply_network_arch(patch, cur):
     if 'ema' in patch:
         v = patch['ema']
         if v in (None, 'off', '', 0, 0.0):
-            cur.pop('ema', None)                           # off → clé retirée
+            cur.pop('ema', None)                           # off removes the key
         elif v in _EMA_CHOICES:
             cur['ema'] = v
         else:
@@ -3900,9 +3871,10 @@ def _ts_apply_levers_memory_quality(patch, cur, batch_choices):
 
 
 def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -> dict:
-    """Valide + fusionne un patch {rank?, resolution?, save_every?, sample_every?,
-    sample_prompts?} dans train_settings. Une clé à None/'auto'/vide est RETIRÉE
-    (retour au défaut). Retourne les réglages effectifs pour la famille courante."""
+    """Validate and merge a training-settings patch.
+
+    Remove keys whose value is None, 'auto' or empty to restore defaults.
+    Return effective settings for the current family."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -4014,7 +3986,7 @@ TRAIN_SETTING_KEYS = ('rank', 'resolution', 'save_every', 'max_step_saves',
 #
 # The memory-saving levers (quantize / quantize_te / low_vram) are deliberately
 # NOT in this list, and that is a decision, not an oversight. They ARE harmless to
-# a resume — VÉRIFIÉ: quantisation is applied to the BASE modules, which are frozen
+# a resume — VERIFIED: quantisation is applied to the BASE modules, which are frozen
 # (`param.requires_grad = False` + `freeze(orig_module)` in ai-toolkit's
 # util/quantize.py), while the resumed checkpoint holds only the LoRA weights,
 # whose shape is fixed by `network` (rank/alpha/type) and untouched here. But this
@@ -4611,8 +4583,8 @@ BUILTIN_TRAIN_PRESETS = [
                        'whole scene; probes every 500 steps.',
         'settings': _concept_preset_settings(16, 8, resolution='1024'),
     },
-    # The vault is EXPLICIT that no Krea concept recipe exists ("seuls
-    # style/character/object documentés" — Krea-2 note 2026-06-29), so this
+    # The research notes explicitly document only Krea style/character/object
+    # recipes (Krea-2 note 2026-06-29), so this
     # extrapolates the family canon: rank 32 (every Krea-2 source) × the
     # generic concept alpha dim/2 rule. linear pinned = the Krea-canonical
     # timestep (ai-toolkit options.ts l.1050 + RunComfy Krea recipe).
@@ -4778,10 +4750,11 @@ def apply_train_settings_dict(user_id, dataset_id, settings: dict, *,
 
 def _dest_base_tag(ds, base_model=_PERSISTED, family=None,
                    variant=_PERSISTED) -> str:
-    """Deployment-name suffix, family-aware. Like _base_tag, but for Krea
-    (which has no base column - always Krea-2-Turbo) falls back to a constant tag
-    so the LoRA carries the model name like SDXL does. `family` override permet au
-    sélecteur UI de router vers Krea même si le train_type persisté diffère."""
+    """Return a family-aware deployment suffix.
+
+    Krea's official base uses a constant tag so the LoRA name identifies its model,
+    as with SDXL. A family override lets the UI target Krea even when persisted
+    train_type differs."""
     tag = _base_tag(ds) if base_model is _PERSISTED else _base_tag_for(base_model)
     fam = _train_type(ds, family)
     if fam == 'zimage':
@@ -4805,24 +4778,23 @@ def _dest_base_tag(ds, base_model=_PERSISTED, family=None,
         # family, but incompatible weights would otherwise share a folder).
         tag = _base_tag_for(
             'Krea-2-Raw' if _krea_is_raw(ds, variant) else KREA_BASE_LABEL)
-    # Même garde pour Flux : sa base officielle donne un tag vide, qui télescoperait
-    # un run Z-Image officiel du même trigger (même dossier `u{user}_{trigger}` →
-    # ai-toolkit auto-resume le mauvais run, poids mélangés). Le tag `_FLUX-1-dev`
-    # isole le run et le LoRA déployé de la famille Z-Image.
+    # Flux's official base also needs a nonempty tag: otherwise it collides
+    # with official Z-Image runs sharing the trigger. _FLUX-1-dev isolates both
+    # the run folder and deployed LoRA name.
     if not tag and fam == 'flux':
         tag = _base_tag_for(FLUX_BASE_LABEL)
-    # FLUX.2 Klein : même garde, mais le tag encode AUSSI la variante (4B vs 9B
-    # sont deux checkpoints incompatibles) — sans ça, deux runs du même trigger
-    # sur les deux tailles partageraient dossier de run et nom déployé.
+    # Klein's tag also encodes 4B versus 9B: incompatible sizes must not share
+    # a run directory or deployment name even with the same trigger.
     if not tag and fam == 'flux2klein':
         tag = _base_tag_for(
             FLUX2KLEIN_BASE_LABELS[
                 '9b' if _flux2klein_is_9b(ds, variant) else '4b'])
-    # Anima : même garde que Flux — sa base officielle unique donne un tag vide qui
-    # télescoperait un run Z-Image officiel du même trigger. Le tag `_Anima-Base`
-    # isole le run et le LoRA déployé.
+    # Anima uses _Anima-Base for the same reason: its official base must not
+    # collide with a Z-Image run sharing the trigger.
     if not tag and fam == 'anima':
         tag = _base_tag_for(ANIMA_BASE_LABEL)
+    if not tag and fam == 'qwenimage21':
+        tag = '_Qwen-Image-2-1'
     return tag + _custom_combo_hash(ds, base_model, family)
 
 
@@ -4883,18 +4855,13 @@ def parse_deployed_run(filename):
 
 def _run_name(ds, base_model=_PERSISTED, family=None,
               variant=_PERSISTED) -> str:
-    """Nom de dossier de run unique par (user, trigger, base, FAMILLE) - évite qu'un
-    même trigger_word chez deux datasets partage/écrase les dossiers, isole un run
-    sur base custom du run officiel, ET isole les familles entre elles. `base_model`
-    absent → base persistée ; fourni (même '') → cette base précise.
+    """Return a run folder unique to user, trigger, base, family and recipe.
 
-    Fix B (2026-07-01) : le tag vient de `_dest_base_tag` (et non `_base_tag`), donc
-    un run **Krea** porte le suffixe `_Krea-2-Turbo` dans le NOM DE DOSSIER. Sans ça,
-    Z-Image base-officielle (tag vide) et Krea (base vide) au même trigger tombaient
-    dans le même dossier `u{user}_{trigger}` → ai-toolkit mélangeait les deux runs et
-    l'import récupérait le mauvais checkpoint. Z-Image ajoute désormais aussi la
-    recette (Turbo/Base/De-Turbo), afin de ne jamais reprendre des poids issus
-    d'une matrice base/adapter incompatible."""
+    An omitted base_model uses the persisted base; an explicit value, including an
+    empty string, selects that base. _dest_base_tag supplies Krea's _Krea-2-Turbo
+    suffix, preventing collisions with official Z-Image runs. Z-Image also includes
+    Turbo/Base/De-Turbo so incompatible base/adapter recipes cannot auto-resume
+    one another's weights."""
     tag = _dest_base_tag(ds, base_model, family, variant)
     # Slider mode gets its own run folder: ai-toolkit AUTO-RESUMES from the
     # training_folder, so a slider run sharing the normal run's folder would
@@ -4905,15 +4872,11 @@ def _run_name(ds, base_model=_PERSISTED, family=None,
 
 def find_run_collision(user_id, dataset_id, base_model=_PERSISTED,
                        variant=_PERSISTED):
-    """Autre dataset du MÊME user qui produirait le même dossier de run
-    (`u{user}_{trigger}{base_tag}`) que (dataset_id, base_model). C'est la source
-    de collision : ai-toolkit auto-resume depuis ce dossier → LoRA mélangés, et
-    deux lancements simultanés corrompent l'`optimizer.pt` partagé (incident
-    Test/Test 2, 2026-06-16). Retourne le FaceDataset en conflit, ou None.
+    """Find another dataset belonging to this user with the same target run folder.
 
-    La clé de collision est le dossier complet (trigger + base + recette/variante).
-    On compare le run-name CIBLE (base/variante en cours de sélection) aux
-    run-names PERSISTÉS des autres datasets du user."""
+    Collisions mix auto-resumed weights and concurrent runs can corrupt optimizer.pt.
+    Compare the selected target trigger/base/recipe/variant against other datasets'
+    persisted run names. Return the conflicting FaceDataset, or None."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         return None
@@ -4933,12 +4896,11 @@ def find_run_collision(user_id, dataset_id, base_model=_PERSISTED,
 
 
 def _masks_dir(dataset_folder: str) -> str:
-    """Dossier des masques d'un export (convention mask_path ai-toolkit : dossier
-    frère, mêmes noms de fichiers)."""
+    """Return the exported masks folder: a sibling with matching filenames for ai-toolkit."""
     return f'{dataset_folder}_masks'
 
 
-# Historical person-mask weight (méthode jandordoe). A CONSTANT, not the new
+# Historical person-mask weight (jandordoe method). A CONSTANT, not the new
 # configurable knob: `face_mask.min_weight` governs face masking, and letting it
 # silently re-weight every character run's background would be a behaviour change
 # nobody asked for.
@@ -4961,16 +4923,12 @@ def _write_mask_meta(masks_dir: str, kind: str, min_value: float) -> None:
 
 
 def _mask_fields(dataset_folder: str) -> dict:
-    """Champs `mask_path`/`mask_min_value` à fusionner dans l'entrée datasets de la
-    job-config SI des masques ont été exportés.
+    """Build dataset mask_path/mask_min_value settings only when exported masks exist.
 
-    Deux polarités possibles, même dossier :
-      - `person` (méthode jandordoe) : sujet blanc, fond noir pondéré à 10 %.
-      - `face` (issue #15) : visage noir, reste blanc — l'acte s'apprend, pas l'identité.
-    Le poids appliqué vient du sidecar écrit à la génération ; sans sidecar (export
-    d'une version antérieure) on retombe sur le 10 % historique, jamais sur le
-    réglage du masque visage.
-    Dossier absent/vide → {} (l'entraînement reste strictement l'historique)."""
+    Person masks use white subjects and a black background weighted at 10%; face
+    masks use black faces and a white remainder to learn the action without identity.
+    Read the weight from the generation sidecar. Older exports without it retain
+    the historical 10%, never the face-mask setting. Missing/empty folders return {}."""
     md = _masks_dir(dataset_folder)
     try:
         if not (os.path.isdir(md) and any(f.lower().endswith('.png') for f in os.listdir(md))):
@@ -5085,21 +5043,16 @@ def _assert_export_fits(out, srcs) -> None:
 
 def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_dir=None,
                                 masked_faces: bool = True) -> str:
-    """Écrit les images `keep` en paires image/.txt dans
-    DATASETS_DIR/<trigger>. L'image garde ses octets d'origine (.jpg/.webp/.png)
-    quand le trainer les lit tels quels et qu'aucun EXIF n'est à appliquer, sinon
-    elle est ré-encodée en .png — cf `_export_copy_is_safe`. Character/concept = trigger + caption éditée ; Style
-    always-on = caption de contenu seule (le trigger interne n'est jamais exporté).
-    Retourne le dossier.
+    """Export kept images and caption sidecars to the training dataset folder.
 
-    `masked` (défaut ON) : génère aussi un masque « personne » par image (rembg
-    u2net, subprocess CPU - cf app/services/person_mask) dans `<dossier>_masks` →
-    la job-config passe en MASKED TRAINING (fond à 10 %). Échec des masques =
-    jamais bloquant : l'entraînement part simplement sans masques (loggé).
-
-    `dest_dir` (cloud seam) : exporte LÀ au lieu de DATASETS_DIR/<run_name> - ne
-    requiert PAS ai-toolkit configuré localement (pas d'appel à _datasets_dir()).
-    Défaut (None) = comportement historique inchangé."""
+    Preserve original JPEG/WebP/PNG bytes when the trainer accepts them and no EXIF
+    transform is needed; otherwise encode PNG (see _export_copy_is_safe).
+    Character/concept captions include the trigger; always-on styles export only
+    content captions. Return the folder.
+    When masked is enabled, generate person masks through rembg's CPU subprocess in
+    <folder>_masks, weighting the background at 10%. Mask failures are logged and
+    do not block unmasked training. An explicit dest_dir supports cloud exports
+    without a configured local ai-toolkit; None preserves the usual dataset path."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -5150,11 +5103,11 @@ def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_d
     if os.path.isdir(out):
         # Derived training export cache, recreated below from the dataset source.
         # It is not user-authored data, so bypassing Trash is intentional.
-        shutil.rmtree(out)  # ré-export propre
+        shutil.rmtree(out)  # clean re-export
     masks_out = _masks_dir(out)
     if os.path.isdir(masks_out):
         # Derived masks are regenerated from exported images on every export.
-        shutil.rmtree(masks_out)  # jamais de masques périmés (ré-export ou toggle OFF)
+        shutil.rmtree(masks_out)  # prevent stale masks after re-export or disabling masking
     os.makedirs(out, exist_ok=True)
     kept = (FaceDatasetImage.query
             .filter_by(dataset_id=dataset_id, status='keep')
@@ -5313,7 +5266,7 @@ def _export_and_freeze_local_dataset(user_id, dataset_id, *, masked, base_model)
             dataset_activity.end(token)
 
 
-# --- Overrides STYLE (communs aux familles) ------------------------------------
+# --- STYLE overrides shared by families ---------------------------------------
 _STYLE_CAPTION_DROPOUT = 0.05
 
 
@@ -5548,22 +5501,15 @@ def _assert_full_transformer_recipe(ds) -> None:
 
 
 def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder=None) -> dict:
-    """Job-config ai-toolkit pour la recette Z-Image validée (Turbo/Base/De-Turbo).
-    Clés alignées sur ce que génère
-    l'UI ai-toolkit (ui/src/app/jobs/new/options.ts) + structure LoRA 24 Go de
-    référence - vérifiées au runtime contre la version installée (cf. spec §3).
-    Points non négociables : arch='zimage', base/adapter résolus uniquement par
-    ``zimage_training_recipe``, quantize qfloat8 + low_vram pour tenir sur 24 Go
-    — ces trois-là sont désormais les DÉFAUTS (inchangés) d'un tri-état surchargeable
-    par dataset (_model_memory_block), pas des constantes : cf. issue #14.
+    """Build the validated ai-toolkit Z-Image Turbo/Base/De-Turbo job configuration.
 
-    SDXL (train_type='sdxl') part dans une branche dédiée (_build_job_config_sdxl) -
-    le chemin zimage ci-dessous reste strictement inchangé.
-
-    `training_folder` (cloud seam) : utilisé TEL QUEL comme process.training_folder
-    dans les 3 familles - aucun appel à _output_dir() (pas d'ai-toolkit local requis).
-    Défaut (None) = comportement historique inchangé (`_run_root(ds)`) - c'est aussi
-    le dossier où atterrit training.log, l'invariant que « 📂 Run folder » ouvre."""
+    Match ai-toolkit options.ts and the reference 24 GB LoRA recipe. Require
+    arch='zimage' and resolve base/adapter only through zimage_training_recipe.
+    qfloat8 quantization and low_vram remain calibrated defaults, now overridable
+    per dataset through _model_memory_block. Other families use dedicated builders.
+    An explicit training_folder is used unchanged, allowing cloud runs without
+    local ai-toolkit. None uses _run_root(ds), which also holds training.log and
+    is the folder opened by "Run folder"."""
     mode = training_mode(ds)
     if mode == 'full_transformer' and _train_type(ds) != 'krea':
         _assert_full_transformer_recipe(ds)
@@ -5601,22 +5547,28 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
         _apply_slider_overrides(ds, cfg_['config']['process'][0], 'anima')
         _apply_dual_captions(ds, cfg_['config']['process'][0], dataset_folder)
         return cfg_
+    if _train_type(ds) == 'qwenimage21':
+        cfg_ = _build_job_config_qwenimage21(ds, dataset_folder, steps, training_folder)
+        _apply_style_overrides(ds, cfg_['config']['process'][0], 'qwenimage21')
+        _apply_slider_overrides(ds, cfg_['config']['process'][0], 'qwenimage21')
+        _apply_dual_captions(ds, cfg_['config']['process'][0], dataset_folder)
+        return cfg_
     trigger = _safe_trigger(ds)
     base_model = getattr(ds, 'train_base_model', None)
     recipe = zimage_training_recipe(getattr(ds, 'train_variant', None), base_model)
 
-    # Base : officielle (repo HF diffusers) OU merge ComfyUI converti en diffusers.
+    # Base: official HF diffusers repository or a ComfyUI merge converted to diffusers.
     model = {'arch': 'zimage', **_model_memory_block(ds, 'zimage')}
     if recipe['custom_base']:
         from .zimage_convert import converted_dir
-        model['name_or_path'] = converted_dir(base_model)       # dossier diffusers converti
+        model['name_or_path'] = converted_dir(base_model)       # converted diffusers directory
     else:
         model['name_or_path'] = recipe['effective_base']
     if recipe['extras_name_or_path']:
         model['extras_name_or_path'] = recipe['extras_name_or_path']
     if recipe['training_adapter']:
         model['assistant_lora_path'] = recipe['training_adapter']
-    _zrank = _lora_rank(ds, 'zimage')   # défaut 16 (choix user) ; éditable via train_settings
+    _zrank = _lora_rank(ds, 'zimage')   # default 16; editable through train_settings
 
     cfg_ = {
         'job': 'extension',
@@ -5634,9 +5586,8 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
                 'datasets': [{
                     'folder_path': dataset_folder,
                     'caption_ext': 'txt',
-                    # 5% de dropout caption : le modèle voit parfois le trigger seul,
-                    # ce qui renforce l'association trigger→identité (reco LoRA de
-                    # sujet ; l'identité doit vivre dans le trigger, pas les mots).
+                    # Caption dropout sometimes exposes the trigger alone, reinforcing
+                    # subject identity in the trigger rather than descriptive words.
                     'caption_dropout_rate': 0.05,
                     'cache_latents_to_disk': True,
                     **_dataset_cache_text_embeddings(ds),
@@ -5651,8 +5602,7 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
                     'train_text_encoder': False,
                     'gradient_checkpointing': _grad_checkpointing_eff(ds),
                     'noise_scheduler': 'flowmatch',
-                    # 'sigmoid' = reco runbook pour un LoRA de sujet (l'exemple
-                    # ai-toolkit confirme : "for just subject, change to sigmoid").
+                    # sigmoid is ai-toolkit's recommended flowmatch weighting for subject LoRAs.
                     'timestep_type': _timestep_type_eff(ds, recipe['timestep_type']),
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
@@ -5665,7 +5615,7 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
                 'model': model,
                 'sample': {
                     'sampler': 'flowmatch',
-                    'neg': '',   # cohérence avec SDXL : défaut ai-toolkit = False (booléen) → fragile
+                    'neg': '',   # match SDXL: ai-toolkit's boolean False default is unsafe for tokenizers
                     'sample_every': _sample_every(ds),
                     'guidance_scale': _sample_guidance(ds, 'zimage'),
                     'sample_steps': _sample_steps(ds, 'zimage'),
@@ -5681,22 +5631,17 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
 
 
 def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=None) -> dict:
-    """Job-config ai-toolkit pour Krea 2. Deux bases selon `train_variant` (cf.
-    _krea_is_raw), toutes deux arch='krea2', alignées sur l'UI ai-toolkit
-    (ui/src/app/jobs/new/options.ts) :
+    """Build Krea 2 training for Raw or Turbo, both with arch='krea2'.
 
-    - RAW (défaut, reco officielle « train on Raw, validate on Turbo ») :
-      name_or_path='krea/Krea-2-Raw' (non distillé), AUCUN assistant_lora_path (rien
-      à dé-distiller), previews en CFG 4 / 25 steps (le Raw a besoin d'un vrai CFG).
-      1er run = download des poids Raw (~24 Go) et run > 4 h → d'où _TRAIN_STATE_TTL 12 h.
-    - TURBO (opt-in, VRAM-friendly) : name_or_path='krea/Krea-2-Turbo' + l'adapter de
-      training Ostris (retiré à l'inférence, comme Z-Image), previews CFG 1 / 8 steps.
-
-    Commun : quantize qfloat8 + low_vram pour tenir sur 24 Go (défauts surchargeables,
-    cf. _model_memory_block — 12B non quantisé = ~30 Gio). ⚠️ Requiert ai-toolkit
-    À JOUR (commit « Add support for Krea2 », arch 'krea2') sinon l'arch est inconnue
-    (garde _aitoolkit_supports_krea). Réseau = 'lora' : VÉRIFIÉ canonique 2026-06-26.
-    Résolution KREA_TRAIN_RESOLUTION (1024, TE déchargé) car 768 seul tenait sinon."""
+    Raw is the official recommended default: Krea-2-Raw needs no training adapter,
+    uses CFG 4/25-step previews and may download roughly 24 GB on its first run.
+    Long initial runs explain the 12-hour training-state TTL. Turbo is opt-in,
+    using Krea-2-Turbo with its training adapter and CFG 1/8-step previews.
+    Both default to qfloat8 and low_vram for 24 GB cards; these settings are
+    user-overridable. The unquantized 12B model needs roughly 30 GiB.
+    Require the installed krea2 extension through _aitoolkit_supports_krea.
+    Use the canonical LoRA network and KREA_TRAIN_RESOLUTION with cached/unloaded
+    text encoder; 768 is the measured lower-memory fallback."""
     trigger = _safe_trigger(ds)
     if _is_full_transformer(ds):
         _assert_full_transformer_recipe(ds)
@@ -5777,16 +5722,16 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
             },
         }
     is_raw = _krea_is_raw(ds)
-    _krank = _lora_rank(ds, 'krea')   # défaut 32/32 (recherche) ; éditable via train_settings
-    # Custom weights (local-only, same krea2 arch) override name_or_path; the TE/VAE
-    # stay official (Krea bundles them). The variant still drives the adapter/CFG.
+    _krank = _lora_rank(ds, 'krea')   # default 32/32; editable through train_settings
+    # Custom local krea2 weights replace name_or_path; bundled TE/VAE remain
+    # official. The selected variant still determines adapter and preview CFG.
     model = {
         'arch': 'krea2',
         'name_or_path': _krea_name_or_path(ds),
         **_model_memory_block(ds, 'krea'),
     }
-    # Adapter de dé-distillation : Turbo UNIQUEMENT (le Raw est déjà non distillé →
-    # rien à retirer ; le charger dessus dégraderait le training).
+    # The training adapter applies only to Turbo. Raw is already undistilled;
+    # loading the adapter there would degrade training.
     if not is_raw:
         model['assistant_lora_path'] = ('ostris/krea2_turbo_training_adapter/'
                                         'krea2_turbo_training_adapter_v1.safetensors')
@@ -5808,9 +5753,9 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     'caption_ext': 'txt',
                     'caption_dropout_rate': 0.05,
                     'cache_latents_to_disk': True,
-                    # Pré-cache les embeddings du Qwen3-VL pour pouvoir le DÉCHARGER pendant le
-                    # training (cf. unload_text_encoder) → libère ~4-8 Go → 1024 tient sans offload.
-                    # Valide ici car train_text_encoder=False (sorties figées → cachables sans perte).
+                    # Cache Qwen3-VL embeddings and unload the frozen text encoder during
+                    # training, freeing roughly 4-8 GB so 1024 fits without offloading.
+                    # This is lossless because train_text_encoder=False.
                     **_dataset_cache_text_embeddings(ds, default=True),
                     'resolution': _train_res(ds),
                     **_mask_fields(dataset_folder),
@@ -5826,7 +5771,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                            ds, default=True)['cache_text_embeddings'] else {}),
                     'gradient_checkpointing': _grad_checkpointing_eff(ds),
                     'noise_scheduler': 'flowmatch',
-                    'timestep_type': _timestep_type_eff(ds, 'linear'),  # défaut canonique krea2 (options.ts)
+                    'timestep_type': _timestep_type_eff(ds, 'linear'),  # canonical krea2 options.ts default
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
                     'dtype': 'bf16',
@@ -5840,7 +5785,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     'sampler': 'flowmatch',
                     'neg': '',
                     'sample_every': _sample_every(ds),
-                    # Défauts Turbo/Raw : voir _SAMPLE_RECIPE_DEFAULTS.
+                    # See _SAMPLE_RECIPE_DEFAULTS for Turbo/Raw preview defaults.
                     'guidance_scale': _sample_guidance(ds, 'krea'),
                     'sample_steps': _sample_steps(ds, 'krea'),
                     'prompts': _sample_prompts(ds, trigger),
@@ -5851,24 +5796,19 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
 
 
 def _build_job_config_flux(ds, dataset_folder: str, steps: int, training_folder=None) -> dict:
-    """Job-config ai-toolkit pour FLUX.1-dev (arch='flux'). Valeurs VÉRIFIÉES contre
-    l'ai-toolkit installé : `ui/.../options.ts` (entrée 'flux' : name_or_path
-    'black-forest-labs/FLUX.1-dev', quantize + quantize_te True, sampler /
-    noise_scheduler 'flowmatch') ET le notebook officiel `FLUX_1_dev_LoRA_Training`
-    (linear/alpha 16, lr 1e-4, previews guidance 4 / 20 steps).
+    """Build FLUX.1-dev training with the core arch='flux'.
 
-    arch='flux' est une arch CŒUR d'ai-toolkit (toolkit/config_modules.py) — supportée
-    par tout ai-toolkit, donc AUCUNE garde de version (contrairement à krea2, extension).
-    FLUX.1-dev est un modèle GATED sur Hugging Face : le 1er run télécharge ~24 Go et
-    exige un HF_TOKEN ayant accepté la licence (même mécanique que Krea, aussi gated).
-
-    VRAM : Flux est un DiT 12B (même classe que Krea 2). On ajoute low_vram + qfloat8
-    (comme Krea, dont la mesure LDS a montré la nécessité à 24 Go) au-dessus des defaults
-    options.ts — curseur basse-VRAM = la résolution 768 (cf. _train_res / KREA_TRAIN)."""
+    Match ai-toolkit options.ts and the official FLUX_1_dev_LoRA_Training notebook:
+    quantize/quantize_te, flowmatch scheduling/sampling, rank/alpha 16, LR 1e-4,
+    and guidance 4/20-step previews. As a core architecture, flux needs no extension
+    version gate. The gated model requires license acceptance and HF_TOKEN before
+    its initial roughly 24 GB download.
+    Like Krea, this 12B transformer uses low_vram/qfloat8 defaults for 24 GB cards;
+    selecting 768 resolution is the lower-memory fallback."""
     trigger = _safe_trigger(ds)
-    _frank = _lora_rank(ds, 'flux')   # défaut 16 (exemple flux officiel) ; éditable via train_settings
-    # Custom weights (local-only, same flux arch) override name_or_path; TE/VAE stay
-    # official (ai-toolkit's flux loader resolves them from the official repo).
+    _frank = _lora_rank(ds, 'flux')   # official default 16; editable through train_settings
+    # Custom local flux weights replace name_or_path; ai-toolkit resolves the
+    # text encoder and VAE from the official repository.
     _fbase = getattr(ds, 'train_base_model', None)
     model = {
         'arch': 'flux',
@@ -5906,8 +5846,7 @@ def _build_job_config_flux(ds, dataset_folder: str, steps: int, training_folder=
                     'train_text_encoder': False,
                     'gradient_checkpointing': _grad_checkpointing_eff(ds),
                     'noise_scheduler': 'flowmatch',
-                    # 'sigmoid' = reco LoRA de SUJET pour les modèles flowmatch (l'exemple
-                    # flux d'ai-toolkit documente ce choix ; identique à Z-Image).
+                    # Use ai-toolkit's recommended sigmoid weighting for flowmatch subject LoRAs.
                     'timestep_type': _timestep_type_eff(ds, 'sigmoid'),
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
@@ -5932,34 +5871,21 @@ def _build_job_config_flux(ds, dataset_folder: str, steps: int, training_folder=
 
 
 def _build_job_config_flux2klein(ds, dataset_folder: str, steps: int, training_folder=None) -> dict:
-    """Job-config ai-toolkit pour FLUX.2 Klein. Deux tailles selon `train_variant`
-    (cf. _flux2klein_is_9b) : arch='flux2_klein_4b' (défaut, voie locale 16-24 Go)
-    ou 'flux2_klein_9b' (32-48 Go, voie cloud surtout). Valeurs VÉRIFIÉES contre
-    l'ai-toolkit installé : `ui/.../options.ts` (entrées flux2_klein_4b/9b) et
-    `extensions_built_in/diffusion_models/flux2/flux2_klein_model.py`.
+    """Build FLUX.2 Klein training for arch flux2_klein_4b or flux2_klein_9b.
 
-    Divergences vs le chemin flux (options.ts fait foi) :
-    - timestep_type 'weighted' — le défaut canonique des deux entrées Klein
-      (PAS 'sigmoid' comme flux/zimage) ;
-    - model_kwargs {'match_target_res': False} — clé propre à cette arch,
-      absente du chemin flux ;
-    - base NON distillée (flux2_is_guidance_distilled=False côté ai-toolkit) →
-      les previews utilisent un VRAI CFG : guidance 4 / 25 steps (les défauts
-      « non distillé » de l'UI ai-toolkit — même duo que Krea Raw), là où
-      FLUX.1-dev (guidance-distillé) sample en guidance 4 / 20 steps.
-
-    Les deux name_or_path sont des modèles GATED sur Hugging Face : accepter la
-    licence + HF_TOKEN avant le 1er run, même mécanique que FLUX.1-dev et Krea.
-    ⚠️ Contrairement à 'flux' (arch CŒUR), flux2_klein_* sont des EXTENSIONS →
-    garde de version obligatoire (_aitoolkit_supports_flux2klein) sinon
-    get_model_class retombe en silence sur le loader SD legacy (LoRA corrompu).
-    quantize/low_vram/qfloat8 comme les autres familles ; curseur basse-VRAM =
-    la résolution 768 (cf. _train_res)."""
+    Default 4B targets local 16-24 GB cards; 9B generally targets 32-48 GB/cloud.
+    Follow the installed options.ts and flux2_klein_model.py: weighted timesteps,
+    model_kwargs.match_target_res=False, and undistilled guidance 4/25-step previews
+    rather than FLUX.1-dev's guidance-distilled 20-step recipe.
+    Both bases require Hugging Face license acceptance and HF_TOKEN. Unlike core
+    flux, Klein architectures are extensions, so _aitoolkit_supports_flux2klein
+    must prevent silent legacy-SD fallback. Retain the shared memory controls;
+    768 resolution is the lower-VRAM setting."""
     trigger = _safe_trigger(ds)
     is_9b = _flux2klein_is_9b(ds)
-    _fkrank = _lora_rank(ds, 'flux2klein')   # défaut 16 ; éditable via train_settings
-    # Custom weights (local-only, same flux2_klein arch) override name_or_path; the
-    # TE (Mistral, hardcoded MISTRAL_PATH in ai-toolkit) and VAE stay official.
+    _fkrank = _lora_rank(ds, 'flux2klein')   # default 16; editable through train_settings
+    # Custom local Klein weights replace name_or_path. The official Mistral text
+    # encoder (ai-toolkit MISTRAL_PATH) and VAE remain unchanged.
     _fkbase = getattr(ds, 'train_base_model', None)
     model = {
         'arch': 'flux2_klein_9b' if is_9b else 'flux2_klein_4b',
@@ -6013,7 +5939,7 @@ def _build_job_config_flux2klein(ds, dataset_folder: str, steps: int, training_f
                     'sampler': 'flowmatch',
                     'neg': '',
                     'sample_every': _sample_every(ds),
-                    # Base non distillée → vrai CFG (cf. docstring) : 4 / 25 steps.
+                    # Undistilled base: use genuine CFG 4 with 25 preview steps.
                     'guidance_scale': _sample_guidance(ds, 'flux2klein'),
                     'sample_steps': _sample_steps(ds, 'flux2klein'),
                     'prompts': _sample_prompts(ds, trigger),
@@ -6024,34 +5950,20 @@ def _build_job_config_flux2klein(ds, dataset_folder: str, steps: int, training_f
 
 
 def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder=None) -> dict:
-    """Job-config ai-toolkit pour Anima (arch='anima'). Modèle circlestone-labs
-    Anima (Cosmos Predict2 DiT 2B + text encoder Qwen3 + conditionneur T5 + VAE
-    Qwen-Image). Valeurs VÉRIFIÉES contre la PR ostris/ai-toolkit #860 (mergée le
-    2026-07-15), entrée `anima` de `ui/.../options.ts` :
-    - name_or_path 'circlestone-labs/Anima-Base-v1.0-Diffusers' (PUBLIC, non gated) ;
-    - quantize / quantize_te False (defaults options.ts — le DiT ne fait que 2B,
-      contrairement aux 12B krea/flux qui forcent qfloat8) ;
-    - noise_scheduler / sampler 'flowmatch', timestep_type 'weighted' (défaut
-      canonique de l'entrée, PAS 'sigmoid') ;
-    - negative de preview = ANIMA_SAMPLE_NEG (tags anime score_1..3, défaut UI).
+    """Build Anima training (Cosmos Predict2 2B, Qwen3/T5 conditioning, Qwen-Image VAE).
 
-    ⚠️ arch 'anima' = EXTENSION (extensions_built_in/diffusion_models/anima), PAS
-    une arch cœur → garde de version obligatoire (_aitoolkit_supports_anima) sinon
-    get_model_class retombe en silence sur le loader SD legacy (LoRA corrompu).
-    Anima exige aussi un diffusers récent (AnimaModularPipeline) — angle mort de la
-    garde, documenté dans _aitoolkit_supports_anima.
-
-    VRAM : 2B → modeste. On garde quand même cache_latents_to_disk +
-    cache_text_embeddings + unload_text_encoder (générique ai-toolkit, valide car
-    train_text_encoder=False → sorties du Qwen3 figées, cachables sans perte), ce
-    qui décharge le TE après caching et laisse de la marge sur les petites cartes.
-    guidance 4 / 25 steps pour les previews : base NON distillée (vrai CFG), même
-    duo que Krea Raw — extrapolé faute de chiffre publié spécifique à Anima."""
+    Follow ai-toolkit PR #860 (2026-07-15) and options.ts: public ungated
+    circlestone-labs/Anima-Base-v1.0-Diffusers, quantize/quantize_te=False, flowmatch,
+    weighted timesteps and ANIMA_SAMPLE_NEG preview tags. Require the Anima
+    extension to avoid silent legacy-SD fallback; recent diffusers with
+    AnimaModularPipeline is also needed but is not checked by that source gate.
+    Cache latents and frozen text embeddings, then unload the encoder for smaller
+    cards. Guidance 4/25-step previews are extrapolated from undistilled Krea Raw
+    because no Anima-specific value was published."""
     trigger = _safe_trigger(ds)
-    _arank = _lora_rank(ds, 'anima')   # défaut 32 (defaultLinearRank options.ts) ; éditable via train_settings
-    # Custom weights (local-only, same anima arch) override name_or_path; the TE
-    # (Qwen3) / conditioner (T5) / VAE stay official (ai-toolkit's anima loader
-    # resolves them from the official pipeline).
+    _arank = _lora_rank(ds, 'anima')   # options.ts default 32; editable through train_settings
+    # Custom local Anima weights replace name_or_path. The loader still resolves
+    # Qwen3, the T5 conditioner and VAE from the official pipeline.
     _abase = getattr(ds, 'train_base_model', None)
     model = {
         'arch': 'anima',
@@ -6076,9 +5988,8 @@ def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder
                     'caption_ext': 'txt',
                     'caption_dropout_rate': 0.05,
                     'cache_latents_to_disk': True,
-                    # Pré-cache les embeddings du Qwen3 pour pouvoir le DÉCHARGER pendant
-                    # le training (unload_text_encoder) → libère de la VRAM. Valide car
-                    # train_text_encoder=False (sorties figées → cachables sans perte).
+                    # Cache Qwen3 embeddings and unload its frozen text encoder during
+                    # training to free VRAM. This is lossless with train_text_encoder=False.
                     **_dataset_cache_text_embeddings(ds, default=True),
                     'resolution': _train_res(ds),
                     **_mask_fields(dataset_folder),
@@ -6094,7 +6005,7 @@ def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder
                            ds, default=True)['cache_text_embeddings'] else {}),
                     'gradient_checkpointing': _grad_checkpointing_eff(ds),
                     'noise_scheduler': 'flowmatch',
-                    'timestep_type': _timestep_type_eff(ds, 'weighted'),  # défaut canonique anima (options.ts)
+                    'timestep_type': _timestep_type_eff(ds, 'weighted'),  # canonical Anima options.ts default
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
                     'dtype': 'bf16',
@@ -6117,11 +6028,65 @@ def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder
     }
 
 
+def _build_job_config_qwenimage21(ds, dataset_folder, steps, training_folder=None) -> dict:
+    """Text-to-image LoRA recipe for upstream's distinct Qwen-Image 2.1 loader.
+
+    Match diffusion_models/ui.tsx: Comfy-Org weights, convrot8 on both components,
+    shifted flow matching, CFG 3 and no encoder unloading. LDS exports RGB image/
+    caption pairs; reference-image editing and RGBA datasets are not exposed here.
+    """
+    family = 'qwenimage21'
+    trigger = _safe_trigger(ds)
+    base = getattr(ds, 'train_base_model', None)
+    return {'job': 'extension', 'config': {
+        'name': f'lora_{trigger}',
+        'process': [{
+            'type': 'sd_trainer',
+            'training_folder': training_folder if training_folder else str(_run_root(ds)),
+            'device': 'cuda:0',
+            'trigger_word': trigger,
+            'network': _network_block(ds, _lora_rank(ds, family), family),
+            'save': {'dtype': _save_dtype_eff(ds), 'save_every': _save_every(ds),
+                     'max_step_saves_to_keep': _max_step_saves(ds)},
+            'datasets': [{
+                'folder_path': dataset_folder, 'caption_ext': 'txt',
+                'caption_dropout_rate': 0.05, 'cache_latents_to_disk': True,
+                **_dataset_cache_text_embeddings(ds, default=False),
+                'resolution': _train_res(ds), **_mask_fields(dataset_folder),
+            }],
+            'train': {
+                'batch_size': _batch_size_eff(ds), 'steps': steps,
+                'gradient_accumulation': _grad_accum(ds),
+                'train_unet': True, 'train_text_encoder': False,
+                'unload_text_encoder': False,
+                'gradient_checkpointing': _grad_checkpointing_eff(ds),
+                'noise_scheduler': 'flowmatch',
+                'timestep_type': _timestep_type_eff(ds, 'shift'),
+                'optimizer': _optimizer_eff(ds), 'lr': _lr_eff(ds), 'dtype': 'bf16',
+                **_train_serializer_fields(ds), **_content_or_style_fields(ds),
+                **_lr_sched_fields(ds), **_ema_fields(ds),
+            },
+            'model': {
+                'arch': 'qwen_image_2',
+                'name_or_path': base if _is_custom_weights(base) else QWENIMAGE21_BASE,
+                'extras_name_or_path': QWENIMAGE21_EXTRAS,
+                'model_kwargs': {'rgba': False},
+                **_model_memory_block(ds, family),
+            },
+            'sample': {
+                'sampler': 'flowmatch', 'sample_every': _sample_every(ds),
+                'guidance_scale': _sample_guidance(ds, family),
+                'sample_steps': _sample_steps(ds, family),
+                'prompts': _sample_prompts(ds, trigger),
+            },
+        }],
+    }}
+
+
 def _build_job_config_sdxl(ds, dataset_folder: str, steps: int, training_folder=None) -> dict:
-    """Job-config ai-toolkit arch='sdxl' - valeurs VÉRIFIÉES dans ai-toolkit
-    ui/.../options.ts (entrée 'sdxl', 2026-06-14) : quantize/quantize_te False,
-    noise_scheduler/sampler 'ddpm', timestep_type DÉSACTIVÉ, guidance 6. Base =
-    checkpoint SDXL ComfyUI local (single-file, pas de conversion)."""
+    """Build arch='sdxl' from verified ai-toolkit options.ts defaults:
+    no quantization, DDPM scheduler/sampler, no timestep weighting, guidance 6.
+    Use a local single-file ComfyUI checkpoint without conversion."""
     trigger = _safe_trigger(ds)
     base_model = getattr(ds, 'train_base_model', None)
     if not base_model:
@@ -6141,7 +6106,7 @@ def _build_job_config_sdxl(ds, dataset_folder: str, steps: int, training_folder=
         model['vae_path'] = _svae
     if _ste:
         model['te_name_or_path'] = _ste
-    _srank = _lora_rank(ds, 'sdxl')   # défaut 32 ; alpha = rank/2 (demi-force, conservé)
+    _srank = _lora_rank(ds, 'sdxl')   # default 32 with retained half-rank alpha
     return {
         'job': 'extension',
         'config': {
@@ -6183,10 +6148,9 @@ def _build_job_config_sdxl(ds, dataset_folder: str, steps: int, training_folder=
                 'model': model,
                 'sample': {
                     'sampler': 'ddpm',
-                    # neg='' EXPLICITE : sans cette clé, ai-toolkit met neg=False (booléen) et le
-                    # tokenizer CLIP de transformers 5.x rejette [False] → ValueError au sample
-                    # baseline (« text input must be of type str »). SDXL crashait juste avant la
-                    # 1re step. '' est un str valide → sample sans négatif (voulu pour un LoRA sujet).
+                    # Explicit neg='' avoids ai-toolkit's boolean False default. CLIP in
+                    # transformers 5.x rejects [False] before the first training step, whereas
+                    # an empty string correctly requests no negative prompt.
                     'neg': '',
                     'sample_every': _sample_every(ds),
                     'guidance_scale': _sample_guidance(ds, 'sdxl'),
@@ -6224,27 +6188,22 @@ def _run_dir(user_id, dataset_id, base_model=_PERSISTED, family=None,
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
-    # ai-toolkit écrit ses checkpoints/samples dans <training_folder>/<name>/
-    # où name = 'lora_<trigger>' (cf. build_job_config). On pointe ce sous-dossier.
-    # `base_model` cible le run d'une base PRÉCISE (sélection UI) ; `family` cible la
-    # famille sélectionnée (Krea vs Z-Image) - sans quoi le panneau montre les
-    # checkpoints du mauvais run quand deux familles partagent le même trigger.
+    # ai-toolkit writes checkpoints/samples below training_folder/lora_<trigger>.
+    # Target that subfolder using the selected base and family so the panel cannot
+    # show a different family's run when triggers are shared.
     return str(_run_root(ds, base_model, family, variant)
                / f'lora_{_safe_trigger(ds)}')
 
 
 def open_training_folder(user_id, dataset_id, target='loras', family=None,
                          base_model=_PERSISTED, variant=_PERSISTED) -> str:
-    """Ouvre dans l'explorateur de fichiers du POSTE (app locale mono-utilisateur,
-    le navigateur tourne sur la même machine) le dossier demandé :
-    'loras' → dossier d'import ComfyUI de la famille (loras/krea, loras/sdxl,
-    loras/z image) ; 'run' → dossier HAUT du run courant (base+famille) : il porte
-    training.log, et les checkpoints sont dans son sous-dossier lora_<trigger> ;
-    'dataset' → dossier des images du dataset (data/datasets/<id>/ — où « 💾 Write
-    .txt files » dépose les captions sidecar ; aucune dépendance ai-toolkit).
-    Cibles FIXES résolues côté serveur — le client n'envoie jamais de chemin.
-    Crée le dossier au besoin (avant un premier import il n'existe pas encore).
-    Retourne le chemin ouvert."""
+    """Open a server-resolved folder in this local computer's file explorer.
+
+    loras selects the family's ComfyUI import folder; run selects its top-level
+    folder with training.log and the lora_<trigger> checkpoint subfolder; dataset
+    selects data/datasets/<id>, including caption sidecars, without ai-toolkit.
+    The client selects a fixed target, never an arbitrary path. Create it if
+    needed and return the opened path."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -6276,12 +6235,11 @@ def open_training_folder(user_id, dataset_id, target='loras', family=None,
 
 def list_checkpoints(user_id, dataset_id, base_model=_PERSISTED, family=None,
                      variant=_PERSISTED) -> list[dict]:
-    """Checkpoints .safetensors du run de la base+famille données (absentes → persistées),
-    triés par step croissant. Retour: [{step:int, filename:str, final?:bool}].
+    """List selected base/family safetensors checkpoints by ascending step.
 
-    Inclut le fichier FINAL `lora_<trigger>.safetensors` (écrit à la fin d'un run
-    abouti, SANS numéro de step) : c'est le résultat terminé, et le regex numéroté
-    l'excluait → le LoRA fini était invisible/non importable depuis le panneau."""
+    Return [{step, filename, final?}], defaulting to persisted base/family.
+    Include the final unnumbered lora_<trigger>.safetensors so a completed result
+    remains visible and importable."""
     run = _run_dir(user_id, dataset_id, base_model, family, variant)
     if not os.path.isdir(run):
         return []
@@ -6291,7 +6249,7 @@ def list_checkpoints(user_id, dataset_id, base_model=_PERSISTED, family=None,
         if m:
             out.append({'step': int(m.group(1)), 'filename': f})
     out.sort(key=lambda c: c['step'])
-    # Fichier final (run = .../lora_<trigger> → lora_<trigger>.safetensors).
+    # The final file is named after the run folder: lora_<trigger>.safetensors.
     final_name = os.path.basename(run) + '.safetensors'
     if os.path.isfile(os.path.join(run, final_name)):
         last = out[-1]['step'] if out else 0
@@ -6548,33 +6506,18 @@ def checkpoint_file_path(user_id, dataset_id, filename, base_model=_PERSISTED,
 def import_checkpoint(user_id, dataset_id, filename, base_model=_PERSISTED, family=None,
                       src_dir=None, version=None, variant=_PERSISTED,
                       run_id=None, run_source=None, return_meta=False):
-    """Copie le checkpoint choisi vers le dossier loras de ComfyUI : loras/z image/
-    pour Z-Image, loras/sdxl/ pour SDXL, loras/krea/ pour Krea (routage par famille,
-    pour ne pas polluer le Test Studio Z-Image). Anti path-traversal :
-    le filename doit appartenir à la liste des checkpoints du run.
+    """Copy a selected checkpoint to its family's ComfyUI LoRA folder.
 
-    Le nom de DESTINATION encode la base et la recette d'entraînement : ai-toolkit
-    écrit toujours `lora_<trigger>_<step>.safetensors` quel que soit le modèle de
-    base (le `name` du job n'est pas base-aware), donc un LoRA entraîné sur un
-    merge ComfyUI et un autre entraîné sur la base officielle produisent des
-    fichiers IDENTIQUES qui, une fois copiés dans le dossier partagé de ComfyUI,
-    sont indiscernables et s'écrasent au même step. On insère ici le tag du merge
-    (`lora_<trigger>_<step>_<merge>_<recipe>.safetensors`) pour les rendre
-    reconnaissables ET éviter la collision. Le fichier
-    source ai-toolkit n'est pas renommé (l'auto-resume continue de fonctionner).
-
-    `base_model`/`family` ciblent le run d'une base+famille précises (sélection UI) ;
-    absents → persistés. Run dir, whitelist, dossier ET suffixe de destination
-    utilisent la MÊME base+famille → cohérent (un LoRA Krea part bien en loras/krea).
-
-    `src_dir` (cloud seam) : le checkpoint est lu LÀ (dossier de staging où le pod a
-    déposé le résultat téléchargé) au lieu du run ai-toolkit local - aucun besoin
-    d'ai-toolkit configuré (ni _run_dir(), ni list_checkpoints(), qui appellent tous
-    deux _output_dir()). La whitelist ici est PUREMENT anti-traversal : tout
-    .safetensors réellement présent dans src_dir est autorisé (pas de filtre de
-    forme _CK_RE — le checkpoint FINAL d'un run abouti, `lora_<trigger>.safetensors`,
-    n'a pas de suffixe de step et doit passer). Défaut (None) = comportement
-    historique inchangé."""
+    Require filename membership in the run checkpoint allowlist for traversal
+    protection. Encode base and recipe in the destination name so same-trigger,
+    same-step runs from different bases cannot overwrite each other. Do not rename
+    the source: ai-toolkit must still recognize it for automatic continuation.
+    Use the same selected base/family for the run, allowlist, destination folder
+    and suffix; omitted values use the dataset's persisted settings.
+    An explicit src_dir supports harvested cloud checkpoints without local
+    ai-toolkit. Allow any real safetensors file inside that staging folder,
+    including unnumbered final checkpoints; this allowlist protects paths rather
+    than enforcing _CK_RE filename shape. None retains the local run behavior."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -6604,9 +6547,8 @@ def import_checkpoint(user_id, dataset_id, filename, base_model=_PERSISTED, fami
         raise ValueError(
             f'this file is a {det_lbl} LoRA — deploy it under the {det_lbl} '
             f'family, not {tgt_lbl}.')
-    # Déploiement routé par famille : sdxl → loras/sdxl, krea → loras/krea, sinon
-    # « z image » (ne pollue pas le Test Studio Z-Image ; un LoRA Krea atterrit
-    # directement dans le dossier lu par le menu de génération Krea).
+    # Deploy into the selected family folder so the corresponding generation
+    # menu discovers it without exposing incompatible LoRAs to Z-Image Studio.
     dest_dir = _lora_dest_dir(ds, family)
     os.makedirs(dest_dir, exist_ok=True)
     tag = _dest_base_tag(ds, base_model, family, variant)
@@ -6703,18 +6645,13 @@ def _same_file(a, b) -> bool:
 
 
 def list_imported_checkpoints(user_id, dataset_id, family=None) -> list[dict]:
-    """LoRA de CE dataset déjà déployés dans le dossier loras de la FAMILLE demandée
-    (chargeables par le Test Studio / la page generate). [{filename, label}].
-    `family` (sélecteur UI) prime sur le train_type persisté : sans ça, la liste
-    « IN COMFYUI (loras/…) » montrait toujours la famille persistée (ex. Krea) même
-    quand l'utilisateur regardait la page Z-Image ou SDXL.
+    """List this dataset's deployed LoRAs in the selected family as [{filename, label}].
 
-    Single-user app: no ownership DB to filter against (SRC's list_test_checkpoints
-    consulted lora_ownership to hide LoRA belonging to OTHER users) -- everything on
-    disk that matches this dataset's trigger boundary IS this dataset's checkpoint.
-    A direct filesystem scan of the family's deploy folder replaces that call.
-    `filename` is returned in LoraLoader form (family-subfolder\\name.safetensors),
-    matching delete_imported_checkpoint's path resolution."""
+    The UI family override takes precedence over persisted train_type. In this
+    single-user app, scan the family's deployment folder and match the exact
+    trigger boundary rather than consulting an ownership database.
+    Return filename in LoraLoader form (family-subfolder\name.safetensors), matching
+    delete_imported_checkpoint's path resolution."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         return []
@@ -6911,11 +6848,11 @@ def deployed_file_present(user_id, dataset_id, filename, family=None) -> bool:
 
 
 def delete_imported_checkpoint(user_id, dataset_id, filename, family=None) -> str:
-    """Supprime un checkpoint déployé du dossier loras de ComfyUI. Garde-fous :
-    le filename doit appartenir aux checkpoints importés du dataset (whitelist,
-    famille-scopée) ET le chemin résolu doit rester dans le dossier loras de la
-    FAMILLE sélectionnée (z image / sdxl / krea) - anti path-traversal, fail-closed.
-    `family` (menu UI) prime sur le train_type persisté, comme la liste affichée."""
+    """Delete a deployed checkpoint from the selected family's ComfyUI LoRA folder.
+
+    Require the dataset's family-scoped import allowlist and verify the resolved
+    path stays inside that family folder. Fail closed against traversal. The UI
+    family override takes precedence over persisted train_type, as in the list."""
     ds = fds.get_dataset(user_id, dataset_id)
     allowed = {c['filename'] for c in list_imported_checkpoints(user_id, dataset_id, family=family)}
     if filename not in allowed:
@@ -7034,9 +6971,8 @@ def dataset_disk_usage(user_id, dataset_id, base_model=_PERSISTED, family=None,
 
 
 def _trigger_boundary(name: str, prefix: str) -> bool:
-    """`name` commence par `prefix` ET la suite est vide ou commence par `_`/`.` -
-    frontière de trigger EXACTE. Évite que « Lola » attrape « Lola2 »/« Lola69382 »
-    (le caractère après le préfixe doit être un séparateur, pas un chiffre/lettre)."""
+    """Match an exact trigger prefix followed by nothing, '_' or '.'.
+    Do not let a trigger match another whose next character is a letter or digit."""
     if not name.startswith(prefix):
         return False
     rest = name[len(prefix):]
@@ -7044,28 +6980,21 @@ def _trigger_boundary(name: str, prefix: str) -> bool:
 
 
 def purge_training_artifacts(user_id, trigger_safe) -> list[str]:
-    """Supprime TOUS les artefacts d'entraînement d'un (user, trigger), appelé à la
-    suppression d'un dataset : LoRA déployés dans ComfyUI (z image + sdxl + krea), run
-    ai-toolkit (output/), export (datasets/) et job config (config/generated/).
+    """Remove training artifacts for a user/trigger when deleting its dataset.
 
-    Sécurité : matching sur la FRONTIÈRE EXACTE du trigger (jamais un sibling type
-    Lola vs Lola2) ; les noms viennent d'os.listdir (bare, pas de path-traversal) ;
-    trigger vide → no-op (sinon `u{user}_` balaierait tout). Retourne les chemins
-    retirés (pour log/affichage). Idempotent : un 2e appel ne retire plus rien.
-
-    Each backend (ComfyUI loras dir / ai-toolkit output+datasets dirs) is probed
-    independently -- an unconfigured backend just yields no roots to sweep for
-    that step instead of aborting the whole purge (this runs from
-    face_dataset_service.delete_dataset as best-effort cleanup)."""
+    Cover deployed ComfyUI LoRAs, ai-toolkit output, exported datasets and generated
+    job configs. Match exact trigger boundaries; use bare directory-listing names
+    for traversal safety. An empty trigger is a no-op. Return removed paths;
+    repeated calls are harmless. Probe each backend independently so an
+    unconfigured one cannot abort the remaining best-effort cleanup."""
     trigger_safe = (trigger_safe or '').strip()
     if not trigger_safe or user_id in (None, ''):
         return []
     removed: list[str] = []
-    run_prefix = f'u{user_id}_{trigger_safe}'    # ex. u1_Lola69382
-    lora_prefix = f'lora_{trigger_safe}'         # ex. lora_Lola69382
-    # 1) LoRA déployés dans ComfyUI (z image + sdxl + krea + flux + flux2klein + anima
-    # séparés), dans CHAQUE racine loras : un LoRA déployé avant le correctif #25
-    # vit dans l'ancien dossier par défaut et doit partir avec le dataset.
+    run_prefix = f'u{user_id}_{trigger_safe}'
+    lora_prefix = f'lora_{trigger_safe}'
+    # 1) Remove deployed LoRAs from every family and every LoRA root, including
+    # older default folders used before the shared-path fix.
     lora_roots = []
     for fam in _FAMILY_SUBDIR:
         lora_roots += _lora_family_dirs(fam)
@@ -7079,7 +7008,7 @@ def purge_training_artifacts(user_id, trigger_safe) -> list[str]:
                     trash.send_to_trash(p, context=f'training-{trigger_safe}')
                     removed.append(p)
                 except OSError as e:
-                    logger.warning('purge: trash %s échoué : %s', p, e)
+                    logger.warning('purge: trash %s failed: %s', p, e)
     # 2) run output + 3) export datasets (dossiers entiers)
     output_datasets_roots = []
     for accessor in (_output_dir, _datasets_dir):
@@ -7097,11 +7026,9 @@ def purge_training_artifacts(user_id, trigger_safe) -> list[str]:
                     trash.send_to_trash(p, context=f'training-{trigger_safe}')
                     removed.append(p)
                 except OSError as e:
-                    logger.warning('purge: trash %s échoué : %s', p, e)
-    # 4) job configs : nommés d'après le run name (base/famille), donc un même
-    #    trigger peut en avoir plusieurs (ex. un run zimage + un run krea). On
-    #    balaie tout config dont le stem est sur la frontière de ce trigger,
-    #    comme les étapes 2-3 pour les dossiers.
+                    logger.warning('purge: trash %s failed: %s', p, e)
+    # 4) Generated configs use run names containing base/family. Remove every
+    #    config stem on this exact trigger boundary, as with run/export folders.
     try:
         jobs_dir = str(_jobs_dir())
     except RuntimeError:
@@ -7116,8 +7043,8 @@ def purge_training_artifacts(user_id, trigger_safe) -> list[str]:
                     trash.send_to_trash(p, context=f'training-{trigger_safe}')
                     removed.append(p)
                 except OSError as e:
-                    logger.warning('purge: trash %s échoué : %s', p, e)
-    logger.info('purge_training_artifacts u%s/%s : %d artefact(s) retiré(s)',
+                    logger.warning('purge: trash %s failed: %s', p, e)
+    logger.info('purge_training_artifacts u%s/%s: %d artifact(s) removed',
                 user_id, trigger_safe, len(removed))
     return removed
 
@@ -7176,7 +7103,7 @@ def _rename_inside_run(run_dir, old_trigger_safe, new_trigger_safe) -> list:
             if os.path.isdir(dest):        # the lora_<trigger>/ folder: its files too
                 moved += _rename_inside_run(dest, old_trigger_safe, new_trigger_safe)
         except OSError as e:
-            logger.warning('rename: %s -> %s échoué : %s', src, dest, e)
+            logger.warning('rename: %s -> %s failed: %s', src, dest, e)
     return moved
 
 
@@ -7252,8 +7179,8 @@ def rename_training_artifacts(user_id, old_trigger_safe, new_trigger_safe) -> di
             # Best-effort like the purge: a locked file (an open LoRA, a folder held
             # by a viewer) is logged and skipped rather than aborting mid-way, which
             # would leave the set split with no way to tell which half moved.
-            logger.warning('rename: %s -> %s échoué : %s', src, dest, e)
-    logger.info('rename_training_artifacts u%s %s->%s : %d artefact(s) renommé(s)',
+            logger.warning('rename: %s -> %s failed: %s', src, dest, e)
+    logger.info('rename_training_artifacts u%s %s->%s: %d artifact(s) renamed',
                 user_id, old_trigger_safe, new_trigger_safe, len(renamed))
     return {'renamed': renamed, 'conflicts': [], 'ok': True}
 
@@ -7339,34 +7266,24 @@ def _preset_steps_policy(ds) -> dict | None:
 
 
 def recommended_steps(dataset_id, train_type=None, variant=None) -> int:
-    """Steps cibles selon le *type* de dataset — la recette suit le dataset, pas l'inverse.
+    """Recommend target steps according to dataset kind.
 
-    Character (défaut) : ~120 steps/image, bornés [1500, 3500]. On verrouille une
-    identité sur un petit set curé (~100-150 vues/image, consensus des guides
-    ai-toolkit/Z-Image) ; un 3000 fixe surentraînait les petits datasets et
-    sous-entraînait les gros. À 25 images (preset équilibré) ça redonne 3000.
-
-    Concept : échelle SOUS-LINÉAIRE (√n), bornée [2000, 12000]. Un concept
-    doit généraliser, pas mémoriser : plus le set grossit, moins chaque image doit
-    être vue. Appliquer le taux « character » (120/img) à 400 images donnerait
-    48 000 steps (overfit garanti) ; le clamp à 3500 donnait l'inverse (sous-
-    entraîné). 475·√n colle aux deux points d'ancrage du consensus : ~30-40 images
-    de concept → ~3000 steps, ~400 images → ~9500 steps (~24 vues/image).
-
-    Style : cible 50 steps/image, arrondie AU-DESSUS à la centaine, puis bornée
-    par la recette effective : Klein [1200,3000], Krea Raw [2000,3000], Krea ou
-    Z-Image Turbo [1000,2000], autres [1500,3000]. ``train_type``/``variant``
-    sont optionnels et rétrocompatibles ; fournis par les routes ils décrivent le
-    lancement en cours plutôt qu'un ancien choix persisté.
-    """
+    Character: approximately 120 steps/image, clamped to 1500-3500; 25 images yield
+    3000. This balances exposure for small curated identity datasets.
+    Concept: sublinear 475*sqrt(n), clamped to 2000-12000. Roughly 30-40 images
+    receive 3000 steps and 400 receive 9500, encouraging generalization rather
+    than applying the character rate to large datasets.
+    Style: 50 steps/image, rounded upward to hundreds and clamped by recipe:
+    Klein 1200-3000, Krea Raw 2000-3000, Krea/Z-Image Turbo 1000-2000, others
+    1500-3000. Optional train_type/variant describe the current launch rather
+    than a stale persisted choice."""
     ds = _train_context_view(
         db.session.get(FaceDataset, dataset_id), train_type, variant)
     n = FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep').count()
     if ds is not None and slider_mode_enabled(ds):
-        # Slider (mode, Beta) : la direction est définie par les prompts, pas par
-        # les images (substrat) → cible FIXE, indépendante de n. Ancrage : la
-        # recette slider d'Ostris (500 steps, « rarement au-dessus de 1000 ») ;
-        # le trainer moderne entraîne les deux polarités à chaque step.
+        # Slider direction comes from prompts; images are a substrate. Use a fixed
+        # step target independent of image count, following the upstream 500-step
+        # recipe (rarely above 1000). Both polarities train at each modern step.
         return SLIDER_DEFAULT_STEPS
     policy = _preset_steps_policy(ds) if ds is not None else None
     if policy:
@@ -7381,7 +7298,7 @@ def recommended_steps(dataset_id, train_type=None, variant=None) -> int:
     if ds is not None and fds.is_concept(ds):
         target = int(round(475 * math.sqrt(max(n, 1)), -2))
         return max(2000, min(12000, target))
-    target = int(round(n * 120, -2))  # ~120 steps/image, arrondi à la centaine
+    target = int(round(n * 120, -2))  # about 120 steps/image, rounded to hundreds
     return max(1500, min(3500, target))
 
 
@@ -7394,9 +7311,7 @@ def default_steps(ds, train_type=None, variant=None) -> int:
 
 
 def recommended_steps_info(dataset_id, train_type=None, variant=None) -> dict:
-    """Version « transparente » de recommended_steps pour l'UI : le nombre + le
-    pourquoi, afin que l'app apprenne au débutant au lieu de décider en boîte
-    noire. Ne mute rien."""
+    """Explain recommended_steps to the UI with both the target and its rationale; never mutate."""
     ds = _train_context_view(
         db.session.get(FaceDataset, dataset_id), train_type, variant)
     n = FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep').count()
@@ -7493,23 +7408,19 @@ def style_caption_quality(dataset_id) -> dict:
     return _style_caption_quality_from_rows(ds, rows)
 
 
-# --- Preflight d'entraînement (garde-fous, lecture seule) -----------------------
-# Plancher DUR / recommandé par famille. Sous le plancher → blocker ; entre les
-# deux → warning à confirmer. 10 images fixes pour tout le monde sous-estimait
-# SDXL (booru, plus gourmand en variété) et laissait passer des runs voués au
-# surapprentissage.
+# Read-only training preflight. Family-specific hard and recommended image
+# floors produce blockers and warnings respectively. A universal ten-image
+# floor underestimated SDXL's need for variety and allowed overfitting-prone runs.
 TRAIN_MIN_IMAGES = {'zimage': (12, 20), 'sdxl': (20, 30), 'krea': (15, 20), 'flux': (15, 20),
                     'flux2klein': (15, 20)}
-# (_FAMILY_LABEL used to be re-declared here, shadowing the definition near the
-#  top of the module. Merged there — see the comment on it.)
-# VRAM mesurée : Krea 2 (12B) sature un 24 GB à 1024 (cf. KREA_TRAIN_RESOLUTION). Flux
-# est un DiT de même classe (12B) → même seuil recommandé.
+# _FAMILY_LABEL is defined near the top, avoiding a shadowed duplicate.
+# Krea 2 and Flux are 12B transformers with similar recommended VRAM needs;
+# see the measured 1024-resolution Krea limits above.
 _KREA_MIN_VRAM_GB = 24
-# flux2klein est VOLONTAIREMENT absent : le check est variant-aveugle (la variante
-# se choisit au lancement, après ce preflight) et le défaut 4B tient en 16-24 Go —
-# un warning « il faut ~24 GB » serait un faux positif sur la voie locale normale.
-# Le 9B (32-48 Go) est la voie cloud ; un seuil 24 le sous-estimerait de toute façon.
-_VRAM24_FAMILIES = ('krea', 'flux')   # familles 12B qui recommandent ~24 GB à 1024
+# Klein is deliberately absent: this preflight cannot see the launch variant.
+# Its default 4B fits 16-24 GB, while a 24 GB warning would underestimate the
+# mostly-cloud 9B variant's 32-48 GB needs.
+_VRAM24_FAMILIES = ('krea', 'flux')   # 12B families recommending about 24 GB at 1024
 
 
 def _pf_automagic3(ds, lane, _machine_warn, _check):
@@ -7580,9 +7491,16 @@ def _pf_dense_mode(ds, ttype, mode, lane, slider, blockers, _check):
         # the first place an absent token, wrong token type/scope, or unaccepted
         # Krea licence is discovered.
         try:
-            from . import cloud_training as cloud
-            hf_cloud_token_status = cloud.full_transformer_token_preflight(
-                required_base_repo=official_base_repo(ds, ttype))
+            from lds_sdk import cloud_training as cloud
+            with cloud.state_change_lock:
+                if not cloud.is_available('cloud_training'):
+                    hf_cloud_token_status = {
+                        'ok': False, 'configured': False,
+                        'error': 'Install and enable Cloud training in Plugins before preparing a cloud run.',
+                    }
+                else:
+                    hf_cloud_token_status = cloud.full_transformer_token_preflight(
+                        required_base_repo=official_base_repo(ds, ttype))
             if not isinstance(hf_cloud_token_status, dict):
                 raise RuntimeError('invalid token preflight response')
         except Exception:
@@ -7609,7 +7527,7 @@ def _pf_dense_mode(ds, ttype, mode, lane, slider, blockers, _check):
             _check(
                 'hf_cloud_token', 'Hugging Face cloud token', 'fail',
                 detail, 'gf-training', bypassable=False,
-                hint=('Add HF_CLOUD_TOKEN in Settings with read access to '
+                hint=('Open Plugins → Cloud training → Settings and add HF_CLOUD_TOKEN with read access to '
                       'krea/Krea-2-Raw and repository write access. A '
                       'fine-grained token is recommended; global write is '
                       'accepted with a warning.'),
@@ -7620,7 +7538,7 @@ def _pf_dense_mode(ds, ttype, mode, lane, slider, blockers, _check):
 def _pf_image_floor(n, slider, ttype, label, blockers, warnings, _check):
     """1) family image floor / recommendation. Returns (floor, reco) — the
     payload echoes both."""
-    # 1) minimum d'images par famille (slider : plancher substrat réduit)
+    # 1) Family image floor; sliders use a smaller substrate requirement.
     floor, reco = (TRAIN_MIN_IMAGES_SLIDER if slider
                    else TRAIN_MIN_IMAGES.get(ttype, (12, 20)))
     if n < floor:
@@ -7660,8 +7578,8 @@ def _pf_image_floor(n, slider, ttype, label, blockers, warnings, _check):
 
 def _pf_slider_prompts(ds, slider, blockers, _check):
     """1bis) slider prompt pair — THE slider prerequisite."""
-    # 1bis) SLIDER : la paire de prompts est LE prérequis (assert_trainable refuse
-    # le launch sans elle) + rappel honnête que les captions ne s'entraînent pas.
+    # 1b) Sliders require the prompt pair; assert_trainable refuses to launch
+    # without it. Remind users that captions do not train in this mode.
     if slider:
         sc = _slider_settings(ds)
         pos = (sc.get('positive') or '').strip()
@@ -7685,10 +7603,9 @@ def _pf_slider_prompts(ds, slider, blockers, _check):
 
 def _pf_composition(ds, kept, n, concept, slider, warnings, _check):
     """2) framing balance — a CHARACTER heuristic, skipped for concept/slider."""
-    # 2) équilibre de composition — heuristique PERSONNAGE (viser un mix face/bust/body/
-    # back pour rendre un visage à toutes les distances). Sans objet pour un CONCEPT (il
-    # s'apprend sur les cadrages tels quels), et un dataset non classé (framing=None) y
-    # déclencherait un faux « tout en gros plan visage » → on saute pour les concepts.
+    # 2) Character composition balance favors varied face/bust/body/back views.
+    # Concepts learn their existing framing; skip this heuristic so unclassified
+    # images cannot trigger a false all-close-up warning.
     if n and not concept and not slider:
         comp = {'face': 0, 'bust': 0, 'body': 0, 'back': 0}
         for r in kept:
@@ -7715,9 +7632,9 @@ def _pf_composition(ds, kept, n, concept, slider, warnings, _check):
 
 def _pf_captioned(kept, n, slider, style, warnings, _check):
     """3bis) every kept image captioned — a warn, the launch modal owns refusal."""
-    # 3bis) toutes les gardées ont une caption — WARN, plus un mur : le launch
-    # demande un confirm (« train anyway ») au lieu de refuser (UNCAPTIONED:
-    # dans assert_trainable). Les captions restent fortement recommandées.
+    # Missing captions produce a warning and explicit "Train anyway" confirmation
+    # (UNCAPTIONED in assert_trainable), not an unconditional wall. Captions remain
+    # strongly recommended.
     uncaptioned = sum(1 for r in kept if not (r.caption or '').strip())
     if n and not slider:
         if uncaptioned:
@@ -7758,7 +7675,7 @@ def _pf_dual_captions(ds, ttype, label, slider, warnings, _check):
 def _pf_caption_quality(ds, kept, style, slider, warnings, _check):
     """3) suspect captions (short / duplicated). Returns `caps` — the identity-
     leak section's ok-row condition reads it."""
-    # 3) captions suspectes (trop courtes / dupliquées) — sans objet en slider mode
+    # 3) Suspiciously short/duplicate captions; irrelevant in slider mode.
     caps = [(r.caption or '').strip() for r in kept if (r.caption or '').strip()]
     if caps and not slider:
         _cap_ok = True
@@ -7794,12 +7711,9 @@ def _pf_identity_leaks(ds, kept, caps, concept, slider, warnings, _check):
     """4) identity leaks in captions — keeps the OFFENDING images for the UI.
     Returns leak_images."""
     from .face_variations import caption_has_identity_leak
-    # 4) fuite d'identité — on RETIENT les images fautives (pas juste le compte) pour
-    # que l'UI liste lesquelles au moment du preflight, éditables sur place.
-    # CONCEPT : décrire l'identité (visage/cheveux/corps) est VOULU — c'est le concept,
-    # pas le visage, qui se lie au trigger → la « fuite d'identité » n'a aucun sens ici.
-    # On saute entièrement cette dimension (comme le badge caption_leak du payload), sinon
-    # CHAQUE caption concept déclenche un faux avertissement au preflight.
+    # 4) Retain identity-leak image IDs for inline preflight editing, not only a
+    # count. Skip this for concepts: describing faces/hair/bodies is intentional
+    # when the trigger represents the concept rather than a specific identity.
     body = fds.is_body_fidelity(ds)
     appearance = (fds.caption_options(ds).get('appearance') or None)
     leak_images = [] if (concept or slider) else [
@@ -7822,13 +7736,13 @@ def _pf_identity_leaks(ds, kept, caps, concept, slider, warnings, _check):
 
 def _pf_duplicates(kept, n, slider, warnings, _check):
     """5) near-duplicate pairs among kept (pairwise dHash). Returns dup_pairs."""
-    # 5) quasi-doublons parmi les kept (dHash pairwise, n<=~60 -> négligeable). On
-    # retient les PAIRES (leurs deux images) pour que l'UI montre lesquelles rejeter.
-    # Slider : sans objet (le substrat n'est pas mémorisé) → on saute le scan.
+    # 5) Pairwise dHash finds near-duplicates among kept images (cheap around 60).
+    # Retain both images for the UI. Skip sliders because their substrate is not
+    # learned as an identity.
     dup_pairs = []
     if not slider:
         try:
-            hp = []  # [(row, dhash)] pour les kept lisibles sur disque
+            hp = []  # [(row, dhash)] for readable kept images
             for r in kept:
                 p = fds._img_path(r)
                 if p and os.path.exists(p):
@@ -7854,7 +7768,7 @@ def _pf_duplicates(kept, n, slider, warnings, _check):
 
 def _pf_triage(rows, warnings, _check):
     """11) untriaged images — they will NOT train."""
-    # 11) images encore en attente de tri (elles ne s'entraînent PAS)
+    # 11) Images awaiting review are not included in training.
     untriaged = sum(1 for r in rows if r.status == 'pending' and r.filename)
     if untriaged:
         warnings.append(f'{untriaged} image(s) still await triage (✓/✕) — they will NOT '
@@ -7913,7 +7827,7 @@ def _pf_memory_savers(ds, ttype, label, lane, warnings, _check):
 
 def _pf_vram(ds, ttype, label, _machine_warn, _check):
     """7) VRAM floor for the 24 GB families (machine scope, never blocking)."""
-    # 7) VRAM (Krea 2 mesuré à 24 GB ; None = inconnu, jamais bloquant)
+    # 7) VRAM: Krea measured at 24 GB; unknown readings never block.
     try:
         from .. import capabilities
         vram = capabilities.gpu_vram_gb()
@@ -8041,38 +7955,15 @@ def _pf_face_mask(ds, slider, warnings, _check):
 def _pf_person_mask(ds, masked, slider, concept, style, warnings, _check):
     """9bis) masked training set but rembg absent (issue #24: the probe's
     timeout collapses to False on a slow machine — warn, never block)."""
-    # 9bis) Person masking set to ON, but rembg isn't installed.
-    # Retenu de la premiere ecriture de cette ligne (issue #24) : la sonde derriere
-    # rembg est un import en sous-processus dont le TIMEOUT s'effondre en False
-    # (capabilities._cached_import), et un `import rembg` a froid a ete MESURE a
-    # ~20 s. Un refus dur transformerait donc une machine lente en machine qui ne
-    # peut plus lancer du tout : c'est la seconde raison, independante, pour
-    # laquelle cette ligne avertit et ne bloque jamais.
-    #
-    # THE reason `masked` became a stored dataset setting. While it lived in the
-    # browser's localStorage the server only learned it at launch, so this badge
-    # could not say what it says now: that the dataset is set to train masked and
-    # will not, because the mask backend is missing. Users found out from a flag
-    # on the progress view, GPU-hours in.
-    #
-    # Same shape as the face-mask row above and for the same reasons: rembg is an
-    # optional ML extra, so its absence is a NORMAL state — a warning, never a
-    # blocker (a run without masks is a valid run). person_masking_enabled()
-    # already returns False for concept/style and slider mode, where masks are
-    # refused BY DESIGN and installing rembg would change nothing, so those stay
-    # silent instead of emitting pure noise.
-    # resolve_masked, pas person_masking_enabled : un appelant qui EXPRIME une
-    # intention explicite (le panneau qui rejoue le drapeau gele d'un run, une
-    # relance cloud) doit etre cru — avertir « le dataset est en masque » a qui
-    # vient de dire « lance sans masque » serait un contresens. Sans intention
-    # (le badge de preparation, qui n'en a pas), on lit le reglage du dataset :
-    # c'est exactement ce que ce chantier rend possible.
-    # …ET les gardes de CONCEPTION, toujours. Une intention explicite decide de
-    # l'OPT-IN de l'utilisateur, jamais des cas ou le masque est refuse par
-    # construction : sur un concept/style le masque effacerait ce qu'on enseigne,
-    # et en mode slider la perte guidee ne lit jamais le masque. Sans cette
-    # seconde moitie, un `masked=True` explicite sur un concept enverrait
-    # installer rembg pour un run qui ne s'en servira jamais.
+    # 9b) Person masking requested without rembg: warn, never block. The import
+    # probe can time out on slow machines (a cold rembg import measured about
+    # 20 seconds), so a hard refusal would reject otherwise valid runs.
+    # Read the stored dataset setting unless the caller explicitly replays a run's
+    # masked flag. resolve_masked honors that intent while retaining design gates:
+    # concept/style masks would erase the learned content, and slider loss ignores
+    # masks. Do not suggest installing rembg for runs that cannot use it.
+    # The stored setting lets readiness explain missing masks before launch rather
+    # than revealing them only after GPU work has begun.
     if resolve_masked(ds, masked) and not slider and not concept and not style:
         try:
             from . import person_mask
@@ -8097,34 +7988,16 @@ def _pf_person_mask(ds, masked, slider, concept, style, warnings, _check):
 def training_preflight(user_id, dataset_id, train_type=None, variant=None,
                        lane=None, masked=None, training_mode=None,
                        base_model=_PERSISTED) -> dict:
-    """Pre-launch sanity report: {'blockers': [...], 'warnings': [...]}. Blockers
-    stop the launch (too few images for the family); warnings ask for one explicit
-    confirm in the UI. Pure reads — never mutates, never raises on probe failures
-    (an unknown GPU must not block a run).
+    """Return read-only preflight blockers, warnings, structured checks and verdict.
 
-    Émet AUSSI `checks` (liste structurée {id,label,status,detail,target}) +
-    `verdict` ('ready'|'warnings'|'blocked') pour la pastille de préparation du
-    workspace — construits DANS LA MÊME PASSE que blockers/warnings (une seule
-    source de vérité, aucune règle dupliquée). `target` = id de section du
-    workspace (gf-generate/gf-images) où corriger — None quand rien à cibler.
-    NB : le check 'captioned' (images gardées sans caption) est un fail dans
-    `checks` (assert_trainable refusera le launch) mais volontairement PAS un
-    blocker ici — le flux modal existant (launch → erreur explicite) est conservé.
-
-    ``lane`` ('local' default, or 'cloud') says WHERE the run will execute. Every
-    row carries a ``scope``: 'dataset' (a property of the images/captions, true
-    wherever the job runs) or 'machine' (a read of THIS box — its GPU, its
-    ai-toolkit venv). A cloud lane drops the 'machine' rows and their warning
-    lines: that hardware will not run the job, and on a machine with no local
-    training environment at all they would fire on every single cloud launch —
-    which is exactly how users learn to click through warnings without reading
-    them. Default 'local' keeps the historical payload byte-for-byte.
-
-    ``masked`` says whether the caller intends MASKED training (person masks). It
-    is a client-side preference the server cannot read, so it is passed in; None
-    (the default) means "not stated" and the person-mask row is omitted entirely —
-    warning about a mask nobody asked for is exactly the noise that teaches people
-    to click through preflights."""
+    Blockers stop launch; warnings request explicit confirmation. Checks contain
+    id/label/status/detail/target and share the same evaluation pass. Targets name
+    workspace sections or None. Missing captions fail the structured check but use
+    the existing launch-confirmation path rather than becoming a blocker here.
+    Each check has dataset or machine scope. Cloud launches omit local-machine
+    checks because this machine's GPU and virtual environment will not run the job.
+    Unknown probes never block. masked conveys the caller's person-masking intent;
+    its default is resolved by the masking helper."""
     stored_ds = fds.get_dataset(user_id, dataset_id)
     if not stored_ds:
         raise ValueError('dataset not found')
@@ -8168,16 +8041,19 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     kept = [r for r in rows if r.status == 'keep' and r.filename]
     n = len(kept)
     _pf_automagic3(ds, lane, _machine_warn, _check)
-    # CONCEPT / STYLE : plusieurs dimensions ci-dessous (équilibre de composition,
-    # fuite d'identité) sont des heuristiques de LoRA PERSONNAGE sans objet quand
-    # l'invariant du set n'est pas une identité — on les saute pour ne pas générer
-    # de faux avertissements.
+    if ttype == 'qwenimage21' and (lane or 'local') == 'local':
+        try:
+            _assert_qwenimage21_ready(ttype)
+        except ValueError as exc:
+            blockers.append(str(exc))
+            _check('qwenimage21_arch', 'Qwen-Image 2.1 trainer', 'fail', str(exc),
+                   scope='machine')
+    # Skip character-only composition and identity-leak heuristics for concept/style datasets to avoid false warnings.
     concept = fds.is_conceptual(ds)
     style = fds.is_style(ds)
-    # SLIDER mode (Beta) : les images ne sont qu'un SUBSTRAT de débruitage et les
-    # captions sont ignorées par la loss slider → plancher d'images réduit, gardes
-    # caption/composition/identité sans objet ; la vraie exigence est la paire de
-    # prompts qui définit la direction du slider.
+    # Slider images are only a denoising substrate and slider loss ignores captions.
+    # Use a smaller image floor, skip caption/composition/identity checks, and
+    # require the prompt pair defining the direction.
     slider = slider_mode_enabled(ds)
 
     hf_cloud_token_status = _pf_dense_mode(ds, ttype, mode, lane, slider,
@@ -8225,27 +8101,24 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         checks = [c for c in checks if c.get('scope') != 'machine']
         warnings = [w for i, w in enumerate(warnings) if i not in machine_warning_ix]
 
-    # Verdict agrégé pour la pastille : un fail = 🔴, sinon un warn = 🟡, sinon 🟢.
+    # Aggregate readiness: any failure is red, otherwise warnings are yellow, else green.
     statuses = {c['status'] for c in checks}
     verdict = ('blocked' if 'fail' in statuses
                else 'warnings' if 'warn' in statuses else 'ready')
 
-    # « Continue anyway » : proposé UNIQUEMENT quand il y a ≥1 blocker ET que TOUS
-    # sont contournables (garde-fous qualité). Un seul blocker physique (0 image,
-    # paire de prompts slider absente) → l'option disparaît et le launch reste refusé
-    # même avec l'ack. override_hint = la ligne de risque honnête à afficher sous la case.
+    # Offer "Continue anyway" only when every blocker is an overridable quality
+    # guard. Physical requirements, such as at least one image or a slider prompt
+    # pair, remain mandatory. override_hint explains the acknowledged risk.
     fail_checks = [c for c in checks if c['status'] == 'fail']
     can_override = bool(fail_checks) and all(c.get('bypassable') for c in fail_checks)
     override_hint = ' '.join(c['hint'] for c in fail_checks
                              if c.get('hint')) if can_override else ''
 
     return {'blockers': blockers, 'warnings': warnings,
-            # Détail « lesquelles » pour l'UI : images dont la caption fuit, et paires
-            # quasi-doublons — le message reste agrégé, mais on peut drill-down + agir.
+            # Retain leaking-image IDs and near-duplicate pairs so the UI can offer direct fixes.
             'leak_images': leak_images, 'dup_pairs': dup_pairs,
             'checks': checks, 'verdict': verdict,
-            # can_override : la case « Continue anyway » n'est offerte que quand c'est True
-            # (miroir exact du garde serveur assert_trainable/allow_not_ready).
+            # can_override mirrors assert_trainable/allow_not_ready and controls the "Continue anyway" option.
             'can_override': can_override, 'override_hint': override_hint,
             # Echoed so the modal can say WHERE this run is headed (and, implicitly,
             # why no GPU-memory row is listed) without re-deriving it client-side.
@@ -8255,10 +8128,8 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
             'kept': n, 'floor': floor, 'recommended': reco}
 
 
-# --- Garde-fou espace disque ---------------------------------------------------
-# Un run plein (10 checkpoints ~0,3-2 Go + latents/samples) et une conversion
-# diffusers (~12 Go) qui crashent à 90 % pour cause de disque plein laissent des
-# artefacts corrompus. On refuse AVANT, avec un message actionnable.
+# Disk-space guard: late failures can corrupt checkpoints or large diffusers
+# conversions. Refuse before starting and explain how to resolve the shortage.
 MIN_FREE_GB_TRAIN = 10
 MIN_FREE_GB_CONVERT = 15
 
@@ -8289,7 +8160,7 @@ def assert_free_disk(path, min_gb, what) -> None:
 
 
 def _log_tail(path: str, n: int = 30) -> str:
-    """Dernières `n` lignes d'un fichier log (pour remonter une erreur ai-toolkit)."""
+    """Return the last n log lines to explain an ai-toolkit failure."""
     try:
         with open(path, encoding='utf-8', errors='replace') as fh:
             return ''.join(fh.readlines()[-n:]).strip()
@@ -8438,11 +8309,11 @@ def _mark_exact_resume_launching(journal_path, run_token) -> None:
 
 def _watch_training(
         app, proc, log_path, dataset_id, exact_resume_transaction=None) -> None:
-    """Thread daemon : attend la fin du process ai-toolkit puis fait avancer la
-    file (libère ComfyUI / lance le suivant) DÈS la fin, sans dépendre du polling
-    client. Sur un crash (rc≠0), remonte la fin du log. process_training_queue()
-    reste le filet de secours si Flask redémarre (le watcher meurt, le flag est
-    rattrapé au prochain poll ou à la récupération de démarrage)."""
+    """Wait for ai-toolkit in a daemon, then immediately advance the queue.
+
+    Free ComfyUI or launch the next job without client polling; surface log tails
+    for nonzero exits. Queue polling/startup recovery remains the fallback if
+    Flask restarts and this watcher disappears."""
     try:
         if exact_resume_transaction and callable(getattr(proc, 'poll', None)):
             while True:
@@ -8507,26 +8378,25 @@ def _watch_training(
                         'headline': 'Full-state resume did not start',
                         'text': f'{rollback_message}\n\nBridge: {bridge_reason}',
                     }
-                logger.error("Entraînement ai-toolkit dataset %s terminé en ERREUR (rc=%s). "
-                             "Cause probable :\n%s", dataset_id, rc,
+                logger.error("ai-toolkit training for dataset %s finished with an ERROR (rc=%s). "
+                             "Likely cause:\n%s", dataset_id, rc,
                              payload['excerpt']['text'] or payload['log_tail'])
-                # Surface l'erreur à l'UI (sinon un crash = juste « terminé » silencieux).
+                # Surface crashes to the UI instead of silently reporting completion.
                 queue_manager._set_system_state('training_error', payload, ttl_seconds=3600)
             else:
-                logger.info("Entraînement ai-toolkit dataset %s terminé (rc=%s).", dataset_id, rc)
-            process_training_queue()  # libère le GPU / enchaîne la file immédiatement
+                logger.info("ai-toolkit training for dataset %s finished (rc=%s).", dataset_id, rc)
+            process_training_queue()  # free the GPU or launch the next job immediately
     except Exception as e:
-        logger.warning("watcher training : post-traitement échoué : %s", e)
+        logger.warning("training watcher: post-processing failed: %s", e)
 
 
 def archive_previous_run(ds) -> str | None:
-    """Écarte le dossier du run existant (rename en `*_archived_<horodatage>`,
-    jamais de suppression) pour que le prochain lancement reparte de ZÉRO au lieu
-    de l'auto-resume ai-toolkit — le cas « j'ai remanié le dataset, je veux un
-    LoRA neuf ». Les checkpoints archivés restent sur disque (récupérables à la
-    main) et tombent avec le dataset : le nom garde le préfixe `lora_<trigger>`
-    donc purge_training_artifacts les balaie aussi. Les copies déjà importées
-    dans ComfyUI (loras/<famille>) ne sont pas touchées. None si aucun run."""
+    """Archive an existing run by renaming it to *_archived_<timestamp>.
+
+    Do not delete checkpoints: a fresh launch starts from zero while archived files
+    remain recoverable. Preserve the lora_<trigger> prefix so dataset deletion also
+    cleans archives. Existing ComfyUI imports remain untouched. Return None if no
+    run exists."""
     run_dir = _run_root(ds)
     if not run_dir.is_dir():
         return None
@@ -8534,7 +8404,7 @@ def archive_previous_run(ds) -> str | None:
     try:
         os.rename(run_dir, dest)
     except OSError as e:
-        # Dossier verrouillé (ex. antivirus, explorateur ouvert) → message actionnable.
+        # Explain locked-folder failures, e.g. from antivirus or an open file explorer.
         raise ValueError(f'could not archive the previous run ({e}) - close anything '
                          f'using "{run_dir}" and retry')
     logger.info('fresh training: previous run archived -> %s', dest)
@@ -8584,12 +8454,11 @@ def _lt_refuse_or_resolve(user_id, dataset_id, train_type, variant,
     if not ds:
         raise ValueError('dataset not found')
     _assert_local_training_mode(ds, training_mode)
-    # Disque plein à mi-run = checkpoints corrompus ; refuser AVANT d'exporter.
+    # Reject insufficient disk space before exporting to avoid corrupt mid-run checkpoints.
     assert_free_disk(_output_dir(), MIN_FREE_GB_TRAIN, 'a training run')
-    # Garde-fou anti double-lancement : un entraînement DÉJÀ vivant (flag levé +
-    # pid en vie) → refuser. Deux process sur le même GPU/dossier corrompent
-    # l'optimizer partagé (incident Test/Test 2). Un pid mort avec flag encore
-    # levé (avance de file) passe : on ne bloque que sur un process réellement vivant.
+    # Reject a second live training process: sharing a GPU/run directory can
+    # corrupt optimizer state. A stale flag with a dead PID is allowed; only a
+    # confirmed live process blocks launch.
     if (queue_manager._get_system_state('training_in_progress', False)
             and not _training_process_is_definitely_dead(
                 queue_manager._get_system_state('training_pid', None))):
@@ -8605,14 +8474,13 @@ def _lt_refuse_or_resolve(user_id, dataset_id, train_type, variant,
                          allow_caption_quality=allow_caption_quality,
                          allow_not_ready=allow_not_ready,
                          variant=variant)
-    # Base d'entraînement : None/'' = officielle ; sinon un merge ComfyUI qui DOIT
-    # avoir été converti en diffusers d'abord (gate). On persiste le choix sur le
-    # dataset → _run_name/_run_dir/list_checkpoints deviennent base-aware (run isolé).
+    # An empty base selects the official model; a ComfyUI merge requires prior
+    # diffusers conversion. Persist the choice so run paths and checkpoint lists
+    # isolate the selected base.
     base_model = (base_model or '').strip() or None
     variant = (variant or '').strip().lower()
-    # La famille de CE lancement vient du param train_type s'il est donné, sinon du
-    # dataset — c'est elle qui fixe l'enum de variantes valide (flux2klein : 4b/9b ;
-    # les autres : turbo/base/deturbo) et le défaut (Krea → Raw, flux2klein → 4B).
+    # Resolve this launch's family from train_type or the dataset, then apply
+    # its valid variant set and default (Krea Raw, Klein 4B).
     launch_fam = _train_type(ds, train_type)
     recipe = None
     if launch_fam == 'zimage':
@@ -8626,24 +8494,21 @@ def _lt_refuse_or_resolve(user_id, dataset_id, train_type, variant,
     launch_view = _train_context_view(ds, launch_fam, variant)
     if train_type is not None:
         ds.train_type = train_type
-    # Conversion diffusers : UNIQUEMENT pour Z-Image (SDXL = single-file direct,
-    # pas de conversion → on ne bloque pas sur is_converted).
+    # Only Z-Image requires diffusers conversion; SDXL loads a single file directly.
     if base_model and _train_type(ds) == 'zimage':
         from .zimage_convert import is_converted
         if not is_converted(base_model):
             raise ValueError('custom base not converted - prepare it first (button "Convert base")')
-    # SDXL : la base vient brute du body → whitelist serveur (anti path-traversal,
-    # comme prepare-base le fait pour Z-Image). Refus immédiat si inconnue. Un
-    # chemin ABSOLU est le champ « Custom weights… » (validé par le preflight
-    # ci-dessous) → il contourne délibérément la whitelist de basenames.
+    # Allowlist ordinary SDXL basenames to prevent traversal. Absolute paths are
+    # explicit Custom weights selections, validated by the preflight below rather
+    # than this basename allowlist.
     if (base_model and _train_type(ds) == 'sdxl' and not _is_custom_weights(base_model)
             and base_model not in _sdxl_base_choices()):
         raise ValueError('unknown SDXL checkpoint')
-    # --- Custom base/vae/te : whitelist STRICTE par famille + preflight avant spawn.
-    # VAE/TE ne sont honorés QUE par SDXL (ai-toolkit) → refuser explicitement pour
-    # toute autre famille (jamais d'ignore silencieux). `_PERSISTED` = « non fourni
-    # par l'appelant » → on garde la valeur persistée (continue/queue) ; une valeur
-    # explicite (même vide) remplace. Une famille non-SDXL n'emporte jamais de VAE/TE.
+    # Validate custom weights by family before spawning. Custom VAE/TE are
+    # SDXL-only; reject them explicitly elsewhere. _PERSISTED retains stored
+    # values for continue/queue, while any explicit value, even empty, replaces
+    # it. Non-SDXL launches never inherit custom VAE/TE.
     _prov_vae = vae_path is not _PERSISTED and (vae_path or '').strip()
     _prov_te = te_path is not _PERSISTED and (te_path or '').strip()
     if launch_fam not in VAE_TE_OVERRIDE_FAMILIES:
@@ -8655,33 +8520,31 @@ def _lt_refuse_or_resolve(user_id, dataset_id, train_type, variant,
                    else ((vae_path or '').strip() or None))
         eff_te = (ds.train_te_path if te_path is _PERSISTED
                   else ((te_path or '').strip() or None))
-    # Preflight (fichier existe, header safetensors lisible, sniff d'arch) — un
-    # sniff non concluant lève un refus CONFIRMABLE (_UNVERIFIED_MARKER), levé par
-    # `allow_unverified_weights` exactement comme UNCAPTIONED.
+    # Preflight existence, readable safetensors headers and architecture.
+    # An inconclusive sniff requires explicit allow_unverified_weights
+    # confirmation through _UNVERIFIED_MARKER, like UNCAPTIONED.
     preflight_custom_paths(launch_fam, weights=base_model, vae_path=eff_vae,
                            te_path=eff_te,
                            allow_unverified_weights=allow_unverified_weights)
     assert_zimage_custom_recipe_confirmed(
         launch_fam, base_model, variant,
         allow_unverified_weights=allow_unverified_weights)
-    # Krea 2 : refuser TÔT si l'ai-toolkit installé n'a pas l'arch krea2 (sinon
-    # fallback silencieux vers le loader SD legacy → mauvais modèle, plantage confus).
+    # Require the krea2 extension before launch to prevent silent legacy-SD fallback.
     if _train_type(ds) == 'krea' and not _aitoolkit_supports_krea():
         raise ValueError(
             "ai-toolkit doesn't support Krea 2 yet (krea2 arch missing) - "
             "update it (git pull) before training a Krea LoRA.")
-    # FLUX.2 Klein : même garde que Krea (archs d'EXTENSION, fallback SD silencieux
-    # sur un ai-toolkit pas à jour → LoRA corrompu, cf. _aitoolkit_supports_flux2klein).
+    # Apply the same extension-presence guard to Klein to prevent incompatible legacy-SD loading.
     if _train_type(ds) == 'flux2klein' and not _aitoolkit_supports_flux2klein():
         raise ValueError(
             "ai-toolkit doesn't support FLUX.2 Klein yet (flux2_klein arch missing) - "
             "update it (git pull) before training a FLUX.2 Klein LoRA.")
-    # Anima : même garde (arch d'EXTENSION, PR #860 mergée le 2026-07-15) — un
-    # ai-toolkit antérieur retombe en silence sur le loader SD legacy → LoRA corrompu.
+    # Apply the same guard to Anima, introduced in ai-toolkit PR #860.
     if _train_type(ds) == 'anima' and not _aitoolkit_supports_anima():
         raise ValueError(
             "ai-toolkit doesn't support Anima yet (anima arch missing) - "
             "update it (git pull) before training an Anima LoRA.")
+    _assert_qwenimage21_ready(launch_fam)
     if (_optimizer_eff(launch_view) == 'automagic3'
             and not _aitoolkit_supports_automagic3()):
         raise ValueError(
@@ -8694,9 +8557,8 @@ def _lt_refuse_or_resolve(user_id, dataset_id, train_type, variant,
         raise ValueError(
             "ai-toolkit doesn't ship the concept_slider trainer - "
             "update it (git pull) before training a Slider LoRA.")
-    # Garde-fou anti-collision de dossier : un AUTRE dataset du user avec le même
-    # (trigger, base, recette) écrirait dans le même run → LoRA mélangés. Refuser AVANT de
-    # persister/lancer, en nommant le conflit pour que l'utilisateur change un trigger.
+    # Reject another dataset with the same trigger/base/recipe run folder before
+    # persisting or launching. Name the conflict so the user can change a trigger.
     clash = find_run_collision(user_id, dataset_id, base_model=base_model,
                                variant=variant)
     if clash:
@@ -8731,20 +8593,18 @@ def _lt_prepare_job(user_id, dataset_id, ds, launch_fam, variant, base_model,
             'full-state resume is unavailable for this ai-toolkit installation'
             + (f': {reasons}' if reasons else
                ' because its revision/lifecycle cannot be verified'))
-    # Repartir de zéro : écarter le run existant APRÈS la persistance base/variante
-    # (_run_name lit les valeurs persistées → on archive bien LE run qui serait repris).
-    # Serialise the first live-lane mutation with exact continuation.  An exact
-    # resume holds this same re-entrant lock from archive/seed through Popen, so
-    # a concurrent fresh launch cannot move or replace its newly seeded lane.
+    # Archive the run after persisting base/variant, so _run_name identifies the
+    # correct continuation target. Hold the same reentrant lock as exact resume
+    # from archive/seed through Popen, preventing a concurrent fresh launch from
+    # moving or replacing a newly seeded lane.
     with _queue_lock:
         archived = archive_previous_run(ds) if fresh else None
-    # Steps adaptatifs si non imposés ; sinon override borné (jamais < 500).
+    # Use adaptive steps unless supplied; clamp an explicit target to at least 500.
     steps = (default_steps(ds, train_type=launch_fam, variant=variant)
              if steps is None else max(500, int(steps)))
-    # masked : masques personne exportés à côté du dataset → la job-config passe
-    # en masked training (fond 10 %). OFF ou indispo = historique. `None` (the
-    # default, and what every fresh launch now sends) = read the dataset's stored
-    # setting; an explicit bool is a per-RUN override replayed by ▶ Continue.
+    # Exported person masks enable training with a 10% background weight.
+    # None resolves the dataset setting; an explicit boolean is a per-run override
+    # replayed by Continue. Missing/disabled masks preserve unmasked behavior.
     masked = resolve_masked(ds, masked)
     _bridge_model_pins = None
     if _bridge_candidate:
@@ -8795,8 +8655,8 @@ def _lt_prepare_job(user_id, dataset_id, ds, launch_fam, variant, base_model,
         ds, dataset_folder, steps=steps,
         exact_state_bridge=_bridge_candidate,
         job_config=_job_config)
-    # Environnement du sous-process d'entraînement (HF_HOME + auth Hugging Face,
-    # cf. training_subprocess_env). Jamais shell=True ; args en liste.
+    # Build the training subprocess environment with HF_HOME and Hugging Face
+    # authentication. Use an argument list, never shell=True.
     env = training_subprocess_env()
     return (archived, steps, masked, _bridge_probe, _bridge_candidate,
             _bridge_model_pins, dataset_folder, _prepared, _job_config,
@@ -9124,18 +8984,13 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                     _state_resume_archived=None,
                     _state_model_pins=None,
                     _state_resume_journal=None) -> dict:
-    """Export + config + pause ComfyUI (flag) + lance l'entraînement ai-toolkit
-    en CLI headless (`run.py <config>`).
+    """Export data, build config, pause ComfyUI and run ai-toolkit headlessly.
 
-    ``steps`` = step cible (None → calculé par recommended_steps selon le nombre
-    d'images). ai-toolkit reprend AUTOMATIQUEMENT depuis le dernier checkpoint
-    présent dans le training_folder (get_latest_save_path), donc relancer avec un
-    steps > dernier_step continue l'entraînement. ``fresh=True`` écarte d'abord le
-    run existant (archive_previous_run) → repart de zéro sur le dataset actuel.
-
-    Retourne {pid, config_path, log_path}. Raises RuntimeError if ai-toolkit isn't
-    installed/configured (route maps this to 409, not 400 - it's a backend
-    availability problem, not a bad request)."""
+    steps is an absolute target, or None for image-count-based recommendations.
+    ai-toolkit auto-resumes the latest checkpoint in training_folder, so a higher
+    target continues training. fresh=True archives the existing run first.
+    Return {pid, config_path, log_path}. Missing/unconfigured ai-toolkit raises
+    RuntimeError, mapped to 409 because it is a backend-availability issue."""
     (ds, base_model, variant, launch_fam, recipe, launch_view,
      eff_vae, eff_te) = _lt_refuse_or_resolve(
         user_id, dataset_id, train_type, variant, base_model, check_captions,
@@ -9174,8 +9029,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         base_model, recipe, allow_not_ready, parent_record_id, resumed_from,
         run_token, log_path, config_path, env, _prepared,
         _state_resume_journal)
-    # Watcher event-driven : libère ComfyUI / enchaîne la file dès la fin du
-    # process (le poll de /train/status reste le filet de secours).
+    # The watcher advances the queue immediately on process exit; /train/status polling remains a fallback.
     _exact_resume_transaction = None
     if (_state_restore_bundle and _state_resume_training_folder
             and _state_resume_archived):
@@ -9195,7 +9049,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                                int(dataset_id), _exact_resume_transaction),
                          daemon=True).start()
     except Exception as e:
-        logger.warning("watcher training non démarré : %s", e)
+        logger.warning("training watcher not started: %s", e)
     return {'started': True, 'pid': proc.pid, 'config_path': config_path, 'steps': steps,
             'dataset_folder': dataset_folder, 'log_path': log_path,
             'fresh': bool(fresh), 'archived_run': archived,
@@ -9654,6 +9508,27 @@ def _seed_continuation_from(user_id, dataset_id, base, family, variant,
     return dest
 
 
+def _expected_resume_record(chosen, expected_record_id, dataset_id, family, base, variant,
+                            *, user_id=None):
+    """A selected history node must own the exact local checkpoint resumed."""
+    if expected_record_id is None:
+        return
+    from . import checkpoint_registry
+    record = checkpoint_registry.record_by_id(expected_record_id)
+    if record is not None and record.source == 'cloud' and user_id is not None:
+        from .cloud_local_continuation import resolve_cloud_checkpoint
+        verified = resolve_cloud_checkpoint(user_id, dataset_id, family, base, variant,
+                                            expected_record_id, chosen.get('step'))
+        if verified is not None and all(chosen.get(key) == verified[key]
+                for key in ('record_id', 'path', '_source_stamp')):
+            return
+    if (chosen.get('record_id') != expected_record_id or record is None
+            or record.dataset_id != dataset_id or record.source != 'local'
+            or record.family != family or (record.base_model or '') != (base or '')
+            or (record.variant or '') != (variant or '')):
+        raise ValueError('The selected checkpoint no longer belongs to this run. Refresh its checkpoints before continuing.')
+
+
 def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                       base_model=_PERSISTED, variant=None, train_type=None,
                       masked=None, allow_unverified_weights=False,
@@ -9661,25 +9536,20 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                       allow_caption_quality=False, from_step=None, overrides=None,
                       resume_mode='weights_only', state_bundle_id=None,
                       allow_not_ready=False, _allow_dead_predecessor=False,
-                      training_mode='lora') -> dict:
-    """Reprend l'entraînement d'une base et vise ``step_de_reprise + extra_steps``.
-    ai-toolkit auto-resume depuis le training_folder ; il faut donc qu'au moins un
-    checkpoint existe POUR CETTE BASE.
+                      training_mode='lora', expected_record_id=None) -> dict:
+    """Continue the selected base to resume_step + extra_steps.
 
-    ``from_step`` absent → reprise depuis le DERNIER checkpoint (comportement
-    historique, relance en place). Fourni → reprise depuis CE step précis ; s'il est
-    INFÉRIEUR au dernier, on repart d'un checkpoint plus ancien SANS rien détruire :
-    le run est archivé de côté et seul le checkpoint choisi est semé dans un dossier
-    propre (_seed_continuation_from). ``overrides`` = sous-ensemble sûr de réglages
-    (cadence de sauvegarde/preview, prompts de preview) appliqué avant la reprise ;
-    tout autre réglage est refusé (il romprait la compatibilité des poids).
-
-    `base_model` absent → base persistée du dataset (ex. file d'attente). Fourni
-    (sélection UI) → on reprend le run DE CETTE base précise : sinon on proposait
-    « Continuer » sur une base sans run et on relançait en fait l'ancienne base."""
+    Require a checkpoint for that base. Without from_step, resume its latest
+    checkpoint in place. An explicit older step archives the current run and seeds
+    only the selected checkpoint into a clean folder, preserving existing results.
+    Accept only safe continuation overrides; reject settings that invalidate weight
+    compatibility. An omitted base_model uses the persisted base, while an explicit
+    UI selection targets that exact run rather than silently reusing another."""
     # Validate the caller-controlled restore contract before interpreter probes,
     # dataset reads, archives or settings writes.
     resume_mode = _validate_resume_contract(resume_mode, state_bundle_id)
+    if expected_record_id is not None and (type(expected_record_id) is not int or expected_record_id <= 0):
+        raise ValueError('expected_record_id must be a positive integer')
     # Queue advancement calls this while the previous run's flag is still set
     # (so ComfyUI never grabs the GPU between jobs).  Only a *live* PID blocks;
     # a dead predecessor is precisely the normal queued-continue transition.
@@ -9715,8 +9585,13 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                      allow_caption_quality=allow_caption_quality,
                      allow_not_ready=allow_not_ready,
                      variant=var)
-    cks = list_checkpoints(user_id, dataset_id, base_model=base,
-                           family=fam, variant=var)
+    from .cloud_local_continuation import resolve_cloud_checkpoint
+    cloud_checkpoint = resolve_cloud_checkpoint(
+        user_id, dataset_id, fam, base, var, expected_record_id, from_step)
+    if cloud_checkpoint is not None and resume_mode != 'weights_only':
+        raise ValueError('Harvested cloud checkpoints support weights-only local continuation.')
+    cks = ([cloud_checkpoint] if cloud_checkpoint is not None else
+           list_checkpoints(user_id, dataset_id, base_model=base, family=fam, variant=var))
     if not cks:
         raise ValueError("no checkpoint to resume for this base - run a training first")
     latest = max(c['step'] for c in cks)
@@ -9739,6 +9614,8 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
         # Ties (a numbered save and the bare final at the same step): prefer the
         # numbered file — it carries a clean step and is never the run's live final.
         chosen = min(matches, key=lambda c: bool(c.get('final')))
+    _expected_resume_record(chosen, expected_record_id, dataset_id, fam, base, var,
+                            user_id=user_id)
     # Lineage: the record this continuation resumes FROM is the record that
     # PRODUCED the file being loaded (list_checkpoints stamps `record_id` on every
     # save), NOT merely the newest record of the lane. One lane holds several runs,
@@ -9839,11 +9716,10 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     # Apply the safe overrides (cadence / preview prompts / LR) before building the job.
     if override_patch:
         update_train_settings(user_id, dataset_id, override_patch)
-    # Reprendre AVEC la base/variante ciblée - sinon launch_training les remettrait
-    # à l'officiel et ai-toolkit reprendrait depuis le mauvais run. vae/te restent
-    # _PERSISTED (on garde le triplet du run). A custom Base/De-Turbo declaration
-    # still requires the caller's explicit confirmation; an old run existing is
-    # not proof that the custom transformer has the declared distillation type.
+    # Pass the selected base/variant so launch_training cannot reset to official
+    # weights and resume the wrong run. VAE/TE remain _PERSISTED. Custom Base/De-Turbo
+    # still requires explicit confirmation: an existing run does not prove the
+    # transformer's declared distillation type.
     needs_explicit_z_recipe = (
         fam == 'zimage' and bool(str(base or '').strip())
         and var in ('base', 'deturbo'))
@@ -9904,8 +9780,24 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                         queue_manager._get_system_state('training_pid', None))
                     if not (_allow_dead_predecessor and previous_is_dead):
                         raise ValueError('a training is already in progress')
-                archived = _seed_continuation_from(
-                    user_id, dataset_id, base, fam, var, chosen['filename'])
+                if cloud_checkpoint is not None:
+                    # A harvested cloud file is not permission to replace a
+                    # local lane. Run the normal admission checks before any
+                    # archive/copy, while retaining the final launch checks.
+                    resolved = _lt_refuse_or_resolve(
+                        user_id, dataset_id, fam, var, base, False,
+                        allow_caption_mismatch, allow_uncaptioned,
+                        allow_caption_quality, allow_not_ready,
+                        launch_allow_unverified, training_mode,
+                        _PERSISTED, _PERSISTED, None)
+                    if (resolved[1] or '', resolved[2], resolved[3]) != (base or '', var, fam):
+                        raise ValueError('the cloud checkpoint no longer matches the resolved local training recipe')
+                    from .cloud_local_continuation import seed_cloud_checkpoint
+                    archived = seed_cloud_checkpoint(
+                        user_id, dataset_id, fam, base, var, chosen)
+                else:
+                    archived = _seed_continuation_from(
+                        user_id, dataset_id, base, fam, var, chosen['filename'])
             res = launch_training(
                 user_id, dataset_id, **launch_kwargs)
     res['resumed_from'] = resume_step
@@ -10016,7 +9908,7 @@ def _dataset_name(dataset_id):
 
 
 def kept_uncaptioned_count(dataset_id) -> int:
-    """Nombre d'images GARDÉES (status keep) sans caption - bloque l'entraînement."""
+    """Count kept images without captions for the training readiness guard."""
     rows = (FaceDatasetImage.query
             .filter_by(dataset_id=dataset_id, status='keep')
             .with_entities(FaceDatasetImage.caption).all())
@@ -10026,26 +9918,17 @@ def kept_uncaptioned_count(dataset_id) -> int:
 def assert_trainable(dataset_id, train_type=None, allow_caption_mismatch=False,
                      allow_uncaptioned=False, allow_caption_quality=False,
                      variant=None, allow_not_ready=False) -> None:
-    """Lève ValueError si le dataset n'est pas prêt : trop peu d'images gardées,
-    captions manquantes, ou STYLE de caption incohérent avec le type de modèle
-    (SDXL booru-native attend des tags booru ; Z-Image attend de la prose ; anima
-    est HYBRIDE — les deux formes sont natives, donc aucun mismatch n'existe pour
-    elle, cf. _EXPECTED_CAPTION_FORM). Le
-    `train_type` effectif est passé par l'appelant car il n'est persisté qu'APRÈS
-    cet appel. `allow_caption_mismatch=True` = override explicite (bouton « forcer »).
-    `allow_uncaptioned=True` = confirm explicite « train anyway » : les captions
-    manquantes ne sont plus un mur, juste un « êtes-vous sûr ? » (demande
-    utilisateur — pouvoir expérimenter), le préfixe UNCAPTIONED: déclenche le
-    confirm côté front comme MISMATCH_CAPTION:. Pour Style, les captions de contenu
-    restent la règle (always-on, sans trigger). ``allow_caption_quality=True`` lève
-    séparément le garde trigger-only/toutes-identiques. ``variant`` est accepté pour
-    garder une signature family/variant homogène avec les recommandations de steps.
+    """Raise ValueError when dataset training requirements are not satisfied.
 
-    ``allow_not_ready=True`` = case « Continue anyway » du panneau de préparation :
-    lève le garde-fou QUALITÉ du plancher d'images par famille (marqueur NOT_READY:,
-    miroir de la pastille de readiness). Les IMPOSSIBILITÉS PHYSIQUES ne sont JAMAIS
-    levées par ce flag : 0 image gardée (rien à entraîner) et, en mode slider, la
-    paire de prompts absente (aucune direction à apprendre) — ai-toolkit planterait."""
+    Check kept-image count, captions and family caption form: SDXL expects booru
+    tags, Z-Image prose, while hybrid Anima accepts either. The caller passes the
+    effective train_type before persistence. Explicit flags can acknowledge
+    caption-form mismatch, missing captions (UNCAPTIONED), trigger-only/identical
+    caption quality, and overridable image-floor quality (NOT_READY).
+    Style still uses content captions without triggers. variant keeps the family
+    interface consistent with step recommendations. allow_not_ready never bypasses
+    physical requirements: zero kept images or a missing slider prompt pair remain
+    untrainable even after confirmation."""
     kept = FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep').count()
     ds_ = db.session.get(FaceDataset, dataset_id)
     if ds_ is not None and slider_mode_enabled(ds_):
@@ -10107,11 +9990,9 @@ def assert_trainable(dataset_id, train_type=None, allow_caption_mismatch=False,
                              ' Re-caption the dataset, or confirm explicitly to train anyway.')
     if allow_caption_mismatch:
         return
-    # Garde-fou style ↔ type : un LoRA SDXL entraîné sur des captions PROSE = mismatch
-    # booru-native → « images disjointes » (recherche 2026-06-14) ; et l'inverse pour Z-Image.
-    # `ttype` a déjà été résolu en tête (plancher d'images) — on le réutilise.
-    # `None` = famille HYBRIDE : les deux formes sont first-class, aucun mismatch
-    # n'existe, le garde se tait (voir _EXPECTED_CAPTION_FORM).
+    # Use the already-resolved family to check caption form: SDXL expects booru
+    # tags and Z-Image prose. A None expected form denotes a hybrid family and
+    # accepts both without reporting a mismatch.
     expected = _EXPECTED_CAPTION_FORM.get(ttype, 'prose')
     if expected is None:
         return
@@ -10274,12 +10155,12 @@ def training_status(user_id=None) -> dict:
             'installed': is_installed(),
             'pid': queue_manager._get_system_state('training_pid', None),
             'current': current,
-            # Dernier crash d'entraînement (rc≠0) remonté par le watcher, pour l'UI.
+            # Expose the watcher-reported nonzero-exit training crash to the UI.
             'error': queue_manager._get_system_state('training_error', None),
             'queue': train_queue_view(user_id) if user_id is not None else []}
 
 
-# --- Retry d'un run LOCAL raté (page Runs) --------------------------------------
+# --- Retry a failed LOCAL run (Runs page) --------------------------------------
 # Local runs carry no status column: their launch is recorded once in the
 # provenance registry (TrainingRunRecord, source='local'), and the ONLY signal
 # that one crashed is the transient global `training_error` the watcher writes on
@@ -10391,10 +10272,9 @@ def retry_local_run(user_id, record_id, **confirmations) -> dict:
         **{k: bool(confirmations.get(k)) for k in CONFIRMATION_FLAGS})
 
 
-# --- Suivi de progression (log tail + loss curve + samples) -------------------
-# ai-toolkit redirige tqdm dans training.log : les mises à jour sont séparées par
-# des \r sur une même « ligne », d'où le split sur [\r\n]. Un segment type :
-#   lora_x:   2%|▏| 60/3000 [01:23<1:07:41, 1.38s/it, lr: 1.0e+00 loss: 3.412e-01]
+# Progress from log tails, loss curves and samples. ai-toolkit redirects tqdm
+# to training.log with carriage-return-separated updates, so split on [\r\n].
+# Example: lora_x: 2%|...| 60/3000 [01:23<1:07:41, 1.38s/it, lr: 1e+00 loss: 0.34]
 _PROG_STEP_RE = re.compile(r'(\d+)/(\d+)')
 _PROG_LOSS_RE = re.compile(r'loss[:=]\s*([0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)')
 _PROG_SPEED_RE = re.compile(r'([\d.]+\s*(?:s/it|it/s))')
@@ -10658,14 +10538,12 @@ def training_progress(user_id, dataset_id, base_model=_PERSISTED, family=None,
                 user_id, dataset_id, base_model, family, variant=variant)}
 
 
-# --- File d'attente d'entraînement -------------------------------------------
+# Training queue.
 TRAIN_QUEUE_KEY = 'lora_train_queue'
 
-# Sérialise TOUS les read-modify-write de la file dans ce process. Le verrou est
-# réentrant pour que l'avancement de file puisse continuer à appeler des helpers
-# de queue sans risque de deadlock. Les preflights d'enqueue restent volontairement
-# hors du verrou : seule la courte transaction duplicate-check/read/write est
-# critique.
+# Serialize all queue read/modify/write operations in this process with a
+# reentrant lock so queue advancement can call helpers safely. Keep costly
+# preflights outside the short duplicate-check/read/write transaction.
 _queue_lock = threading.RLock()
 
 _TRAIN_IDENTITY_KEYS = (
@@ -10804,17 +10682,12 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
                      vae_path=_PERSISTED, te_path=_PERSISTED,
                      allow_unverified_weights=False, allow_not_ready=False,
                      training_mode=None) -> dict:
-    """Ajoute un dataset à la file (lancé à la fin du training courant).
+    """Queue a dataset for launch after the current training run.
 
-    `base_model`/`variant` permettent de CHOISIR explicitement la base du job en
-    file (absent → base persistée). Sans ça, on ne pouvait pas choisir le modèle
-    d'un job mis en file pendant qu'un autre entraînement tourne (le sélecteur
-    était masqué et l'enqueue réutilisait silencieusement la base persistée).
-
-    `steps` = cible ABSOLUE de steps pour un lancement neuf (None → adaptatif via
-    recommended_steps). À NE PAS confondre avec `extra_steps` (mode « continuer »
-    = +N steps depuis le dernier checkpoint). Snapshotté dans la file pour que le
-    lancement différé respecte le même plafond (ex. « s'arrêter à 2000 »)."""
+    Explicit base_model/variant select the queued job's model; omitted values use
+    the persisted base. steps is an absolute fresh-run target, distinct from a
+    continuation's extra_steps. Snapshot it so delayed launch honors the selected
+    limit. None uses adaptive recommended_steps."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -10846,19 +10719,16 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
     assert_zimage_custom_recipe_confirmed(
         ttype, base, var,
         allow_unverified_weights=allow_unverified_weights)
-    # Base custom (merge) Z-Image = doit être convertie AVANT (SDXL = single-file
-    # direct, pas de conversion → on saute la vérif). Refus immédiat et lisible.
+    # Require converted custom Z-Image bases before enqueue; SDXL single-file bases need no conversion.
     if extra_steps is None and base and ttype == 'zimage':
         from .zimage_convert import is_converted
         if not is_converted(base):
             raise ValueError('custom base not converted - prepare it first (button "Convert base")')
-    # SDXL : whitelist serveur de la base (anti path-traversal). Un chemin ABSOLU
-    # = « Custom weights… » (validé par le preflight) → contourne la whitelist.
+    # Allowlist SDXL basenames; explicit absolute Custom weights paths use preflight validation.
     if base and ttype == 'sdxl' and not _is_custom_weights(base) and base not in _sdxl_base_choices():
         raise ValueError('unknown SDXL checkpoint')
-    # Custom vae/te : whitelist STRICTE par famille (SDXL-only), persistance et
-    # preflight — même contrat qu'au lancement, pour ne pas mettre en file un job
-    # voué à un refus 400 (ou à un chemin fantôme) au moment de son démarrage.
+    # Apply the same SDXL-only custom VAE/TE validation, persistence and preflight
+    # as launch so queued jobs cannot later fail on unsupported or missing paths.
     _q_prov_vae = vae_path is not _PERSISTED and (vae_path or '').strip()
     _q_prov_te = te_path is not _PERSISTED and (te_path or '').strip()
     if ttype not in VAE_TE_OVERRIDE_FAMILIES:
@@ -10878,40 +10748,36 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
     ds.train_vae_path = eff_vae
     ds.train_te_path = eff_te
     fds.db.session.commit()
-    # Krea 2 : même garde qu'au lancement - pas de mise en file d'un job qui
-    # tomberait dans le fallback SD legacy faute d'arch krea2 dans l'ai-toolkit.
+    # Require krea2 support before enqueue, as at launch, to prevent legacy-SD fallback.
     if ttype == 'krea' and not _aitoolkit_supports_krea():
         raise ValueError(
             "ai-toolkit doesn't support Krea 2 yet (krea2 arch missing) - "
             "update it (git pull) before queuing a Krea LoRA.")
-    # FLUX.2 Klein : même garde qu'au lancement (archs d'extension, cf. launch).
+    # Apply the same Klein extension guard as at launch.
     if ttype == 'flux2klein' and not _aitoolkit_supports_flux2klein():
         raise ValueError(
             "ai-toolkit doesn't support FLUX.2 Klein yet (flux2_klein arch missing) - "
             "update it (git pull) before queuing a FLUX.2 Klein LoRA.")
-    # Anima : même garde qu'au lancement (arch d'extension, PR #860).
+    # Apply the same Anima extension guard as at launch.
     if ttype == 'anima' and not _aitoolkit_supports_anima():
         raise ValueError(
             "ai-toolkit doesn't support Anima yet (anima arch missing) - "
             "update it (git pull) before queuing an Anima LoRA.")
+    _assert_qwenimage21_ready(ttype)
     if (_optimizer_eff(queue_view) == 'automagic3'
             and not _aitoolkit_supports_automagic3()):
         raise ValueError(
             "ai-toolkit doesn't support Automagic3 yet - update it (git pull) "
             "or choose another optimizer before queuing.")
-    # Même garde-fou de collision qu'au lancement : pas de mise en file d'un job
-    # qui partagerait le dossier de run d'un autre dataset (même trigger + base + recette).
+    # Reject queued jobs that would share another dataset's trigger/base/recipe run directory.
     clash = find_run_collision(user_id, dataset_id, base_model=base, variant=var)
     if clash:
         raise ValueError(f"training collision with '{clash.name}' (#{clash.id}): "
                          f"same trigger + same base. Change the trigger_word before queuing.")
-    # Snapshot de la base/variante/type CHOISIE au moment de la mise en file (le
-    # lancement différé doit garder CE choix, pas relancer sur l'officiel/zimage).
-    # `not_before` (ISO, heure locale serveur) = entraînement PROGRAMMÉ : le job
-    # reste en file jusqu'à l'échéance ; s'il devient dû pendant qu'un autre
-    # entraînement tourne, il attend simplement son tour (jamais d'erreur).
-    # Cible de steps ABSOLUE (plafond choisi côté UI) - coercition défensive : un
-    # '' / 0 / non-numérique retombe sur None (= adaptatif), jamais de crash JSON.
+    # Snapshot the selected base/variant/type for delayed launch. not_before is
+    # an ISO timestamp in server-local time; jobs remain queued until due, then
+    # wait their turn if training is active. Store an absolute step target;
+    # empty, zero or nonnumeric inputs defensively become None (adaptive).
     try:
         steps_target = int(steps) if steps else None
     except (TypeError, ValueError):
@@ -10942,10 +10808,9 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
         item.update({'recipe_version': recipe['recipe_version'],
                      'effective_base': recipe['effective_base'],
                      'training_adapter': recipe['training_adapter']})
-    # Ne verrouiller qu'après tous les preflights potentiellement coûteux. La
-    # lecture, le contrôle anti-doublon et l'écriture doivent former UNE opération
-    # atomique, sinon deux requêtes concurrentes peuvent perdre un item ou accepter
-    # deux fois le même dataset.
+    # Acquire the lock after costly preflights. Read, duplicate detection and
+    # write must be atomic so concurrent requests cannot lose an item or enqueue
+    # the same dataset twice.
     with _queue_lock:
         q = get_train_queue()
         if any(int(it.get('dataset_id', -1)) == int(dataset_id) for it in q):
@@ -10957,9 +10822,8 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
 
 
 def dequeue_training(dataset_id) -> int:
-    # Même transaction atomique que l'enqueue : sans le verrou, deux suppressions
-    # simultanées peuvent chacune réécrire leur ancien snapshot et ressusciter
-    # l'item supprimé par l'autre requête.
+    # Use the same atomic transaction for removal so simultaneous requests cannot
+    # rewrite stale snapshots and resurrect an item removed by the other.
     with _queue_lock:
         q = get_train_queue()
         new = [it for it in q if int(it.get('dataset_id', -1)) != int(dataset_id)]
@@ -10977,7 +10841,7 @@ def train_queue_view(user_id) -> list:
         out.append({'dataset_id': it.get('dataset_id'),
                     'name': ds.name if ds else f"#{it.get('dataset_id')}",
                     'extra_steps': it.get('extra_steps'),
-                    # Cible de steps absolue choisie à la mise en file (None = adaptatif).
+                    # Absolute target chosen at enqueue; None means adaptive.
                     'steps': it.get('steps'),
                     'base_model': bm, 'base_label': base_label,
                     'train_type': it.get('train_type'),
@@ -10986,7 +10850,7 @@ def train_queue_view(user_id) -> list:
                     'recipe_version': it.get('recipe_version'),
                     'effective_base': it.get('effective_base'),
                     'training_adapter': it.get('training_adapter'),
-                    # Échéance de programmation (ISO local) - None = dès que possible.
+                    # Scheduled server-local ISO time; None means as soon as possible.
                     'not_before': it.get('not_before')})
     return out
 
@@ -11019,7 +10883,7 @@ def _launch_queued_item(item) -> None:
     else:
         launch_training(uid, ds_id, steps=item.get('steps'),
                         base_model=item.get('base_model'),
-                        # None → launch_training applique le défaut family-aware (Krea → Raw).
+                        # None lets launch_training resolve the family default, including Krea Raw.
                         variant=item.get('variant'),
                         train_type=item.get('train_type'),
                         masked=item.get('masked', True),
@@ -11262,14 +11126,12 @@ def process_training_queue() -> str | None:
 
 def _snapshot_final_checkpoint(dataset_id, step, base_model=_PERSISTED,
                                family=None, variant=_PERSISTED) -> str | None:
-    """Copie le final bare `lora_<trigger>.safetensors` vers son nom NUMÉROTÉ
-    `lora_<trigger>_<step:09d>.safetensors`. ai-toolkit écrit le résultat final SANS
-    numéro de step ; sans ce snapshot :
-      - continuer un entraînement écrase ce final sans aucune trace (perte) ;
-      - list_checkpoints sous-estime le step de reprise (il compte le bare au DERNIER
-        numéro existant, pas à son vrai step) → `continue_training` repart trop bas.
-    Le snapshot rend chaque final permanent ET visible à son vrai step. Idempotent
-    (ne réécrit jamais un numéroté existant). Retourne le nom créé, ou None."""
+    """Snapshot the bare final checkpoint as lora_<trigger>_<step:09d>.safetensors.
+
+    ai-toolkit writes its final without a step suffix. Preserve it before a future
+    continuation overwrites that file and make its true step visible to listing
+    and resume logic. Never overwrite an existing numbered snapshot. Return the
+    created filename or None."""
     try:
         step = int(step)
     except (TypeError, ValueError):
@@ -11290,14 +11152,14 @@ def _snapshot_final_checkpoint(dataset_id, step, base_model=_PERSISTED,
         logger.info('snapshot final → %s (step %d)', numbered, step)
         return os.path.basename(numbered)
     except OSError as e:
-        logger.warning('snapshot final échoué : %s', e)
+        logger.warning('final snapshot failed: %s', e)
         return None
 
 
 def _due_index(q) -> int | None:
-    """Index du premier job DÛ de la file : sans `not_before`, ou dont l'échéance
-    (ISO, heure locale serveur) est atteinte. Un job PROGRAMMÉ pour plus tard ne
-    bloque pas ceux placés derrière lui. `not_before` illisible → dû (fail-open)."""
+    """Return the first due queue index, using server-local ISO not_before.
+
+    Future jobs do not block later due jobs. Missing or unreadable times are due."""
     now = datetime.now()
     for i, it in enumerate(q):
         nb = it.get('not_before')
@@ -11337,11 +11199,10 @@ def _advance_training_queue() -> str | None:
                 if value is not None:
                     queue_manager._set_system_state(
                         key, value, ttl_seconds=_TRAIN_STATE_TTL)
-            return None  # toujours en cours
-        # Process mort alors que le flag est levé → training terminé.
-        # Snapshot du final en nom NUMÉROTÉ (immuable) AVANT d'enchaîner/libérer :
-        # sinon un futur « continuer » écrase ce final sans trace. Idempotent, et ce
-        # point tourne aussi via le poll /train/status (robuste à un restart Flask).
+            return None  # still running
+        # The PID exited while the flag remained set: training has finished.
+        # Snapshot the final under an immutable numbered name before advancing.
+        # This also runs through status polling, surviving a Flask restart.
         try:
             _snapshot_final_checkpoint(
                 queue_manager._get_system_state('training_dataset_id', None),
@@ -11353,28 +11214,27 @@ def _advance_training_queue() -> str | None:
                 variant=queue_manager._get_system_state(
                     'training_variant', _PERSISTED))
         except Exception as e:
-            logger.warning('snapshot final (advance) échoué : %s', e)
+            logger.warning('final snapshot (advance) failed: %s', e)
         due = _due_index(q)
         if due is not None and not vision_busy:
             nxt = q[due]
             try:
-                _launch_queued_item(nxt)  # remet le flag + un nouveau pid (pas de flap GPU)
-                _save_queue(q[:due] + q[due + 1:])  # retirer SEULEMENT après lancement réussi
-                logger.info(f"File training : terminé → lancement dataset {nxt['dataset_id']}")
+                _launch_queued_item(nxt)  # replace the flag/PID without a GPU release gap
+                _save_queue(q[:due] + q[due + 1:])  # remove only after successful launch
+                logger.info(f"Training queue: finished → starting dataset {nxt['dataset_id']}")
                 return f"next:{nxt['dataset_id']}"
             except Exception as e:
-                # Échec → on retire l'item (évite une boucle infinie) mais on
-                # SURFACE l'erreur au lieu de la perdre silencieusement.
+                # Remove failed items to avoid endless retries, but surface their errors.
                 _save_queue(q[:due] + q[due + 1:])
                 queue_manager._set_system_state(
                     'training_queue_error',
                     {'dataset_id': nxt.get('dataset_id'), 'error': str(e)}, ttl_seconds=3600)
-                logger.error(f"File training : échec lancement {nxt.get('dataset_id')}: {e}")
+                logger.error(f"Training queue: startup failed {nxt.get('dataset_id')}: {e}")
                 return None
-        # File vide (ou uniquement des jobs programmés plus tard) → libérer le GPU
-        # (le superviseur relance ComfyUI ; le ticker relancera le job à l'échéance).
+        # No due jobs: release the GPU. The supervisor restarts ComfyUI and the
+        # background ticker will launch scheduled jobs when they become due.
         _clear_training_identity(ttl_seconds=1)
-        logger.info("File training : terminé, aucune suite due → flag libéré")
+        logger.info("Training queue: finished, no continuation due → flag released")
         return 'released'
 
     due = _due_index(q)
@@ -11382,7 +11242,7 @@ def _advance_training_queue() -> str | None:
         nxt = q[due]
         try:
             _launch_queued_item(nxt)
-            _save_queue(q[:due] + q[due + 1:])  # retirer SEULEMENT après lancement réussi
+            _save_queue(q[:due] + q[due + 1:])  # remove only after successful launch
             logger.info(f"File training : lancement dataset {nxt['dataset_id']}")
             return f"launched:{nxt['dataset_id']}"
         except Exception as e:
@@ -11390,20 +11250,20 @@ def _advance_training_queue() -> str | None:
             queue_manager._set_system_state(
                 'training_queue_error',
                 {'dataset_id': nxt.get('dataset_id'), 'error': str(e)}, ttl_seconds=3600)
-            logger.error(f"File training : échec lancement {nxt.get('dataset_id')}: {e}")
+            logger.error(f"Training queue: startup failed {nxt.get('dataset_id')}: {e}")
             return None
     return None
 
 
-# --- Programmation d'entraînements (jour + heure) -----------------------------
+# Scheduled training by date and time.
 _scheduler_started = False
 
 
 def start_training_scheduler(app, interval_seconds=60):
-    """Ticker de fond : avance la file toutes les `interval_seconds` MÊME sans
-    navigateur ouvert. Sans lui, seuls le poll /train/status et le watcher de fin
-    de process faisaient avancer la file - un entraînement programmé à 3 h du
-    matin ne serait jamais parti. Idempotent (un seul thread par process)."""
+    """Advance the queue every interval_seconds, even without an open browser.
+
+    Polling and process-exit watchers alone cannot start future scheduled jobs.
+    Idempotent: create only one background thread per process."""
     global _scheduler_started
     if _scheduler_started:
         return
@@ -11421,8 +11281,24 @@ def start_training_scheduler(app, interval_seconds=60):
             try:
                 with app.app_context():
                     process_training_queue()
-            except Exception as e:  # jamais fatal - le tick suivant réessaie
+            except Exception as e:  # nonfatal; the next tick retries
                 logger.debug('training scheduler tick: %s', e)
 
     threading.Thread(target=_tick, daemon=True, name='train-scheduler').start()
-    logger.info('Training scheduler démarré (tick %ss)', interval_seconds)
+    logger.info('Training scheduler started (tick %ss)', interval_seconds)
+
+
+def validate_resume_record_id(expected_record_id):
+    """An optional provenance fence, never a coercion of a caller's identity."""
+    if expected_record_id is not None and (
+            type(expected_record_id) is not int or expected_record_id < 1):
+        raise ValueError('expected_record_id must be a positive integer')
+    return expected_record_id
+
+
+def assert_resume_checkpoint_record(checkpoint, expected_record_id):
+    """Refuse a changed or ambiguous save before archiving, seeding or renting."""
+    expected_record_id = validate_resume_record_id(expected_record_id)
+    if expected_record_id is not None and checkpoint.get('record_id') != expected_record_id:
+        raise ValueError('The selected checkpoint belongs to another run or its provenance '
+                         'is unavailable. Refresh the run checkpoints before continuing.')

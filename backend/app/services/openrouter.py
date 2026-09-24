@@ -41,6 +41,7 @@ log line, no exception message and no error surfaced to the UI contains it or
 any fragment of it.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import base64
 import logging
@@ -230,7 +231,7 @@ def generate_variation(ref_bytes: bytes | list[bytes], prompt: str, model: str |
                'HTTP-Referer': _APP_URL, 'X-OpenRouter-Title': _APP_TITLE}
     for i, payload in enumerate(payloads):
         try:
-            r = requests.post(_API, headers=headers, json=payload, timeout=(10, 300))
+            r = requests.post(_API, headers=headers, json=payload, timeout=network_timeout((10, 300), processing=True))
         except requests.RequestException as e:
             raise OpenRouterError(f'could not reach OpenRouter: {e}')
         if r.status_code == 400 and i == 0 and len(payloads) > 1:

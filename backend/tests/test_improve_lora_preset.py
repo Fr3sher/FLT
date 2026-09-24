@@ -77,6 +77,7 @@ def test_no_pick_and_a_stale_name_both_mean_no_preset(app):
         assert svc._improve_enqueue_profile(None)['generation_loras'] == []
 
 
+@pytest.mark.plugins('image_upscale')
 def test_the_klein_hand_off_forwards_the_rows_to_enqueue_klein_edit(app, monkeypatch):
     """The splat is the contract: _enqueue_improve passes the profile through
     **kwargs, so a renamed key would silently stop reaching the graph. This
@@ -103,25 +104,29 @@ def test_the_klein_hand_off_forwards_the_rows_to_enqueue_klein_edit(app, monkeyp
         assert seen['generation_loras'] == PRESETS[0]['loras']
 
 
-# --- the setting round-trips through /api/settings ---------------------------
+# --- the improvement setting round-trips through its plugin scope -----------
 
+@pytest.mark.plugins('image_upscale')
 def test_the_setting_saves_and_echoes_like_every_other_klein_knob(client, app):
-    """The lightbox picker writes through PUT /api/settings (partial, deep-
-    merged) — the same contract the improve instruction uses. What the server
-    echoes is what every mounted picker then shows."""
-    r = client.put('/api/settings', json={
-        'config': {'klein': {'generation_lora_presets': PRESETS,
-                             'improve_lora_preset': 'Detail'}}})
+    """Preset definitions stay shared; the Improve selection belongs to its plugin."""
+    shared = client.put('/api/settings', json={
+        'config': {'klein': {'generation_lora_presets': PRESETS}}})
+    assert shared.status_code == 200
+    r = client.put('/api/settings?plugin=image_upscale', json={
+        'config': {'klein': {'improve_lora_preset': 'Detail'}}})
     assert r.status_code == 200
     assert r.get_json()['config']['klein']['improve_lora_preset'] == 'Detail'
     # …and a later unrelated partial save does not clobber it.
-    client.put('/api/settings', json={'config': {'klein': {'improve_steps': 6}}})
-    d = client.get('/api/settings').get_json()
+    partial = client.put('/api/settings?plugin=image_upscale',
+                         json={'config': {'klein': {'improve_steps': 6}}})
+    assert partial.status_code == 200
+    d = client.get('/api/settings?plugin=image_upscale').get_json()
     assert d['config']['klein']['improve_lora_preset'] == 'Detail'
 
 
 # --- provenance on the canvas/gallery candidate ------------------------------
 
+@pytest.mark.plugins('image_upscale')
 def test_a_klein_candidate_records_the_rows_that_decided_it(app, monkeypatch):
     from app.extensions import db
     from app.models import LoraTestImage
@@ -142,8 +147,8 @@ def test_a_klein_candidate_records_the_rows_that_decided_it(app, monkeypatch):
 
 
 @pytest.mark.parametrize('engine,preset', [
-    ('klein', ''),          # no pick — nothing ran, nothing stored
-    ('seedvr2', 'Detail'),  # a restoration chains nothing, whatever is set
+    pytest.param('klein', '', marks=pytest.mark.plugins('image_upscale')),
+    pytest.param('seedvr2', 'Detail', marks=pytest.mark.plugins('seedvr2')),
 ])
 def test_candidates_never_claim_a_preset_that_did_not_run(app, monkeypatch,
                                                           engine, preset):
@@ -163,6 +168,7 @@ def test_candidates_never_claim_a_preset_that_did_not_run(app, monkeypatch,
 
 # --- the recorded profile ----------------------------------------------------
 
+@pytest.mark.plugins('image_upscale')
 def test_a_klein_candidate_records_the_knobs_it_ran_with(app, monkeypatch):
     """Stored == executed: the profile handed to the engine is the dict the
     candidate stores, so ↩ 'Use these improve settings' never guesses."""
@@ -205,6 +211,7 @@ def test_a_klein_candidate_records_the_knobs_it_ran_with(app, monkeypatch):
         assert handed['profile']['generation_loras'] == PRESETS[0]['loras']
 
 
+@pytest.mark.plugins('image_upscale')
 def test_a_stale_preset_name_is_not_recorded_as_having_run(app, monkeypatch):
     import json as _json
     from app.extensions import db
@@ -221,6 +228,7 @@ def test_a_stale_preset_name_is_not_recorded_as_having_run(app, monkeypatch):
         assert _json.loads(candidate.improve_profile)['lora_preset'] == ''
 
 
+@pytest.mark.plugins('seedvr2')
 def test_a_restoration_candidate_records_no_profile(app, monkeypatch):
     from app.extensions import db
     from app.models import LoraTestImage
@@ -236,6 +244,7 @@ def test_a_restoration_candidate_records_no_profile(app, monkeypatch):
         assert candidate.improve_profile is None
 
 
+@pytest.mark.plugins('image_upscale')
 def test_the_gallery_publishes_the_profile_parsed_and_junk_as_nothing(app, monkeypatch):
     from app.extensions import db
     from app.models import LoraTestImage

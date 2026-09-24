@@ -10,18 +10,18 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const promptField = readFileSync(new URL('./PromptField.jsx', import.meta.url), 'utf8');
-const panel = readFileSync(new URL('./RunSetupPanel.jsx', import.meta.url), 'utf8');
-const runSetup = readFileSync(new URL('./StudioRunSetup.jsx', import.meta.url), 'utf8');
-const comparison = readFileSync(new URL('./ComparisonStudio.jsx', import.meta.url), 'utf8');
-const viewer = readFileSync(new URL('./StudioResultViewer.jsx', import.meta.url), 'utf8');
-const pref = readFileSync(new URL('./triggerPref.js', import.meta.url), 'utf8');
+const promptField = readFileSync(new URL('./PromptField.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const panel = readFileSync(new URL('./RunSetupPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const runSetup = readFileSync(new URL('./StudioRunSetup.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const comparison = readFileSync(new URL('./ComparisonStudio.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const viewer = readFileSync(new URL('./StudioResultViewer.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const pref = readFileSync(new URL('./triggerPref.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const canvasPanel = readFileSync(
-  new URL('../../canvas/CanvasGenerationPanel.jsx', import.meta.url), 'utf8');
-const canvasBlend = readFileSync(new URL('../../canvas/CanvasBlendPanel.jsx', import.meta.url), 'utf8');
-const stackPanel = readFileSync(new URL('./LoraStackPanel.jsx', import.meta.url), 'utf8');
-const stackComposition = readFileSync(new URL('./StackCompositionPanel.jsx', import.meta.url), 'utf8');
-const facts = readFileSync(new URL('../../../utils/generatedImageFacts.js', import.meta.url), 'utf8');
+  new URL("../../../../../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const canvasBlend = readFileSync(new URL("../../../../../bundled/canvas/frontend/components/canvas/CanvasBlendPanel.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const stackPanel = readFileSync(new URL('./LoraStackPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const stackComposition = readFileSync(new URL('./StackCompositionPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const facts = readFileSync(new URL('../../../utils/generatedImageFacts.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('both prompt surfaces render the Trigger word checkbox', () => {
   for (const src of [promptField, runSetup]) {
@@ -45,11 +45,16 @@ test('ComparisonStudio sends inject_trigger only when unticked', () => {
 });
 
 test('one shared preference module, default-true, written only when unticked', () => {
-  for (const src of [panel, comparison, canvasPanel]) {
+  for (const src of [panel, comparison]) {
     assert.match(src, /from '(\.\.\/dataset\/studio\/)?(\.\/)?triggerPref'/);
     assert.match(src, /useState\(readInjectTrigger\)/);
     assert.match(src, /writeInjectTrigger\(v\)/);
   }
+  assert.match(canvasPanel, /import \{ readInjectTrigger, writeInjectTrigger \} from '@lds\/plugin-sdk\/canvas'/);
+  assert.match(canvasPanel, /useState\(readInjectTrigger\)/);
+  assert.match(canvasPanel, /writeInjectTrigger\(v\)/);
+  const host = readFileSync(new URL('../../../plugins/canvasRuntime.js', import.meta.url), 'utf8');
+  assert.match(host, /import \{ readInjectTrigger, writeInjectTrigger \} from '\.\.\/components\/dataset\/studio\/triggerPref.js'/);
   assert.match(pref, /const KEY = 'studioInjectTrigger';/);
   assert.match(pref, /getItem\(KEY\) !== '0'/);
   assert.match(pref, /removeItem\(KEY\)/);

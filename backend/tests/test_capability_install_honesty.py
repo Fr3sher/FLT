@@ -25,11 +25,18 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _fresh_encoder_verdict():
+def _fresh_encoder_verdict(monkeypatch, tmp_path):
     """The ffmpeg verdict is process-cached; these tests stub it, so it must not
     survive them."""
     from app.services import ffmpeg_tools
     ffmpeg_tools.clear_cache()
+    from app import setup_installer
+    python = tmp_path / 'managed-quality' / 'python'
+    python.parent.mkdir()
+    python.write_bytes(b'')
+    # Runtime provisioning is tested separately; retain the real package,
+    # verification and selection logic exercised by these install tests.
+    monkeypatch.setattr(setup_installer, '_ensure_managed_ml_env', lambda action, env_dir: str(python))
     yield
     ffmpeg_tools.clear_cache()
 
@@ -150,10 +157,10 @@ def test_install_whose_import_works_reports_success(app, monkeypatch):
     assert any('import OK' in l for l in lines)
 
 
-def test_a_slow_cold_import_is_warming_not_a_failure(app, monkeypatch):
+def test_a_slow_cold_import_stays_retryable_without_selecting_an_unverified_runtime(app, monkeypatch):
     """The first `import rembg` after an install compiles caches while the AV
-    scans fresh DLLs (~20 s measured). Timing out must never fail a good install
-    — that is the mirror-image lie."""
+    scans fresh DLLs. A timeout must explain warming and offer retry, without
+    claiming success or selecting an interpreter that has not been verified."""
     from app import setup_installer, config
     lines = []
     monkeypatch.setattr(setup_installer, '_append', lambda a, l: lines.append(l))
@@ -168,8 +175,11 @@ def test_a_slow_cold_import_is_warming_not_a_failure(app, monkeypatch):
         config.save_config({'masks': {'python': '/masks/py'}})
         setup_installer._runs['masks'] = setup_installer._new_run()
         rc = setup_installer._run_ml_capability('masks')
-    assert rc == 0
+    assert rc == 1
     assert any('warming' in l for l in lines)
+    assert any('retry' in l for l in lines)
+    with app.app_context():
+        assert config.get('masks.python') == '/masks/py'
 
 
 def test_the_verification_runs_the_exact_import_the_probe_runs():
@@ -216,6 +226,7 @@ def _stub_video_install(monkeypatch, setup_installer, *, encoder_rc=0,
     monkeypatch.setattr(setup_installer.os.path, 'isfile', lambda p: True)
 
 
+@pytest.mark.plugins('video')
 def test_video_install_that_cannot_encode_must_not_report_success(app, monkeypatch,
                                                                   tmp_path):
     """The half-success. Reading works, encoding does not — and the action used to
@@ -239,6 +250,7 @@ def test_video_install_that_cannot_encode_must_not_report_success(app, monkeypat
     assert 'path' in log or 'install ffmpeg' in log, 'and the gesture that repairs it'
 
 
+@pytest.mark.plugins('video')
 def test_video_install_reports_success_when_both_halves_work(app, monkeypatch, tmp_path):
     from app import setup_installer
     from app.services import ffmpeg_tools
@@ -312,7 +324,7 @@ def test_onnxruntime_is_not_reinstalled_when_the_env_already_imports_one(app, mo
     monkeypatch.setattr(setup_installer, '_append', lambda a, l: lines.append(l))
     seen = _stub_pip(monkeypatch, setup_installer, rc=0)
     monkeypatch.setattr(setup_installer, '_onnxruntime_provided', lambda p: True)
-    monkeypatch.setattr(setup_installer, '_verify_capability_import', lambda a, p: True)
+    monkeypatch.setattr(setup_installer, '_verify_capability_import', lambda a, p, **kw: True)
     with app.app_context():
         config.save_config({'masks': {'python': '/masks/py'}})
         setup_installer._runs['masks'] = setup_installer._new_run()
@@ -320,7 +332,8 @@ def test_onnxruntime_is_not_reinstalled_when_the_env_already_imports_one(app, mo
         rembg = setup_installer._requirement_spec('rembg')
     cmd = seen['cmd']
     assert rembg in cmd
-    assert not any('onnxruntime' in str(c) for c in cmd), (
+    package_args = cmd[cmd.index('install') + 1:cmd.index('-c')]
+    assert not any(setup_installer._canon(str(c)) == 'onnxruntime' for c in package_args), (
         'a working onnxruntime (possibly the GPU build) must be left alone'
     )
     assert any('already imports' in l for l in lines)
@@ -331,7 +344,7 @@ def test_onnxruntime_is_installed_when_the_env_cannot_import_it(app, monkeypatch
     monkeypatch.setattr(setup_installer, '_append', lambda a, l: None)
     seen = _stub_pip(monkeypatch, setup_installer, rc=0)
     monkeypatch.setattr(setup_installer, '_onnxruntime_provided', lambda p: False)
-    monkeypatch.setattr(setup_installer, '_verify_capability_import', lambda a, p: True)
+    monkeypatch.setattr(setup_installer, '_verify_capability_import', lambda a, p, **kw: True)
     with app.app_context():
         config.save_config({'masks': {'python': '/masks/py'}})
         setup_installer._runs['masks'] = setup_installer._new_run()
@@ -365,7 +378,8 @@ def test_an_unlaunchable_interpreter_does_not_claim_onnxruntime_is_present(monke
     assert setup_installer._onnxruntime_provided('/nope/py') is False
 
 
-def test_every_capability_the_app_probes_can_be_installed_from_setup():
+@pytest.mark.plugins('video')
+def test_every_capability_the_app_probes_can_be_installed_from_setup(app):
     """The hole the family guard above cannot see — and the reason it matters.
 
     That guard walks ``_CAPABILITY_PACKAGES``, so it only ever examines
@@ -381,11 +395,12 @@ def test_every_capability_the_app_probes_can_be_installed_from_setup():
     pip set, and that is fine. What is never fine is a probe with no way out.
     """
     from app import setup_installer, capabilities
-    missing = sorted(set(capabilities.CAPABILITY_IMPORTS)
-                     - set(setup_installer.INSTALL_ACTIONS))
+    with app.app_context():
+        missing = sorted(action for action in capabilities.CAPABILITY_IMPORTS
+                         if not setup_installer.known_action(action))
     assert not missing, (
         f"probed but not installable from Setup: {missing}. Every capability the "
-        "app probes needs an INSTALL_ACTIONS entry — otherwise Setup shows ✗ with "
+        "app probes needs a core or owner-registered install action — otherwise Setup shows ✗ with "
         "no button that repairs it. Add the action (plus its packages in "
         "_CAPABILITY_PACKAGES when it installs with pip), or remove the probe.")
 

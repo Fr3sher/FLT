@@ -5,7 +5,7 @@ import {
   videoClipThumbUrl, videoSourceMediaUrl, videoBankUrl, videoClipsUrl,
   videoPassUrl, videoDatasetUrl,
   videoClipBoundsUrl, videoClipSplitUrl, videoSourceClipsUrl, videoSearchUrl,
-} from './videoBankApi.js'
+} from "../../../../bundled/video/frontend/videobank/videoBankApi.js"
 
 test('thumb and media URLs address a clip and its SOURCE', () => {
   assert.equal(videoClipThumbUrl(3, 41), '/api/video-bank/3/clip/41/thumb')

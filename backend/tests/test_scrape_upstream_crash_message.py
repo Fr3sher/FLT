@@ -20,7 +20,7 @@ Three things were wrong with that, and only the third is ours to fix:
 
 So a crash class is re-worded and a refusal is passed through untouched.
 """
-from app.scrape.sources import gdl
+from lds_scrape.sources import gdl
 
 
 def _entry(error, message):

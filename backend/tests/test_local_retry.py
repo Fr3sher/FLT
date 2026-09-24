@@ -247,6 +247,7 @@ def test_retry_route_posts_record_id(app, client, monkeypatch):
     from app import capabilities
     from app.services import lora_training as lt
     monkeypatch.setattr(capabilities, 'probe', lambda: {'aitoolkit': {'valid': True}})
+    monkeypatch.setattr(capabilities, 'probe_aitoolkit', lambda: {'ok': True})
     captured = {}
     monkeypatch.setattr(
         lt, 'retry_local_run',

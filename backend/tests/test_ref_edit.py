@@ -8,13 +8,17 @@ The engine is ALWAYS stubbed here — no network, no dollars. Invariants pinned:
     the old client-held Blob);
   - Keep reuses the atomic commit; a failed commit leaves the old reference intact.
 """
+
+import pytest
+
+pytestmark = pytest.mark.plugins('api_engines')
+
 import contextlib
 import io
 import os
 import threading
 import time
 
-import pytest
 from PIL import Image
 
 from app.services import face_dataset_service as svc
@@ -357,7 +361,7 @@ def test_route_edit_openrouter_sends_every_reference_with_the_configured_model(
     the anchors added in the modal), because dropping some silently would return a
     face the user didn't ask for. The transport is stubbed: no call, no dollar."""
     from app import config as cfg
-    from app.services import openrouter
+    from lds_api_engines import openrouter
 
     monkeypatch.setenv('OPENROUTER_API_KEY', 'sk-or-v1-testkeyvalue0123456789')
     with app.app_context():
@@ -408,7 +412,7 @@ def test_external_edit_sanitizes_persistent_and_transient_camera_refs(
 
     from app import config as cfg
     from app.config import LOCAL_USER
-    from app.services import openrouter
+    from lds_api_engines import openrouter
 
     monkeypatch.setenv('OPENROUTER_API_KEY', 'sk-or-v1-testkeyvalue0123456789')
     with app.app_context():
@@ -509,7 +513,7 @@ def test_route_edit_openrouter_names_a_model_that_cannot_take_references(
     text in Settings. The failure has to be LOUD and NAMED — the engine's own words
     about the reference count — not a mute 'empty response' the user reads as a
     content refusal on their prompt."""
-    from app.services import openrouter
+    from lds_api_engines import openrouter
 
     monkeypatch.setenv('OPENROUTER_API_KEY', 'sk-or-v1-testkeyvalue0123456789')
     did = _create_with_ref(client, monkeypatch, 'Nope', 'zchar_nope')

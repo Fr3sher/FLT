@@ -1,6 +1,6 @@
-// Carte « Meilleur réglage (selon tes votes) » — preset temps réel d'après les votes.
-// Extrait behavior-preserving de LoraTestStudio.jsx (bloc {d.best_preset && (...)}).
-// Contrat (spec §6) : BestPresetCard({ preset, onMemorize, fmt }).
+// Best setting according to votes: live preset derived from votes. Extracted unchanged from
+// LoraTestStudio.jsx's d.best_preset block. Contract (spec section 6): BestPresetCard({ preset,
+// onMemorize, fmt }).
 export default function BestPresetCard({ preset, onMemorize, fmt }) {
   if (!preset) return null;
 

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { thresholdFields, FLAG_LABELS } from '../src/components/videobank/videoMetricsFilter.js'
+import { thresholdFields, FLAG_LABELS } from "../../bundled/video/frontend/videobank/videoMetricsFilter.js"
 
 // 🎬 The quality cuts exist in TWO codebases and have to name the same things.
 //

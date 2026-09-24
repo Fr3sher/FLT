@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(
-  new URL('./ConceptSourcesPanel.jsx', import.meta.url), 'utf8');
+  new URL("../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx", import.meta.url), 'utf8');
 
 test('scan state follows the effective page returned by the backend', () => {
   assert.match(source, /const responsePage = body\.page;/);

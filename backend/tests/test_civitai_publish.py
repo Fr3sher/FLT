@@ -16,7 +16,7 @@ import time
 import pytest
 from PIL import Image
 
-from app.services import civitai_publish as cp
+from lds_civitai_publish import publish as cp
 
 KEY = 'test-key-not-real'
 SERVER_DATE = 'Wed, 02 Sep 2026 12:00:00 GMT'
@@ -295,15 +295,17 @@ def test_an_unknown_run_is_said_as_such(app):
         assert e.value.code == 'run_missing'
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_a_cloud_save_is_resolved_by_name_or_by_step_and_a_shared_step_is_refused(app, tmp_path, monkeypatch):
     from app.extensions import db
     from app.models import CloudTrainingRun
     from app.services import cloud_training as ct
     with app.app_context():
-        run = CloudTrainingRun(dataset_id=1, status='done')
+        ds = _create(app.test_client())
+        run = CloudTrainingRun(dataset_id=ds, status='done')
         db.session.add(run)
         db.session.commit()
-        rec = _record(db, 1, source='cloud', steps=3000)
+        rec = _record(db, ds, source='cloud', steps=3000)
         rec.cloud_run_id = run.id
         db.session.commit()
         files = {'lora_nova_000002500.safetensors': str(tmp_path / 'a.safetensors'),
@@ -329,11 +331,13 @@ def test_a_cloud_save_is_resolved_by_name_or_by_step_and_a_shared_step_is_refuse
         assert path.endswith('final.safetensors')
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_a_local_run_that_ended_on_a_numbered_save_refuses_the_bare_step(app, tmp_path, monkeypatch):
     from app.extensions import db
     from app.services import lora_training as lt
     with app.app_context():
-        rec = _record(db, 1, steps=2500)
+        ds = _create(app.test_client())
+        rec = _record(db, ds, steps=2500)
         listed = [
             {'step': 2500, 'filename': NUMBERED, 'run_source': 'local', 'run_id': rec.id},
             {'step': 2500, 'filename': FINAL, 'final': True, 'run_source': 'local', 'run_id': rec.id},
@@ -367,6 +371,7 @@ def test_a_local_run_that_ended_on_a_numbered_save_refuses_the_bare_step(app, tm
         assert cp.resolve_save_filename(rec, 1000, deployed_numbered) is None
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_a_picture_marks_its_page_without_a_file_name(client, app, civitai, monkeypatch):
     """The refusal the maintainer hit from the viewer ("Which save is this? The
     file name is missing."): a picture must resolve its save from the deployed
@@ -403,6 +408,7 @@ def test_a_picture_marks_its_page_without_a_file_name(client, app, civitai, monk
 
 # --- the draft form -----------------------------------------------------------------
 
+@pytest.mark.plugins('civitai_publish')
 def test_draft_defaults_derive_the_page_from_the_run_and_say_when_the_file_is_missing(client, app, monkeypatch):
     from app.extensions import db
     with app.app_context():
@@ -426,6 +432,7 @@ def test_draft_defaults_derive_the_page_from_the_run_and_say_when_the_file_is_mi
         assert 'https://github.com/Fr3sher/FLT' in d['description']
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_a_custom_base_leaves_the_base_model_open_with_a_hint(client, app, monkeypatch):
     from app.extensions import db
     with app.app_context():
@@ -465,6 +472,7 @@ def test_the_form_is_validated_and_redacted_before_anything_leaves(app):
 
 # --- the model page ---------------------------------------------------------------
 
+@pytest.mark.plugins('civitai_publish')
 def test_publish_model_runs_the_chain_as_a_draft_and_links_the_save(client, app, civitai, tmp_path, monkeypatch):
     from app.extensions import db
     with app.app_context():
@@ -507,6 +515,7 @@ def test_publish_model_runs_the_chain_as_a_draft_and_links_the_save(client, app,
         assert out['link']['model_name'] == 'Nova' and out['link']['filename'] == NUMBERED
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_publish_now_adds_model_publish_without_a_pc_clock(client, app, civitai, tmp_path, monkeypatch):
     from app.extensions import db
     with app.app_context():
@@ -525,11 +534,12 @@ def test_publish_now_adds_model_publish_without_a_pc_clock(client, app, civitai,
         assert cp.link_for(rec.id, 2500, 'lora.safetensors').published is True
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_the_numbered_save_and_the_final_at_one_step_are_two_links(client, app, civitai, tmp_path, monkeypatch):
     """The refuted design: keyed on (record_id, step) alone, publishing the
     final overwrote the numbered save's link. Now each file is its own row."""
     from app.extensions import db
-    from app.models import CivitaiLink
+    from lds_civitai_publish.models import CivitaiLink
     with app.app_context():
         ds = _create(client)
         rec = _record(db, ds, steps=2500)
@@ -549,6 +559,7 @@ def test_the_numbered_save_and_the_final_at_one_step_are_two_links(client, app, 
         assert set(cp.links_for_record(rec.id)) == {NUMBERED, FINAL}
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_a_checkpoint_whose_metadata_names_the_machine_is_refused_before_any_call(client, app, civitai, tmp_path, monkeypatch):
     from app.extensions import db
     with app.app_context():
@@ -567,6 +578,7 @@ def test_a_checkpoint_whose_metadata_names_the_machine_is_refused_before_any_cal
 
 # --- the link store -------------------------------------------------------------------
 
+@pytest.mark.plugins('civitai_publish')
 def test_marking_a_page_resolves_it_and_remembers_the_version(client, app, civitai):
     from app.extensions import db
     with app.app_context():
@@ -581,7 +593,7 @@ def test_marking_a_page_resolves_it_and_remembers_the_version(client, app, civit
         # Relinking the same save retargets the ONE row.
         again, _ = cp.link_checkpoint_to_page(rec.id, 2500, '2755270', KEY, filename=NUMBERED)
         assert again.id == link.id
-        from app.models import CivitaiLink
+        from lds_civitai_publish.models import CivitaiLink
         assert CivitaiLink.query.count() == 1
         assert cp.links_for_record(rec.id)[NUMBERED]['model_url'].endswith('/models/2755270?modelVersionId=3100001')
         assert [l['id'] for l in cp.links_for_dataset(ds)] == [link.id]
@@ -589,6 +601,7 @@ def test_marking_a_page_resolves_it_and_remembers_the_version(client, app, civit
         assert cp.link_for(rec.id, 2500, NUMBERED) is None
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_a_page_that_is_not_a_lora_or_a_version_not_of_that_page_is_refused(client, app, civitai, monkeypatch):
     from app.extensions import db
     with app.app_context():
@@ -611,9 +624,10 @@ def test_a_page_that_is_not_a_lora_or_a_version_not_of_that_page_is_refused(clie
         assert e.value.code == 'not_a_lora'
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_removing_a_run_detaches_its_links_and_deleting_a_dataset_drops_them(client, app, civitai):
     from app.extensions import db
-    from app.models import CivitaiLink
+    from lds_civitai_publish.models import CivitaiLink
     from app.services import cloud_training as ct
     from app.services import face_dataset_service as fds
     with app.app_context():
@@ -637,6 +651,7 @@ def test_removing_a_run_detaches_its_links_and_deleting_a_dataset_drops_them(cli
 
 # --- images → a post -------------------------------------------------------------------
 
+@pytest.mark.plugins('civitai_publish')
 def test_a_picture_finds_its_page_through_its_stamp_and_prefers_the_file_it_was_made_with(client, app, civitai):
     from app.extensions import db
     with app.app_context():
@@ -659,6 +674,7 @@ def test_a_picture_finds_its_page_through_its_stamp_and_prefers_the_file_it_was_
         assert cp.link_for_image(row).id == final_link.id
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_the_image_meta_is_what_actually_ran(client, app):
     from app.extensions import db
     from app.services import face_dataset_service as fds
@@ -694,6 +710,7 @@ def test_the_image_meta_is_what_actually_ran(client, app):
         assert cp.image_meta(row, ds, link, 64, 48)['prompt'] == 'Nova smiling'
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_post_images_uploads_a_metadata_free_png_with_the_meta_and_publishes(client, app, civitai):
     from app.extensions import db
     with app.app_context():
@@ -731,6 +748,7 @@ def test_post_images_uploads_a_metadata_free_png_with_the_meta_and_publishes(cli
         assert phases[-1] == ('uploading', 1.0)
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_a_draft_post_skips_the_publish_and_answers_the_edit_address(client, app, civitai):
     from app.extensions import db
     with app.app_context():
@@ -743,6 +761,7 @@ def test_a_draft_post_skips_the_publish_and_answers_the_edit_address(client, app
         assert out['published'] is False and out['url'].endswith(f'/posts/{civitai.post_id}/edit')
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_post_images_refuses_without_a_link_a_key_or_a_finished_image(client, app, civitai):
     from app.extensions import db
     with app.app_context():
@@ -765,6 +784,7 @@ def test_post_images_refuses_without_a_link_a_key_or_a_finished_image(client, ap
 
 # --- the routes ------------------------------------------------------------------------
 
+@pytest.mark.plugins('civitai_publish')
 def test_status_says_whether_a_key_exists_and_whose_it_is(client, civitai, monkeypatch):
     r = client.get('/api/civitai/status')
     assert r.status_code == 200
@@ -773,6 +793,7 @@ def test_status_says_whether_a_key_exists_and_whose_it_is(client, civitai, monke
     assert client.get('/api/civitai/status').get_json()['has_key'] is False
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_every_write_route_names_the_missing_key(client, monkeypatch):
     monkeypatch.setattr(cp, 'api_key', lambda: None)
     for url, body in (('/api/civitai/links', {'record_id': 1, 'step': 1, 'filename': 'x', 'url': '1'}),
@@ -784,6 +805,7 @@ def test_every_write_route_names_the_missing_key(client, monkeypatch):
         assert 'Settings' in r.get_json()['error']
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_link_routes_round_trip(client, app, civitai):
     from app.extensions import db
     with app.app_context():
@@ -828,31 +850,49 @@ def test_link_routes_round_trip(client, app, civitai):
     assert client.post(f'/api/civitai/links/{link["id"]}/delete').status_code == 404
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_the_capabilities_payload_counts_the_civitai_key_like_an_engine_key(app, monkeypatch):
     from app import capabilities
-    from app.services import civitai_browser
+    from lds_sdk import credentials
+    from lds_civitai_publish import probes
     with app.app_context():
-        monkeypatch.setattr(civitai_browser, 'civitai_api_key', lambda: None)
-        assert capabilities.probe_civitai() == {'ok': False, 'detail': 'key missing'}
-        monkeypatch.setattr(civitai_browser, 'civitai_api_key', lambda: 'k')
-        assert capabilities.probe_civitai() == {'ok': True, 'detail': 'key set'}
+        monkeypatch.setattr(credentials, 'civitai_api_key', lambda: None)
+        assert probes.configured() == {'ok': False, 'detail': 'key missing'}
+        monkeypatch.setattr(credentials, 'civitai_api_key', lambda: 'k')
+        assert probes.configured() == {'ok': True, 'detail': 'key set'}
         capabilities._cache = None
         capabilities._cache_ts = 0.0
         assert capabilities.probe(force=True)['civitai'] == {'ok': True, 'detail': 'key set'}
 
 
-def test_the_key_test_button_shows_the_key_to_civitai_and_names_the_account(client, civitai, monkeypatch):
+@pytest.mark.parametrize('owner', [
+    pytest.param(None, marks=pytest.mark.plugins()),
+    pytest.param('civitai_publish', marks=pytest.mark.plugins('civitai_publish')),
+    pytest.param('scrape', marks=pytest.mark.plugins('scrape')),
+])
+def test_the_key_test_button_shows_the_key_to_civitai_and_names_the_account(client, civitai, monkeypatch, owner):
     from app import capabilities
-    r = client.post('/api/settings/test/civitai')
+    from app.services import civitai_browser
+    from types import SimpleNamespace
+
+    def get(url, *, headers, timeout):
+        status, _headers, body = civitai('GET', url, headers=headers, timeout=timeout)
+        return SimpleNamespace(status_code=status, json=lambda: json.loads(body))
+
+    monkeypatch.setattr(civitai_browser, 'civitai_api_key', lambda: KEY)
+    monkeypatch.setattr(civitai_browser.requests, 'get', get)
+    url = '/api/settings/test/civitai' + (f'?plugin={owner}' if owner else '')
+    r = client.post(url)
     assert r.status_code == 200 and r.get_json() == {'ok': True, 'detail': 'signed in as creator'}
-    cp._who_cache.update(key=None, at=0.0, value=None)
+    assert civitai.calls[-1][2]['Authorization'] == f'Bearer {KEY}'
     civitai.fail['/api/v1/me'] = (401, {'error': 'unauthorized'})
     assert capabilities.probe_civitai_test()['ok'] is False
     assert 'did not accept' in capabilities.probe_civitai_test()['detail']
-    monkeypatch.setattr(cp, 'api_key', lambda: None)
+    monkeypatch.setattr(civitai_browser, 'civitai_api_key', lambda: None)
     assert capabilities.probe_civitai_test() == {'ok': False, 'detail': 'key missing'}
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_a_pasted_address_is_looked_up_before_it_is_linked(client, civitai, monkeypatch):
     r = client.get('/api/civitai/page?ref=https://civitai.red/models/2755270/nova?modelVersionId=3100001')
     assert r.status_code == 200, r.get_json()
@@ -868,6 +908,7 @@ def test_a_pasted_address_is_looked_up_before_it_is_linked(client, civitai, monk
     assert client.get('/api/civitai/page?ref=2755270').get_json()['error_code'] == 'no_key'
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_publishing_images_without_a_link_answers_what_to_do(client, app, civitai):
     from app.extensions import db
     with app.app_context():
@@ -886,6 +927,7 @@ def test_publishing_images_without_a_link_answers_what_to_do(client, app, civita
     assert client.get('/api/civitai/jobs/nope').status_code == 404
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_the_publish_image_route_runs_the_job_to_its_result(client, app, civitai):
     from app.extensions import db
     with app.app_context():
@@ -913,6 +955,7 @@ def test_the_publish_image_route_runs_the_job_to_its_result(client, app, civitai
     assert civitai.procs() == ['post.create', 'post.addImage']
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_publish_model_route_validates_the_form_and_the_file_before_starting(client, app, civitai, tmp_path, monkeypatch):
     from app.extensions import db
     with app.app_context():
@@ -930,14 +973,21 @@ def test_publish_model_route_validates_the_form_and_the_file_before_starting(cli
     assert civitai.calls == []
 
 
-def test_a_linked_pill_carries_its_civitai_page_in_the_lineage_payload(client, app, civitai, monkeypatch):
+def test_a_linked_pill_carries_its_civitai_page_in_the_lineage_payload(
+        plugin_app_factory, civitai, monkeypatch, tmp_path):
     from app.extensions import db
+    from app.models import TrainingRunRecord
+    from lds_civitai_publish.models import CivitaiLink
     from app.services import cloud_training as ct
+    database = {'SQLALCHEMY_DATABASE_URI': 'sqlite:///' + (tmp_path / 'lineage.sqlite').as_posix()}
+    app = plugin_app_factory(enabled=('civitai_publish',), config_object=database)
+    client = app.test_client()
     with app.app_context():
         ds = _create(client)
         rec = _record(db, ds)
         cp.save_link(rec.id, 2500, NUMBERED, ds, model_id=2755270, version_id=civitai.version_id,
                      model_name='Nova', version_name='v1.0')
+        record_id = rec.id
         monkeypatch.setattr(ct, '_node_checkpoints', lambda r, c: [
             {'step': 2500, 'filename': NUMBERED, 'final': False, 'present': True},
             {'step': 2500, 'filename': FINAL, 'final': True, 'present': True}])
@@ -948,11 +998,23 @@ def test_a_linked_pill_carries_its_civitai_page_in_the_lineage_payload(client, a
         # Same step, other file: no badge — the final is its own version, or none.
         assert 'civitai' not in pills[FINAL]
         # A broken link store blanks nothing: the node still comes back whole.
+        real_links = cp.links_for_record
         monkeypatch.setattr(cp, 'links_for_record', lambda rid: (_ for _ in ()).throw(RuntimeError('boom')))
         node = ct._lineage_node(rec, None, rec.id, None)
         assert len(node['checkpoints']) == 2 and 'civitai' not in node['checkpoints'][0]
+        monkeypatch.setattr(cp, 'links_for_record', real_links)
+    # Reboot the same saved history with no publisher: its data survives, while
+    # the history renderer stops offering the plugin's badge.
+    core = plugin_app_factory(config_object=database)
+    with core.app_context():
+        saved = db.session.get(TrainingRunRecord, record_id)
+        assert saved is not None and CivitaiLink.query.count() == 1
+        node = ct._lineage_node(saved, None, saved.id, None)
+        assert len(node['checkpoints']) == 2
+        assert all('civitai' not in checkpoint for checkpoint in node['checkpoints'])
 
 
+@pytest.mark.plugins('civitai_publish')
 def test_draft_defaults_route_answers_the_link_of_the_named_file(client, app, civitai, monkeypatch):
     from app.extensions import db
     with app.app_context():

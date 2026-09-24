@@ -1,9 +1,8 @@
 import {
-  offersSemanticGpuPython, SCORE_STAYS_CLIP_SENTENCE, SEMANTIC_CACHE_SENTENCE,
+  SCORE_STAYS_CLIP_SENTENCE, SEMANTIC_CACHE_SENTENCE,
   SEMANTIC_ENGINE_OPTIONS, semanticDeviceNote, semanticIndexActionLabel,
   semanticPrerequisite, semanticPurposeSentence,
 } from './bankSemanticEngine.js'
-import { openerLabel } from './scoringPython.js'
 
 /** A deliberately small Bank-local choice. Changing it only selects the
  * persisted cache/group lane; building either remains a second gesture. */
@@ -19,13 +18,11 @@ export default function BankSemanticEngine({ state, disabled = false,
     ? `${state.indexed.toLocaleString()} of ${state.total.toLocaleString()} image(s) ready`
     : state.indexed > 0
       ? `${state.indexed.toLocaleString()} image(s) indexed, but the selected engine is not ready`
-      : 'Not ready yet'
+      : 'No images indexed in this bank yet'
 
   // Which device the index will really use, and — when a card sits unused — the
   // way out. Same offer Score has had, same detector behind it.
   const deviceNote = capsLoading ? null : semanticDeviceNote(state, gpuPresent)
-  const offerPython = Boolean(onPickPython) && !capsLoading
-    && offersSemanticGpuPython(state, gpuPresent)
 
   return (
     <fieldset className="rounded-lg border border-indigo-400/30 bg-indigo-500/5 p-3 space-y-2"
@@ -59,7 +56,7 @@ export default function BankSemanticEngine({ state, disabled = false,
           {state.engine === 'siglip2' && capsLoading ? 'checking the Quality tool…' : status}
         </span>
         {state.engine === 'clip' && (
-          <span className="text-content-subtle">Produced by ✨ Score.</span>
+          <span className="text-content-subtle">Run ✨ Score to build the CLIP index.</span>
         )}
         {state.engine === 'siglip2' && !capsLoading && action && (
           <button type="button" onClick={onIndex} disabled={disabled || switching || live}
@@ -82,18 +79,18 @@ export default function BankSemanticEngine({ state, disabled = false,
         {switching && <span className="text-content-subtle">Saving choice…</span>}
       </div>
 
-      {deviceNote && (
+      {(deviceNote || onPickPython) && (
         <div className="space-y-2 border-t border-indigo-400/20 pt-2">
-          <p className={`m-0 text-xs ${deviceNote.tone === 'warn'
+          {deviceNote && <p className={`m-0 text-xs ${deviceNote.tone === 'warn'
             ? 'text-amber-400/90' : 'text-content-subtle'}`}>
             {deviceNote.text}
-          </p>
-          {offerPython && (
+          </p>}
+          {onPickPython && (
             <button type="button" onClick={onPickPython}
               disabled={disabled || switching || live}
-              title="Check the Pythons on this machine and point the SigLIP 2 index at one that reaches your GPU. They are read, never changed."
-              className="rounded-md border border-amber-400/50 px-2 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10 disabled:opacity-50">
-              {openerLabel(gpuPresent)}
+              title="Inspect, test or change the Python used by the SigLIP 2 index"
+              className="min-h-10 lg:min-h-0 rounded-md border border-border px-2 py-1 text-xs font-medium text-content-muted hover:bg-surface-raised hover:text-content disabled:opacity-50">
+              Manage SigLIP 2 Python…
             </button>
           )}
         </div>

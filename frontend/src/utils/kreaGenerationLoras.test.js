@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MAX_GENERATION_LORAS, MAX_GENERATION_LORA_PRESETS, KREA_LORA_STRENGTH_MAX,
+  MAX_GENERATION_LORAS, KREA_LORA_STRENGTH_MAX,
   KREA_SLIDER_MAX, KREA_LORA_STRENGTH_DEFAULT, kreaStrengthRange,
   clampKreaLoraStrength, sanitizeKreaGenerationLoraPresets,
   kreaGenerationLoraPresetPayload,
@@ -48,11 +48,12 @@ test('sanitizer drops junk, preserves order, applies the caps', () => {
   ]);
 });
 
-test('caps bound rows and presets', () => {
+test('keeps every preset while bounding rows', () => {
   const rows = Array.from({ length: 30 }, (_, i) => ({ file: `k/${i}.safetensors`, strength: 1 }));
   const out = sanitizeKreaGenerationLoraPresets(
     Array.from({ length: 30 }, (_, i) => ({ name: `P${i}`, loras: rows })));
-  assert.equal(out.length, MAX_GENERATION_LORA_PRESETS);
+  assert.equal(out.length, 30);
+  assert.equal(out.at(-1).name, 'P29');
   assert.equal(out[0].loras.length, MAX_GENERATION_LORAS);
 });
 

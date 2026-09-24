@@ -13,11 +13,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 
-const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
+const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const PANELS = {
-  'VideoOptionsPanel.jsx': read('./VideoOptionsPanel.jsx'),
-  'VideoLoraPicker.jsx': read('./VideoLoraPicker.jsx'),
+  'VideoOptionsPanel.jsx': read("../../../../../../bundled/video/frontend/studio/video/VideoOptionsPanel.jsx"),
+  'H3LoraPicker.jsx': read('../../../shared/H3LoraPicker.jsx'),
 }
+
+const VIDEO_LORA_WRAPPER = read("../../../../../../bundled/video/frontend/studio/video/VideoLoraPicker.jsx")
 
 /** Every `<input type="range" … />` tag in a source, whole. */
 function ranges(src) {
@@ -55,7 +57,7 @@ test('the picker’s Preview size is the one dial that goes without a lock — o
   // thumb, and no clip reads it. So it stays bare, and this pins that the
   // exemption is exactly one range wide: a second dial in the picker, or a
   // render setting moved there, fails here.
-  const src = read('./VideoSourcePicker.jsx')
+  const src = read("../../../../../../bundled/video/frontend/studio/video/VideoSourcePicker.jsx")
   const found = ranges(src)
   assert.equal(found.length, 1, `the picker holds one range input, found ${found.length}`)
   assert.match(found[0], /aria-label="Preview size"/, `not the preview size:\n${found[0]}`)
@@ -63,9 +65,11 @@ test('the picker’s Preview size is the one dial that goes without a lock — o
 })
 
 test('the lock is the app’s one implementation, not a second one', () => {
+  assert.match(VIDEO_LORA_WRAPPER, /import \{ H3LoraPicker \} from '@lds\/plugin-sdk\/ui'/)
+  assert.match(VIDEO_LORA_WRAPPER, /<H3LoraPicker \{\.\.\.props\}/)
   // The video lane wearing its own padlock is how the two lanes drift apart.
   for (const [name, src] of Object.entries(PANELS)) {
-    assert.match(src, /import SliderLock, \{ useSliderLock \} from '\.\.\/\.\.\/\.\.\/shared\/SliderLock'/,
+    assert.match(src, /(?:import \{ SliderLock, useSliderLock \} from '@lds\/plugin-sdk\/ui'|import SliderLock, \{ useSliderLock \} from '\.\/SliderLock\.jsx')/,
       `${name} does not use the shared lock`)
     assert.doesNotMatch(src, /localStorage/,
       `${name} keeps its own lock memory instead of the shared one`)

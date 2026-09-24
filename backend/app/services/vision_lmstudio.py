@@ -30,6 +30,7 @@ model stays resident until something unloads it). Both are the NORMAL state righ
 after an install, so each gets a sentence that names the actual next action.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import base64
 import logging
@@ -147,7 +148,7 @@ def _get(path: str, *, url: str | None = None, reach: '_Reach | None' = None,
     """
     try:
         resp = requests.get(f'{url or base_url()}{path}', headers=_headers(),
-                            timeout=timeout)
+                            timeout=network_timeout(timeout))
         if reach is not None:
             reach.answered = True
             status = getattr(resp, 'status_code', None)
@@ -382,7 +383,7 @@ def ensure_model_loaded(model: str, *, url: str | None = None,
             resp = requests.post(f'{endpoint}/api/v1/models/load',
                                  json={'model': model},
                                  headers={'Content-Type': 'application/json', **_headers()},
-                                 timeout=timeout)
+                                 timeout=network_timeout(timeout, processing=True))
         except requests.RequestException as exc:
             return False, failure_sentence(None, str(exc))
         if resp.status_code >= 400:
@@ -424,7 +425,7 @@ def release(endpoint: str | None = None, model: str | None = None) -> bool:
         try:
             resp = requests.post(f'{url}/api/v1/models/unload',
                                  json={'instance_id': inst},
-                                 headers=_headers(), timeout=(5, 30))
+                                 headers=_headers(), timeout=network_timeout((5, 30)))
             if getattr(resp, 'status_code', 0) >= 400:
                 logger.warning('vision_lmstudio: unload %s -> HTTP %s', inst,
                                resp.status_code)
@@ -555,14 +556,14 @@ def _chat(messages, *, model, max_tokens, temperature, timeout, url=None, as_jso
     headers = {'Content-Type': 'application/json', **_headers()}
     target = f'{url or base_url()}/v1/chat/completions'
     if not as_json:
-        return requests.post(target, json=payload, headers=headers, timeout=timeout)
+        return requests.post(target, json=payload, headers=headers, timeout=network_timeout(timeout, processing=True))
 
     order = (['json_object', 'json_schema'] if _json_format == 'json_object'
              else ['json_schema', 'json_object'])
     resp = None
     for kind in order:
         resp = requests.post(target, json=dict(payload, response_format=_json_response_format(kind)),
-                             headers=headers, timeout=timeout)
+                             headers=headers, timeout=network_timeout(timeout, processing=True))
         if resp.status_code < 400:
             _json_format = kind
             return resp

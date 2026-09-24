@@ -10,8 +10,8 @@ export function useSliderTraining({
   ds, postTrain, toastTrainError, base, trainType, variant,
   setBaseInfo, setAdv, setStepsInfo,
 }) {
-  // Slider LoRA mode (Beta) : état serveur (colonne dédiée train_slider) + brouillon
-  // local des champs texte (édition libre, sauvés au blur comme les sample prompts).
+  // Slider LoRA Beta combines server state in train_slider with local text drafts, freely editable
+  // and saved on blur like sample prompts.
   const [slider, setSlider] = useState(null);
   const [sliderBusy, setSliderBusy] = useState(false);
   const [sliderDraft, setSliderDraft] = useState({ positive: '', negative: '', target_class: '', anchor: '' });

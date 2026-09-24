@@ -1,3 +1,4 @@
+import { installRestorationOwners } from './support/restorationOwners.mjs'
 /**
  * The improve instruction is editable FROM the improve button — proved in the
  * DOM, not in a regex over the source.
@@ -21,9 +22,9 @@ import { createElement, renderToStaticMarkup } from './support/mountJsx.mjs'
 import { readSource } from './support/readSource.mjs'
 
 const { default: KleinImproveNote, _resetKleinImproveNoteCache, _seedKleinImproveNoteCache } =
-  await import('../src/components/dataset/KleinImproveNote.jsx')
+  await import('../../bundled/image_upscale/frontend/panels/KleinImproveNote.jsx')
 const { IMPROVE_SCOPE_NOTE, IMPROVE_OFF_NOTE } =
-  await import('../src/components/dataset/kleinImproveEditor.js')
+  await import("../../bundled/image_upscale/frontend/lib/kleinImproveEditor.js")
 
 const SHIPPED = 'add detailed texture, add sharp details, add candid shot, add soft focus effect'
 
@@ -267,7 +268,7 @@ test('the slider writes the row it belongs to, and lands when the finger lifts',
      and it is worth pinning — the drawn position and the STORED index differ as
      soon as a preset holds an empty slot, and the 600 ms coalescing meant a
      drag followed by ✨ Generate rendered with the previous value. */
-  const src = readSource('src/components/dataset/KleinImproveNote.jsx')
+  const src = readSource('../bundled/image_upscale/frontend/panels/KleinImproveNote.jsx')
   assert.match(src, /onChange=\{\(e\) => setLoraStrength\(row\.index, e\.target\.value\)\}/,
     'writing by the drawn position would move the strength onto another LoRA')
   assert.match(src, /onPointerUp=\{\(\) => saver\.current\.flush\(\)\}/)
@@ -282,7 +283,7 @@ test('a publish LETS GO of the drafted preset list — the app-wide value cannot
      the lightbox modal). The drafted value here is the WHOLE presets array, so
      a copy that kept its snapshot would rewrite the other copy's saved strength
      from stale data — silently, app-wide. */
-  const src = readSource('src/components/dataset/KleinImproveNote.jsx')
+  const src = readSource('../bundled/image_upscale/frontend/panels/KleinImproveNote.jsx')
   const receive = src.split('const receive =')[1].split('loadSettings()')[0]
   assert.match(receive, /saver\.current\?\.pending\?\.presets/,
     'not while a write is still coalescing here: that is a finger on a slider')
@@ -290,7 +291,7 @@ test('a publish LETS GO of the drafted preset list — the app-wide value cannot
 })
 
 test('a failed save is reported with the editor CLOSED, where the sliders are', () => {
-  const src = readSource('src/components/dataset/KleinImproveNote.jsx')
+  const src = readSource('../bundled/image_upscale/frontend/panels/KleinImproveNote.jsx')
   // From the chain block to the dial that follows it — the error line has to
   // live INSIDE that span, not in the instruction editor that starts closed.
   const chain = src.split('data-testid="klein-improve-lora-chain"')[1]
@@ -298,3 +299,6 @@ test('a failed save is reported with the editor CLOSED, where the sliders are', 
   assert.match(chain, /error &&/,
     'a slider sitting on a value the server never stored must not stay silent')
 })
+
+
+test.beforeEach(t => installRestorationOwners(t, { runtime: true }))

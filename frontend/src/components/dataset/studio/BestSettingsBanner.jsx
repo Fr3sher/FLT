@@ -1,6 +1,5 @@
-// Bandeau « Réglages gagnants » : réglage persisté (best_settings).
-// Extrait behavior-preserving de LoraTestStudio.jsx (bloc `{bs && (...)}`).
-// `best` = d.best_settings ; `onClear` fourni par le parent (StudioShell).
+// Winning settings banner: persisted best_settings, extracted unchanged from LoraTestStudio.jsx's
+// bs block. best is d.best_settings; parent StudioShell supplies onClear.
 export default function BestSettingsBanner({ best, onClear, fmt }) {
   if (!best) return null;
   return (

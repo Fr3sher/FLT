@@ -1,0 +1,7 @@
+{
+  "name": "lds-package-audit-tools",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Developer-only parser; never shipped in a plugin or installed in LDS runtime",
+  "dependencies": { "acorn": "8.18.0" }
+}

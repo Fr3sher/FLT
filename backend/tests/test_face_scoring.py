@@ -734,6 +734,7 @@ def _scored_generated_image(svc, user_id):
     return ds, img
 
 
+@pytest.mark.plugins('api_engines')
 def test_regenerate_image_clears_prior_face_score(app, monkeypatch):
     from app.services import face_dataset_service as svc
     from app.models import FaceDatasetImage
@@ -758,6 +759,7 @@ def test_regenerate_image_clears_prior_face_score(app, monkeypatch):
         assert (row.content_sig, row.content_sig_stat) == (None, None)
 
 
+@pytest.mark.plugins('api_engines')
 def test_regenerate_image_restores_prior_face_score_when_trash_fails(app, monkeypatch):
     from app.services import face_dataset_service as svc
     from app.models import FaceDatasetImage

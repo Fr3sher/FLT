@@ -22,11 +22,22 @@ import {
   defaultValueAt, isAtDefault, describeDefault, resetAriaLabel, RESET_TO_DEFAULT_TEXT,
 } from './settingDefaults.js';
 
-const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const SECTION_FILES = ['EnginesSection.jsx', 'CaptioningSection.jsx', 'TrainingSection.jsx',
   'LocalToolsSection.jsx', 'ServerSection.jsx', 'ScrapingSection.jsx', 'MaintenanceSection.jsx', 'StorageSection.jsx',
-  'HfStorageCard.jsx'];
+  ];
 const sources = Object.fromEntries(SECTION_FILES.map((f) => [f, read(`./${f}`)]));
+Object.assign(sources, {
+  'ApiEnginesSettingsGroup.jsx': read('../../../../bundled/api_engines/frontend/panels/ApiEnginesSettingsGroup.jsx'),
+  'KleinImproveSettings.jsx': read('../../../../bundled/image_upscale/frontend/panels/KleinImproveSettings.jsx'),
+  'CloudTrainingGroup.jsx': read('../../../../bundled/cloud_training/frontend/settings/CloudTrainingGroup.jsx'),
+  'CloudStorageLocation.jsx': read('../../../../bundled/cloud_training/frontend/settings/CloudStorageLocation.jsx')
+    + read('../shared/LocationEditor.jsx'),
+  'ScrapeSettingsGroup.jsx': read('../../../../bundled/scrape/frontend/panels/ScrapeSettingsGroup.jsx'),
+  'HfStorageCard.jsx': read('../../../../bundled/cloud_training/frontend/settings/HfStorageCard.jsx'),
+});
+sources['StorageSection.jsx'] += read('../shared/LocationEditor.jsx');
+
 const button = read('./ResetToDefault.jsx');
 const settingsPage = read('../../pages/SettingsPage.jsx');
 
@@ -147,16 +158,16 @@ const COVERED = [
   // Image engines — the reported gap. "Upscale & improve ▸ Steps" is the last one.
   ['EnginesSection.jsx', 'engines', 'default'],
   ['EnginesSection.jsx', 'engines', 'enabled'],
-  ['EnginesSection.jsx', 'engines', 'chatgpt_auth'],
-  ['EnginesSection.jsx', 'engines', 'nanobanana_model'],
-  ['EnginesSection.jsx', 'engines', 'chatgpt_image_model'],
-  ['EnginesSection.jsx', 'engines', 'openrouter_model'],
+  ['ApiEnginesSettingsGroup.jsx', 'engines', 'chatgpt_auth'],
+  ['ApiEnginesSettingsGroup.jsx', 'engines', 'nanobanana_model'],
+  ['ApiEnginesSettingsGroup.jsx', 'engines', 'chatgpt_image_model'],
+  ['ApiEnginesSettingsGroup.jsx', 'engines', 'openrouter_model'],
   ['EnginesSection.jsx', 'klein', 'generation_steps'],
   ['EnginesSection.jsx', 'klein', 'edit_base_lora_strength'],
-  ['EnginesSection.jsx', 'klein', 'improve_megapixels'],
-  ['EnginesSection.jsx', 'klein', 'improve_base_lora_strength'],
-  ['EnginesSection.jsx', 'klein', 'improve_consistency_strength'],
-  ['EnginesSection.jsx', 'klein', 'improve_steps'],
+  ['KleinImproveSettings.jsx', 'klein', 'improve_megapixels'],
+  ['KleinImproveSettings.jsx', 'klein', 'improve_base_lora_strength'],
+  ['KleinImproveSettings.jsx', 'klein', 'improve_consistency_strength'],
+  ['KleinImproveSettings.jsx', 'klein', 'improve_steps'],
   ['EnginesSection.jsx', 'krea', 'grounding_px'],
   ['EnginesSection.jsx', 'krea', 'steps'],
   ['EnginesSection.jsx', 'krea', 'base_model'],
@@ -177,7 +188,7 @@ const COVERED = [
     'first_step_timeout_minutes', 'first_step_download_budget_minutes', 'max_runtime_minutes',
     'freeze_watchdog_minutes', 'upload_stall_minutes', 'unreachable_grace_minutes',
     'min_reliability']
-    .map((k) => ['TrainingSection.jsx', 'cloud', k]),
+    .map((k) => ['CloudTrainingGroup.jsx', 'cloud', k]),
   // Concept face masking (issue #15) — both knobs are user-tunable, so both must
   // have a way back to the shipped value.
   ['TrainingSection.jsx', 'face_mask', 'expand'],
@@ -186,9 +197,9 @@ const COVERED = [
   ['LocalToolsSection.jsx', 'ollama', 'vision_concurrency'],
   ['LocalToolsSection.jsx', 'ollama', 'vision_keep_warm_seconds'],
   ['ServerSection.jsx', 'server', 'port'],
-  ['ScrapingSection.jsx', 'klein', 'small_image_prompt'],
+  ['ScrapeSettingsGroup.jsx', 'klein', 'small_image_prompt'],
   ['StorageSection.jsx', 'paths', 'dataset_images_root'],
-  ['StorageSection.jsx', 'paths', 'cloud_runs_dir'],
+  ['CloudStorageLocation.jsx', 'paths', 'cloud_runs_dir'],
   ['StorageSection.jsx', 'paths', 'checkpoints_dir'],
 ];
 
@@ -225,6 +236,10 @@ const resetPairs = (src) => {
   return pairs;
 };
 const PAIRS = Object.fromEntries(Object.entries(sources).map(([f, s]) => [f, resetPairs(s)]));
+if (/onClick=\{\(\) => setField\('engines', 'enabled', resetEngineSelection\(config.engines.enabled, configDefaults.engines\?\.enabled, \[\.\.\.coreEngineIds\]\)\)\}/.test(sources['EnginesSection.jsx'])) {
+  PAIRS['EnginesSection.jsx'].add('engines.enabled');
+}
+
 
 for (const [file, section, field] of COVERED) {
   test(`${section}.${field} can be put back to its default`, () => {

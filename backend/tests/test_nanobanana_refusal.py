@@ -77,9 +77,9 @@ def test_a_200_with_no_image_raises_instead_of_returning_none(app, monkeypatch):
     """THE regression this file exists for. The silent `None` is gone: a refused
     request now carries its cause out of the engine."""
     monkeypatch.setenv('GEMINI_API_KEY', KEY)
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     from app.services.engine_errors import EngineRefused
-    with patch('app.services.nanobanana.requests.post',
+    with patch('lds_api_engines.nanobanana.requests.post',
                return_value=_resp(200, _filtered_body())):
         with pytest.raises(EngineRefused) as e:
             nanobanana.generate_variation([b'ref'], 'a portrait')
@@ -94,7 +94,7 @@ def test_the_refusal_message_never_promises_a_workaround():
     """The measured behaviour is that the same prompt passes about half the time,
     so "retry" is a coin toss. The message must not sell it as a fix, and must
     not invent prompt advice the filter's false positives would make false."""
-    from app.services.nanobanana import refusal_message
+    from lds_api_engines.nanobanana import refusal_message
     for body in (_filtered_body(), _filtered_body('PROHIBITED_CONTENT'),
                  _prompt_blocked_body(), {}, {'candidates': []}):
         msg = refusal_message(body).lower()
@@ -108,7 +108,7 @@ def test_a_prompt_side_block_is_told_apart_from_an_output_side_one():
     """These are genuinely different: the prompt-side categories ARE the four the
     API exposes, the output filter is not exposed at all. One sentence for both
     would misdescribe whichever it was not written for."""
-    from app.services.nanobanana import refusal_message, refusal_detail
+    from lds_api_engines.nanobanana import refusal_message, refusal_detail
     prompt_side = refusal_message(_prompt_blocked_body('SAFETY'))
     assert 'blocked the prompt before generating' in prompt_side
     assert 'SAFETY' in prompt_side
@@ -123,7 +123,7 @@ def test_a_prompt_side_block_is_told_apart_from_an_output_side_one():
 def test_a_text_only_answer_relays_the_words_gemini_actually_wrote():
     """Not every empty response is the filter: the model sometimes answers in
     prose. Paraphrasing that as a policy block would be a second guess."""
-    from app.services.nanobanana import refusal_message
+    from lds_api_engines.nanobanana import refusal_message
     body = {'candidates': [{'content': {'parts': [
         {'text': "I can't help with that request."}]}, 'finishReason': 'STOP'}]}
     msg = refusal_message(body)
@@ -134,7 +134,7 @@ def test_a_text_only_answer_relays_the_words_gemini_actually_wrote():
 def test_an_unknown_reason_code_still_reads_as_a_refusal():
     """Google adds finishReason values without notice. An unrecognised one on a
     200-with-no-image must not fall through to a sentence about the network."""
-    from app.services.nanobanana import refusal_message
+    from lds_api_engines.nanobanana import refusal_message
     msg = refusal_message(_filtered_body('SOME_FUTURE_CODE_2027'))
     assert 'refused' in msg
     assert 'SOME_FUTURE_CODE_2027' in msg
@@ -150,14 +150,14 @@ def test_a_malformed_body_still_produces_a_sentence_instead_of_a_crash(body):
     """This runs on whatever Google sends, outside any try/except in the caller.
     A shape we did not anticipate must degrade to the generic refusal, not turn
     a content refusal into an AttributeError the user reads as an app bug."""
-    from app.services.nanobanana import refusal_message, refusal_detail
+    from lds_api_engines.nanobanana import refusal_message, refusal_detail
     assert isinstance(refusal_detail(body), dict)
     msg = refusal_message(body)
     assert isinstance(msg, str) and 'refused' in msg
 
 
 def test_a_refusal_with_no_reason_at_all_says_so_rather_than_inventing_one():
-    from app.services.nanobanana import refusal_message
+    from lds_api_engines.nanobanana import refusal_message
     msg = refusal_message({'candidates': [{'content': {'parts': []}}]})
     assert 'no reason given' in msg
 
@@ -165,7 +165,7 @@ def test_a_refusal_with_no_reason_at_all_says_so_rather_than_inventing_one():
 def test_snake_case_spellings_are_read_too():
     """The REST envelope is camelCase and the protos are snake_case; both have
     been seen. Reading only one spelling would silently lose the reason."""
-    from app.services.nanobanana import refusal_detail
+    from lds_api_engines.nanobanana import refusal_detail
     assert refusal_detail(
         {'prompt_feedback': {'block_reason': 'SAFETY'}})['reason'] == 'SAFETY'
     assert refusal_detail({'candidates': [
@@ -186,9 +186,9 @@ def test_a_real_malfunction_keeps_its_own_message(app, monkeypatch, status, body
     """Replacing a silence with the WRONG explanation would be worse than the
     silence. A key, a quota or an outage must never read as a content refusal."""
     monkeypatch.setenv('GEMINI_API_KEY', KEY)
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     from app.services.engine_errors import EngineFatal, EngineRefused
-    with patch('app.services.nanobanana.requests.post',
+    with patch('lds_api_engines.nanobanana.requests.post',
                return_value=_resp(status, body)):
         with pytest.raises(nanobanana.NanoBananaError) as e:
             nanobanana.generate_variation([b'ref'], 'a portrait')
@@ -202,9 +202,9 @@ def test_a_real_malfunction_keeps_its_own_message(app, monkeypatch, status, body
 def test_an_unreachable_host_is_not_a_content_refusal(app, monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY', KEY)
     import requests
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     from app.services.engine_errors import EngineRefused
-    with patch('app.services.nanobanana.requests.post',
+    with patch('lds_api_engines.nanobanana.requests.post',
                side_effect=requests.ConnectionError('name resolution failed')):
         with pytest.raises(nanobanana.NanoBananaError) as e:
             nanobanana.generate_variation([b'ref'], 'a portrait')
@@ -213,7 +213,7 @@ def test_an_unreachable_host_is_not_a_content_refusal(app, monkeypatch):
 
 
 def test_a_missing_key_is_fatal_and_not_a_refusal(app):
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     from app.services.engine_errors import EngineFatal, EngineRefused
     with pytest.raises(EngineFatal) as e:
         nanobanana.generate_variation([b'ref'], 'a portrait')
@@ -223,10 +223,10 @@ def test_a_missing_key_is_fatal_and_not_a_refusal(app):
 
 def test_no_message_or_log_record_ever_carries_the_key(app, monkeypatch, caplog):
     monkeypatch.setenv('GEMINI_API_KEY', KEY)
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     from app.services.engine_errors import EngineRefused
     caplog.set_level(logging.DEBUG)
-    with patch('app.services.nanobanana.requests.post',
+    with patch('lds_api_engines.nanobanana.requests.post',
                return_value=_resp(200, _filtered_body())):
         with pytest.raises(EngineRefused) as e:
             nanobanana.generate_variation([b'ref'], 'a portrait')
@@ -269,7 +269,7 @@ def test_a_batch_with_refusals_finishes_every_row_and_counts_them_exactly(
     from app.config import LOCAL_USER
     from app.models import FaceDatasetImage
     from app.services import face_dataset_service as svc
-    from app.services.nanobanana import NanoBananaRefused
+    from lds_api_engines.nanobanana import NanoBananaRefused
     monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', _SerialPool)
     caplog.set_level(logging.INFO)
 
@@ -320,7 +320,7 @@ def test_a_refusal_is_not_fatal_but_a_rejected_key_still_is(app, monkeypatch):
     from app.config import LOCAL_USER
     from app.models import FaceDatasetImage
     from app.services import face_dataset_service as svc
-    from app.services.nanobanana import NanoBananaFatal, NanoBananaRefused
+    from lds_api_engines.nanobanana import NanoBananaFatal, NanoBananaRefused
     monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', _SerialPool)
 
     for raised, expect_calls, expect_kind in (
@@ -426,8 +426,8 @@ def test_a_database_created_before_fail_kind_gains_it_on_boot(app):
 def test_a_normal_response_still_returns_the_image(app, monkeypatch):
     """The whole point of raising on refusals is lost if the success path moved."""
     monkeypatch.setenv('GEMINI_API_KEY', KEY)
-    from app.services import nanobanana
-    with patch('app.services.nanobanana.requests.post',
+    from lds_api_engines import nanobanana
+    with patch('lds_api_engines.nanobanana.requests.post',
                return_value=_resp(200, _image_body())) as post:
         out = nanobanana.generate_variation([b'ref-a', b'ref-b'], 'a portrait',
                                             aspect_ratio='3:4')
@@ -467,10 +467,10 @@ def test_the_imageconfig_retry_still_happens_before_any_refusal_is_declared(
     """A model that rejects imageConfig answers 400 on the first payload. That is
     a retry, not a refusal, and it must not be reported as one."""
     monkeypatch.setenv('GEMINI_API_KEY', KEY)
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     responses = [_resp(400, {'error': {'message': 'imageConfig unsupported'}}),
                  _resp(200, _image_body())]
-    with patch('app.services.nanobanana.requests.post',
+    with patch('lds_api_engines.nanobanana.requests.post',
                side_effect=responses) as post:
         out = nanobanana.generate_variation([b'ref'], 'a portrait')
     assert out == PNG

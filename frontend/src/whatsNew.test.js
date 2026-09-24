@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import {
@@ -16,6 +16,12 @@ import {
 } from './whatsNew.js';
 import { SETTINGS_SECTIONS } from './components/settings/registry.js';
 import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
+import { setEnabled, whatsNewEntries } from './plugins/registry.js';
+import { mountPublicPlugins, PUBLIC_DESCRIPTORS, publicNewsImage, imageDigest,
+  curatedImageDigests } from '../tests/support/publicPluginFixtures.mjs';
+
+beforeEach(() => mountPublicPlugins());
+const publicNews = () => [...WHATS_NEW, ...whatsNewEntries()];
 
 // Minimal localStorage stand-in for the marker helpers.
 function fakeStorage(initial = {}) {
@@ -33,7 +39,7 @@ function fakeStorage(initial = {}) {
 test('every entry has the required shape and a unique, stable id', () => {
   assert.ok(WHATS_NEW.length > 0, 'feed is not empty');
   const seen = new Set();
-  for (const e of WHATS_NEW) {
+  for (const e of publicNews()) {
     assert.equal(typeof e.id, 'string');
     assert.match(e.id, /^\d{4}-\d{2}-\d{2}-[a-z0-9-]+$/, `id shape: ${e.id}`);
     assert.match(e.date, /^\d{4}-\d{2}-\d{2}$/, `date shape: ${e.id}`);
@@ -51,7 +57,7 @@ test('every entry has the required shape and a unique, stable id', () => {
 test('every declared screenshot exists, and is an image', () => {
   const root = new URL('../../', import.meta.url);
   let declared = 0;
-  for (const e of WHATS_NEW) {
+  for (const e of publicNews()) {
     if (e.image === undefined) continue;
     declared += 1;
     assert.equal(typeof e.image, 'string', `image must be a path: ${e.id}`);
@@ -69,10 +75,11 @@ test('every declared screenshot exists, and is an image', () => {
 // maintainer's own images are NSFW and out of bounds for anything public. Only
 // the curated, generated showcase set is publishable, and it lives in one place.
 test('screenshots come from the tracked showcase folder, never from anywhere else', () => {
-  for (const e of WHATS_NEW) {
+  const curated = curatedImageDigests();
+  for (const e of publicNews()) {
     if (e.image === undefined) continue;
-    assert.match(e.image, /^docs\/screenshots\//,
-      `a public screenshot must live under docs/screenshots/: ${e.image} (${e.id})`);
+    assert.ok(curated.has(imageDigest(publicNewsImage(e))),
+      `a packaged screenshot must retain the curated showcase bytes: ${e.id}`);
   }
 });
 
@@ -80,7 +87,7 @@ test('seed waves are all present', async () => {
   // The founding entries now live in the ARCHIVE (whatsNewArchive.js) — this
   // guard is about deletion, not location: an id must exist in the union.
   const { WHATS_NEW_ARCHIVE } = await import('./whatsNewArchive.js');
-  const ids = new Set([...WHATS_NEW, ...WHATS_NEW_ARCHIVE].map((e) => e.id));
+  const ids = new Set([...publicNews(), ...WHATS_NEW_ARCHIVE].map((e) => e.id));
   for (const id of [
     '2026-07-17-watermark-engine',
     '2026-07-17-scrape-section',
@@ -94,6 +101,16 @@ test('seed waves are all present', async () => {
   ]) {
     assert.ok(ids.has(id), `missing seed entry: ${id}`);
   }
+});
+
+test('each public product contributes its own history only while enabled', () => {
+  for (const descriptor of PUBLIC_DESCRIPTORS) {
+    setEnabled([descriptor.id]);
+    assert.deepEqual(whatsNewEntries().map(entry => entry.id),
+      (descriptor.whatsNew || []).map(entry => entry.id), descriptor.id);
+  }
+  setEnabled([]);
+  assert.deepEqual(whatsNewEntries(), []);
 });
 
 // ── Ordering ─────────────────────────────────────────────────────────────────
@@ -202,7 +219,7 @@ test('parseTarget splits path and workspace query params', () => {
 });
 
 test('every seed entry target is a valid, navigable in-app route', () => {
-  for (const e of WHATS_NEW) {
+  for (const e of publicNews()) {
     if (e.to === undefined) continue; // optional — reliability entries omit it
     assert.equal(isValidTarget(e.to), true, `${e.id} → ${e.to}`);
   }
@@ -210,7 +227,7 @@ test('every seed entry target is a valid, navigable in-app route', () => {
 
 test('seed section/panel targets resolve against the LIVE navigation registries', () => {
   const settingsIds = new Set(SETTINGS_SECTIONS.map((s) => s.id));
-  for (const e of WHATS_NEW) {
+  for (const e of publicNews()) {
     const t = parseTarget(e.to);
     if (!t) continue;
     if (t.path.startsWith('/settings/')) {

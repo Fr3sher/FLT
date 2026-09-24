@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { matchesDatasetQuery, statusLabel } from './canvasFilterBar.js';
+import { matchesDatasetQuery, statusLabel } from "../../../bundled/canvas/frontend/utils/canvasFilterBar.js";
 
 test('every status the board can report has a name of its own', () => {
   assert.equal(statusLabel('active'), 'Active');

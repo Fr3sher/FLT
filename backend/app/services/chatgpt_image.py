@@ -66,6 +66,7 @@ content-policy refusal and a transient API error look identical here", which is
 the truth, and inventing a cause to fill the silence would be the worse bug.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 import base64
 import json
 import logging
@@ -373,7 +374,7 @@ def _generate_via_api(ref_bytes: bytes | list[bytes], prompt: str, model: str | 
     try:
         # 'high' renders take 1-3 min -> generous read timeout (connect stays short).
         r = requests.post(_API, headers={"Authorization": f"Bearer {key}"},
-                          data=data, files=files, timeout=(10, 420))
+                          data=data, files=files, timeout=network_timeout((10, 420), processing=True))
     except requests.RequestException as e:
         raise ChatGPTImageError(f'could not reach OpenAI: {e}')
     if r.status_code != 200:
@@ -589,7 +590,7 @@ def _generate_via_subscription(refs: list, prompt: str, aspect_ratio: str) -> by
         try:
             # Same generous read timeout as the API lane: 'high' renders take minutes.
             r = requests.post(CODEX_RESPONSES_URL, headers=headers, json=body,
-                              timeout=(10, 420))
+                              timeout=network_timeout((10, 420), processing=True))
         except requests.RequestException as e:
             # Was `return None`, i.e. a dropped connection reported to the user
             # as "the provider produced no image" — the API lane has raised here

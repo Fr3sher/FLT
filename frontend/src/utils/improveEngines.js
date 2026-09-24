@@ -1,3 +1,4 @@
+import { contributions } from '../plugins/registry.js'
 /* Which engine runs the ✨ Upscale & improve pass, and how the UI says what the
    difference IS.
 
@@ -11,43 +12,38 @@
 
    Pure module, no JSX — the contract tests run under `node --test`. */
 
-export const IMPROVE_ENGINES = [
-  {
-    id: 'klein',
-    label: 'Klein',
-    emoji: '✨',
-    action: 'Improve via Klein',
-    /* Deliberately says what it CHANGES, not just what it improves — that
-       sentence is the whole reason the second engine exists. */
-    summary: 'Re-renders detail and texture. Sharper, but skin and colour can shift.',
-    confirm: 'Create a separate 2 MP Klein improvement candidate',
-  },
-  {
-    id: 'seedvr2',
-    label: 'SeedVR2',
-    emoji: '🔍',
-    action: 'Upscale via SeedVR2',
-    summary: 'Resolves detail at a higher resolution and keeps the original look.',
-    confirm: 'Create a separate SeedVR2 upscale candidate',
-  },
-]
+export const IMPROVE_ENGINES = []
+const HISTORICAL_ENGINES = {
+  klein: { id: 'klein', label: 'Klein', emoji: '✨' },
+  seedvr2: { id: 'seedvr2', label: 'SeedVR2', emoji: '🔍' },
+}
 
 const DEFAULT_IMPROVE_ENGINE = 'klein'
 
 export function improveEngine(id) {
-  return IMPROVE_ENGINES.find((e) => e.id === id)
-    || IMPROVE_ENGINES.find((e) => e.id === DEFAULT_IMPROVE_ENGINE)
+  return [...IMPROVE_ENGINES, ...contributions('improve.engine')].find((e) => e.id === id)
+    || HISTORICAL_ENGINES[id] || HISTORICAL_ENGINES[DEFAULT_IMPROVE_ENGINE]
 }
 
-/** The engines this install can actually run right now, in display order.
+/** Active plugins remain discoverable before their engines are prepared.
+    Launch guards below still enforce readiness; absent/disabled plugins have
+    no contribution and therefore no action or preparation link. */
+export function availableImproveEngines() {
+  return [...IMPROVE_ENGINES, ...contributions('improve.engine')]
+}
 
-    Klein is always listed: it is the historical pass, and when it is not ready
-    its button carries the reason (an engine that vanishes from the toolbar
-    teaches nobody why). SeedVR2 only appears once it is READY, because until
-    then it is not a choice, it is a setup task that belongs in Setup. */
-export function availableImproveEngines(caps) {
-  const comfy = (caps && caps.comfyui) || {}
-  return IMPROVE_ENGINES.filter((e) => e.id !== 'seedvr2' || comfy.seedvr2_ready === true)
+function preparationReason(engine, caps) {
+  return typeof engine.ready === 'function' && !engine.ready(caps)
+    ? engine.blockedReason || `${engine.label} needs preparation.` : null
+}
+
+/** The registry supplies the owner, so preparation opens that plugin's own
+    settings even when it is the only installed restoration plugin. */
+export function improvePreparations(caps) {
+  return availableImproveEngines().flatMap(engine => {
+    const reason = preparationReason(engine, caps)
+    return reason ? [{ id: engine.id, plugin: engine.plugin, label: engine.label, reason }] : []
+  })
 }
 
 /** Why an engine's bulk button is disabled, or null when it can run. */
@@ -55,8 +51,11 @@ export function improveEngineBlockedReason(engineId, { caps, engines, eligibleCo
   if (engineId === 'klein' && engines && engines.klein === false) {
     return 'Klein is not available in this setup'
   }
-  if (engineId === 'seedvr2' && !((caps && caps.comfyui) || {}).seedvr2_ready) {
-    return 'SeedVR2 is not installed yet — Setup ▸ ComfyUI can download it'
+  {
+    const engine = contributions('improve.engine').find(item => item.id === engineId)
+    if (!engine) return 'This restoration plug-in is not active. Open the Store.'
+    const preparation = preparationReason(engine, caps)
+    if (preparation) return preparation
   }
   if (!eligibleCount) return 'No selected image is eligible.'
   return null
@@ -157,4 +156,8 @@ export function lightboxImproveButtons({ caps, engines, improving = false,
       showKleinNote: engine.id === 'klein',
     }
   })
+}
+
+export function improvementAvailable(engineId) {
+  return contributions('improve.engine').some(engine => !engineId || engine.id === engineId)
 }

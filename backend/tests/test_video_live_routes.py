@@ -3,7 +3,9 @@ from urllib.parse import urljoin
 
 import pytest
 
-from app.services import live_studio as live
+from lds_live import live_studio as live
+
+pytestmark = pytest.mark.plugins('live')
 
 
 class _FakeSession:
@@ -39,7 +41,7 @@ def test_options_say_what_ffmpeg_can_do_and_the_rates_the_stream_accepts(client,
 
 
 def test_options_say_when_vlc_needs_the_token_in_the_address(client, monkeypatch):
-    from app.routes import video_live
+    from lds_live.routes import video_live
     monkeypatch.setattr(live, 'ffmpeg_facts', lambda force=False: {'path': 'ffmpeg', 'rubberband': True})
     monkeypatch.setattr(video_live.cfg, 'get', lambda key, default=None: True if key == 'server.require_token' else default)
     assert client.get('/api/video-studio/live/options').get_json()['token_required'] is True
@@ -50,7 +52,7 @@ def test_options_say_when_vlc_needs_the_token_in_the_address(client, monkeypatch
 
 def test_start_is_gated_on_comfyui_like_a_clip_launch(client, monkeypatch):
     from flask import jsonify
-    from app.routes import video_live
+    from lds_live.routes import video_live
     monkeypatch.setattr(video_live, '_require_comfyui',
                         lambda **k: (jsonify({'error': 'ComfyUI is not reachable'}), 409))
     r = client.post('/api/video-studio/live/start', json={'scenes': 'x'})
@@ -58,7 +60,7 @@ def test_start_is_gated_on_comfyui_like_a_clip_launch(client, monkeypatch):
 
 
 def test_start_cleans_its_parameters_and_answers_the_channels_status(client, monkeypatch, tmp_path):
-    from app.routes import video_live
+    from lds_live.routes import video_live
     monkeypatch.setattr(video_live, '_require_comfyui', lambda **k: None)
     monkeypatch.setattr(video_live, '_require_no_stalled_comfyui', lambda: None)
     seen = {}
@@ -80,7 +82,7 @@ def test_start_cleans_its_parameters_and_answers_the_channels_status(client, mon
 
 
 def test_start_refuses_a_rooted_lora_name_and_a_second_channel(client, monkeypatch):
-    from app.routes import video_live
+    from lds_live.routes import video_live
     monkeypatch.setattr(video_live, '_require_comfyui', lambda **k: None)
     monkeypatch.setattr(video_live, '_require_no_stalled_comfyui', lambda: None)
     r = client.post('/api/video-studio/live/start', json={'lora': '../../etc/passwd'})

@@ -19,19 +19,35 @@
        in SCREEN pixels at a constant size — a popover that scaled with the
        board would be unreadable at the zoom levels the board is useful at. */
 
+import { contributions } from '../../plugins/registry.js';
 import { canContinueFromCheckpoint } from './lineageContinue.js';
 import {
   checkpointDeleteTarget, checkpointDeployed, checkpointUndeployAction,
   lineageImportPayload,
 } from './lineagePreview.js';
 
-/* The popover's fixed box. Both surfaces size it from here, so the geometry
+/* The popover's fixed box. Every surface sizes it from here, so the geometry
    below is clamping the thing that is actually drawn. 210 px wide fits a 400-px
-   screen with margins to spare; the height is the tallest the column gets (every
-   row present at once). */
+   screen with margins to spare; the height is the tallest the CORE column gets
+   (every core row present at once) — a plugin's row (`checkpoint.action`) adds
+   ROW_H each, counted per surface by `popoverHeight`, so a host reserves room
+   for the rows it will show and no more.
+
+   MEASURED, not inherited (headless Chromium, 1280 px and 400 px, every core
+   row combination, 2026-09-05): the tallest core column is 220.5 px and one
+   plugin row is 30.5 px. The constants sit just above those — a reservation
+   short of the real row would erode by 2.5 px per contribution until a
+   fourth row clipped. */
 export const POPOVER_W = 210;
-// One row taller since 📤 Civitai joined the column (every row present at once).
-export const POPOVER_H = 264;
+export const POPOVER_H = 224;
+export const POPOVER_ROW_H = 31;
+
+/** The popover's height on `surface`: the core column plus one row per plugin
+ *  contribution to `checkpoint.action` there (read at call time — the registry
+ *  is fixed after boot, a disabled plugin contributes nothing). */
+export function popoverHeight(surface) {
+  return POPOVER_H + POPOVER_ROW_H * contributions('checkpoint.action', surface).length;
+}
 
 /* WHY a checkpoint cannot be deployed into ComfyUI, or null when it can. The
    payload builder answers only yes/no (it returns a body or null), and "no" has

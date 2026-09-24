@@ -213,9 +213,8 @@ def test_create_run_commits_rows_before_enqueue(app, monkeypatch, tmp_path):
         lora_dir.mkdir(parents=True)
         ck = 'z image\\lora_s_000002000.safetensors'
         (lora_dir / 'lora_s_000002000.safetensors').touch()
-        # create_run resolves a base Z-Image model BEFORE building any cell (verbatim
-        # SRC guard: "aucun modèle Z-Image disponible") — a real unet/z image entry
-        # is required for get_zimage_models() to return non-empty.
+        # create_run resolves a Z-Image base BEFORE building cells. Provide a real
+        # unet/Z-Image entry so get_zimage_models returns a nonempty list.
         unet_dir = base / 'models' / 'unet' / 'z image'
         unet_dir.mkdir(parents=True)
         (unet_dir / 'zmodel.safetensors').write_bytes(_ST)
@@ -1004,8 +1003,8 @@ def test_build_cell_workflow_zimage_loads_real_json_and_injects_lora(app):
 
 
 def test_apply_krea_base_model_sets_node20_and_validates(app):
-    """Base Krea locale : `base_model` remplace le UNET câblé du node 20, None le
-    laisse intact, hors-whitelist → ValueError (anti path-injection)."""
+    """Local Krea base_model replaces node20 UNET; None leaves it unchanged. A model
+    outside the allowlist raises ValueError to prevent path injection."""
     from app.services import lora_test_studio as lts
     from app.utils.comfyui import load_workflow_local
     with app.app_context():
@@ -1027,21 +1026,21 @@ def test_apply_krea_base_model_sets_node20_and_validates(app):
 
 
 def test_krea_alt_base_models_excludes_wired_default(app, monkeypatch):
-    """Les listes de bases ALTERNATIVES excluent le UNET câblé du workflow (déjà
-    représenté par l'entrée « Official ») — quel que soit son dossier/sa casse."""
+    """Alternative-base lists exclude the workflow UNET already represented by
+    Official, regardless of folder or case."""
     from app.services import lora_test_studio as lts
     with app.app_context():
         monkeypatch.setattr(lts, 'get_krea_models', lambda: [
-            'Krea\\krea2_turbo_fp8.safetensors',      # défaut câblé (sous-dossier)
-            'krea2_turbo_fp8.safetensors',            # copie racine du même défaut
+            'Krea\\krea2_turbo_fp8.safetensors',      # Wired default in a subfolder.
+            'krea2_turbo_fp8.safetensors',            # Root copy of the same default.
             'krea\\my_custom_krea.safetensors',
         ])
         assert lts.krea_alt_base_models() == ['krea\\my_custom_krea.safetensors']
 
 
 def test_build_cell_workflow_krea_honors_local_base(app, monkeypatch):
-    """Bout-en-bout cellule Krea : z_model (base locale) atterrit dans le node 20
-    et le LoRA testé est bien injecté — même canal de base que SDXL/Z-Image."""
+    """End-to-end Krea cell: local z_model reaches node20 and the tested LoRA is
+    injected, using the same base-model channel as SDXL/Z-Image."""
     from app.services import lora_test_studio as lts
     with app.app_context():
         lora = 'krea\\lora_k_000001000.safetensors'
@@ -1056,10 +1055,10 @@ def test_build_cell_workflow_krea_honors_local_base(app, monkeypatch):
         lora_nodes = [n for n in wf.values()
                       if isinstance(n, dict) and n.get('class_type') == 'LoraLoaderModelOnly']
         assert any(n['inputs']['lora_name'] == lora for n in lora_nodes)
-        # z_model=None (entrée par défaut du picker) → base ÉLUE, pas le nom figé
-        # dans krea2_turbo.json : ce littéral n'est pas le fichier que Setup
-        # installe, donc sur une install qui a suivi Setup il désignait un fichier
-        # absent et ComfyUI refusait le prompt (cf. test_krea_default_base_election).
+        # z_model=None selects the ELECTED default, not the fixed filename in
+        # krea2_turbo.json. That literal differs from the file Setup installs, which
+        # previously made ComfyUI reject the prompt on fresh installations; see
+        # test_krea_default_base_election.
         wf2 = lts._build_cell_workflow(
             user_id='local', checkpoint=lora, strength=0.9, prompt='a prompt',
             seed=42, z_model=None, allowed_loras={lora}, dataset_id=1,
@@ -1088,12 +1087,10 @@ def _build_krea_cell(lts, monkeypatch, *, available_classes):
 
 
 def test_build_krea_cell_rewrites_rebalance_class_to_registered_alias(app, monkeypatch):
-    """Résolveur de CLASSES : quand le ComfyUI cible n'enregistre le node de rebalance
-    QUE sous le nom permuté (Krea2RebalanceConditioning — le cas de l'install du dev,
-    origine du nom permuté qu'on avait d'abord livré), le builder réécrit le class_type
-    du node de rebalance injecté vers ce nom pour que le graphe ENQUEUÉ valide. Les inputs épinglés
-    (preset='custom', renormalize=False) restent posés — la réécriture ne touche QUE le
-    class_type (inoffensif sur une variante qui ignore ces inputs)."""
+    """When ComfyUI registers only the legacy alias Krea2RebalanceConditioning,
+    rewrite the injected rebalance class_type so the queued graph validates. Keep
+    preset=custom and renormalize=False; only the class name changes, harmless to
+    variants ignoring these inputs."""
     from app.services import lora_test_studio as lts
     with app.app_context():
         wf = _build_krea_cell(lts, monkeypatch,
@@ -1104,8 +1101,7 @@ def test_build_krea_cell_rewrites_rebalance_class_to_registered_alias(app, monke
 
 
 def test_build_krea_cell_keeps_canonical_class_when_registered(app, monkeypatch):
-    """Quand le ComfyUI cible expose bien la classe canonique, le node injecté la GARDE
-    (pas de réécriture) et les inputs épinglés sont intacts."""
+    """If ComfyUI exposes the canonical class, retain it and all pinned inputs."""
     from app.services import lora_test_studio as lts
     with app.app_context():
         wf = _build_krea_cell(lts, monkeypatch,
@@ -1116,9 +1112,8 @@ def test_build_krea_cell_keeps_canonical_class_when_registered(app, monkeypatch)
 
 
 def test_build_krea_cell_keeps_canonical_class_without_object_info(app, monkeypatch):
-    """available_classes=None (probe /object_info échouée ou non fournie) → AUCUNE
-    réécriture : on garde le nom canonique (fail-open ; le preflight / la capture
-    d'erreur par tuile signalera un vrai manque)."""
+    """available_classes=None after a failed or missing object_info probe keeps the
+    canonical name. Preflight or per-tile errors report a genuinely missing node."""
     from app.services import lora_test_studio as lts
     with app.app_context():
         wf = _build_krea_cell(lts, monkeypatch, available_classes=None)
@@ -1243,10 +1238,9 @@ def test_preflight_family_flags_missing_custom_node_via_object_info(app, tmp_pat
 
 
 def test_preflight_family_accepts_registered_rebalance_alias(app, tmp_path, monkeypatch):
-    """Le workflow porte la classe canonique ConditioningKrea2Rebalance, mais le ComfyUI
-    cible ne l'enregistre QUE sous l'alias Krea2RebalanceConditioning (l'install du dev /
-    une variante legacy) : le preflight NE 409 PAS — c'est le MÊME node (cf.
-    NODE_CLASS_ALIASES), donc l'exiger sous son autre nom est satisfait."""
+    """A workflow requiring ConditioningKrea2Rebalance must pass preflight when
+    ComfyUI exposes its Krea2RebalanceConditioning alias: NODE_CLASS_ALIASES
+    identifies the same node, so no409 refusal is justified."""
     from app.services import lora_test_studio as lts
     with app.app_context():
         base = _configure_comfy(tmp_path, monkeypatch)
@@ -1499,7 +1493,7 @@ def test_resume_run_matches_opposite_separator_whitelist(app, monkeypatch):
             ],
         )
         monkeypatch.setattr(lts, '_target_node_classes', lambda: None)
-        monkeypatch.setattr(lts, 'get_zimage_models', lambda: [])
+        monkeypatch.setattr(lts, 'get_zimage_models', lambda: ['test-zimage-base'])
         monkeypatch.setattr(lts, '_build_cell_workflow', lambda *_args, **_kwargs: {'1': {}})
         monkeypatch.setattr(lts, '_enqueue_cell', lambda *_args, **_kwargs: 'resume-job')
 

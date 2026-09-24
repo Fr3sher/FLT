@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { postJson } from '../api/fetchClient';
 import { useToast } from '../components/common/Toast';
 import { canvasImproveLaunchMessage } from '../utils/canvasImprove';
-import { improveEngine } from '../utils/improveEngines';
+import { improveEngine, improvementAvailable } from '../utils/improveEngines';
 
 /* ✨ Start an Upscale & improve on ONE picture of the library — the handler the
    shared lightbox's `onImprove` expects, in ONE place.
@@ -32,6 +32,7 @@ import { improveEngine } from '../utils/improveEngines';
 export function useCanvasImageImprove({ launchMessage = null } = {}) {
   const toast = useToast();
   return useCallback(async (imageId, engineId) => {
+    if (!improvementAvailable()) { toast.warning('Enable Improve & upscale to improve this image.'); return; }
     try {
       const d = await postJson(`/api/canvas/image/${imageId}/improve`,
         engineId ? { engine: engineId } : {});

@@ -4,7 +4,7 @@ import {
   FLAG_LABELS, cutSummary, draftThresholds, editThreshold, filterByFlag,
   flagChips, flagCounts, payloadFromDraft, thresholdFields, audioState,
   audioNote, audioSummary,
-} from './videoMetricsFilter.js';
+} from "../../../../bundled/video/frontend/videobank/videoMetricsFilter.js";
 
 const CLIPS = [
   { id: 1, flags: ['still'], metrics: { motion_mean: 0.0001 } },

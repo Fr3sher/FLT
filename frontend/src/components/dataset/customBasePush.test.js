@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { customBasePushView } from './customBasePush.js';
+import { customBasePushView } from "../../../../bundled/cloud_training/frontend/dataset/customBasePush.js";
 
 /* The reported modal, verbatim: "Custom base: bigLove_zt3.safetensors" /
  * "⚠ The local file is unavailable (missing) — restore it to push." / a

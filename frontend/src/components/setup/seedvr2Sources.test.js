@@ -16,10 +16,16 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { MemoryRouter } from 'react-router'
+import { installRuntimeHost } from '../../../tests/support/runtimeHost.mjs'
+import { createElement, render } from '../../../tests/support/mountJsx.mjs'
+
+const { default: SeedVr2InstallCard } = await import('../../../../bundled/seedvr2/frontend/panels/SeedVr2InstallCard.jsx')
+test.beforeEach(installRuntimeHost)
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
-const setup = read('./SeedVr2InstallCard.jsx')
-const settings = read('../settings/EnginesSection.jsx')
+const setup = read('../../../../bundled/seedvr2/frontend/panels/SeedVr2InstallCard.jsx')
+const settings = read('../../../../bundled/seedvr2/frontend/panels/SeedVr2Settings.jsx')
 
 const PACK = 'https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler'
 const WEIGHTS = 'https://huggingface.co/numz/SeedVR2_comfyUI'
@@ -39,7 +45,14 @@ test('the pack link is offered AT the moment the card asks you to install it', (
   // The "install it from ComfyUI-Manager" warning used to end on a bare URL in
   // a <span>: the one place the link is actionable was the one place it was not
   // a link.
-  assert.match(setup, /Open the node pack on GitHub/)
+  const html = render(MemoryRouter, { children: createElement(SeedVr2InstallCard, { caps: { comfyui: {
+    dir_valid: true, seedvr2_ready: false, seedvr2_missing_nodes: ['SeedVR2LoadDiTModel'],
+    seedvr2_missing: ['seedvr2_model'],
+  } } }) })
+  assert.match(html, /Prepare SeedVR2/)
+  assert.ok(html.includes(`href="${PACK}" target="_blank" rel="noreferrer"`),
+    'the node-pack source must be clickable while the card offers preparation')
+  assert.match(html, />Node pack →<\/a>/)
   assert.doesNotMatch(setup, /Source: <span className="break-all">\{PACK_URL\}<\/span>/)
 })
 

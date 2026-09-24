@@ -102,14 +102,7 @@ export const PAGE_TOPICS = [
      'narrow window', 'phone', 'mobile', 'small screen', 'sort', 'tile size',
      'thresholds', 'search', 'exclude', 'subfolder', 'bank', 'triage'],
     '/bank', 'using-the-app', 'the-image-bank-triage-a-big-folder'),
-  action('bank-scrape', 'Scrape the web into a bank',
-    ['scrape', 'scraper', 'scrape into bank', 'scrape to bank', 'web', 'gallery',
-     'gallery url', 'reddit', 'pexels', 'pornpics', 'civitai images', 'download',
-     'download images', 'from the web', 'fill a bank', 'new bank from the web',
-     'no folder', 'without a folder', 'add more images', 'resume scrape',
-     'second scrape', 'append', 'grow a bank', 'destination', 'unfiltered',
-     'no filter', 'keeps small images', 'small images kept', 'raw'],
-    '/bank', 'using-the-app', 'the-image-bank-triage-a-big-folder'),
+
   action('bank-find-by-text', 'Find bank images by describing them',
     ['find by text', 'text search', 'search by text', 'describe', 'description',
      'search images', 'semantic search', 'clip search', 'natural language',
@@ -358,6 +351,10 @@ export const PAGE_TOPICS = [
       'stopped working', 'no longer responding', 'that was on purpose'],
     guide: { chapter: 'getting-started', anchor: 'the-setup-wizard' },
     app: { route: '/setup' } },
+  action('setup-first-steps', 'Choose your first task in LDS',
+    ['first steps', 'getting started', 'setup', 'install', 'dataset', 'plugins',
+     'no plugins', 'open LDS', 'prepare tools'],
+    '/setup', 'getting-started', 'the-setup-wizard'),
   setupStep('setup-comfyui', 'comfyui', 'Set up ComfyUI & download the Klein model',
     ['comfyui', 'klein', 'local engine', 'download model', 'weights', 'unet', 'vae',
      'text encoder', 'studio', 'test studio', 'not installed', 'install klein',
@@ -393,53 +390,17 @@ export const PAGE_TOPICS = [
   setting('krea_hires.steps', 'engines', 'krea-hires-steps', 'Second-pass steps',
     ['hires steps', 'second pass steps', 'steps', 'inherit', 'same as the first',
      'krea steps second pass']),
-  setting('improve.colour_match', 'engines', 'improve-colour-match', "Put the source's colours back",
-    ['colour match', 'color match', 'colour shift', 'color shift', 'skin warms', 'skin cools',
-     'grade', 'mkl', 'two colour worlds', 'klein colours', 'finishing', 'finish']),
-  setting('improve.sharpen', 'engines', 'improve-sharpen', 'Sharpen (finishing pass)',
-    ['sharpen', 'unsharp', 'sharpness', 'soft', 'blurry', 'halo', 'finest detail',
-     'finishing', 'finish', 'after improve']),
-  setting('improve.grain', 'engines', 'improve-grain', 'Film grain (finishing pass)',
-    ['grain', 'film grain', 'noise', 'plastic', 'smooth', 'waxy', 'photographic',
-     'looks like a render', 'finishing', 'finish']),
-  setting('improve.grain_saturation', 'engines', 'improve-grain-sat', 'How coloured the grain is',
-    ['grain saturation', 'coloured grain', 'colored grain', 'luminance grain', 'sensor noise',
-     'chroma noise', 'grain colour']),
-  setting('seedvr2.tiling', 'engines', 'seedvr2-tiling', 'High-resolution tiling',
-    ['tiling', 'tile', 'tiles', 'seedvr2 tiling', 'TTP', 'Comfyui_TTP_Toolset',
-     'high resolution', '4k', 'detail', 'artifacts', 'seam', 'seams', 'vram',
-     'out of memory', 'oom', 'always', 'never', 'auto']),
-  setting('seedvr2.tile_px', 'engines', 'seedvr2-tile-px', 'SeedVR2 tile size',
-    ['tile size', 'tile px', 'tile', 'seedvr2 vram', 'out of memory', 'oom', 'cuda',
-     '8gb', '8 gb', 'small card', 'smaller card', 'upscale fails', 'upscale crashes',
-     'seam', 'seams', '512', '768', '1024', 'encode_tile_size', 'decode tile']),
-  setting('seedvr2.tile_threshold', 'engines', 'seedvr2-tile-threshold',
-    'SeedVR2 tiling threshold',
-    ['tiling threshold', 'start tiling above', 'crossover', 'when does it tile',
-     'tile sooner', 'seedvr2 auto tiling', '1536', 'short edge']),
-  setting('seedvr2.vae', 'engines', 'seedvr2-vae', 'SeedVR2 VAE build',
-    ['seedvr2 vae', 'vae', 'ema_vae_fp16', 'vae not found', 'pin the vae',
-     'renamed vae', 'models/SEEDVR2', 'model location', 'dit', 'weights folder']),
-  setupStep('setup-seedvr2-install', 'install', 'Install the SeedVR2 upscaler',
-    ['seedvr2', 'seed vr2', 'seedvr', 'upscale', 'upscaler', 'upscaling', 'super resolution',
-     'super-resolution', 'restore', 'restoration', 'sharpen', 'fidelity', 'keeps colours',
-     'colour shift', 'color shift', 'changes the image', 'node pack',
-     'ComfyUI-SeedVR2_VideoUpscaler', 'comfyui-manager', 'dit', 'vae', 'models/SEEDVR2',
-     '3b', '7b', 'fp8', 'blocks to swap', 'target resolution', 'install seedvr2']),
-  setupStep('setup-video-studio', 'install', 'Install 🎬 Video Test Studio',
-    ['video studio', 'video test studio', 'install video', 'video weights',
-     'minimax', 'h3', 'minimax h3', 'video model missing', '39 gb', '40 gb',
-     'i2v', 'image to video', 'text to video', 'video lora', 'test a video lora',
-     'turbo lora', '4 step', 'sparse attention', 'latent upscale', 'node pack',
-     'restart comfyui', 'models/diffusion_models', 'models/text_encoders',
-     'latent_upscale_models', '10eros', 'video tab greyed out',
-     'video options disabled', 'cannot render a clip']),
-  setupStep('setup-camera-install', 'install', 'Install 📷 Camera angles',
-    ['camera angles', 'camera', 'angles', 'multi-angle', 'multiple angles', 're-shoot',
-     'reshoot', 'other side', 'back view', 'viewpoint', 'qwen image edit', 'qwen 2511',
-     'sks', 'camera lora', 'lightning', 'speed lora', 'install camera',
-     'camera weights', 'camera model missing', '20 gb', 'gallery camera button',
-     'models/diffusion_models/qwen', 'models/loras/qwen']),
+
+
+
+
+
+
+
+
+
+
+
   setupStep('setup-ollama', 'ollama', 'Set up Ollama & pull the vision model',
     ['ollama', 'vision model', 'pull model', 'captioning', 'caption', 'auto-framing',
      'framing', 'head-crop', 'head crop', 'qwen', 'install ollama']),
@@ -507,8 +468,8 @@ export const PAGE_TOPICS = [
      'own row', 'checkpoints to test', 'add their lora', 'compare with other loras',
      'other loras', 'accordion'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
-  // Le lot vit dans le composant d'historique, monté par le Studio de test ET par
-  // le panneau « Generate from the board » : un seul sujet d'aide pour les deux.
+  // The history component serves both Test Studio and Generate from the board;
+  // use one help topic for both batch interfaces.
   action('studio-prompt-batch', '📝 Batch: run several saved prompts in one launch',
     ['studio', 'test studio', 'canvas', 'generate from the board', 'prompt', 'prompts',
      'recent prompts', 'saved prompts', 'prompt history', 'batch', 'batch of prompts',
@@ -518,14 +479,14 @@ export const PAGE_TOPICS = [
      'one image per prompt', 'n selected', 'clear selection', 'untick',
      'civitai prompts in the batch', 'batch civitai prompts', 'civitai batch',
      'how many images will this make', 'too many prompts', 'at most 24 prompts',
-     // Ce que quelqu'un tape après avoir été refusé par le plafond qui a existé
-     // une journée — et ce qu'il cherche maintenant : le coût, pas la limite.
+     // Search terms for users who encountered the former one-day limit and now
+     // want to understand cost rather than a cap.
      'prompt limit', 'maximum prompts', 'why was my batch refused', 'no limit',
      'how long will this take', 'estimated time', 'duration', 'at your current pace',
      'this run will queue', 'confirmation before a long run', 'seconds per image'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
-  // 📚 La bande d'historique et sa fenêtre sont UN composant, monté par le Studio
-  // de test ET par « Generate from the board » : un seul sujet d'aide pour les deux.
+  // The history strip and dialog form ONE shared component in Test Studio and
+  // Generate from the board; both use the same help topic.
   action('studio-saved-prompts', '📚 Saved prompts: find one again among hundreds',
     ['studio', 'test studio', 'canvas', 'generate from the board', 'prompt', 'prompts',
      'saved prompts', 'recent prompts', 'prompt history', 'browse prompts',
@@ -536,9 +497,8 @@ export const PAGE_TOPICS = [
      'cannot see the thumbnails', 'browse all prompts', 'never run', 'no image yet',
      'full prompt', 'show the whole prompt', 'expand the prompt'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
-  // 🌐 Un seul composant (bouton + navigateur) monté par les TROIS surfaces de
-  // génération — Studio du dataset, comparaison multi-LoRA, « Generate from the
-  // board » : un seul sujet d'aide pour les trois.
+  // ONE prompt-browser component serves all THREE generation surfaces: dataset
+  // Studio, multi-LoRA comparison, and Generate from the board. Share one topic.
   action('studio-civitai-browser', '🌐 Civitai: browse top images and reuse their prompts',
     ['studio', 'test studio', 'canvas', 'generate from the board', 'civitai',
      'civitai prompts', 'top images', 'browse civitai', 'prompt ideas',
@@ -549,18 +509,12 @@ export const PAGE_TOPICS = [
      'batch', 'add to batch', 'tick several civitai prompts', 'run several civitai prompts',
      'civitai prompts in one run', 'in batch'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
-  // 📤 One dialog, two doors (the checkpoint popover on the ◉ Canvas / run
-  // graph, and the shared image viewer everywhere it opens): one topic.
-  action('civitai-publish', '📤 Publish a LoRA and its images to Civitai',
-    ['civitai', 'civitai.red', 'publish', 'publish lora', 'upload lora', 'upload checkpoint',
-     'model page', 'draft', 'post image', 'post to civitai', 'share image', 'share lora',
-     'link checkpoint', 'mark the page', 'trigger words', 'base model', 'generation data',
-     'prompt', 'seed', 'metadata', 'api key', 'not linked', 'wizard', 'nsfw'],
-    '/gallery', 'using-the-app', 'publish-a-lora-and-its-images-to-civitai'),
-  // 🎬 Les scènes vivent dans le même rail que le lot d'historique, monté par le
-  // Studio de test ET par « Generate from the board » : un seul sujet pour les deux.
-  // Les DEUX sources (banque et dataset) partagent ce sujet : c'est le même
-  // panneau et le même contrat — deux entrées d'aide diraient qu'il y en a deux.
+  // One dialog, two entry points: the Canvas/run-graph checkpoint popover and
+  // the shared image viewer. Keep one help topic.
+
+  // Scenes share the history-batch rail in Test Studio and Generate from the
+  // board. Bank and dataset sources also share the same panel and contract,
+  // so they must share this topic rather than appear to be separate features.
   action('studio-scene-prompts', '🎬 Scenes: run a bank’s or a dataset’s captions in order',
     ['studio', 'test studio', 'canvas', 'generate from the board', 'scene', 'scenes',
      'scenes from a bank', 'bank captions', 'import captions', 'captions from a bank',
@@ -570,15 +524,13 @@ export const PAGE_TOPICS = [
      'one pass per scene', 'run captions in order', 'choose a bank',
      'no scenes loaded', 'scene skipped', 'image without a caption',
      'caption pass', 'thumbnail of the page', 'which page',
-     // Le champ ✏️ par scène : ce qu'on tape pour le trouver, et ce qu'on
-     // se demande une fois trouvé (où le texte atterrit dans le prompt).
+     // Search terms for the per-scene edit field and where its text enters the prompt.
      'custom prompt', 'custom prompt per scene', 'add to a scene',
      'extra prompt', 'append to the caption', 'add text to a caption',
      'edit a scene prompt', 'change one scene', 'modifiers per scene',
      'per scene text', 'scene input', 'where does the custom text go',
-     // Ce que quelqu'un tape quand la source qu'il veut rejouer est son dataset
-     // — et ce qu'il cherchait avant que le dataset soit offert : un moyen de ne
-     // PAS réexporter son dataset vers une banque pour atteindre ce panneau.
+     // Search terms for replaying dataset images directly without exporting them
+     // to a bank merely to reach this panel.
      'scenes from a dataset', 'dataset captions', 'captions from a dataset',
      'use my dataset captions', 'run my dataset captions', 'choose a dataset',
      'replay my dataset', 'my own captions', 'only banks?', 'no dataset in the list',

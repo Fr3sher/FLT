@@ -9,6 +9,12 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import _basetemp_guard
+from public_plugin_fixture import (
+    bootstrap_public_packages, create_test_app, dispose_test_app,
+    install_hf_gate_guard, isolated_plugin_runtime, marked_plugins,
+)
+
+bootstrap_public_packages()
 
 
 def pytest_configure(config):
@@ -20,6 +26,9 @@ def pytest_configure(config):
     parallel is now the norm, so the collision is refused here — with a message
     naming the other run — instead of surfacing as a phantom failure plus a
     handful of "ERROR at setup" half a suite later."""
+    config.addinivalue_line('markers',
+                           'plugins(*ids): load exactly these public products in the app fixture; '
+                           'the closest marker replaces outer markers and plugins() keeps Store empty')
     basetemp = getattr(config.option, 'basetemp', None)
     if not basetemp:
         return                        # no --basetemp: pytest numbers per run, safe
@@ -198,51 +207,37 @@ def _reset_inmemory_registries():
     clip_text_encoder.forget_memory_cache()
     clip_text_encoder.release()
 
+@pytest.fixture(autouse=True)
+def _isolate_plugin_runtime():
+    with isolated_plugin_runtime():
+        yield
+
+
 @pytest.fixture()
-def app(tmp_path, monkeypatch):
-    monkeypatch.setenv('LDS_DATA_DIR', str(tmp_path / 'data'))
-    monkeypatch.setenv('LDS_CONFIG', str(tmp_path / 'config.json'))
-    monkeypatch.setenv('LDS_ENV', str(tmp_path / '.env'))
-    # A developer may have real extensions cloned into backend/extensions/;
-    # the suite must never load them. Point the loader at an empty dir.
-    monkeypatch.setenv('LDS_EXTENSIONS_DIR', str(tmp_path / 'no-extensions'))
-    import app.config as _cfg
-    monkeypatch.setattr(_cfg, 'ENV_PATH', tmp_path / '.env')   # never touch the real .env in tests
-    # config.py caches load_config() in a module-level global keyed on nothing but
-    # "has it been loaded before" -- it isn't tied to LDS_CONFIG. Without resetting it
-    # here, a test that calls save_config() with a real comfyui.base_dir leaks that
-    # value into every later test's "fresh" app (same process, stale cache), even
-    # though each test gets its own tmp_path/env vars. Task 14 (Klein path) hit this:
-    # a test asserting "ComfyUI unconfigured -> RuntimeError" silently inherited a
-    # previous test's real base_dir and passed for the wrong reason.
-    monkeypatch.setattr(_cfg, '_cache', None)
-    # capabilities.py caches its WHOLE probe for 30 s in a module global, and that
-    # clock does not know tests exist: a file that ran seconds earlier -- with its
-    # own tmp config, so legitimately seeing no ai-toolkit -- leaves 'aitoolkit
-    # invalid' in the cache, and the next test's `client.get(.../preflight)` gets
-    # 409 instead of 200 no matter what config IT wrote. Reproduced 2/2 by running
-    # test_masked_dataset_setting.py before test_training_preflight.py.
-    #
-    # Same class as the two bank tests that failed a release this morning: a test
-    # whose answer depends on a shared clock fails INTERMITTENTLY, and intermittent
-    # reads as random. Clearing both caches per test makes the suite say what the
-    # test set up, and nothing else.
-    import app.capabilities as _caps
-    monkeypatch.setattr(_caps, '_cache', None)
-    monkeypatch.setattr(_caps, '_cache_ts', 0.0)
-    _caps._import_cache.clear()
-    from app import create_app
-    application = create_app({'TESTING': True, 'WTF_CSRF_ENABLED': False,
-                              'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:'})
-    yield application
-    # Hand every pooled sqlite connection back. Without this each test
-    # leaked its in-memory engine, and the suite drowned in ~27 900
-    # ResourceWarnings (~93 % of all warnings) - unable to signal a NEW
-    # warning over the noise.
-    from app.extensions import db as _db
-    with application.app_context():
-        _db.session.remove()
-        _db.engine.dispose()
+def plugin_app_factory(tmp_path, monkeypatch):
+    """Real boot: factory(enabled=('video',), config_object={...})."""
+    from copy import deepcopy
+    from app import config
+
+    applications = []
+    defaults = deepcopy(config.DEFAULTS)
+
+    def make(enabled=(), config_object=None):
+        # Preserve the original app fixture's tmp_path/data layout on first boot.
+        directory = tmp_path if not applications else tmp_path / f'app-{len(applications)}'
+        config.DEFAULTS = deepcopy(defaults)
+        application = create_test_app(directory, monkeypatch, enabled, config_object)
+        applications.append(application)
+        return application
+
+    yield make
+    for application in reversed(applications):
+        dispose_test_app(application)
+
+
+@pytest.fixture()
+def app(request, plugin_app_factory):
+    return plugin_app_factory(enabled=marked_plugins(request.node))
 
 @pytest.fixture()
 def client(app):
@@ -273,9 +268,7 @@ def _no_hugging_face_gate_call(request, monkeypatch):
     """
     if request.node.get_closest_marker('hf_gate'):
         return
-    from app.services import cloud_training as _ct
-    monkeypatch.setattr(_ct, '_assert_official_base_reachable',
-                        lambda *a, **k: None, raising=False)
+    install_hf_gate_guard(monkeypatch)
 
 
 @pytest.fixture(autouse=True)

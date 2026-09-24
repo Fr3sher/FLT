@@ -19,7 +19,10 @@ ai-toolkit has an architecture for it" — never "some trainer somewhere does".
 """
 import pytest
 
-from app.services import video_targets as vt
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_targets as vt
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- the catalogue's contract -------------------------------------------------

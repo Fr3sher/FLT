@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import {
   canRecut, dryRunSummary, effectiveThreshold, parseThreshold, recutSummary,
   sweepRows, thresholdLabel, transitionChip,
-} from './videoShotCuts.js'
+} from "../../../../bundled/video/frontend/videobank/videoShotCuts.js"
 
 /** 🎬 Find shots — the numbers and the sentences, with no React around them.
  *

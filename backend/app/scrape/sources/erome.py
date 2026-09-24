@@ -1,19 +1,17 @@
 # app/scrape/sources/erome.py
-"""Scraper Erome — énumération via gallery-dl + téléchargement direct (curl_cffi).
+"""Erome scraper: gallery-dl enumeration and direct curl_cffi downloads.
 
-Erome expose des albums (`/a/ID`), une recherche (`/search?q=`) et des profils
-utilisateur (`/USER`). L'énumération est déléguée au moteur partagé **gdl.py**
-(qui gère les types 3/6/-1, dont la correction du sentinel d'erreur type -1
-qui rendait les erreurs auth/429 invisibles).
+Supports albums (/a/ID), searches (/search?q=) and profiles (/USER).
+Enumeration uses shared gdl.py with types 3/6/-1, including type -1
+error propagation so authentication and 429 failures remain visible.
 
-gallery-dl REJETTE les sous-domaines de langue (`fr.erome.com`, …) → on
-normalise le host en `www.erome.com` (path/query conservés) avant délégation.
+gallery-dl rejects language subdomains; normalize to www.erome.com
+while preserving path/query before delegation.
 
-API publique (contrat des sources de scraping) :
-    scan(validation) -> (items, error)
-    download(url, dest_path) -> (ok, final_filename, error)
-Aucune des deux ne lève : toute exception est capturée et convertie en message.
-"""
+Public contract: scan(validation) -> (items, error);
+download(url, dest_path) -> (ok, final_filename, error).
+Neither raises: exceptions become messages."""
+from ...timeout_settings import network_timeout
 import logging
 import os
 import re
@@ -25,17 +23,17 @@ from . import gdl
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
-# Constantes (autonomes — aucun import de config/settings)
+# Constants (standalone — no config/settings imports)
 # --------------------------------------------------------------------------- #
 BASE = "https://www.erome.com"
-MAX_ITEMS = 120          # cap dur sur le nombre de médias retournés par scan()
+MAX_ITEMS = 120          # Hard cap on media items returned by scan().
 MAX_ALBUMS = 8           # cap recursion search/user (anti-lenteur)
-DOWNLOAD_TIMEOUT = 120   # secondes (téléchargement média)
+DOWNLOAD_TIMEOUT = 120   # Seconds (media download).
 CHUNK_SIZE = 8192
 
 PLATFORM = "erome"
 
-# Host de langue (fr./de./…) à normaliser vers www.erome.com.
+# Normalize language hosts (fr./de./...) to www.erome.com.
 _HOST_RE = re.compile(r'^https?://[^/]*erome\.com', re.IGNORECASE)
 
 
@@ -43,9 +41,8 @@ _HOST_RE = re.compile(r'^https?://[^/]*erome\.com', re.IGNORECASE)
 # Helpers internes
 # --------------------------------------------------------------------------- #
 def _normalize(url: str) -> str:
-    """Force le host sur www.erome.com (gallery-dl rejette les sous-domaines de
-    langue). Conserve path + query. Si l'URL ne ressemble pas à erome, renvoie
-    telle quelle."""
+    """Force Erome URLs to www.erome.com because gallery-dl rejects language
+    subdomains. Preserve path/query and leave non-Erome URLs unchanged."""
     url = (url or "").strip()
     if _HOST_RE.match(url):
         return _HOST_RE.sub(BASE, url, count=1)
@@ -53,7 +50,7 @@ def _normalize(url: str) -> str:
 
 
 def _ext_from_url(url: str) -> str:
-    """Extension de fichier (avec point) déduite de l'URL. Défaut: .mp4."""
+    """File extension including the dot, derived from URL; default .mp4."""
     ext = os.path.splitext(urlparse(url).path)[1].lower()
     if ext in (".mp4", ".webm", ".mov", ".m4v", ".jpg", ".jpeg",
                ".png", ".gif", ".webp"):
@@ -65,11 +62,10 @@ def _ext_from_url(url: str) -> str:
 # API publique
 # --------------------------------------------------------------------------- #
 def scan(validation):
-    """Énumère les médias d'une URL Erome via le moteur gallery-dl partagé (gdl.py).
+    """Enumerate Erome media using shared gdl.py.
 
-    Normalise le host (gallery-dl rejette les sous-domaines de langue) puis délègue ;
-    le moteur gère type 3 (média) / 6 (album recurse) / -1 (erreur d'extracteur).
-    Retourne (items, error). Ne lève jamais."""
+    Normalize language hosts, then delegate type-3 media, type-6 album
+    recursion and type -1 extractor errors. Return (items, error); never raises."""
     try:
         url = getattr(validation, 'original_url', None) or getattr(validation, 'value', '')
         url = _normalize(url)
@@ -78,26 +74,22 @@ def scan(validation):
         items, err = gdl.enumerate(url, platform=PLATFORM,
                                    max_items=MAX_ITEMS, max_albums=MAX_ALBUMS)
         if err:
-            # GdlError (cf. gdl.py) : préfixer le message SANS perdre `.kind` — un
-            # f-string nu reconstruirait un str ordinaire, invisible au routage
-            # par kind (routes/scrape.py distingue désormais 'empty' du reste).
+            # Prefix GdlError without losing its kind. A plain f-string would create
+            # an ordinary str, hiding kind from routes/scrape.py dispatch, which
+            # distinguishes empty results from failures.
             return None, gdl.GdlError(f"Erome: {err}", getattr(err, 'kind', None))
         return items, None
     except Exception as e:
-        logger.exception("Erome scan: erreur inattendue")
+        logger.exception("Erome scan: unexpected error")
         return None, f"Erome: unexpected error ({e})."
 
 
 def download(url, dest_path):
-    """Télécharge un média Erome (vidéo ou image) en direct via curl_cffi.
+    """Download an Erome video/image directly through curl_cffi.
 
-    `url` = URL CDN directe (ex. https://v22.erome.com/.../X_720p.mp4).
-    `dest_path` = chemin de sortie SANS extension imposée (l'extension est
-    déduite de l'URL). Écriture atomique .tmp -> final.
-
-    Retourne (ok: bool, final_filename: str | None, error: str | None).
-    Ne lève jamais.
-    """
+    url is a direct CDN URL. dest_path has no imposed extension: derive it
+    from the URL. Write atomically through .tmp -> final.
+    Return (ok: bool, final_filename: str|None, error: str|None). Never raises."""
     try:
         from curl_cffi import requests as cf_requests
     except ImportError:
@@ -115,10 +107,10 @@ def download(url, dest_path):
             response = cf_requests.get(
                 url, impersonate="chrome",
                 headers={"Referer": "https://www.erome.com/"},
-                timeout=DOWNLOAD_TIMEOUT, stream=True,
+                timeout=network_timeout(DOWNLOAD_TIMEOUT), stream=True,
             )
         except Exception as e:
-            logger.warning("Erome download: échec requête %s: %s", url, e)
+            logger.warning("Erome download: request failed %s: %s", url, e)
             return False, None, f"Erome: download failed ({e})."
 
         status = getattr(response, "status_code", 0)
@@ -135,7 +127,7 @@ def download(url, dest_path):
         if status >= 400:
             return False, None, f"Erome: HTTP {status} response."
 
-        # Une réponse HTML n'est PAS un média.
+        # An HTML response is not media.
         if "text/html" in content_type.lower():
             return False, None, "Erome: HTML response instead of media."
 
@@ -161,7 +153,7 @@ def download(url, dest_path):
                 pass
             return False, None, f"Erome: write error ({e})."
 
-        # Fichier vide = échec.
+        # An empty file is a failure.
         try:
             if not tmp_path.exists() or tmp_path.stat().st_size == 0:
                 tmp_path.unlink(missing_ok=True)
@@ -181,8 +173,8 @@ def download(url, dest_path):
 
         return True, final_path.name, None
 
-    except Exception as e:  # garde-fou ultime — ne jamais lever
-        logger.exception("Erome download: erreur inattendue")
+    except Exception as e:  # final safeguard — never raise
+        logger.exception("Erome download: unexpected error")
         return False, None, f"Erome: unexpected error ({e})."
 
 
@@ -202,8 +194,8 @@ class EromeSource(Source):
         result = url_validator.validate_url(url)
         if result.is_valid and result.platform == Platform.EROME:
             return Match(url=url, validation=result)
-        # URLs CDN directes (v*.erome.com) : sous-domaine hors VALID_DOMAINS mais
-        # bien sur erome.com → notre downloader curl_cffi (Referer requis).
+        # Direct CDN URLs (v*.erome.com): subdomain outside VALID_DOMAINS but
+        # still on erome.com → our curl_cffi downloader (Referer required).
         if result.platform == Platform.EROME:
             return Match(url=url, validation=None)
         return None

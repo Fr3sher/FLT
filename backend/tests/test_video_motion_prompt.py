@@ -14,7 +14,10 @@ opener, the <Picture 1> tag, the I2V header) guaranteed in code.
 """
 import pytest
 
-from app.services import video_motion_prompt as vmp
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_motion_prompt as vmp
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- the answer that reaches the sampler ---------------------------------------

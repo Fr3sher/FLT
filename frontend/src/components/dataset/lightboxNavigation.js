@@ -74,10 +74,12 @@ export function freshLightboxImageState(imageId) {
     improving: false,
     actionsOpen: false,
     repairOpen: false,
-    // 📷 In the id-stamped slot like every other overlay flag: an open picker
-    // is a moment on THIS image, and ⟨ / ⟩ must leave it behind with the image
-    // it belonged to rather than carry it onto the next one.
-    cameraOpen: false,
+    // A layer a plugin's verb opened (lightbox.action — the 📷 picker): in the
+    // id-stamped slot like every other overlay flag, because an open picker is
+    // a moment on THIS image, and ⟨ / ⟩ must leave it behind with the image it
+    // belonged to rather than carry it onto the next one. The plugin reports
+    // it through the slot's onLayer.
+    pluginLayer: false,
     improveOpen: false,
     deciding: false,
   };
