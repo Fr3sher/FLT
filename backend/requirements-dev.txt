@@ -86,8 +86,9 @@ setuptools==84.0.0
 numpy>=1.26,<2
 opencv-python-headless>=4.9
 # Video import contracts encode and decode real clips; the Video plugin normally
-# installs this host extra, while CI's shared base must declare it explicitly.
+# installs these host extras, while CI's shared base must declare them explicitly.
 av>=13,<19
+imageio-ffmpeg>=0.5,<1
 
 # safetensors belongs HERE and not in the Torch overlay: that overlay carries
 # `--index-url .../whl/cpu`, so anything added to it resolves from PyTorch's
