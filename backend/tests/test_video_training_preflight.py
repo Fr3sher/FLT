@@ -162,26 +162,16 @@ def test_cloud_preflight_is_blocked_without_querying_an_absent_owner(client, tmp
 
 
 @pytest.mark.plugins('video', 'cloud_training')
-def test_the_cloud_launch_relays_allow_parallel_run_to_the_guardrails(client, tmp_path,
-                                                                       seams, monkeypatch):
-    """The guardrails' `PARALLEL_RUN:` refusal is CONFIRMABLE by contract, and the
-    answer travels as `allow_parallel_run`. The image route relayed it; the
-    video route dropped it, so the question the server asked could never be
-    answered from the video lane."""
-    from lds_cloud_training import cloud_training as ct
-    from lds_cloud_training import cloud_video_training as cvt
+def test_the_cloud_launch_relays_allow_parallel_run_to_the_provider(client, tmp_path,
+                                                                     seams, monkeypatch):
+    """The video HTTP route relays the user's parallel-rental confirmation."""
+    from lds_cloud_training import public_api_v1
     seen = {}
 
-    def spy(dataset_id, fam, dataset_table=None, allow_parallel_run=False):
-        seen['allow_parallel_run'] = allow_parallel_run
-        raise RuntimeError('stop here — the guardrails were consulted')
-    monkeypatch.setattr(ct, '_assert_launch_guardrails', spy)
-    monkeypatch.setattr(ct.cfg, 'secret', lambda key, *a, **k: 'k' if key == 'VAST_API_KEY' else None)
-    monkeypatch.setattr(cvt, '_count_clips', lambda folder: 2)
-    # The validation build runs BEFORE the guardrails and wants a clip size the
-    # seams' promote never records; its result is discarded by design, so a
-    # stand-in is exact here — the guardrails are the thing under test.
-    monkeypatch.setattr(cvt.video_training, 'build_job_config', lambda *a, **k: {})
+    def spy(*args):
+        seen['allow_parallel_run'] = args[14]
+        raise RuntimeError('stop here — the provider was consulted')
+    monkeypatch.setattr(public_api_v1, 'launch_cloud_video_training', spy)
     ds_id = _promoted(client, tmp_path)
 
     r = client.post(f'/api/video-dataset/{ds_id}/train/cloud',
