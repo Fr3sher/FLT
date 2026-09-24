@@ -11,9 +11,9 @@ import json
 import re
 import zlib
 
-# Verrou d'identité renforcé (deep-research 2026-06-14, source primaire Google AI) :
-# nommer les traits + interdire l'embellissement améliore la cohérence du visage.
-# NB : la qualité de la photo de référence reste le facteur déterminant.
+# Stronger identity lock (research 2026-06-14, Google AI primary source):
+# naming traits and forbidding beautification improves face consistency.
+# Reference-photo quality remains the determining factor.
 IDENTITY_GUARD = (
     "This is the SAME person as the reference image. Preserve their facial identity "
     "EXACTLY: same eye shape and color, nose, jawline, lips, skin tone and texture, "
@@ -23,9 +23,9 @@ IDENTITY_GUARD = (
     "expression shown in the reference image. "
     "SFW, realistic photographic portrait.")
 
-# Variante multi-références (Nano Banana) : avec un guard au singulier le modèle
-# peut s'ancrer sur une seule image ; on lui dit EXPLICITEMENT que toutes les refs
-# montrent la même personne et qu'il doit s'appuyer sur chacune d'elles.
+# Multi-reference Nano Banana variant: explicitly say all references show
+# the same person and every image must contribute, rather than allowing
+# a singular guard to anchor the model to just one image.
 IDENTITY_GUARD_MULTI = (
     "ALL the reference images show the SAME person (different angles, expressions or "
     "framings). Use EVERY reference image together to lock the identity. Preserve their "
@@ -472,11 +472,9 @@ def wrap_variation(prompt: str, ref_count: int = 1, suffix: str = '',
     return f"{guard} {apply_directive_overrides(_append_suffix(prompt, suffix))}"
 
 
-# Enrichissement PAR CADRAGE pour Klein (étude prompts 2026-07-10, sources :
-# guide fal.ai Flux2-klein + guide BFL FLUX.2) : Klein veut des descriptions
-# CONCRÈTES et détaillées (hiérarchie sujet → cadre → technique) — les tags
-# télégraphiques du catalogue suffisent aux moteurs API (qui brodent seuls)
-# mais SOUS-spécifient Klein, qui comble les trous arbitrairement.
+# Per-framing Klein detail (prompt study 2026-07-10, fal.ai/BFL guides).
+# Klein needs concrete subject/framing/technique descriptions. Brief
+# catalog tags suffice for API engines but leave Klein guessing details.
 _KLEIN_FRAMING_DETAIL = {
     'face': ('Close-up head-and-shoulders portrait: the face fills most of the frame, '
              'both eyes in crisp focus, 85mm portrait lens look with gentle background '
@@ -595,31 +593,24 @@ def wrap_variation_klein(prompt: str, nsfw: bool = False, framing: str | None = 
                                 concrete_outfit=True, markings_lock=True)
 
 
-# --- Anti-fuite tenue / expression (constat terrain 2026-07-14) ---------------
-# Les moteurs d'édition (Nano Banana, ChatGPT-image, Klein) PRÉSERVENT ce qu'on ne
-# contredit pas explicitement. Symptômes réels rapportés par le propriétaire :
-#   1) sur les plans buste, le modèle reprend la MÊME tenue que la réf → la tenue se
-#      lie à l'identité dans le LoRA ;
-#   2) l'expression de la réf (sourire, grimace) se propage à TOUS les plans.
-# Deux corrections complémentaires, au bon niveau :
-#   • WRAPPERS (IDENTITY_GUARD / IDENTITY_GUARD_MULTI / wrap_variation_klein) : la réf
-#     ne sert QU'À l'identité du visage ; tenue + expression viennent de la description,
-#     jamais copiées de la réf. Directive GÉNÉRALE → couvre aussi les prompts édités /
-#     custom, les deux familles de moteurs et la régénération.
-#   • CATALOGUE : chaque entrée SANS tenue / expression explicite reçoit une cible
-#     CONCRÈTE mais variée (les modèles d'édition suivent mieux une consigne « porte X »
-#     qu'un vide qu'ils comblent par la réf). Baker la directive dans le TEXTE du prompt
-#     la propage partout (API + Klein + persistance variation_prompt + régénération).
+# Prevent outfit/expression leakage (field reports 2026-07-14). Editing
+# engines preserve uncontradicted reference details, causing the same
+# outfit or expression to propagate and bind to identity.
+# Wrappers restrict the reference to facial identity; outfit/expression
+# come from the requested description. This also covers custom/edited
+# prompts, both engine families and regeneration.
+# Catalog entries without explicit outfits/expressions receive concrete,
+# varied targets. Embedding directions in prompt text carries them through
+# API/Klein generation, persisted variation_prompt and regeneration.
 OUTFIT_VARY = ('wearing a different casual everyday outfit, varied in style and colour '
                '(not the outfit from the reference image)')
 EXPRESSION_NEUTRAL = ('a calm neutral facial expression, not copying the expression from '
                       'the reference image')
 
-# Détecteurs « le texte nomme-t-il DÉJÀ une tenue / une expression ? » (mots entiers).
-# Servent à n'ajouter la directive par défaut qu'aux entrées qui n'en portent pas —
-# les entrées à tenue nommée (veste, robe, bikini…) ou expression nommée (sourire,
-# sérieux…) gardent la leur. OUTFIT_VARY contient « outfit » et EXPRESSION_NEUTRAL
-# « expression » → la passe d'augmentation est idempotente.
+# Whole-word detectors check whether text already names an outfit or
+# expression. Add defaults only when absent; keep explicit choices.
+# OUTFIT_VARY includes outfit and EXPRESSION_NEUTRAL includes expression,
+# so augmentation is idempotent.
 _HAS_OUTFIT = re.compile(
     r'\b(outfit|top|clothes|clothing|jacket|dress|bikini|swimsuit|swimwear|sportswear|'
     r'leggings|jeans|lingerie|towel|shirt|blouse|coat|skirt|gown|suit)\b', re.I)
@@ -1156,10 +1147,9 @@ VARIATION_CATALOG = [
     _e('bust_land', 'framing', 'bust', 'Bust, landscape framing',
        'upper body portrait, landscape framing, environment visible on the sides, outdoor',
        cb=True, aspect='4:3'),
-    # --- Body emphasis (fidélité corps) : silhouette RÉELLEMENT visible mais dans
-    # le registre AUTORISÉ des moteurs API (vêtements ajustés, maillot de bain en
-    # contexte plage/piscine, tenue de sport, robe moulante, contre-jour). Pas de
-    # contournement de filtre : pour du contenu explicite → Klein en local.
+    # Body fidelity: make the silhouette visible through API-accepted fitted
+    # clothes, swimwear in beach/pool contexts, sportswear, fitted dresses and
+    # backlighting. Explicit content stays on local Klein, without filter bypass.
     _e('bust_fitted_top', 'outfit', 'bust', 'Bust, fitted top',
        'upper body portrait, fitted ribbed knit top, natural relaxed pose, soft indoor light',
        co=True, cb=True),
@@ -1187,8 +1177,8 @@ VARIATION_CATALOG = [
     _e('body_silhouette', 'lighting', 'body', 'Body, backlit silhouette',
        'full body shot, backlit near a large window, figure outlined by rim light, elegant '
        'fitted dress, moody interior', co=True, cb=True),
-    # Gros plans VISAGE en formats variés (preset visage-centré) : la robustesse de
-    # format sur le visage lui-même, sans plan corps (corps reste générique).
+    # Face-centered close-ups in varied formats improve facial format
+    # robustness while leaving the body generic.
     _e('face_land', 'framing', 'face', 'Face, landscape framing',
        'close-up portrait, three-quarter view, landscape framing, face to one side with environment, outdoor',
        cb=True, aspect='4:3'),
@@ -1200,13 +1190,11 @@ VARIATION_CATALOG = [
        cb=True, aspect='16:9'),
 ]
 
-# --- Catalogue NSFW (moteur Klein LOCAL uniquement) --------------------------
-# Plans corps non censurés pour la fidélité corporelle : jamais envoyés aux
-# moteurs API (route + service refusent), générés par le Klein local qui n'a pas
-# de filtre. Le registre reste "état + pose + décor" (lingerie/topless/nu) — pas
-# d'acte : c'est un dataset de PERSONNAGE, l'acte appartient au prompt d'usage.
-# Le caption doit décrire l'état (nude/lingerie) pour qu'il reste promptable et
-# ne se lie pas au trigger (principe d'inversion).
+# NSFW catalog for local Klein only. Body shots for fidelity never go
+# to API engines; routes/services reject them. Specify state, pose and
+# setting (lingerie/topless/nude), not actions: this is a character dataset.
+# Captions describe state so it stays promptable rather than binding
+# to the trigger.
 NSFW_VARIATION_CATALOG = [
     _e('nsfw_bust_lingerie', 'nsfw', 'bust', 'Bust, lingerie',
        'bust shot, wearing delicate lace lingerie, bedroom, soft window light',
@@ -1908,9 +1896,9 @@ def is_nsfw_label(label) -> bool:
     return bool(label) and (label in _NSFW_LABELS or label.startswith('🔞'))
 
 
-# Préréglage face-heavy (deep-research 2026-06-14) : majorité de visages — c'est là
-# que se joue la cohérence d'identité — et ≤4 plein-pied (le reste du catalogue
-# body/cafe/beach reste sélectionnable manuellement). 14 visage / 6 buste / 4 corps / 1 dos.
+# Face-heavy preset (research 2026-06-14): prioritize identity with
+# 14 face/6 bust/4 body/1 back. Remaining body/cafe/beach entries stay
+# manually selectable.
 _BALANCED_25 = [
     'face_front_neutral', 'face_front_smile', 'face_34l_smile', 'face_34l_serious',
     'face_34r_laugh', 'face_34r_soft', 'face_profile_l', 'face_profile_r',
@@ -1929,9 +1917,9 @@ _BALANCED_MULTIFORMAT = _BALANCED_25 + [
     'body_wide_env', 'body_walk_wide', 'body_land_outdoor',
     'body_sit_terrace', 'body_field_wide', 'bust_land',
 ]
-# Visage-centré : QUE du visage + buste, en formats variés, ZÉRO plan corps. Pour un
-# LoRA où l'identité (visage) prime et où le corps doit rester générique/pilotable
-# (ne pas l'entraîner = ne pas le graver). 17 visage / 7 buste, formats 1:1/3:4/4:3/9:16/16:9.
+# Face-centered preset: 17 face/7 bust, no body shots, in
+# 1:1/3:4/4:3/9:16/16:9. Prioritize identity and leave body appearance
+# generic and prompt-controllable by not training it.
 _FACE_FOCUSED = [
     'face_front_neutral', 'face_front_smile', 'face_34l_smile', 'face_34l_serious',
     'face_34r_laugh', 'face_34r_soft', 'face_profile_l', 'face_profile_r',
@@ -1940,11 +1928,10 @@ _FACE_FOCUSED = [
     'bust_front', 'bust_34', 'bust_outdoor', 'bust_studio', 'bust_jacket', 'bust_evening',
     'bust_land',
 ]
-# Plein-pied fiable (deep-research 2026-06-16) : pour un LoRA qui doit rendre le
-# CORPS de façon robuste (le perso casse en paysage/pied). On prend TOUT le catalogue
-# corps (11) + dos, et un noyau visage/buste resserré pour rester ~50/50 — entraîner
-# surtout sur des plans corps dégraderait le visage (identité qui dérive). ZÉRO
-# nouvelle variation : tout est déjà dans le catalogue. 10 visage / 4 buste / 11 corps / 1 dos.
+# Reliable full-body preset (research 2026-06-16): use all 11 body
+# entries plus back, with a smaller identity core for roughly even
+# coverage. Excess body emphasis would degrade face identity. Reuses
+# existing entries: 10 face/4 bust/11 body/1 back.
 _FULLBODY_FOCUSED = [
     'face_front_neutral', 'face_front_smile', 'face_34l_smile', 'face_34r_laugh',
     'face_34r_soft', 'face_profile_l', 'face_window', 'face_golden', 'face_studio',
@@ -1955,11 +1942,10 @@ _FULLBODY_FOCUSED = [
     'body_sit_terrace', 'body_field_wide',
     'back_34',
 ]
-# Body-emphasis (fidélité corps, 25 = 8 visage / 8 buste / 8 corps / 1 dos — aligné
-# sur la cible de composition body-fidelity 8/8/8/2, le dos se génère en x2) : les
-# plans buste/corps privilégient les tenues qui MONTRENT la silhouette (ajusté,
-# maillot, sport, moulant, contre-jour) tout en restant dans le registre accepté
-# par les moteurs API. Le visage garde son noyau identité.
+# Body-emphasis fidelity preset: 25 entries (8 face/8 bust/8 body/1 back),
+# aligned with the 8/8/8/2 target by generating the back twice. Bust/body
+# clothing reveals silhouette within API-accepted subjects; face shots
+# retain the identity core.
 _BODY_EMPHASIS = [
     'face_front_neutral', 'face_front_smile', 'face_34l_smile', 'face_34r_laugh',
     'face_profile_l', 'face_window', 'face_golden', 'face_studio',
@@ -2300,9 +2286,9 @@ def prompt_by_label(label):
     return next((e['prompt'] for e in _ALL_CATALOGS if e['label'] == label), None)
 
 
-# Aspect ratio par cadrage (deep-research 2026-06-14) : forcer tout en carré
-# letterboxe les plans corps (bandes noires apprises par le LoRA). On demande à
-# Nano Banana un ratio adapté ; ai-toolkit gère le bucketing non-carré.
+# Choose aspect by framing: forcing square body shots adds learnable
+# black bands. Ask Nano Banana for appropriate ratios; ai-toolkit
+# handles non-square bucketing.
 ASPECT_BY_FRAMING = {'face': '1:1', 'bust': '3:4', 'body': '3:4', 'back': '3:4'}
 
 
@@ -2311,15 +2297,15 @@ def aspect_for_framing(framing: str) -> str:
 
 
 def aspect_for_entry(entry) -> str:
-    """Ratio d'une ENTRÉE de catalogue : override explicite, sinon défaut du cadrage."""
+    """Catalog entry aspect: explicit override, otherwise framing default."""
     return entry.get('aspect') or aspect_for_framing(entry.get('framing'))
 
 
 def aspect_for_label(label, framing='face') -> str:
-    """Ratio résolu PAR LABEL sur le catalogue serveur (autoritatif) — le frontend
-    n'envoie pas l'aspect, et la régénération n'a que la ligne DB. Retrouve l'entrée
-    par son label → son override ; label inconnu → fallback cadrage. Le label est
-    d'abord canonicalisé pour qu'un ancien label français retrouve son override."""
+    """Resolve aspect by label from the authoritative server catalog. Frontend
+    does not send aspect and regeneration has only the database row. Use the
+    entry override or fall back to framing. Canonicalize historical French
+    labels first so stored entries retain their overrides."""
     label = canonical_label(label)
     e = next((x for x in _ALL_CATALOGS if x['label'] == label), None)
     return aspect_for_entry(e) if e else aspect_for_framing(framing)
@@ -2350,9 +2336,9 @@ CAPTION_PROMPT = (
     "mood. Output only the caption itself - no preamble, no \"Here is\", no quotation marks, "
     "no commentary.")
 
-# JoyCaption et le fallback Qwen3-VL partagent ce prompt POSITIF + mode entrainé
-# "Straightforward". Validé empiriquement (24/31 fuites -> 0/31). La consigne negative
-# precedente etait ignoree par JoyCaption ("not a general instruction follower").
+# JoyCaption and Qwen3-VL fallback share this positive prompt and trained
+# Straightforward mode. Empirically reduced leaks from 24/31 to 0/31.
+# JoyCaption ignored the previous negative instruction.
 JOYCAPTION_PROMPT = CAPTION_PROMPT
 
 
@@ -2372,11 +2358,10 @@ DESCRIPTIVE_CAPTION_PROMPT = (
     "itself — no preamble, no \"Here is\", no quotation marks, no commentary.")
 
 
-# Dataset STYLE : l'invariant du set est le RENDU (esthétique, médium, palette, trait…),
-# qui doit être absorbé par le LoRA — donc jamais décrit. Règle miroir du concept :
-# ce qui est captionné reste contrôlable par le prompt, ce qui est tu est absorbé.
-# On décrit donc le CONTENU librement (sujets, scène, composition — l'identité est
-# conservée, les sujets varient) et on tait tout vocabulaire de style/rendu.
+# Style datasets learn rendering (aesthetic, medium, palette, linework),
+# so omit those descriptions and freely describe subjects/scene/composition.
+# As with concepts, described features stay controllable; omitted features
+# are learned. Subject identity remains described because subjects vary.
 CAPTION_PROMPT_STYLE = (
     "Caption Type: Straightforward.\n\n"
     "This is one image from a STYLE training set: every image shares the same artistic "
@@ -2406,12 +2391,10 @@ def caption_prompt_for_style(mode) -> str:
     return CAPTION_PROMPT_STYLE_BOORU if mode == 'booru' else CAPTION_PROMPT_STYLE
 
 
-# Dataset CONCEPT (logique INVERSÉE) : l'invariant du set n'est plus l'identité mais
-# l'acte/effet récurrent qu'on OMET pour qu'il se lie au trigger. On décrit donc tout —
-# personnes, pose, cadrage, lumière, décor — SAUF l'acte central répété. Le captioneur
-# reçoit la description EXACTE du concept ({concept}, saisie à la création du dataset) pour
-# savoir précisément quoi taire, plutôt que de deviner l'action dominante. Aucun post-filtre
-# d'identité (on GARDE l'identité).
+# Concept datasets reverse character logic: omit the repeated action/
+# effect so it binds to the trigger. Describe people, pose, framing, light
+# and setting. Pass the exact user-supplied concept description so the
+# captioner knows what to omit. Do not filter identity descriptions.
 CAPTION_PROMPT_CONCEPT = (
     "Caption Type: Straightforward.\n\n"
     "This is one image from a CONCEPT training set. The single element every image in the "
@@ -2434,11 +2417,10 @@ CAPTION_PROMPT_CONCEPT = (
     "commentary.")
 
 
-# Passe de RAFFINAGE concept (Joy→Qwen) : JoyCaption est très détaillé mais LITTÉRAL —
-# il NOMME l'acte/les fluides/le watermark (ce qui, pour un concept, doit rester tu
-# pour se lier au trigger). Qwen relit la caption Joy + l'image et RÉÉCRIT en retirant
-# uniquement le focal explicite + le texte incrusté, en gardant tout le contexte riche.
-# => détail de JoyCaption + adhérence de Qwen (mesuré : Joy nomme le concept ~4/4).
+# Concept refinement (Joy-to-Qwen): JoyCaption is detailed but literal
+# and names the action/fluids/watermark. Qwen rereads caption plus image,
+# removing only the explicit focus and overlaid text while retaining rich
+# context. Combines JoyCaption detail with Qwen instruction adherence.
 CAPTION_REFINE_CONCEPT_PROMPT = (
     "Below is a draft caption describing this exact image:\n\n"
     "\"\"\"\n{existing}\n\"\"\"\n\n"
@@ -2462,20 +2444,15 @@ CAPTION_REFINE_CONCEPT_PROMPT = (
     "quotation marks, no commentary.")
 
 
-# Expansion de la ban-list concept : à partir de la description du concept, le LLM liste
-# les mots/locutions qu'un captioneur emploierait pour le NOMMER (synonymes, argot, formes
-# verbales). Sert au DÉTECTEUR de fuite (regex), pas au prompt de caption — la littérature
-# sur le negative prompting montre que lister les mots interdits dans le prompt de
-# GÉNÉRATION amorce l'effet « éléphant rose » ; la robustesse vient de la vérification en
-# sortie + correction ciblée. Format JSON objet (le grammar-mode d'Ollama produit un objet
-# plus fiablement qu'un tableau nu). Accolades DOUBLÉES → survivent au .format(concept=…).
-# Loop-resistant on purpose: the earlier version listed residue examples ("glistening,
-# dripping, sticky, white substance") and asked for 8-25 terms — the abliterated Qwen
-# latched onto the examples and looped combinatorially ("mirror selfie shot",
-# "self-portrait photograph"…) past the token budget, leaving an UNCLOSED array that
-# json.loads rejected → empty ban-list → the concept leaked into every caption. So: no
-# seeding examples, "each term once, then STOP", 6-15 terms, and an explicit ban on
-# listing the PEOPLE/body/clothing (which must stay DESCRIBED, never scrubbed).
+# Expand concept synonyms/slang/verb forms into a ban list for the leak
+# detector, not the caption prompt: naming forbidden words in generation
+# can prime them. Validate output and apply targeted correction instead.
+# Use a JSON object, more reliable with Ollama grammar mode than a bare
+# array; doubled braces survive format(concept=...).
+# Avoid seeded examples that previously caused repetitive combinatorial
+# output past the token budget, invalid JSON and an empty ban list.
+# Request each term once, then stop, with 6-15 terms and no people/body/
+# clothing terms, which must remain described.
 EXPAND_CONCEPT_TERMS_PROMPT = (
     "Ignore the attached image entirely. You are building a caption BLOCKLIST for a "
     "CONCEPT training set.\n"
@@ -2489,8 +2466,8 @@ EXPAND_CONCEPT_TERMS_PROMPT = (
     "Output ONLY a JSON object: {{\"terms\": [\"term one\", \"term two\"]}}")
 
 
-# Réécriture CORRECTIVE après détection de fuite : on nomme les mots EXACTS qui ont fui
-# (feedback ciblé ≫ instruction générique). Placeholders : existing / concept / leaked.
+# Corrective rewrite after leak detection: identify the exact leaked
+# words for targeted feedback. Placeholders: existing/concept/leaked.
 CAPTION_LEAK_FIX_PROMPT = (
     "Below is a caption for this exact image:\n\n"
     "\"\"\"\n{existing}\n\"\"\"\n\n"
@@ -2507,12 +2484,10 @@ CAPTION_LEAK_FIX_PROMPT = (
     "quotation marks, no commentary.")
 
 
-# --- Mode FIDÉLITÉ CORPS (fidelity='body') -------------------------------------
-# Pour un LoRA qui doit reproduire AUSSI la morphologie, les marques corporelles
-# PERMANENTES (tatouages, cicatrices, taches de naissance, piercings) sont de
-# l'identité au même titre que le visage : les décrire dans la caption les lierait
-# aux mots au lieu du trigger. Blocs AJOUTÉS aux prompts de base (la morphologie —
-# body build, breast size… — y est déjà bannie).
+# Body fidelity also treats permanent tattoos/scars/birthmarks/piercings
+# as identity. Omit them from captions so they bind to the trigger rather
+# than words. Append to base prompts, which already exclude body-build
+# descriptions.
 BODY_FIDELITY_PROSE_SUFFIX = (
     "\n\nBODY-FIDELITY RULE - this subject's BODY is part of the learned identity. "
     "Additionally NEVER mention: tattoos, scars, birthmarks, moles, piercings or any "
@@ -2790,9 +2765,9 @@ def caption_prompt_for(mode, body=False, appearance=None) -> str:
     return base + (BODY_FIDELITY_BOORU_SUFFIX if mode == 'booru' else BODY_FIDELITY_PROSE_SUFFIX)
 
 
-# Detecteur INDICATIF de VRAIS descripteurs d'identite (cheveux/peau/couleur d'yeux/
-# forme de visage/traits). Ne flague PAS "the face" (lumiere) ni "eyes open/looking"
-# (expression) — calibre empiriquement sur 31 captions reelles.
+# Advisory detector of actual identity traits: hair/skin/eye color/face
+# shape/features. Do not flag face lighting or eyes-open/looking expressions.
+# Calibrated empirically on 31 real captions.
 _IDENTITY_LEAK = re.compile(
     r'\bhair\b'
     r'|\bcomplexion\b|\bfreckles?\b|\bjawline\b|\beyebrows?\b|\bfacial\s+features?\b'
@@ -2835,7 +2810,7 @@ _GLASSES_LEAK = re.compile(
     r'\bglasses\b|\bsunglasses\b|\bspectacles\b|\beyeglasses\b',
     re.I)
 
-# Marques corporelles permanentes = identité en mode body-fidelity (détection + drop).
+# Permanent body marks count as identity in body-fidelity detection/removal.
 _BODY_LEAK = re.compile(
     r'\btattoos?\b|\btattooed\b|\bscars?\b|\bscarred\b|\bbirthmarks?\b|\bmoles?\b'
     r'|\bpiercings?\b|\bpierced\b', re.I)
@@ -2875,10 +2850,10 @@ def _policy_identity_hit(caption, appearance) -> bool:
 
 
 def caption_has_identity_leak(caption, body=False, appearance=None) -> bool:
-    """True si la caption mentionne un VRAI trait d'identite. Detecteur SEUL (badge).
-    body=True (fidélité corps) flague AUSSI les marques corporelles permanentes.
-    appearance=None keeps the historical hair/eyes/skin/face net; a policy dict
-    watches locked core plus every family set to Omit, and ignores Describe ones."""
+    """Detect real identity traits for the badge only. body=True also flags
+    permanent body marks. appearance=None retains historical hair/eyes/skin/
+    face detection; policy dictionaries monitor locked core and Omit
+    families while ignoring Describe families."""
     if not caption:
         return False
     if appearance:
@@ -2888,10 +2863,9 @@ def caption_has_identity_leak(caption, body=False, appearance=None) -> bool:
     return bool(hit or (body and _BODY_LEAK.search(caption)))
 
 
-# Post-filtre : drop les PHRASES decrivant un trait d'identite. Avec le prompt
-# "Straightforward", la rare fuite est isolee dans sa propre phrase -> suppression
-# propre (pas de casse grammaticale). NE drop PAS expression ("eyes closed") ni
-# lumiere ("shadow on the face").
+# Post-filter sentences describing identity traits. Straightforward
+# prompts isolate rare leaks in separate sentences, allowing clean
+# removal without grammar damage. Preserve expressions and face lighting.
 _DROP_SENT = re.compile(
     r'\bhair\b|\bcomplexion\b|\bfreckles?\b|\bjawline\b|\beyebrows?\b|\bfacial\s+features?\b'
     r'|\bskin\s+(?:tone|texture)\b', re.I)
@@ -2907,10 +2881,10 @@ def _sentence_is_identity(sent, body=False, appearance=None) -> bool:
 
 
 def drop_identity_sentences(caption, body=False, appearance=None) -> str:
-    """Retire les phrases d'identite isolees d'une caption (post-captioning).
-    body=True retire aussi les phrases décrivant une marque corporelle permanente.
-    appearance=None keeps the historical `\bhair\b` drop; a policy only drops
-    sentences that name an Omit family (hair-clip wardrobe is not hair-identity)."""
+    """Remove isolated identity sentences after captioning. body=True also
+    removes permanent body marks. appearance=None keeps historical hair
+    matching; a policy removes only sentences naming Omit families, so
+    a wardrobe hair clip is not mistaken for hair identity."""
     parts = re.split(r'(?<=[.!?])\s+', caption or '')
     kept = [s for s in parts if s.strip()
             and not _sentence_is_identity(s, body=body, appearance=appearance)]
@@ -2998,9 +2972,9 @@ _LEAD_IN_OBJECT = re.compile(
 
 
 def drop_style_lead_in(caption) -> str:
-    """Retire l'amorce de médium d'une caption de dataset STYLE, en réparant la
-    grammaire : « A digital illustration of a young woman… » -> « A young woman… ».
-    Ne touche QUE l'amorce ; un médium cité dans la scène est du contenu."""
+    """Remove a style caption's leading medium phrase and repair grammar:
+    A digital illustration of a young woman becomes A young woman.
+    Only change the opening; a medium mentioned within the scene is content."""
     text = (caption or '').strip()
     if not text:
         return ''
@@ -3152,7 +3126,7 @@ def caption_concept_leaks(caption, concept_desc, concept_terms=None) -> list:
 
 
 def caption_has_concept_leak(caption, concept_desc, concept_terms=None) -> bool:
-    """True if `caption` names the concept (kind=concept). Detector SEUL (badge), the
+    """True if `caption` names the concept (kind=concept). Detector ONLY (badge), the
     concept-side twin of caption_has_identity_leak."""
     return bool(caption_concept_leaks(caption, concept_desc, concept_terms))
 
@@ -3208,11 +3182,9 @@ def caption_prompt_for_concept(concept_desc) -> str:
     return base[:cut] + hint + base[cut:]
 
 
-# --- Mode BOORU (datasets SDXL booru-native type bigLove) --------------------
-# Les fine-tunes SDXL booru se promptent en tags danbooru (virgules) ; la prose est
-# un mismatch de style (recherche 2026-06-14). On demande à JoyCaption le mode
-# "Booru tag list" en EXCLUANT l'identité (même principe que la prose : l'identité
-# se lie au trigger, pas aux mots).
+# Booru mode for native SDXL fine-tunes: comma-separated Danbooru tags,
+# where prose would mismatch the model's style. Ask JoyCaption for Booru
+# tag list while excluding identity, which should bind to the trigger.
 CAPTION_PROMPT_BOORU = (
     "Caption Type: Booru tag list.\n\n"
     "ABSOLUTE RULE - the subject's physical identity is already known and must NEVER be "
@@ -3228,9 +3200,9 @@ CAPTION_PROMPT_BOORU = (
     "and the lighting and mood. Output ONLY the comma-separated tag list - no preamble, "
     "no sentences, no quotation marks.")
 
-# Tags booru d'IDENTITÉ à filtrer en post-traitement (le filtre prose par PHRASES est
-# inutilisable sur des tags virgule). On drop par sous-chaîne, par valeur exacte, et un
-# cas spécial 'eyes' (garder l'expression closed_eyes/wink, drop la couleur).
+# Post-filter identity tags; prose sentence filtering cannot handle
+# comma-separated tags. Match substrings/exact values with special eyes
+# handling: retain closed_eyes/wink expressions, remove eye color.
 _IDENTITY_TAG_CONTAINS = (
     'hair', 'bangs', 'braid', 'ponytail', 'twintail', 'sideburn', 'eyebrow', 'eyelash',
     'freckle', 'complexion', 'jawline',
@@ -3268,8 +3240,8 @@ _FACIAL_HAIR_TAG_CONTAINS = (
 _GLASSES_TAG_CONTAINS = ('glasses', 'sunglasses', 'spectacles', 'eyeglasses')
 
 
-# Marques corporelles permanentes (mode body-fidelity) — par sous-chaîne : couvre
-# tattoo/arm_tattoo/tattooed, scar/scar_on_face, piercing/ear_piercing…
+# Permanent body marks for body fidelity, matched by substring to cover
+# tattoo/arm_tattoo/tattooed, scar/scar_on_face and piercing/ear_piercing.
 _BODY_TAG_CONTAINS = ('tattoo', 'scar', 'birthmark', 'piercing', 'pierced')
 
 
@@ -3289,7 +3261,7 @@ def _is_identity_tag(tag, body=False, appearance=None) -> bool:
     if appearance:
         if t in _CORE_TAG_EXACT:
             return True
-        if 'eyes' in t:  # garde l'EXPRESSION, drop la couleur
+        if 'eyes' in t:  # keep the EXPRESSION, drop the color
             return not any(k in t for k in ('closed', 'wink', 'half'))
         if any(sub in t for sub in _CORE_TAG_CONTAINS):
             return True
@@ -3309,7 +3281,7 @@ def _is_identity_tag(tag, body=False, appearance=None) -> bool:
         return False
     if t in _IDENTITY_TAG_EXACT:
         return True
-    if 'eyes' in t:  # garde l'EXPRESSION (closed_eyes, wink), drop la couleur (blue_eyes)
+    if 'eyes' in t:  # keep the EXPRESSION (closed_eyes, wink), drop the color (blue_eyes)
         return not any(k in t for k in ('closed', 'wink', 'half'))
     if body and any(sub in t for sub in _BODY_TAG_CONTAINS):
         return True
@@ -3317,10 +3289,10 @@ def _is_identity_tag(tag, body=False, appearance=None) -> bool:
 
 
 def drop_identity_tags(caption, body=False, appearance=None) -> str:
-    """Retire les tags booru d'identité d'une caption en liste de tags (mode booru),
-    pendant booru de drop_identity_sentences (mode prose). body=True retire aussi
-    les marques corporelles permanentes (fidélité corps). appearance=None keeps
-    the historical tag net; a policy only drops Omit-family tags (hair clips stay)."""
+    """Remove identity tags from booru captions, mirroring prose
+    drop_identity_sentences. body=True also removes permanent body marks.
+    appearance=None retains the historical tag filter; policies remove
+    only Omit-family tags, preserving hair clips."""
     if not caption:
         return ''
     kept = [t.strip() for t in caption.split(',')
@@ -3329,8 +3301,8 @@ def drop_identity_tags(caption, body=False, appearance=None) -> str:
 
 
 def caption_style(text) -> str:
-    """Heuristique PURE : 'booru' (liste de tags virgule courts) vs 'prose' (phrases).
-    Sert au garde-fou de cohérence caption↔type au lancement de l'entraînement."""
+    """Pure heuristic distinguishing short comma-separated booru tags from
+    prose sentences, used for caption/training-family consistency checks."""
     t = (text or '').strip()
     if not t:
         return 'prose'
@@ -3339,7 +3311,7 @@ def caption_style(text) -> str:
         return 'prose'
     avg_words = sum(len(s.split()) for s in segs) / len(segs)
     sentence_punct = t.count('.') + t.count('!') + t.count('?')
-    # Beaucoup de segments courts + quasi pas de ponctuation de phrase = tags booru.
+    # Many short segments and little sentence punctuation indicate booru tags.
     return 'booru' if (avg_words <= 3.0 and sentence_punct <= 1) else 'prose'
 
 

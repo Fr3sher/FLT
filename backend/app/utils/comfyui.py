@@ -22,6 +22,7 @@ Dataset Studio, config-driven and slimmed:
     `invalidate_model_caches`, `get_model_folder_paths`, `unload_ollama_model`.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import errno
 import glob
@@ -359,7 +360,7 @@ _workflow_text_cache = {}
 
 
 def load_workflow_local(file_path):
-    """Charge un fichier JSON de workflow ComfyUI et retourne les données parsées, ou None en cas d'erreur."""
+    """Load and parse a ComfyUI workflow JSON file; return None on error."""
     import json
     try:
         st = os.stat(file_path)
@@ -426,22 +427,21 @@ def _request_never_sent(exc) -> bool:
 
 
 def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
-    """Envoie un workflow à ComfyUI pour exécution.
+    """Submit a workflow to ComfyUI.
 
     Args:
-        prompt_workflow: Workflow JSON ComfyUI (format API).
-        client_id: Identifiant du client (user_id).
-        worker_url: URL optionnelle du worker distant. Si None, utilise api_address() (local).
-    """
+        prompt_workflow: ComfyUI API-format workflow JSON.
+        client_id: Client identifier (user_id).
+        worker_url: Optional remote worker URL; None uses local api_address()."""
     if not prompt_workflow:
         return None, "Workflow data is missing"
 
-    # URL cible : worker distant ou local
+    # Target URL: remote or local worker
     local_api = api_address()
     api_addr = worker_url or local_api
     is_local = not worker_url or api_addr.rstrip('/') == local_api.rstrip('/')
 
-    # Vérifier que ComfyUI est démarré (seulement pour le worker local)
+    # Check ComfyUI availability for the local worker only.
     if is_local:
         result = _ensure_comfyui_before_generation()
         if result is not None:
@@ -556,7 +556,7 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
         # try timed out the same way).
         response = requests.post(
             urljoin(api_addr, "/prompt"), json=payload, headers=headers,
-            timeout=(10, 120), allow_redirects=False)
+            timeout=network_timeout((10, 120)), allow_redirects=False)
         response.raise_for_status()
         status = getattr(response, 'status_code', None)
         if type(status) is not int or not 200 <= status < 300:
@@ -565,9 +565,8 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
     except requests.exceptions.RequestException as e:
         logger.error(f"Error queuing prompt to {api_addr}: {e}")
 
-        # ComfyUI place le détail de validation (node_errors) dans le CORPS de la
-        # réponse 400 — sans le logger, on ne voit jamais POURQUOI le workflow est
-        # rejeté (modèle introuvable, nœud custom non chargé, input invalide...).
+        # ComfyUI puts node_errors validation details in the 400 response body.
+        # Log them so missing models/custom nodes and invalid inputs are diagnosable.
         err_body = ''
         _resp = getattr(e, 'response', None)
         if _resp is not None:
@@ -578,10 +577,9 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
             if err_body:
                 logger.error(f"ComfyUI /prompt {getattr(_resp, 'status_code', '?')} body: {err_body}")
 
-        # 400 = REJET DE VALIDATION (modèle absent du disque, node inconnu, input
-        # invalide…) : déterministe — retenter ou redémarrer ComfyUI n'y changera
-        # RIEN. Tag distinct pour que la queue échoue le job immédiatement au lieu
-        # de le requalifier en « panne ».
+        # HTTP 400 is deterministic validation rejection: missing model, unknown
+        # node or invalid input. Retrying/restarting cannot fix it. Use a distinct
+        # tag so the queue fails immediately rather than treating it as an outage.
         if getattr(_resp, 'status_code', None) == 400:
             return None, f"WORKFLOW_INVALIDE (validation ComfyUI 400): {err_body[:600]}"
 
@@ -613,7 +611,7 @@ def get_comfyui_history_probe(prompt_id, worker_url=None) -> ComfyHistoryProbe:
     api_addr = worker_url or api_address()
     try:
         response = requests.get(
-            urljoin(api_addr, f'/history/{prompt_id}'), timeout=5, allow_redirects=False)
+            urljoin(api_addr, f'/history/{prompt_id}'), timeout=network_timeout(5), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         if type(status) is not int:
             return ComfyHistoryProbe(ComfyHistoryHealth.UNHEALTHY,
@@ -690,7 +688,7 @@ def comfyui_prompt_is_absent(prompt_id, worker_url=None):
     try:
         api_addr = worker_url or api_address()
         response = requests.get(
-            urljoin(api_addr, '/queue'), timeout=3, allow_redirects=False)
+            urljoin(api_addr, '/queue'), timeout=network_timeout(3), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         if type(status) is not int or not 200 <= status < 300:
             return None
@@ -727,7 +725,7 @@ def cancel_comfyui_prompt_state(prompt_id, client_id, worker_url=None) -> ComfyP
 
     try:
         response = requests.get(
-            urljoin(api_addr, '/queue'), timeout=3, allow_redirects=False)
+            urljoin(api_addr, '/queue'), timeout=network_timeout(3), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         if type(status) is not int or not 200 <= status < 300:
             return ComfyPromptState.UNKNOWN
@@ -744,7 +742,7 @@ def cancel_comfyui_prompt_state(prompt_id, client_id, worker_url=None) -> ComfyP
             return ComfyPromptState.UNKNOWN
         if any(exact(entry) for entry in pending):
             response = requests.post(
-                urljoin(api_addr, '/queue'), json={'delete': [prompt_id]}, timeout=3,
+                urljoin(api_addr, '/queue'), json={'delete': [prompt_id]}, timeout=network_timeout(3),
                 allow_redirects=False)
             status = getattr(response, 'status_code', None)
             return (ComfyPromptState.DELETED if type(status) is int and 200 <= status < 300
@@ -777,7 +775,7 @@ def _running_entries(worker_url=None):
     # repo measured 3-second /queue timeouts two in a row while the render
     # was alive (ComfyQueueVerdict). Asking to stop that render is the one
     # read that must survive it.
-    response = requests.get(urljoin(api_addr, '/queue'), timeout=(3, 10), allow_redirects=False)
+    response = requests.get(urljoin(api_addr, '/queue'), timeout=network_timeout((3, 10)), allow_redirects=False)
     status = getattr(response, 'status_code', None)
     if type(status) is not int or not 200 <= status < 300:
         return None
@@ -836,7 +834,7 @@ def interrupt_own_prompt(prompt_id, client_id, worker_url=None) -> str:
         # older build ignores the body and stops what runs, which the GET
         # just verified is ours.
         response = requests.post(urljoin(api_addr, '/interrupt'), json={'prompt_id': str(prompt_id)},
-                                 timeout=(3, 10), allow_redirects=False)
+                                 timeout=network_timeout((3, 10)), allow_redirects=False)
         status = getattr(response, 'status_code', None)
         return 'interrupted' if type(status) is int and 200 <= status < 300 else 'unknown'
     except requests.RequestException as exc:
@@ -863,7 +861,7 @@ def fetch_output_image_bytes(filename, subfolder='', timeout=30):
     try:
         qs = urlencode({'filename': filename, 'subfolder': subfolder or '', 'type': 'output'})
         url = urljoin(api_address(), f"/view?{qs}")
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(url, timeout=network_timeout(timeout))
         response.raise_for_status()
         return response.content
     except Exception as e:
@@ -1057,10 +1055,9 @@ def _distill_object_info(data):
     """{class_type: {input_name: frozenset(accepted values)}} for the COMBO inputs
     named in `_VERSION_SENSITIVE_INPUTS`.
 
-    ComfyUI declares a combo input as `[[<choice>, <choice>, …], {options}]` — the
-    type slot is a literal list of the accepted values. That list is the exact one
-    ComfyUI prints in its "Value not in list" validation error, so comparing our
-    graph against it reproduces ComfyUI's own verdict without a round trip.
+    Legacy nodes use `[[<choice>, <choice>, …], {options}]`; newer native nodes
+    use `["COMBO", {"options": [<choice>, …]}]`. Both expose the accepted values
+    ComfyUI prints in its "Value not in list" validation error.
 
     A class with no checkable input maps to an empty dict (it must still appear so
     the class-presence view keeps every key)."""
@@ -1077,6 +1074,8 @@ def _distill_object_info(data):
                     if name not in _VERSION_SENSITIVE_INPUTS:
                         continue
                     choices = decl[0] if isinstance(decl, (list, tuple)) and decl else None
+                    if choices == 'COMBO' and len(decl) > 1 and isinstance(decl[1], dict):
+                        choices = decl[1].get('options')
                     if isinstance(choices, list) and all(isinstance(v, str) for v in choices):
                         combos[name] = frozenset(choices)
         out[cls] = combos
@@ -1161,7 +1160,7 @@ def _fetch_object_info(timeout=None, force=False):
     read_budget = int(timeout) if timeout else object_info_timeout()
     try:
         resp = requests.get(urljoin(addr, '/object_info'),
-                            timeout=(_OBJECT_INFO_CONNECT_TIMEOUT, read_budget))
+                            timeout=network_timeout((_OBJECT_INFO_CONNECT_TIMEOUT, read_budget)))
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -1535,7 +1534,7 @@ def free_comfyui_vram(worker_url=None, timeout=10) -> ComfyVramFreeVerdict:
         response = requests.post(
             f'{api_addr}/free',
             json={'unload_models': True, 'free_memory': True},
-            timeout=timeout,
+            timeout=network_timeout(timeout),
             allow_redirects=False,
         )
     except (requests.RequestException, OSError) as exc:
@@ -1560,8 +1559,8 @@ def free_comfyui_vram(worker_url=None, timeout=10) -> ComfyVramFreeVerdict:
 
 # --- Trained-LoRA parser (SINGLE source shared by labels + grouping) -------
 
-# Steps d'entraînement ai-toolkit : zero-paddés à 9 chiffres (000004000). Un token
-# tout-chiffres de 4+ caractères = un compteur de steps (pas une version 'v13').
+# ai-toolkit steps are zero-padded to nine digits. An all-digit token
+# of at least four characters is a step count, not a version such as v13.
 _TRAINED_STEP_RE = re.compile(r'^\d{4,}$')
 # Source-run tag token: `rc<id>` (cloud CloudTrainingRun id) / `rl<id>` (local
 # TrainingRunRecord id) appended by lora_training.import_checkpoint. Kept out of
@@ -1570,69 +1569,63 @@ _TRAINED_STEP_RE = re.compile(r'^\d{4,}$')
 # dataset version collapse to one identical Test Studio name.
 _RUN_TAG_TOKEN_RE = re.compile(r'^r[cl]\d+$')
 
-# Familles d'entraînement (= pipeline). La clé interne ('zimage'/'sdxl'/'krea') et
-# son libellé d'affichage : source UNIQUE, réutilisée par le studio (sélecteur de
-# famille) et par le label de LoRA ci-dessous.
+# Training pipeline family IDs and display labels: shared source for
+# Studio family selection and LoRA labels below.
 FAMILY_LABELS = {'zimage': 'Z-Image', 'sdxl': 'SDXL', 'krea': 'Krea 2', 'flux': 'FLUX.1',
-                 'flux2klein': 'FLUX.2 Klein', 'anima': 'Anima'}
+                 'flux2klein': 'FLUX.2 Klein', 'anima': 'Anima', 'qwenimage21': 'Qwen-Image 2.1'}
 
-# Tags de base OFFICIELS qu'apposent lora_training._dest_base_tag aux LoRA déployés
-# sur une base de famille (pas de merge). Chacun est UN token (tirets, pas
-# d'underscore) → un checkpoint FINAL sans compteur de steps
-# (`lora_<trigger>_<tag>`) reste parsable : le trigger est tout ce qui PRÉCÈDE ce
-# tag, même s'il contient lui-même des underscores. Miroir des constantes de
-# lora_training (KREA_BASE_LABEL / FLUX_BASE_LABEL / FLUX2KLEIN_BASE_LABELS +
-# suffixes recette Z-Image) — dupliqué ici pour éviter un import circulaire ;
-# à garder synchronisé si une famille/variante est ajoutée là-bas.
+# Official base tags from lora_training._dest_base_tag for family bases,
+# not merges. Each is one hyphenated token, so final checkpoints without
+# steps remain parseable even with multi-token triggers. Mirrors training
+# base-label constants and Z-Image recipe suffixes to avoid circular imports.
+# Keep synchronized when adding families/variants.
 _FAMILY_BASE_TAGS = frozenset({
     'Z-Image-Turbo', 'Z-Image-Base', 'Z-Image-De-Turbo',
     'Krea-2-Turbo', 'Krea-2-Raw',
     'FLUX-1-dev', 'FLUX2-Klein-4B', 'FLUX2-Klein-9B',
-    'Anima-Base',
+    'Anima-Base', 'Qwen-Image-2-1',
 })
 
 
 def _safe_trigger_token(trigger: str) -> str:
-    """Forme du trigger telle qu'elle est ENCODÉE dans le nom de fichier déployé —
-    miroir EXACT de lora_training._safe_trigger (tout caractère hors alphanumérique
-    et hors '_'/'-' devient '_'). Dupliqué ici (pas d'import du service, circulaire)
-    pour retrouver la frontière du trigger dans le stem quand le caller connaît le
-    trigger réel du dataset."""
+    """Trigger encoded into deployed filenames, exactly matching
+    lora_training._safe_trigger: non-alphanumeric characters other than
+    underscore/hyphen become underscores. Duplicated to avoid circular
+    service imports and recover boundaries when callers know the real trigger."""
     return ''.join(c if (c.isalnum() or c in '_-') else '_' for c in (trigger or ''))
 
 
 def family_of_lora(filename: str) -> str | None:
-    """Déduit la famille (pipeline) d'un LoRA de son DOSSIER ComfyUI : les LoRA
-    entraînés atterrissent dans ``loras/sdxl``, ``loras/krea`` ou ``loras/z image``
-    (cf. lora_training._lora_dest_dir). La famille est donc une fonction du chemin —
-    pas besoin de la stocker en base. Renvoie None si pas de préfixe de dossier connu."""
-    # Comparaison, pas un chemin : le nom arrive dans l'une OU l'autre convention
-    # (Windows, Linux, valeur relue d'une config écrite sur l'autre OS), donc on
-    # aplatit d'abord sur '/' — le même pivot que comfy_names.normalise_model_name,
-    # pour qu'il n'y ait qu'UNE forme normalisée dans toute l'app.
+    """Infer LoRA pipeline from its ComfyUI directory (e.g. loras/sdxl, krea,
+    z image), matching _lora_dest_dir. No database field is needed.
+    Return None for an unknown folder prefix."""
+    # Normalize separators for comparison, not filesystem access: names
+    # can come from either OS or cross-platform stored config. Use the same
+    # slash form as comfy_names.normalise_model_name across the app.
     low = (filename or '').replace('\\', '/').lower()
     if low.startswith('sdxl/'):
         return 'sdxl'
     if low.startswith('krea/'):
         return 'krea'
-    # flux2klein AVANT flux par lisibilité seulement : « flux/ » exige le séparateur
-    # juste après « flux », donc « flux2klein/x » ne le matche pas — pas d'ambiguïté.
+    # flux2klein precedes flux for readability only. flux/ requires its
+    # separator immediately, so flux2klein/x cannot match ambiguously.
     if low.startswith('flux2klein/'):
         return 'flux2klein'
     if low.startswith('flux/'):
         return 'flux'
     if low.startswith('anima/'):
         return 'anima'
+    if low.startswith('qwenimage21/'):
+        return 'qwenimage21'
     if low.startswith(('z image/', 'zimage/', 'z-image/')):
         return 'zimage'
     return None
 
 
 def _finish_parse(trigger: str, rest_tokens):
-    """Partage final du parse : depuis un trigger déjà isolé et les tokens qui le
-    SUIVENT, extrait le step (1er token tout-chiffres 4+), le reste (base/merge)
-    et le tag de run `rc<id>`/`rl<id>` (identité du run — rendu en fin de label
-    pour que deux runs de la même version dataset restent distincts)."""
+    """After isolating the trigger, parse trailing tokens into the first
+    4+-digit step count, base/merge tokens and rc<id>/rl<id> run tag.
+    Include the run tag in labels to distinguish same-version dataset runs."""
     step, rest, run_tag = None, [], None
     for t in rest_tokens:
         if step is None and _TRAINED_STEP_RE.match(t):
@@ -1645,10 +1638,9 @@ def _finish_parse(trigger: str, rest_tokens):
 
 
 def _parse_trained_stem(filename: str, trigger: str | None = None):
-    """Décompose un nom de LoRA entraîné ai-toolkit ``lora_<trigger>_<step?>_<base?>``
-    en (trigger, step|None, [tokens_de_base]). Renvoie None si le nom ne suit PAS la
-    convention (le caller retombe alors sur un label générique). Source UNIQUE du
-    parse, partagée par le libellé lisible ET la clé de regroupement des checkpoints.
+    """Parse ai-toolkit lora_<trigger>_<step?>_<base?> stems into trigger,
+    optional step and base tokens. Return None outside the convention.
+    Shared by display labels and checkpoint grouping.
 
     ⚠️ Le trigger peut LUI-MÊME contenir des underscores (ex. ``leg_behind``) : il
     s'étale alors sur plusieurs tokens. Prendre bêtement ``tokens[0]`` le tronquait
@@ -1679,25 +1671,23 @@ def _parse_trained_stem(filename: str, trigger: str | None = None):
     if not tokens:
         return None
 
-    # 1) Trigger connu du caller : frontière EXACTE, affichage fidèle (verbatim).
+    # 1) Caller knows the trigger: exact boundary and verbatim display.
     if trigger:
         safe = _safe_trigger_token(trigger).strip('_')
         if safe and body.lower().startswith(safe.lower()):
             after = body[len(safe):]
             if after == '' or after[0] == '_':
                 return _finish_parse(trigger, [t for t in after.split('_') if t])
-        # Le hint ne colle pas (nom legacy) → on retombe sur les heuristiques.
+        # Hint does not match a legacy name: fall back to heuristics.
 
-    # 2) Ancre sur le step : le trigger = tokens AVANT le compteur (multi-token OK).
+    # 2) Step anchor: all preceding tokens belong to the trigger.
     step_idx = next((i for i, t in enumerate(tokens) if _TRAINED_STEP_RE.match(t)), None)
     if step_idx is not None and step_idx > 0:
         return _finish_parse('_'.join(tokens[:step_idx]), tokens[step_idx:])
 
-    # 3) Pas de step : tag de base de famille, éventuellement suivi du tag de
-    #    run (`rcN`/`rlN`) et du suffixe de version (`vN`) — le trigger = tout
-    #    ce qui précède le tag de base. Sans peler ces suffixes, un final
-    #    `…_Krea-2-Raw_rc27_v2` tombait dans le repli legacy et tronquait les
-    #    triggers multi-token (`leg_behind` → `leg`).
+    # 3) Without a step, find a family-base tag after stripping optional
+    # rcN/rlN run and vN version suffixes. Otherwise a final Krea-2-Raw_rc27_v2
+    # name would fall back to the first token and truncate compound triggers.
     core = list(tokens)
     peeled = []
     while core and (re.fullmatch(r'v\d+', core[-1])
@@ -1706,24 +1696,18 @@ def _parse_trained_stem(filename: str, trigger: str | None = None):
     if len(core) > 1 and core[-1] in _FAMILY_BASE_TAGS:
         return _finish_parse('_'.join(core[:-1]), [core[-1], *peeled])
 
-    # 4) Repli legacy : premier token = trigger.
+    # 4) Legacy fallback: first token = trigger.
     return _finish_parse(tokens[0], tokens[1:])
 
 
 def trained_lora_group(filename: str, family: str | None = None,
                        trigger: str | None = None):
-    """Clé de REGROUPEMENT (trigger + base, SANS le step) + le step, pour empiler les
-    checkpoints d'un même dataset sous une entrée dépliable dans le picker. Deux
-    checkpoints frères (ex. ``lora_lola3869_000002000_Krea-2-Turbo`` et
-    ``lora_lola3869_000002500_Krea-2-Turbo``) partagent la MÊME clé et ne diffèrent
-    que par le step. Renvoie (None, None) si le nom n'est pas un LoRA entraîné.
-
-    La clé = le displayName AMPUTÉ du segment « N steps » → cohérente avec le label
-    affiché (cf. format_trained_lora_label) : le checkpoint final (sans step) a un
-    displayName EXACTEMENT égal à la clé de son groupe. Le tag de run (`rc27` /
-    `rl12`) fait partie de la clé : deux runs de la même version dataset ne
-    doivent pas s'empiler sous une seule entrée. `trigger` (optionnel) = le
-    trigger réel du dataset pour un parse EXACT (cf. _parse_trained_stem)."""
+    """Return checkpoint grouping key (trigger+base without step) and step.
+    Sibling checkpoints stack under one expandable picker entry. Return
+    (None,None) for non-training filenames.
+    The key equals displayName without N steps, so final checkpoint labels
+    match their group exactly. Include rcN/rlN run tags to keep separate
+    same-version runs distinct. Optional real trigger enables exact parsing."""
     parsed = _parse_trained_stem(filename, trigger)
     if not parsed:
         return None, None
@@ -1741,31 +1725,18 @@ def trained_lora_group(filename: str, family: str | None = None,
 
 def format_trained_lora_label(filename: str, family: str | None = None,
                               trigger: str | None = None) -> str:
-    """Libellé lisible pour un LoRA de personnage ai-toolkit nommé
-    ``lora_<trigger>_<step?>_<mergebase?>.safetensors``.
+    """Readable label for ai-toolkit lora_<trigger>_<step?>_<mergebase?> weights.
 
-    Le step est zero-paddé à 9 chiffres (``000004000``) ; affiché brut il se lit
-    comme du bruit et rend deux checkpoints frères indiscernables. On expose les
-    axes que l'utilisateur compare : le trigger, le step dé-paddé (``4000``), la
-    base d'entraînement, et le tag de run (`rc27` / `rl12`) quand il est présent —
-    sans lui, deux runs déployés de la même version dataset portent le même nom
-    dans le Test Studio. Cette base apparaît dans le nom sous forme de tag de merge
-    (``bigLove_zt3``) ; QUAND ce tag est absent (LoRA entraîné sur la base officielle
-    de la famille, ex. ``lora_Lola2_000002000`` en Krea), on affiche au moins la
-    PIPELINE (Krea 2 / SDXL / Z-Image) — sinon on ne sait pas avec quoi il a été fait.
-    `family` est passée par les getters (le nom seul n'a pas le dossier) ; sinon
-    déduite du chemin. `trigger` (optionnel) = le trigger réel du dataset : les
-    callers qui l'ont (Test Studio, liste des checkpoints déployés) le passent pour
-    un label EXACT même quand le trigger contient des underscores. Renvoie '' si le
-    nom ne suit PAS la convention ai-toolkit (le caller retombe alors sur
-    ``_clean_klein_lora_label``).
+    Remove nine-digit step padding and expose trigger, step, training base
+    and optional run tag so sibling checkpoints and different runs remain
+    distinguishable. Without a merge tag, show at least the family pipeline.
+    Getters supply family because a basename has no folder; otherwise infer
+    it from path. Optional real trigger preserves underscores accurately.
+    Return empty text outside the naming convention so callers can use
+    _clean_klein_lora_label.
 
-    Ex. 'lora_Lola2_000004000_bigLove_zt3'         -> 'Lola2 · 4000 steps · bigLove zt3'
-        'krea/lora_Lola2_000002000' (family krea)  -> 'Lola2 · 2000 steps · Krea 2'
-        'sdxl/lora_Lola2_mopMix_pornmaster'        -> 'Lola2 · mopMix pornmaster'
-        'lora_leg_behind_000002000_Krea-2-Turbo'   -> 'leg_behind · 2000 steps · Krea 2'
-        '…_Krea-2-Raw_rc27_v2'                    -> '… · Krea-2-Raw v2 · rc27'
-    """
+    Examples: a 000004000 step becomes 4000 steps; a compound leg_behind
+    trigger stays intact; Krea-2-Raw_rc27_v2 displays Krea-2-Raw v2 and rc27."""
     parsed = _parse_trained_stem(filename, trigger)
     if not parsed:
         return ''
@@ -1774,9 +1745,9 @@ def format_trained_lora_label(filename: str, family: str | None = None,
     if step is not None:
         parts.append(f'{step} steps')
     if rest:
-        parts.append(' '.join(rest))                 # tag de merge = la base d'entraînement
+        parts.append(' '.join(rest))                 # The merge tag identifies the training base.
     else:
-        fam = family or family_of_lora(filename)     # pas de tag -> au moins la pipeline
+        fam = family or family_of_lora(filename)     # Without a tag, show at least the pipeline.
         if fam:
             parts.append(FAMILY_LABELS.get(fam, fam))
     if run_tag:
@@ -2122,33 +2093,18 @@ def _krea_root_candidate(name) -> bool:
 
 
 def get_krea_models():
-    """List Krea 2 UNET checkpoints: le défaut du workflow (krea2_turbo_fp8.safetensors
-    à la racine de models/unet ou models/diffusion_models) + tout .safetensors/.gguf
-    sous un sous-dossier 'krea' (ex. 'Krea\\monKrea.safetensors') + tout fichier de
-    RACINE dont le NOM porte 'krea'. Noms en forme
-    UNETLoader (relatifs au dossier de base, séparateur de l'arbre parcouru =
-    os.sep ; la file d'attente les réécrit selon la liste publiée par le ComfyUI
-    ciblé). Cache TTL partagé. Vide si
-    ComfyUI n'est pas encore configuré.
+    """List Krea 2 UNET checkpoints: workflow-default krea2_turbo_fp8 at the
+    models/unet or diffusion_models root, safetensors/GGUF in krea subfolders,
+    and root filenames containing krea. Return UNETLoader-relative names
+    using local separators; queue submission maps them to the target
+    ComfyUI's published names. Shared TTL cache; empty before configuration.
 
-    THE ROOT-FILENAME RULE, AND WHY IT WAS MISSING
-    ----------------------------------------------
-    The directory-only rule made the app's OWN full-model deliveries invisible
-    here. `fp8_local_delivery` writes the fp8 twin of a dense run to the ROOT of
-    `diffusion_models` — deliberately, because that is a folder ComfyUI reads —
-    so the one file the whole dense lane exists to produce could not be picked as
-    a Test Studio base. The only way to try a model you had paid hours of GPU for
-    was to open ComfyUI by hand.
-
-    That it was an oversight and not a rule is settled by the Generate surface:
-    `krea_edit_helper._krea_unet_folders` has always matched 'krea' in the folder
-    OR in the filename, root included. Aligning on it retro-fits every twin
-    already on disk without moving a byte, and it borrows the same exclusion
-    list — BigLove* carries 'krea' and renders pure noise under this pipeline.
-
-    Still NOT "every root file": a `diffusion_models` root also holds Z-Image,
-    FLUX and Klein weights, and listing those as Krea bases would trade one
-    silent wrong result for another."""
+    Root filenames matter: fp8_local_delivery deliberately writes dense
+    training output twins at the diffusion_models root. A folder-only rule
+    hid those models from Test Studio despite successful training. Align
+    with Generate's folder-or-filename matching, retaining its exclusions
+    (e.g. BigLove carries krea but produces noise in this pipeline).
+    Do not include every root file: Z-Image/FLUX/Klein weights are not Krea bases."""
     current_time = time.time()
     if (_krea_models_cache["data"] is not None
             and current_time - _krea_models_cache["timestamp"] < _MODEL_CACHE_TTL):
@@ -2222,7 +2178,7 @@ def get_zimage_loras():
                         "displayName": format_trained_lora_label(f, 'zimage') or _clean_klein_lora_label(f),
                         "triggerWord": triggers[0]["prompt"] if triggers else None,
                         "triggerWords": triggers,
-                        # group/step : regroupement des checkpoints d'un même dataset dans le picker.
+                        # group/step groups sibling dataset checkpoints in the picker.
                         "group": grp,
                         "step": stp,
                     })
@@ -2232,12 +2188,10 @@ def get_zimage_loras():
 
 
 def get_sdxl_loras():
-    """List SDXL LoRAs: .safetensors under the 'sdxl' subfolder of models/loras.
-    Ce sont les LoRA de PERSONNAGE/concept ENTRAÎNÉS pour SDXL (déployés par
-    import_checkpoint), à NE PAS confondre avec les LoRA système 'subtle'
-    (enhancement, hors périmètre). Returns [{filename, displayName, triggerWord,
-    triggerWords, group, step}] avec filename en forme LoraLoader
-    ('sdxl\\lora_Lola_000001000.safetensors'). Vide si non configuré."""
+    """List trained character/concept SDXL safetensors LoRAs under models/loras/sdxl,
+    not subtle system-enhancement LoRAs. Return filename/displayName/triggerWord/
+    triggerWords/group/step dictionaries with LoraLoader-form names.
+    Empty when unconfigured."""
     out = []
     lora_dir = _lora_dir()
     try:
@@ -2245,7 +2199,7 @@ def get_sdxl_loras():
             for root, _dirs, files in os.walk(lora_dir):
                 rel_dir = os.path.relpath(root, lora_dir)
                 low = rel_dir.lower()
-                # UNIQUEMENT le dossier 'sdxl' (pas subtle/z image/klein/wan).
+                # Only the sdxl folder, excluding subtle/z image/klein/wan.
                 if low != 'sdxl' and not low.startswith('sdxl' + os.sep):
                     continue
                 for f in sorted(files):
@@ -2268,11 +2222,9 @@ def get_sdxl_loras():
 
 
 def get_krea_loras():
-    """List Krea 2 LoRAs: .safetensors under the 'krea' subfolder of models/loras.
-    Ce sont les LoRA entraînés POUR Krea 2 (ex. realism_engine_krea2). Returns
-    [{filename, displayName, triggerWord, triggerWords, group, step}] avec filename
-    en forme LoraLoader ('krea\\realism_engine_krea2_v1.safetensors'). Vide si non
-    configuré."""
+    """List Krea 2 safetensors LoRAs under models/loras/krea. Return filename,
+    displayName, triggerWord, triggerWords, group and step dictionaries
+    with LoraLoader-form paths. Empty when unconfigured."""
     out = []
     lora_dir = _lora_dir()
     try:
@@ -2280,8 +2232,8 @@ def get_krea_loras():
             for root, _dirs, files in os.walk(lora_dir):
                 rel_dir = os.path.relpath(root, lora_dir)
                 low = rel_dir.lower()
-                # NE JAMAIS confondre avec un dossier FRÈRE 'krea_styles' (LoRA de
-                # style officiels — hors périmètre, cf. get_krea_style_loras dropped).
+                # Never confuse the sibling krea_styles folder of official style LoRAs
+                # with this scope; get_krea_style_loras was removed.
                 if low == 'krea_styles' or low.startswith('krea_styles' + os.sep):
                     continue
                 if low != 'krea' and not low.startswith('krea' + os.sep):
@@ -2435,13 +2387,12 @@ def get_flux2_klein_models():
 
 # --- LoRA-chain injectors ---------------------------------------------------
 
-# Samplers / schedulers / précision exposés pour le mode Krea 2 Turbo. SOURCE UNIQUE
-# partagée : whitelist côté route generate ET côté studio de test (anti-injection —
-# une valeur hors liste est ignorée), + peuplent les dropdowns du front via /config.
-# Krea 2 = flow-matching (DiT) : seuls les sampler/scheduler connus pour converger
-# proprement (défaut workflow = er_sde / simple, en tête). weight_dtype = options
-# RÉELLES du UNETLoader node 20 ('default' = dtype délégué au checkpoint ;
-# 'fp8_e4m3fn' = défaut rapide et sûr pour Krea).
+# Krea 2 Turbo sampler/scheduler/precision choices: one shared allowlist
+# for Generate/Test Studio validation and frontend dropdowns via /config.
+# Unknown values are ignored. Krea is flow-matching DiT; offer convergent
+# choices with er_sde/simple first. weight_dtype matches actual UNETLoader
+# node-20 options: default delegates to the checkpoint; fp8_e4m3fn is
+# the fast, safe Krea default.
 KREA_ALLOWED_SAMPLERS = [
     'er_sde', 'euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_2m_sde',
     'dpmpp_sde', 'res_multistep', 'deis', 'ddim', 'uni_pc',
@@ -2456,19 +2407,16 @@ KREA_ALLOWED_WEIGHT_DTYPES = frozenset({
 
 
 def inject_krea_loras(workflow, requested, allowed, unet_node="20", consumers=("26",)):
-    """Chain LoraLoaderModelOnly nodes after the Krea 2 UNETLoader (node 20) and
-    repoint its model consumers (KSampler node 26) to the end of the chain.
+    """Chain LoraLoaderModelOnly nodes after Krea's UNETLoader (node 20), then
+    repoint model consumers such as KSampler 26 to the final loader.
 
-    `requested` = [{filename, strength}], `allowed` = whitelist of filenames
-    (path-injection guard). Strength clamped to [-2.0, 20.0] — garde anti-absurde
-    seulement : la plage UX (6 en général, 20 pour les LoRA utility type
-    filter-bypass qui n'agissent qu'à strength >10) est portée par le slider front.
-    Négatif autorisé (tire un slider LoRA vers son pôle négatif — même plancher
-    que Z-Image/SDXL) ; les LoRA always-on restent clampés ≥0 EN AMONT par leurs
-    appelants (lora_test_studio), donc ce plancher ne les élargit pas.
-    An effective strength of exactly 0.0 is a true no-op: no loader node is
-    created. Returns the number of LoRAs injected; 0 leaves the workflow untouched.
-    Independent of the conditioning path."""
+    requested contains filename/strength dictionaries; allowed is the
+    filename allowlist preventing path injection. Clamp strength to [-2,20]
+    as a sanity limit; frontend sliders define narrower UX ranges. Negative
+    values support slider LoRA inversion. Always-on callers still clamp
+    their inputs to nonnegative values upstream, so this does not widen them.
+    Exactly zero is a true no-op without a loader. Return injected count;
+    zero leaves the workflow unchanged. Independent of conditioning."""
     if unet_node not in workflow or not isinstance(requested, list):
         return 0
     allowed_norm = {_normalise_model_name(a) for a in allowed}
@@ -2815,8 +2763,8 @@ def inject_zimage_loras(workflow, requested, allowed,
         if _normalise_model_name(fn) not in allowed_norm:
             continue
         try:
-            # Négatif autorisé (inverse le concept, plage UI -2..2) ; max 6 conservé
-            # pour rétro-compat avec les anciennes valeurs persistées.
+            # Allow negative strengths to invert concepts (UI -2..2); retain max 6
+            # for compatibility with older persisted values.
             strength = max(-2.0, min(6.0, float(item.get("strength", 1.0))))
         except (TypeError, ValueError):
             strength = 1.0
@@ -2837,17 +2785,15 @@ def inject_zimage_loras(workflow, requested, allowed,
 
 
 def inject_sdxl_loras(workflow, requested, allowed, anchor="25"):
-    """Chaîne des LoraLoader (model+clip) APRÈS le LoraLoader d'ancrage (node 25 = Style
-    LoRA) dans le workflow SDXL/HQ, et repointe les consommateurs de l'ancre vers le dernier
-    maillon. Permet une PILE de LoRA SDXL perso (en plus du Style LoRA du node 25).
-
-    `requested` = [{filename, strength}] (filename en forme LoraLoader 'sdxl\\…') ;
-    `allowed` = whitelist de filenames (garde anti path-injection + owner). Strength clampé
-    [-2.0, 6.0]. Retourne le nombre de LoRA injectés ; 0 laisse le workflow intact."""
+    """Chain model+clip LoraLoaders after SDXL/HQ's Style LoRA anchor node 25
+    and repoint its consumers to the last loader. Supports personal SDXL
+    LoRA stacks in addition to the anchor style. requested is filename/
+    strength dictionaries; allowed enforces path and owner restrictions.
+    Clamp to [-2,6]. Return injected count; zero leaves the workflow unchanged."""
     if anchor not in workflow or not isinstance(requested, list):
         return 0
-    # Consommateurs ACTUELS de l'ancre (AVANT insertion) -> à repointer en fin de chaîne
-    # (sinon le 1er maillon inséré, qui lit aussi l'ancre, serait repointé sur lui-même).
+    # Capture current anchor consumers before insertion; otherwise the
+    # first new loader, itself reading the anchor, would point to itself.
     consumers = [nid for nid, node in workflow.items()
                  if isinstance(node, dict)
                  and (node.get("inputs", {}).get("model") == [anchor, 0]
@@ -2862,7 +2808,7 @@ def inject_sdxl_loras(workflow, requested, allowed, anchor="25"):
         if _normalise_model_name(fn) not in allowed_norm:
             continue
         try:
-            # Négatif autorisé (plage UI -2..2) ; max 6 conservé (rétro-compat).
+            # Allow negative strengths (UI -2..2); retain max 6 for compatibility.
             strength = max(-2.0, min(6.0, float(item.get("strength", 1.0))))
         except (TypeError, ValueError):
             strength = 1.0
@@ -2895,7 +2841,7 @@ def check_ollama_running(host="127.0.0.1", port=11434):
     """Checks if Ollama is running by connecting to its port."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(1)
+            s.settimeout(network_timeout(1))
             return s.connect_ex((host, port)) == 0
     except Exception as e:
         logger.error(f"Error checking Ollama status: {e}")
@@ -2933,3 +2879,23 @@ def ensure_ollama_running():
         else:
             return False
     return True
+
+
+def fetch_node_info(class_type, timeout=10, worker_url=None):
+    """ONE node's /object_info entry — its inputs and their choices — or None
+    when the target does not register it or cannot be reached. Kilobytes,
+    where the whole registry is megabytes: the right call for a question about
+    one node, such as which attention backends the block-attention switch can
+    offer on THIS ComfyUI."""
+    api = (worker_url or api_address() or '').rstrip('/')
+    if not api or not class_type:
+        return None
+    try:
+        r = requests.get(f'{api}/object_info/{class_type}', timeout=network_timeout(timeout))
+        if r.status_code != 200:
+            return None
+        data = r.json() or {}
+    except Exception:  # noqa: BLE001 — unreachable reads as unknown, never as absent
+        return None
+    entry = data.get(class_type) if isinstance(data, dict) else None
+    return entry if isinstance(entry, dict) else None

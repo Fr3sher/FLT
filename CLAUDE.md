@@ -15,6 +15,9 @@ any file.
 - No real names, usernames, machine paths (`C:\Users\...`), IPs or tokens in
   code, comments, commits, or test fixtures. Diagnostic output must stay
   paste-safe (path redaction helpers exist — reuse them).
+- The approved public PostHog ingestion token may be distributed only in
+  `backend/app/usage_statistics_config.json`. It grants event ingestion, not
+  account administration or data access. Personal/admin keys remain forbidden.
 - Never write to GitHub (comments, reviews, releases) through a personally
   authenticated `gh`. Reads are fine.
 - `backend/tests/test_no_personal_data.py` enforces the two rules above.
@@ -37,12 +40,12 @@ during a wave, so the full gate belongs at the **push**, not at every commit.
   Seconds. This is a speed signal, not a gate.
 - **Before a commit** — the above, plus the tests no filename can lead you to:
   `backend/tests/test_no_personal_data.py` and `backend/tests/test_*contract*.py`
-  check invariants across the whole tree. Frontend: `node --test` from
+  check invariants across the whole tree. Frontend: `npm test` from
   `frontend/` (~1 min — it carries the help-registry and What's-new contracts).
 - **Before the push that LANDS the wave** — both suites, whole and green, on
-  that exact tree: `python -m pytest -n 8 --dist loadfile` (system Python) and
-  `node --test` from `frontend/`. **Plus both linters**: `ruff check backend
-  scripts packaging` and `npx eslint .` from `frontend/` — CI's Lint job runs
+  that exact tree: `python -m pytest backend/tests scripts/tests -q -n 8 --dist loadfile`
+  and `npm test` from `frontend/`. **Plus both linters**: `ruff check .`
+  and `npm run lint` from `frontend/` — CI's Lint job runs
   outside the size gate, so a branch merged with a pre-gate file can turn
   `main` red on lint alone with every test green (it happened: an F401 in a
   branch written before the gate existed). Non-negotiable. **Do not lean on CI for this**:

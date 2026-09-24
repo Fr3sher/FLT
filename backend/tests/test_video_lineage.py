@@ -10,10 +10,14 @@ import os
 
 from app.extensions import db
 from app.services import cloud_run_dataset as crd
-from app.services import video_lineage
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_lineage
 from test_cloud_video_launch import _face_dataset, _run, _video_dataset
 from test_cloud_video_lifecycle import _saves
 from test_video_checkpoints import _deployed, _local_saves, _loras_root
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 PAIR_100 = ['video_surf_000000100_high_noise.safetensors',
             'video_surf_000000100_low_noise.safetensors']
@@ -117,7 +121,7 @@ def test_the_local_final_takes_its_number_from_the_job_config(app, tmp_path, mon
     with app.app_context():
         ds = _video_dataset(tmp_path)
         _local_saves(tmp_path, monkeypatch, FINAL)
-        from app.services import video_training_local as vtl
+        from lds_video import video_training_local as vtl
         (jobs / (vtl.local_run_name(ds) + '.json')).write_text(json.dumps({
             'job': 'extension', 'config': {'name': 'x', 'process': [
                 {'type': 'sd_trainer', 'train': {'steps': 1500}}]}}), encoding='utf-8')
@@ -191,7 +195,7 @@ def test_a_poster_is_cut_once_and_cached(app, client, tmp_path, monkeypatch):
     32-byte 'clip' decodes to nothing — what is under test is the caching
     and the honest 404 when no frame can be cut."""
     _loras_root(tmp_path, monkeypatch)
-    from app.services import video_bank_service as vbs
+    from lds_video import video_bank_service as vbs
     calls = []
 
     def cut(src, ts, dst):
@@ -268,7 +272,7 @@ def test_ai_toolkits_own_thumbnail_is_served_before_any_frame_is_cut(
     """ai-toolkit writes `<samples>/.thumbs/<file>.jpg` next to every sample it
     saves (since mid-2025). When it is there, nothing is decoded here."""
     _loras_root(tmp_path, monkeypatch)
-    from app.services import video_bank_service as vbs
+    from lds_video import video_bank_service as vbs
     monkeypatch.setattr(vbs, '_write_thumbnail', lambda *a: (_ for _ in ()).throw(AssertionError('cut called')))
     monkeypatch.setattr(video_lineage, '_first_frame_still', lambda *a: (_ for _ in ()).throw(AssertionError('cut called')))
     with app.app_context():

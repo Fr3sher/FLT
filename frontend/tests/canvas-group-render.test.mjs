@@ -23,8 +23,11 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { installRuntimeHost } from './support/runtimeHost.mjs'
 
-import { layoutImageNodes } from '../src/utils/canvasImageGroups.js'
+test.beforeEach(installRuntimeHost)
+
+import { layoutImageNodes } from "../../bundled/canvas/frontend/utils/canvasImageGroups.js"
 import { groupBarHeight } from '../src/utils/canvasNodeChrome.js'
 import { render } from './support/mountJsx.mjs'
 
@@ -33,9 +36,9 @@ import { render } from './support/mountJsx.mjs'
    would already have been loaded by then — the whole graph is linked before the
    first line of any module runs. */
 const { default: CanvasImageGroup } =
-  await import('../src/components/canvas/CanvasImageGroup.jsx')
+  await import("../../bundled/canvas/frontend/components/canvas/CanvasImageGroup.jsx")
 const { default: CanvasGroupBar } =
-  await import('../src/components/canvas/CanvasGroupBar.jsx')
+  await import("../../bundled/canvas/frontend/components/canvas/CanvasGroupBar.jsx")
 
 const img = (id, x, y, w, h, extra = {}) => ({
   imageId: id, x, y, w, h, visible: true, groupId: null, groupPos: null,

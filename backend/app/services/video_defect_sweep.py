@@ -488,6 +488,8 @@ def _run_polled(args, cwd, budget, should_stop):
             args, cwd=cwd, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=err_file,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        from ..timeout_settings import processing_timeout
+        budget = processing_timeout(budget)
         deadline = time.time() + budget
         while proc.poll() is None:
             if should_stop is not None and should_stop():

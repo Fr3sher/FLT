@@ -1,0 +1,85 @@
+{
+  "id": "resource_monitor",
+  "bundled": true,
+  "name": "Resource monitor",
+  "version": "1.0.0",
+  "api": 1,
+  "description": "CPU, GPU, RAM, VRAM and temperature readings in the header and on an installed Canvas, with guarded memory release. Polling stops when folded or hidden.",
+  "requires": [],
+  "python_package": "lds_resource_monitor",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": true,
+  "owns": {
+    "install_actions": [],
+    "install_groups": [],
+    "probes": [],
+    "engines": [],
+    "config_sections": [],
+    "tables": [],
+    "model_slots": [],
+    "help_topics": [
+      "canvas-machine-load",
+      "system-free-memory"
+    ],
+    "whats_new_ids": [
+      "2026-09-06-zzzzz-comfyui-interrupt-second-press",
+      "2026-09-02-free-memory-button",
+      "2026-08-28-header-machine-load",
+      "2026-08-09-canvas-machine-load"
+    ],
+    "config_keys_in_shared_sections": {}
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "comfyui",
+    "network"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Open workspace and expand the chart button",
+        "path": "/datasets"
+      }
+    ],
+    "setup": {
+      "label": "Open resource monitor guide",
+      "path": "/guide/resource_monitor.guide"
+    },
+    "setup_hint": "Ready after activation. Expand the chart button in the header; Canvas is optional. No model download is needed.",
+    "surfaces": [
+      "Workspace header",
+      "Canvas when installed"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.9,<2",
+    "lds": ">=2026.9.4",
+    "python": ">=3.10,<4",
+    "os": [
+      "windows",
+      "linux",
+      "darwin"
+    ],
+    "arch": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "guide_ownership": {
+    "chapters": [
+      "resource_monitor.guide"
+    ],
+    "sections": [
+      "resource_monitor.guide#resource-monitor"
+    ]
+  },
+  "schema_version": 2,
+  "publisher": {
+    "id": "lds",
+    "name": "LoRA Dataset Studio"
+  },
+  "data_schema": 1
+}

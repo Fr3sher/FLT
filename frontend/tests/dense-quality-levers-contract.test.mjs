@@ -26,7 +26,7 @@ import { createElement, renderToStaticMarkup } from './support/mountJsx.mjs'
 /* ⚠️ Dynamic — the hooks that teach Node to read .jsx are installed while
    mountJsx.mjs is evaluated, and a static import would already be linked. */
 const { FullTransformerAdvancedRecipe } =
-  await import('../src/components/dataset/TrainingPanel.jsx')
+  await import('../../bundled/cloud_training/frontend/dataset/FullTransformerRecipe.jsx')
 
 const ADV = {
   dense_lr: 1e-6, dense_lr_min: 1e-7, dense_lr_max: 5e-6,
@@ -49,6 +49,22 @@ const render = (adv = {}) => renderToStaticMarkup(createElement(
   { stepsOverride: '', setStepsOverride: () => {}, adv: { ...ADV, ...adv },
     saveAdv: () => {}, samplePromptsDefault: ['{trigger} portrait'] },
 ))
+
+const { configureHostRuntime } = await import('../src/plugins/runtimeHost.jsx')
+const { publishRuntime } = await import('../src/plugins/loadPlugins.js')
+const { resetRegistry, setEnabled } = await import('../src/plugins/registry.js')
+test.beforeEach(t => {
+  const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch }
+  t.after(() => { Object.assign(globalThis, saved); resetRegistry() })
+  globalThis.window = {}
+  globalThis.document = { cookie: '', querySelector: () => null }
+  globalThis.fetch = () => { throw new Error('Rendering must not contact any service') }
+  resetRegistry()
+  setEnabled([])
+  configureHostRuntime()
+  publishRuntime()
+})
+
 
 test('the card renders its three quality levers at all', () => {
   const html = render()

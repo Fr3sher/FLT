@@ -20,10 +20,10 @@ const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
 
 // file → whether that surface also lets the model be CHOSEN (it has a dataset).
 const SURFACES = {
-  '../dataset/KleinImproveNote.jsx': true,      // ✨ Upscale & improve (shipped first)
+  '../../../../bundled/image_upscale/frontend/panels/KleinImproveNote.jsx': true,      // ✨ Upscale & improve (shipped first)
   '../dataset/VariationCatalog.jsx': true,      // Klein generation
   '../dataset/ReferenceEditModal.jsx': true,    // local reference edit
-  '../dataset/ConceptSourcesPanel.jsx': true,   // rescue of small scraped images
+  "../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx": true,   // rescue of small scraped images
   '../dataset/DatasetWorkspace.jsx': true,      // 🧽 Clean, bulk
   '../dataset/WatermarkReviewLightbox.jsx': true,  // 🧽 Clean, one image
   '../bank/BankWatermarkPanel.jsx': false,      // bank inpaint — naming only
@@ -33,7 +33,7 @@ const SURFACES = {
 for (const [file, scoped] of Object.entries(SURFACES)) {
   test(`${file} names the Klein model it will run on`, () => {
     const src = read(file);
-    assert.match(src, /import KleinModelSetting from/,
+    assert.match(src, /import (?:\{ KleinModelSetting \}|KleinModelSetting) from/,
       'the surface no longer imports the shared model line');
     assert.match(src, /<KleinModelSetting\b/);
     if (scoped) {

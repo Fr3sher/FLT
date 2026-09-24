@@ -38,7 +38,7 @@ configured). One caveat: the log tail can mention file names from your machine
 ## Feature requests
 
 Describe the **job you were doing when you missed the feature** — the problem
-is more valuable than the proposed solution. Post it in Discord **#roadmap** or
+is more valuable than the proposed solution. Post it in Discord **#feature-requests** or
 open a GitHub issue with the *Feature request* template.
 
 ## Support the project

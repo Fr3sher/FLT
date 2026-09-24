@@ -1,0 +1,88 @@
+{
+  "id": "civitai_publish",
+  "bundled": true,
+  "name": "Publish to Civitai",
+  "version": "1.0.0",
+  "api": 1,
+  "description": "Publish a trained checkpoint as a Civitai model page and post the images it generated under that page, without leaving the app — from a checkpoint's popover (run graph, LoRA Canvas) and from the image viewer. Uses the Civitai API key the scraper and the prompt browser already share.",
+  "requires": [],
+  "python_package": "lds_civitai_publish",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": true,
+  "owns": {
+    "install_actions": [],
+    "install_groups": [],
+    "probes": [
+      "civitai"
+    ],
+    "engines": [],
+    "config_sections": [
+      "civitai"
+    ],
+    "config_keys_in_shared_sections": {},
+    "help_topics": [
+      "civitai-publish",
+      "civitai.link_host"
+    ],
+    "tables": [
+      "civitai_link"
+    ],
+    "whats_new_ids": [
+      "2026-09-02-publish-to-civitai"
+    ],
+    "model_slots": []
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "network",
+    "datasets:read",
+    "secrets:CIVITAI_API_KEY"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Open checkpoints",
+        "path": "/datasets?section=checkpoints"
+      }
+    ],
+    "setup": {
+      "label": "Configure",
+      "path": "/plugins/civitai_publish/settings"
+    },
+    "setup_hint": "Connect your Civitai API key. Publication starts from a dataset checkpoint or model.",
+    "surfaces": [
+      "Dataset checkpoints",
+      "Publishing dialog"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.12,<2",
+    "lds": ">=2026.9.4",
+    "python": ">=3.10,<4",
+    "os": [
+      "windows",
+      "linux",
+      "darwin"
+    ],
+    "arch": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "using-the-app#publish-a-lora-and-its-images-to-civitai",
+      "settings-reference#civitai-publishing"
+    ]
+  },
+  "schema_version": 2,
+  "publisher": {
+    "id": "lds",
+    "name": "LoRA Dataset Studio"
+  },
+  "data_schema": 1
+}

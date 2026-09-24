@@ -19,8 +19,12 @@ import os
 
 import pytest
 
-from app.services import dense_weights as dw
-from app.services import fp8_export, fp8_local_delivery as fld
+from lds_cloud_training import dense_weights as dw
+from app.services import fp8_export
+from lds_cloud_training import fp8_local_delivery as fld
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 torch = pytest.importorskip('torch', reason='fp8 quantization needs torch')
 safetensors_torch = pytest.importorskip('safetensors.torch')
@@ -115,7 +119,7 @@ def test_the_delivery_verifier_stamps_the_same_file_the_quantizer_would_take(
     `.` is 0x2E and `_` is 0x5F. So the card advertised the step snapshot while
     the operation offered under it took the final save.
     """
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
 
     class _Sibling:
         def __init__(self, name):
@@ -152,7 +156,7 @@ def test_the_cloud_lane_takes_the_same_file_when_it_is_told_which_one():
     """The dormant cloud lane has its own "largest sibling" fallback. Every caller
     passes the designated name, and with it the two lanes agree — which is the
     property that has to hold for as long as that fallback exists."""
-    from app.services import cloud_quantize as cq
+    from lds_cloud_training import cloud_quantize as cq
 
     class _Sibling:
         def __init__(self, name):
@@ -259,9 +263,8 @@ def test_the_budget_is_derived_not_a_flat_threshold(comfy, monkeypatch):
     """A 12.8 GB output with 17.6 GB free must be allowed — it was refused."""
     monkeypatch.setattr(fld, '_free_bytes', lambda _p: 17_600_000_000)
     local_master = _model(comfy.parent / 'masters' / 'Krea_real.safetensors')
-    monkeypatch.setattr(fld.fp8_export, 'plan_quantization', lambda header: {
-        'quantize': ['w'], 'keep': [], 'bytes_before': 25_600_000_000,
-        'bytes_after': 12_822_354_094})
+    monkeypatch.setattr(fld.fp8_export, 'estimate_fp8_bytes',
+                        lambda source_bytes: 12_822_354_094)
     assert fld.plan(path=local_master, family='krea')['enough_space'] is True
 
 

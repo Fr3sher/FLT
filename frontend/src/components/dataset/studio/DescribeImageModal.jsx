@@ -93,11 +93,11 @@ export default function DescribeImageModal({ open, onClose, onResult }) {
     onClose();
   }
 
-  /* PORTAILLÉE, même raison que CivitaiBrowserModal : ce composant est monté par
-     StudioRunSetup, qui vit dans l'`<aside lg:sticky lg:overflow-auto>` de
-     ComparisonStudio. `sticky` ouvre un contexte d'empilement qui plafonne le
-     z-index posé dedans, et `overflow-auto` découpe. Le portail est le seul fix ;
-     aucun z-index ne sort d'un contexte parent. */
+  /*
+   * Portal required for the same reason as CivitaiBrowserModal: StudioRunSetup mounts inside
+   * ComparisonStudio's lg:sticky lg:overflow-auto aside. Sticky caps child z-index within its
+   * stacking context and overflow-auto clips it. Only a portal escapes the parent context.
+   */
   return createPortal(
     <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4"
       role="dialog" aria-modal="true" aria-label="Describe an image into a test prompt" ref={ref}

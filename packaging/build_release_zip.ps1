@@ -1,81 +1,23 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Build the supported Windows release archive.
-
+  Build the supported Windows core ZIP from a committed source tree.
 .DESCRIPTION
-  Produces packaging/dist/LoRA-Dataset-Studio-windows.zip. The archive contains
-  the application source, the tracked frontend build and start.bat. It contains
-  no executable launcher and no embedded Python runtime: start.bat discovers or
-  downloads a compatible CPython on first launch, then creates a local .venv.
+  No installed plugins or working files are copied. start.bat prepares Python
+  on first launch. Commit the frontend Store build before making the archive.
 #>
 [CmdletBinding()]
 param(
-  [string]$OutName = 'LoRA-Dataset-Studio-windows'
+  [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$')]
+  [string]$OutName = 'LoRA-Dataset-Studio-windows',
+  [string]$SourceRef = 'HEAD',
+  [string]$Python = 'python'
 )
-
 $ErrorActionPreference = 'Stop'
-$Here = $PSScriptRoot
-$Root = Split-Path -Parent $Here
-$Build = Join-Path $Here 'build\release'
-$Stage = Join-Path $Build $OutName
-$Dist = Join-Path $Here 'dist'
-$Zip = Join-Path $Dist "$OutName.zip"
-
-function Step($message) { Write-Host "==> $message" -ForegroundColor Cyan }
-
-Step 'Preparing the Windows source bundle'
-Remove-Item -Recurse -Force $Build -ErrorAction SilentlyContinue
-Remove-Item -Force $Zip -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force $Stage, $Dist | Out-Null
-
-# Mirror only the runtime application. In particular, do not copy a developer
-# venv, node_modules, tests, packaging tools, or any locally-built launcher.
-# .pytest_cache is excluded because it was NOT: excluding `tests` while leaving
-# the cache that sits beside it shipped ~478 KB of a developer's test run inside
-# a published release. An exclusion list is only as good as its blind spot.
-robocopy (Join-Path $Root 'backend') (Join-Path $Stage 'backend') /E `
-  /XD __pycache__ tests .venv venv .pytest_cache extensions /XF *.pyc *.pyo | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "robocopy backend failed ($LASTEXITCODE)." }
-$global:LASTEXITCODE = 0
-
-New-Item -ItemType Directory -Force (Join-Path $Stage 'frontend') | Out-Null
-Copy-Item -Recurse -Force (Join-Path $Root 'frontend\dist') (Join-Path $Stage 'frontend\dist')
-
-New-Item -ItemType Directory -Force (Join-Path $Stage 'scripts') | Out-Null
-Copy-Item -Force (Join-Path $Root 'scripts\bootstrap_python.ps1') (Join-Path $Stage 'scripts')
-
-foreach ($file in @('start.bat', 'README.md', 'LICENSE', 'config.example.json', '.env.example')) {
-  Copy-Item -Force (Join-Path $Root $file) $Stage
-}
-
-# Stamp a build marker so a packaged (no-.git) install is identifiable: the tag
-# it was cut from, the source commit and the build time. The app's local version
-# stays authoritative from backend/app/version.py (shipped in the bundle); this
-# marker is a diagnostic + a fallback the in-app updater can surface. RELEASE_TAG
-# is set by release.yml; outside CI it falls back to v<APP_VERSION>.
-$appVersion = (Select-String -Path (Join-Path $Root 'backend/app/version.py') -Pattern "APP_VERSION = '([^']+)'").Matches[0].Groups[1].Value
-$commit = ''
-try { $commit = (& git -C $Root rev-parse --short HEAD 2>$null) } catch { $commit = '' }
-$tag = if ($env:RELEASE_TAG) { $env:RELEASE_TAG } else { "v$appVersion" }
-$buildInfo = [ordered]@{
-  version  = $appVersion
-  tag      = $tag
-  commit   = ($commit | Out-String).Trim()
-  built_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-}
-$buildInfo | ConvertTo-Json | Set-Content -Path (Join-Path $Stage 'build_info.json') -Encoding utf8
-
-# This is both a local safety check and a release invariant. The CI policy guard
-# independently inspects the final ZIP before GitHub receives it.
-$executables = @(Get-ChildItem -Path $Stage -Recurse -File -Filter '*.exe')
-if ($executables.Count -gt 0) {
-  $executables | ForEach-Object { Write-Host $_.FullName }
-  throw 'Windows release bundle contains a forbidden executable.'
-}
-
-Step 'Creating the release ZIP'
-Compress-Archive -Path $Stage -DestinationPath $Zip -CompressionLevel Optimal
-$sizeMb = [math]::Round((Get-Item $Zip).Length / 1MB, 1)
-Step "Done -> $Zip ($sizeMb MB)"
-Write-Host '    Extract the ZIP, then double-click start.bat.'
+$Root = Split-Path -Parent $PSScriptRoot
+$Builder = Join-Path $PSScriptRoot 'release_bundle.py'
+$Arguments = @('-X', 'utf8', $Builder, '--repo', $Root, '--ref', $SourceRef, '--name', $OutName)
+if ($env:RELEASE_TAG) { $Arguments += @('--tag', $env:RELEASE_TAG) }
+& $Python @Arguments
+if ($LASTEXITCODE -ne 0) { throw 'The committed core archive could not be built.' }
+Write-Host 'Extract the ZIP, then double-click start.bat.'

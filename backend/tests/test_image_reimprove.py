@@ -65,6 +65,7 @@ def _improved_pair(svc, image_cls, user_id, *, parent_filename='parent.png',
     return ds, parent, candidate
 
 
+@pytest.mark.plugins('image_upscale')
 def test_reimprove_reruns_the_pass_from_the_parent_with_todays_settings(app, monkeypatch):
     """The whole point: the pass restarts from the PARENT's pixels (never the
     dataset reference), with the improve knobs as they are NOW — a user who edits
@@ -118,6 +119,7 @@ def test_reimprove_reruns_the_pass_from_the_parent_with_todays_settings(app, mon
         assert parent.status == 'keep'
 
 
+@pytest.mark.plugins('image_upscale')
 def test_reimprove_kept_candidate_restores_parent_as_fallback_after_late_failure(
         app, monkeypatch):
     """A re-run replaces a selected result with an in-flight row.
@@ -154,6 +156,7 @@ def test_reimprove_kept_candidate_restores_parent_as_fallback_after_late_failure
         assert svc.db.session.get(FaceDatasetImage, parent.id).status == 'keep'
 
 
+@pytest.mark.plugins('image_upscale')
 def test_reimprove_trash_failure_restores_candidate_and_parent_states(app, monkeypatch):
     from app import job_queue
     from app.config import LOCAL_USER
@@ -185,6 +188,7 @@ def test_reimprove_trash_failure_restores_candidate_and_parent_states(app, monke
         assert svc.db.session.get(FaceDatasetImage, parent_id).status == 'pending'
 
 
+@pytest.mark.plugins('image_upscale')
 def test_reimprove_never_overwrites_a_candidate_changed_during_enqueue(app, monkeypatch):
     """A status click racing the queue hand-off wins over the re-run request."""
     from sqlalchemy import update
@@ -232,6 +236,7 @@ def test_reimprove_never_overwrites_a_candidate_changed_during_enqueue(app, monk
         assert cancelled and cancelled[0][0] == 'race-job'
 
 
+@pytest.mark.plugins('image_upscale')
 @pytest.mark.parametrize('old_caption', [None, 'caption before re-run'])
 def test_reimprove_preserves_a_caption_edited_during_enqueue(app, monkeypatch, old_caption):
     from sqlalchemy import update
@@ -271,6 +276,7 @@ def test_reimprove_preserves_a_caption_edited_during_enqueue(app, monkeypatch, o
         assert row.caption == 'caption edited while enqueueing'
 
 
+@pytest.mark.plugins('image_upscale')
 def test_reimprove_trash_rollback_preserves_a_concurrent_candidate_decision(
         app, monkeypatch):
     from sqlalchemy import update
@@ -310,6 +316,7 @@ def test_reimprove_trash_rollback_preserves_a_concurrent_candidate_decision(
         assert svc.db.session.get(FaceDatasetImage, parent_id).status == 'keep'
 
 
+@pytest.mark.plugins('image_upscale')
 def test_reimprove_trash_rollback_preserves_a_caption_edited_during_trash(
         app, monkeypatch):
     from sqlalchemy import update
@@ -352,6 +359,7 @@ def test_reimprove_trash_rollback_preserves_a_caption_edited_during_trash(
         assert svc.db.session.get(FaceDatasetImage, parent_id).status == 'pending'
 
 
+@pytest.mark.plugins('image_upscale')
 def test_reimprove_trash_rollback_restores_an_unchanged_blank_caption(app, monkeypatch):
     from app import job_queue
     from app.config import LOCAL_USER

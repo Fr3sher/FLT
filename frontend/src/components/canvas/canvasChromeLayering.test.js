@@ -18,9 +18,9 @@ import { dirname, join } from 'node:path';
 import {
   isLowZoom, LOW_ZOOM_THRESHOLD, MIN_LABEL_ZOOM, showsZoomLabels,
   zoomLabelScale, zoomLabelText,
-} from '../../utils/canvasZoomLegibility.js';
+} from "../../../../bundled/canvas/frontend/utils/canvasZoomLegibility.js";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+const HERE = dirname(fileURLToPath(new URL('../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx', import.meta.url)));
 const read = (f) => readFileSync(join(HERE, f), 'utf8');
 
 /* ------------------------------------------------------- stacking contract */

@@ -3,6 +3,8 @@ import os
 import zipfile
 import pytest
 
+import pytest
+
 from PIL import Image
 
 
@@ -347,6 +349,7 @@ def test_export_no_kept_images_400(client):
     assert resp.status_code == 400
 
 
+@pytest.mark.plugins('api_engines')
 def test_generate_chatgpt_no_key_accepts_and_creates_pending_rows(client, monkeypatch):
     """The service doesn't validate the API key up front — rows go pending and
     the background batch (which we don't wait for) will fail them later.

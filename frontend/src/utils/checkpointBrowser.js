@@ -37,6 +37,16 @@ export function normalizeCheckpointVariant(trainType, variant) {
     : choices[0].value;
 }
 
+/** The saved selection is available with the dataset, before trainer/model probes. */
+export function savedCheckpointSelection(dataset) {
+  const family = dataset?.train_type || 'zimage';
+  return {
+    family,
+    base: dataset?.train_base_model || '',
+    variant: normalizeCheckpointVariant(family, dataset?.train_variant),
+  };
+}
+
 export function checkpointVariantLabel(trainType, variant) {
   const normalized = normalizeCheckpointVariant(trainType, variant);
   return checkpointVariantOptions(trainType).find((choice) => choice.value === normalized)?.label || normalized;
@@ -88,6 +98,7 @@ export function trainFamilyLabel(type) {
   if (type === 'flux') return 'FLUX.1';
   if (type === 'flux2klein') return 'FLUX.2 Klein';
   if (type === 'anima') return 'Anima';
+  if (type === 'qwenimage21') return 'Qwen-Image 2.1';
   return 'Z-Image';
 }
 
@@ -97,5 +108,6 @@ export function loraFolderLabel(type) {
   if (type === 'flux') return 'loras/flux';
   if (type === 'flux2klein') return 'loras/flux2klein';
   if (type === 'anima') return 'loras/anima';
+  if (type === 'qwenimage21') return 'loras/qwenimage21';
   return 'loras/z image';
 }

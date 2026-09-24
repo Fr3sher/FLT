@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Fr3sher/FLT/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Fr3sher/FLT/actions/workflows/ci.yml) [![Join our Discord](https://img.shields.io/discord/1525908170331914411?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/j6hnJBFtXE) [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/perfectgf) [![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/perfectgf)
 
-**A complete, self-hosted training workflow in one browser tab:** source or generate a Character, Concept or Style dataset, curate it, caption it, clean watermarks, then train — a LoRA on five model families, locally or in the cloud, or a full Krea 2 model on a rented GPU — and compare checkpoints before export.
+[Install](#setup--install) · [Documentation](docs/README.md) · [Plugins](#plugins) · [Releases](https://github.com/Fr3sher/FLT/releases) · [Discord](https://discord.gg/j6hnJBFtXE)
 
 No account, paid tier or telemetry. API engines and rented GPUs are optional; local and manual workflows remain available.
 There is no upsell in the app: optional cloud signup referral links are disclosed and do not change the price.
@@ -30,45 +30,25 @@ A real Character LoRA built end to end in seven minutes, unedited and without na
 
 https://github.com/user-attachments/assets/d51ff89c-34e9-41a9-b47d-08939a8c867b
 
-<table>
-  <tr>
-    <td width="45%" valign="top">
-      <a href="docs/screenshots/generate/generate-variations.png"><img src="docs/screenshots/generate/generate-variations.png" alt="Generate variations: the subject type, and the five engines side by side with what each one costs per image, whether it runs on your GPU or bills an API, and which ones refuse adult content" width="100%"></a>
-    </td>
-    <td width="55%" valign="top">
-      <a href="docs/screenshots/02-workspace.png"><img src="docs/screenshots/02-workspace.png" alt="Guided dataset workspace: a progress rail mapping reference, generation, curation, captioning and training, next to the curation grid and its bulk actions" width="100%"></a>
-    </td>
-  </tr>
-  <tr>
-    <td valign="top"><sub><strong>Pick where the images come from</strong> — the five engines side by side, each stating its price per image, whether it runs free on your GPU or bills an API, and which ones refuse adult content. The first question anyone asks of this app, answered before you commit to it.</sub></td>
-    <td valign="top"><sub><strong>Then one workspace for the whole route</strong> — a progress rail from reference to Studio, beside the grid where you keep, reject, re-caption or send a selection back through an engine in bulk.</sub></td>
-  </tr>
-</table>
-
-<p align="center"><em>Every person shown in these screenshots was produced by the app's own generation engines; no real individual is depicted.</em></p>
+People shown in the demo and screenshots are AI-generated.
 
 ## What it does
 
-### Build any dataset
-
-| Capability | What it provides |
+| Area | Capabilities |
 |---|---|
-| **Character / Concept / Style** | Kind-aware captioning, masking, readiness checks and training policies rather than three cosmetic labels |
-| **Human / Animal / Creature / Object / Other / Anime subjects** | Subject-specific identity wording and shot catalogs; Anime protects the character design and illustrated rendering instead of forcing photorealism |
-| **Five generation engines** | Nano Banana Pro (Gemini), ChatGPT (`gpt-image-2`), OpenRouter, or local Klein and Krea 2 Edit through ComfyUI |
-| **Several engines in one batch** | Tick multiple engines and split one shot list across them; every result remains labelled with the engine that produced it |
-| **Generation queue** | Generations, ✨ upscale batches and tile retries line up instead of blocking each other. A dock in the corner shows what the GPU is on and what is waiting, lets one job jump the queue or leave it, and says plainly when the whole queue is held by a training run |
-| **Krea 2 Edit** | Restage a single reference while preserving identity, without needing a character LoRA first; the selected card controls output framing |
-| **Variation catalog** | Balanced expression, angle, lighting, framing, outfit and background shots; import/export the catalog as JSON and keep custom entries |
-| **Shot-type views** | Sort or group the grid by shot type to judge like against like (too many of these, not enough of those, which near-twins to keep), and ✏️ edit a custom shot card in place instead of deleting it and retyping the sentence |
-| **Reference editing and exact retry** | Edit the main reference through any available engine, compare before/after, then retry with the exact prompt, engine and temporary references |
-| **Import or scrape** | Drag in images, merge ZIP/folder datasets, search Reddit, Pexels or the open web by keyword, or scan a gallery/direct-media URL — a dozen sites have a dedicated handler that enumerates a profile or a gallery properly, several of them needing your own credentials entered once in **Settings → Source credentials**, and anything else goes through gallery-dl and whatever its bundled extractors cover. A site gallery-dl has no extractor for shows "No images found on this page" (the fallback item exists internally but is video-typed, so the image picker filters it out); a URL the app refuses outright — a retired source, a non-public host — says so as an error instead |
+| Datasets | Character, Concept and Style workflows; image and ZIP/folder import; subject-aware shot catalogs; local Klein and Krea 2 Edit generation; reference editing and exact retries |
+| Image Bank | Review folders in place, score quality, group duplicates and people, search by text or similarity, and build balanced shortlists to promote into datasets |
+| Curation | Keep/reject, crop, mirror, rotate, face similarity, composition checks, editable watermark masks, text detection and recoverable cleaning |
+| Captioning | Local vision models or JoyCaption, family-appropriate prose or tags, appearance policies, bulk editing, targeted re-captioning and external image/`.txt` round trips |
+| Local training | Guided ai-toolkit recipes for Z-Image, SDXL, Krea 2, FLUX.1, FLUX.2 Klein, Anima and Qwen-Image 2.1; queues, advanced settings, checkpoint continuation and experimental slider LoRAs |
+| Review and testing | Generate with all seven image training families; fixed-seed checkpoint/strength comparisons, prompt batches, runs, logs, lineage, votes, rankings and a generated-image Gallery |
+| Files | Standard training ZIPs and sidecars, backup/restore without API keys, ComfyUI deployment, configurable storage and Trash |
 
-API generation follows each provider's billing and content policy. Read the direct notes for [Gemini](docs/guide/settings-reference.md#what-the-gemini-engine-will-and-will-not-do), [ChatGPT subscription mode](docs/guide/settings-reference.md#chatgpt-subscription-experimental), [OpenRouter and image-engine settings](docs/guide/settings-reference.md#image-engines), and [Pexels authorization](docs/guide/workflow.md#the-built-in-web-scraper) before using those lanes. The local engines do not send reference images to an API.
+Dependencies vary by feature. Bank search ranks matches; it does not guarantee exclusions. Undo covers specific actions, and **Delete rejected** can remove source files after confirmation. Video and slider workflows are experimental. See the [feature reference](docs/guide/features.md), [requirements](docs/guide/requirements.md) and [known limitations](docs/guide/known-limitations.md) for the detailed behavior.
 
-### Image Bank
+## Plugins
 
-A dataset is the thirty images you train on. A **bank** is the three thousand you had to look at to find them — and looking at three thousand images by hand is where most datasets die.
+Install optional features from **Plugins → Store**, configure and prepare them in their own settings, and update them through **Plugins → Updates**. Several plugins can be installed together with one LDS restart. Each is independently installable; model downloads, hardware and provider credentials depend on the feature.
 
 Point a bank at a folder, or scrape straight into one. It reads what is there **in place**: your files are never modified, moved or renamed, and the single action that does touch the source folder announces itself in capitals before it runs. Then **one pass measures the whole pile**, and every question afterwards is answered against those measurements instead of against your eyes — what is blurry, what is a duplicate of what, who is in it, how it is framed, whether it is a photograph or a render, and what it actually shows. You keep, reject and shortlist; a kept selection graduates into a dataset with its analysis attached, and can come back the other way.
 
@@ -318,83 +298,63 @@ These are built on personal time, and how fast they arrive depends on how much o
 
 | Stage | ai-toolkit alone | FLT - Fresh LoRa Trainer |
 |---|---|---|
-| Build from references | ❌ bring your own images | ✅ five engines, simultaneous multi-engine batches, subject-aware catalogs including Anime, reference edits and exact retries |
-| Build from the web | ❌ none | ✅ Reddit, Pexels, keyword search across the open web, and gallery/direct-media URL scans (through gallery-dl, which covers several hundred sites) into a dataset or Image Bank, with deduplication and explicit provider warnings |
-| Triage a large dump | ❌ none | ✅ Image Bank scans, scores, search, filters, sorts, balanced/diverse shortlists, watermark masks and dataset round trips |
-| Curate and repair | ❌ external file tools | ✅ keep/reject, crop/mirror/rotate, InsightFace scoring, composition guidance, improve/compare and recoverable originals |
-| Captions | ❌ write or prepare them yourself | ✅ JoyCaption/Ollama, kind/family rules, Caption Lab, external `.txt` round trip and dual-caption support |
-| Masked training | ⚙️ consumes masks you supply | ✅ generates Character masks, supports Concept face masks and disables unsafe kind combinations |
-| Training | ✅ **it is the engine** — direct YAML/config control | ⚙️ guided/scoped recipes, preflight guards, advanced controls, queueing, local/cloud lanes and continuation |
-| Track experiments | ⚙️ inspect outputs manually | ✅ Runs hub, lineage graphs and a cross-dataset LoRA Canvas with notes, diffs, galleries and actions |
-| Pick a checkpoint | ❌ samples + your eye | ✅ Test Studio grids, multi-LoRA comparison, dataset-caption prompts, votes/rankings, outage-safe pause and export |
-| Move or publish | ⚙️ manual file handling | ✅ ZIP/sidecars, portable backup/restore, folder merge, ComfyUI deployment and optional Hugging Face publishing |
+| [API image engines](bundled/api_engines/) | Generate images with Gemini/Nano Banana, ChatGPT or OpenRouter; experimental ChatGPT subscription connection | Provider credentials; API usage is billed by the provider |
+| [Camera angles](bundled/camera_angles/) | Create new viewpoints of Gallery or dataset images with controls for direction, height and distance | ComfyUI, Qwen-Image-Edit and Multiple-Angles LoRA |
+| [Canvas](bundled/canvas/) | Arrange runs and checkpoints on a visual board, compare or blend LoRAs, generate images and export layouts | ComfyUI for generation; one model family per generation batch |
+| [Cloud training](bundled/cloud_training/) | Train image or video models on rented GPUs, monitor runs, recover checkpoints and deliver full Krea 2 models | [vast.ai](https://cloud.vast.ai/?ref_id=683073) account and API key; Hugging Face access for applicable runs |
+| [DLSS 5 Neural Rendering](bundled/dlss5/) | Improve a finished video's lighting and materials, compare with the original and export the result | Windows x86-64, NVIDIA driver, compatible model supplied by you and the prepared bridge |
+| [Klein Improve](bundled/image_upscale/) | Re-render image detail with instructions, LoRA presets and finishing controls | ComfyUI and Klein models; appearance and color can change |
+| [Live channels](bundled/live/) | Continuously render scripted H3 scenes and watch them in a browser or VLC | Compatible local ComfyUI, H3 weights and stream encoder; experimental |
+| [Model tools](bundled/model_tools/) | Quantize full models to fp8 or merge weighted LoRAs into a base checkpoint | Python with PyTorch and output disk space; CPU processing, no GPU required |
+| [Publish to Civitai](bundled/civitai_publish/) | Upload checkpoints and generated images to a model page | Civitai API key; checkpoints default to drafts, image posts default to publication |
+| [Publish to Hugging Face](bundled/hf_publish/) | Export kept images, captions, metadata and a dataset card to the Hub | Write-enabled Hugging Face token; private repository by default and rights confirmation |
+| [Resource monitor](bundled/resource_monitor/) | Show CPU, GPU, RAM, VRAM and temperatures, with guarded memory release | No model download |
+| [SeedVR2](bundled/seedvr2/) | Restore and upscale images with high-resolution tiling and finishing controls | ComfyUI, SeedVR2 nodes and models; optional TTP nodes for tiling |
+| [Video lane](bundled/video/) | Build video datasets from local files or web imports, curate shots, train LoRAs and test H3 generation, continuation and interpolation | Dependencies vary by task: PyAV/ffmpeg, ai-toolkit, ComfyUI and model weights; Video Bank remains beta |
+| [Web scraping](bundled/scrape/) | Import selected images or clips from searches and supported gallery URLs into datasets or banks | Source-dependent credentials and permissions; Pexels requires explicit dataset/ML authorization |
 
-**Honest verdict:** the studio is strongest when you want one guided path from raw images to a reviewed LoRA. A raw ai-toolkit config still exposes the widest surface for unsupported architectures and experimental keys. Standard ZIP/sidecars keep both workflows interoperable.
+API providers apply their own billing and content policies. Model licenses also apply, including MiniMax H3's territory restrictions; check the [video limits](docs/guide/features.md#video-bank-beta--first-release-read-the-limits) before using it. Plugin authors can start with the [SDK and package guide](docs/plugins/README.md).
 
-## Feature matrix by backend
+## Screenshots
 
-Missing dependencies are shown in Setup/Settings and gated features stay unavailable until their requirements are satisfied. Setup's closing screen lists the installable capabilities — including bank scoring, the optional SigLIP 2 engine, the watermark detector and the scraping extras — and each row that is not ready leads to the step that installs it. The SeedVR2 upscaler is the exception: it installs from its own Setup ▸ ComfyUI card and is not counted on that screen.
+Click a screenshot to view it at full size.
 
-| Feature | Requires |
-|---|---|
-| Nano Banana Pro generation | `GEMINI_API_KEY` |
-| ChatGPT / `gpt-image-2` generation | `OPENAI_API_KEY`, or the separate experimental ChatGPT-subscription connection |
-| OpenRouter generation | `OPENROUTER_API_KEY` plus an image-capable model slug; OpenRouter billing and the upstream provider's policy still apply |
-| Klein generation / improvement | ComfyUI reachable + Klein model stack |
-| SeedVR2 upscaling | ComfyUI reachable + the `ComfyUI-SeedVR2_VideoUpscaler` node pack (installed from ComfyUI, not by this app — it has its own Python dependencies) + two model files the Setup step downloads (~3.9 GB); big frames are upscaled in overlapping tiles by default when the optional `Comfyui_TTP_Toolset` pack is present (a `tiling` setting keeps `always`/`never` available); [exact files](docs/guide/settings-reference.md#seedvr2-upscaling-local) |
-| Krea 2 Edit generation | ComfyUI reachable + `comfyui-krea2edit`, a Krea 2 base, Identity Edit LoRA, Qwen3-VL encoder and Qwen Image VAE; [exact files](docs/guide/settings-reference.md#krea-2-edit-local) |
-| Captioning | A local LLM — **Ollama or LM Studio** — **or** ai-toolkit (JoyCaption) |
-| Dual long + short captions | ai-toolkit + local vision caption derivation; local training only, and unavailable for Krea 2 / Anima |
-| Auto-framing / auto head-crop | A local LLM (Ollama or LM Studio) with a vision model |
-| Face similarity / auto-triage | `backend/requirements-ml.txt` (InsightFace + ONNX Runtime) |
-| Character person masks | `backend/requirements-ml.txt` (rembg); Concept/Style intentionally disable them |
-| Image Bank scoring, crops and semantic tools | The Bank scoring extra provides CLIP and ✨ Score. Each Bank can instead select the optional pinned SigLIP 2 engine from Setup; it builds a separate index, while aesthetic/NSFW/style/medium remain on CLIP. Balanced picks also need Framing. Both ship **CPU-only PyTorch** on purpose; on a machine that already has a CUDA Python (ai-toolkit's, ComfyUI's) each can be pointed at it instead — checked package by package, never installed into, and separately for ✨ Score and for SigLIP 2. |
-| Watermark detection | A local LLM (Ollama or LM Studio) with a vision model, **or** the dedicated detector (torch + transformers — the bank-scoring extra's environment is reused when present — plus ~0.9 GB of model downloads at first use) |
-| Watermark inpainting | LaMa extra from `backend/requirements-ml.txt`, or ComfyUI + Klein, which erases the found zones and re-renders the whole photo; crop remains model-free |
-| Scraping | `backend/requirements-scrape.txt`; Pexels also needs `PEXELS_API_KEY` and explicit authorization. Gallery/URL scanning goes through gallery-dl for any site it recognizes, whatever its bundled extractors cover; an unrecognized site returns "No images found" in the picker (the single item gallery-dl's yt-dlp fallback can still fetch is video-typed, so it never reaches the image list), and a listing of albums returns one cover per album unless **Scan full albums** is ticked. A scan that was cut short — by the time budget, a result cap, or a source that blocked or rate-limited it — now says so under the results ("this scan stopped before the end of the listing"), instead of presenting a partial list as the whole thing. Web image search needs no key — it queries a metasearch layer over several backends and asks for photos, but the filter is not honored uniformly, so some non-photo results can still come through; results are capped per search rather than guaranteed — a request for the 120 maximum routinely comes back with far fewer — come from third-party sites whose licence is your responsibility, and a few links — mainly stock-photo CDNs that redirect to the actual file — are refused by the hardened fetch that protects every import |
-| Video Bank — reading and triaging | `backend/requirements-ml.txt` (PyAV). Shot detection additionally needs `transnetv2-pytorch` (weights bundled, nothing to download), which rides the bank-scoring environment because it pulls torch. The three pieces install and fail **apart**, and Setup reports them as three separate rows |
-| Video Bank — cutting clips into a dataset | An ffmpeg binary: `imageio-ffmpeg` ships one, or any ffmpeg on PATH. Needed **only to promote** — without it you can still scan, detect shots, watch and triage a whole bank |
-| Video Bank — shot captions and scene search | The Bank scoring extra's environment (torch + `transformers` ≥ 4.57) plus a Qwen3-VL checkpoint downloaded at first use; the model is a setting, and the same environment serves ✨ Score, SigLIP 2 and the watermark detector |
-| Civitai scanning | `backend/requirements-scrape.txt`; without `CIVITAI_API_KEY` the scan runs but returns SFW results only |
-| 🌐 Civitai top prompts (Studio/Canvas) | Browsing needs nothing; reading the prompts needs `CIVITAI_API_KEY` (free account) — the same key Civitai scanning uses |
-| 📷 Camera angles | ComfyUI reachable + the Qwen-Image-Edit stack Setup's Camera card downloads (the VAE is shared with Krea 2 Edit) |
-| 🔤 Find text (bank & dataset) | The same small CPU OCR package the Video Bank's text pass uses, installed from Setup |
-| Local LoRA training: Z-Image / Krea 2 / FLUX.1 / FLUX.2 Klein / Anima | ai-toolkit; no ComfyUI is needed for official Hugging Face bases. Krea 2 can start from any Krea 2 checkpoint already on your disk instead — including one a full-model run delivered — discovered through ComfyUI's model tree; an ordinary fp8 build trains (the trainer up-casts it, and the app says with numbers how much precision that cast dropped), while a packed ComfyUI export is refused because it carries decompression tables a trainer cannot load |
-| Local SDXL training | ai-toolkit + a base checkpoint discoverable in ComfyUI's model tree |
-| Cloud training | `VAST_API_KEY`; supported families are shown in the launch UI. Full-model Krea 2 also needs `HF_CLOUD_TOKEN` with Krea base read and repository write access; fine-grained is recommended, global `role=write` is accepted with a warning, and read-only is rejected. A finished full model (~26 GB, plus its ~10 GB fp8 twin) is downloaded **to your machine** and verified before the rented pod is released; a copy of the master is then pushed to a private Hugging Face repository as a backup, and it can be turned off. Either copy can seed a fresh pod when you continue the run: the Hugging Face one is minutes over a datacenter link, the one on your machine costs your upload speed — and the ▶ Continue dialog shows both durations and what each one costs in rented GPU time before you pick. So you need **room on the checkpoint drive** (checked before anything is rented), and Hugging Face room only for the backup; Settings ▸ Storage lists what is taking that space |
-| Quantizing a model to fp8 (Settings ▸ Storage, or a full model's card) | A Python with `torch`; the interpreter is probed before the button is enabled, so a missing package is a refusal with its pip line, not a crash thirty seconds in. Runs on the CPU, one at a time, so it never takes VRAM from ComfyUI or a training run. Your source file is never modified or overwritten; an already-quantized file, or an adapter, is refused |
-| Merging a LoRA into a base checkpoint (produces a full model) | A Python with `torch` (the same one fp8 quantization uses) and room for a second copy of the base — a 26 GB Krea 2 base takes about two minutes and writes 26 GB. Refused on an already-quantized base: merge into the full-precision file, then quantize. LoRAs must name their modules the way the base names its weights (the ai-toolkit/diffusion-model convention); kohya's flattened `lora_unet_…` SDXL exports do not, and are refused by name before anything is written. The result is a **merged** model, not a trained one, and its metadata says so |
-| LoRA Canvas browsing, layout, notes and diffs | No external service; generating needs ComfyUI and same-family checkpoints, continuing needs the chosen local/cloud training lane |
-| Test Studio | ComfyUI reachable + assets for a supported Studio family |
-| Backup/restore and ZIP/folder merge | No external service |
-| Hugging Face publishing | Write-enabled `HF_TOKEN`; repositories are private by default |
-
-## Run it your way
-
-| Mode | Good for | What is optional or unavailable |
-|---|---|---|
-| **Docker + existing ComfyUI** | Run LDS in Docker while keeping the ComfyUI already installed on the host | The launcher asks for the ComfyUI folder once; local training still uses host ai-toolkit or the cloud |
-| **Docker GPU + fresh ComfyUI** | Run LDS and a new isolated ComfyUI together on an NVIDIA GPU | Existing ComfyUI/models stay untouched; local training still uses host ai-toolkit or the cloud |
-| **Rented GPU pod (RunPod)** | Reach the studio, Image Bank and ComfyUI generation from any browser, on a GPU you do not own | Training still rents a [vast.ai](https://cloud.vast.ai/?ref_id=683073) instance; ai-toolkit is not in the image, so local training is unavailable. Large ZIP exports can hit the pod proxy's 100-second timeout. See the [RunPod guide](docs/guide/runpod.md) |
-| **Full local** | Local engines, ML helpers, ai-toolkit training, Canvas generation and Test Studio | Install/connect only the tools you need; each capability degrades independently |
+<table>
+  <tr>
+    <td width="33%" align="center"><a href="docs/screenshots/bank/bank-overview.png"><img src="docs/screenshots/bank/bank-overview.png" alt="Image Bank" width="100%"></a><br><sub>Image Bank</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/bank/bank-analyze-and-overview.png"><img src="docs/screenshots/bank/bank-analyze-and-overview.png" alt="Analysis and coverage" width="100%"></a><br><sub>Analysis and coverage</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/bank/bank-launch-all.png"><img src="docs/screenshots/bank/bank-launch-all.png" alt="Batch analysis" width="100%"></a><br><sub>Batch analysis</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="docs/screenshots/03-curate.png"><img src="docs/screenshots/03-curate.png" alt="Dataset curation" width="100%"></a><br><sub>Dataset curation</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/bank/find-text-launch.png"><img src="docs/screenshots/bank/find-text-launch.png" alt="Text detection" width="100%"></a><br><sub>Text detection</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/training/runs-hub.png"><img src="docs/screenshots/training/runs-hub.png" alt="Training runs" width="100%"></a><br><sub>Training runs</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="docs/screenshots/studio/studio-grid.png"><img src="docs/screenshots/studio/studio-grid.png" alt="Checkpoint comparisons" width="100%"></a><br><sub>Checkpoint comparisons</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/canvas/canvas-board.png"><img src="docs/screenshots/canvas/canvas-board.png" alt="LoRA Canvas" width="100%"></a><br><sub>LoRA Canvas</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/studio/civitai-prompt-browser.png"><img src="docs/screenshots/studio/civitai-prompt-browser.png" alt="Civitai prompts" width="100%"></a><br><sub>Civitai prompts</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><a href="docs/screenshots/release/camera-angles-picker.png"><img src="docs/screenshots/release/camera-angles-picker.png" alt="Camera angles" width="100%"></a><br><sub>Camera angles</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/video/video-studio-clips.png"><img src="docs/screenshots/video/video-studio-clips.png" alt="Video Test Studio" width="100%"></a><br><sub>Video Test Studio</sub></td>
+    <td width="33%" align="center"><a href="docs/screenshots/video/dlss5-compare.png"><img src="docs/screenshots/video/dlss5-compare.png" alt="DLSS 5 comparison" width="100%"></a><br><sub>DLSS 5 comparison</sub></td>
+  </tr>
+</table>
 
 ## Setup & install
 
-On first launch, **Setup** scans the machine and links every missing capability to its install/configuration step. You can skip optional tools and begin with imported images immediately.
+**Windows:** download `LoRA-Dataset-Studio-windows.zip` from [FLT's latest release](https://github.com/Fr3sher/FLT/releases/latest) when that asset is available; otherwise use GitHub's **Source code (zip)**. Extract the entire archive and run `start.bat`. The launcher prepares Python and opens FLT in your browser.
 
-### Option 1 — release ZIP + start.bat (Windows)
+Complete **Setup**, then create a dataset and install the optional plugins you need. Importing, organizing and manually captioning images require no GPU or API key.
 
-Download **`LoRA-Dataset-Studio-windows.zip`** from the [latest release](https://github.com/Fr3sher/FLT/releases/latest) when that asset is present; otherwise use GitHub's **Source code (zip)**. Extract the entire archive, then double-click:
+**Updates:** ZIP installations use **Update & restart** and retain their datasets, media, settings and history. Git installations follow their configured branch; this fork continues to use `main`. Pinokio and Docker use their own [update procedures](docs/guide/installation.md). Back up your data before the first v2 launch because it may migrate the database.
 
-```text
-start.bat
-```
+### Minimum requirements
 
-`start.bat` uses Python 3.10–3.12 if available. If none is installed, it downloads a self-contained CPython 3.12 into `.python\`, creates `.venv`, installs the core requirements, opens `http://127.0.0.1:5050/`, and starts the server. It requires no admin rights and changes no system PATH.
+The core runs without a GPU. Python 3.10–3.12 supports the local ML extras; the Windows launcher downloads Python 3.12 if needed. Local generation typically needs about 16 GB NVIDIA VRAM; training requirements depend on the family and settings. See the [hardware and dependency tables](docs/guide/requirements.md) before downloading models or renting a GPU.
 
-A ZIP install updates from inside the app too: **Update & restart** downloads the next **release** and swaps it in, keeping `data/`, `config.json`, `.env`, `.venv` and `.python` untouched. A git checkout follows every commit instead — and needs `git` on your PATH, which an install made through a desktop Git client does not always provide.
-
-From a git checkout, the same launcher works and **Update & restart** can pull fixes directly:
+### Option 1 — Git checkout (Windows)
 
 ```bash
 git clone https://github.com/Fr3sher/FLT.git
@@ -526,7 +486,7 @@ The app scales from "no GPU at all" to a full local training rig — each capabi
 
 ## Configuration & network access
 
-Use **Settings** for normal configuration. The complete defaults, `config.json` keys, model locations and environment overrides live in [docs/guide/settings-reference.md](docs/guide/settings-reference.md).
+Use **Settings** for normal configuration. Native installs bind to `127.0.0.1` by default. Read the [security policy](SECURITY.md#the-default-threat-model) before enabling network access; a protected connection also lets you use LDS from a phone or tablet.
 
 The server binds to `127.0.0.1` by default. Before enabling LAN access or publishing a port, read [SECURITY.md](SECURITY.md#the-default-threat-model) and configure the access-token/VPN/reverse-proxy boundary that fits your network. The whole interface also works on a phone or tablet on your own network, so checking a run or triaging a bank does not need the machine that is training.
 
@@ -555,7 +515,7 @@ Still stuck? **Guide → Getting help** generates a paste-safe diagnostic report
   <a href="https://ko-fi.com/perfectgf"><img src="https://storage.ko-fi.com/cdn/kofi3.png?v=3" alt="Support the project on Ko-fi" height="44"></a>
 </p>
 
-FLT - Fresh LoRa Trainer is free, open source, and has no paid tier, no telemetry and
+FLT - Fresh LoRa Trainer is free and source available under a noncommercial license. It has no paid tier, no telemetry and
 no upsell. It is built and maintained by one person, on personal time — every
 feature in the list above came out of somebody's evenings.
 
@@ -628,4 +588,4 @@ Issues, ideas and pull requests are welcome. For anything bigger than a small fi
 
 ## License
 
-Licensed under the **PolyForm Noncommercial License 1.0.0** — see [LICENSE](LICENSE). Noncommercial use is permitted; commercial use requires separate permission from the licensor.
+[PolyForm Noncommercial 1.0.0](LICENSE). Noncommercial use is permitted; commercial use requires separate permission from the licensor.

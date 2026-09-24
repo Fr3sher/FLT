@@ -1,57 +1,43 @@
+import { apiEngineSetupRows, apiEngineSpecs } from '../engines/catalog.js'
+import { contributions } from '../plugins/registry.js'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Dna, Lock, PartyPopper } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { apiFetch, getCsrfToken, putJson, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { useCapabilities } from '../context/CapabilitiesContext'
 import LmStudioDownload from '../components/settings/LmStudioDownload'
 import { deriveSetupSteps, deriveCapabilitySummary, SETUP_STEP_IDS, kleinMissingLabels,
-  comfyuiDirVerdict, comfyuiLauncherState, COMFYUI_SKIP_LOST, COMFYUI_SKIP_KEPT, installAllPlan,
+  comfyuiDirVerdict, comfyuiLauncherState, COMFYUI_SKIP_LOST, comfyuiSkipKept, installAllPlan,
   OLLAMA_SKIP_LOST, ollamaSkipKept, ollamaGateReason,
-  aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS, chatgptLanes, chatgptLaneSummary }
+  aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS }
   from '../hooks/useSetupSteps'
-import ChatgptSubscriptionConnect from '../components/common/ChatgptSubscriptionConnect'
 import SettingsLink from '../components/common/SettingsLink'
 import GuidedSteps from '../components/setup/GuidedSteps'
-import { ML_INSTALL_CARDS, cardInstalled } from '../components/setup/mlInstallCards'
+import SetupStart from '../components/setup/SetupStart'
+import { normalizeJourney } from '../components/setup/setupJourney'
+import { completeCoreSetup } from '../components/setup/completeCoreSetup'
+import { mlInstallCards, cardInstalled } from '../components/setup/mlInstallCards'
 import InstallRunner from '../components/setup/InstallRunner'
 import InstallEverything from '../components/setup/InstallEverything'
 import { HelpBadge } from '../help/HelpMode'
 import { kleinAssetBlocks } from '../utils/kleinAssets.js'
-import CloudSignupNote from '../components/setup/CloudSignupNote'
 
 const INPUT_CLASS =
   'mt-1 w-full rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-sm text-content ' +
   'placeholder:text-content-subtle focus:border-primary focus:outline-none'
 
-const KEY_FIELDS = [
-  { key: 'GEMINI_API_KEY', label: 'Gemini API key', engine: 'nanobanana',
-    href: 'https://aistudio.google.com/apikey', help: 'Powers Nano Banana.' },
-  // NOT "Powers ChatGPT (gpt-image-2)" any more. That sentence was true and
-  // still misleading: it made the paid API key read as the only way in, on the
-  // screen where a ChatGPT Plus/Pro subscriber decides what this app can do —
-  // while the subscription lane sat two pages away in Settings. The key row now
-  // describes ITS lane; the engine's other door is rendered right under it.
-  { key: 'OPENAI_API_KEY', label: 'OpenAI API key', engine: 'chatgpt',
-    href: 'https://platform.openai.com/api-keys',
-    help: 'Pay-per-image, and the lane that accepts up to 16 reference images.' },
-  { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API key', engine: 'openrouter',
-    href: 'https://openrouter.ai/keys',
-    help: 'Powers the OpenRouter engine — one key and one balance for the same '
-      + 'upstream models. Pick the model in Settings \u203a Image engines.' },
-  // 📤 Not an image engine, but a key like the three above and read on the
-  // same "what can this install do" screen: the Overview row and the final
-  // summary count it, so the field that turns it on must be here too.
-  { key: 'CIVITAI_API_KEY', label: 'Civitai API key (optional)', engine: 'civitai',
-    href: 'https://civitai.com/user/account',
-    help: 'Publishes your checkpoints as Civitai model pages and posts generated '
-      + 'images under them from the app; also reads the prompts in the 🌐 Civitai '
-      + 'browser and unlocks adult results in Civitai scans. A free account has one.' },
-]
+// Credentials belong to their plugin. This legacy wizard step is only a
+// directory to those pages; its metadata also feeds the capability summary.
+function apiKeyFields() {
+  return apiEngineSpecs().filter((s) => s.secret && s.setupKey).map((s) => ({
+    key: s.secret, label: s.setupKey.label, plugin: s.plugin,
+  }))
+}
 
-/** Which capability probe the "Save & test" button runs for each key field. */
-const KEY_TEST_TARGET = { nanobanana: 'gemini', chatgpt: 'openai', openrouter: 'openrouter',
-  civitai: 'civitai' }
+function pluginKeyFields() {
+  return contributions('setup.key', 'setup').filter((k) => k.field && k.field.key)
+}
 
 // Default local vision model + rough VRAM notes surfaced in the wizard. The
 // ABLITERATED Qwen3-VL is required — vanilla qwen3-vl refuses to caption the NSFW
@@ -64,8 +50,7 @@ const KLEIN_MODEL_VRAM = '≈ 16 GB VRAM (fp8; ~29 GB at bf16)'
 // A wizard "screen" is the welcome/scan, one per setup tool, then the install step (where
 // the app installs what it can for you — AFTER the config, since several installs depend on
 // a configured ComfyUI/Ollama), then done.
-const SCREENS = ['welcome', ...SETUP_STEP_IDS, 'install', 'done']
-const TOTAL_TOOLS = SETUP_STEP_IDS.length
+const SCREENS = ['welcome', ...SETUP_STEP_IDS, 'install', 'done', 'tools']
 
 const STATUS_META = {
   ready: { glyph: '✓', label: 'Ready', cls: 'text-emerald-400' },
@@ -92,9 +77,8 @@ const STATUS_META = {
 // tool step (the comfyui step has Klein's weights, never Krea's). Hence 'install',
 // which is a SCREEN and not a step id — see screenOf().
 const CAPABILITY_STEP_ID = {
-  'Nano Banana (Gemini)': 'image',
-  'ChatGPT (gpt-image-2)': 'image',
-  'OpenRouter': 'image',
+  // The API engines' rows (from the catalog, at render time) map to the image
+  // step — see capabilityStepId().
   'Klein (local)': 'comfyui',
   'Krea 2 Edit (local)': 'install',
   // Same screen as Krea, for the same reason: its one-click installer
@@ -130,39 +114,58 @@ const CAPABILITY_STEP_ID = {
   // 📤 A credential like the three above it: its field sits on the same
   // keys screen (the wizard's optional keys block), so the row lands on the
   // control that turns it on.
-  '📤 Civitai publishing': 'image',
   'LoRA training': 'training',
   '🖼️ Test Studio (images)': 'comfyui',
 }
 
+/** The wizard step a capability row leads to: the table above, plus every
+ *  API engine's row and every plugin key field's row (their fields are on
+ *  the image step). */
+function capabilityStepId(label) {
+  if (CAPABILITY_STEP_ID[label]) return CAPABILITY_STEP_ID[label]
+  if (apiEngineSetupRows().some((r) => r.label === label)) return 'image'
+  return pluginKeyFields().some((k) => k.capabilityLabel === label) ? 'image' : undefined
+}
+
 export default function SetupPage() {
+  const navigate = useNavigate()
   const toast = useToast()
-  const { caps, refresh } = useCapabilities()
+  const { caps, refresh: refreshCapabilities } = useCapabilities()
   const [config, setConfig] = useState(null)
-  const [secretsPresence, setSecretsPresence] = useState({})
-  const [secretInputs, setSecretInputs] = useState({})
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState(false)
   const [detected, setDetected] = useState(null)   // autodetect result (path suggestions)
   const [detecting, setDetecting] = useState(false)
   const [scanned, setScanned] = useState(false)     // the on-load scan has completed at least once
-  // Deep link: /setup?step=<tool id> opens that wizard screen straight away.
-  // The Settings ▸ Overview capability rows link here — "✗ Person masks" must
-  // land ON the install button, not on the welcome screen with 4 Next clicks in
-  // between. Applied to the INITIAL state (not an effect) so the wizard never
-  // flashes the welcome screen first; an unknown/absent step falls back to 0.
-  const [searchParams] = useSearchParams()
-  const [screen, setScreen] = useState(() => {
-    const raw = searchParams.get('step')
-    const i = SETUP_STEP_IDS.indexOf(raw)
-    if (i >= 0) return i + 1                        // welcome=0, tools=1..N
-    // The screens that are NOT tool steps are addressable too: the install /
-    // repair menu is where the one-click engine installs live (Krea 2 Edit), and
-    // a help topic pointing at ?step=install must land there, not on welcome.
-    const j = SCREENS.indexOf(raw)
-    return j > 0 ? j : 0
-  })
+  const [scanProblem, setScanProblem] = useState('')
+  const [pendingChecks, setPendingChecks] = useState(0)
+  const latestCheck = useRef(0)
+  // The context keeps last-known capabilities for the rest of LDS. A setup
+  // plan must not reuse those after saving a different URL/model and failing
+  // its check, including when the user returns through the guide's link.
+  const refresh = useCallback(async (...args) => {
+    const revision = ++latestCheck.current
+    setPendingChecks(count => count + 1)
+    let checked = null
+    try { checked = await refreshCapabilities(...args); return checked }
+    finally {
+      if (revision === latestCheck.current) setScanProblem(checked ? ''
+        : 'Could not verify your tools. Check the connection and try again.')
+      setPendingChecks(count => count - 1)
+    }
+  }, [refreshCapabilities])
+  // Read the URL on every render: links from Settings and other setup screens
+  // must open the requested tool even when this page is already mounted.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const journey = normalizeJourney(Object.fromEntries(searchParams))
+  const requestedScreen = SCREENS.indexOf(searchParams.get('step'))
+  const screen = requestedScreen >= 0 ? requestedScreen : 0
+  const setScreen = (next) => setSearchParams(
+    { ...(journey || {}), ...(SCREENS[next] === 'welcome' ? {} : { step: SCREENS[next] }) }, { replace: true })
   const [advancing, setAdvancing] = useState(false) // Next is mid save-&-recheck
+  const kind = SCREENS[screen]
+  const optionalScreen = (kind !== 'welcome' && kind !== 'done')
+    || (kind === 'welcome' && !!journey && journey.goal !== 'dataset')
   const [startingOllama, setStartingOllama] = useState(false) // "Start Ollama" in flight
   const [startingComfyui, setStartingComfyui] = useState(false) // secure portable launch in flight
   const [savingOllamaMode, setSavingOllamaMode] = useState(false)
@@ -183,7 +186,7 @@ export default function SetupPage() {
   const load = useCallback(async () => {
     try {
       const data = await apiFetch('/api/settings')
-      setConfig(data.config); setSecretsPresence(data.secrets); setLoadError(false)
+      setConfig(data.config); setLoadError(false)
       savedConfigRef.current = JSON.stringify(data.config)
     } catch (e) { setLoadError(true); toast.error(`Failed to load settings: ${e.message}`) }
   }, [toast])
@@ -194,6 +197,7 @@ export default function SetupPage() {
   // SUGGESTED (a scan can guess wrong) and applied on the user's click.
   const runAutodetect = useCallback(async (baseConfig, force = false) => {
     setDetecting(true)
+    setScanProblem('')
     try {
       const d = await apiFetch('/api/setup/autodetect')
       setDetected(d)
@@ -221,17 +225,21 @@ export default function SetupPage() {
       // The app shell is already checking capabilities on first load. Reuse
       // that scan unless auto-detection saved new settings or the user asked
       // for a fresh check; otherwise cold Python checks run twice at startup.
-      await refresh(force || changed)
+      const checked = await refresh(force || changed)
+      if (!checked) throw new Error('Could not verify your tools. Check the connection and try again.')
       return d
-    } catch { return null }
+    } catch {
+      setScanProblem('Could not verify your tools. Check the connection and try again.')
+      return null
+    }
     finally { setDetecting(false); setScanned(true) }
   }, [refresh])
 
   // The scan runs BY ITSELF the moment settings load — the user watches it on the
   // welcome screen, no button required.
   useEffect(() => {
-    if (config && !autodetectedRef.current) { autodetectedRef.current = true; runAutodetect(config) }
-  }, [config, runAutodetect])
+    if (optionalScreen && config && !autodetectedRef.current) { autodetectedRef.current = true; runAutodetect(config) }
+  }, [config, runAutodetect, optionalScreen])
 
   // Navigating between wizard screens dismisses a half-open "continue without ComfyUI"
   // or "continue without Ollama" panel, so neither re-appears stale when the user
@@ -243,6 +251,7 @@ export default function SetupPage() {
   // scan. Recursive timeouts avoid overlapping requests; unmount aborts the active
   // fetch and clears the pending timer.
   useEffect(() => {
+    if (!optionalScreen) return undefined
     let alive = true
     let timer = null
     let controller = null
@@ -288,7 +297,7 @@ export default function SetupPage() {
       if (timer) clearTimeout(timer)
       controller?.abort()
     }
-  }, [refresh, readinessRevision])
+  }, [refresh, readinessRevision, optionalScreen])
 
   // Live, SAVE-FREE classification of the typed ComfyUI directory, so the field gives
   // an actionable verdict (wrong path / empty folder / launcher-parent-with-a-child)
@@ -354,37 +363,23 @@ export default function SetupPage() {
   const setField = (section, key, value) =>
     setConfig((prev) => ({ ...prev, [section]: { ...prev[section], [key]: value } }))
 
-  // Single write path: persist config + typed secrets, then force a re-probe so
+  // Single write path: persist core configuration, then force a re-probe so
   // every step's status recomputes from fresh capabilities.
   const persist = async () => {
     setBusy(true)
     try {
-      const secrets = Object.fromEntries(
-        Object.entries(secretInputs).map(([k, v]) => [k, (v || '').trim()]).filter(([, v]) => v)
-      )
-      const data = await putJson('/api/settings', { config, secrets })
-      setConfig(data.config); setSecretsPresence(data.secrets); setSecretInputs({})
+      const data = await putJson('/api/settings', { config })
+      setConfig(data.config)
       savedConfigRef.current = JSON.stringify(data.config)
-      await refresh(true)
-      toast.success('Saved.')
-    } catch (e) { toast.error(`Save failed: ${e.message}`) }
-    finally { setBusy(false) }
-  }
-
-  // Test the key the user JUST typed. The probe reads the SAVED secret, so save
-  // that one key first (no need to fill anything else), then test + re-probe so
-  // the step flips to Ready. With no typed value, test whatever is already saved.
-  const saveSecretThenTest = async (key, target) => {
-    const typed = (secretInputs[key] || '').trim()
-    try {
-      if (typed) {
-        const data = await putJson('/api/settings', { secrets: { [key]: typed } })
-        setSecretsPresence(data.secrets); setSecretInputs((p) => ({ ...p, [key]: '' }))
+      const checked = await refresh(true)
+      if (!checked) {
+        toast.warning('Settings saved, but the tool check failed. Return to your plan and retry the checks.')
+        return null
       }
-      const r = await postJson(`/api/settings/test/${target}`, {})
-      r.ok ? toast.success(r.detail) : toast.warning(r.detail)
-      await refresh(true)
-    } catch (e) { toast.error(e.message) }
+      toast.success('Saved.')
+      return checked
+    } catch (e) { toast.error(`Save failed: ${e.message}`); return false }
+    finally { setBusy(false) }
   }
 
   // One-click start for an ALREADY-INSTALLED Ollama that just isn't running
@@ -392,7 +387,7 @@ export default function SetupPage() {
   // serve` detached and polls readiness (~15s); refresh(true) then flips the step
   // to ready with no app restart. A failure returns 502 -> apiFetch throws (and
   // auto-toasts the generic 5xx notice); the catch adds the specific reason,
-  // matching the existing saveSecretThenTest pattern.
+  // alongside the generic request failure notice.
   const loadLlmModel = async () => {
     setStartingOllama(true)
     try {
@@ -512,77 +507,25 @@ export default function SetupPage() {
   const toolBody = (id) => {
     const step = stepById[id]
     if (id === 'image') {
-      // Two doors into ONE engine, so the ✓ belongs to the engine and each lane
-      // carries its own smaller state. Attaching "✓ Ready" to the API-key row —
-      // as this screen did — meant a subscriber with no key at all watched the
-      // key field certify itself green, and a keyless user saw "○ Not set" on an
-      // engine that was already working.
-      const chatgpt = chatgptLanes(caps, secretsPresence)
+      const links = [
+        ...apiKeyFields(),
+        ...pluginKeyFields().map((item) => ({ ...item.field, plugin: item.plugin })),
+      ]
       return (
         <div className="space-y-4">
-          {KEY_FIELDS.map((f) => {
-            const isChatgpt = f.engine === 'chatgpt'
-            // The Civitai key is not an image engine: its readiness is the
-            // capability probe's own row, not a member of `step.engines`.
-            const laneOk = isChatgpt ? chatgpt.keySet
-              : f.engine === 'civitai' ? !!(caps && caps.civitai && caps.civitai.ok)
-                : !!step.engines[f.engine]
-            const field = (
-              <div key={f.key}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className={isChatgpt
-                    ? 'text-sm font-medium text-content-muted'
-                    : 'text-sm font-medium text-content'}>{f.label}</span>
-                  <span className={`text-xs ${laneOk ? 'text-emerald-400' : 'text-content-subtle'}`}>
-                    {laneOk ? '✓ Ready' : '○ Not set'}
-                  </span>
-                </div>
-                <p className="text-xs text-content-muted">{f.help}</p>
-                <input type="password" autoComplete="off" className={INPUT_CLASS}
-                  value={secretInputs[f.key] ?? ''}
-                  placeholder={secretsPresence[f.key] ? 'Already set — enter a new value to replace it' : 'Paste your key'}
-                  onChange={(e) => setSecretInputs((p) => ({ ...p, [f.key]: e.target.value }))} />
-                <div className="mt-1 flex items-center gap-3">
-                  <a href={f.href} target="_blank" rel="noreferrer" className="text-xs text-primary underline">Get a key</a>
-                  <button type="button" onClick={() => saveSecretThenTest(f.key, KEY_TEST_TARGET[f.engine])}
-                    className="text-xs text-content-muted underline">Save &amp; test</button>
-                </div>
-              </div>
-            )
-            if (!isChatgpt) return field
-            // FLAT, like its neighbours: the engine gets the same heading line and
-            // the same right-hand state as "Gemini API key" or "OpenRouter API
-            // key", and its two lanes hang under it as ordinary rows. The nested
-            // bordered card this used to be described the same thing correctly
-            // and broke the rhythm of the page doing it — the one engine on the
-            // screen that looked like a different kind of object.
-            return (
-              <div key={f.key} className="space-y-3">
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-medium text-content">ChatGPT (gpt-image-2)</span>
-                    <span className={`text-xs ${chatgpt.ready ? 'text-emerald-400' : 'text-content-subtle'}`}>
-                      {chatgpt.ready ? '✓ Ready' : '○ Not set up'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-content-muted">{chatgptLaneSummary(chatgpt)}</p>
-                </div>
-                {field}
-                {/* The SAME component Settings ▸ Image engines mounts — one
-                    device-code flow, so the two screens cannot disagree about
-                    what "connected" means. Given a label it renders as one sober
-                    row (state inline, compact button) instead of a badge adrift
-                    opposite a full-width call to action. */}
-                <ChatgptSubscriptionConnect caps={caps} refreshCaps={refresh} toast={toast}
-                  label="ChatGPT Plus/Pro subscription"
-                  description={'Runs on your plan’s image quota instead of a paid key. '
-                    + 'Experimental and undocumented by OpenAI — up to 5 reference images, '
-                    + 'your plan’s daily cap applies, SFW only.'} />
-              </div>
-            )
-          })}
-          <p className="text-xs text-content-subtle">Klein (local) needs ComfyUI — the next step.</p>
-          {saveRecheckBtn}
+          <p className="text-sm text-content-muted">
+            Accounts and image engine preferences are configured from each plugin's settings.
+          </p>
+          {links.map((field) => (
+            <div key={`${field.plugin}:${field.key}`}>
+              <SettingsLink pluginId={field.plugin} focus={field.key}>
+                Configure {field.label}
+              </SettingsLink>
+            </div>
+          ))}
+          <p className="text-xs text-content-subtle">
+            For local Klein generation, <SettingsLink section="local-tools" focus="comfyui-api-url">configure ComfyUI</SettingsLink>.
+          </p>
         </div>
       )
     }
@@ -716,6 +659,8 @@ export default function SetupPage() {
           {dirVerdictNode}
           {slowComfyuiNode}
           {startComfyuiNode}
+
+
           {/* Capability gap on the GRAPH's widget values, not on the files: this
               ComfyUI doesn't offer a value the Klein workflow pins. That is what
               the `beta57` scheduler did — added to ComfyUI's core list by the
@@ -873,7 +818,7 @@ export default function SetupPage() {
               <div>
                 <p className="mb-1 text-xs font-semibold text-emerald-400">What still works</p>
                 <ul className="space-y-1 text-xs text-content-muted">
-                  {COMFYUI_SKIP_KEPT.map((t) => (
+                  {comfyuiSkipKept().map((t) => (
                     <li key={t} className="flex gap-1.5"><span aria-hidden="true" className="text-emerald-400">✓</span><span>{t}</span></li>
                   ))}
                 </ul>
@@ -1443,38 +1388,28 @@ export default function SetupPage() {
       // The list itself lives in mlInstallCards.js so the bare node --test suite
       // can hold Setup to the promises the capability strips make (JSX never
       // executes there — a list defined here is a list no test can see).
-      const ML_CAPS = ML_INSTALL_CARDS
+      const ML_CAPS = mlInstallCards({ includePlugins: false })
       return (
         <div className="space-y-3">
           <p className="text-sm text-content-muted">
-            Optional helpers installed into this app's managed ML environments. Face scoring and masks run on
-            CPU; watermark inpainting can use CUDA or CPU. The app works fully without them; they just make
-            curation and training cleaner. Install each on its own below. The legacy pip bundle at the bottom covers
-            the shared ML requirements only; isolated Bank engines and large model downloads stay explicit. Already installed?
+            Choose the helpers you need. LDS automatically prepares a compatible Python environment
+            for each managed ML tool when you click Install. Face scoring and masks run on CPU;
+            watermark inpainting can use CUDA or CPU. Your workspace works without these helpers.
+            Model downloads remain explicit. Already installed?
             Use <span className="font-medium text-content">↻ Reinstall</span> to repair or update it.
           </p>
-          {caps.python && !caps.python.ml_supported && (
-            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-content space-y-1">
-              <p>
-                <span className="font-semibold text-amber-300">⚠ Python {caps.python.version} —</span>{' '}
-                these extras need Python {caps.python.ml_range}. insightface / numpy&lt;2 / onnxruntime publish
-                no prebuilt packages for {caps.python.version}, so the installs below will try to compile them
-                and most likely fail.
-              </p>
-              <p className="text-content-muted">
-                They're optional — you can skip this step, or install them into a separate Python 3.11/3.12
-                environment and point <span className="font-mono">face_scoring.python</span> +{' '}
-                <span className="font-mono">masks.python</span> at it in Settings.
-              </p>
-            </div>
+          {caps.python?.managed_ml?.available === false && (
+            <p role="status" className="rounded-md border border-border px-3 py-2.5 text-sm text-content-muted">
+              Automatic ML installation is not available for this platform. Your LDS workspace remains ready.
+            </p>
           )}
           <div className="space-y-3">
             {ML_CAPS.map((c) => {
               // Every piece the action installs, not just the first — see cardInstalled.
               const present = cardInstalled(c, caps)
               return (
-                <div key={c.action} className="rounded-md border border-border bg-surface-raised p-3 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
+                <div key={c.action} className="rounded-md border border-border bg-surface-raised p-3 space-y-2 [&_button]:min-h-10 lg:[&_button]:min-h-0">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-sm font-semibold text-content">{c.icon} {c.title}</span>
                     <span className={`shrink-0 text-xs font-medium ${present ? 'text-emerald-400' : 'text-content-subtle'}`}>
                       {present ? '✓ Installed' : '✗ Not installed'}
@@ -1493,11 +1428,11 @@ export default function SetupPage() {
           </div>
           <details className="rounded-md border border-border bg-surface-raised px-3 py-2">
             <summary className="cursor-pointer text-xs text-content-subtle hover:text-content">
-              Or install everything at once (first-time setup)
+              Install the shared quality helpers together
             </summary>
             <div className="mt-2">
-              <InstallRunner action="ml_extras" buttonLabel="Install all (pip)"
-                manualCommand="python -m pip install -r backend/requirements-ml.txt" onDone={() => refresh(true)} />
+              <InstallRunner action="ml_extras" buttonLabel="Install quality helpers"
+                onDone={() => refresh(true)} />
             </div>
           </details>
         </div>
@@ -1510,10 +1445,6 @@ export default function SetupPage() {
       <>
         {guidedField('ai-toolkit directory', 'aitoolkit', 'dir', 'C:\\ai-toolkit')}
         {saveRecheckBtn}
-        {/* "No GPU?" note — the wizard's one "create a vast.ai account" moment. Its own
-            component (components/setup/CloudSignupNote.jsx) so the sign-up link and its
-            disclosure are rendered by tests in both states; this page is not mountable. */}
-        <CloudSignupNote />
       </>
     )
     if (step.valid) {
@@ -1583,15 +1514,12 @@ export default function SetupPage() {
     )
   }
 
-  const kind = SCREENS[screen]
-  const DONE = SCREENS.length - 1
   const INSTALL = SCREENS.indexOf('install')   // the install/reinstall step, after config
   // 'skipped' counts as settled. A Docker "No Ollama" already did, through `disabled`;
   // leaving the native skip out meant the welcome screen kept saying "Start setup" and
   // kept landing the user back on the step they had just deliberately closed.
   const isReady = (id) => ['ready', 'skipped'].includes(stepById[id].status)
     || stepById[id].disabled
-  const toolIdx = (id) => SETUP_STEP_IDS.indexOf(id)
   // welcome=0, tools=1..N — and, for the two screens that are not tool steps
   // ('install', 'done'), their index in SCREENS. Without that second lookup a
   // capability row pointing at the install/repair menu (Krea 2 Edit, whose only
@@ -1603,51 +1531,23 @@ export default function SetupPage() {
     const j = SCREENS.indexOf(id)
     return j > 0 ? j : 0
   }
-  const allReady = SETUP_STEP_IDS.every(isReady)
-  const nextUnfinished = (fromIdx) => {
-    for (let i = fromIdx + 1; i < SETUP_STEP_IDS.length; i += 1)
-      if (!isReady(SETUP_STEP_IDS[i])) return SETUP_STEP_IDS[i]
-    return null
-  }
-  const prevUnfinished = (fromIdx) => {
-    for (let i = fromIdx - 1; i >= 0; i -= 1)
-      if (!isReady(SETUP_STEP_IDS[i])) return SETUP_STEP_IDS[i]
-    return null
-  }
   const blockReason = (id) => (id === 'ollama' ? ollamaGateReason(stepById.ollama) : null)
   // The scan already knows what's installed — so "Start setup" / Next land on the
   // first tool that still needs attention and skip the ones already ready. No
   // re-walking ComfyUI/Ollama when they were just detected as running.
-  const startSetup = () => {
-    const first = SETUP_STEP_IDS.find((id) => !isReady(id))
-    // All tools already configured -> land on the install step (its reinstall menu), not
-    // straight to the summary, so "install everything" / repairs stay one screen away.
-    setScreen(first ? screenOf(first) : INSTALL)
-  }
   const goNext = () => {
-    if (kind === 'welcome') return startSetup()
-    if (kind === 'install') return setScreen(DONE)
-    if (kind === 'done') return
-    const nxt = nextUnfinished(toolIdx(kind))
-    // After the last config tool, the install step (never straight to done).
-    setScreen(nxt ? screenOf(nxt) : INSTALL)
+    setScreen(screenOf(journey ? 'welcome' : 'tools'))
   }
   // Guard-rail: Back (unlike Save & continue) does NOT save — warn before losing
   // typed-but-unsaved fields (config edits or a typed secret).
   const hasUnsaved = () => (
     (savedConfigRef.current != null && JSON.stringify(config) !== savedConfigRef.current)
-    || Object.values(secretInputs).some((v) => (v || '').trim())
+
   )
   const goBack = () => {
     if (hasUnsaved() && !window.confirm(
       'You have unsaved changes on this step - they will be lost.\n\nGo back without saving?')) return
-    if (kind === 'done') return setScreen(INSTALL)   // the install step sits before the summary
-    if (kind === 'install') {
-      const last = [...SETUP_STEP_IDS].reverse().find((id) => !isReady(id))
-      return setScreen(last ? screenOf(last) : 0)
-    }
-    const prv = prevUnfinished(toolIdx(kind))
-    setScreen(prv ? screenOf(prv) : 0)
+    setScreen(screenOf(journey ? 'welcome' : 'tools'))
   }
   // Next on a tool step SAVES + re-checks first (so typed URLs/models take effect and
   // the status refreshes), then advances — unless a required gate is still unmet after
@@ -1669,10 +1569,9 @@ export default function SetupPage() {
     }
     setAdvancing(true)
     try {
-      await persist()
-      let fresh = null
-      try { fresh = await apiFetch('/api/capabilities') } catch { /* keep going */ }
-      if (fresh && kind === 'ollama') {
+      const fresh = await persist()
+      if (!fresh) return
+      if (kind === 'ollama') {
         const s = deriveSetupSteps(fresh, runtimeReadiness).find((x) => x.id === 'ollama')
         const reason = ollamaGateReason(s)
         // A Docker install already has a first-class "No Ollama" card, so a blocked
@@ -1720,35 +1619,32 @@ export default function SetupPage() {
     finally { setBusy(false) }
   }
 
-  // Progress dots: one per tool step, filled when that tool is ready.
-  const ProgressDots = () => (
-    <div className="flex items-center gap-1.5" aria-hidden="true">
-      {SETUP_STEP_IDS.map((id) => {
-        const active = kind === id
-        const ready = stepById[id].status === 'ready'
-        return (
-          <span key={id}
-            className={`h-2 rounded-full transition-all ${active ? 'w-6 bg-primary'
-              : ready ? 'w-2 bg-emerald-400' : 'w-2 bg-border-strong'}`} />
-        )
-      })}
-    </div>
-  )
-
+  const openWorkspace = async () => {
+    if (busy) return
+    setBusy(true)
+    try { await completeCoreSetup(); navigate('/datasets') }
+    catch (e) { toast.error(e.message || 'Could not prepare the workspace. Please try again.') }
+    finally { setBusy(false) }
+  }
   const skipLink = (
     // Defense in depth: also mark the onboarding redirect as "already fired" here,
     // in the same sessionStorage key App.jsx's OnboardingRedirect guards on — so
     // skipping never bounces straight back to #/setup even in an edge case where
     // the guard effect hasn't run yet (e.g. this Link navigates before that effect
     // re-fires with fresh caps).
-    <Link to="/datasets" onClick={() => sessionStorage.setItem('lds_setup_redirected', '1')}
-      className="text-xs text-content-subtle underline hover:text-content">
-      Skip setup — I'll do it later
-    </Link>
+    <button type="button" onClick={openWorkspace} disabled={busy}
+      className="inline-flex min-h-10 items-center text-xs text-content-subtle underline hover:text-content">
+      Back to my workspace
+    </button>
   )
 
   // --- Welcome + live machine scan --------------------------------------------
   if (kind === 'welcome') {
+    return <SetupStart onTools={() => setScreen(screenOf('tools'))}
+      onRecheck={() => runAutodetect(config, true)} scanned={scanned} detecting={detecting || pendingChecks > 0}
+      scanProblem={scanProblem} runtimeReadiness={runtimeReadiness} />
+  }
+  if (kind === 'tools') {
     // Three states per tool: ready (✓ green), partial (⚠ amber — detected but a
     // key piece is missing), missing (✗). Ollama keys on the MODEL, not just being
     // reachable — a running Ollama with no vision model is only "partial".
@@ -1797,12 +1693,14 @@ export default function SetupPage() {
       // turned it off. What Ollama alone unlocks stays counted in the capability
       // summary either way; this flag only stops the row reading like a failure.
       { label: `Captioning — ${llmLabel} + vision model`, stepId: 'ollama',
-        optional: oll.disabled || oll.skipped || oll.joycaptionReady,
+        optional: true,
         state: ollamaScan.state, partial: ollamaScan.partial },
-      { label: 'LoRA training — ai-toolkit', stepId: 'training',
+      { label: 'LoRA training — ai-toolkit', stepId: 'training', optional: true,
         state: stepById.training.valid ? 'ready'
           : (detected && detected.aitoolkit && detected.aitoolkit.dir ? 'partial' : 'missing'),
         partial: 'found on disk — one click to use' },
+      { label: 'Quality tools — scoring, masks and cleanup', stepId: 'quality', optional: true,
+        state: isReady('quality') ? 'ready' : 'missing' },
     ]
     const SCAN_META = {
       ready: { glyph: '✓', cls: 'text-emerald-400', word: 'ready' },
@@ -1814,13 +1712,13 @@ export default function SetupPage() {
     // Optional + not-ready → don't alarm: neutral glyph/color and an "optional" tone.
     const NEUTRAL = { glyph: '○', cls: 'text-content-subtle' }
     return (
-      <div className="mx-auto max-w-2xl space-y-6">
+      <div className="mx-auto max-w-2xl space-y-6" data-probe-content="setup" data-probe-setup={detecting ? 'checking' : 'ready'}>
         <div className="text-center">
           <Dna aria-hidden="true" className="mx-auto h-8 w-8 text-primary" />
           <h1 className="mt-2 text-2xl font-bold text-content">Welcome to FLT - Fresh LoRa Trainer</h1>
           <p className="mt-2 text-sm text-content-muted">
-            Let's set up your machine. I'll scan what's already installed and help you install the rest —
-            you can also start building a dataset from your own photos right now, no setup required.
+            Choose a tool to configure or repair. None is required to use your FLT workspace.
+            Prepare installed plugins from their own settings in Plugins.
           </p>
         </div>
 
@@ -1833,7 +1731,7 @@ export default function SetupPage() {
               ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-border-strong border-t-primary" aria-hidden="true" />
               : (
                 <button type="button" onClick={() => runAutodetect(config, true)}
-                  className="text-xs text-primary underline">Re-scan</button>
+                  className="min-h-10 lg:min-h-0 text-xs text-primary underline">Re-scan</button>
               )}
           </div>
           <ul className="mt-4 space-y-1">
@@ -1852,10 +1750,11 @@ export default function SetupPage() {
                       stays subtle for those. Disabled mid-scan: the state is still shifting. */}
                   <button type="button" disabled={detecting}
                     onClick={() => setScreen(screenOf(r.stepId))}
-                    className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 -mx-2 text-left text-sm
+                    className="flex w-full min-w-0 min-h-10 lg:min-h-0 flex-col items-start gap-1.5 rounded-md px-2 py-1.5 -mx-2 text-left text-sm
+                      sm:flex-row sm:items-center sm:justify-between sm:gap-3
                       cursor-pointer transition-colors hover:bg-surface-raised focus:outline-none focus-visible:ring-2
                       focus-visible:ring-primary disabled:cursor-default disabled:hover:bg-transparent">
-                    <span className="flex items-center gap-2">
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <span aria-hidden="true" className={detecting ? 'text-content-subtle' : m.cls}>
                         {detecting ? '…' : m.glyph}
                       </span>
@@ -1864,8 +1763,8 @@ export default function SetupPage() {
                         <span className="rounded bg-surface-raised px-1.5 py-px text-[10px] font-medium text-content-subtle">optional</span>
                       )}
                     </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className={`truncate text-right font-mono text-xs ${detecting ? 'text-content-subtle' : m.cls}`}>
+                    <span className="flex min-w-0 max-w-full items-center gap-1.5 pl-6 sm:pl-0">
+                      <span className={`min-w-0 break-words text-left sm:text-right font-mono text-xs ${detecting ? 'text-content-subtle' : m.cls}`}>
                         {detecting ? '' : word}
                       </span>
                       {!detecting && (
@@ -1887,14 +1786,14 @@ export default function SetupPage() {
           )}
         </section>
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           {skipLink}
           {/* Welcome leads to configuring the services first; the install step (Install
               everything + the one-by-one menu) comes AFTER, since several installs depend
               on a configured ComfyUI/Ollama. */}
-          <button type="button" onClick={goNext}
-            className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950">
-            {allReady ? "Everything's ready — review →" : 'Start setup →'}
+          <button type="button" onClick={() => setScreen(INSTALL)}
+            className="min-h-10 rounded-lg border border-border-strong px-5 py-2 text-sm font-semibold text-content">
+            Downloads & repair
           </button>
         </div>
       </div>
@@ -1904,23 +1803,39 @@ export default function SetupPage() {
   // --- Done / summary ----------------------------------------------------------
   if (kind === 'done') {
     return (
-      <div className="mx-auto max-w-2xl space-y-6">
+      <div className="mx-auto max-w-2xl space-y-6" data-probe-content="setup" data-probe-setup="ready">
         <div className="text-center">
           <PartyPopper aria-hidden="true" className="mx-auto h-8 w-8 text-primary" />
-          <h1 className="mt-2 text-2xl font-bold text-content">You're all set</h1>
+          <h1 className="mt-2 text-2xl font-bold text-content">Optional tools overview</h1>
           <p className="mt-1 text-sm text-content-muted">{readyCount} of {summary.length} capabilities ready.</p>
         </div>
         <section className="rounded-xl border border-border bg-surface p-5">
           <h2 className="text-base font-semibold text-content">What's unlocked</h2>
           <ul className="mt-3 grid gap-1 sm:grid-cols-2">
             {summary.map((s) => {
-              const targetStep = CAPABILITY_STEP_ID[s.label]
+              // A product names the setup screen it owns without extending a
+              // host table keyed by its display label.
+              const targetStep = s.step || capabilityStepId(s.label)
               // Every current capability maps to a wizard step (see CAPABILITY_STEP_ID above);
               // this guard is defensive only — an unmapped label just renders inert, as before.
               const rowOk = s.ok || s.pending
               const noteEl = s.pending && s.note ? (
                 <span className="text-xs italic text-content-subtle"> — {s.note}</span>
               ) : null
+              if (s.plugin) {
+                return (
+                  <li key={s.label}>
+                    <SettingsLink pluginId={s.plugin}
+                      className="flex min-h-10 items-center gap-2 rounded-md px-2 py-1 hover:bg-surface-raised">
+                      <span aria-hidden="true" className={rowOk ? 'text-emerald-400' : 'text-content-subtle'}>{rowOk ? '✓' : '✗'}</span>
+                      <span className="flex min-w-0 flex-col">
+                        <span>{s.label}{noteEl}</span>
+                        {s.what && <span className="text-[11px] text-content-subtle">{s.what}</span>}
+                      </span>
+                    </SettingsLink>
+                  </li>
+                )
+              }
               if (!targetStep) {
                 return (
                   <li key={s.label} className={`flex items-center gap-2 px-2 py-1 text-sm ${rowOk ? 'text-content' : 'text-content-subtle'}`}>
@@ -1956,9 +1871,9 @@ export default function SetupPage() {
           <button type="button" onClick={goBack} className="text-xs text-content-subtle underline hover:text-content">
             ← Back
           </button>
-          <Link to="/datasets" className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950">
+          <button type="button" onClick={openWorkspace} disabled={busy} className="min-h-10 rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950">
             Build your first dataset →
-          </Link>
+          </button>
         </div>
       </div>
     )
@@ -1967,14 +1882,15 @@ export default function SetupPage() {
   // --- Install / reinstall components (after the API/service config) -----------
   if (kind === 'install') {
     return (
-      <div className="mx-auto max-w-2xl space-y-5">
+      <div data-probe-reading="setup-downloads" data-probe-content="setup" data-probe-setup="ready"
+        className="mx-auto max-w-2xl space-y-5 [&_button]:min-h-10 [&_summary]:min-h-10 lg:[&_button]:min-h-0 lg:[&_summary]:min-h-0">
         <div className="text-center">
           <div className="text-3xl" aria-hidden="true">⬇</div>
-          <h1 className="mt-2 text-2xl font-bold text-content">Install components</h1>
+          <h1 className="mt-2 text-2xl font-bold text-content">Optional downloads & repair</h1>
           <p className="mt-2 text-sm text-content-muted">
-            Now that your services are configured, install what the app can set up for you —
-            all at once, or one at a time. Come back here anytime to reinstall a component and
-            repair a broken install.
+            Install only the tools you want to use. Each action lists what it adds;
+            local model downloads require a configured ComfyUI first.
+            Your LDS workspace does not need these downloads.
           </p>
         </div>
         <InstallEverything plan={installPlan} caps={caps} onDone={() => refresh(true)} />
@@ -1986,7 +1902,7 @@ export default function SetupPage() {
             {skipLink}
             <button type="button" onClick={goNext}
               className="rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950">
-              Finish →
+              Back to optional tools
             </button>
           </div>
         </div>
@@ -1996,18 +1912,15 @@ export default function SetupPage() {
 
   // --- A single tool step ------------------------------------------------------
   const step = stepById[kind]
-  const stepNo = SETUP_STEP_IDS.indexOf(kind) + 1
   const meta = STATUS_META[step.status] || STATUS_META.available
   const reason = blockReason(kind)                 // live hint of what's still missing
-  const hasNext = nextUnfinished(toolIdx(kind)) !== null
   // Next always saves + re-checks first; the gate (if any) is enforced AFTER that
   // fresh re-check inside nextWithSave, not by disabling the button on a stale snapshot.
-  const nextLabel = advancing ? 'Saving…' : (hasNext ? 'Save & continue →' : 'Save & finish →')
+  const nextLabel = advancing ? 'Saving…' : journey ? 'Save & return to my plan' : 'Save & return to tools'
   return (
-    <div className="mx-auto max-w-2xl space-y-5">
+    <div data-probe-content="setup" data-probe-setup="ready" className="mx-auto max-w-2xl space-y-5 [&_button]:min-h-10 [&_summary]:min-h-10 lg:[&_button]:min-h-0 lg:[&_summary]:min-h-0">
       <div className="flex items-center justify-between">
-        <ProgressDots />
-        <span className="text-xs text-content-subtle">Step {stepNo} of {TOTAL_TOOLS}</span>
+        <button type="button" onClick={goBack} className="text-sm text-content-muted hover:text-content">{journey ? '← My setup plan' : '← Optional tools'}</button>
       </div>
 
       <section className="rounded-xl border border-border bg-surface p-5">
@@ -2015,11 +1928,7 @@ export default function SetupPage() {
           <div>
             <h1 className="text-lg font-semibold text-content">
               {step.title}
-              {step.recommended && (
-                <span className="ml-2 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                  Recommended
-                </span>
-              )}
+              <span className="ml-2 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">Optional</span>
               <HelpBadge topic="page-setup" className="ml-2" />
             </h1>
             <p className="mt-1 text-xs text-content-muted">Unlocks: {step.unlocks.join(' · ')}</p>
@@ -2036,11 +1945,11 @@ export default function SetupPage() {
           <Lock aria-hidden="true" className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />{reason}
         </p>
       )}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <button type="button" onClick={goBack} className="text-xs text-content-subtle underline hover:text-content">
           ← Back
         </button>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-3">
           {skipLink}
           <button type="button" onClick={nextWithSave} disabled={advancing}
             title={reason || ''}

@@ -1,0 +1,175 @@
+{
+  "id": "seedvr2",
+  "bundled": true,
+  "name": "SeedVR2",
+  "version": "1.0.6",
+  "api": 1,
+  "description": "Faithful image restoration with SeedVR2, including high-resolution tiling, model preparation, settings and independent finishing. No Klein Improve or other LDS plug-in required.",
+  "requires": [],
+  "python_package": "lds_seedvr2",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": true,
+  "owns": {
+    "install_actions": [
+      "seedvr2_nodes",
+      "seedvr2_model",
+      "seedvr2_vae"
+    ],
+    "install_groups": [
+      "seedvr2"
+    ],
+    "probes": [
+      "comfyui.seedvr2_missing",
+      "comfyui.seedvr2_invalid",
+      "comfyui.seedvr2_nodes_missing",
+      "comfyui.seedvr2_nodes_installed",
+      "comfyui.seedvr2_ready",
+      "comfyui.seedvr2_tiling_ready",
+      "comfyui.seedvr2_tiling_nodes_missing",
+      "comfyui.seedvr2_ceiling_mp"
+    ],
+    "engines": [
+      "seedvr2"
+    ],
+    "config_sections": [
+      "seedvr2"
+    ],
+    "config_keys_in_shared_sections": {},
+    "help_topics": [
+      "action-seedvr2-restore",
+      "seedvr2.finish_sharpen",
+      "seedvr2.finish_grain",
+      "seedvr2.finish_grain_saturation",
+      "seedvr2.tiling",
+      "seedvr2.tile_px",
+      "seedvr2.tile_threshold",
+      "seedvr2.vae",
+      "setup-seedvr2-install",
+      "seedvr2.default_engine"
+    ],
+    "tables": [],
+    "whats_new_ids": [
+      "2026-09-10-seedvr2-node-discovery-retry",
+      "2026-09-10-seedvr2-overlapping-tile-joins",
+      "2026-09-10-seedvr2-complete-tiles-and-finishing",
+      "2026-09-07-seedvr2-standalone",
+      "2026-08-03-seedvr2-tile-and-vae-settings",
+      "2026-08-03-seedvr2-tiling-is-a-choice",
+      "2026-08-03-seedvr2-tiled-highres",
+      "2026-08-02-seedvr2-in-the-lightbox",
+      "2026-08-02-seedvr2-results-come-back",
+      "2026-08-02-seedvr2-upscaling",
+      "2026-08-04-seedvr2-settings-say-which-lane-your-target-takes"
+    ],
+    "model_slots": []
+  },
+  "models": [],
+  "node_packs": [
+    {
+      "pack": "SeedVR2",
+      "url": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+      "search": "SeedVR2",
+      "classes": [
+        "SeedVR2LoadDiTModel",
+        "SeedVR2LoadVAEModel",
+        "SeedVR2VideoUpscaler"
+      ],
+      "installation": {
+        "id": "seedvr2",
+        "version": "2.5.24-lds.1",
+        "folder": "seedvr2_videoupscaler",
+        "url": "https://codeload.github.com/numz/ComfyUI-SeedVR2_VideoUpscaler/zip/4490bd1f482e026674543386bb2a4d176da245b9",
+        "sha256": "04c61842bc00fd8673e6bc9a3b1b1935955461f363791070ed14d67d2a2e77fb",
+        "requirements": [
+          "torch==2.14.0",
+          "torchvision==0.29.0",
+          "safetensors==0.8.0",
+          "numpy==2.5.2",
+          "tqdm==4.70.1",
+          "psutil==7.2.2",
+          "einops==0.8.2",
+          "omegaconf==2.3.1",
+          "diffusers==0.40.0",
+          "peft==0.20.0",
+          "rotary-embedding-torch==0.9.1",
+          "opencv-python==5.0.0.93",
+          "gguf==0.19.0",
+          "matplotlib==3.11.2",
+          "antlr4-python3-runtime==4.9.3"
+        ],
+        "archive_prefix": "ComfyUI-SeedVR2_VideoUpscaler-4490bd1f482e026674543386bb2a4d176da245b9",
+        "wheels": [
+          {
+            "filename": "antlr4_python3_runtime-4.9.3+lds.1-py3-none-any.whl",
+            "sha256": "4e909ac01d54970b10622e90c2645dad8b186d4d79b5864fa60bb155379173ef"
+          }
+        ],
+        "action": "seedvr2_nodes",
+        "python": ">=3.12",
+        "wheelhouse": "resources/wheels"
+      }
+    }
+  ],
+  "permissions": [
+    "comfyui",
+    "filesystem",
+    "datasets:write"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Restore dataset images",
+        "path": "/datasets?section=images"
+      },
+      {
+        "label": "Restore Bank images",
+        "path": "/bank"
+      },
+      {
+        "label": "Open settings",
+        "path": "/plugins/seedvr2/settings?focus=seedvr2-engine"
+      }
+    ],
+    "setup": {
+      "label": "Prepare SeedVR2",
+      "path": "/plugins/seedvr2/settings"
+    },
+    "setup_hint": "Connect a compatible ComfyUI Windows portable, then prepare the SeedVR2 node pack and its two model files together. Restart ComfyUI when idle and re-check readiness. Existing packages are preserved; TTP tiling remains optional. No other LDS plugin is required.",
+    "surfaces": [
+      "Bank",
+      "Dataset",
+      "Gallery",
+      "Canvas",
+      "Upscale settings",
+      "Upscale setup"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.20,<2",
+    "lds": ">=2026.9.4",
+    "python": ">=3.10,<4",
+    "os": [
+      "windows",
+      "linux",
+      "darwin"
+    ],
+    "arch": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "settings-reference#seedvr2-upscaling-local"
+    ]
+  },
+  "schema_version": 2,
+  "publisher": {
+    "id": "lds",
+    "name": "LoRA Dataset Studio"
+  },
+  "data_schema": 1
+}

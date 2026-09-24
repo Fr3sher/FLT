@@ -54,16 +54,17 @@ def test_assets_come_from_the_resolvers_never_from_the_shipped_json(monkeypatch)
     assert w['22']['inputs']['vae_name'] == 'vae_mine.safetensors'
 
 
-def test_the_cell_axes_all_land_where_they_belong():
+@pytest.mark.parametrize('steps', [1, 2, 3, 4, 5, 6])
+def test_the_cell_axes_all_land_where_they_belong(steps):
     w = _wf()
     studio.apply_klein_lora_test_settings(
         w, lora_name='flux2klein/lora_x.safetensors', strength=0.65, prompt='a cat',
-        seed=1234, width=768, height=1024, steps=6, filename_prefix='pfx',
+        seed=1234, width=768, height=1024, steps=steps, filename_prefix='pfx',
         allowed_loras=None)
     assert w['29']['inputs']['lora_name'] == 'flux2klein/lora_x.safetensors'
     assert w['29']['inputs']['strength_model'] == pytest.approx(0.65)
     assert w['23']['inputs']['text'] == 'a cat'
-    assert w['26']['inputs']['seed'] == 1234 and w['26']['inputs']['steps'] == 6
+    assert w['26']['inputs']['seed'] == 1234 and w['26']['inputs']['steps'] == steps
     assert w['28']['inputs']['filename_prefix'] == 'pfx'
     # The size must reach BOTH the latent and the shift, or the shift is
     # computed for a picture nobody asked for.

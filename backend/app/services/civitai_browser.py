@@ -24,6 +24,7 @@ an image already seen. Continuation is exact even when a page is left half
 scanned: the response's ``next_cursor``/``next_skip`` name the first listing
 item NOT yet consumed, and the caches make the re-walk to that point free.
 """
+from ..timeout_settings import network_timeout
 import json
 import logging
 import threading
@@ -85,6 +86,17 @@ def civitai_api_key():
     return cfg.secret('CIVITAI_API_KEY') or None
 
 
+def account_name(key):
+    """Read-only credential check, independent of publishing and on demand."""
+    if not key:
+        return None
+    try:
+        account = _http_get_json('https://civitai.com/api/v1/me', key)
+    except (RuntimeError, PermissionError):
+        return None
+    return (account.get('username') or None) if isinstance(account, dict) else None
+
+
 def _http_get_json(url, key=None):
     """GET → parsed JSON. The single network seam (tests monkeypatch it).
     Auth/network/HTTP failures raise RuntimeError with a user-facing sentence;
@@ -93,7 +105,7 @@ def _http_get_json(url, key=None):
     if key:
         headers['Authorization'] = f'Bearer {key}'
     try:
-        resp = requests.get(url, headers=headers, timeout=_TIMEOUT)
+        resp = requests.get(url, headers=headers, timeout=network_timeout(_TIMEOUT))
     except requests.RequestException as e:
         raise RuntimeError('Civitai did not answer - check your connection '
                            'and try again.') from e

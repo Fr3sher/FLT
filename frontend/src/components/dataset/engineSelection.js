@@ -17,101 +17,26 @@
    next to it. A profile that only ever knew the old key reads back as a
    one-engine selection — i.e. exactly today's behaviour. */
 
-/** Canonical engine order — drives the card order, the primary pick and the
- *  round-robin. Stable: it is also the order batches are BUILT in, and the LOCAL
- *  engines must come last at DISPATCH time (see engineBatches). */
-export const ENGINES = ['klein', 'krea', 'nanobanana', 'chatgpt', 'openrouter'];
+/* The engine facts — order, the API/local split, labels, accents, rates — come
+   from ONE catalog (src/engines/catalog.js), read AT CALL TIME: a plugin's
+   engines join it when the plugin loads, and a list copied at import would
+   never see them. Its readers are re-exported here so every importer of this
+   module keeps one import site. */
+import {
+  apiEngineIds, defaultEngineId, engineAccent, engineIds, engineLabel, engineLabels,
+  engineRate, localEngineIds,
+} from '../../engines/catalog.js';
 
-export const API_ENGINES = ['nanobanana', 'chatgpt', 'openrouter'];
-
-/** Engines that render on the user's own GPU through ComfyUI: free, slower,
- *  serialized on one GPU, and the ONLY ones allowed to receive 🔞 shots (the
- *  server refuses NSFW on every API engine). Mirrors
- *  face_dataset_service.LOCAL_ENGINES — derive from this, never re-list it. */
-export const LOCAL_ENGINES = ['klein', 'krea'];
-
-export const ENGINE_LABELS = {
-  klein: 'Klein',
-  krea: 'Krea 2 Edit',
-  nanobanana: 'Nano Banana Pro',
-  chatgpt: 'ChatGPT',
-  openrouter: 'OpenRouter',
-};
-
-/* Per-engine accent colour. Deliberately NOT green: green already means
-   "kept / already in the dataset / free" everywhere else in the app, so using
-   it for "selected" made two different messages share one colour. Indigo /
-   amber / sky stay distinguishable in a dark theme AND in deuteranopia, which a
-   green+amber pair does not. Class strings are spelled out in full because
-   Tailwind scans source text — never build them by concatenation. */
-export const ENGINE_ACCENTS = {
-  klein: {
-    card: 'border-indigo-400/60 bg-indigo-500/15 ring-1 ring-indigo-400/40',
-    title: 'text-indigo-200',
-    text: 'text-indigo-300',
-    icon: 'text-indigo-300',
-    pill: 'bg-indigo-500/25 text-indigo-200',
-    dot: 'bg-indigo-400',
-  },
-  /* Violet deliberately sits NEXT to Klein's indigo: both are local-GPU engines,
-     and reading them as a pair is information, not a collision — the icon and
-     the title carry the distinction. Every hue that would have separated them
-     further is already taken (amber/sky/fuchsia) or reserved (green means
-     "kept / free" everywhere else in the app). */
-  krea: {
-    card: 'border-violet-400/60 bg-violet-500/15 ring-1 ring-violet-400/40',
-    title: 'text-violet-200',
-    text: 'text-violet-300',
-    icon: 'text-violet-300',
-    pill: 'bg-violet-500/25 text-violet-200',
-    dot: 'bg-violet-400',
-  },
-  nanobanana: {
-    card: 'border-amber-400/60 bg-amber-500/15 ring-1 ring-amber-400/40',
-    title: 'text-amber-200',
-    text: 'text-amber-300',
-    icon: 'text-amber-300',
-    pill: 'bg-amber-500/25 text-amber-200',
-    dot: 'bg-amber-400',
-  },
-  chatgpt: {
-    card: 'border-sky-400/60 bg-sky-500/15 ring-1 ring-sky-400/40',
-    title: 'text-sky-200',
-    text: 'text-sky-300',
-    icon: 'text-sky-300',
-    pill: 'bg-sky-500/25 text-sky-200',
-    dot: 'bg-sky-400',
-  },
-  // Fuchsia is the 4th hue that stays apart from the other three in a dark
-  // theme AND in deuteranopia: indigo and sky are both blue-side but far apart
-  // in lightness, amber is the warm one, fuchsia is the only magenta. Still not
-  // green — green keeps meaning "kept / free" everywhere else.
-  openrouter: {
-    card: 'border-fuchsia-400/60 bg-fuchsia-500/15 ring-1 ring-fuchsia-400/40',
-    title: 'text-fuchsia-200',
-    text: 'text-fuchsia-300',
-    icon: 'text-fuchsia-300',
-    pill: 'bg-fuchsia-500/25 text-fuchsia-200',
-    dot: 'bg-fuchsia-400',
-  },
-};
-
-/** Pay-per-image rate. Klein is local GPU time, hence free; the ChatGPT
- *  subscription lane spends plan quota, not dollars (handled by estimateCost).
- *  OpenRouter is an ESTIMATE for its default model (the same Gemini weights
- *  Nano Banana calls, hence the same rate): the model is free text in Settings,
- *  so a user who points it at a cheaper or dearer slug pays that instead. The
- *  engine card says so — a number here is better than no guard-rail at all, but
- *  it is the only rate in this table that the user can move. */
-export const ENGINE_RATES = { klein: 0, krea: 0, nanobanana: 0.15, chatgpt: 0.17, openrouter: 0.15 };
+export { apiEngineIds, engineAccent, engineIds, engineLabel, engineLabels, engineRate, localEngineIds };
 
 export const STORAGE_ENGINES = 'datasetGenerators';     // JSON list (new)
 export const STORAGE_PRIMARY = 'datasetGenerator';      // legacy string mirror — NEVER renamed
 export const STORAGE_MODE = 'datasetGeneratorMode';     // 'split' | 'all'
 
 /** The engine a profile with no stored preference generates with — the historic
- *  useState default of the workspace. */
-export const DEFAULT_ENGINE = 'nanobanana';
+ *  useState default of the workspace, read from the catalog (the first API
+ *  engine, else the first engine there is). */
+export function defaultEngine() { return defaultEngineId(); }
 export const MODES = ['split', 'all'];
 /** Sharing the N selected shots between the engines (total = N, today's cost)
  *  is the default: nobody should multiply their bill without asking. */
@@ -123,38 +48,73 @@ export function canonicalEngines(list) {
   const wanted = new Set(Array.isArray(list)
     ? list.filter((e) => typeof e === 'string').map((e) => e.toLowerCase())
     : []);
-  return ENGINES.filter((e) => wanted.has(e));
+  return engineIds().filter((e) => wanted.has(e));
+}
+
+/** The ids a stored list holds that the catalog does NOT know right now.
+ *  They are a plugin's whose plugin is off (a typo of long ago at worst): not
+ *  the user's choice to drop, so a write keeps them and a read skips them.
+ *  Measured before this rule (refutation, 2026-09-05): opening the workspace
+ *  with the plugin off rewrote a selection made of its engines as `[]`, and
+ *  switching the plugin back on restored nothing. */
+function storedUnknownEngines(storage) {
+  let raw = null;
+  try { raw = storage?.getItem(STORAGE_ENGINES) ?? null; } catch { raw = null; }
+  if (raw == null) return [];
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return []; }
+  if (!Array.isArray(parsed)) return [];
+  const known = new Set(engineIds());
+  const out = [];
+  for (const e of parsed) {
+    if (typeof e !== 'string') continue;
+    const id = e.toLowerCase();
+    if (!known.has(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
 }
 
 /** The stored selection, with the legacy single-string key as fallback.
  *  Order of trust: the list key → the legacy string → the historic default.
  *  An EMPTY stored list is a real state (the user unchecked everything) and is
- *  returned as such; only a missing/unusable key falls through. */
+ *  returned as such; only a missing/unusable key falls through. A list whose
+ *  every engine is unknown right now (its plugin is off) is NOT that state: the
+ *  user picked something, so the default engine stands in until the plugin is
+ *  back — and the stored ids stay stored (writeEngines). */
 export function readEngines(storage) {
   let raw = null;
   try { raw = storage?.getItem(STORAGE_ENGINES) ?? null; } catch { raw = null; }
   if (raw != null) {
     try {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return canonicalEngines(parsed);
+      if (Array.isArray(parsed)) {
+        const known = canonicalEngines(parsed);
+        if (known.length || !parsed.length) return known;
+        const fallback = defaultEngine();
+        return fallback ? [fallback] : [];
+      }
     } catch { /* corrupt JSON: fall through to the legacy key */ }
   }
   let legacy = null;
   try { legacy = storage?.getItem(STORAGE_PRIMARY) ?? null; } catch { legacy = null; }
   const fromLegacy = canonicalEngines([legacy]);
   if (fromLegacy.length) return fromLegacy;
-  return [DEFAULT_ENGINE];
+  const fallback = defaultEngine();
+  return fallback ? [fallback] : [];
 }
 
 /** Persist the selection AND refresh the legacy mirror, so the ✎ modal and
  *  older single-engine profiles keep seeing a valid engine. Tile Retry reads
  *  its engine from the image row, not this mirror. The mirror is left untouched
  *  when nothing is selected: an empty selection generates nothing, while
- *  blanking the legacy preference would lose compatibility state. */
+ *  blanking the legacy preference would lose compatibility state.
+ *  The ids the catalog does not know right now ride along untouched (see
+ *  storedUnknownEngines): a plugin switched back on finds them where they were.
+ *  Returns the KNOWN selection, which is what the screen offers. */
 export function writeEngines(storage, engines) {
   const list = canonicalEngines(engines);
   try {
-    storage?.setItem(STORAGE_ENGINES, JSON.stringify(list));
+    storage?.setItem(STORAGE_ENGINES, JSON.stringify([...list, ...storedUnknownEngines(storage)]));
     if (list.length) storage?.setItem(STORAGE_PRIMARY, list[0]);
   } catch { /* private browsing / full storage: the in-memory state still works */ }
   return list;
@@ -202,7 +162,8 @@ export function distributeVariations(variations, engines, mode) {
  *  their canonical order between themselves (a stable sort). */
 export function engineBatches(variations, engines, mode) {
   const batches = distributeVariations(variations, engines, mode);
-  const local = (g) => (LOCAL_ENGINES.includes(g) ? 1 : 0);
+  const localIds = localEngineIds();
+  const local = (g) => (localIds.includes(g) ? 1 : 0);
   return [...batches].sort((a, b) => local(a.generator) - local(b.generator));
 }
 
@@ -210,8 +171,10 @@ export function engineBatches(variations, engines, mode) {
  *  the case where the local shots visibly queue behind the API ones. */
 export function localQueuesBehindApi(engines) {
   const list = canonicalEngines(engines);
-  return list.some((e) => LOCAL_ENGINES.includes(e))
-    && list.some((e) => API_ENGINES.includes(e));
+  const local = localEngineIds();
+  const api = apiEngineIds();
+  return list.some((e) => local.includes(e))
+    && list.some((e) => api.includes(e));
 }
 
 /** Every selected engine renders locally — the condition 🔞 shots need (the
@@ -219,7 +182,8 @@ export function localQueuesBehindApi(engines) {
  *  False on an empty selection: nothing selected renders nothing. */
 export function localOnly(engines) {
   const list = canonicalEngines(engines);
-  return list.length > 0 && list.every((e) => LOCAL_ENGINES.includes(e));
+  const local = localEngineIds();
+  return list.length > 0 && list.every((e) => local.includes(e));
 }
 
 /** Back-compat alias — `kleinQueuesBehindApi` was the only name for this and is
@@ -235,16 +199,17 @@ export function totalImages(shotCount, engines, mode, multiplier = 1) {
   return (mode === 'all' ? n * list.length : n) * mult;
 }
 
-/** Dollar estimate for the batch. Klein contributes 0 (local GPU) and so does
- *  ChatGPT when it runs on the subscription lane (plan quota, not dollars).
- *  In split mode each engine only pays for ITS share — which is why the split
- *  is computed here rather than averaged. */
-export function estimateCost(shotCount, engines, mode, { multiplier = 1, gptViaSub = false } = {}) {
+/** Dollar estimate for the batch. A local engine contributes 0 (its rate), and
+ *  so does any engine named in `free` — the catalog's freeEngines() for this
+ *  run: a lane that spends a subscription's quota, not dollars. In split mode
+ *  each engine only pays for ITS share — which is why the split is computed
+ *  here rather than averaged. */
+export function estimateCost(shotCount, engines, mode, { multiplier = 1, free = [] } = {}) {
   const n = Math.max(0, Number(shotCount) || 0);
   const mult = Math.max(1, Number(multiplier) || 1);
   const list = canonicalEngines(engines);
   if (!list.length || !n) return 0;
-  const rate = (engine) => (engine === 'chatgpt' && gptViaSub ? 0 : ENGINE_RATES[engine] || 0);
+  const rate = (engine) => (free.includes(engine) ? 0 : engineRate(engine));
   if (mode === 'all') return list.reduce((sum, e) => sum + n * mult * rate(e), 0);
   // split: round-robin share, same arithmetic as distributeVariations.
   return list.reduce((sum, e, i) => {
@@ -255,9 +220,9 @@ export function estimateCost(shotCount, engines, mode, { multiplier = 1, gptViaS
 
 /** The engines that actually BILL for this run — names the guard-rail confirm
  *  ("this will cost $X on …") without listing free lanes. */
-export function billingEngines(engines, { gptViaSub = false } = {}) {
+export function billingEngines(engines, { free = [] } = {}) {
   return canonicalEngines(engines).filter(
-    (e) => (ENGINE_RATES[e] || 0) > 0 && !(e === 'chatgpt' && gptViaSub));
+    (e) => engineRate(e) > 0 && !free.includes(e));
 }
 
 /** Why Generate is unavailable, or null when it can run. The empty selection is
@@ -265,13 +230,16 @@ export function billingEngines(engines, { gptViaSub = false } = {}) {
  *  queueing an empty batch. `maxFanout` mirrors the server cap; it is read from
  *  /api/capabilities, never hardcoded here, and 0/undefined disables the check
  *  (the server stays the authority and refuses with its own message). */
-export function generateBlockedReason({ engines, shotCount, mode, multiplier = 1, maxFanout = 0 }) {
+export function generateBlockedReason({ engines, shotCount, mode, multiplier = 1, maxFanout = 0, maxLocalFanout = 0 }) {
   const list = canonicalEngines(engines);
   if (!list.length) return 'Pick at least one engine above';
   if (!Number(shotCount)) return 'Select at least one shot';
   const total = totalImages(shotCount, list, mode, multiplier);
-  if (maxFanout > 0 && total > maxFanout) {
-    return `${total} images is over the ${maxFanout}-per-batch limit — `
+  const local = localOnly(list) && maxLocalFanout > 0;
+  const limit = local ? maxLocalFanout : maxFanout;
+  if (limit > 0 && total > limit) {
+    if (local) return `${total} images is over the ${limit}-image local queue limit — select fewer shots or raise it in Settings > Local tools > ComfyUI`;
+    return `${total} images is over the ${limit}-per-batch limit — `
       + (mode === 'all' ? 'switch to Split, ' : '') + 'uncheck an engine or select fewer shots';
   }
   return null;

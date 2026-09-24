@@ -21,6 +21,7 @@ def _create(client, name='Lola', trigger='lola'):
 
 
 def _valid(monkeypatch, ok=True):
+    monkeypatch.setattr('app.capabilities.probe_aitoolkit', lambda: {'ok': ok})
     monkeypatch.setattr('app.capabilities.probe',
                         lambda *a, **k: {'aitoolkit': {'valid': ok}})
 

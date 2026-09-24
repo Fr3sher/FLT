@@ -25,6 +25,7 @@ acknowledges the request and unloads on its own loop a moment later, so the
 reading is taken after a short settle and the numbers are the OS's.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import gc
 import logging
@@ -63,7 +64,7 @@ def comfyui_queue_busy():
         api_addr = (api_address() or '').rstrip('/')
         if not api_addr:
             return None
-        resp = requests.get(f'{api_addr}/queue', timeout=(2, 4), allow_redirects=False)
+        resp = requests.get(f'{api_addr}/queue', timeout=network_timeout((2, 4)), allow_redirects=False)
         if resp.status_code != 200:
             return None
         queue = resp.json()
@@ -120,12 +121,9 @@ def _offer(job_id, lead="ComfyUI is rendering a clip of LDS's own."):
 def _automatic_work_reason():
     """The local Live channel: a second press must not drop its clip (found
     in review). Its sentence, said for this gesture."""
-    from . import live_studio
-    live = live_studio.current()
-    if (live is not None and live.state in ('starting', 'running', 'stopping')
-            and live.params.get('gpu', 'local') != 'rented'):
-        return 'Stop the local Live channel and let its current clips finish before freeing the memory.'
-    return None
+    from ..plugins.hooks import run_filter
+    reasons = run_filter('system.free_memory_blockers', [], strict=True)
+    return reasons[0] if reasons else None
 
 
 def _interrupt_and_wait(job, *, wait_seconds=INTERRUPT_WAIT_SECONDS):
@@ -190,6 +188,13 @@ def free_memory(*, interrupt=False, job_id=None, interrupt_wait_seconds=INTERRUP
     from . import system_stats
     from ..job_queue import GPU_ARBITER_LOCK
     from ..utils.comfyui import ComfyVramFreeVerdict, free_comfyui_vram
+    try:
+        automatic = _automatic_work_reason()
+    except Exception as exc:
+        raise MemoryReleaseBusy('LDS could not verify plugin activity. Nothing was unloaded; '
+                                'check the active plugins before trying again.') from exc
+    if automatic:
+        raise MemoryReleaseBusy(automatic)
     reason, kind = _busy()
     interrupted = None
     held = False
@@ -198,9 +203,6 @@ def free_memory(*, interrupt=False, job_id=None, interrupt_wait_seconds=INTERRUP
         if state == 'unmapped':
             raise MemoryReleaseBusy(_UNMAPPED)
         if state == 'own':
-            automatic = _automatic_work_reason()
-            if automatic:
-                raise MemoryReleaseBusy(automatic)
             if not interrupt or (job_id and str(job_id) != str(job.job_id)):
                 raise _offer(job.job_id, "Another clip of LDS's own is rendering now."
                              if job_id else "ComfyUI is rendering a clip of LDS's own.")

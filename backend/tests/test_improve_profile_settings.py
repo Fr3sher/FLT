@@ -74,9 +74,10 @@ def test_out_of_range_values_are_clamped_not_rejected(app, svc):
         assert svc._improve_int('improve_steps', 4) == 1     # never a 0-step job
 
 
+@pytest.mark.plugins('image_upscale')
 def test_the_knobs_round_trip_through_the_settings_api(client, app):
-    """They must survive a full-config Save, not be dropped as an unknown key."""
-    r = client.put('/api/settings', json={'config': {'klein': {
+    """The plugin editor must persist its owned knobs through a partial Save."""
+    r = client.put('/api/settings?plugin=image_upscale', json={'config': {'klein': {
         'improve_base_lora_strength': 0.6, 'improve_steps': 6}}})
     assert r.status_code == 200
     with app.app_context():

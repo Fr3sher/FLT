@@ -12,6 +12,9 @@ Covers the whole seam:
 Single-user extraction (LOCAL_USER). The vision seam is imported locally by the pipeline,
 so it is patched at app.services.vision_ollama.*.
 """
+
+import pytest
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import io
 import json
 import os
@@ -24,6 +27,8 @@ from app.models import FaceDataset, FaceDatasetImage
 from app.services import face_dataset_service as svc
 from app.services import lora_training as lt
 from app.config import LOCAL_USER, save_config
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _png(w=64, h=64):
@@ -268,7 +273,7 @@ def test_caption_route_regenerates_both_when_dual_on(app, client, monkeypatch):
 
 # --- cloud strips dual back to the historical shape --------------------------
 def test_cloudify_strips_dual_captions(app):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         staging = 'C:/stage/dataset'
         job_config = {'job': 'extension', 'config': {'name': 'x', 'process': [{

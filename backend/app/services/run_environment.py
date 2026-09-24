@@ -25,6 +25,7 @@ Paths are redacted (`~`) before they are stored: a snapshot ends up in the Share
 config and in pasted diagnostics.
 """
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 
 import hashlib
 import json
@@ -90,7 +91,7 @@ def _aitoolkit_probe():
         try:
             proc = subprocess.run(['git', '-C', str(root), *args],
                                   capture_output=True, text=True,
-                                  timeout=_GIT_TIMEOUT,
+                                  timeout=processing_timeout(_GIT_TIMEOUT),
                                   creationflags=_no_window())
         except (OSError, subprocess.SubprocessError):
             return out or None
@@ -171,7 +172,7 @@ def _gpu_probe():
     proc = subprocess.run(
         ['nvidia-smi', '--query-gpu=name,driver_version,memory.total',
          '--format=csv,noheader'],
-        capture_output=True, text=True, timeout=_SMI_TIMEOUT,
+        capture_output=True, text=True, timeout=processing_timeout(_SMI_TIMEOUT),
         creationflags=_no_window())
     if proc.returncode != 0:
         return None

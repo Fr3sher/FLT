@@ -71,7 +71,7 @@ def _openai_err(message, code=None, param=None, status=400):
 
 
 def _sub_connected(monkeypatch):
-    from app.services import chatgpt_oauth
+    from lds_api_engines import chatgpt_oauth
     monkeypatch.setattr(chatgpt_oauth, 'access_token', lambda force_refresh=False: TOKEN)
     monkeypatch.setattr(chatgpt_oauth, 'account_id', lambda: 'acc-x')
     monkeypatch.setattr(chatgpt_oauth, 'status',
@@ -92,8 +92,8 @@ def _sub_image_sse():
 def _sub(monkeypatch, **kw):
     """Call the subscription lane with requests.post patched as told."""
     _sub_connected(monkeypatch)
-    from app.services import chatgpt_image
-    with patch('app.services.chatgpt_image.requests.post', **kw):
+    from lds_api_engines import chatgpt_image
+    with patch('lds_api_engines.chatgpt_image.requests.post', **kw):
         return chatgpt_image.generate_variation(b'ref', 'a portrait',
                                                 force_lane='subscription')
 
@@ -109,7 +109,7 @@ def test_a_subscription_5xx_raises_instead_of_returning_none(app, monkeypatch, s
                                                              body, expected):
     """MEASURED before the fix: `None`, silently, for every one of these. The
     fan-out then wrote the sentence reserved for a provider that answered."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     from app.services.engine_errors import EngineFatal, EngineRefused
     with pytest.raises(chatgpt_image.ChatGPTImageError) as e:
         _sub(monkeypatch, return_value=_resp(status, text=body))
@@ -128,7 +128,7 @@ def test_a_subscription_5xx_raises_instead_of_returning_none(app, monkeypatch, s
 def test_a_dropped_connection_on_the_subscription_lane_says_so(app, monkeypatch, exc):
     """MEASURED before the fix: `None`. A user whose network died was told they
     had written something the provider would not draw."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     from app.services.engine_errors import EngineRefused
     with pytest.raises(chatgpt_image.ChatGPTImageError) as e:
         _sub(monkeypatch, side_effect=exc)
@@ -141,7 +141,7 @@ def test_a_dropped_connection_on_the_subscription_lane_says_so(app, monkeypatch,
 def test_the_five_causes_get_five_different_sentences(app, monkeypatch):
     """Refusal, network, quota, token, closed door. If any two of these ever
     collapse into one message, someone is told to fix the wrong thing."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     said = {}
 
     def _catch(key, **kw):
@@ -156,7 +156,7 @@ def test_the_five_causes_get_five_different_sentences(app, monkeypatch):
     _catch('closed', return_value=_resp(403, text='forbidden'))
     # token: connected, but the refreshed token is refused too
     _sub_connected(monkeypatch)
-    with patch('app.services.chatgpt_image.requests.post',
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                return_value=_resp(401, text='token expired')):
         try:
             chatgpt_image.generate_variation(b'r', 'p', force_lane='subscription')
@@ -191,7 +191,7 @@ def test_a_lane_openai_has_closed_says_that_instead_of_unknown_error(app, monkey
     """The most useful thing this lane can ever report. It rides an undocumented
     endpoint the module itself warns may be withdrawn; when that happens, every
     user would otherwise go hunting their own settings for a fault not there."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     from app.services.engine_errors import EngineFatal
     for status in (403, 404, 410):
         with pytest.raises(chatgpt_image.ChatGPTImageFatal) as e:
@@ -206,7 +206,7 @@ def test_a_lane_openai_has_closed_says_that_instead_of_unknown_error(app, monkey
 def test_the_model_answering_in_prose_relays_its_own_words(app, monkeypatch):
     """A 200 that carries a sentence instead of pixels IS a stated reason.
     Paraphrasing it would be a second guess on top of the one being removed."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     from app.services.engine_errors import EngineFatal, EngineRefused
     with pytest.raises(chatgpt_image.ChatGPTImageRefused) as e:
         _sub(monkeypatch, return_value=_sse_refusal_resp())
@@ -216,7 +216,7 @@ def test_the_model_answering_in_prose_relays_its_own_words(app, monkeypatch):
 
 
 def test_a_failed_image_tool_call_relays_its_error(app, monkeypatch):
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     r = MagicMock(status_code=200, headers={})
     r.text = _sse({'type': 'response.output_item.done',
                    'item': {'type': 'image_generation_call', 'status': 'failed',
@@ -229,7 +229,7 @@ def test_a_failed_image_tool_call_relays_its_error(app, monkeypatch):
 def test_a_subscription_401_still_refreshes_once_before_giving_up(app, monkeypatch):
     """The refresh is the whole reason a first 401 is not an error. Only the
     SECOND one is the user's problem, and only then does it say so."""
-    from app.services import chatgpt_image, chatgpt_oauth
+    from lds_api_engines import chatgpt_image, chatgpt_oauth
     calls = []
     monkeypatch.setattr(chatgpt_oauth, 'access_token',
                         lambda force_refresh=False: calls.append(force_refresh) or TOKEN)
@@ -238,13 +238,13 @@ def test_a_subscription_401_still_refreshes_once_before_giving_up(app, monkeypat
                         lambda: {'connected': True, 'email': None, 'plan': None})
     ok = MagicMock(status_code=200, headers={})
     ok.text = _sub_image_sse()
-    with patch('app.services.chatgpt_image.requests.post',
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                side_effect=[_resp(401, text='expired'), ok]):
         assert chatgpt_image.generate_variation(
             b'r', 'p', force_lane='subscription') == PNG
     assert calls == [False, True]
 
-    with patch('app.services.chatgpt_image.requests.post',
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                side_effect=[_resp(401, text='expired'), _resp(401, text='expired')]):
         with pytest.raises(chatgpt_image.SubscriptionUnavailable) as e:
             chatgpt_image.generate_variation(b'r', 'p', force_lane='subscription')
@@ -256,7 +256,7 @@ def test_a_subscription_401_still_refreshes_once_before_giving_up(app, monkeypat
 def _every_chatgpt_message(app, monkeypatch):
     """Every user-facing sentence both lanes can produce, collected by running
     them. Collected, not listed: a message added later is covered on its own."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     out = []
     sub_cases = [
         {'return_value': _resp(s, text='x')} for s in (400, 401, 403, 404, 410,
@@ -285,7 +285,7 @@ def _every_chatgpt_message(app, monkeypatch):
         {'side_effect': requests.ConnectionError('down')},
     ]
     for kw in api_cases:
-        with patch('app.services.chatgpt_image.requests.post', **kw):
+        with patch('lds_api_engines.chatgpt_image.requests.post', **kw):
             try:
                 chatgpt_image.generate_variation(b'r', 'p', force_lane='api')
             except Exception as e:                      # noqa: BLE001
@@ -323,9 +323,9 @@ def test_no_message_or_log_record_ever_carries_a_credential(app, monkeypatch, ca
 def test_the_api_lane_success_path_is_untouched(app, monkeypatch):
     """The anti-regression that decides whether this change was worth making."""
     monkeypatch.setenv('OPENAI_API_KEY', KEY)
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     ok = _resp(200, {'data': [{'b64_json': base64.b64encode(PNG).decode()}]})
-    with patch('app.services.chatgpt_image.requests.post', return_value=ok) as post:
+    with patch('lds_api_engines.chatgpt_image.requests.post', return_value=ok) as post:
         out = chatgpt_image.generate_variation([b'a', b'b'], 'a portrait',
                                                aspect_ratio='3:4')
     assert out == PNG
@@ -346,9 +346,9 @@ def test_the_api_lane_success_path_is_untouched(app, monkeypatch):
 def test_the_api_lane_keeps_every_verdict_it_already_had(app, monkeypatch, status,
                                                          body, expected, fatal):
     monkeypatch.setenv('OPENAI_API_KEY', KEY)
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     from app.services.engine_errors import EngineFatal
-    with patch('app.services.chatgpt_image.requests.post', return_value=body):
+    with patch('lds_api_engines.chatgpt_image.requests.post', return_value=body):
         with pytest.raises(chatgpt_image.ChatGPTImageError) as e:
             chatgpt_image.generate_variation(b'r', 'p', force_lane='api')
     assert expected in str(e.value)
@@ -357,8 +357,8 @@ def test_the_api_lane_keeps_every_verdict_it_already_had(app, monkeypatch, statu
 
 def test_a_model_blaming_400_is_still_fatal_and_still_blames_the_model(app, monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', KEY)
-    from app.services import chatgpt_image
-    with patch('app.services.chatgpt_image.requests.post',
+    from lds_api_engines import chatgpt_image
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                return_value=_openai_err("Supported values are: 'gpt-image-2'",
                                         param='model')):
         with pytest.raises(chatgpt_image.ChatGPTImageFatal) as e:
@@ -373,10 +373,10 @@ def test_a_model_blaming_400_is_still_fatal_and_still_blames_the_model(app, monk
 def test_a_moderation_400_is_named_a_refusal_and_does_not_stop_the_batch(app, monkeypatch):
     """It used to return None: the tile said "empty response", which reads as an
     app failure. It is not — it is OpenAI declining, and it must stay per-row."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     from app.services.engine_errors import EngineFatal, EngineRefused
     monkeypatch.setenv('OPENAI_API_KEY', KEY)
-    with patch('app.services.chatgpt_image.requests.post',
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                return_value=_openai_err(
                    'Your request was rejected as a result of our safety system',
                    code='moderation_blocked')):
@@ -398,11 +398,11 @@ def test_a_broken_reference_photo_is_not_reported_as_a_refused_prompt(app, monke
     """The 400 that used to be lumped in with moderation. The remedy is at the
     opposite end of the app — a file to replace, not a prompt to reconsider —
     and since every row of a batch is sent the same references, it repeats."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     from app.services.engine_errors import EngineFatal, EngineRefused
     monkeypatch.setenv('OPENAI_API_KEY', KEY)
     msg = kwargs.pop('message_override', 'bad input')
-    with patch('app.services.chatgpt_image.requests.post',
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                return_value=_openai_err(msg, **kwargs)):
         with pytest.raises(chatgpt_image.ChatGPTImageFatal) as e:
             chatgpt_image.generate_variation(b'r', 'p', force_lane='api')
@@ -416,9 +416,9 @@ def test_a_400_naming_no_cause_stays_honestly_unexplained(app, monkeypatch):
     """The honest half of the split. When OpenAI says nothing we recognise, the
     engine says nothing it cannot support — it keeps returning None, and the
     fan-out states the ambiguity in words instead of picking a side."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     monkeypatch.setenv('OPENAI_API_KEY', KEY)
-    with patch('app.services.chatgpt_image.requests.post',
+    with patch('lds_api_engines.chatgpt_image.requests.post',
                return_value=_openai_err('something went wrong')):
         assert chatgpt_image.generate_variation(b'r', 'p', force_lane='api') is None
     from app.services.face_dataset_service import _EMPTY_MSG
@@ -457,7 +457,7 @@ def test_both_lanes_answer_the_same_event_the_same_way(app, monkeypatch, event):
     """The inconsistency this file was opened for, stated as one assertion: same
     file, same event, same KIND of answer. The wording differs (each names its
     own lane); what must not differ is raising versus staying silent."""
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     from app.services.engine_errors import EngineFatal, EngineRefused
     kw = ({'side_effect': requests.ConnectionError('down')} if event == 'network'
           else {'return_value': _openai_err('boom', status=500)})
@@ -467,7 +467,7 @@ def test_both_lanes_answer_the_same_event_the_same_way(app, monkeypatch, event):
     with pytest.raises(chatgpt_image.ChatGPTImageError) as sub_e:
         _sub(monkeypatch, **sub_kw)
     monkeypatch.setenv('OPENAI_API_KEY', KEY)
-    with patch('app.services.chatgpt_image.requests.post', **kw):
+    with patch('lds_api_engines.chatgpt_image.requests.post', **kw):
         with pytest.raises(chatgpt_image.ChatGPTImageError) as api_e:
             chatgpt_image.generate_variation(b'r', 'p', force_lane='api')
 

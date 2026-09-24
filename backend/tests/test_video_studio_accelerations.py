@@ -3,7 +3,10 @@ right, stored on the clip, downloadable from Setup."""
 import pytest
 
 from app import setup_installer
-from app.services import video_test_studio as vts
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_test_studio as vts
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _graph(**kw):
@@ -11,11 +14,12 @@ def _graph(**kw):
                               frames=56, megapixels=0.2, sage=False, **kw)
 
 
-def test_the_three_choices_are_the_arena_podium_at_six_steps():
-    assert [a['id'] for a in vts.ACCELERATIONS] == ['turbo', 'parasyte', 'dareties']
-    assert all(a['steps'] == vts.TURBO_STEPS == 6 for a in vts.ACCELERATIONS)
+def test_the_arena_podium_stays_at_six_steps_alongside_optional_vdn():
+    podium = [a for a in vts.ACCELERATIONS if a['id'] != 'vdn']
+    assert [a['id'] for a in podium] == ['turbo', 'parasyte', 'dareties']
+    assert all(a['steps'] == vts.TURBO_STEPS == 6 for a in podium)
     assert vts.accel_spec('turbo')['file'] == vts.TURBO_LORA
-    for a in vts.ACCELERATIONS:
+    for a in podium:
         assert a['arena'].startswith('#') and a['hint'] and a['action']
 
 
@@ -72,21 +76,27 @@ def test_an_explicit_step_count_still_wins_over_the_accelerations_six():
     assert turbo['steps'] == 4 and any(n.endswith('steps=4') for n in turbo['notes'])
 
 
-def test_every_optional_weight_with_a_button_is_a_download_setup_knows():
-    for action, subs, filename, _what in vts.OPTIONAL_WEIGHTS:
-        if action is None:
-            continue
-        entry = setup_installer._MODEL_DOWNLOADS[action]
-        assert action in setup_installer.INSTALL_ACTIONS
-        assert entry['dest'] == (subs[0], filename), f'{action}: the file Setup writes is the file the graph loads'
-        assert entry['url'].startswith('https://huggingface.co/') and '/resolve/main/' in entry['url']
-        assert entry['license_url']
+def test_every_optional_weight_with_a_button_is_a_download_setup_knows(app):
+    with app.app_context():
+        for action, subs, filename, _what in vts.OPTIONAL_WEIGHTS:
+            if action is None:
+                continue
+            if not setup_installer.known_action(action):
+                assert action not in {row['action'] for row in vts.missing_weights()}
+                continue
+            entry = setup_installer.model_download_spec(action)
+            assert setup_installer.known_action(action)
+            assert entry['dest'] == (subs[0], filename), f'{action}: the file Setup writes is the file the graph loads'
+            assert entry['url'].startswith('https://huggingface.co/') and '/resolve/' in entry['url']
+            assert entry['license_url']
 
 
 def test_the_status_says_what_this_machine_has(monkeypatch):
+    from lds_sdk import h3_render as h3_host
     present = {vts.PARASYTE_LORA}
-    monkeypatch.setattr(vts, '_weight_present', lambda subs, name: name in present)
-    monkeypatch.setattr(vts, 'option_availability',
+    # The status function is shared with Live through lds_sdk.h3_render.
+    monkeypatch.setattr(h3_host, '_weight_present', lambda subs, name: name in present)
+    monkeypatch.setattr(h3_host, 'option_availability',
                         lambda classes=None: {'turbo': {'available': False, 'pack': 'x', 'url': 'u', 'search': 's', 'nodes': ['MiniMaxH3TurboSampler']}})
     rows = {r['id']: r for r in vts.accelerations_status(classes=set())}
     assert rows['parasyte']['available'] is True and rows['parasyte']['pack'] is None

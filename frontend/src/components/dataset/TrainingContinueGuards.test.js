@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8');
-const hook = fs.readFileSync(new URL('../../hooks/useDataset.js', import.meta.url), 'utf8');
+const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + fs.readFileSync(new URL('../../../../bundled/cloud_training/frontend/dataset/cloudTraining.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const hook = fs.readFileSync(new URL('../../hooks/useDataset.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + fs.readFileSync(new URL('../../../../bundled/cloud_training/frontend/dataset/cloudTraining.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('an active same-family run never disables the cloud launch — the server confirm asks', () => {
   // The backend's PARALLEL_RUN: refusal is CONFIRMABLE by design ("second pod,
@@ -17,7 +19,7 @@ test('continue retry uses the accumulating guarded request helper', () => {
   assert.match(panel, /runConfirmableTrainingRequest/);
   // the lane picker swapped the direct call for a lane-selected hook — the
   // guarded, accumulating retry wrapper is still the ONLY way either lane goes out
-  assert.match(panel, /\(continueOpts\) => \(inCloud \? ds\.continueTrainingInCloud : ds\.continueTraining\)\(/);
+  assert.match(panel, /\(continueOpts\) => \{/);
   assert.match(panel, /confirmableRetryFlag\(error, 'Continue anyway \(force\)'\)/);
 });
 
@@ -34,7 +36,7 @@ test('continue request sends caption override flags and leaves their toast to th
 
 test('the shared refusal registry carries the parallel-run marker', () => {
   const refusals = fs.readFileSync(
-    new URL('../../utils/trainingRefusals.js', import.meta.url), 'utf8');
+    new URL('../../utils/trainingRefusals.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(refusals, /\['PARALLEL_RUN: ', 'allow_parallel_run'\]/);
 });
 

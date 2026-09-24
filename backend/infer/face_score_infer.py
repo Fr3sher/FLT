@@ -1,13 +1,12 @@
-"""Face similarity scorer — InsightFace antelopev2, lance dans un interprete DEDIE
-(insightface y est installe, PAS dans le venv Flask). CPU par DEFAUT (provider CPU +
-ctx_id=-1) -> pas de GPU, ne touche pas ComfyUI. Le parent peut demander
-{"device": "cuda"}, mais SEULEMENT depuis la fenetre GPU exclusive (cf. le
-resolveur partage capabilities.resolve_face_device).
-Protocole stdin: {"ref": path, "images": [paths], "models_root": path|null} -> stdout
-UNE ligne JSON
-{"ref_ok": bool, "results": {path: {state, sim?, det, bbox_frac, yaw, zoomed}}}.
-Logs -> stderr.
-Gating 3-etats + padding rescue (valide empiriquement sur test3) + zoom rescue."""
+"""InsightFace antelopev2 face-similarity scorer in a dedicated interpreter
+with InsightFace installed, outside the Flask venv. Default to CPU
+(provider CPU, ctx_id=-1), leaving ComfyUI untouched. The caller may
+request device=cuda only inside the exclusive GPU window (shared
+capabilities.resolve_face_device).
+stdin: {ref: path, images: [paths], models_root: path|null}.
+stdout: one JSON line {ref_ok: bool, results: {path: {state, sim?, det,
+bbox_frac, yaw, zoomed}}}. Logs go to stderr.
+Three-state gating with empirically validated padding and zoom rescue."""
 from __future__ import annotations
 import json, os, sys
 # A ._pth-pinned interpreter (ComfyUI portable's python_embeded) does not put
@@ -72,12 +71,11 @@ def _verdict(det, face_px, yaw):
 
 
 def _repair_nested_antelopev2(models_root=None):
-    """L'antelopev2.zip d'insightface 0.7.3 contient un DOSSIER RACINE (contrairement
-    a buffalo_l) : l'auto-extract pose les .onnx dans .../models/antelopev2/antelopev2/,
-    or FaceAnalysis globbe NON-recursivement -> 0 modele charge -> AssertionError
-    (`'detection' in self.models`). CHAQUE install fraiche en auto-download est
-    touchee, et ca ne s'auto-repare jamais (le dossier externe existe, insightface
-    ne re-telecharge pas). On aplatit une fois pour toutes ici."""
+    """InsightFace 0.7.3 antelopev2.zip contains a root directory, unlike
+    buffalo_l. Auto-extraction nests ONNX files one directory too deep for
+    FaceAnalysis's non-recursive glob, loading zero models and failing its
+    detection assertion. Every fresh auto-download is affected and will not
+    self-repair because the outer directory exists. Flatten it here once."""
     import glob, os, shutil
     root = models_root or os.path.join(os.path.expanduser('~'), '.insightface')
     outer = os.path.join(root, 'models', 'antelopev2')
@@ -91,7 +89,7 @@ def _repair_nested_antelopev2(models_root=None):
     try:
         os.rmdir(inner)
     except OSError:
-        pass  # reliquats (zip...) — sans consequence
+        pass  # Harmless leftovers such as ZIP files.
     if moved:
         _log(f"[face] repaired nested antelopev2 layout ({moved} model(s) moved up)")
 
@@ -196,8 +194,8 @@ def main() -> int:
         app = FaceAnalysis(**kwargs)
         app.prepare(ctx_id=0 if use_cuda else -1, det_size=DET_SIZE)
     except Exception as e:
-        # Un crash de chargement (modeles absents/corrompus) doit sortir en JSON
-        # propre — pas en traceback muet que le parent resume en « pas de JSON ».
+        # Missing/corrupt model load failures must return clean JSON, not a
+        # silent traceback that the parent can only report as missing JSON.
         print(json.dumps({"ref_ok": False, "results": {},
                           "error": f"model load failed: {type(e).__name__}: {e}"}))
         return 1
@@ -216,7 +214,7 @@ def main() -> int:
 
     def detect(img):
         f = biggest(app.get(img))
-        if f is None:  # padding rescue : SCRFD rate les gros plans plein cadre
+        if f is None:  # Padding rescue: SCRFD misses full-frame close-ups.
             h, w = img.shape[:2]; pad = int(0.25 * max(h, w))
             f2 = biggest(app.get(cv2.copyMakeBorder(img, pad, pad, pad, pad,
                                                     cv2.BORDER_CONSTANT, value=(0, 0, 0))))

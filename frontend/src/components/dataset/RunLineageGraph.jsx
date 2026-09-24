@@ -7,8 +7,8 @@ import LineageDiffPanel from './LineageDiffPanel';
 import CheckpointActionsPopover from './CheckpointActionsPopover';
 import PreviewLightbox from './PreviewLightbox';
 import CheckpointGalleryPanel from '../shared/CheckpointGalleryPanel';
-import CivitaiPublishModal from '../shared/CivitaiPublishModal';
-import { checkpointPopoverPlacement, POPOVER_H, POPOVER_W } from './checkpointPopover.js';
+import PluginSlot from '../../plugins/PluginSlot.jsx';
+import { checkpointPopoverPlacement, POPOVER_W, popoverHeight } from './checkpointPopover.js';
 import { noteBadge, toggleDiffSelection } from './lineageDetail.js';
 import { removeRunFromTree } from '../../utils/runDeletable.js';
 import { postJson } from '../../api/fetchClient';
@@ -91,10 +91,6 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
   // surface nobody complained about. The canvas, whose cards do nothing else,
   // routes the click to the popover instead.
   const handleOpenDetails = useCallback((node) => setOpenNode(node), []);
-  // 📤 Civitai — the popover's row hands the checkpoint to the shared modal;
-  // this host only holds which one is open.
-  const [publishCk, setPublishCk] = useState(null);
-  const handlePublish = useCallback((node, pill) => setPublishCk({ node, pill }), []);
   // record_id -> node, so the two picked ids resolve to the nodes the diff reads.
   const nodeById = useMemo(() => {
     const m = new Map();
@@ -414,10 +410,11 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
             units, flipped above the pill when there is no room below and clamped
             horizontally so the scroll panel never clips it. */}
         {openCk && (() => {
-          const at = checkpointPopoverPlacement(openCk.pill, g);
+          const height = popoverHeight('graph');
+          const at = checkpointPopoverPlacement(openCk.pill, g, { height });
           return (
           <foreignObject className="lds-gnode overflow-visible"
-            x={at.x} y={at.y} width={POPOVER_W + 10} height={POPOVER_H + 8}>
+            x={at.x} y={at.y} width={POPOVER_W + 10} height={height + 8}>
             <div style={{ width: POPOVER_W }}>
               <CheckpointActionsPopover
                 node={openCk.node} pill={openCk.pill}
@@ -428,7 +425,7 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
                 onDeploy={handleImport}
                 onDelete={handleDeleteCheckpoint}
                 onDetails={handleOpenDetails}
-                onPublish={handlePublish}
+                surface="graph"
                 onClose={closePopover} />
             </div>
           </foreignObject>
@@ -456,13 +453,12 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
         opens, so the results of a generation are reachable from either surface. */}
     <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)}
       onDeleted={() => { Promise.resolve(refetchTree?.()).catch(() => {}); }} />
-    {/* 📤 Civitai — the shared publish dialog, for the checkpoint whose popover
-        asked for it. A link made or removed here changes the pill's `civitai`
-        stamp, so the lineage is re-read on close. */}
-    {publishCk && (
-      <CivitaiPublishModal context={{ kind: 'checkpoint', node: publishCk.node, pill: publishCk.pill }}
-        onClose={() => { setPublishCk(null); Promise.resolve(refetchTree?.()).catch(() => {}); }} />
-    )}
+    {/* The layers the plugins keep mounted here for their popover rows
+        (checkpoint.layer): a dialog a row asked for outlives the popover. A
+        change made in one (a page linked, a link removed) changes what the
+        pills carry, so the lineage is re-read when it closes. */}
+    <PluginSlot slot="checkpoint.layer" surface="graph"
+      onChanged={() => { Promise.resolve(refetchTree?.()).catch(() => {}); }} />
     </>
   );
 }

@@ -22,17 +22,20 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { installRuntimeHost } from './support/runtimeHost.mjs'
 
-import { layoutImageNodes } from '../src/utils/canvasImageGroups.js'
+test.beforeEach(installRuntimeHost)
+
+import { layoutImageNodes } from "../../bundled/canvas/frontend/utils/canvasImageGroups.js"
 import { datasetThumbUrl } from '../src/utils/datasetThumbUrl.js'
 import { render } from './support/mountJsx.mjs'
 
 const { default: CanvasImageGroup } =
-  await import('../src/components/canvas/CanvasImageGroup.jsx')
+  await import("../../bundled/canvas/frontend/components/canvas/CanvasImageGroup.jsx")
 const { default: CanvasGroupBar } =
-  await import('../src/components/canvas/CanvasGroupBar.jsx')
+  await import("../../bundled/canvas/frontend/components/canvas/CanvasGroupBar.jsx")
 const { default: CanvasImageNode } =
-  await import('../src/components/canvas/CanvasImageNode.jsx')
+  await import("../../bundled/canvas/frontend/components/canvas/CanvasImageNode.jsx")
 
 /* ⚠️ REAL dataset image URLs, not `/i/1.png`: datasetThumbUrl only rewrites
    `/api/dataset/<id>/img/<name>`, and with any other URL the tile and the
@@ -166,7 +169,7 @@ test('the board owns the strips\' HQ, and hands the SAME value to both halves', 
   // not a child: the nearest node owning both is LaneImages. If the two ever
   // read different sources the button and the pictures would disagree.
   const CANVAS = readFileSync(
-    new URL('../src/components/canvas/LineageCanvas.jsx', import.meta.url), 'utf8')
+    new URL("../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8')
   assert.match(CANVAS, /hq=\{hqGroups\.has\(r\.groupId\)\}[\s\S]*<CanvasGroupBar/,
     'the strip must be given its HQ before the bar layer is drawn')
   assert.match(CANVAS, /onToggleHq=\{toggleGroupHq\}/)

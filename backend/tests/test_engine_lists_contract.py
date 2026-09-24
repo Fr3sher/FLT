@@ -1,24 +1,10 @@
-"""The engine list exists in TWO languages — this file is the seam that holds
-them together.
+"""The public engine catalogs agree across Python and JavaScript.
 
-WHY THIS TEST EXISTS
---------------------
-Python owns `svc.API_ENGINES` (what /ref/edit and the fan-out accept) and
-JavaScript owns `API_ENGINES` in engineSelection.js (what the workspace offers).
-Neither can import the other, so the only thing that can stop them drifting is a
-test that reads both. Drift is not theoretical: OpenRouter shipped as a
-generation engine while the ✦ Edit modal and the /ref/edit route each kept their
-own two-engine copy, so the app offered an engine set that no longer matched what
-the server accepted.
-
-The rule the codebase now follows is DERIVE, don't copy: the edit engines are the
-API engines on both sides (`EDIT_ENGINES = [...API_ENGINES]` in JS,
-`svc.API_ENGINES` in the route). That kills the third and fourth copies. This
-test kills the drift between the two that remain — ids AND human labels, because
-the labels word user-facing refusals on both sides.
-
-Parsing JS with a regex is crude, and deliberately so: it must fail loudly if the
-declaration moves or changes shape, rather than quietly matching nothing.
+The host keeps local engines while API engines belong to their optional plugin.
+Compare the current spec owners' ids, order and labels with the real backend
+registry after booting with that plugin on and off. The frontend specs retain a
+stable first-line shape for this cross-language source contract; reference-pool
+contracts below independently keep the local edit inputs aligned.
 """
 import re
 from pathlib import Path
@@ -31,24 +17,18 @@ _JS = (Path(__file__).resolve().parents[2]
        / 'frontend' / 'src' / 'components' / 'dataset' / 'engineSelection.js')
 
 
-def _js_source():
-    if not _JS.exists():                       # source-only checkout of the backend
-        pytest.skip(f'frontend source not present ({_JS.name})')
-    return _JS.read_text(encoding='utf-8')
-
-
-def _js_api_engines():
-    m = re.search(r'export const API_ENGINES\s*=\s*\[(.*?)\];', _js_source(), re.S)
-    assert m, 'API_ENGINES declaration not found in engineSelection.js'
-    return tuple(re.findall(r"'([^']+)'", m.group(1)))
-
-
-def _js_edit_engines():
-    """EDIT_ENGINES lives in referenceEdit.js and is spelled `[...ENGINES]`, so
-    what has to match is the CANONICAL list it copies."""
-    m = re.search(r'export const ENGINES\s*=\s*\[(.*?)\];', _js_source(), re.S)
-    assert m, 'ENGINES declaration not found in engineSelection.js'
-    return tuple(re.findall(r"'([^']+)'", m.group(1)))
+def _js_catalog(api_enabled):
+    """Read the explicit spec rows owned by core and the optional API plugin."""
+    paths = [_JS.parents[2] / 'engines' / 'catalog.js']
+    if api_enabled:
+        paths.append(_JS.parents[4] / 'bundled' / 'api_engines' / 'frontend' / 'lib' / 'engineSpecs.js')
+    rows = []
+    for path in paths:
+        text = path.read_text(encoding='utf-8')
+        entries = re.findall(r"\{ id: '([^']+)', label: '([^']+)', kind: '(api|local)', order: (\d+),", text)
+        assert entries, f'engine spec rows not found in {path.name}'
+        rows.extend(entries)
+    return sorted(rows, key=lambda row: int(row[3]))
 
 
 def _js_edit_ref_support():
@@ -63,24 +43,26 @@ def _js_edit_ref_support():
     return dict(re.findall(r"(\w+):\s*'([^']*)'", m.group(1)))
 
 
-def _js_engine_labels():
-    m = re.search(r'export const ENGINE_LABELS\s*=\s*\{(.*?)\};', _js_source(), re.S)
-    assert m, 'ENGINE_LABELS declaration not found in engineSelection.js'
-    return dict(re.findall(r"(\w+):\s*'([^']*)'", m.group(1)))
+@pytest.mark.parametrize('api_enabled', [
+    pytest.param(False, marks=pytest.mark.plugins()),
+    pytest.param(True, marks=pytest.mark.plugins('api_engines')),
+])
+def test_the_api_engine_ids_are_identical_on_both_sides(app, api_enabled):
+    """The installed owner supplies the same ids and order to both catalogs."""
+    from app.engines.registry import available_specs
+    js = tuple(row[0] for row in _js_catalog(api_enabled) if row[2] == 'api')
+    py = tuple(spec.id for spec in available_specs() if spec.is_api)
+    assert js == py
+    assert py == (svc.API_ENGINES if api_enabled else ())
 
 
-def test_the_api_engine_ids_are_identical_on_both_sides():
-    """Same ids, same ORDER: the order drives the toggle order in the ✦ Edit modal
-    and the batch build order on the server."""
-    assert _js_api_engines() == svc.API_ENGINES
-
-
-def test_the_editable_engine_ids_are_identical_on_both_sides():
-    """The set the ✦ Edit modal offers and the set /ref/edit accepts. It is now
-    EVERY engine — the local ones edit through the ComfyUI queue — and the ORDER
-    matters twice over: it is the toggle order in the modal, and it puts the free
-    engines first on a gesture that is billed per press."""
-    assert _js_edit_engines() == svc.editable_engines()
+@pytest.mark.parametrize('api_enabled', [
+    pytest.param(False, marks=pytest.mark.plugins()),
+    pytest.param(True, marks=pytest.mark.plugins('api_engines')),
+])
+def test_the_editable_engine_ids_are_identical_on_both_sides(app, api_enabled):
+    """Local engines remain first; an unavailable plugin offers no edit engine."""
+    assert tuple(row[0] for row in _js_catalog(api_enabled)) == svc.editable_engines()
 
 
 def test_the_local_engines_reference_support_matches_on_both_sides():
@@ -129,32 +111,20 @@ def test_each_local_engine_reads_only_its_own_pool():
     assert svc.local_engines_taking_dataset_refs(['chatgpt']) == []
 
 
-def test_the_engine_labels_are_worded_identically_on_both_sides():
-    """Both sides word a refusal from these labels ('pick Klein, Krea 2 Edit, Nano
-    Banana Pro, ChatGPT or OpenRouter'), so the same engine must not be called two
-    different things depending on whether the client or the server said no."""
-    js = _js_engine_labels()
-    py = svc.engine_labels()
-    for engine in svc.editable_engines():
-        assert js.get(engine) == py.get(engine), engine
+@pytest.mark.parametrize('api_enabled', [
+    pytest.param(False, marks=pytest.mark.plugins()),
+    pytest.param(True, marks=pytest.mark.plugins('api_engines')),
+])
+def test_the_engine_labels_are_worded_identically_on_both_sides(app, api_enabled):
+    """Labels used in both refusal messages come from the same owner catalog."""
+    assert {row[0]: row[1] for row in _js_catalog(api_enabled)} == svc.engine_labels()
 
 
-def test_the_refusal_message_is_derived_from_the_list_not_hardcoded():
-    """The point of deriving: adding an engine to a lane rewrites the message with
-    no edit anywhere else. Pinned by mutating the tuple, not by pinning the
-    sentence — a pinned sentence is just the old hardcoded list again."""
-    msg = svc.edit_engine_choice_message()
-    labels = svc.engine_labels()
-    for engine in svc.editable_engines():
-        assert labels[engine] in msg
-
-    real_engines, real_labels = svc.API_ENGINES, svc.API_ENGINE_LABELS
-    real_local, real_local_labels = svc.LOCAL_ENGINES, svc.LOCAL_ENGINE_LABELS
-    try:
-        svc.LOCAL_ENGINES, svc.LOCAL_ENGINE_LABELS = (), {}
-        svc.API_ENGINES = ('nanobanana', 'newcomer')
-        svc.API_ENGINE_LABELS = dict(real_labels, newcomer='Newcomer')
-        assert svc.edit_engine_choice_message() == 'pick Nano Banana Pro or Newcomer'
-    finally:
-        svc.API_ENGINES, svc.API_ENGINE_LABELS = real_engines, real_labels
-        svc.LOCAL_ENGINES, svc.LOCAL_ENGINE_LABELS = real_local, real_local_labels
+def test_the_refusal_message_is_derived_from_the_list_not_hardcoded(monkeypatch):
+    """Adding an engine at the registry seam rewrites the refusal at read time."""
+    from app.engines import registry
+    monkeypatch.setattr(registry, '_specs', {})
+    registry.register(registry.EngineSpec('nanobanana', 'Nano Banana Pro', 'api', 0))
+    assert svc.edit_engine_choice_message() == 'pick Nano Banana Pro'
+    registry.register(registry.EngineSpec('newcomer', 'Newcomer', 'api', 1))
+    assert svc.edit_engine_choice_message() == 'pick Nano Banana Pro or Newcomer'

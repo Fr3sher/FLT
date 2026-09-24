@@ -1,20 +1,12 @@
 // react-frontend/src/components/dataset/studio/LoraStackPanel.jsx
 /**
- * Bascule Compare / Blend + poids par LoRA de la pile (≥2 LoRA cochés).
- *
- * « Compare » = comportement historique : chaque LoRA est testé SEUL, une colonne
- * par LoRA. « Blend » = les LoRA cochés sont chargés ENSEMBLE dans la même image,
- * chacun à son poids, et tous leurs triggers sont injectés dans le prompt.
- *
- * ⚠️ Ce mode s'est appelé « 🧬 Combine » jusqu'au 03/08/2026. SEUL LE LIBELLÉ a
- * changé, pour que le Test Studio et le ◉ LoRA Canvas cessent d'avoir deux mots
- * pour un seul mode : la valeur persistée (`studioComp_mode === 'combine'`), la
- * clé de l'API (`combine: true`) et l'id du sujet d'aide (`studio-combine-loras`)
- * restent CE QU'ILS ÉTAIENT — les renommer casserait le localStorage de tout le
- * monde pour un mot.
- *
- * La logique (clé de poids, clamp, blocage inter-familles, coût) vit dans
- * ./loraStack.js — testée sous `node --test`, que le JSX rend inaccessible ici.
+ * Compare/Blend toggle and stack weights for at least two selected LoRAs. Compare tests each LoRA
+ * ALONE in its own column; Blend loads them TOGETHER into one image at individual weights and
+ * injects all triggers. Blend was labeled Combine until 2026-08-03. ONLY the label changed to
+ * match Canvas: preserve studioComp_mode === 'combine', API combine: true and help ID
+ * studio-combine-loras to avoid breaking stored preferences. Weight keys, clamping, family guards
+ * and cost calculations live in loraStack.js, where node --test can test them independently of
+ * JSX.
  */
 import { HelpBadge } from '../../../help/HelpMode';
 import BlendWeightRow from './BlendWeightRow';
@@ -25,8 +17,8 @@ import {
 
 export default function LoraStackPanel({ selection, mode, onMode, weights, onWeight,
   sets = {}, onToggleChip = null, count = 1, batchMult = 1, secondsPerImage = null,
-  // 🔤 État de la case « Trigger word » du panneau de lancement : la phrase du
-  // mode Blend ne doit pas promettre une injection que la case annule.
+  // Track the launch panel's Trigger word checkbox so Blend text never promises injection when
+  // that checkbox disables it.
   injectTrigger = true }) {
   const combine = mode === 'combine';
   const blocker = combine ? combineBlocker(selection) : null;
@@ -41,8 +33,10 @@ export default function LoraStackPanel({ selection, mode, onMode, weights, onWei
         <HelpBadge topic="studio-combine-loras" />
         <div role="group" aria-label="LoRA run mode"
           className="ml-auto flex rounded-lg border border-border bg-app/60 p-0.5">
-          {/* La VALEUR reste 'combine' (elle est dans le localStorage de tous les
-              utilisateurs et dans le corps du POST) ; seul le libellé dit Blend. */}
+          {/*
+           * The VALUE stays combine in existing localStorage and POST bodies; only the label says
+           * Blend.
+           */}
           {[['compare', '⚖ Compare'], ['combine', '🧬 Blend']].map(([value, label]) => (
             <button key={value} type="button" onClick={() => onMode(value)}
               aria-pressed={mode === value}

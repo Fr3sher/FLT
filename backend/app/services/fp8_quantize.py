@@ -49,6 +49,7 @@ one that lacks the dependencies is a refusal with the pip command in it, not an
 error thirty seconds after the button.
 """
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 
 import json
 import logging
@@ -162,7 +163,7 @@ def _probe(python: str):
         proc = subprocess.run(
             infer_env.worker_argv(python, '-c', _PROBE_CODE),
             capture_output=True, text=True,
-            encoding='utf-8', errors='replace', timeout=_PROBE_TIMEOUT,
+            encoding='utf-8', errors='replace', timeout=processing_timeout(_PROBE_TIMEOUT),
             env=infer_env.worker_env(python),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         info = json.loads(((proc.stdout or '').strip().splitlines() or [''])[-1])

@@ -1,3 +1,4 @@
+import { installRestorationOwners } from '../../../tests/support/restorationOwners.mjs'
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -71,11 +72,12 @@ test('bankImproveEngines: both engines when the install has both', () => {
   assert.ok(rows.every((r) => !r.disabled));
 });
 
-test('bankImproveEngines: SeedVR2 absent until it is installed, Klein always shown', () => {
-  // Shared rule with the dataset lane: an engine that is not installed is a
-  // SETUP task, not a choice — but Klein stays visible with its reason.
+test('bankImproveEngines: active products remain visible while preparation is missing', () => {
+  // Installed products stay discoverable; readiness disables only their launch.
   const rows = bankImproveEngines({ comfyui: {} }, { todo: 10, engines: { klein: false } });
-  assert.deepEqual(rows.map((r) => r.id), ['klein']);
+  assert.deepEqual(rows.map((r) => r.id), ['klein', 'seedvr2']);
+  assert.equal(rows[1].disabled, true);
+  assert.match(rows[1].reason, /prepare|Setup/);
   assert.ok(rows[0].disabled);
   assert.match(rows[0].reason, /not available/i);
 });
@@ -139,3 +141,6 @@ test('revertOutcomeMessage: zero is reported as zero, not as a green success', (
   assert.equal(ok.type, 'success');
   assert.match(ok.text, /7 image/);
 });
+
+
+test.beforeEach(t => installRestorationOwners(t, { runtime: false }))

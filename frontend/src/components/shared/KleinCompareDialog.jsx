@@ -3,25 +3,15 @@ import { postJson } from '../../api/fetchClient';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { compareSeed, defaultTicked, toggleTicked } from './kleinCompare.js';
 
-/* ⚖ Compare Klein models — the intermediate window the CLEAN was missing.
- *
- * Same shape as the detection scan's launch window on the maintainer's ask
- * ("un modal intermédiaire avant l'envoi, comme la détection") : judge on a
- * sample BEFORE committing the batch. Here the sample is one flagged image and
- * the judged variable is the MODEL: every candidate runs on the same image,
- * same zones, same seed — the server enforces the derivation (manual zones
- * first, else the detected bbox), the dialog enforces the seed.
- *
- * ONE component for both surfaces. What differs is only what "adopt" means,
- * and the parent says it via `onAdopt`:
- *  - dataset: save the per-dataset pick (the batch clean already honours it);
- *  - bank: arm a PER-RUN override on the next clean — a bank deliberately
- *    stores no Klein pick (one stored authority for the UNETLoader, and it is
- *    the dataset's).
- *
- * Results stream into the grid one model at a time: a 9B UNET swap costs tens
- * of seconds, and a spinner that hides three finished results behind a fourth
- * still running would waste exactly the time this window exists to save.
+/*
+ * Compare Klein models provides the intermediate dialog missing from cleaning, matching the
+ * detection launch dialog requested by the maintainer. Judge a sample BEFORE committing a batch.
+ * Run every model on one flagged image with identical zones and seed; server chooses manual zones
+ * first, otherwise detected boxes, while the dialog fixes the seed. Both surfaces share one
+ * component; onAdopt differs: datasets save a per-dataset model choice already honored by batch
+ * cleaning, while banks set a PER-RUN override for the next clean and store no Klein choice,
+ * preserving one dataset-owned UNETLoader authority. Stream results model by model: 9B swaps take
+ * tens of seconds, so completed comparisons should not wait behind the last model's spinner.
  */
 export default function KleinCompareDialog({
   choices = [], stored = null, compareUrl, onAdopt, onClose,

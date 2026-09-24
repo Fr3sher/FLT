@@ -30,6 +30,9 @@ import os
 import pytest
 
 from app.services import cloud_run_dataset as crd
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training', 'video')
 
 
 def _face_dataset(name='a face set'):
@@ -154,7 +157,7 @@ def test_the_launch_guardrail_counts_only_runs_of_the_same_table(app, tmp_path, 
     (dataset, family). A video run of the colliding id must not block a face
     dataset's launch, and vice versa — one user's video training would otherwise
     lock another dataset's button with no explanation."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         # The FLEET limit is deliberately not scoped by table — it is about the
         # account's pods and its money, which one lane cannot claim — so it has
@@ -176,7 +179,7 @@ def test_an_active_run_with_an_unreadable_table_blocks_rather_than_allows(app):
     one for a guard deciding whether to rent a second GPU. Fail-open here means
     paying twice for one answer, so the guard asks the question itself and blocks
     on the ambiguity — the same caution it already applies to an unknown family."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         ct.cfg.save_config({'cloud': {'max_concurrent_runs': 5}})
         run = _run(7, status='training')
@@ -193,7 +196,7 @@ def test_a_video_run_never_registers_a_face_provenance_record(app, tmp_path):
     dataset, and registering anyway would file the run under face dataset #N —
     it would then appear in that dataset's lineage graph forever."""
     from app.models import TrainingRunRecord
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path)
         cvt.launch_cloud_video_training('local', vid.id, steps=500,
@@ -208,7 +211,7 @@ def test_a_video_run_is_never_imported_into_a_face_datasets_lora_folder(
     video run the id names a different table entirely, so the deploy would land a
     Wan LoRA in a face dataset's Z-Image folder. Out of scope to do properly —
     so it must be SKIPPED, loudly enough to find later, never guessed."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         vid = _video_dataset(tmp_path)
         run = _run(vid.id, crd.VIDEO, checkpoint_local_path='/nowhere/x.safetensors')
@@ -223,7 +226,7 @@ def test_a_video_run_has_no_local_run_directory_to_mirror_into(
     …)` — a path built from a FACE dataset's folder. There is no local video
     training lane, so there is no directory to mirror into; the mirror must stand
     down rather than write into a face dataset's run folder."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         vid = _video_dataset(tmp_path)
         run = _run(vid.id, crd.VIDEO)
@@ -251,7 +254,7 @@ def test_the_video_launcher_stamps_the_table_on_the_run(app, tmp_path):
     """Without the stamp every reader above falls back to face, and the run is
     indistinguishable from a face run the moment the launch call returns."""
     from app.models import CloudTrainingRun
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path)
         res = cvt.launch_cloud_video_training('local', vid.id, steps=500,
@@ -269,8 +272,8 @@ def test_the_video_launcher_skips_the_image_preflight_entirely(
     dataset has neither: its folder is already the flat mp4 + .txt shape
     ai-toolkit wants. Calling either would fail on an empty image set — and
     "fixing" that by relaxing the preflight would relax it for face runs too."""
-    from app.services import cloud_training as ct
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path)
         monkeypatch.setattr(ct.lt, 'assert_trainable', lambda *a, **k: pytest.fail(
@@ -286,8 +289,8 @@ def test_the_clips_are_uploaded_from_the_dataset_folder_itself(app, tmp_path):
     mp4 + homonym .txt folder, and a dataset of 81-frame clips is gigabytes — a
     copy would double the disk and the wait for nothing. The upload seam must
     point straight at it."""
-    from app.services import cloud_training as ct
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import cloud_video_training as cvt
     out = tmp_path / 'vds'
     out.mkdir()
     (out / 'clip_0001.mp4').write_bytes(b'\x00')
@@ -306,8 +309,8 @@ def test_the_pod_job_is_built_by_the_video_branch(app, tmp_path):
     `video_training.build_job_config` (num_frames, the MoE boundary, the arch)
     and not `lt.build_job_config`, which would read the face columns this row
     does not have."""
-    from app.services import cloud_training as ct
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path, frames=81)
         res = cvt.launch_cloud_video_training('local', vid.id, steps=500,
@@ -333,7 +336,7 @@ def test_a_target_with_no_verified_base_is_refused_before_renting_anything(app, 
     otherwise the refusal arrives from the monitor thread, minutes later, with a
     GPU already on the clock."""
     from app.models import CloudTrainingRun
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     from app.services import video_training as vt
     with app.app_context():
         vid = _video_dataset(tmp_path, profile='ltx23', frames=81)
@@ -349,7 +352,7 @@ def test_a_target_with_no_verified_base_is_refused_before_renting_anything(app, 
 def test_the_generic_profile_is_refused_at_launch(app, tmp_path):
     """Same gate, the other refusal: `generic` has no `aitk_arch` at all."""
     from app.models import CloudTrainingRun
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     from app.services import video_training as vt
     with app.app_context():
         vid = _video_dataset(tmp_path, profile='generic', frames=40)
@@ -363,7 +366,7 @@ def test_an_empty_dataset_folder_is_refused_before_renting_anything(app, tmp_pat
     """A folder with no .mp4 uploads nothing (the extension filter is the only
     thing that ships clips) and the pod trains on an empty set. Cheap to check
     here; expensive to discover on a rented GPU."""
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     empty = tmp_path / 'empty'
     empty.mkdir()
     with app.app_context():
@@ -379,7 +382,7 @@ def test_two_video_runs_on_one_dataset_are_refused(app, tmp_path):
     second pod on the same dataset is money spent twice on one answer. It raises
     RuntimeError, exactly as the face lane's does — the two launches share that
     guard rather than each having their own idea of the refusal."""
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     out = tmp_path / 'vds2'
     out.mkdir()
     (out / 'clip_0001.mp4').write_bytes(b'\x00')
@@ -398,7 +401,7 @@ def test_the_launch_route_starts_a_video_run(app, client, tmp_path, monkeypatch)
     """Without a route the lane is reachable only from a Python shell. This is the
     smallest surface that makes it real, and it is the one place a user-supplied
     step count arrives from outside."""
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path)
         vid_id = vid.id
@@ -418,7 +421,7 @@ def test_the_launch_route_reports_an_unsupported_target_as_a_refusal(
         app, client, tmp_path, monkeypatch):
     """A target with no verified base must come back as a 4xx the UI can render,
     not a 500 — it is a choice the user can correct, not a server fault."""
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path, profile='ltx23', frames=81)
         vid_id = vid.id
@@ -439,7 +442,7 @@ def test_the_progress_route_reads_the_video_lane_not_the_face_one(
     """`latest_run_for` resolves the newest run BY INTEGER. Polled from a video
     dataset's page it must find the video run, not the face run of the same id —
     the exact mis-attribution its table scope exists to stop."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         _face_dataset('portraits')
         vid = _video_dataset(tmp_path, 'surf clips')
@@ -492,8 +495,8 @@ def test_retry_and_continue_never_relaunch_a_video_run_as_a_face_one(
     the face launcher must not see it. `lt.assert_trainable` is the first thing
     `launch_cloud_training` calls on a dataset, so a video run reaching it fails
     here rather than on someone's bill."""
-    from app.services import cloud_training as ct
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import cloud_video_training as cvt
     called = []
     with app.app_context():
         _face_dataset('portraits')
@@ -523,7 +526,7 @@ def test_a_video_pod_boots_the_video_image_and_a_face_pod_keeps_the_pin(app, tmp
     setup as everything in this file — the resolver must answer per RUN, not per
     config, or the fresher tag would leak into face runs (whose verdicts were
     read against the old one) the day it was added."""
-    from app.services.cloud_training import _pod_image_for
+    from lds_cloud_training.cloud_training import _pod_image_for
     c = {'image': 'toolkit:face-pin', 'video_image': 'toolkit:video-fresh'}
     with app.app_context():
         _face_dataset('portraits')
@@ -564,7 +567,7 @@ def test_a_video_pod_is_never_rented_with_the_face_lane_s_disk():
     `video_disk_gb` at all, and a resolver reading the config alone would rent
     60 GB from it forever."""
     from app.config import DEFAULTS
-    from app.services.cloud_training import _VIDEO_DISK_FLOOR_GB, _disk_gb_for
+    from lds_cloud_training.cloud_training import _VIDEO_DISK_FLOOR_GB, _disk_gb_for
     from app.services.video_training_local import WEIGHT_FOOTPRINTS
     stale = {'disk_gb': 60}                      # a cloud block frozen in July
     assert _disk_gb_for(stale, {'train_type': 'video'}) >= _VIDEO_DISK_FLOOR_GB
@@ -605,9 +608,9 @@ def test_video_gpu_tiers_prices_every_class_and_refuses_to_invent_estimates(
     generation — a picker listing cards the launch refuses is a menu of dead
     ends), and the estimate comes from one measured run scaled by latent rows,
     so a frame count off the 17n+5 grid gets None, never a made-up number."""
-    from app.services import cloud_video_training as cvt
-    from app.services import cloud_training as ct
-    from app.services import vast_client
+    from lds_cloud_training import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import vast_client
     seen = {}
 
     def fake_search(**kw):
@@ -651,7 +654,7 @@ def test_a_replayed_run_keeps_every_stamped_training_flag():
     today's dataset row. That promise is only as good as the list of flags it
     copies - do_i2v was missed the day it shipped, and a retried i2v run would
     have silently trained t2v. Pinned here so the next flag cannot repeat it."""
-    from app.services.cloud_video_training import _relaunch_args
+    from lds_cloud_training.cloud_video_training import _relaunch_args
     args = _relaunch_args({'base_model': '', 'low_vram': True, 'do_i2v': True,
                            'sample_prompts': ['a wave'], 'distillation': 'off',
                            'requested_gpu': 'A100 SXM4'})
@@ -668,7 +671,7 @@ def test_previews_and_the_distillation_override_ride_the_stamp(
     `distillation: off`, which exists for MEASUREMENT - it is the only way to
     run one dataset with and without upstream's de-distillation recipe and
     compare the previews. 'auto' stamps nothing and keeps the gated default."""
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     calls = []
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
@@ -697,7 +700,7 @@ def test_the_off_stamp_beats_a_capable_image_and_prompts_reach_the_config(
     """A capable image normally arms the recipe; the experiment stamp must win
     or the A/B has no control arm. And the stamped prompts come out as the
     sample block, sized to the dataset's own frames and fps."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
         run = _run(vid.id, crd.VIDEO)
@@ -729,8 +732,8 @@ def test_the_automatic_retry_of_a_video_run_goes_down_the_video_lane(
     replays the video stamps, with the same bookkeeping the face path writes
     (auto_retry_of is how a crash finds its child; the count bounds the
     ladder)."""
-    from app.services import cloud_training as ct
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import cloud_video_training as cvt
     seen = {}
 
     def fake_launch(user_id, dataset_id, **kw):
@@ -755,4 +758,3 @@ def test_the_automatic_retry_of_a_video_run_goes_down_the_video_lane(
         assert seen['auto_retry_of'] == run.id
         assert seen['auto_retry_count'] == 1
         assert seen['gpu_name'] == 'A100 SXM4'
-

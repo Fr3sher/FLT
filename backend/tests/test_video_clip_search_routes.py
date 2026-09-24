@@ -17,14 +17,17 @@ exists to prevent.
 """
 import pytest
 
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_bank_service as svc
 from app.services import clip_text_encoder
-from app.services import video_clip_search as vcs
+from lds_video import video_clip_search as vcs
 
 # The video-extra gate answers for the MACHINE, so without this these route
 # tests pass where PyAV/ffmpeg are installed and 503 where they are not.
 # Imported for its autouse effect; see _video_extra.py for why not importorskip.
 from _video_extra import detect_source_stub, video_extra_ready  # noqa: F401
+
+pytestmark = pytest.mark.plugins('video')
 
 
 @pytest.fixture()

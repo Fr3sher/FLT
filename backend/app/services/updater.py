@@ -20,6 +20,7 @@ fail cryptically (a clone user has git by definition, so this only bites an
 unusual setup).
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout, processing_timeout
 
 import os
 import shutil
@@ -45,17 +46,27 @@ DOCKER_UPDATE_INSTRUCTIONS = (
 
 
 def is_docker_runtime() -> bool:
-    """Whether this process is running in the immutable GPU Docker image."""
-    return os.environ.get('LDS_RUNTIME', '').strip().lower() == DOCKER_RUNTIME
+    """All Docker lanes run immutable application code, including API-only."""
+    return os.environ.get('LDS_RUNTIME', '').strip().lower() in {
+        'docker', 'docker-external-comfy', DOCKER_RUNTIME,
+    }
 
 
 def docker_update_payload() -> dict:
     """Structured manual-update contract shared by check/apply endpoints."""
+    runtime = os.environ.get('LDS_RUNTIME', '').strip().lower()
+    instructions = list(DOCKER_UPDATE_INSTRUCTIONS)
+    if runtime == 'docker':
+        instructions[1] = 'docker compose up -d --build'
+    elif runtime == 'docker-external-comfy':
+        instructions[1] = ('docker compose -f docker-compose.yml '
+                           '-f docker-compose.external-comfy.yml '
+                           '-f .docker-compose.external-comfy.override.yml up -d --build')
     return {
         'install_mode': 'docker',
         'can_apply': False,
         'manual': True,
-        'instructions': list(DOCKER_UPDATE_INSTRUCTIONS),
+        'instructions': instructions,
     }
 
 
@@ -114,7 +125,7 @@ def _git(root, *args, timeout=_GIT_TIMEOUT):
     if not git:
         raise FileNotFoundError('git')
     return subprocess.run([git, '-C', str(root), *args],
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, timeout=processing_timeout(timeout))
 
 
 def current_sha(root=None):
@@ -324,7 +335,7 @@ def latest_release(repo=None, timeout=6) -> dict:
     repo = repo or _cfg_get('updates.repo') or 'Fr3sher/FLT'
     try:
         r = requests.get(f'https://api.github.com/repos/{repo}/releases/latest',
-                         timeout=timeout, headers={'Accept': 'application/vnd.github+json'})
+                         timeout=network_timeout(timeout), headers={'Accept': 'application/vnd.github+json'})
     except requests.RequestException:
         return {'reason': 'offline or GitHub unreachable'}
     if r.status_code != 200:
@@ -530,7 +541,7 @@ def _download_file(url, dest, timeout=300, on_progress=None) -> None:
     `on_progress(downloaded, total)` fires per chunk; total is the Content-Length
     when the server sends one, else 0 (unknown — the UI shows an indeterminate bar)."""
     import requests
-    with requests.get(url, stream=True, timeout=timeout) as r:
+    with requests.get(url, stream=True, timeout=network_timeout(timeout)) as r:
         r.raise_for_status()
         total = int(r.headers.get('Content-Length') or 0)
         downloaded = 0

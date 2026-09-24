@@ -856,13 +856,16 @@ def test_joycaption_streams_stderr_to_log_live(app, monkeypatch, caplog, tmp_pat
     stdout_text = json.dumps({'captions': {img: 'a caption'}, 'errors': {}}) + '\n'
     monkeypatch.setattr(jc.subprocess, 'Popen',
                         lambda *a, **k: _FakePopen(stderr_lines, stdout_text))
+    diagnostics = {}
     with app.app_context():
         with caplog.at_level('INFO'):
-            out = jc.caption_images_joycaption([img])
+            out = jc.caption_images_joycaption([img], diagnostics_out=diagnostics)
     assert out == {img: 'a caption'}
     # Every subprocess stderr line reached the app log live (not only at the end).
     assert 'first run: downloading model' in caplog.text
     assert 'model loaded' in caplog.text
+    assert diagnostics == {'returncode': 0, 'timed_out': False,
+                           'stderr_tail': [line.rstrip('\n') for line in stderr_lines]}
 
 
 def test_joycaption_reflects_stage_markers_into_activity(app, monkeypatch, tmp_path):
@@ -905,13 +908,71 @@ def test_joycaption_timeout_returns_empty_and_logs_first_run_hint(app, monkeypat
     fake = _FakePopen(stderr_lines, '',
                       wait_raises=subprocess.TimeoutExpired(cmd='joycaption', timeout=1))
     monkeypatch.setattr(jc.subprocess, 'Popen', lambda *a, **k: fake)
+    diagnostics = {}
     with app.app_context():
         with caplog.at_level('ERROR'):
-            out = jc.caption_images_joycaption([img], timeout=1)
+            out = jc.caption_images_joycaption([img], timeout=1, diagnostics_out=diagnostics)
     assert out == {}
     assert fake.killed, 'a timed-out subprocess must be killed'
     # The timeout message explains the first-run download so the user knows to re-run.
     assert '7 GB' in caplog.text and 'resume' in caplog.text.lower()
+    assert diagnostics['timed_out'] is True
+    assert diagnostics['stderr_tail'] == [stderr_lines[0].rstrip('\n')]
+
+
+def test_joycaption_video_sdk_reports_worker_failure_without_losing_captions(
+        app, monkeypatch, tmp_path):
+    """The Video reader calls this exact SDK API with diagnostics_out."""
+    import app.services.joycaption as jc
+    from lds_sdk.video_host import joycaption as video_jc
+    img = _prep_joycaption(monkeypatch, jc, tmp_path)
+    secret = 'hf_' + 'exampletoken' * 3
+    tail = [f'Loading shard {i}\n' for i in range(30)]
+    tail.append(f'RuntimeError: download rejected with {secret}\n')
+    stdout = json.dumps({'path': img, 'caption': 'A person standing.'}) + '\n'
+    stdout += json.dumps({'path': 'unreadable.webp', 'error': 'image cannot be read'})
+    monkeypatch.setattr(jc.subprocess, 'Popen',
+                        lambda *a, **k: _FakePopen(tail, stdout, returncode=1))
+    diagnostics, errors = {}, {}
+    with app.app_context():
+        result = video_jc.caption_images_joycaption(
+            [img], diagnostics_out=diagnostics, errors_out=errors)
+    assert result == {img: 'A person standing.'}
+    assert errors == {'unreadable.webp': 'image cannot be read'}
+    assert diagnostics['returncode'] == 1
+    assert diagnostics['timed_out'] is False
+    assert len(diagnostics['stderr_tail']) == 25
+    assert diagnostics['stderr_tail'][-1] == 'RuntimeError: download rejected with ***'
+    assert secret not in str(diagnostics)
+
+
+@pytest.mark.parametrize('available,has_paths', [(False, True), (True, False)])
+def test_joycaption_no_worker_clears_stale_diagnostics(app, monkeypatch, tmp_path,
+                                                   available, has_paths):
+    import app.services.joycaption as jc
+    img = _prep_joycaption(monkeypatch, jc, tmp_path)
+    monkeypatch.setattr(jc, 'is_available', lambda: available)
+    def no_worker(*args, **kwargs):
+        pytest.fail('unavailable JoyCaption must not start a process')
+    monkeypatch.setattr(jc.subprocess, 'Popen', no_worker)
+    diagnostics = {'returncode': 1, 'timed_out': True, 'stderr_tail': ['old failure']}
+    with app.app_context():
+        assert jc.caption_images_joycaption([img] if has_paths else [],
+                                            diagnostics_out=diagnostics) == {}
+    assert diagnostics == {'returncode': None, 'timed_out': False, 'stderr_tail': []}
+
+
+def test_joycaption_start_failure_is_available_to_the_video_reader(app, monkeypatch, tmp_path):
+    import app.services.joycaption as jc
+    img = _prep_joycaption(monkeypatch, jc, tmp_path)
+    def failed_start(*args, **kwargs):
+        raise OSError('caption worker could not start')
+    monkeypatch.setattr(jc.subprocess, 'Popen', failed_start)
+    diagnostics = {}
+    with app.app_context():
+        assert jc.caption_images_joycaption([img], diagnostics_out=diagnostics) == {}
+    assert diagnostics == {'returncode': None, 'timed_out': False,
+                           'stderr_tail': ['caption worker could not start']}
 
 
 # --- graceful caption-batch cancellation ------------------------------------

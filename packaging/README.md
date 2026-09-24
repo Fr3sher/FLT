@@ -5,6 +5,9 @@ The supported Windows release is a source archive named
 backend, `start.bat`, and the small Python bootstrap script. It does not ship a
 prebuilt launcher or an embedded runtime.
 
+The V2 archive contains the core and plugin SDK, with no installed plugins.
+Choose optional products from the Plugin store after opening LDS.
+
 Users extract the archive and double-click **`start.bat`**. The launcher finds a
 compatible Python already installed or downloads a standalone CPython into the
 extracted folder on first launch, creates `.venv`, installs the core requirements,
@@ -23,6 +26,15 @@ powershell -ExecutionPolicy Bypass -File packaging\build_release_zip.ps1
 The release workflow runs the same script after the backend/frontend test suites.
 It then runs `scripts/check_release_artifacts.py` against the ZIP before uploading
 the explicitly named archive. GitHub also supplies its normal source-code archives.
+
+The builder reads the committed Git tree (`HEAD` by default), including the
+committed Store frontend build. Uncommitted changes, ignored files, installed
+plugins, extensions and user data are not copied. Commit the intended source
+and build first. The build marker records the complete source commit.
+
+`-SourceRef <commit>` selects another committed tree; `-Python <executable>`
+selects the build interpreter. Existing archives are preserved: choose a new
+`-OutName` when keeping an earlier build. Names cannot contain a directory path.
 
 ## What the archive check looks for
 

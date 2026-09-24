@@ -14,8 +14,10 @@ import pytest
 
 from app import config as cfg
 from app import capabilities, setup_installer
-from app.services import (video_camera_motion as cam, video_metrics,
-                          video_ai_check, video_defect_sweep, video_safe_zone)
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_camera_motion as cam, video_metrics, video_ai_check, video_defect_sweep, video_safe_zone
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- forging a trajectory ------------------------------------------------------------
@@ -440,7 +442,7 @@ def test_the_pass_needs_no_install_action_of_its_own():
 def test_the_pass_takes_no_gpu_window():
     # OpenCV on the CPU, so a bank can be read while a training owns the card.
     import inspect
-    from app.services import video_bank_service
+    from lds_video import video_bank_service
     body = inspect.getsource(video_bank_service.start_camera)
     assert 'gpu_exclusive' not in body and '_gpu_busy_reason' not in body
 

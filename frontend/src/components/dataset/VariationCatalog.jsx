@@ -28,10 +28,14 @@ import {
   createCustomShot, editCustomShot, customShotDraft, hasDerivedLabel,
 } from '../../utils/customShots';
 import {
-  ENGINE_ACCENTS, ENGINE_LABELS, billingEngines, canonicalEngines, engineBatches,
+  apiEngineIds, engineAccent, engineIds, engineLabel, localEngineIds,
+  billingEngines, canonicalEngines, engineBatches,
   estimateCost, generateBlockedReason, localQueuesBehindApi, localOnly, readEngines,
   readMode, totalImages, writeEngines, writeMode,
 } from './engineSelection.js';
+import { pluginEngineSpecs, freeEngines } from '../../engines/catalog.js';
+import EngineCard from './EngineCard.jsx';
+import { PluginPanel } from '../../plugins/PluginSlot.jsx';
 import { kreaUnavailableReason, groundingDescription } from '../../utils/kreaEngine.js';
 import {
   KREA_REF_BOOST_MIN, KREA_REF_BOOST_MAX, KREA_REF_BOOST_STEP,
@@ -99,38 +103,6 @@ function CompositionMiniBar({ counts, total }) {
   );
 }
 
-/** Minimal ChatGPT pictogram — hexagonal knot silhouette, currentColor. */
-function ChatGptIcon({ className }) {
-  return (
-    <svg viewBox="0 0 32 32" className={className} aria-hidden="true" focusable="false">
-      {[0, 60, 120, 180, 240, 300].map((a) => (
-        <path key={a} transform={`rotate(${a} 16 16)`}
-          d="M16 4.5 a 6.2 6.2 0 0 1 6.2 6.2 v 4 l -3.4 -2 v -2 a 2.8 2.8 0 0 0 -2.8 -2.8 z"
-          fill="currentColor" />
-      ))}
-      <circle cx="16" cy="16" r="3.1" fill="none" stroke="currentColor" strokeWidth="1.6" />
-    </svg>
-  );
-}
-
-/** Routing pictogram for the OpenRouter card: one input fanning out to several
- *  providers — which is exactly what the engine does (one key, many models). */
-function RouterIcon({ className }) {
-  return (
-    <svg viewBox="0 0 32 32" className={className} aria-hidden="true" focusable="false">
-      <g stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round">
-        <line x1="9" y1="16" x2="17" y2="16" />
-        <path d="M17 16 C 21 16, 21 8, 25 8" />
-        <path d="M17 16 C 21 16, 21 24, 25 24" />
-      </g>
-      <circle cx="7" cy="16" r="3" fill="currentColor" />
-      <circle cx="25" cy="8" r="2.4" fill="currentColor" opacity="0.85" />
-      <circle cx="25" cy="16" r="2.4" fill="currentColor" opacity="0.85" />
-      <circle cx="25" cy="24" r="2.4" fill="currentColor" opacity="0.85" />
-    </svg>
-  );
-}
-
 /** Small inline GPU-chip pictogram for the local Klein engine card. */
 function GpuIcon({ className }) {
   return (
@@ -171,34 +143,8 @@ const MODE_CHOICES = [
     desc: 'Every engine renders every shot — compare the results side by side, then keep the ones you like. Multiplies the cost.' },
 ];
 
-/** One engine CHECKBOX card. A checkbox, not a radio: engines combine. Each
- *  carries its own accent (see ENGINE_ACCENTS) so a mixed run is readable —
- *  green is deliberately not one of them, it already means "kept / free". */
-function EngineCard({ id, checked, available, generating, onToggle, icon, title, tags, hint }) {
-  const accent = ENGINE_ACCENTS[id];
-  return (
-    <button type="button" role="checkbox" aria-checked={checked}
-      aria-label={ENGINE_LABELS[id]}
-      onClick={() => onToggle(id)}
-      disabled={!available || !!generating}
-      title={generating ? 'A generation batch is running — wait for it to finish before changing engines' : undefined}
-      className={`relative flex items-start gap-3 rounded-xl border p-3 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${checked
-        ? accent.card
-        : 'border-border bg-app/40 hover:enabled:bg-surface-raised'}`}>
-      <span aria-hidden="true"
-        className={`absolute top-2 right-2 w-4 h-4 rounded border grid place-items-center text-[0.625rem] font-bold ${checked
-          ? `${accent.pill} border-transparent` : 'border-border text-transparent'}`}>✓</span>
-      {icon}
-      <span className="flex flex-col gap-1 min-w-0">
-        <span className={`text-[0.8125rem] font-semibold ${checked ? accent.title : 'text-content-muted'}`}>
-          {title}
-        </span>
-        <span className="flex flex-wrap gap-1">{tags}</span>
-        {hint}
-      </span>
-    </button>
-  );
-}
+/* The engine CHECKBOX card is its own module now (EngineCard.jsx): the plugins'
+   engine cards render through it too. */
 
 /* One Krea calibration slider, with the same "back to shipped value" affordance
    the Settings page uses (ResetToDefault): the button exists ONLY when the value
@@ -612,14 +558,14 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   const [loraPresets, setLoraPresets] = useState([]);   // [{name, loras:[{file, strength}]}]
   const [loraPresetName, setLoraPresetName] = useState('');   // '' = None
   const activeLoraPreset = loraPresets.find((p) => p.name === loraPresetName) || null;
-  // Generator backends — a SET, not one card: Nano Banana Pro (Gemini API,
-  // ~$0.15/image, zero GPU, best face fidelity — the historic default), ChatGPT
-  // (API or subscription) and local Klein (GPU, free). Several at once either
-  // SPLIT the shots between them (varied dataset, same cost) or run ALL of them
-  // on every shot (compare the engines, then triage). engineSelection.js owns
-  // the storage compatibility: the legacy single-string `datasetGenerator` key
-  // is still written for older profiles and the ✎ modal. Tile Retry uses the
-  // stored engine of its own row instead.
+  // Generator backends — a SET, not one card: the two local engines (GPU, free)
+  // and every API engine the catalog holds (the enabled plugins' — zero GPU,
+  // billed per image). Several at once either SPLIT the shots between them
+  // (varied dataset, same cost) or run ALL of them on every shot (compare the
+  // engines, then triage). engineSelection.js owns the storage compatibility:
+  // the legacy single-string `datasetGenerator` key is still written for older
+  // profiles and the ✎ modal. Tile Retry uses the stored engine of its own row
+  // instead.
   const [engines, setEngines] = useState(() => readEngines(storage()));
   useEffect(() => { writeEngines(storage(), engines); }, [engines]);
   const [engineMode, setEngineMode] = useState(() => readMode(storage()));
@@ -627,9 +573,6 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   const toggleEngine = (id) => setEngines((list) => (list.includes(id)
     ? list.filter((e) => e !== id) : canonicalEngines([...list, id])));
 
-  const isNB = engines.includes('nanobanana');
-  const isGPT = engines.includes('chatgpt');
-  const isOR = engines.includes('openrouter');
   // Per-engine affordances (the Klein tuning panel, the Krea one) light up as
   // soon as that engine is part of the run — its shots really are rendered
   // locally.
@@ -658,18 +601,13 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   };
 
   // Which engines the user actually enabled in Settings (config.engines.enabled),
-  // on top of the live reachability probe in `caps.engines`.
-  const [enabledEngines, setEnabledEngines] = useState(['nanobanana', 'chatgpt', 'klein']);
-  // ChatGPT auth lane (auto|api|subscription) — decides whether the card shows a
-  // per-image API price or "uses your ChatGPT subscription quota".
-  const [chatgptAuth, setChatgptAuth] = useState('auto');
-  // Which OpenRouter model the run will actually bill: free text in Settings, so
-  // the card names it rather than implying a fixed one.
-  const [openrouterModel, setOpenrouterModel] = useState('');
-  // Same for the ChatGPT API lane, whose model is free text in Settings too:
-  // this card used to state "gpt-image-2" flatly, which became a lie the moment
-  // someone changed it. Blank = the engine's own default, named here.
-  const [chatgptImageModel, setChatgptImageModel] = useState('');
+  // on top of the live reachability probe in `caps.engines`. Every catalog
+  // engine until the settings answer.
+  const [enabledEngines, setEnabledEngines] = useState(() => engineIds());
+  // The config's `engines` section as read: the plugins' engine cards read
+  // their own keys from it (which model an API lane bills, which auth lane
+  // an engine is on) — the core hands the section over and knows none of them.
+  const [engineConfig, setEngineConfig] = useState({});
   // Krea's consistency <-> prompt-adherence dial. `null` until /api/settings
   // answers — like the other three, so no slider invents a number for a frame.
   const [kreaGrounding, setKreaGrounding] = useState(null);
@@ -704,9 +642,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       .then((d) => {
         if (cancelled) return;
         setEnabledEngines(d.config?.engines?.enabled || []);
-        setChatgptAuth(d.config?.engines?.chatgpt_auth || 'auto');
-        setOpenrouterModel((d.config?.engines?.openrouter_model || '').trim());
-        setChatgptImageModel((d.config?.engines?.chatgpt_image_model || '').trim());
+        setEngineConfig(d.config?.engines || {});
         // Optional generation-LoRA presets: names + chains for the picker, and
         // the preset each engine STARTS on. The pickers used to open on "None"
         // on every visit, so a configured preset applied only when the user
@@ -815,13 +751,13 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   const stepsValue = clampSteps(kreaSteps, kreaStepsDefault);
   const refBoostValue = clampRefBoost(kreaRefBoost, kreaRefBoostDefault);
   const identityStrengthValue = clampIdentityStrength(kreaIdentityStrength, kreaIdentityDefault);
-  const nbAvailable = enabledEngines.includes('nanobanana') && caps.engines.nanobanana;
-  const gptAvailable = enabledEngines.includes('chatgpt') && caps.engines.chatgpt;
-  const orAvailable = enabledEngines.includes('openrouter') && caps.engines.openrouter;
-  const klAvailable = enabledEngines.includes('klein') && caps.engines.klein;
-  const krAvailable = enabledEngines.includes('krea') && caps.engines.krea;
-  const available = { klein: klAvailable, krea: krAvailable, nanobanana: nbAvailable,
-    chatgpt: gptAvailable, openrouter: orAvailable };
+  // Available = enabled in Settings AND the live probe says it can run — for
+  // every engine the catalog holds, the plugins' included.
+  const available = Object.fromEntries(engineIds().map(
+    (id) => [id, enabledEngines.includes(id) && !!(caps.engines || {})[id]]));
+  const klAvailable = !!available.klein;
+  const krAvailable = !!available.krea;
+  const availableKey = engineIds().filter((id) => available[id]).join('|');
 
   // The persisted selection can name engines that have since been disabled in
   // Settings (or lost their key/backend): drop those instead of trying to
@@ -831,28 +767,25 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   useEffect(() => {
     const usable = engines.filter((e) => available[e]);
     if (usable.length === engines.length) return;
-    const first = nbAvailable ? 'nanobanana' : gptAvailable ? 'chatgpt'
-      : orAvailable ? 'openrouter' : klAvailable ? 'klein'
-      : krAvailable ? 'krea' : null;
+    // The first usable card, API engines first then the local ones — the order
+    // the historic fallback always followed.
+    const first = [...apiEngineIds(), ...localEngineIds()].find((id) => available[id]) || null;
     setEngines(usable.length ? usable : (first ? [first] : []));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engines, nbAvailable, gptAvailable, orAvailable, klAvailable, krAvailable]);
-  // Effective ChatGPT lane: the subscription (ChatGPT Plus/Pro image quota) vs the
-  // pay-per-use API key. Mirrors the backend "auto = subscription when connected".
-  const gptSub = caps.chatgpt_subscription || {};
-  const gptViaSub = chatgptAuth === 'subscription'
-    || (chatgptAuth === 'auto' && !!gptSub.connected);
-  const gptPlanLabel = gptSub.plan && gptSub.plan !== 'free'
-    ? gptSub.plan.charAt(0).toUpperCase() + gptSub.plan.slice(1)
-    : 'Plus/Pro';
+  }, [engines, availableKey]);
+  // The engines whose lane is FREE for this run (the catalog asks each spec:
+  // a subscription lane spends plan quota, not dollars) — the cost
+  // estimate and the billing confirm both read this one list.
+  const free = freeEngines({ caps, engineConfig });
   // What this run costs and, when it can't run, why. `caps.max_fanout` is the
   // SERVER's per-batch cap, published by /api/capabilities — mirrored so the
   // limit is explained before the click, never hardcoded here. A server that
   // doesn't publish it (older build) simply keeps the check off.
-  const runCost = estimateCost(selected.size, engines, engineMode, { multiplier, gptViaSub });
+  const runCost = estimateCost(selected.size, engines, engineMode, { multiplier, free });
   const blockedReason = generateBlockedReason({
     engines, shotCount: selected.size, mode: engineMode, multiplier,
     maxFanout: Number(caps.max_fanout) || 0,
+    maxLocalFanout: Number(caps.max_local_fanout) || 0,
   });
   // Klein unavailable has FOUR distinct causes and the hint must name the right
   // one — a reachable ComfyUI with no Klein model used to show "Configure
@@ -972,8 +905,8 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       preset.selectedIds.forEach((id) => { const fr = framingById.get(id); if (fr) counts[fr] += 1; });
       return [preset.id, { counts, total: preset.selectedIds.length }];
     }));
-    // userShots, pas customShots : la map lit AUSSI les shots importes, et
-    // une dep sur la moitie de la source laissait leurs framings figes.
+    // Depend on userShots, not customShots: the map ALSO reads imported shots.
+    // Depending on only half the source left imported framings frozen.
   }, [catalog, nsfwCatalog, userShots, customPresets]);
 
   const toggle = (id) => setSelected((s) => {
@@ -1097,15 +1030,15 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
     }
     if (!toGen.length) return;
     // Guard-rail: pay-per-use API engines bill per image — above $5 estimated,
-    // confirm with the amount (silent for the free local Klein AND for the
-    // ChatGPT subscription lane, which spends plan quota, not dollars). On a
-    // multi-engine run the amount is the WHOLE run's, and only the lanes that
-    // really charge are named.
-    const cost = estimateCost(toGen.length, engines, engineMode, { multiplier, gptViaSub });
-    const billing = billingEngines(engines, { gptViaSub });
+    // confirm with the amount (silent for the free local engines AND for any
+    // lane the catalog says is free for this run — a subscription spends plan
+    // quota, not dollars). On a multi-engine run the amount is the WHOLE run's,
+    // and only the lanes that really charge are named.
+    const cost = estimateCost(toGen.length, engines, engineMode, { multiplier, free });
+    const billing = billingEngines(engines, { free });
     if (cost > 5 && !window.confirm(
       `This will launch ${totalImages(toGen.length, engines, engineMode, multiplier)} generation(s) `
-      + `≈ $${cost.toFixed(2)} (${billing.map((e) => ENGINE_LABELS[e]).join(' + ')}).\n\nProceed?`)) return;
+      + `≈ $${cost.toFixed(2)} (${billing.map((e) => engineLabel(e)).join(' + ')}).\n\nProceed?`)) return;
     // Persist any per-batch suffix edit BEFORE enqueueing: the backend applies
     // the dataset's CURRENT suffix at wrap time, so the save must land first or
     // the batch would generate with the old creative direction (Idea by waltm).
@@ -1156,8 +1089,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         <span className="text-content-subtle text-[0.625rem]">{SUBJECT_TYPE_HINTS[subject]}</span>
       </div>
 
-      {/* Engine cards — Klein and Krea 2 Edit (local GPU), Nano Banana Pro,
-          ChatGPT and OpenRouter (APIs).
+      {/* Engine cards — Klein and Krea 2 Edit (local GPU), then every plugin
+          engine the catalog holds (the enabled plugins', each drawing its own
+          card through EngineCard).
           CHECKBOXES, not a radio group: several engines can run in one batch.
           Each card disables itself with an actionable hint when its engine
           isn't configured/reachable or was turned off in Settings, and carries
@@ -1165,7 +1099,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       <div className="flex items-center gap-2">
         <span className="text-content-muted text-[0.6875rem] uppercase">Engines</span>
         <span className="text-content-subtle text-[0.625rem]">
-          where the images are made — pick one or several · Klein and Krea 2 Edit run free on your GPU · APIs bill per image (or use your ChatGPT subscription)
+          where the images are made — pick one or several · local engines use your GPU · API engines use credits or a plan
         </span>
         <HelpBadge topic="dataset-engine-mode" />
       </div>
@@ -1176,18 +1110,12 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         Not the look you wanted (a stylized reference coming out realistic)? Edit the generation prompt in{' '}
         <a href="#/settings/engines" className="text-amber-300 underline decoration-amber-300/50">Settings › Image engines →</a>
       </p>
-      {/* Two facts about the Gemini engine that belong next to the choice, not in
-          a support thread after the fact. Both are stated flat, with no verdict
-          attached: the filter has no setting to offer, and nobody — in either
-          direction — has measured what SynthID does to trained weights, so this
-          says it is present and stops there. Plain <p>: wraps freely at 400 px. */}
-      <p className="text-content-subtle text-[0.625rem] -mt-1">
-        Building with <span className="text-content-muted">Nano Banana</span>? Google
-        screens every image it returns and refuses some of them — LDS names each
-        refusal on the tile; the filter itself is not configurable. Its outputs also
-        carry SynthID, Google&apos;s invisible provenance watermark.{' '}
-        <HelpBadge topic="nanobanana-filter-and-synthid" />
-      </p>
+      {/* A fact an engine's plugin wants next to the choice (the Gemini output
+          filter and SynthID, for one) rides its spec as a `note` panel. */}
+      {pluginEngineSpecs().filter((s) => typeof s.note === 'function').map((s) => (
+        <PluginPanel key={`note-${s.id}`} panelKey={`${s.plugin}:${s.id}:note`} importer={s.note}
+          spec={s} checked={engines.includes(s.id)} caps={caps} />
+      ))}
       {/* Five cards now, and the column stops at THREE. Tailwind breakpoints read
           the VIEWPORT, but these cards live in the workspace column next to the
           sidebar — a `2xl:grid-cols-5` measured on a 1600 px window put five cards
@@ -1197,7 +1125,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
         <EngineCard id="klein" checked={isKlein} available={klAvailable} generating={generating}
           onToggle={toggleEngine} share={engineShare('klein')}
-          icon={<GpuIcon className={`w-9 h-9 shrink-0 ${isKlein ? ENGINE_ACCENTS.klein.icon : 'text-content-subtle'}`} />}
+          icon={<GpuIcon className={`w-9 h-9 shrink-0 ${isKlein ? engineAccent('klein').icon : 'text-content-subtle'}`} />}
           title={<>Klein <span className="font-normal text-content-subtle">· local</span></>}
           tags={[
             // Green stays a statement about the PRICE, never a selection state.
@@ -1209,7 +1137,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             <span className="text-content-subtle text-[0.625rem]">
               Runs on this machine — slower, tunable face fidelity.
               {localQueuesBehindApi(engines) && (
-                <> <span className={ENGINE_ACCENTS.klein.text}>
+                <> <span className={engineAccent('klein').text}>
                   Its {engineShare('klein')} shot(s) queue on your GPU, one at a time, after the API ones.
                 </span></>
               )}
@@ -1225,7 +1153,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             exactly the bootstrap case: a character that has no LoRA yet. */}
         <EngineCard id="krea" checked={isKrea} available={krAvailable} generating={generating}
           onToggle={toggleEngine} share={engineShare('krea')}
-          icon={<IdentityFrameIcon className={`w-9 h-9 shrink-0 ${isKrea ? ENGINE_ACCENTS.krea.icon : 'text-content-subtle'}`} />}
+          icon={<IdentityFrameIcon className={`w-9 h-9 shrink-0 ${isKrea ? engineAccent('krea').icon : 'text-content-subtle'}`} />}
           title={<>Krea 2 Edit <span className="font-normal text-content-subtle">· local</span></>}
           tags={[
             <span key="free" className="px-1.5 py-px rounded-full bg-emerald-500/15 border border-emerald-400/40 text-emerald-300 text-[0.625rem]">Free</span>,
@@ -1237,7 +1165,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
               Identity-preserving edit — strongest likeness from a single reference photo.
               Krea Fit v1.2 honors the selected shot card&rsquo;s framing and aspect ratio.
               {localQueuesBehindApi(engines) && (
-                <> <span className={ENGINE_ACCENTS.krea.text}>
+                <> <span className={engineAccent('krea').text}>
                   Its {engineShare('krea')} shot(s) queue on your GPU, one at a time, after the API ones.
                 </span></>
               )}
@@ -1248,63 +1176,16 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
               {kreaHint}
             </a>
           )} />
-        <EngineCard id="nanobanana" checked={isNB} available={nbAvailable} generating={generating}
-          onToggle={toggleEngine} share={engineShare('nanobanana')}
-          icon={<span className="w-9 h-9 shrink-0 grid place-items-center text-2xl" aria-hidden="true">🍌</span>}
-          title={<>Nano Banana Pro <span className="font-normal text-content-subtle">· API</span></>}
-          tags={[
-            <span key="gpu" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">No GPU</span>,
-            <span key="price" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">~$0.15/image</span>,
-            <span key="sfw" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">SFW</span>,
-          ]}
-          hint={nbAvailable ? (
-            <span className={`text-[0.625rem] ${isNB ? ENGINE_ACCENTS.nanobanana.text : 'text-content-subtle'}`}>
-              Best face fidelity · {engineShare('nanobanana')} image(s) ≈ ${(engineShare('nanobanana') * 0.15).toFixed(2)}
-            </span>
-          ) : (
-            <span className="text-amber-300 text-[0.625rem]">⚠ Add GEMINI_API_KEY in Settings</span>
-          )} />
-        <EngineCard id="chatgpt" checked={isGPT} available={gptAvailable} generating={generating}
-          onToggle={toggleEngine} share={engineShare('chatgpt')}
-          icon={<ChatGptIcon className={`w-9 h-9 shrink-0 ${isGPT ? ENGINE_ACCENTS.chatgpt.icon : 'text-content-subtle'}`} />}
-          title={<>ChatGPT <span className="font-normal text-content-subtle">{gptViaSub ? '· subscription' : '· API'}</span></>}
-          tags={[
-            <span key="gpu" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">No GPU</span>,
-            <span key="price" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">{gptViaSub ? 'Plan quota' : '~$0.17/image'}</span>,
-            <span key="sfw" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">SFW</span>,
-          ]}
-          hint={gptAvailable ? (
-            <span className={`text-[0.625rem] ${isGPT ? ENGINE_ACCENTS.chatgpt.text : 'text-content-subtle'}`}>
-              {/* The subscription lane renders on the plan's own image model and
-                  ignores the Settings field, so only the API lane names it. */}
-              {gptViaSub
-                ? `gpt-image-2 · uses your ChatGPT ${gptPlanLabel} quota`
-                : <><span className="break-all">{chatgptImageModel || 'gpt-image-2'}</span>
-                    {` · ${engineShare('chatgpt')} image(s) ≈ $${(engineShare('chatgpt') * 0.17).toFixed(2)}`}</>}
-            </span>
-          ) : (
-            <span className="text-amber-300 text-[0.625rem]">⚠ Add an API key or connect a subscription in Settings</span>
-          )} />
-        <EngineCard id="openrouter" checked={isOR} available={orAvailable} generating={generating}
-          onToggle={toggleEngine} share={engineShare('openrouter')}
-          icon={<RouterIcon className={`w-9 h-9 shrink-0 ${isOR ? ENGINE_ACCENTS.openrouter.icon : 'text-content-subtle'}`} />}
-          title={<>OpenRouter <span className="font-normal text-content-subtle">· API</span></>}
-          tags={[
-            <span key="gpu" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">No GPU</span>,
-            <span key="price" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">Your credits</span>,
-            <span key="sfw" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">SFW</span>,
-          ]}
-          hint={orAvailable ? (
-            <span className={`text-[0.625rem] ${isOR ? ENGINE_ACCENTS.openrouter.text : 'text-content-subtle'}`}>
-              {/* The model is free text in Settings, so the price here is an
-                  estimate for the DEFAULT one — say so rather than quote a
-                  number the user may have changed under it. */}
-              <span className="break-all">{openrouterModel || 'default model'}</span>
-              {' · '}{engineShare('openrouter')} image(s), billed by OpenRouter at that model&rsquo;s rate
-            </span>
-          ) : (
-            <span className="text-amber-300 text-[0.625rem]">⚠ Add OPENROUTER_API_KEY in Settings</span>
-          )} />
+        {/* The plugins' cards: each spec names its card panel (`card`), and
+            the core hands it the same facts every card gets — checked,
+            available, its share of the shots — plus the capabilities and the
+            engines config it may read its own keys from. */}
+        {pluginEngineSpecs().map((spec) => (
+          <PluginPanel key={spec.id} panelKey={`${spec.plugin}:${spec.id}:card`} importer={spec.card}
+            spec={spec} checked={engines.includes(spec.id)} available={!!available[spec.id]}
+            generating={generating} onToggle={toggleEngine} share={engineShare(spec.id)}
+            caps={caps} engineConfig={engineConfig} enabledInSettings={enabledEngines.includes(spec.id)} />
+        ))}
       </div>
 
       {/* How several engines share the run. Only shown when it can change
@@ -1317,7 +1198,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           </legend>
           {MODE_CHOICES.map(({ id, name, desc }) => {
             const count = totalImages(selected.size, engines, id, multiplier);
-            const price = estimateCost(selected.size, engines, id, { multiplier, gptViaSub });
+            const price = estimateCost(selected.size, engines, id, { multiplier, free });
             return (
               <label key={id} className={`flex items-start gap-2 rounded-md px-2 py-1 cursor-pointer ${engineMode === id ? 'bg-surface-raised' : ''}`}>
                 <input type="radio" name="engine-mode" value={id} checked={engineMode === id}
@@ -1345,7 +1226,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           reference's shape while Krea capped itself at the reference's own pixel
           count, so the same dataset held tiles of two sizes and two shapes.
           Both now spend this budget on the shot card's ratio. */}
-      {(isKlein || isKrea) && (klAvailable || krAvailable) && (
+      {localEngineIds().some((id) => engines.includes(id) && available[id]) && (
         <div className="rounded-lg border border-border bg-app/30 px-2.5 py-2">
           <KreaDial
             id="variation-output-size-dial"
@@ -1360,9 +1241,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             onChange={setVariationSize}
           >
             How many pixels every generated shot gets, on the shape of its own
-            card. Shared by 🖥️ Klein and Krea 2 Edit so one dataset never mixes
-            two sizes. Larger costs more VRAM and more time per image, and the
-            edit models lose coherence past 2 MP — upscale further afterwards with
+            card. Shared by the local engines so one dataset uses the same pixel
+            budget. Larger costs more VRAM and more time per image, and results
+            can lose coherence at higher sizes — upscale further afterwards with
             ✨ Upscale &amp; improve instead.
           </KreaDial>
         </div>
@@ -2143,7 +2024,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           <select value={multiplier} onChange={(e) => setMultiplier(+e.target.value)}
             aria-label="Variation multiplier"
             className="bg-app/60 border border-border rounded px-1 py-0.5 text-content ml-1">
-            {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
+            {[1, 2, 3, 5, 10, 20].map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </label>
         {!hasRef && (
@@ -2154,7 +2035,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             decision is made, not only inside the mode selector. */}
         {engines.length > 0 && selected.size > 0 && (
           <span className="text-content-muted text-[0.6875rem]">
-            {engines.map((e) => ENGINE_LABELS[e]).join(' + ')}
+            {engines.map((e) => engineLabel(e)).join(' + ')}
             {' · '}
             {runCost > 0 ? `≈ $${runCost.toFixed(2)}` : 'free'}
           </span>
@@ -2167,7 +2048,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         )}
         {/* Disabled for the WHOLE batch, not just the launch request: `busy` is the
             hook's busyLive (local flag OR any server-side activity, restored on
-            reload), so a generation already in flight — Nano Banana / ChatGPT /
+            reload), so a generation already in flight — on an API engine or on
             Klein alike — keeps this locked with a visible reason. */}
         <button type="button" onClick={go} disabled={busy || !hasRef || !!blockedReason}
           title={generating ? 'A generation batch is already running' : (blockedReason || undefined)}

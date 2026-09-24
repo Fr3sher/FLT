@@ -21,12 +21,22 @@ import { getHelpTopic } from '../src/help/helpRegistry.js'
 import { WHATS_NEW } from '../src/whatsNew.js'
 import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
 
+import canvasPlugin from '../../bundled/canvas/frontend/index.js'
+import { registerDescriptor, resetRegistry, setEnabled } from '../src/plugins/registry.js'
+test.beforeEach(() => {
+  resetRegistry()
+  const manifest = JSON.parse(readFileSync(new URL('../../bundled/canvas/plugin.json', import.meta.url), 'utf8'))
+  assert.equal(registerDescriptor(canvasPlugin, { guideOwnership: manifest.guide_ownership }), true)
+  setEnabled(['canvas'])
+})
+test.afterEach(() => resetRegistry())
+
 // The entry under test may have moved to the archive since it shipped
 // (see whatsNew.js, rule "Keep the list tidy") — search the union.
 const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
 
 const readStudio = (name) => readFileSync(
-  new URL(`../src/components/dataset/studio/${name}`, import.meta.url), 'utf8')
+  new URL(`../src/components/dataset/studio/${name}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 const SEL = [
   { dataset_id: 1, checkpoint: 'z image\\a.safetensors', lora_label: 'A', family: 'zimage' },
@@ -35,9 +45,9 @@ const SEL = [
 
 test('a combined payload carries one weight per LoRA, a comparison payload carries none', () => {
   const weights = { [stackKey(SEL[0])]: 0.9, [stackKey(SEL[1])]: 0.55 }
-  // Depuis le balayage 🧬, chaque entree porte AUSSI sa liste `weights` - ici
-  // d'un seul element, faute de case cochee. `weight` reste envoye pour un backend
-  // qui ne connaitrait pas encore le balayage (cf. tests/blend-sweep.test.mjs).
+  // Since sweeps, each entry ALSO carries weights, here one item because no
+  // boxes are checked. Keep scalar weight for backends without sweep support
+  // (see tests/blend-sweep.test.mjs).
   assert.deepEqual(buildSelectionsPayload(SEL, { combine: true, weights }), [
     { dataset_id: 1, checkpoint: 'z image\\a.safetensors', weight: 0.9, weights: [0.9] },
     { dataset_id: 2, checkpoint: 'z image\\b.safetensors', weight: 0.55, weights: [0.55] },
@@ -92,11 +102,12 @@ test('Enhance is disabled with the reason when Ollama is missing, running or unp
 test('the studio sends `combine` instead of the strength axis when the stack is on', () => {
   const source = readStudio('ComparisonStudio.jsx')
   assert.match(source, /buildSelectionsPayload\(selection, \{ combine, weights: stackWeights, sets: stackSets \}\)/)
-  // Les cases de poids voyagent AVEC les curseurs : un balayage qui n'enverrait
-  // que les curseurs rendrait une image la ou le panneau en annonce N.
+  // Send checked weights ALONGSIDE sliders; sliders alone would render one
+  // image while the panel promises N.
   assert.match(source, /\.\.\.\(combine \? \{ combine: true \} : \{ strengths \}\)/)
   // A blocked stack must never reach the network.
-  assert.match(source, /if \(!selection\.length \|\| combineBlocked\) return/)
+  assert.match(source, /\|\| combineBlocked;/)
+  assert.match(source, /if \(!selection\.length \|\| launchBlocked\) return/)
 })
 
 test('the run panel hides the strength sweep and both prompt helpers stay reachable', () => {
@@ -125,9 +136,8 @@ test('the Enhance button posts to the studio route and stays disabled while bloc
 test('a combined tile says so, so a stack is never mistaken for a solo render', () => {
   const tile = readStudio('ResultTile.jsx')
   assert.match(tile, /cell\.combined_loras/)
-  // Depuis le balayage 🧬 la tuile ne dit plus seulement « c'est une pile » : elle
-  // dit LAQUELLE, poids de tête compris. Neuf images d'un balayage sont sinon
-  // neuf tuiles identiques.
+  // Sweep tiles identify the exact stack weights, including the leading LoRA,
+  // rather than merely saying stack; otherwise nine variants look identical.
   assert.match(tile, /Blend: /)
   assert.match(tile, /fmt\(cell\.strength\)/)
 })

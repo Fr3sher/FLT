@@ -10,9 +10,39 @@ The two accessors at the bottom exist because an adversarial pass found that
 them, an LM Studio user would get two Settings dials that change nothing.
 """
 import pytest
+from unittest.mock import create_autospec
 
 from app import config
 from app.services import vision_llm
+
+
+@pytest.mark.parametrize('configured', ['ollama', 'lmstudio'])
+@pytest.mark.parametrize('pinned', [None, '', 'ollama', 'lmstudio'])
+def test_text_writer_consumes_provider_and_honors_a_pinned_choice(
+        app, monkeypatch, configured, pinned):
+    from app.services import vision_lmstudio, vision_ollama
+
+    # Preserve the real signatures: a **kwargs-only double hid this regression.
+    drivers = {
+        'ollama': create_autospec(vision_ollama.generate_text_ollama, return_value='written'),
+        'lmstudio': create_autospec(vision_lmstudio.generate_text, return_value='written'),
+    }
+    monkeypatch.setattr(vision_ollama, 'generate_text_ollama', drivers['ollama'])
+    monkeypatch.setattr(vision_lmstudio, 'generate_text', drivers['lmstudio'])
+    options = {'model': 'test-writer', 'num_ctx': 8192, 'strict': True}
+    if pinned is not None:
+        options['provider'] = pinned
+    with app.app_context():
+        config.save_config({'local_llm': {'provider': configured}})
+        assert vision_llm.generate_text('Write motion.', **options) == 'written'
+    chosen = pinned or configured
+    drivers[chosen].assert_called_once()
+    drivers['lmstudio' if chosen == 'ollama' else 'ollama'].assert_not_called()
+    sent = drivers[chosen].call_args.kwargs
+    assert 'provider' not in sent
+    assert sent['model'] == 'test-writer'
+    assert sent['strict'] is True
+    assert sent.get('num_ctx') == (8192 if chosen == 'ollama' else None)
 
 
 def test_an_install_that_never_heard_of_this_setting_still_uses_ollama(app):

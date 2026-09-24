@@ -58,6 +58,7 @@
 
 import { createRequire } from 'node:module';
 import process from 'node:process';
+import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
@@ -397,10 +398,9 @@ const PAGES = {
          shares its classes with the Gallery grid the state above measures. */
       { name: 'video-clip',
         open: ['[data-testid="studio-lane-video"]', '[data-testid="video-source-clip"]'] },
-      /* 🌐 Le navigateur Civitai. Sa rangée d'actions par carte est passée de deux
-         boutons à trois avec le 📝 lot de prompts, dans une colonne qui fait ~250 px
-         à 360 px de large — exactement la forme qui déborde. Aucun état ne l'ouvrait,
-         donc aucune mesure ne l'a jamais vue. */
+      /* Civitai browser: prompt batches added a third action to each card's row,
+         in a roughly 250px column at 360px viewport width, a likely overflow point.
+         No previous probe state opened it, so the row was never measured. */
       { name: 'civitai', open: ['button:has-text("🌐 Civitai")'] },
     ],
   },
@@ -454,7 +454,7 @@ function cannotRun(why, how) {
 /** chrome-headless-shell has no windowed mode at all, so no window can appear
  *  on anyone's desktop while this runs. Its version directory changes with the
  *  Playwright release, so it is discovered rather than pinned. */
-function findHeadlessShell(fs, path) {
+export function findHeadlessShell(fs, path) {
   const roots = [
     process.env.PLAYWRIGHT_BROWSERS_PATH,
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'ms-playwright'),
@@ -1002,4 +1002,6 @@ async function main() {
   process.exit(findings.length ? 1 : 0);
 }
 
-main().catch((e) => cannotRun(e.message, e.stack?.split('\n')[1]?.trim()));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => cannotRun(e.message, e.stack?.split('\n')[1]?.trim()));
+}

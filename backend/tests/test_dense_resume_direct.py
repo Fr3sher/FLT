@@ -11,16 +11,21 @@ So the tests here are about two things in equal measure: that the file really
 arrives, and that nobody is asked to choose a road without being told what it
 costs.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 
 import pytest
 
-from app.services import pod_checkpoint_push, pod_transfer_plan
+from lds_cloud_training import pod_checkpoint_push, pod_transfer_plan
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
 def ct(app, monkeypatch):
-    from app.services import cloud_training, storage_locations
+    from lds_cloud_training import cloud_training
+    from app.services import storage_locations
     monkeypatch.setattr(storage_locations, 'free_space',
                         lambda path: {'free_bytes': 4 * 1000 ** 4,
                                       'total_bytes': 8 * 1000 ** 4})

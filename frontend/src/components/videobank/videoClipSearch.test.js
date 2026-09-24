@@ -8,7 +8,7 @@ import {
   searchBasisNote, captionMatchNote, captionStateNote, uncaptionedWarning,
   captionModelNote, captionStyleLabel, overBudgetWarning,
   overTokenBudgetWarning, servedShortNote,
-} from './videoClipSearch.js'
+} from "../../../../bundled/video/frontend/videobank/videoClipSearch.js"
 
 // ---- what stops a search before it starts ------------------------------------
 

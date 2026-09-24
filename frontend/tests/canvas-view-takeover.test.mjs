@@ -29,7 +29,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const canvas = readFileSync(
-  new URL('../src/components/canvas/LineageCanvas.jsx', import.meta.url), 'utf8')
+  new URL("../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8')
 
 /** The body of one `const NAME = useCallback(` … `}, [deps]);` in the source. */
 function callbackBody(name) {

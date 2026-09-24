@@ -24,11 +24,12 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readSource } from './support/readSource.mjs'
 
-import { renderToStaticMarkup, createElement } from './support/mountJsx.mjs'
+import { createElement } from './support/mountJsx.mjs'
 
 const { default: DenseModelsPanel } = await import(
-  '../src/components/dataset/DenseModelsPanel.jsx')
+  '../../bundled/cloud_training/frontend/dataset/DenseModelsPanel.jsx')
 // The panel carries a HelpBadge and a "Test in Studio" Link, so it only renders
 // inside a router. Mounting the WHOLE panel is the point: a sentence proven in
 // isolation and never reached on screen is the failure mode this file is about.
@@ -45,10 +46,14 @@ const hubOnly = (hub = {}) => ({
   },
 })
 
-const render = (models, presence = null) => renderToStaticMarkup(
+const render = async (models, presence = null) => {
+  const stream = await renderToReadableStream(
   createElement(MemoryRouter, null, createElement(DenseModelsPanel, {
     datasetId: 3, models, hubPresenceOverride: presence,
   })))
+  await stream.allReady
+  return (await new Response(stream).text()).replace(/<!--.*?-->/gs, '')
+}
 
 /* The rendered markup as readable prose: entity-decoded and tag-stripped, so an
    assertion reads the sentence a user reads and not an attribute soup. */
@@ -58,44 +63,64 @@ const text = (html) => html
   .replace(/&quot;/g, '"').replace(/&mdash;/g, '—')
   .replace(/\s+/g, ' ').trim()
 
-test('THE regression: a verified-missing repository never says the model is there', () => {
-  const body = text(render([hubOnly({ status: 'missing' })]))
+const { configureHostRuntime } = await import('../src/plugins/runtimeHost.jsx')
+const { publishRuntime } = await import('../src/plugins/loadPlugins.js')
+const { resetRegistry, setEnabled, registerDescriptor } = await import('../src/plugins/registry.js')
+const { default: modelTools } = await import('../../bundled/model_tools/frontend/index.js')
+const manifest = JSON.parse(readSource('../bundled/model_tools/plugin.json'))
+const { renderToReadableStream } = await import('react-dom/server')
+test.beforeEach(t => {
+  const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch }
+  t.after(() => { Object.assign(globalThis, saved); resetRegistry() })
+  globalThis.window = {}
+  globalThis.document = { cookie: '', querySelector: () => null }
+  globalThis.fetch = () => { throw new Error('Rendering must not contact any service') }
+  resetRegistry()
+  assert.equal(registerDescriptor(modelTools, { guideOwnership: manifest.guide_ownership }), true)
+  setEnabled(['model_tools'])
+  configureHostRuntime()
+  publishRuntime()
+})
+
+
+test('THE regression: a verified-missing repository never says the model is there', async () => {
+  const body = text(await render([hubOnly({ status: 'missing' })]))
   assert.doesNotMatch(body, /the model is there/,
     'the sentence came back — it must be chosen from the status, not from rows.length')
   assert.match(body, /The last check found no model in this repository/)
   assert.match(body, /Nothing from this run is on this computer/)
 })
 
-test('nothing has asked the Hub yet, so the card speaks about the delivery, dated', () => {
-  const body = text(render([hubOnly({ checked_at: '2026-07-11T09:12:33' })]))
+test('nothing has asked the Hub yet, so the card speaks about the delivery, dated', async () => {
+  const body = text(await render([hubOnly({ checked_at: '2026-07-11T09:12:33' })]))
   assert.match(body, /Delivered and verified on 2026-07-11 — not re-checked since/)
   assert.match(body, /Delivered to Hugging Face/)          // the chip, past tense too
   assert.doesNotMatch(body, /the model is there|still holds/)
 })
 
-test('a repository measured gone says so, and says what is left to do', () => {
-  const body = text(render([hubOnly()], { 90: { state: 'gone' } }))
+test('a repository measured gone says so, and says what is left to do', async () => {
+  const body = text(await render([hubOnly()], { 90: { state: 'gone' } }))
   assert.match(body, /Hugging Face no longer returns this repository/)
   assert.match(body, /no recoverable model left/)
   assert.match(body, /No copy left/)                       // the chip agrees
   // And the button that promised "quantizing fetches it first" is refused HERE,
   // with its reason, rather than failing after the click.
   assert.match(body, /the repository it would be downloaded from is gone/)
-  assert.match(render([hubOnly()], { 90: { state: 'gone' } }),
+  assert.match(await render([hubOnly()], { 90: { state: 'gone' } }),
     /Quantize to fp8<\/button>/)
-  assert.match(render([hubOnly()], { 90: { state: 'gone' } }), /disabled=""/)
+  assert.match(await render([hubOnly()], { 90: { state: 'gone' } }), /disabled=""/)
 })
 
-test('a repository measured present is the only case allowed the present tense', () => {
-  const body = text(render([hubOnly()], { 90: { state: 'present' } }))
+test('a repository measured present is the only case allowed the present tense', async () => {
+  const body = text(await render([hubOnly()], { 90: { state: 'present' } }))
   assert.match(body, /checked just now/)
   assert.match(body, /The repository still holds this model/)
   assert.match(body, /On Hugging Face/)
   assert.doesNotMatch(body, /not re-checked since/)
 })
 
-test('a check that FAILED reads as our failure, never as a deletion', () => {
-  const body = text(render([hubOnly()], { 90: {
+test('a check that FAILED reads as our failure, never as a deletion', async () => {
+  const body = text(await render([hubOnly()], { 90: {
     state: 'unknown',
     detail: 'Hugging Face could not be reached, so the repository was not checked.',
   } }))
@@ -104,27 +129,27 @@ test('a check that FAILED reads as our failure, never as a deletion', () => {
   assert.doesNotMatch(body, /deleted|no longer|gone/)
   // The quantize button survives an unreachable Hub: the repository is very
   // probably fine and the user is merely offline.
-  assert.doesNotMatch(render([hubOnly()], { 90: { state: 'unknown' } }), /disabled=""/)
+  assert.doesNotMatch(await render([hubOnly()], { 90: { state: 'unknown' } }), /disabled=""/)
 })
 
-test('a run whose master is on disk is not told it lost anything', () => {
+test('a run whose master is on disk is not told it lost anything', async () => {
   const withMaster = {
     ...hubOnly(),
     master: { filename: 'Krea_full_y.safetensors', path: '/store/Krea_full_y.safetensors',
       size_bytes: 26e9, step: null, is_final: true, total_candidates: 1, others: [] },
     can_delete: true,
   }
-  const body = text(render([withMaster], { 90: { state: 'gone' } }))
+  const body = text(await render([withMaster], { 90: { state: 'gone' } }))
   assert.match(body, /full-precision master is still on this computer, so nothing is lost/)
   assert.match(body, /On this computer/)                   // the chip answers from disk
   assert.doesNotMatch(body, /no recoverable model left/)
 })
 
-test('the line wraps instead of pushing the card sideways at 400 px', () => {
+test('the line wraps instead of pushing the card sideways at 400 px', async () => {
   // A repository id plus a two-line sentence inside a fixed-width column is a
   // horizontal scrollbar on a phone — and this line is the one thing the card
   // exists to make readable.
-  const html = render([hubOnly()], { 90: { state: 'gone' } })
+  const html = await render([hubOnly()], { 90: { state: 'gone' } })
   const start = html.indexOf('Backup:')
   const paragraph = html.slice(html.lastIndexOf('<p', start), html.indexOf('</p>', start))
   assert.match(paragraph, /leading-snug/)

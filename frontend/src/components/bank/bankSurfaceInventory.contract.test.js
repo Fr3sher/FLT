@@ -11,10 +11,11 @@ const FRONTEND = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 /** Read the whole Bank tree as it is NOW — discovered, not listed, so a file
  *  the redesign creates is scanned without anyone remembering to add it. */
 function bankTree() {
-  const dirs = ['src/components/bank', 'src/components/videobank']
+  const dirs = ['src/components/bank', '../bundled/video/frontend/videobank', '../bundled/cloud_training/frontend/video',
+    '../bundled/scrape/frontend/panels']
   const files = [
     'src/pages/BankPage.jsx',
-    'src/pages/VideoBankPage.jsx',
+    '../bundled/video/frontend/pages/VideoBankPage.jsx',
     ...dirs.flatMap((d) => readdirSync(resolve(FRONTEND, d), { recursive: true })
       .filter((f) => String(f).endsWith('.jsx'))
       .map((f) => `${d}/${String(f).replaceAll('\\', '/')}`)),

@@ -16,8 +16,11 @@ Two answers, both at promotion time:
 import pytest
 
 from app.extensions import db
-from app.models import VideoClip, VideoDataset, VideoSource
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoClip, VideoDataset, VideoSource
+from lds_video import video_bank_service as svc
+
+pytestmark = pytest.mark.plugins('video')
 
 LOCAL_USER = 'local'
 
@@ -96,7 +99,7 @@ def test_the_cap_keeps_the_earliest_clips_of_each_source(app, tmp_path, seams):
                                    target_profile='wan22_14b', frames=81,
                                    max_per_source=2)
         ds = VideoDataset.query.filter_by(name='Set').one()
-        from app.models import VideoDatasetClip
+        from lds_video.models import VideoDatasetClip
         starts = sorted(c.start_s for c in
                         VideoDatasetClip.query.filter_by(dataset_id=ds.id))
 

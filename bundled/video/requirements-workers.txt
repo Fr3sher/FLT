@@ -1,0 +1,9 @@
+# Standalone inference scripts run in the configured ML environments.
+# This declaration is audited; installing the product does not install CUDA.
+Pillow>=9,<13
+av>=13,<19
+numpy>=1.26,<2
+torch>=2,<3
+transformers>=4.57,<6
+sentencepiece>=0.2,<1
+transnetv2-pytorch>=1.0.5,<2

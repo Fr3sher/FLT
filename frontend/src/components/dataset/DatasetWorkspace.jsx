@@ -1,3 +1,4 @@
+import { engineLabel } from '../../engines/catalog.js';
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUp, Ban, CheckCircle2, Copy, Download, Drama, Eraser, Filter, FolderOpen, Globe, Loader2, Package, PenLine, PersonStanding, RefreshCw, Save, Scissors, Search, Settings, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router';
@@ -8,10 +9,11 @@ import ReferencePanel from './ReferencePanel';
 import TrainingPanel from './TrainingPanel';
 import { fmt } from '../../utils/studioFormat';
 import ImportDropzone from './ImportDropzone';
-import ConceptSourcesPanel from './ConceptSourcesPanel';
+import PluginSlot, { hasContributions } from '../../plugins/PluginSlot.jsx';
+import { contributions } from '../../plugins/registry.js';
 import BankImportPanel from './BankImportPanel';
 import DatasetFolderNote from './DatasetFolderNote';
-import { isDatasetImportBlocked, isStopGenerationBlocked } from './scraperState';
+import { isDatasetImportBlocked, isStopGenerationBlocked } from './activityGates.js';
 import { holdsLocalGpu } from '../../utils/activityLanes.js';
 import { IMPROVE_DERIVATION } from './improveCandidates.js';
 import { faceAnalysisState, faceAnalysisLabel } from './faceScoringGate.js';
@@ -47,7 +49,6 @@ const VariationCatalog = lazy(() => import('./VariationCatalog'));
 const CropModal = lazy(() => import('./CropModal'));
 const ReferenceEditModal = lazy(() => import('./ReferenceEditModal'));
 const DatasetLightbox = lazy(() => import('./DatasetLightbox'));
-const PublishHfModal = lazy(() => import('./PublishHfModal'));
 // 🧪 The Caption Lab, reached from the Captions section: the picker names an
 // image, the caption editor opens straight on its Lab tab. Only the PICKER is really
 // deferred by this — CaptionEditorDialog is already in this page's static graph
@@ -86,8 +87,6 @@ import { apiFetch, postJson, putJson } from '../../api/fetchClient';
 import { datasetToBankRequest, datasetToBankUrl } from './datasetToBank';
 import { HelpBadge } from '../../help/HelpMode';
 import { requestHelpTip } from '../../help/helpTips';
-import { useDatasetCameraAngles } from '../../hooks/useDatasetCameraAngles';
-import { datasetCameraRefusal } from '../../utils/cameraAngles';
 import { openCollapsedAncestors } from '../../help/revealTarget';
 import { activeLocalLlm } from '../../utils/localLlm';
 import {
@@ -112,11 +111,13 @@ const GRID_STATUS_FILTER_KEY = 'datasetGridStatusFilter';
 // pattern. The KEY and the stored ids are stable handles: never rename either.
 const GRID_SORT_KEY = 'datasetGridSort';
 
-// Style partagé des items du menu « ⋯ More » du header (actions secondaires).
+// Shared style for secondary actions in the header's More menu.
 const MENU_ITEM = 'min-h-10 lg:min-h-0 w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-md text-sm text-content hover:bg-surface-raised disabled:opacity-40';
 
-/* En-tête de section (miroir visuel du SectionHeader de Settings, en h2 : le h1
-   de la page reste le nom du dataset) : eyebrow mono + titre + description. */
+/*
+ * Section heading: matches Settings SectionHeader visually, using h2 because the dataset name
+ * remains the page's h1. Monospace eyebrow, title and description.
+ */
 function SectionHeading({ id, eyebrow, title, description, badge }) {
   return (
     <div id={id} tabIndex={-1}>
@@ -127,9 +128,11 @@ function SectionHeading({ id, eyebrow, title, description, badge }) {
   );
 }
 
-/* Pastille de compte dans la sidebar — sobre : ambre = action attendue (triage,
-   watermarks, fuites), indigo pulsé = travail en cours (générations), neutre =
-   simple info. Jamais couleur seule : le sr-only épelle le sens. */
+/*
+ * Sidebar count badge: amber means action needed (triage, watermarks, leaks), pulsing indigo means
+ * generation in progress, neutral means information. Never color alone: sr-only text spells out
+ * the meaning.
+ */
 function NavBadge({ badge }) {
   if (!badge) return null;
   const cls = badge.tone === 'amber' ? 'border-amber-400/50 bg-amber-500/15 text-amber-200'
@@ -270,7 +273,6 @@ export default function DatasetWorkspace({ ds, onBack }) {
   const toast = useToast();
   const { caps, loading: capsLoading, refresh: refreshCaps } = useCapabilities();
   // 📷 With the other hooks, above the loading return — rules-of-hooks.
-  const shootDatasetViews = useDatasetCameraAngles();
   const d = ds.data;
   // 🎭 Analyze faces: state + tooltip derived from the SERVER's verdict
   // (`face_scoring_blocked`, a sentence or null) — see faceScoringGate.js. The UI
@@ -308,17 +310,17 @@ export default function DatasetWorkspace({ ds, onBack }) {
     if (gridBulkBusy) setViewImg(null);
   }, [gridBulkBusy]);
   useEffect(() => { setGridBulkBusy(false); }, [d?.id]);
-  const [captionMode, setCaptionMode] = useState(null);   // null → défaut auto selon train_type
-  const [showLeaks, setShowLeaks] = useState(false);       // liste dépliée des captions qui fuient
+  const [captionMode, setCaptionMode] = useState(null);   // null selects the automatic default for train_type.
+  const [showLeaks, setShowLeaks] = useState(false);       // Expanded list of captions with leaks.
   const [captionToolsOpen, setCaptionToolsOpen] = useState(false);
   /* 🧪 Caption Lab, opened from the Captions section: which image to bench
      (picker), then the image it named. The bench itself is the existing caption
      editor on its Lab tab — this adds an ENTRY POINT, not a second bench. */
   const [labPickerOpen, setLabPickerOpen] = useState(false);
   const [labImage, setLabImage] = useState(null);
-  const [installInpaintOpen, setInstallInpaintOpen] = useState(false);  // panneau d'install LaMa
-  const [watermarkMethod, setWatermarkMethod] = useState('lama');  // moteur d'inpaint batch : lama | klein
-  const [kleinCompareOpen, setKleinCompareOpen] = useState(false); // ⚖ essai des modeles avant le batch
+  const [installInpaintOpen, setInstallInpaintOpen] = useState(false);  // LaMa installation panel
+  const [watermarkMethod, setWatermarkMethod] = useState('lama');  // Batch inpainting engine: lama | klein
+  const [kleinCompareOpen, setKleinCompareOpen] = useState(false); // Compare models before the batch.
   const [kleinCompareState, setKleinCompareState] = useState({ choices: [], stored: null });
   /* What 🧽 Clean aims at: every flagged page ('all'), only the 🔤 text-flagged
      ones ('text'), or only the 🚩 watermark-flagged ones ('watermark'). The
@@ -337,13 +339,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
   const [checkpointCount, setCheckpointCount] = useState(0);
   const [checkpointHost, setCheckpointHost] = useState(null);
   const [trainingNavigation, setTrainingNavigation] = useState({ ready: false, queueCount: 0 });
-  // « Continue anyway » : ack remonté par la pastille de préparation (garde-fou
-  // qualité contournable) → débloque le bouton Train du panneau et voyage jusqu'au
-  // launch (allow_not_ready). Le serveur reste l'autorité.
+  // Continue anyway: acknowledgment from the readiness badge bypasses the quality safeguard,
+  // unlocks Train and reaches launch as allow_not_ready. The server remains authoritative.
   const [notReadyAck, setNotReadyAck] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importToBankOpen, setImportToBankOpen] = useState(false);
-  const [publishHfOpen, setPublishHfOpen] = useState(false);
   const [folderBrowseOpen, setFolderBrowseOpen] = useState(false);  // in-app folder browser (native-dialog fallback)
   // Grid tag-filter (session-only): tags whose images are hidden (exclude) or the
   // ONLY tags allowed through (include). Both are normalized (trim+lowercase).
@@ -391,8 +391,22 @@ export default function DatasetWorkspace({ ds, onBack }) {
     }
   }, [refreshCaps, toast]);
   const navImages = d?.images || EMPTY_IMAGES;
+  // A section that exists to host a plugin slot (Scrape) is listed only while a
+  // plugin fills it: with the plugin disabled or absent the rail shows no empty
+  // destination, the "Scrape images from the web" shortcut goes with it, its
+  // help tip stays quiet, and a stored ?section=scrape normalizes to the default
+  // section instead of an empty page. The registry is fixed after boot.
+  const { hasScrape, visibleSections, hiddenSectionIds } = useMemo(() => {
+    const visible = WORKSPACE_SECTIONS.filter((s) => !s.slot || hasContributions(s.slot, 'dataset'));
+    return {
+      hasScrape: hasContributions('sources.panel', 'dataset'),
+      visibleSections: visible,
+      hiddenSectionIds: WORKSPACE_SECTIONS.filter((s) => !visible.includes(s)).map((s) => s.id),
+    };
+  }, []);
   const navContext = useMemo(() => ({
     kind: d?.kind || 'character',
+    hiddenSections: hiddenSectionIds,
     hasSelectableImages: filterSmallImageRescueGrid(navImages)
       .some((image) => Boolean(image.filename)),
     hasKeptImages: navImages.some((image) => image.status === 'keep'),
@@ -405,12 +419,20 @@ export default function DatasetWorkspace({ ds, onBack }) {
     smallImageRescue: buildSmallImageRescuePairs(navImages).filter((pair) => !pair.resolved).length,
     unused: navImages.filter((image) => (image.status === 'reject' || image.status === 'failed')
       && !isSmallImageRescueRow(image)).length,
-    hfPublish: Boolean(caps.hf_publish),
+    // The capabilities themselves, for the rows plugins contribute: their
+    // `when(context)` reads the capability THEY own (a publisher's token…).
+    caps,
     trainingVisible: Boolean(caps.training_visible),
     trainingStatusReady: !caps.training_visible || trainingNavigation.ready,
     trainingQueueCount: trainingNavigation.queueCount,
     studioVisible: Boolean(caps.studio_visible),
-  }), [d, navImages, caps.hf_publish, caps.training_visible, caps.studio_visible, trainingNavigation]);
+  }), [d, navImages, caps, trainingNavigation, hiddenSectionIds]);
+  // The plugins' ways out of this dataset (`export.action`), offered under
+  // their own predicate — the same one the rail reads through sectionPanels().
+  const exportActions = contributions('export.action', 'dataset')
+    .filter((item) => typeof item.when !== 'function' || item.when(navContext));
+  const exportActionSummary = exportActions.map((item) => item.summary).filter(Boolean)
+    .map((label) => ` · ${label}`).join('');
   const workspaceLocation = resolveWorkspaceLocation(searchParams, navContext);
   const section = workspaceLocation.section;
   const panel = workspaceLocation.panel;
@@ -596,7 +618,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
   // change the hook count between the Loading render and the loaded one
   // (React #310 crash — caught by runtime verification).
   const leakingCount = ((d && d.images) || []).filter((i) => i.leak).length;
-  useEffect(() => { if (d && section === 'add') requestHelpTip('add-images-visit'); }, [d, section]);
+  useEffect(() => { if (d && section === 'add' && hasScrape) requestHelpTip('add-images-visit'); },
+    [d, section, hasScrape]);
   useEffect(() => { if (leakingCount >= 1) requestHelpTip('leak-panel-visible'); }, [leakingCount]);
   useEffect(() => { if (settingsOpen) requestHelpTip('dataset-settings-open'); }, [settingsOpen]);
 
@@ -626,19 +649,17 @@ export default function DatasetWorkspace({ ds, onBack }) {
   ));
   const rescueGridImages = filterSmallImageRescueGrid(images);
   const rescueReviewCount = unresolvedRescuePairs.length;
-  // Dataset CONCEPT : on masque tout ce qui est identité/visage (référence, générateur
-  // de variations, analyse faciale, badge de fuite, composition, flux guidé) — il ne
-  // reste que import brut → curation → caption (inversée) → entraînement.
-  // Style follows the same compact layout as concept (no face/reference tools),
-  // but keeps its own always-on semantics and requires content-only captions.
+  // CONCEPT datasets hide identity/face tools: reference, variation generator, face analysis, leak
+  // badge, composition and guided flow. The flow is raw import, curation, inverse captioning, then
+  // training. Style uses the same compact layout without face/reference tools, while retaining
+  // always-on semantics and mandatory content-only captions.
   const isConcept = d.kind === 'concept';
   const isStyle = d.kind === 'style';
   const isConceptual = isConcept || isStyle;
-  // Leak check is KIND-specific (see the caption-leak panel): character flags identity,
-  // concept flags the caption NAMING the concept (must bind to the trigger), style never
-  // (its subjects' description IS the content). `isConceptual` is layout-only.
-  // Fidélité corps : captions bannissent aussi les marques corporelles, composition
-  // cible plus de bustes/corps, import plein cadre par défaut.
+  // Leak checks depend on KIND: characters flag identity, concepts flag captions naming the
+  // concept that must bind to the trigger, and styles never flag subject descriptions because
+  // those ARE the content. isConceptual only controls layout. Body fidelity also excludes body
+  // markings from captions, targets more bust/body shots and defaults to full-frame import.
   const bodyFid = d.fidelity === 'body';
   // The kept pile itself, not only its size: it is what a caption pass reads, and
   // what the 🧪 Caption Lab picker offers as benchable subjects.
@@ -677,10 +698,9 @@ export default function DatasetWorkspace({ ds, onBack }) {
   // would refuse to touch, which detector judged, and how many carry no position.
   const flagged = summarizeFlagged(images);
   const flaggedNote = flaggedSourceNote(flagged);
-  // Style de caption : défaut AUTO (SDXL booru-native → booru tags ; sinon prose),
-  // surchargé par le sélecteur. Anima est HYBRIDE (les deux formes sont natives) :
-  // le défaut prose n'est qu'un point de départ, basculer sur booru est légitime et
-  // ne déclenche aucun garde-fou au lancement.
+  // Caption style defaults to AUTO: booru tags for booru-native SDXL, prose otherwise, unless
+  // overridden by the picker. Anima is HYBRID: both forms are native. Prose is only a starting
+  // point; choosing booru is valid and triggers no launch safeguard.
   const effCaptionMode = captionMode || (d.train_type === 'sdxl' ? 'booru' : 'prose');
   // ── Grid tag-filter (session-only) ──────────────────────────────────────────
   // A tag is toggled in its list and mutually excluded from the other (a tag can't
@@ -753,10 +773,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
     onRevealOpenChange('leak-review', !showLeaks, setShowLeaks);
   };
 
-  /* Saut vers une ancre gf-* (checklist, NextStep, « Fix → » du preflight) :
-     on bascule d'abord la sidebar sur la section qui l'héberge, puis on scrolle
-     + flash quand l'ancre est VISIBLE (les sections inactives restent montées
-     mais display:none — getClientRects() vide tant que la bascule n'a pas peint). */
+  /*
+   * Jump to a gf-* anchor (checklist, NextStep, preflight Fix link): select its sidebar section
+   * first, then scroll and flash once VISIBLE. Inactive sections stay mounted with display:none,
+   * so getClientRects() is empty until the switch paints.
+   */
   const jumpTo = (step) => {
     setSection(SECTION_FOR_TARGET[step.targetId] || 'images');
     let tries = 0;
@@ -816,13 +837,6 @@ export default function DatasetWorkspace({ ds, onBack }) {
     && !viewImgLive._rescueReviewPreview
     && !isSmallImageRescueRow(viewImgLive)
     && viewImgLive.derivation_kind !== 'klein_image_improve';
-  // 📷 Eligibility decided HERE like improve's, so an ineligible picture shows
-  // no button at all. The rescue preview is excluded for the same reason it is
-  // everywhere: it is half of a Curation decision, not a library picture.
-  const canCameraViewImg = !!viewImgLive
-    && !viewImgLive._rescueReviewPreview
-    && !isSmallImageRescueRow(viewImgLive)
-    && datasetCameraRefusal(viewImgLive) === null;
 
   // Import to bank — the reverse of promoting bank images into a dataset. Both
   // choices retain Dataset-owned metadata; the default restores compatible
@@ -900,8 +914,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
         if (act) {
           const prog = act.total ? ` ${act.done}/${act.total}` : '';
           // Passes that DON'T claim "ComfyUI is paused": the CPU ones, plus
-          // 'generate' (engine-dependent — Nano Banana / ChatGPT don't touch
-          // ComfyUI, and the Klein case is obvious from the tiles appearing).
+          // 'generate' (engine-dependent — an API engine doesn't touch ComfyUI,
+          // and the Klein case is obvious from the tiles appearing).
           // 'analyze_faces' is CPU by default and then claims nothing — but it
           // has a GPU lane (face_scoring.device), and THAT one really does hold
           // the exclusive window. The pass advertises its engine so this line
@@ -912,7 +926,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
             // Same reasoning as 'generate': the improve batch feeds ComfyUI, and
             // the candidates appearing in the grid say so better than a claim.
             || act.kind === 'improve'
-            // Editing the reference is an API call (ChatGPT / Nano Banana) — no GPU,
+            // Editing the reference on an API engine is an API call — no GPU,
             // ComfyUI is never touched, so never claim it is paused.
             || act.kind === 'edit_reference'
             // Dataset → Bank is a reserved filesystem copy. It blocks edits to
@@ -948,12 +962,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
         return 'GPU processing in progress (analysis / cropping / captioning)… ComfyUI is paused during the pass.';
       })();
 
-  // ── Sidebar : pastilles par section — ambre quand une action attend l'utilisateur,
-  //    indigo pulsé quand des générations tournent, neutre pour l'info « à faire ».
-  // The engine line for the caption pass that just ran — empty string (falsy) when
-  // no pass ran in this session, when the backend sent no counts, or when the run
-  // belongs to ANOTHER dataset: the id check is what stops this line from describing
-  // someone else's pass after a dataset switch.
+  // Sidebar badges: amber for user action, pulsing indigo during generation, neutral for pending
+  // information. The caption engine line is empty if this session has no pass, the backend
+  // returned no counts, or the run belongs to ANOTHER dataset. The ID check prevents showing
+  // another dataset's pass after switching.
   const lastCaptionEngines = ds.lastCaptionRun && ds.lastCaptionRun.datasetId === d.id
     ? captionEnginesSummary(ds.lastCaptionRun.engines) : '';
 
@@ -1003,8 +1015,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
     );
   };
 
-  // Un item de la sidebar : rail vertical desktop (chip=false) ou chip du bandeau
-  // horizontal mobile (chip=true) — mêmes classes que la sidebar de Settings.
+  // Sidebar item: a desktop vertical rail item (chip=false) or horizontal mobile chip (chip=true),
+  // using the Settings sidebar's classes.
   const navItem = (s, chip) => {
     const isActive = s.id === section;
     const base = chip
@@ -1041,17 +1053,16 @@ export default function DatasetWorkspace({ ds, onBack }) {
         ? 'Import varied images that share the aesthetic; subject and scene diversity keep the Style LoRA composable.'
         : isConceptual && s.conceptDescription ? s.conceptDescription : s.description} />;
   };
-  // Sections inactives : montées mais masquées (display:none) — les polls et
-  // états internes survivent au changement de section (le poll 10 s du
-  // TrainingPanel fait AVANCER la file d'entraînement côté serveur, il ne doit
-  // jamais s'arrêter parce qu'on regarde la grille ; idem sélection de la
-  // grille, panneaux dépliés, catalogue de variations).
+  // Inactive sections stay mounted but hidden with display:none, preserving polls and internal
+  // state. TrainingPanel's 10-second poll ADVANCES the server training queue and must keep running
+  // while viewing the grid. Grid selection, expanded panels and the variation catalog also survive
+  // switches.
   const sectionCls = (id) => (section === id ? 'flex flex-col gap-3' : 'hidden');
 
   // Discreet entry point kept in "Add images" after the scraper moved to its own
   // 🕸 Scrape destination — preserves the build-flow's discoverability without the
   // long accordion. Navigates to the Scrape section and focuses its gallery-URL input.
-  const scrapeLink = (
+  const scrapeLink = hasScrape && (
     <button type="button" onClick={() => navigateToPanel('scrape', 'scan')}
       className="flex w-full items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-content-muted hover:text-content hover:bg-surface-raised transition-colors">
       <Globe aria-hidden="true" className="h-4 w-4" />
@@ -1071,12 +1082,15 @@ export default function DatasetWorkspace({ ds, onBack }) {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* ---- Header : identité du dataset + UNE action primaire (Export ZIP).
-           Les actions secondaires de PARAMÉTRAGE (settings, fidélité) vivent dans
-           le menu « ⋯ More » ; les actions de DONNÉES (backup, import-fusion,
-           publish) vivent dans la section « Import & export » de la sidebar. ---- */}
-      {/* relative z-30 : le header est un flex item ; sans stacking-context propre,
-          le z-20 du menu « ⋯ More » resterait piégé sous les frères plus bas. */}
+      {/*
+       * Header: dataset identity and ONE primary action, Export ZIP. Secondary configuration
+       * actions (settings, fidelity) live in More. Data actions (backup, merge import, publish)
+       * live in the sidebar's Import & export section.
+       */}
+      {/*
+       * relative z-30: the header is a flex item; without its own stacking context, the More
+       * menu's z-20 would remain trapped below later siblings.
+       */}
       <div data-probe-chrome="header" className="relative z-30 flex items-center gap-x-2 gap-y-1 flex-wrap">
         <button type="button" onClick={onBack}
           className="min-h-10 lg:min-h-0 flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border bg-surface text-content-muted hover:text-content hover:bg-surface-raised text-sm transition-colors">
@@ -1103,8 +1117,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
             className="min-h-10 lg:min-h-0 px-3 py-1.5 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">
             <Download aria-hidden="true" className="mr-1.5 inline h-4 w-4 align-[-2px]" />Export ZIP ({kept})
           </button>
-          {/* summary en display:flex → pas de marqueur natif ; les items restent
-              montés en permanence (details ne fait que masquer l'affichage). */}
+          {/*
+           * display:flex removes the native summary marker; items stay mounted because details
+           * only hides their display.
+           */}
           <details className="relative">
             <summary
               title="More dataset actions — edit settings, body fidelity"
@@ -1168,7 +1184,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
           <nav aria-label="Dataset sections" data-probe-chrome="sections"
             className="relative -mx-4 overflow-x-auto px-4 pb-1 lg:hidden">
             <ul className="m-0 flex list-none gap-2 p-0">
-              {WORKSPACE_SECTIONS.map((s) => <li key={s.id}>{navItem(s, true)}</li>)}
+              {visibleSections.map((s) => <li key={s.id}>{navItem(s, true)}</li>)}
             </ul>
           </nav>
           {activePanels.length > 0 && (
@@ -1189,7 +1205,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
             <nav aria-label="Dataset sections">
               <p className="m-0 px-3 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-content-subtle">Dataset</p>
               <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
-                {WORKSPACE_SECTIONS.map((s) => {
+                {visibleSections.map((s) => {
                   const isActive = s.id === section;
                   const destinations = isActive ? getWorkspacePanels(s.id, navContext) : [];
                   return (
@@ -1215,8 +1231,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
         </aside>
 
         <div className="flex flex-col gap-3 min-w-0 mt-1 lg:mt-0">
-          {/* ---- Bandeaux GLOBAUX : visibles quelle que soit la section active
-               (une passe GPU ou un batch de générations concernent tout l'écran). ---- */}
+          {/*
+           * GLOBAL banners remain visible in every section: a GPU pass or generation batch
+           * concerns the whole screen.
+           */}
           {!isConceptual && (
             <NextStepCard step={nextStep} trainMode={!!caps.training_visible} busy={ds.busy}
               totalImages={images.length} onAction={nextAction} actionLabel={nextActionLabel} />
@@ -1311,9 +1329,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     </summary>
                     <div className="mt-1 flex flex-col gap-1 break-words">
                       <p className="m-0">
-                        {outcome.refusedEngines.includes('nanobanana')
-                          ? 'Gemini (Nano Banana) screens the image it just produced'
-                          : 'The provider screens the image it just produced'}
+                        {/* Named by the catalog: the engine that refused, whoever brought it. */}
+                        {`${outcome.refusedEngines.map((e) => engineLabel(e)).join(' / ') || 'The provider'} screens the image it just produced`}
                         {' '}and answers with no image when that screen trips.
                         The screen is <strong>not configurable</strong>: the safety
                         settings the API exposes act on the prompt, not on the
@@ -1338,7 +1355,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
             </div>
           )}
 
-          {/* ============ 🖼️ Images — la grille : triage ✓/✕, filtres, tri auto. */}
+          {/* Images grid: keep/reject triage, filters and automatic sorting. */}
           <div className={sectionCls('images')}>
             {heading('images')}
             <p className="m-0 text-content-subtle text-[0.75rem] tabular-nums">
@@ -1403,14 +1420,15 @@ export default function DatasetWorkspace({ ds, onBack }) {
             </div>
           </div>
 
-          {/* ============ 📸 Add images — constituer le dataset. Concept : sources
-               scrapées + import brut. Personnage : référence puis génération/import. */}
+          {/*
+           * Add images: populate the dataset. Concepts use scraped sources and raw import;
+           * characters start with a reference, then generation/import.
+           */}
           <div className={sectionCls('add')}>
             {heading('add')}
             {isConceptual ? (
-              // Concept : pas de photo de référence ni de générateur — on peuple le
-              // dataset par upload manuel et/ou via le scraper, qui vit désormais dans
-              // sa propre section 🕸 Scrape (lien discret ci-dessous).
+              // Concepts have no reference photo or generator. Populate them through manual upload
+              // or the scraper, now in its own Scrape section linked below.
               <div id="gf-reference" className="scroll-mt-20 flex flex-col gap-2">
                 {scrapeLink}
                 <div id="ds-add-import" tabIndex={-1} className="scroll-mt-20">
@@ -1494,20 +1512,24 @@ export default function DatasetWorkspace({ ds, onBack }) {
             )}
           </div>
 
-          {/* ============ 🕸 Scrape — its own destination now (moved out of "Add
-               images"): scan a gallery URL → pick thumbnails → import full-frame, then
-               crop each tile manually (✂ on the card). One ConceptSourcesPanel serves
-               every dataset kind. */}
-          <div className={sectionCls('scrape')}>
-            {heading('scrape')}
-            <div id="ds-scrape-scan" tabIndex={-1} className="scroll-mt-20">
-              <ConceptSourcesPanel key={`scraper-${d.id}`} datasetId={d.id}
-                onImport={ds.scrapeImport} busy={importBusy} />
+          {/* ============ 🕸 Scrape — its own destination, filled by whatever plugin
+               contributes a `sources.panel` for datasets (the bundled scrape plugin:
+               scan a gallery URL → pick thumbnails → import full-frame, then crop each
+               tile manually, ✂ on the card). Not rendered at all without one. */}
+          {hasScrape && (
+            <div className={sectionCls('scrape')}>
+              {heading('scrape')}
+              <div id="ds-scrape-scan" tabIndex={-1} className="scroll-mt-20">
+                <PluginSlot slot="sources.panel" surface="dataset" key={`scraper-${d.id}`}
+                  datasetId={d.id} onImport={ds.scrapeImport} busy={importBusy} />
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* ============ 🧹 Curation — passes de qualité sur les images gardées :
-               ressemblance faciale, watermarks (find → clean → review), purge. */}
+          {/*
+           * Curation: quality passes on kept images, including face likeness, watermark
+           * find/clean/review, and purge.
+           */}
           <div className={sectionCls('curation')}>
             {heading('curation')}
             <div id="gf-curation" className="scroll-mt-20 flex flex-col gap-2">
@@ -1856,8 +1878,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
                 </div>
               )}
 
-              {/* Nettoyage définitif des rejetées/échouées (ex-item du menu ⋯ More :
-                  c'est une action de curation, elle vit avec les autres). */}
+              {/*
+               * Permanently remove rejected/failed images. Formerly in More, this curation action
+               * belongs with the other curation tools.
+               */}
               {unused > 0 && (
                 <div id="ds-curation-rejected-cleanup" tabIndex={-1}
                   className="flex items-center gap-2 flex-wrap rounded-lg border border-border bg-surface px-3 py-2 scroll-mt-20">
@@ -1877,8 +1901,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
             </div>
           </div>
 
-          {/* ============ ✍️ Captions — générer/regénérer les captions, surveiller
-               les fuites (identité/concept), outils de masse (find/replace, tags). */}
+          {/*
+           * Captions: generate/regenerate, monitor identity/concept leaks, and use bulk
+           * find/replace and tag tools.
+           */}
           <div className={sectionCls('captions')}>
             {heading('captions')}
             <div id="gf-captions" className="scroll-mt-20 flex flex-col gap-2">
@@ -2195,8 +2221,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
             </div>
           </div>
 
-          {/* ============ 📦 Import & export — fusionner un dataset existant ;
-               sortir celui-ci (ZIP d'entraînement, backup portable, HF Hub). */}
+          {/*
+           * Import & export: merge an existing dataset or export this one as a training ZIP,
+           * portable backup or HF Hub upload.
+           */}
           <div className={sectionCls('export')}>
             {heading('export')}
             <div id="gf-export" className="scroll-mt-20 flex flex-col gap-2">
@@ -2256,14 +2284,14 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     instead of four buttons competing for the same glance. A
                     <details> and not a floating menu: the workspace landing
                     (openCollapsedAncestors in `land`) opens collapsed ancestors on
-                    jump, so the sidebar links to Import to bank / Backup /
-                    Hugging Face keep working. Do NOT make this a controlled
+                    jump, so the sidebar links to Import to bank / Backup / a
+                    plugin's row keep working. Do NOT make this a controlled
                     <details> without teaching `land` about it. */}
                 <details className="rounded-lg border border-border bg-surface-raised">
                   <summary className="flex items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] text-content-muted hover:text-content cursor-pointer select-none">
                     ⋯ More ways out
                     <span className="text-content-subtle">
-                      bank · portable backup{caps.hf_publish && kept > 0 ? ' · Hugging Face' : ''}
+                      bank · portable backup{exportActionSummary}
                     </span>
                   </summary>
                   <div className="flex flex-col gap-2 px-2.5 pb-2.5 pt-1">
@@ -2290,20 +2318,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
                         portable copy — restore it on any machine from the Datasets page
                       </span>
                     </div>
-                    {caps.hf_publish && kept > 0 && (
-                      <div id="ds-export-hugging-face" tabIndex={-1}
-                        className="flex items-center gap-2 flex-wrap scroll-mt-20">
-                        <button type="button" data-workspace-focus
-                          onClick={() => setPublishHfOpen(true)}
-                          title="Publish this dataset (kept images + captions) as a dataset repo on the Hugging Face Hub. Private by default; you choose the license and confirm you have the right to share."
-                          className="px-3 py-1.5 rounded-lg bg-surface border border-border text-content text-sm">
-                          🤗 Publish to Hugging Face
-                        </button>
-                        <span className="text-content-subtle text-[0.6875rem]">
-                          dataset repo on the Hub — private by default
-                        </span>
-                      </div>
-                    )}
+                    {/* The plugins' ways out (a publisher's row): each draws
+                        its own row under its own predicate, its dialog with it. */}
+                    <PluginSlot slot="export.action" surface="dataset" dataset={d} kept={kept}
+                      context={navContext} />
                   </div>
                 </details>
               </div>
@@ -2316,8 +2334,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
             <div id="gf-training" className="scroll-mt-20 flex flex-col gap-2">
               <div id="ds-training-launch" tabIndex={-1}
                 className="flex flex-col gap-2 scroll-mt-20">
-                {/* Pastille de préparation (miroir du preflight) : refreshKey borné aux
-                    compteurs pertinents → pas de re-fetch à chaque poll du dataset. */}
+                {/*
+                 * Readiness badge mirrors preflight. Limit refreshKey to relevant counters to
+                 * avoid refetching on every dataset poll.
+                 */}
                 {caps.training_visible && (
                   <TrainingReadiness datasetId={d.id} trainType={d.train_type} variant={d.train_variant}
                     refreshKey={`${kept}|${keptCaptioned}|${pending}|${triage}|${d.caption_leak?.leaking ?? ''}`}
@@ -2451,7 +2471,6 @@ export default function DatasetWorkspace({ ds, onBack }) {
           onImprove={canImproveViewImg
             ? ((imageId, engine) => ds.improveImage(imageId, { engine }))
             : undefined}
-          onCameraAngles={canCameraViewImg ? shootDatasetViews : undefined}
           /* ⟨ / ⟩ walk `gridImages` — the filtered, sorted list the grid shows,
              the SAME array it is handed below. Not `images` (the raw payload):
              ⟩ would then land on a picture the current filters hide, behind an
@@ -2505,9 +2524,6 @@ export default function DatasetWorkspace({ ds, onBack }) {
       {importToBankOpen && (
         <DatasetToBankDialog datasetName={d.name} keptCount={kept}
           onClose={() => setImportToBankOpen(false)} onStart={importToBank} />
-      )}
-      {publishHfOpen && (
-        <PublishHfModal datasetId={d.id} onClose={() => setPublishHfOpen(false)} />
       )}
       {folderBrowseOpen && (
         <FolderBrowserModal

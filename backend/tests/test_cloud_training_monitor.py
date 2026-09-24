@@ -9,12 +9,15 @@ from app.utils.timestamps import naive_utcnow
 import os
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
 def ct(app, monkeypatch):
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
-    from app.services import cloud_training
+    from lds_cloud_training import cloud_training
     monkeypatch.setattr(cloud_training, '_sleep', lambda s: None)
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     # launch_cloud_training now reconciles orphans on every call (Task 7) --
@@ -118,18 +121,25 @@ def _launch(ct, app, client, monkeypatch, remote, destroy_log):
                         lambda **kw: [{'offer_id': 9, 'gpu_name': 'RTX 4090',
                                        'dph_total': 0.4, 'gpu_ram_gb': 24.0,
                                        'machine_id': 43503, 'reliability': 0.99}])
-    monkeypatch.setattr(ct.vast_client, 'create_instance', lambda *a, **kw: '777')
-    monkeypatch.setattr(ct.vast_client, 'get_instance', lambda iid: {
+    remote.rental = {'label': None}
+
+    def create_instance(*_a, **kw):
+        remote.rental['label'] = kw['label']
+        return '777'
+
+    monkeypatch.setattr(ct.vast_client, 'create_instance', create_instance)
+    monkeypatch.setattr(ct.vast_client, 'get_instance', lambda iid, **_kw: {
         'instance_id': iid, 'actual_status': 'running', 'public_ipaddr': '1.2.3.4',
-        'ports': {'18675/tcp': [{'HostPort': '40123'}]}, 'label': 'lds-x',
+        'ports': {'18675/tcp': [{'HostPort': '40123'}]}, 'label': remote.rental['label'],
         'jupyter_token': 'jtok-vast'})
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroy_log.append(iid) or True)
+                        lambda iid, **_kw: destroy_log.append(iid) or True)
     monkeypatch.setattr(ct, '_make_remote', lambda run: remote)
     ds_id = client.post('/api/dataset/create',
                         json={'name': 'Lola', 'trigger_word': 'lola'}).get_json()['id']
     with app.app_context():
         res = ct.launch_cloud_training('local', ds_id)
+        remote.rental['label'] = f'lds-{res["run_id"]}'
     return ds_id, res['run_id']
 
 
@@ -434,12 +444,13 @@ def test_provision_retries_transient_create_refusal(ct, app, client, monkeypatch
     ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
     monkeypatch.setattr(ct.vast_client, 'search_offers', lambda **kw: list(_TWO_OFFERS))
     tried = []
+    create_instance = ct.vast_client.create_instance
 
     def flaky_create(offer_id, **kw):
         tried.append(offer_id)
         if len(tried) == 1:
             raise ct.vast_client.VastError('create_instance failed: HTTP 400 {}')
-        return '777'
+        return create_instance(offer_id, **kw)
 
     monkeypatch.setattr(ct.vast_client, 'create_instance', flaky_create)
     with app.app_context():
@@ -667,7 +678,7 @@ def test_auto_retry_requires_confirmed_old_pod_termination(ct, app, client,
     remote.is_ready = lambda: False
     ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(iid) or False)
+                        lambda iid, **_kw: destroyed.append(iid) or False)
     clock = {'t': 0.0}
     monkeypatch.setattr(ct, '_now',
                         lambda: clock.__setitem__('t', clock['t'] + 120) or clock['t'])
@@ -879,7 +890,8 @@ def test_midrun_checkpoint_sync_harvests_every_save(ct, app, client, monkeypatch
         assert not any(f.endswith('.safetensors')
                        for f in os.listdir(run.staging_dir))
         # ...and the panel lists all of them
-        assert [c['step'] for c in ct.cloud_checkpoints(ds_id)] == [100, 200, 300]
+        from app.services.cloud_training import cloud_checkpoints
+        assert [c['step'] for c in cloud_checkpoints(ds_id)] == [100, 200, 300]
 
 
 def test_completion_retrieves_intermediates_still_on_pod(ct, app, client, monkeypatch, tmp_path):
@@ -1273,14 +1285,14 @@ def test_boot_wait_tolerates_transient_vast_errors(ct, app, client, monkeypatch)
     calls = {'n': 0}
     good = {'instance_id': '777', 'actual_status': 'running',
             'public_ipaddr': '1.2.3.4',
-            'ports': {'18675/tcp': [{'HostPort': '40123'}]}, 'label': 'lds-x',
+            'ports': {'18675/tcp': [{'HostPort': '40123'}]}, 'label': remote.rental['label'],
             'jupyter_token': 'jtok-vast'}
 
-    def flaky(iid):
+    def flaky(iid, **_kw):
         calls['n'] += 1
         if calls['n'] <= 2:
             raise ct.vast_client.VastError('bundles endpoint 502')
-        return good
+        return dict(good, label=remote.rental['label'])
 
     monkeypatch.setattr(ct.vast_client, 'get_instance', flaky)
     with app.app_context():

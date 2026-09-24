@@ -1,5 +1,8 @@
 """Cloud training routes: gating, forwarding, progress/status/stop/sample."""
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _mkds(client):
@@ -34,7 +37,7 @@ def test_cloud_train_forwards_kwargs(client, monkeypatch):
         seen.update(user_id=user_id, dataset_id=dataset_id, **kw)
         return {'run_id': 1, 'status': 'preparing', 'job_name': 'j', 'steps': 1200}
 
-    monkeypatch.setattr('app.services.cloud_training.launch_cloud_training', fake_launch)
+    monkeypatch.setattr('lds_cloud_training.cloud_training.launch_cloud_training', fake_launch)
     r = client.post(f'/api/dataset/{ds}/train/cloud',
                     json={'steps': 500, 'variant': 'turbo', 'train_type': 'krea',
                           'training_mode': 'full_transformer',
@@ -56,7 +59,7 @@ def test_cloud_train_forwards_gpu_name(client, monkeypatch):
         seen.update(kw)
         return {'run_id': 1, 'status': 'preparing', 'job_name': 'j', 'steps': 1200}
 
-    monkeypatch.setattr('app.services.cloud_training.launch_cloud_training', fake_launch)
+    monkeypatch.setattr('lds_cloud_training.cloud_training.launch_cloud_training', fake_launch)
     client.post(f'/api/dataset/{ds}/train/cloud',
                 json={'train_type': 'krea', 'gpu_name': 'RTX 5090'})
     assert seen['gpu_name'] == 'RTX 5090'
@@ -75,7 +78,7 @@ def test_cloud_offers_route_returns_tiers(client, monkeypatch):
                            'est_minutes': 48, 'est_cost': 0.11, 'speed': 1.0}],
                 'steps': 3000, 'family': 'krea', 'max_price_per_hour': 0.8}
 
-    monkeypatch.setattr('app.services.cloud_training.gpu_tiers', fake_tiers)
+    monkeypatch.setattr('lds_cloud_training.cloud_training.gpu_tiers', fake_tiers)
     r = client.get(
         f'/api/dataset/{ds}/train/cloud/offers'
         '?train_type=krea&variant=base&steps=3000&training_mode=full_transformer')
@@ -96,7 +99,7 @@ def test_cloud_offers_route_gated_when_unconfigured(client):
 def test_cloud_train_value_error_maps_400(client, monkeypatch):
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
     ds = _mkds(client)
-    monkeypatch.setattr('app.services.cloud_training.launch_cloud_training',
+    monkeypatch.setattr('lds_cloud_training.cloud_training.launch_cloud_training',
                         lambda *a, **k: (_ for _ in ()).throw(ValueError('SDXL nope')))
     r = client.post(f'/api/dataset/{ds}/train/cloud', json={'train_type': 'sdxl'})
     assert r.status_code == 400
@@ -108,7 +111,7 @@ def test_cloud_retry_rechecks_mutated_dataset_without_legacy_bypass(
     import json
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
     monkeypatch.setattr(
-        'app.services.cloud_training._reconcile_before_launch', lambda app: None)
+        'lds_cloud_training.cloud_training._reconcile_before_launch', lambda app: None)
     ds_id = _mkds(client)
     with app.app_context():
         from app.extensions import db
@@ -172,13 +175,13 @@ def test_cloud_runs_unconfigured_is_open_and_empty(client):
 def test_cloud_progress_and_stop(client, monkeypatch):
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
     ds = _mkds(client)
-    monkeypatch.setattr('app.services.cloud_training.cloud_progress',
+    monkeypatch.setattr('lds_cloud_training.cloud_training.cloud_progress',
                         lambda uid, did, train_type=None, run_id=None: {
                             'active': True, 'phase': 'training',
                             'step': 5, 'total': 100, 'samples': []})
     r = client.get(f'/api/dataset/{ds}/train/cloud/progress')
     assert r.status_code == 200 and r.get_json()['phase'] == 'training'
-    monkeypatch.setattr('app.services.cloud_training.request_stop',
+    monkeypatch.setattr('lds_cloud_training.cloud_training.request_stop',
                         lambda run_id=None, ban_host=False: True)
     assert client.post('/api/dataset/train/cloud/stop').get_json()['ok'] is True
 
@@ -192,7 +195,7 @@ def test_cloud_stop_forwards_run_id(client, monkeypatch):
         seen['ban_host'] = ban_host
         return True
 
-    monkeypatch.setattr('app.services.cloud_training.request_stop', fake_request_stop)
+    monkeypatch.setattr('lds_cloud_training.cloud_training.request_stop', fake_request_stop)
     r = client.post('/api/dataset/train/cloud/stop', json={'run_id': 42})
     assert r.status_code == 200 and r.get_json()['ok'] is True
     assert seen['run_id'] == 42
@@ -218,7 +221,7 @@ def test_cloud_stop_forwards_the_host_ban_only_when_asked(client, monkeypatch):
         seen['ban_host'] = ban_host
         return True
 
-    monkeypatch.setattr('app.services.cloud_training.request_stop', fake_request_stop)
+    monkeypatch.setattr('lds_cloud_training.cloud_training.request_stop', fake_request_stop)
     client.post('/api/dataset/train/cloud/stop', json={'run_id': 7, 'ban_host': True})
     assert seen['ban_host'] is True
     client.post('/api/dataset/train/cloud/stop', json={'run_id': 7})
@@ -335,7 +338,7 @@ def test_all_runs_unifies_local_and_cloud_history(app, client, monkeypatch):
     with app.app_context():
         from app.extensions import db
         from app.models import CloudTrainingRun, TrainingRunRecord
-        from app.services import cloud_training as ct
+        from lds_cloud_training import cloud_training as ct
         # local launch record with a settings snapshot
         db.session.add(TrainingRunRecord(
             dataset_id=ds, family='krea', source='local', fingerprint='fp1', version=1,
@@ -503,7 +506,7 @@ def test_continue_local_in_cloud_route_forwards_the_choice(client, monkeypatch):
         return {'run_id': 7, 'status': 'preparing', 'resumed_from': 500,
                 'target_steps': 1500}
 
-    monkeypatch.setattr('app.services.cloud_training.continue_local_run_in_cloud',
+    monkeypatch.setattr('lds_cloud_training.cloud_training.continue_local_run_in_cloud',
                         fake_continue)
     r = client.post(f'/api/dataset/{ds}/train/cloud/continue-local',
                     json={'extra_steps': 1000, 'from_step': 500,
@@ -536,7 +539,7 @@ def test_recheck_dense_delivery_route_returns_helper_payload(client, monkeypatch
         'hf_url': 'https://huggingface.co/tester/Krea-42',
     }
     monkeypatch.setattr(
-        'app.services.cloud_training.recheck_full_transformer_delivery',
+        'lds_cloud_training.cloud_training.recheck_full_transformer_delivery',
         lambda run_id: seen.append(run_id) or dict(expected))
     response = client.post(
         '/api/dataset/train/cloud/recheck-delivery', json={'run_id': 42})

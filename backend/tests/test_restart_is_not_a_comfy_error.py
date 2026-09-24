@@ -28,10 +28,12 @@ def _cancelled_job(app, *, metadata, error_message=None):
     return job
 
 
+@pytest.mark.plugins('video')
 def test_an_auto_resolved_cancellation_says_the_restart_not_a_comfy_error(app, monkeypatch):
     from app import job_queue
     from app.extensions import db
-    from app.models import ImageGenerationQueue, VideoTestClip
+    from app.models import ImageGenerationQueue
+    from lds_video.models import VideoTestClip
     with app.app_context():
         _cancelled_job(app, metadata={'is_video_test': True, 'clip_id': 1})
         clip = VideoTestClip(job_id='job-restart', status='pending', prompt='p',
@@ -55,12 +57,13 @@ def test_an_auto_resolved_cancellation_says_the_restart_not_a_comfy_error(app, m
         assert 'restarted' in (job.error_message or '')
 
 
+@pytest.mark.plugins('video')
 def test_a_real_comfyui_error_is_never_overwritten(app):
     """The recovery path only fills a SILENCE. A node error, a validation body —
     anything the queue already captured — is what the user needs, and it wins."""
     from app import job_queue
     from app.extensions import db
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     with app.app_context():
         _cancelled_job(app, metadata={'is_video_test': True, 'clip_id': 1},
                        error_message='Value not in list: unet_name')

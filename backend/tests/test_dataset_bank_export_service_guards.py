@@ -23,8 +23,9 @@ _OPERATIONS = (
         'local', c['dataset_id'], [{'prompt': 'portrait'}], 1)),
     ('generate_krea', lambda c: c['svc'].generate_variations_krea(
         'local', c['dataset_id'], [{'prompt': 'portrait'}], 1)),
-    ('generate_api', lambda c: c['svc'].generate_variations_nanobanana(
-        c['app'], 'local', c['dataset_id'], [{'prompt': 'portrait'}], 1)),
+    pytest.param('generate_api', lambda c: c['svc'].generate_variations_nanobanana(
+        c['app'], 'local', c['dataset_id'], [{'prompt': 'portrait'}], 1),
+        marks=pytest.mark.plugins('api_engines'), id='generate_api'),
     ('improve_one', lambda c: c['svc'].improve_existing_image(
         'local', c['imported_id'])),
     ('reimprove_one', lambda c: c['svc'].reimprove_image(
@@ -43,7 +44,8 @@ _EXCLUSIVE_DATASET_ACTIVITIES = (
 
 
 @pytest.mark.parametrize('_name,operation', _OPERATIONS, ids=[
-    name for name, _operation in _OPERATIONS
+    getattr(operation, 'id', None) or operation[0]
+    for operation in _OPERATIONS
 ])
 @pytest.mark.parametrize('activity_kind,error_text',
                          _EXCLUSIVE_DATASET_ACTIVITIES,

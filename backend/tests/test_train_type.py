@@ -92,6 +92,7 @@ def test_modern_settings_can_atomically_leave_dense_and_change_family(
     from app.extensions import db
     from app.models import FaceDataset
 
+    monkeypatch.setattr(capabilities, 'probe_aitoolkit', lambda: {'ok': True})
     monkeypatch.setattr(capabilities, 'probe', lambda: {
         'aitoolkit': {'valid': True}, 'cloud_training': False})
     did = client.post(

@@ -1,15 +1,9 @@
-/* 🔤 Flagged pages with their zones — INSIDE the launch window.
- *
- * Asked for in these words: "quand on fait le lancement de recherche test de
- * text cela doit afficher dans la même fenêtre les image cible avec les zone
- * de ciblage" — a test run whose result can only be judged by leaving the
- * window is not a test run, it is a scavenger hunt. ONE component for both
- * surfaces, so the strip cannot drift into two wordings of the same thing
- * (the parity rule): the bank feeds it from its preview endpoint, the dataset
- * from the flagged rows already in its payload.
- *
- * Each tile links to the full-size page: the zones are judged on a thumbnail,
- * but a borderline box (did it clip the bubble outline?) needs pixels.
+/*
+ * Show flagged pages and their target zones INSIDE the test launch dialog, as requested, so
+ * results can be judged without leaving it. One component serves both surfaces under the parity
+ * rule: Bank uses its preview endpoint; Dataset uses flagged payload rows. Each tile opens the
+ * full-size page because a thumbnail shows zones, but judging borderline boxes such as clipped
+ * bubble outlines requires full pixels.
  */
 import { galleryHeadline, galleryZones, zoneStyle } from './textZonesGallery.js'
 

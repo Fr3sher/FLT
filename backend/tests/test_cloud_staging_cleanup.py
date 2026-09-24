@@ -17,6 +17,9 @@ from app.utils.timestamps import naive_utcnow
 from datetime import timedelta
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
@@ -51,13 +54,13 @@ def runs(app, tmp_path):
 
 
 def _clear_size_cache():
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     ct._staging_size_cache.clear()
 
 
 def test_spare_reason_is_the_single_rule_both_purges_use(app, runs):
     from app.models import CloudTrainingRun
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         get = lambda s: db.session.get(CloudTrainingRun, runs[s])   # noqa: E731
         assert ct.staging_spare_reason(get('done')) is None
@@ -71,7 +74,7 @@ def test_spare_reason_is_the_single_rule_both_purges_use(app, runs):
 
 
 def test_staging_sizes_reports_only_what_is_on_disk(app, runs):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     _clear_size_cache()
     with app.app_context():
         sizes = ct.staging_sizes()
@@ -92,7 +95,7 @@ def test_purge_keeps_the_checkpoint_and_only_frees_the_working_files(app, runs):
     """The regression test for the incident: a purge must move the samples and
     the dataset copy, and leave every .safetensors readable — in the store."""
     from app.models import CloudTrainingRun
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     _clear_size_cache()
     with app.app_context():
         target = db.session.get(CloudTrainingRun, runs['done'])
@@ -119,7 +122,7 @@ def test_purge_keeps_the_checkpoint_and_only_frees_the_working_files(app, runs):
 
 def test_purge_one_run_refuses_the_runs_the_global_purge_spares(app, runs):
     from app.models import CloudTrainingRun
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         with pytest.raises(ValueError):
             ct.purge_run_staging(runs['training'])
@@ -133,7 +136,7 @@ def test_purge_one_run_refuses_the_runs_the_global_purge_spares(app, runs):
 
 
 def test_purge_one_run_twice_is_an_honest_no_op(app, runs):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         ct.purge_run_staging(runs['done'])
         again = ct.purge_run_staging(runs['done'])
@@ -141,7 +144,7 @@ def test_purge_one_run_twice_is_an_honest_no_op(app, runs):
 
 
 def test_global_purge_reports_already_clean_instead_of_a_bare_zero(app, runs):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         first = ct.purge_finished_runs()
         # done + stopped + the expired kept pod; the active run and the pod
@@ -160,7 +163,7 @@ def test_orphan_run_folders_are_named_instead_of_ignored(app, runs, monkeypatch,
     """A run_<id> folder no row points at used to be answered 'already clean'
     while it held 25 GB. It is now listed, sized, and purgeable on request —
     with any loose checkpoint rescued into the store first."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     root = tmp_path / 'cloud_runs_root'
     (root / 'run_9001' / 'dataset').mkdir(parents=True)
     (root / 'run_9001' / 'dataset' / 'a.png').write_bytes(b'z' * 2048)
@@ -230,7 +233,7 @@ def test_routes_expose_sizes_and_the_targeted_purge(client, app, runs):
 
 
 def test_orphan_routes_report_and_purge(client, app, runs, monkeypatch, tmp_path):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     root = tmp_path / 'cloud_runs_root2'
     (root / 'run_9002').mkdir(parents=True)
     (root / 'run_9002' / 'training.log').write_bytes(b'l' * 100)

@@ -1,17 +1,5 @@
-/* "Use a GPU Python you already have" — the decidable half, JSX-free so
- * `node --test` can import it.
- *
- * ✨ Score ships CPU-only PyTorch on purpose, and on a machine with a card that
- * costs hours. The fix is NOT to download a 2.5 GB CUDA wheel from inside the
- * app (wrong wheel index = a broken environment, and it is a big download for
- * people who may not need it). It is to reuse an interpreter this machine has
- * already proven — the one ComfyUI runs on, the one that trains LoRAs.
- *
- * The whole value is in being specific. "ai-toolkit: no" is useless; "ai-toolkit
- * has CUDA but is missing OpenCLIP, here is the command" is actionable. So every
- * row carries a per-dependency verdict and the backend refuses anything it could
- * not prove — a wrong pick would surface as an import error an hour into a pass.
- */
+/* Interpreter discovery checks imports and CUDA availability, not whether a
+ * calculation succeeds. A separate, explicit action tests that runtime. */
 
 /** The two features that can borrow an interpreter, and the ONLY thing that
  *  differs between them: which endpoint answers, what the sentences call the
@@ -81,7 +69,7 @@ export function sortInterpreters(rows) {
 /** Badge wording + tone per status. 'ok' green, 'warn' amber, 'off' muted. */
 export function statusBadge(status) {
   switch (status) {
-    case 'gpu_ready': return { tone: 'ok', label: 'GPU ready' }
+    case 'gpu_ready': return { tone: 'off', label: 'CUDA detected · calculation not tested' }
     case 'cpu_only': return { tone: 'warn', label: 'CPU only' }
     case 'incomplete': return { tone: 'warn', label: 'Missing packages' }
     default: return { tone: 'off', label: 'No answer' }
@@ -94,8 +82,7 @@ export function bestUpgrade(rows) {
   return (sortInterpreters(rows).find((r) => r.status === 'gpu_ready' && !r.selected)) || null
 }
 
-/** Can the user pick this row? Only interpreters proven able to run the whole
- *  pass — the backend enforces the same rule; this just greys the button. */
+/** Selection requires the pass's imports. It is not a calculation guarantee. */
 export function canSelect(row) {
   return Boolean(row && row.usable && !row.selected)
 }
@@ -136,7 +123,8 @@ export function detectionSummary(rows, nvidiaPresent = true, profile = DEFAULT_P
   if (!list.length) return 'No Python interpreters found to check yet.'
   const ready = list.filter((r) => r.status === 'gpu_ready')
   if (ready.length) {
-    return `${ready.length} of ${list.length} can run ${feature} on your GPU.`
+    return `${ready.length} of ${list.length} detect CUDA and have the packages for ${feature}. `
+      + 'Calculation is not tested. Use Test calculation to check the runtime.'
   }
   const close = list.filter((r) => r.status === 'incomplete' && r.cuda)
   if (close.length) {
@@ -171,7 +159,7 @@ export function dialogCopy(nvidiaPresent = true, profile = DEFAULT_PICKER) {
   const { feature, needs } = pickerProfile(profile)
   if (!nvidiaPresent) {
     return {
-      title: `⚡ Run ${feature} in a Python you already have`,
+      title: `Manage Python for ${feature}`,
       intro: `${feature} needs ${needs}. If another `
         + 'Python on this machine already carries them, it can run the pass — no '
         + 'second install. Nothing is ever installed into those environments: '
@@ -179,10 +167,9 @@ export function dialogCopy(nvidiaPresent = true, profile = DEFAULT_PICKER) {
     }
   }
   return {
-    title: `⚡ Run ${feature} on a GPU Python you already have`,
-    intro: 'If this machine already has a working CUDA PyTorch — the one that '
-      + `trains your LoRAs, or the one ComfyUI runs on — ${feature} can borrow it `
-      + 'instead of downloading another. Nothing is ever installed into those '
+    title: `Manage Python for ${feature}`,
+    intro: 'Choose the app’s managed environment, or reuse a Python that already '
+      + `has the packages for ${feature}. Nothing is ever installed into external `
       + 'environments: they are checked, never changed.',
   }
 }
@@ -226,4 +213,24 @@ export function selectionNote(result, profile = DEFAULT_PICKER) {
   const current = rows.find((r) => r.selected)
   if (!current) return null
   return `${pickerProfile(profile).feature} runs in ${current.label} — ${current.detail}`
+}
+
+/** Keep a failed native-library probe readable, including a bounded diagnostic. */
+export function calculationNote(result) {
+  if (!result) return null
+  const passed = result.status === 'passed'
+  const title = passed ? `Calculation passed (${result.device || 'device unknown'})`
+    : result.status === 'busy' ? 'Calculation deferred — another task is running'
+    : result.status === 'unavailable' ? 'Calculation unavailable' : 'Calculation failed'
+  const detail = typeof result.detail === 'string' ? result.detail.trim().slice(0, 1200) : ''
+  return { tone: passed ? 'ok' : 'warn', title, detail }
+}
+
+/** Default resolution can inherit another configured Python; managed is explicit. */
+export function interpreterPaths(result) {
+  return {
+    effective: result?.effective_python || result?.interpreters?.find((r) => r.selected)?.path || '',
+    managed: result?.managed_python || '',
+    usesManaged: result?.uses_managed === true,
+  }
 }

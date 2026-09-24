@@ -17,11 +17,14 @@ the keys the resume itself injected — and nothing more.
 import json
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
 def ct(app):
-    from app.services import cloud_training
+    from lds_cloud_training import cloud_training
     return cloud_training
 
 

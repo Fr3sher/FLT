@@ -10,6 +10,7 @@ failure keeps the pod recoverable until its direct Hugging Face delivery and
 licence metadata are verified; only then may completion destroy it. The local
 training path is untouched: a cloud run never sets 'training_in_progress', so
 local generation/captioning stay available."""
+from ..timeout_settings import network_timeout
 import json
 from ..utils.timestamps import naive_utcnow
 import logging
@@ -347,7 +348,7 @@ def _assert_official_base_reachable(repo_id, token, timeout=8):
         f'https://huggingface.co/api/models/{repo_id}/tree/main',
         headers={'Authorization': f'Bearer {token}'} if token else {})
     try:
-        urllib.request.urlopen(req, timeout=timeout).read(1)
+        urllib.request.urlopen(req, timeout=network_timeout(timeout)).read(1)
     except urllib.error.HTTPError as e:
         if e.code not in (401, 403):
             return                          # 404 / 5xx: not our call to make
@@ -380,7 +381,7 @@ def _assert_dense_custom_base_readable(repo_id, token, timeout=8):
         f'https://huggingface.co/api/models/{repo_id}/tree/main',
         headers={'Authorization': f'Bearer {token}'} if token else {})
     try:
-        urllib.request.urlopen(req, timeout=timeout).read(1)
+        urllib.request.urlopen(req, timeout=network_timeout(timeout)).read(1)
     except urllib.error.HTTPError as e:
         if e.code not in (401, 403):
             return
@@ -1636,12 +1637,10 @@ def _video_lane(run):
 
 
 def retry_cloud_run(user_id, run_id) -> dict:
-    """Relance un run TERMINÉ EN ERREUR avec les paramètres exacts persistés au
-    lancement d'origine (train_params) — le bouton ↻ Retry de la page Cloud.
-    C'est un VRAI launch_cloud_training (pod frais, mêmes garde-fous : limite
-    de runs actifs, budget, unicité par famille), pas une réanimation du pod
-    mort. Les confirmations ne sont rejouées que si le lancement d'origine les
-    avait explicitement enregistrées."""
+    """Retry a terminal failed cloud run using its original persisted
+    train_params. This is a real launch_cloud_training on a fresh pod with
+    normal active-run, budget and family-uniqueness safeguards, not revival
+    of a dead pod. Replay confirmations only when originally recorded."""
     run = db.session.get(CloudTrainingRun, int(run_id))
     if not run:
         raise ValueError('unknown cloud run')
@@ -2085,22 +2084,18 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
                        overrides=None, resume_mode='weights_only',
                        state_bundle_id=None, transport=None,
                        allow_parallel_run=False) -> dict:
-    """Reprend un run cloud TERMINAL (done OU en échec) depuis un checkpoint
-    harvesté et vise step_de_reprise + extra_steps — le pendant cloud de
-    lora_training.continue_training. C'est un VRAI launch_cloud_training (pod
-    frais, mêmes garde-fous : limite de runs actifs, budget, unicité par
-    famille) avec les paramètres persistés du run source (variante/famille/
-    masked/GPU class, comme retry_cloud_run) ; son monitor, AVANT de démarrer le
-    job, dépose le checkpoint dans le save_root du job sur le pod pour déclencher
-    l'auto-resume d'ai-toolkit.
+    """Continue a terminal cloud run (done or failed) from a harvested
+    checkpoint, targeting resume_step+extra_steps. Cloud equivalent of
+    lora_training.continue_training: fresh pod, normal run/budget/family
+    guards and the source run's persisted variant/family/masked/GPU settings.
+    Before starting, the monitor stages the checkpoint in save_root to
+    trigger ai-toolkit auto-resume.
 
-    ``from_step`` absent → dernier checkpoint (défaut). Fourni → CE step précis, y
-    compris un checkpoint plus ancien : le seed d'un checkpoint arbitraire sur un
-    pod NEUF est le même canal que le seed du dernier, et le staging du run source
-    n'est jamais touché — repartir d'un step inférieur est donc gratuit côté cloud.
-    ``overrides`` = mêmes réglages sûrs que le local (cadence/preview prompts),
-    fusionnés dans le snapshot du run (jamais dans le dataset). register_launch
-    reste un launch cloud normal — le resume est un détail d'exécution."""
+    Missing from_step selects the latest checkpoint; an explicit earlier
+    step uses the same fresh-pod staging path without modifying the source
+    run. Safe overrides match local continuation (cadence/preview prompts)
+    and merge into the run snapshot, never the dataset. register_launch
+    remains an ordinary cloud launch; resume is an execution detail."""
     _require_cloud_weights_only(resume_mode, state_bundle_id)
     run = db.session.get(CloudTrainingRun, int(run_id))
     if not run:
@@ -2575,9 +2570,9 @@ def _lct_resolve_and_refuse(user_id, dataset_id, train_type, base_model,
     if fam == 'sdxl':
         raise ValueError('SDXL training needs a local base checkpoint — '
                          'cloud training supports Z-Image, Krea and FLUX.2 Klein')
-    # flux2klein n'est PAS bloqué (contrairement à flux) : ses bases sont des repos
-    # HF officiels que le pod télécharge lui-même — le 9B (32-48 GB VRAM) est même
-    # la voie cloud principale de la famille.
+    # Unlike flux, flux2klein is not blocked: pods download its official
+    # Hugging Face bases themselves. The 9B model (32-48 GB VRAM) is even
+    # the family's primary cloud option.
     if fam == 'flux':
         raise ValueError('FLUX.1 training is local-only for now — '
                          'cloud training supports Z-Image, Krea and FLUX.2 Klein')
@@ -3113,6 +3108,9 @@ def _auto_retry_child(parent_id):
 
 def _maybe_auto_retry(run, error):
     """Rent at most one fresh pod after a transient failure of an existing pod."""
+    from .legacy_cloud_recovery import recovery_only
+    if recovery_only():
+        return None
     if (run.status != 'error' or not run.vast_instance_id
             or not _is_retryable_pod_failure(error)):
         return None
@@ -3863,6 +3861,9 @@ def _provision(run):
     """Search offers and create the instance, honoring the launch-time GPU
     choice when the picked class is still available.
     LEAK-SAFE: any failure after create_instance destroys the instance."""
+    from .legacy_cloud_recovery import recovery_only
+    if recovery_only():
+        raise RuntimeError('Install Cloud Training before renting another pod')
     c = cfg.get('cloud') or {}
     params = json.loads(run.train_params or '{}')
     fam = params.get('train_type') or 'zimage'
@@ -4685,7 +4686,9 @@ def boot_recover(app):
                 else:
                     _set(run, status='error', finished_at=naive_utcnow(),
                          error='app restarted before the pod was created')
-            _recover_pending_auto_retries()
+            from .legacy_cloud_recovery import recovery_only
+            if not recovery_only():
+                _recover_pending_auto_retries()
     except Exception:
         logger.exception('cloud boot recovery failed')
 
@@ -6019,6 +6022,13 @@ def _monitor(app, run_id):
     with app.app_context():
         run = db.session.get(CloudTrainingRun, run_id)
         if not run:
+            _stop_events.pop(int(run_id), None)
+            _monitor_threads.pop(int(run_id), None)
+            return
+        from .legacy_cloud_recovery import recovery_only
+        if recovery_only() and not run.vast_instance_id:
+            _set(run, status='error', finished_at=naive_utcnow(),
+                 error='Cloud Training is not installed; no replacement pod was rented')
             _stop_events.pop(int(run_id), None)
             _monitor_threads.pop(int(run_id), None)
             return
@@ -7464,18 +7474,6 @@ def checkpoint_notes_for(record_id):
             if r.note}
 
 
-def _civitai_links_for(record_id):
-    """{step: link} of this run's checkpoints already on Civitai — the pill's
-    📤 badge. Best-effort like the notes: a pill only GAINS a badge here, and a
-    failure in the link store must never blank a node of the tree."""
-    try:
-        from .civitai_publish import links_for_record
-        return links_for_record(record_id)
-    except Exception:
-        logger.debug('civitai links unavailable for record %s', record_id, exc_info=True)
-        return {}
-
-
 def training_activity() -> dict:
     """🏋️ Is anything training RIGHT NOW — locally or on a rented pod.
 
@@ -8572,7 +8570,6 @@ def _lineage_node(rec, crun, requested_id, failed_local_id):
             node['checkpoint_ready'] = None
     _cnotes = checkpoint_notes_for(rec.id)
     _cprev = checkpoint_previews_for(rec.id)
-    _clinks = _civitai_links_for(rec.id)
     # Deployment (testable + the deployed copy's own name) comes from the SHARED
     # annotator, so the graph pills and the Checkpoints panel rows answer "is this
     # deployed, and which ComfyUI file is it?" with the same join. Scoped to THIS
@@ -8592,13 +8589,8 @@ def _lineage_node(rec, crun, requested_id, failed_local_id):
             _ck['preview_url'] = _pv.get('url')
             _ck['preview_status'] = _pv.get('status')
             _ck['preview_count'] = _pv.get('count') or 0
-        # 📤 The Civitai page this save IS — keyed by the FILE, not the step:
-        # the numbered save and the final of a run that ended on it share a
-        # step, and each is its own version on the site. The popover says
-        # "On Civitai" from this, without a request per pill.
-        _cl = _clinks.get(_ck.get('filename') or '')
-        if _cl:
-            _ck['civitai'] = _cl
+    from ..plugins.hooks import run_filter
+    node['checkpoints'] = run_filter('lineage.checkpoints', node.get('checkpoints') or [], rec.id)
     return node
 
 
@@ -9390,7 +9382,7 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
     if fam == 'sdxl':
         raise ValueError('SDXL training needs a local base checkpoint — '
                          'cloud training supports Z-Image, Krea and FLUX.2 Klein')
-    # flux2klein passe (cf. launch_cloud_training) — seul flux reste local-only.
+    # flux2klein is supported (see launch_cloud_training); only flux remains local-only.
     if fam == 'flux':
         raise ValueError('FLUX.1 training is local-only for now — '
                          'cloud training supports Z-Image, Krea and FLUX.2 Klein')

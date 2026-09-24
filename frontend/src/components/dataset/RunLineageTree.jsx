@@ -146,7 +146,7 @@ function ViewToggle({ view, onChange }) {
 }
 
 export default function RunLineageTree({ tree, loading, error, onSelect, onContinueCheckpoint,
-  refetchTree, bestSettingsLora = null }) {
+  continueSource = 'cloud', refetchTree, bestSettingsLora = null }) {
   const [view, setView] = useState(readView);
   const changeView = useCallback((v) => {
     setView(v);
@@ -186,7 +186,7 @@ export default function RunLineageTree({ tree, loading, error, onSelect, onConti
       </div>
       {view === 'graph'
         ? <RunLineageGraph tree={tree} onSelect={onSelect} onContinueCheckpoint={onContinueCheckpoint}
-            refetchTree={refetchTree} bestSettingsLora={bestSettingsLora} />
+            continueSource={continueSource} refetchTree={refetchTree} bestSettingsLora={bestSettingsLora} />
         : <LineageList rows={rows} onSelect={onSelect} />}
     </div>
   );

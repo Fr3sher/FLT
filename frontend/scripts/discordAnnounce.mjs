@@ -38,6 +38,7 @@
 //  generator that will post something nobody read.
 // =====================================================================//
 import { extractCredits, newEntries, idsAtTag, previousTagOf, REPO_URL } from './releaseNotes.mjs';
+import { execFileSync } from 'node:child_process';
 
 /** Discord's per-message ceiling. Not a style choice — the API rejects beyond. */
 export const DISCORD_LIMIT = 2000;
@@ -63,6 +64,7 @@ const SURFACE_BY_ROUTE = [
   ['/studio', 'Test Studio'],
   ['/cloud', 'Cloud'],
   ['/setup', 'Setup'],
+  ['/plugins', 'Plugins'],
   ['/settings', 'Settings'],
 ];
 
@@ -95,20 +97,36 @@ export function renderLines(entries) {
  * credits must close the last part, whatever the split. Splitting those would
  * produce a thank-you addressed to nobody.
  */
-export function renderAnnouncement({ tag, entries, previousTag, limit = DISCORD_LIMIT }) {
+export function isV2PreviewVersion(source) {
+  return /^APP_RELEASE_CHANNEL = 'v2-preview'\s*$/m.test(source);
+}
+
+export function isV2StableVersion(source) {
+  return /^APP_RELEASE_CHANNEL = 'v2'\s*$/m.test(source);
+}
+
+export function renderAnnouncement({ tag, entries, previousTag, preview = false, v2 = false, limit = DISCORD_LIMIT }) {
   if (!entries.length) {
     throw new Error(`nothing to announce for ${tag}: no What's-new entry since `
       + `${previousTag || 'the previous release'}. An announcement that lists nothing `
       + 'is how a wave gets skipped — fix the changelog, do not post an empty message.');
   }
-  const head = `## 🎁 ${tag} is out — ${entries.length} change${entries.length > 1 ? 's' : ''}\n`;
+  const releaseName = preview ? `LoRA Dataset Studio V2 — Preview (${tag})`
+    : v2 ? `LoRA Dataset Studio V2 (${tag})` : tag;
+  const head = `## 🎁 ${releaseName} is out — ${entries.length} change${entries.length > 1 ? 's' : ''}\n`;
   const credits = extractCredits(entries);
   const tail = [
     '',
     credits.length
       ? `Thanks to **${credits.join('**, **')}** — these came from your reports. 🙏`
       : '',
-    `Update from **Settings ▸ Maintenance ▸ Update & restart**, or grab the ZIP: <${REPO_URL}/releases/tag/${tag}>`,
+    preview
+      ? `Try V2 with the preview ZIP or an explicit **v2** checkout: <${REPO_URL}/releases/tag/${tag}>\n`
+        + 'Complete the core Setup, then choose your plugins in **Plugins ▸ Store**. '
+        + 'V1 Update & restart does not switch to V2; preview ZIP updates are manual.'
+      : `Update from **Settings ▸ Maintenance ▸ Update & restart**, or grab the ZIP: <${REPO_URL}/releases/tag/${tag}>`
+        + (v2 ? '\nV2 is now the main release. Your datasets, media and history stay in place. '
+          + 'Choose from **13 free public plugins** in **Plugins ▸ Store**, then review each plugin’s settings and preparation steps.' : ''),
   ].filter(Boolean).join('\n');
 
   const lines = renderLines(entries);
@@ -119,7 +137,8 @@ export function renderAnnouncement({ tag, entries, previousTag, limit = DISCORD_
   // Measuring after the fact and re-splitting would be the classic off-by-one
   // that ships a 2 003-character message.
   const suffix = '\n\n*(part 99/99)*';
-  const budgetFirst = limit - head.length - suffix.length;
+  // Part 1 may also be the last part, so reserve its footer before splitting.
+  const budgetFirst = limit - head.length - tail.length - suffix.length;
   const budgetLast = limit - tail.length - suffix.length;
 
   for (const line of lines) {
@@ -161,10 +180,16 @@ async function main() {
   const previousTag = opts.previous || previousTagOf(tag, repoRoot);
   const current = (await import('../src/whatsNew.js')).WHATS_NEW;
   const entries = newEntries(current, idsAtTag(previousTag, repoRoot));
+  // Read the requested tag, not this checkout: a V2 checkout may be used to
+  // regenerate a historical V1 announcement whose update advice must stay V1.
+  const taggedVersion = execFileSync('git', ['show', `${tag}:backend/app/version.py`],
+    { cwd: repoRoot, encoding: 'utf8' });
+  const preview = isV2PreviewVersion(taggedVersion);
+  const v2 = isV2StableVersion(taggedVersion);
 
   let messages;
   try {
-    messages = renderAnnouncement({ tag, entries, previousTag });
+    messages = renderAnnouncement({ tag, entries, previousTag, preview, v2 });
   } catch (err) {
     console.error(String(err.message));
     process.exit(2);

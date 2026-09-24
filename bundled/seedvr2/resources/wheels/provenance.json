@@ -1,0 +1,10 @@
+{
+  "source_url": "https://pypi.org/project/antlr4-python3-runtime/4.9.3/",
+  "source_sha256": "f224469b4168294902bb1efa80a8bf7855f24c99aef99cbefc1bcd3cce77881b",
+  "license_url": "https://raw.githubusercontent.com/antlr/antlr4/4.9.3/LICENSE.txt",
+  "transformation": "omit unused pygrun script; local version +lds.1; include BSD license",
+  "python_runtime_files_unchanged": 56,
+  "wheel": "antlr4_python3_runtime-4.9.3+lds.1-py3-none-any.whl",
+  "wheel_sha256": "4e909ac01d54970b10622e90c2645dad8b186d4d79b5864fa60bb155379173ef",
+  "size": 144376
+}

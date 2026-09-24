@@ -1,7 +1,6 @@
-"""Provenance des images de recherche web : la page d'origine est conservée.
-
-Pexels exige un crédit photographe ; une image trouvée sur le web ouvert n'en a
-pas — seulement la page où elle a été trouvée. Les deux formes coexistent."""
+"""Web-search image provenance preserves the source page. Pexels requires
+photographer credit; open-web results instead identify the page where the image
+was found. Both metadata forms coexist."""
 from app.services.face_dataset_service import (
     _source_metadata_from_scrape_item, normalize_source_metadata)
 
@@ -14,7 +13,7 @@ def test_websearch_metadata_keeps_the_page_the_image_came_from():
 
 
 def test_websearch_metadata_without_a_usable_source_url_is_dropped():
-    for value in ('http://blog.example.test/post/42',      # pas https
+    for value in ('http://blog.example.test/post/42',      # Not HTTPS.
                   'https://user:pw@blog.example.test/x',   # credentials
                   '', None, 12):
         assert normalize_source_metadata(

@@ -1,22 +1,15 @@
-"""Signatures vidéo de netfetch + validation RÉELLE du chemin yt-dlp.
-
-Ce module existe à cause d'un port dormant : `netfetch.py` importait
-`_looks_like_video` depuis `app/upload/routes.py`, un module qui n'a jamais
-existé dans cette app. Résultat : ImportError à chaque exécution réelle de
-`download_via_ytdlp` et de `_validate_media_file` — invisible pour la suite,
-parce que `test_universal_source.py` monkeypatche `download_via_ytdlp` EN
-ENTIER et ne descend donc jamais dedans.
-
-D'où la règle de ce fichier : on ne mocke QUE le sous-processus yt-dlp
-(`_download_with_ytdlp`), jamais la validation. Les octets sont forgés à la
-main — aucun vrai média, aucun réseau, aucun contexte Flask.
-"""
+"""netfetch video signatures and real yt-dlp download-path validation. netfetch
+formerly imported _looks_like_video from app/upload/routes.py, which never existed
+here. Real calls failed, but test_universal_source mocked download_via_ytdlp
+entirely and hid the error. Mock only the yt-dlp subprocess
+(_download_with_ytdlp), never validation. Use synthetic bytes, without real media,
+network, or Flask context."""
 import pytest
 
 from app.scrape import netfetch
 
 
-# --- En-têtes forgés (le strict nécessaire : 12 octets minimum sont lus) ---
+# Synthetic headers: only the required minimum 12 bytes are read.
 
 MP4 = b'\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2'
 MOV = b'\x00\x00\x00\x14ftypqt  \x00\x00\x02\x00qt  '
@@ -25,8 +18,7 @@ WEBM = b'\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81webm'
 AVI = b'RIFF\x24\x08\x00\x00AVI LIST\x00\x00'
 GIF = b'GIF89a\x10\x00\x10\x00\x80\x00\x00\xff\xff\xff'
 MPEG_PS = b'\x00\x00\x01\xba\x44\x00\x04\x00\x04\x01\x00\x03'   # pack header
-MPEG_ES = b'\x00\x00\x01\xb3\x14\x00\xf0\xc4\x02\xcb\x23\x80'   # sequence header
-# mpeg-ts : aucun magic en tête, juste 0x47 tous les 188 octets.
+MPEG_ES = b'\x00\x00\x01\xb3\x14\x00\xf0\xc4\x02\xcb\x23\x80'   # Sequence header. MPEG-TS has no leading magic, just 0x47 every 188 bytes.
 MPEG_TS = bytearray(b'\x11' * 512)
 MPEG_TS[0] = MPEG_TS[188] = MPEG_TS[376] = 0x47
 MPEG_TS = bytes(MPEG_TS)
@@ -37,14 +29,14 @@ HTML = b'<!DOCTYPE html><html><head><title>Sign in</title></head></html>'
 
 
 def _write(tmp_path, name, data):
-    """Écrit `data` tel quel et retourne le chemin (str) — l'extension MENT
-    volontairement dans plusieurs tests : c'est tout l'objet de la sonde."""
+    """Write data unchanged and return its path as a string. Extensions deliberately
+    lie in several tests: that is what the probe must detect."""
     path = tmp_path / name
     path.write_bytes(data)
     return str(path)
 
 
-# --- 1. Sonde vidéo : ce qu'elle reconnaît ---
+# 1) Video probe: supported signatures.
 
 @pytest.mark.parametrize('name, data', [
     ('clip.mp4', MP4),
@@ -61,30 +53,30 @@ def test_known_video_headers_are_recognised(tmp_path, name, data):
     assert netfetch._looks_like_video(_write(tmp_path, name, data)) is True
 
 
-# --- 2. Sonde vidéo : ce qu'elle refuse ---
+# 2) Video probe: rejected inputs.
 
 @pytest.mark.parametrize('name, data', [
-    ('login.mp4', HTML),                       # page d'auth servie à la place du média
-    ('clip.mp4', JPEG),                        # vignette renommée
+    ('login.mp4', HTML),                       # Authentication page served instead of media.
+    ('clip.mp4', JPEG),                        # Renamed thumbnail.
     ('clip.mp4', b'PK\x03\x04' + b'\x00' * 32),   # zip
     ('clip.mp4', b'MZ\x90\x00' + b'\x00' * 32),   # exe Windows
     ('clip.mp4', b'GET / HTTP/1.1\r\n\r\n'),   # texte quelconque
-    ('clip.mp4', b'\x47' + b'\x00' * 500),     # un SEUL 0x47 : pas un flux TS
-    ('clip.mp4', b'short'),                    # trop court pour décider
-    ('clip.mp4', b''),                         # fichier vide (yt-dlp tué en vol)
+    ('clip.mp4', b'\x47' + b'\x00' * 500),     # Only ONE 0x47 byte: not a TS stream.
+    ('clip.mp4', b'short'),                    # Too short to classify.
+    ('clip.mp4', b''),                         # Empty file after yt-dlp was killed mid-download.
 ])
 def test_non_video_content_is_refused_whatever_the_extension(tmp_path, name, data):
     assert netfetch._looks_like_video(_write(tmp_path, name, data)) is False
 
 
 def test_a_missing_file_is_refused_instead_of_raising(tmp_path):
-    """Le nettoyage d'un échec yt-dlp peut avoir déjà retiré le fichier."""
+    """Cleanup after yt-dlp failure may already have removed the file."""
     assert netfetch._looks_like_video(str(tmp_path / 'gone.mp4')) is False
 
 
 def test_only_a_bounded_prefix_is_read(tmp_path, monkeypatch):
-    """Une vidéo pèse jusqu'à MAX_DRIVER_BYTES (200 Mo) : la sonde lit un
-    en-tête, jamais le fichier entier."""
+    """Videos can reach MAX_DRIVER_BYTES (200 MB): read only a header, never the
+    entire file."""
     path = _write(tmp_path, 'big.mp4', MP4 + b'\x00' * 200000)
     reads = []
     real_open = open
@@ -112,22 +104,21 @@ def test_only_a_bounded_prefix_is_read(tmp_path, monkeypatch):
     assert all(0 < size <= 4096 for size in reads), reads
 
 
-# --- 3. _validate_media_file : l'ordre image-avant-vidéo, et ses deux branches ---
+# 3) _validate_media_file: image-before-video ordering and both branches.
 
 def test_an_avif_image_is_classified_image_not_video(tmp_path):
-    """LE piège du fichier : `ftyp` matche AUSSI l'AVIF, donc la sonde vidéo
-    dit True sur une image AVIF. Seul l'ordre (image testée EN PREMIER) la
-    classe correctement. Ce test tombe si quelqu'un inverse les deux blocs."""
+    """ftyp also matches AVIF, so the video probe accepts an AVIF image. Testing
+    IMAGE FIRST is what classifies it correctly; reversing the checks must fail
+    this test."""
     path = _write(tmp_path, 'photo.avif', AVIF)
-    assert netfetch._looks_like_video(path) is True        # la sonde vidéo se fait avoir
+    assert netfetch._looks_like_video(path) is True        # The video probe is fooled.
     assert netfetch._validate_media_file(path) == (True, 'image')   # l'ordre rattrape
 
 
 def test_a_gif_is_classified_image_not_video(tmp_path):
-    """Même mécanique que l'AVIF : `GIF8` est reconnu des deux côtés. Conséquence
-    assumée de l'ordre : sur le chemin vidéo-only, un GIF est refusé — une voie
-    qui voudrait des GIF animés doit le demander explicitement, pas hériter du
-    hasard d'un ordre de tests."""
+    """GIF8 is recognized by both probes, like AVIF. Image-first ordering
+    intentionally rejects GIF on the video-only path. Animated GIF support must be
+    explicit rather than an accidental consequence of probe order."""
     path = _write(tmp_path, 'anim.gif', GIF)
     assert netfetch._looks_like_video(path) is True
     assert netfetch._validate_media_file(path) == (True, 'image')
@@ -152,16 +143,13 @@ def test_validate_media_file_refuses_html_whatever_the_mode(tmp_path, allow_imag
     assert netfetch._validate_media_file(path, allow_image=allow_image) == (False, None)
 
 
-# --- 4. download_via_ytdlp : le sous-processus est mocké, la VALIDATION s'exécute ---
-#
-# C'est le test qui manquait. Il descend dans le corps de `download_via_ytdlp`
-# au lieu de le remplacer, donc il touche la ligne qui importait un module
-# inexistant : avec l'import fantôme en place, il échoue sur
-# ModuleNotFoundError: No module named 'app.upload'.
+# 4) download_via_ytdlp: mock the subprocess, run REAL validation. Enter the function
+# body instead of replacing it so the nonexistent app.upload import cannot remain hidden
+# behind a full-function mock.
 
 def _fake_download(files):
-    """Fabrique un faux `_download_with_ytdlp` qui écrit `files`
-    ({extension: octets}) là où yt-dlp les aurait écrits."""
+    """Create a fake _download_with_ytdlp that writes files ({extension: bytes})
+    where yt-dlp would write them."""
     def _run(url, dest_template):
         for ext, data in files.items():
             with open(dest_template.replace('%(ext)s', ext), 'wb') as fh:
@@ -181,8 +169,8 @@ def test_a_real_video_is_kept_and_named(tmp_path, monkeypatch):
 
 
 def test_an_html_page_saved_as_mp4_is_rejected_and_deleted(tmp_path, monkeypatch):
-    """yt-dlp sort 0 en ayant enregistré une page de connexion : sans la
-    validation, ce fichier partirait en bank comme une vidéo."""
+    """yt-dlp exits successfully after saving a login page. Without validation it
+    would enter the bank as a video."""
     monkeypatch.setattr(netfetch, '_download_with_ytdlp', _fake_download({'mp4': HTML}))
 
     ok, filename, err = netfetch.download_via_ytdlp(
@@ -194,7 +182,7 @@ def test_an_html_page_saved_as_mp4_is_rejected_and_deleted(tmp_path, monkeypatch
 
 
 def test_side_files_are_cleaned_and_only_the_video_survives(tmp_path, monkeypatch):
-    """yt-dlp dépose souvent une vignette et un .json à côté du média."""
+    """yt-dlp often saves a thumbnail and JSON alongside media."""
     monkeypatch.setattr(netfetch, '_download_with_ytdlp',
                         _fake_download({'mp4': MP4, 'jpg': JPEG, 'info.json': b'{}'}))
 
@@ -221,8 +209,8 @@ def test_a_failed_download_reports_the_error_and_leaves_nothing_behind(tmp_path,
 
 
 def test_no_upload_module_is_imported_anywhere_in_netfetch():
-    """Garde-fou explicite contre la réapparition du port dormant : `app/upload/`
-    n'existe pas dans cette app, un import vers lui ne peut que lever."""
+    """Prevent the dormant port from returning: app/upload does not exist here, so
+    importing it can only fail."""
     from pathlib import Path
     source = Path(netfetch.__file__).read_text(encoding='utf-8')
     assert 'upload.routes' not in source

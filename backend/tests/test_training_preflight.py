@@ -83,10 +83,9 @@ def test_preflight_warns_identical_and_leaking_captions(app):
 
 
 def test_preflight_concept_skips_identity_leak(app):
-    """A concept dataset DESCRIBES identity on purpose (the concept, not the face, binds to
-    the trigger). The identity-leak dimension must be skipped entirely — otherwise the SAME
-    hair/face captions that legitimately warn for a character trip a false warning on every
-    concept training run (the '...identité leak' messages reported in concept mode)."""
+    """Concept captions deliberately DESCRIBE identity because the concept, not the
+    face, binds to the trigger. Skip identity-leak checks entirely so valid
+    hair/face captions do not trigger false warnings on every concept run."""
     from app.services import face_dataset_service as svc
     from app.services import lora_training as lt
     from app.models import FaceDatasetImage
@@ -210,9 +209,9 @@ def test_preflight_clean_dataset_no_findings(app, monkeypatch):
 
 
 def test_preflight_checks_and_verdict_mirror_findings(app, monkeypatch):
-    """`checks`/`verdict` (pastille de préparation) reflètent la même passe que
-    blockers/warnings : fail → blocked, warn seul → warnings, rien → ready.
-    Les lignes en défaut portent une cible de section (gf-*) pour le saut."""
+    """checks/verdict preparation indicators reflect blockers/warnings from the same
+    pass: failure=blocked, warning-only=warnings, otherwise ready. Failed rows
+    include gf-* section targets for navigation."""
     from app.services import lora_training as lt
     from app import capabilities
     with app.app_context():
@@ -222,11 +221,13 @@ def test_preflight_checks_and_verdict_mirror_findings(app, monkeypatch):
         assert r['verdict'] == 'blocked'
         img = next(c for c in r['checks'] if c['id'] == 'images')
         assert img['status'] == 'fail' and img['target'] == 'gf-generate'
-        # 🟡 warnings : au-dessus du plancher, sous la reco (aucun fail)
+        # Warnings: above the hard minimum but below the recommendation, without
+        # failures.
         r2 = lt.training_preflight(LOCAL_USER, _mk(app, n_keep=15, framing='body').id)
         assert r2['verdict'] == 'warnings'
         assert not any(c['status'] == 'fail' for c in r2['checks'])
-        # 🟢 ready : dataset propre (reco atteinte, body, captions variées)
+        # Ready: a clean dataset meeting recommendations, with body coverage and varied
+        # captions.
         ds3 = _mk(app, n_keep=20, framing='body',
                   caption='full body shot of the subject walking through a sunny park wearing jeans')
         r3 = lt.training_preflight(LOCAL_USER, ds3.id)
@@ -235,9 +236,9 @@ def test_preflight_checks_and_verdict_mirror_findings(app, monkeypatch):
 
 
 def test_preflight_uncaptioned_kept_is_warning_not_blocker(app, monkeypatch):
-    """Une gardée sans caption : WARN (plus un mur) — le launch demande un
-    confirm « train anyway » (UNCAPTIONED: dans assert_trainable) au lieu de
-    refuser. Demande utilisateur : pouvoir expérimenter sans captions."""
+    """A kept image without a caption produces a warning. Launch asks for
+    train-anyway confirmation (UNCAPTIONED: in assert_trainable) instead of
+    blocking experiments without captions."""
     from app.services import lora_training as lt
     from app import capabilities
     with app.app_context():
@@ -253,8 +254,8 @@ def test_preflight_uncaptioned_kept_is_warning_not_blocker(app, monkeypatch):
 
 
 def test_assert_trainable_uncaptioned_is_confirmable(app):
-    """Le refus sans-caption porte le marqueur UNCAPTIONED: (déclencheur du
-    confirm côté front) et allow_uncaptioned=True le lève."""
+    """The missing-caption refusal carries UNCAPTIONED: for frontend confirmation;
+    allow_uncaptioned=True overrides it."""
     import pytest
     from app.services import lora_training as lt
     with app.app_context():

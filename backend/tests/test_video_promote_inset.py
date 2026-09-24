@@ -29,9 +29,12 @@ inset. Counting them together is how a setting quietly halves a dataset.
 import pytest
 
 from app.extensions import db
-from app.models import VideoClip, VideoSource
-from app.services import video_bank_service as svc
-from app.services import video_clip_export as export
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoClip, VideoSource
+from lds_video import video_bank_service as svc
+from lds_video import video_clip_export as export
+
+pytestmark = pytest.mark.plugins('video')
 
 LOCAL_USER = 'local'
 

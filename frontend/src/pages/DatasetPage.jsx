@@ -7,11 +7,9 @@ import { lazy, Suspense } from 'react';
 import LoadingScreen from '../components/common/LoadingScreen';
 import { useDataset } from '../hooks/useDataset';
 import DatasetListPanel from '../components/dataset/DatasetListPanel';
-import VideoDatasetsPanel from '../components/videobank/VideoDatasetsPanel';
-// The workspace (and its heavy training/variation sub-tools) only renders once
-// a dataset is OPEN, so it is lazy-loaded: the /datasets landing (the library
-// list) never pays for its ~300 KB of training UI, and the initial bundle stays
-// small on slow links.
+import PluginSlot from '../plugins/PluginSlot.jsx';
+
+// Keep the training workspace out of the library's initial bundle.
 const DatasetWorkspace = lazy(() => import('../components/dataset/DatasetWorkspace'));
 
 export default function DatasetPage() {
@@ -43,7 +41,9 @@ export default function DatasetPage() {
               /video-dataset/<id>, exactly as opening an image dataset swaps this
               page for DatasetWorkspace. One library, two kinds of set, a
               workspace each. */}
-          <VideoDatasetsPanel />
+          {/* The other kinds of training set a plugin brings (the video lane's
+              list of video datasets): the `datasets.section` slot. */}
+          <PluginSlot slot="datasets.section" surface="datasets" />
         </div>
       )}
     </div>

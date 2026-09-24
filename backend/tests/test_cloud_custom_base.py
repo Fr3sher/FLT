@@ -24,6 +24,9 @@ import struct
 import types
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 # --- fake .safetensors (same shape as test_custom_base_paths) -------------------
@@ -131,7 +134,7 @@ def _mkds(app, name='CB', trigger='zc_cb', train_type='krea'):
 # --- a) naming contract ----------------------------------------------------------
 
 def test_base_repo_name_matches_run_tag_hash(app, tmp_path):
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     from app.services import lora_training as lt
     from app.services import face_dataset_service as svc
     from app.config import LOCAL_USER
@@ -151,7 +154,7 @@ def test_weight_filenames_match_pod_loaders():
     ALSO satisfy ai-toolkit's derived-filename fallback (repo tail after the
     last dash + .safetensors) so even a pod ignoring checkpoint_filename
     resolves it; zimage is a folder (no single filename)."""
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     repo = 'lds-base-h1234abcd'
     assert hbp.weight_filename('flux2klein', '4b', repo) == 'flux-2-klein-base-4b.safetensors'
     assert hbp.weight_filename('flux2klein', '9b', repo) == 'flux-2-klein-base-9b.safetensors'
@@ -169,7 +172,7 @@ def test_weight_filenames_match_pod_loaders():
 def test_push_forces_private_repo_and_expected_filename(app, tmp_path):
     """THE privacy invariant: create_repo is called with private=True — this
     test fails the day anyone makes it public or togglable."""
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     base = _write_safetensors(tmp_path / 'k.safetensors', _KREA_KEYS)
     ds_id = _mkds(app)
     api = _FakeApi()
@@ -186,7 +189,7 @@ def test_push_forces_private_repo_and_expected_filename(app, tmp_path):
 
 
 def test_push_cache_hit_skips_upload(app, tmp_path):
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     from app.services import face_dataset_service as svc
     from app.config import LOCAL_USER
     base = _write_safetensors(tmp_path / 'k.safetensors', _KREA_KEYS)
@@ -207,7 +210,7 @@ def test_push_cache_hit_skips_upload(app, tmp_path):
 def test_push_size_drift_reuploads(app, tmp_path):
     """Same repo, but the local file changed since the last push -> NOT a
     cache-hit: the file is uploaded again over the stale copy."""
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     base = _write_safetensors(tmp_path / 'k.safetensors', _KREA_KEYS)
     ds_id = _mkds(app)
     api = _FakeApi(exists=True, paths={'placeholder': 1})
@@ -226,7 +229,7 @@ def test_push_size_drift_reuploads(app, tmp_path):
 
 
 def test_push_refuses_read_only_token_before_upload(app, tmp_path):
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     base = _write_safetensors(tmp_path / 'k.safetensors', _KREA_KEYS)
     ds_id = _mkds(app)
     api = _FakeApi(who={'name': 'tester', 'auth': {'accessToken': {'role': 'read'}}})
@@ -240,7 +243,7 @@ def test_push_refuses_read_only_token_before_upload(app, tmp_path):
 
 
 def test_push_repairs_public_repo_or_refuses(app, tmp_path):
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     import os
     base = _write_safetensors(tmp_path / 'k.safetensors', _KREA_KEYS)
     ds_id = _mkds(app)
@@ -266,7 +269,7 @@ def test_push_repairs_public_repo_or_refuses(app, tmp_path):
 
 
 def test_push_zimage_requires_conversion_then_uploads_folder(app, tmp_path, monkeypatch):
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     from app.services import zimage_convert as zc
     ds_id = _mkds(app, train_type='zimage', trigger='zc_zi')
     base = 'z image\\merge.safetensors'
@@ -293,7 +296,7 @@ def test_push_zimage_requires_conversion_then_uploads_folder(app, tmp_path, monk
 
 
 def test_push_missing_local_file_is_actionable(app, tmp_path):
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     ds_id = _mkds(app)
     with app.app_context():
         with pytest.raises(hbp.HfPublishError) as e:
@@ -307,7 +310,7 @@ def test_push_arch_sniff_is_confirmable(app, tmp_path):
     """A file whose header does not look like the family's arch raises the
     CUSTOM_WEIGHTS_UNVERIFIED marker (confirm-and-retry contract) unless
     allow_unverified_weights."""
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     base = _write_safetensors(tmp_path / 'x.safetensors', _FLUX_KEYS)  # flux keys on krea
     ds_id = _mkds(app)
     with app.app_context():
@@ -322,7 +325,7 @@ def test_push_arch_sniff_is_confirmable(app, tmp_path):
 # --- launch-time guard -------------------------------------------------------------
 
 def test_require_base_repo_actionable_errors(app, tmp_path, monkeypatch):
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     from app.services import face_dataset_service as svc
     from app.config import LOCAL_USER
     import os
@@ -365,7 +368,7 @@ def test_require_base_repo_actionable_errors(app, tmp_path, monkeypatch):
 @pytest.fixture()
 def ct(app, monkeypatch):
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
-    from app.services import cloud_training
+    from lds_cloud_training import cloud_training
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     monkeypatch.setattr(cloud_training, '_reconcile_before_launch', lambda a: None)
     return cloud_training
@@ -388,7 +391,7 @@ REPO = {'repo_id': 'tester/lds-base-hdeadbeef', 'size_bytes': 18_000_000_000}
 ])
 def test_launch_custom_base_stamps_repo_per_family(ct, app, tmp_path, monkeypatch,
                                                    fam, variant, base_kind):
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     _fake_export(monkeypatch, ct)
     seen = {}
 
@@ -418,7 +421,7 @@ def test_launch_custom_base_stamps_repo_per_family(ct, app, tmp_path, monkeypatc
 
 
 def test_launch_zimage_custom_deturbo_needs_confirm(ct, app, monkeypatch):
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     _fake_export(monkeypatch, ct)
     monkeypatch.setattr(hbp, 'require_base_repo',
                         lambda *a, **kw: dict(REPO))
@@ -441,7 +444,7 @@ def test_launch_zimage_custom_deturbo_needs_confirm(ct, app, monkeypatch):
 def test_launch_official_base_params_unchanged(ct, app, monkeypatch):
     """Zero-regression guard: an official launch stamps base_model '' and no
     repo fields, and never consults hf_base_push."""
-    from app.services import hf_base_push as hbp
+    from lds_cloud_training import hf_base_push as hbp
     _fake_export(monkeypatch, ct)
     monkeypatch.setattr(hbp, 'require_base_repo',
                         lambda *a, **kw: (_ for _ in ()).throw(AssertionError('called')))
@@ -588,7 +591,7 @@ def test_custom_base_status_route(client, monkeypatch):
         seen.update(family=family, variant=variant, base_model=base_model)
         return {'supported': True, 'ready': True, 'repo_id': 'tester/lds-base-h1'}
 
-    monkeypatch.setattr('app.services.hf_base_push.base_push_state', fake_state)
+    monkeypatch.setattr('lds_cloud_training.hf_base_push.base_push_state', fake_state)
     r = client.get(f'/api/dataset/{ds}/train/cloud/custom-base'
                    '?train_type=krea&variant=base&base_model=C%3A%5Cm%5Ck.safetensors')
     assert r.status_code == 200
@@ -614,7 +617,7 @@ def test_custom_base_push_route_requires_token_and_forwards(client, monkeypatch)
                     allow=allow_unverified_weights, token=token)
         return {'state': 'running', 'repo_name': 'lds-base-h1'}
 
-    monkeypatch.setattr('app.services.hf_base_push.start_push', fake_start)
+    monkeypatch.setattr('lds_cloud_training.hf_base_push.start_push', fake_start)
     r = client.post(f'/api/dataset/{ds}/train/cloud/custom-base/push',
                     json={'train_type': 'krea', 'variant': 'base',
                           'base_model': 'C:\\m\\k.safetensors',
@@ -633,7 +636,7 @@ def test_cloud_train_route_forwards_unverified_flag(client, monkeypatch):
         seen.update(kw)
         return {'run_id': 1, 'status': 'preparing', 'job_name': 'j', 'steps': 1200}
 
-    monkeypatch.setattr('app.services.cloud_training.launch_cloud_training', fake_launch)
+    monkeypatch.setattr('lds_cloud_training.cloud_training.launch_cloud_training', fake_launch)
     client.post(f'/api/dataset/{ds}/train/cloud',
                 json={'train_type': 'krea', 'base_model': 'C:\\m\\k.safetensors',
                       'allow_unverified_weights': True})

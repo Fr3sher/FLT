@@ -1,10 +1,7 @@
-// Bouton « 🚀 Lancer le test ». Désactivé tant que !canLaunch (calculé par RunSetupPanel).
-// Extrait behavior-preserving de LoraTestStudio.jsx (bouton de lancement).
-//
-// `label`/`title` : le ◉ LoRA Canvas fait dire au bouton CE QU'IL VA FAIRE quand
-// ce n'est pas juste « lancer » (« Deploy 2 checkpoints, then generate ») et
-// POURQUOI quand il ne peut pas (familles mélangées). Absents → le libellé
-// historique, à l'identique.
+// Launch test button, disabled until RunSetupPanel's canLaunch is true. Extracted unchanged from
+// LoraTestStudio.jsx. Canvas supplies label/title to explain what will happen, such as deploying
+// two checkpoints before generating, or why launch is blocked, such as mixed families. Without
+// overrides, preserve the existing label.
 export default function LaunchBar({ canLaunch, onLaunch, label = null, title = null }) {
   return (
     <button type="button" disabled={!canLaunch} onClick={onLaunch} title={title || undefined}

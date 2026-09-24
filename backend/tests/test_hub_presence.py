@@ -22,10 +22,14 @@ The contract pinned here is almost entirely about the ANSWER WE MAY NOT GIVE:
 No request ever leaves this process: ``_http_get`` is the single seam and every
 test replaces it.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import pytest
 from app.extensions import db
 
 from app.services import hub_presence as hp
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 REPO = 'ns/dense-run-90'
 TOKEN = 'hf_test_token'
@@ -230,7 +234,13 @@ def _dense_run(dataset_id, *, repo='ns/dense-90', status='available'):
     import json
 
     from app.extensions import db
-    from app.models import CloudTrainingRun
+    from app.models import CloudTrainingRun, FaceDataset
+    from app.config import LOCAL_USER
+
+    if db.session.get(FaceDataset, dataset_id) is None:
+        db.session.add(FaceDataset(id=dataset_id, user_id=LOCAL_USER,
+                                   name=f'Dense {dataset_id}', trigger_word='dense'))
+        db.session.flush()
     params = {'training_mode': 'full_transformer', 'train_type': 'krea',
               'variant': 'Raw', 'steps': 3000, 'artifact_status': status}
     if repo:
@@ -304,10 +314,10 @@ def test_the_panel_payload_dates_the_record_it_shows(app, client, monkeypatch):
     Without it the card can only say "delivered and verified", which reads as a
     present-tense claim; with it, it says "on 2026-07-11 — not re-checked since",
     which is the same fact told truthfully."""
-    from app.services import dense_artifacts as da
+    from lds_cloud_training import dense_artifacts as da
     with app.app_context():
         run = _dense_run(3)
-        from app.services import cloud_training as ct
+        from lds_cloud_training import cloud_training as ct
         ct._persist_run_params(run, delivery_last_checked_at='2026-07-11T09:12:33')
         entry = da.describe_run(run)
     assert entry['hub']['checked_at'] == '2026-07-11T09:12:33'

@@ -119,24 +119,24 @@ export default function CivitaiBrowserModal({ open, onClose, onUse, picks = null
 
   const sel = 'rounded border border-border bg-app/60 px-1.5 py-1 text-content text-[0.6875rem]';
 
-  /* PORTAILLÉE SUR `document.body`, et ce n'est pas une préférence.
-     Cette modale est montée depuis StudioRunSetup, qui vit dans l'`<aside
-     lg:sticky lg:overflow-auto>` de ComparisonStudio. `position: sticky` OUVRE un
-     contexte d'empilement : le `z-[9999]` ci-dessous y est plafonné et ne peut pas
-     passer au-dessus de la grille de résultats, sœur de l'aside et plus loin dans
-     le DOM — d'où les 👍/👎 des cellules peints PAR-DESSUS les prompts. Et
-     `overflow-auto` la DÉCOUPE en prime. Le portail sort du contexte fautif ; il
-     n'y a pas de z-index qui répare ça de l'intérieur.
-     ⚠️ Invisible aux suites : ni un test de source ni un rendu SSR n'a de layout.
-     Seule une capture tranche. Même piège, même fix que CaptionEditorDialog. */
+  /*
+   * Portal to document.body is required. StudioRunSetup mounts this modal inside
+   * ComparisonStudio's aside with lg:sticky and lg:overflow-auto. Sticky creates a stacking
+   * context that caps even z-[9999] below the later results-grid sibling, putting vote controls
+   * over prompts; overflow-auto also clips it. Only a portal escapes: no inner z-index can fix the
+   * parent context. Source tests and SSR have no layout, so a screenshot is needed to verify
+   * appearance. Same issue and fix as CaptionEditorDialog.
+   */
   return createPortal(
     <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4"
       role="dialog" aria-modal="true" aria-label="Browse top Civitai prompts" ref={ref}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      {/* `data-probe-layer` : cette modale couvre la page PAR DESIGN — non budgétée,
-          appariée avec rien dans le test de chevauchement. Sans marqueur ni état de
-          sonde, la rangée d'actions d'une carte — passée de deux boutons à trois
-          avec le lot — n'est mesurée à aucune taille. */}
+      {/*
+       * data-probe-layer marks a modal that intentionally covers the page, exempting it from space
+       * budgets and overlap pairs. Without this marker and a probe state, the card action row,
+       * expanded from two buttons to three for batch actions, would be measured at no viewport
+       * size.
+       */}
       <div data-probe-layer data-probe-panel="civitai-browser"
         className="w-full max-w-4xl max-h-[88vh] rounded-2xl border border-border bg-surface-overlay p-4 flex flex-col gap-3 shadow-xl">
         <div className="flex items-center justify-between gap-2">

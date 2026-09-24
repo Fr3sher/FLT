@@ -1,0 +1,6 @@
+{
+  "python_scripts": ["lds_model_tools/lora_merge_worker.py"],
+  "python_shared_modules": ["lds_model_tools/lora_merge.py"],
+  "python_dependencies": {"torch": "torch"},
+  "python_requirements": "requirements-workers.txt"
+}

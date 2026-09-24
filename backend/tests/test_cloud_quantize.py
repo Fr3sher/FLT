@@ -14,8 +14,11 @@ import base64
 
 import pytest
 
-from app.services import cloud_quantize as cq
-from app.services import vast_client
+from lds_cloud_training import cloud_quantize as cq
+from lds_cloud_training import vast_client
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 class _Sibling:
@@ -67,6 +70,9 @@ def _tokens(monkeypatch):
     monkeypatch.setattr(cq.cfg, 'secret',
                         lambda name, *a, **k: FAKE_TOKEN if name in
                         ('HF_CLOUD_TOKEN', 'HF_TOKEN', 'VAST_API_KEY') else None)
+    from lds_cloud_training import hf_storage
+    monkeypatch.setattr(hf_storage, 'dense_storage_forecast',
+                        lambda *_a, **_kw: {'free_bytes': 1000 ** 4, 'fits': True})
 
 
 def _api(extra=()):
@@ -204,27 +210,36 @@ class _Vast:
         if offer_id in self.refuse:
             raise vast_client.VastError(TAKEN)
         self.created.append((offer_id, kw))
+        self.instances.append({'instance_id': '9001', 'label': kw['label']})
         return '9001'
 
-    def destroy_instance(self, instance_id):
+    def destroy_instance(self, instance_id, **_kw):
         self.destroyed.append(str(instance_id))
+        self.instances = [item for item in self.instances
+                          if item['instance_id'] != str(instance_id)]
         return True
 
-    def list_instances(self):
+    def list_instances(self, **_kw):
         return self.instances
+
+    def get_instance(self, instance_id, **_kw):
+        return next((item for item in self.instances
+                     if item['instance_id'] == str(instance_id)), None)
 
 
 @pytest.fixture()
 def vast(monkeypatch):
     fake = _Vast()
-    monkeypatch.setattr(cq, 'vast_client', fake)
+    for name in ('search_offers', 'create_instance', 'destroy_instance',
+                 'list_instances', 'get_instance'):
+        monkeypatch.setattr(cq.vast_client, name, getattr(fake, name))
     return fake
 
 
 def _drive(monkeypatch, vast, result, *, timeout=False):
     planned = _plan()
     api = _api()
-    monkeypatch.setattr(cq, '_read_result', lambda *_a: None if timeout else result)
+    monkeypatch.setattr(cq, '_read_result', lambda *_a, **_kw: None if timeout else result)
     clock = iter([0.0] + [i * 10.0 for i in range(1, 200)] + [10 ** 9] * 50)
     cq._drive(planned, FAKE_TOKEN, _api=api, _sleep=lambda _s: None,
               _now=lambda: next(clock))
@@ -239,7 +254,8 @@ def test_a_successful_job_reports_the_file_and_destroys_the_machine(monkeypatch,
     assert state['result']['uploaded'] is True
     assert vast.destroyed == ['9001']
     # The pod's report file does not stay behind in the user's repository.
-    assert api.deleted == [cq.RESULT_FILE]
+    receipt = cq._receipt()
+    assert api.deleted == [f'_lds_fp8_result_{receipt["job_id"]}.json']
     # The rental carries this lane's label, which is what makes reaping possible.
     assert vast.created[0][1]['label'].startswith(cq.LABEL_PREFIX)
     assert vast.created[0][1]['env']['HF_TOKEN'] == FAKE_TOKEN
@@ -257,7 +273,7 @@ def test_a_pod_that_never_reports_is_destroyed_at_the_hard_deadline(monkeypatch,
     state = cq.status()
     assert state['status'] == 'error'
     assert 'reported nothing' in state['error']
-    assert 'nothing in your repository was changed' in state['error']
+    assert 'no result was confirmed' in state['error']
     assert vast.destroyed == ['9001']
 
 
@@ -358,18 +374,30 @@ def test_the_quote_is_priced_by_the_same_rule_that_rents(monkeypatch):
 
 
 def test_reconcile_destroys_an_orphan_but_spares_a_live_job(vast):
+    receipt = cq._reserve(vast_client.capture_credentials())
+    receipt = cq._save_receipt(receipt, instance_id='111')
     vast.instances = [
-        {'instance_id': '111', 'label': cq.LABEL_PREFIX + 'abc'},
+        {'instance_id': '111', 'label': receipt['label']},
         {'instance_id': '222', 'label': 'someone-elses-run'},
+        {'instance_id': '333', 'label': cq.LABEL_PREFIX + 'a' * 32},
     ]
     assert cq.reconcile_orphans() == ['111']
     assert vast.destroyed == ['111']
 
     vast.destroyed.clear()
+    receipt = cq._reserve(vast_client.capture_credentials())
+    cq._save_receipt(receipt, instance_id='444')
+    vast.instances.append({'instance_id': '444', 'label': receipt['label']})
     cq.queue_manager._set_system_state(cq._STATE_KEY, {
-        'status': 'running', 'instance_id': '111', 'repo_id': 'r',
+        'status': 'running', 'instance_id': '444', 'repo_id': 'r',
         'weight_name': 'w', 'output_name': 'o', 'source_bytes': 1,
         'output_bytes_typical': 1, 'price_per_hour': 0, 'estimated_cost': 0,
         'keep_bf16': True}, ttl_seconds=60)
-    assert cq.reconcile_orphans() == []
+    # The job owns the lease for its entire paid lifetime. A recovery pass
+    # cannot reap it while another worker/process still holds that lease.
+    lease = cq._lease()
+    try:
+        assert cq.reconcile_orphans() == []
+    finally:
+        lease.release()
     assert vast.destroyed == []

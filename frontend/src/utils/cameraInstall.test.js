@@ -9,9 +9,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  CAMERA_INSTALL_ORDER, INSTALL_ALL_ACTION_LABELS, cameraInstallPlan,
+  INSTALL_ALL_ACTION_LABELS,
   deriveCapabilitySummary, installAllPlan, installCatalog,
 } from '../hooks/useSetupSteps.js';
+import { CAMERA_INSTALL_ORDER, CAMERA_ACTION_LABELS, cameraInstallPlan } from '../../../bundled/camera_angles/frontend/lib/cameraInstall.js';
+import cameraDescriptor from '../../../bundled/camera_angles/frontend/index.js';
+import { setEnabled } from '../plugins/registry.js';
+import { installRuntimeHost } from '../../tests/support/runtimeHost.mjs';
+import { registerBundledDescriptor } from '../../tests/support/bundledDescriptors.mjs';
+
+test.beforeEach(t => {
+  installRuntimeHost(t);
+  assert.equal(registerBundledDescriptor(cameraDescriptor), true);
+  setEnabled(['camera_angles']);
+});
 
 const caps = (comfyui) => ({ comfyui });
 
@@ -39,7 +50,7 @@ test('the VAE rides the Krea action — one file, one button', () => {
 
 test('every queued action has a human label', () => {
   for (const a of CAMERA_INSTALL_ORDER) {
-    assert.ok(INSTALL_ALL_ACTION_LABELS[a], `no label for ${a}`);
+    assert.ok(CAMERA_ACTION_LABELS[a] || INSTALL_ALL_ACTION_LABELS[a], `no label for ${a}`);
   }
 });
 
@@ -81,4 +92,13 @@ test('camera angles is a counted capability, never dropped from the total', () =
     comfyui: { dir_valid: true, camera_ready: true, camera_missing: [] },
   }).find((r) => r.label.includes('Camera angles'));
   assert.equal(ready.ok, true);
+});
+
+test('the Camera owner can be absent without removing the shared VAE', () => {
+  setEnabled([]);
+  const state = caps({ dir_valid: true, camera_missing: [], krea_missing: [] });
+  const rows = installCatalog(state);
+  assert.equal(rows.some(row => row.action.startsWith('camera_')), false);
+  assert.equal(rows.filter(row => row.action === 'krea_vae').length, 1);
+  assert.equal(deriveCapabilitySummary(state).some(row => row.label.includes('Camera angles')), false);
 });

@@ -5,7 +5,7 @@ import test from 'node:test'
 import {
   clampTile, gridBoxHeight, readTile, writeTile,
   TILE_DEFAULT, TILE_MAX, TILE_MIN, TILE_STEP, TILE_STORAGE_KEY,
-} from './videoPickerTile.js'
+} from "../../../../../../bundled/video/frontend/studio/video/videoPickerTile.js"
 
 test('a tile size is numeric, snapped to the step and inside the dial', () => {
   assert.equal(clampTile(84), 84)
@@ -64,7 +64,7 @@ test('with no store named, the helper finds the browser\'s — and survives one 
 test('the dial keeps the range and step of the concept sources\u2019 \ud83d\udd0d, so the two feel like one', () => {
   // The other side carries its numbers as literals in JSX; read both, or the
   // two dials drift apart with every gate green and the docstring quietly false.
-  const concept = fs.readFileSync(new URL('../../ConceptSourcesPanel.jsx', import.meta.url), 'utf8')
+  const concept = fs.readFileSync(new URL("../../../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx", import.meta.url), 'utf8')
   assert.match(concept, new RegExp(`<input type="range" min="${TILE_MIN}" max="${TILE_MAX}" step="${TILE_STEP}"`),
     'the two Preview size dials must keep the same range and step')
 })

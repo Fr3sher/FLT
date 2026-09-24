@@ -19,6 +19,8 @@ What is pinned here:
   · both routes forward `prompts` to their engine — a dropped key would degrade a
     batch into a single generation in silence.
 """
+
+import pytest
 _ST =(b'\x08\x00\x00\x00\x00\x00\x00\x00{"__metadata__":{}}'
        .ljust(32, b'\x00'))
 
@@ -273,6 +275,7 @@ def test_canvas_batch_without_prompts_still_falls_back_per_dataset(
 
 # --- both routes forward the key ---------------------------------------------
 
+@pytest.mark.plugins('canvas')
 def test_canvas_route_forwards_the_prompt_batch(client, monkeypatch):
     _comfy(monkeypatch)
     seen = {}

@@ -24,15 +24,16 @@ const codeOnly = (text) => text
   .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/^\s*\/\/.*$/gm, '')
-const block = codeOnly(readSource('src/components/videobank/VideoTrainingBlock.jsx'))
-const dialog = codeOnly(readSource('src/components/videobank/VideoCloudLaunchDialog.jsx'))
+const video = codeOnly(readSource('../bundled/video/frontend/videobank/VideoTrainingBlock.jsx'))
+const block = codeOnly(readSource('../bundled/cloud_training/frontend/video/VideoCloudTraining.jsx'))
+const dialog = codeOnly(readSource('../bundled/cloud_training/frontend/video/VideoCloudLaunchDialog.jsx'))
 
 test('every pod-renting POST of the video block relays the confirmable refusals', () => {
   assert.match(block, /postWithConfirmations\(\(b\) => postJson\(url, b\), body, 'Launch anyway \(force\)'\)/,
     'postCloud must post through postWithConfirmations')
   // No bare postJson may rent a pod. The only postJson calls left are the local
   // lane's (train / stop), which rent nothing.
-  const bare = [...block.matchAll(/await postJson\(([^,]+),/g)].map((m) => m[1].trim())
+  const bare = [...`${video}\n${block}`.matchAll(/await postJson\(([^,]+),/g)].map((m) => m[1].trim())
   for (const url of bare) {
     assert.ok(/\/train(`|'|\/stop)/.test(url) && !/cloud/i.test(url),
       `a bare postJson rents a pod without the confirmation loop: ${url}`)
@@ -43,7 +44,7 @@ test('the launch window opens only after the cloud-lane preflight and its gate',
   const open = block.slice(block.indexOf('const openCloudDialog = async () => {'),
     block.indexOf('const launchCloud ='))
   assert.ok(open.length > 0, 'openCloudDialog not found')
-  const preflightAt = open.indexOf("videoPreflightUrl(ds.id, 'cloud')")
+  const preflightAt = open.indexOf("apiFetch(preflightUrl")
   const gateAt = open.indexOf("preflightGate(report, { lane: 'cloud' })")
   const blockersAt = open.indexOf('if (!gate.ok)')
   const confirmAt = open.indexOf('gate.confirmText && !window.confirm(gate.confirmText)')
@@ -55,11 +56,15 @@ test('the launch window opens only after the cloud-lane preflight and its gate',
   assert.ok(preflightAt < gateAt && gateAt < blockersAt && blockersAt < confirmAt && confirmAt < openAt,
     'the order must be: preflight → gate → blockers stop → warnings confirm → open')
   // The licence question comes FIRST — before anything is fetched or spent.
-  assert.ok(open.indexOf('ensureLicenceAck(ds') < preflightAt, 'the licence ack must precede the preflight')
+  const licenceAt = open.indexOf('if (!confirmLicence()) return')
+  assert.ok(licenceAt >= 0 && licenceAt < preflightAt, 'the licence ack must precede the preflight')
+  assert.match(video, /confirmLicence=\{\(\) => ensureLicenceAck\(ds,/)
+  assert.match(video, /preflightUrl=\{videoPreflightUrl\(ds\.id, 'cloud'\)\}/)
 })
 
 test('the chosen GPU class rides on the launch body, and the dialog is what chooses it', () => {
-  assert.match(block, /const launchCloud = \(gpuName\) => postCloud\(videoDatasetCloudUrl\(ds\.id\),/)
+  assert.match(video, /cloudUrl=\{videoDatasetCloudUrl\(ds\.id\)\}/)
+  assert.match(block, /const launchCloud = \(gpuName\) => postCloud\(cloudUrl,/)
   assert.match(block, /\.\.\.\(gpuName \? \{ gpu_name: gpuName \} : \{\}\)/)
   assert.match(block, /<VideoCloudLaunchDialog ds=\{ds\} steps=\{steps\} cloudStatus=\{cloudStatus\}/)
   assert.match(dialog, /const launched = await onLaunch\(selected\)/)

@@ -2,7 +2,7 @@
 plus checkpoint listing/import/delete and Z-Image base-conversion prep.
 
 No login - single local user (`cfg.LOCAL_USER`). Every route except
-`/dataset/train/status` is gated on `capabilities.probe()['aitoolkit']['valid']`
+`/dataset/train/status` is gated on the lightweight ai-toolkit presence probe
 (409 with a UI hint): `/train/status` must stay pollable even when
 ai-toolkit isn't configured, so it degrades to `{'available': False}` instead.
 """
@@ -11,6 +11,7 @@ from ..extensions import db
 import re
 import time
 from datetime import datetime
+from functools import wraps
 from threading import Lock
 
 from flask import Blueprint, current_app, request, jsonify
@@ -29,6 +30,18 @@ from ..utils.comfyui import get_zimage_models, get_checkpoint_models, get_krea_m
 from ._common import _map_error
 
 bp = Blueprint('training', __name__, url_prefix='/api')
+
+
+def _cloud_provider_required(fn):
+    @wraps(fn)
+    def admitted(*args, **kwargs):
+        from ..auth_policy import plugin_available
+        from ..plugins.lifecycle import state_change_lock
+        with state_change_lock:
+            if not plugin_available('cloud_training'):
+                return jsonify({'error': 'Cloud training is disabled or unavailable.'}), 409
+            return fn(*args, **kwargs)
+    return admitted
 
 
 class _CloseCallbackFile:
@@ -61,7 +74,9 @@ class _CloseCallbackFile:
 
 def _require_aitoolkit():
     """None if ai-toolkit is usable, else the (body, status) 409 to return."""
-    if not capabilities.probe()['aitoolkit']['valid']:
+    # Presence is the same gate as the full snapshot, but must not wait for
+    # unrelated optional ML imports before Training can open after a restart.
+    if not capabilities.probe_aitoolkit()['ok']:
         return jsonify({'error': 'ai-toolkit is not configured',
                         'hint': 'Set its folder in Settings'}), 409
     return None
@@ -134,12 +149,11 @@ def dataset_train(dataset_id):
             'training_mode': mode,
         }), 400
     try:
-        # steps optionnel : None → adaptatif. base_model='' → officiel ; sinon merge
-        # (doit être converti d'abord). variant règle l'adapter de de-distillation.
-        # base_model peut être un chemin ABSOLU (« Custom weights… », local-only).
-        # vae_path/te_path = overrides SDXL uniquement (le service refuse en 400
-        # pour toute autre famille). Présence-conditionnelle : absent → le service
-        # garde la valeur persistée (sentinelle _PERSISTED), jamais un reset muet.
+        # Optional steps: None means adaptive. Empty base_model means official;
+        # otherwise a merge requiring conversion. variant sets de-distillation.
+        # base_model can be an absolute local custom-weights path. VAE/TE overrides
+        # are SDXL-only (other families return 400). Forward only present fields;
+        # missing fields retain persisted values through _PERSISTED, never reset.
         kw = {}
         if 'vae_path' in d:
             kw['vae_path'] = d.get('vae_path')
@@ -155,14 +169,14 @@ def dataset_train(dataset_id):
                                  allow_uncaptioned=bool(d.get('allow_uncaptioned')),
                                  allow_caption_quality=bool(d.get('allow_caption_quality')),
                                  allow_unverified_weights=bool(d.get('allow_unverified_weights')),
-                                 # « Continue anyway » du panneau de préparation : lève le
-                                 # garde-fou plancher d'images (jamais une impossibilité physique).
+                                 # Continue anyway bypasses the minimum-image quality warning, never
+                                 # a physical impossibility.
                                  allow_not_ready=bool(d.get('allow_not_ready')),
                                  # Absent = read the dataset's stored setting
                                  # (persisted; it used to be a browser-only value).
                                  masked=d.get('masked'),
-                                 # fresh=True : écarte le run existant (archivé, pas
-                                 # détruit) → repart de zéro au lieu de l'auto-resume.
+                                 # fresh=True archives the existing run without deleting it, then
+                                 # starts from scratch rather than auto-resuming.
                                  fresh=bool(d.get('fresh')), **kw)
     except Exception as e:
         return _map_error(e)
@@ -182,7 +196,7 @@ def dataset_train_continue(dataset_id):
     # artifact decides the continuation mode; today's dataset selector (or a
     # stale client body) cannot reinterpret those weights as a dense model.
     mode = 'lora'
-    # base_model/variant = base sélectionnée (absente → base persistée du run).
+    # Selected base_model/variant; absent means the run's persisted base.
     kw = {'extra_steps': d.get('extra_steps', 1000)}
     if 'base_model' in d:
         kw['base_model'] = d.get('base_model')
@@ -190,10 +204,12 @@ def dataset_train_continue(dataset_id):
         kw['variant'] = d.get('variant')
     if d.get('train_type'):
         kw['train_type'] = d.get('train_type')
-    # from_step = reprise depuis un checkpoint précis (défaut = dernier). overrides =
-    # réglages sûrs (le service refuse toute clé hors liste → 400).
+    # from_step chooses a checkpoint (latest by default). overrides contains
+    # safe settings only; the service rejects unknown keys with 400.
     if d.get('from_step') is not None:
         kw['from_step'] = d.get('from_step')
+    if 'expected_record_id' in d:
+        kw['expected_record_id'] = d['expected_record_id']
     if d.get('overrides') is not None:
         kw['overrides'] = d.get('overrides')
     # Resume semantics are always explicit on the wire. Older clients safely
@@ -218,12 +234,11 @@ def dataset_train_continue(dataset_id):
 
 @bp.get('/dataset/train/status')
 def dataset_train_status():
-    # Le poll doit toujours répondre 200 (jamais d'erreur) : sans ai-toolkit
-    # configuré, on renvoie juste 'indisponible' au lieu d'un 409 qui casserait
-    # le polling UI.
-    if not capabilities.probe()['aitoolkit']['valid']:
+    # Polling always returns 200. Missing ai-toolkit configuration yields
+    # unavailable instead of a 409 that would break UI polling.
+    if not capabilities.probe_aitoolkit()['ok']:
         return jsonify({'available': False})
-    # Le poll fait avancer la file : fin du training courant → lancement du suivant.
+    # Polling advances the queue: current training ends → start the next one.
     try:
         lt.process_training_queue()
     except Exception:
@@ -249,7 +264,7 @@ def dataset_train_enqueue(dataset_id):
     if mode == 'full_transformer':
         return jsonify({'error': 'full_transformer training is cloud-only and cannot be queued locally',
                         'training_mode': mode}), 400
-    # base_model/variant = base CHOISIE pour le job en file (absente → persistée).
+    # base_model/variant select the queued job's base; absent uses persisted values.
     kw = {'extra_steps': d.get('extra_steps'), 'masked': d.get('masked')}
     if has_training_mode:
         kw['training_mode'] = mode
@@ -274,7 +289,7 @@ def dataset_train_enqueue(dataset_id):
         kw['vae_path'] = d.get('vae_path')
     if 'te_path' in d:
         kw['te_path'] = d.get('te_path')
-    # steps = cible absolue choisie côté UI (None → adaptatif). Forwarding conditionnel.
+    # steps is the UI's absolute target, or None for adaptive. Forward conditionally.
     if d.get('steps') is not None:
         kw['steps'] = d.get('steps')
     try:
@@ -286,10 +301,9 @@ def dataset_train_enqueue(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/train/schedule')
 def dataset_train_schedule(dataset_id):
-    """Programme un entraînement (jour + heure locale). Contrairement à SRC, une
-    échéance déjà PASSÉE est refusée (400) plutôt que dégradée en « dû
-    immédiatement » : un `at` dans le passé est presque toujours une saisie
-    erronée côté UI, pas une intention de lancer tout de suite."""
+    """Schedule training for a local date/time. Unlike the source app, reject
+    past deadlines with 400 rather than treating them as immediately due: a
+    past at value usually indicates mistaken input, not intent to start now."""
     gate = _require_aitoolkit()
     if gate:
         return gate
@@ -354,7 +368,7 @@ def dataset_train_dequeue(dataset_id):
     gate = _require_aitoolkit()
     if gate:
         return gate
-    # Ownership : on ne retire de la file que SES propres datasets (anti-IDOR).
+    # Ownership: remove only the current user's datasets from the queue (anti-IDOR).
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     n = lt.dequeue_training(dataset_id)
@@ -363,7 +377,7 @@ def dataset_train_dequeue(dataset_id):
 
 @bp.post('/dataset/train/stop')
 def dataset_train_stop():
-    # Single-user app : pas de vérif d'ownership sur l'entraînement en cours.
+    # Single-user app: no ownership check on the active training run.
     gate = _require_aitoolkit()
     if gate:
         return gate
@@ -418,10 +432,9 @@ def dataset_train_checkpoints(dataset_id):
     local_ok = capabilities.probe()['aitoolkit']['valid']
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
-    # base_model = base sélectionnée dans le dropdown (param absent → base persistée).
+    # base_model selects the dropdown base; absent means persisted base.
     bm = request.args.get('base_model')
-    # train_type = famille sélectionnée dans le menu LORA TYPE (param absent →
-    # famille persistée).
+    # train_type selects the LORA TYPE family; absent means persisted family.
     fam = request.args.get('train_type') or None
     variant = request.args.get('variant') or None
     kw = {} if bm is None else {'base_model': bm}
@@ -952,8 +965,8 @@ def train_base_file_advisory():
 
 @bp.get('/dataset/<int:dataset_id>/train/base-info')
 def dataset_train_base_info(dataset_id):
-    """Bases entraînables (officielle + merges Z-Image), base/variante choisies du
-    dataset, et statut de conversion - pour le sélecteur du TrainingPanel."""
+    """Trainable bases, selected dataset base/variant and conversion status
+    for TrainingPanel's selector."""
     gate = _require_aitoolkit()
     if gate and not capabilities.probe().get('cloud_training'):
         return gate
@@ -965,37 +978,33 @@ def dataset_train_base_info(dataset_id):
     for m in get_zimage_models():
         bases.append({'value': m, 'label': m.replace('\\', '/').split('/')[-1].rsplit('.', 1)[0]})
         converted[m] = zc.is_converted(m)
-    # Bases SDXL = checkpoints ComfyUI existants (single-file, pas de conversion).
-    # get_checkpoint_models() renvoie des DICTS {name, civitai_url, score} (pas des
-    # strings comme get_zimage_models) → extraire 'name'.
+    # SDXL bases are existing single-file ComfyUI checkpoints, without
+    # conversion. get_checkpoint_models returns {name,civitai_url,score}
+    # dictionaries rather than get_zimage_models strings; extract name.
     sdxl_bases = []
     for c in (get_checkpoint_models() or []):
         name = c['name'] if isinstance(c, dict) else c
         sdxl_bases.append({'value': name,
                            'label': name.replace('\\', '/').split('/')[-1].rsplit('.', 1)[0]})
-    # Krea 2 : la base officielle (le choix Raw/Turbo se fait via le sélecteur
-    # `variant`, pas ici → label neutre) PUIS tout checkpoint Krea 2 installé sur
-    # cette machine — un modèle que l'utilisateur vient d'entraîner, un build
-    # communautaire. Même scanner que le Studio (get_krea_models), pas un
-    # cinquième : leur divergence a déjà produit un bug.
+    # Krea 2: official base first, then locally installed checkpoints,
+    # including trained/community models. Raw/Turbo is selected by variant,
+    # so use a neutral label. Reuse Studio's get_krea_models scanner;
+    # divergent scanners have already caused a bug.
     krea_bases = [{'value': '', 'label': 'Official - Krea 2'}] + _krea_installed_bases()
-    # Flux : base officielle fixe (FLUX.1-dev, gated HF) — pas de checkpoint custom ni
-    # de conversion. Entrée explicite pour que l'UI n'aille PAS retomber sur les bases
-    # Z-Image (fallback `bases_by_type[type] || bases`) quand la famille est Flux.
+    # Flux has one fixed gated FLUX.1-dev base, without custom checkpoints
+    # or conversion. An explicit entry prevents UI fallback to Z-Image bases.
     flux_bases = [{'value': '', 'label': 'Official - FLUX.1-dev'}]
-    # FLUX.2 Klein : bases officielles fixes (gated HF) — le choix 4B/9B se fait via
-    # le sélecteur `variant` (comme Raw/Turbo pour Krea), pas ici → label neutre.
+    # FLUX.2 Klein has fixed gated official bases. 4B/9B is chosen by variant,
+    # like Raw/Turbo for Krea; keep this label neutral.
     flux2klein_bases = [{'value': '', 'label': 'Official - FLUX.2 Klein'}]
-    # Anima : une seule base officielle publique, pas de checkpoint custom. Sans
-    # cette entrée le panneau retombait sur les bases Z-Image et annonçait
-    # « Official - Z-Image-Turbo » sous la famille Anima — jusque dans la ligne de
-    # résumé du bouton Train (le repli côté panneau est mort depuis, cf.
-    # trainingFamilyScope.js ; l'entrée reste la source de vérité).
+    # Anima has one public official base without custom checkpoints. This
+    # entry prevents misleading Z-Image labels and remains the source of
+    # truth after the old panel fallback was removed (trainingFamilyScope.js).
     anima_bases = [{'value': '', 'label': f'Official - {lt.ANIMA_BASE_LABEL}'}]
-    # Les listers de bases (get_checkpoint_models / get_zimage_models) résolvent le
-    # dossier des modèles depuis comfyui.base_dir → vides tant qu'il n'est pas
-    # configuré. On expose ce fait pour que l'UI dise « configure ComfyUI dans Setup »
-    # au lieu d'un « No checkpoint found » aveugle (le vrai motif sur un clone neuf).
+    # Base scanners resolve model directories through comfyui.base_dir and
+    # return empty until configured. Expose that fact so a new clone asks
+    # users to configure ComfyUI in Setup rather than merely saying no
+    # checkpoints were found.
     models_dir = None
     try:
         models_dir = cfg.comfyui_dir('models')
@@ -1014,16 +1023,14 @@ def dataset_train_base_info(dataset_id):
                     # Present ONLY when the persisted base belongs to another
                     # family: the note the panel shows so the change isn't silent.
                     'base_family_mismatch': _base_mismatch,
-                    # « Custom weights… » (local-only) : chemin custom persisté +
-                    # overrides SDXL (VAE/TE). Le sélecteur les ressème ; la
-                    # whitelist par famille est ré-appliquée au lancement (400).
+                    # Local custom weights: persisted custom path plus SDXL VAE/TE overrides.
+                    # Restore them in the selector; enforce the family allowlist again at launch.
                     'vae_path': ds.train_vae_path or '',
                     'te_path': ds.train_te_path or '',
                     'custom_weights_families': list(lt.CUSTOM_WEIGHTS_FAMILIES),
                     'vae_te_families': list(lt.VAE_TE_OVERRIDE_FAMILIES),
-                    # Défaut family-aware : Krea → Raw (reco officielle), FLUX.2 Klein
-                    # → 4B, sinon Turbo. Déféré au service (_default_variant_for) pour
-                    # que l'UI et le lancement (_krea_is_raw/_flux2klein_is_9b) s'accordent.
+                    # Family defaults: Krea Raw (official recommendation), FLUX.2 Klein 4B,
+                    # otherwise Turbo. Delegate to _default_variant_for so UI and launch agree.
                     'variant': ds.train_variant or lt._default_variant_for(ds.train_type or 'zimage'),
                     'converted': converted,
                     'convert': zc.convert_status(),
@@ -1033,12 +1040,11 @@ def dataset_train_base_info(dataset_id):
                     'training_mode': lt.training_mode(ds),
                     'comfyui_configured': comfyui_configured,
                     'models_dir': str(models_dir) if models_dir else '',
-                    # Réglages avancés effectifs (persistés ∪ défauts family-aware) pour
-                    # la famille courante : rank/alpha/resolution/save_every → le panneau
-                    # « Advanced options » les affiche et laisse les éditer.
+                    # Effective advanced settings combine persisted values and family defaults:
+                    # rank/alpha/resolution/save_every for display/editing in Advanced options.
                     'train_settings': lt.effective_train_settings(ds),
-                    # Slider LoRA mode (Beta) : état + prompts persistés + knobs résolus
-                    # (colonne dédiée train_slider — jamais écrasé par un preset).
+                    # Slider LoRA mode (Beta): state, persisted prompts and resolved settings
+                    # in dedicated train_slider, never overwritten by a preset.
                     'slider': lt.effective_slider_settings(ds),
                     # Can this machine actually train Anima? The arch is an ai-toolkit
                     # EXTENSION, so an older checkout simply doesn't have it (the launch
@@ -1048,19 +1054,20 @@ def dataset_train_base_info(dataset_id):
                     # The panel uses it to stay quiet instead of recommending Anima to
                     # someone who cannot run it.
                     'anima_supported': lt._aitoolkit_supports_anima(),
-                    # Une entrée par famille de TRAIN_TYPES, sans exception : c'est
-                    # ce que le panneau lit pour peupler son sélecteur de base
-                    # (test_every_family_gets_its_own_base_list).
+                    'qwenimage21_supported': lt._aitoolkit_supports_qwenimage21(),
+                    # One base-list entry for every TRAIN_TYPES family, without exception.
+                    # The panel populates its selector from this (covered by contract tests).
                     'bases_by_type': {'zimage': bases, 'sdxl': sdxl_bases,
                                       'krea': krea_bases, 'flux': flux_bases,
                                       'flux2klein': flux2klein_bases,
-                                      'anima': anima_bases}})
+                                      'anima': anima_bases,
+                                      'qwenimage21': [{'value': '', 'label': 'Official - Qwen-Image 2.1'}]}})
 
 
 @bp.post('/dataset/<int:dataset_id>/train/settings')
 def dataset_train_settings(dataset_id):
-    """Persiste un patch de réglages avancés {rank?, resolution?, save_every?} sur le
-    dataset (validé + borné côté service). Renvoie les réglages effectifs résultants."""
+    """Persist advanced {rank?, resolution?, save_every?} settings on the dataset,
+    validated and bounded by the service. Return resulting effective settings."""
     gate = _require_aitoolkit()
     if gate and not capabilities.probe().get('cloud_training'):
         return gate
@@ -1083,9 +1090,9 @@ def dataset_train_settings(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/train/slider')
 def dataset_train_slider(dataset_id):
-    """Slider LoRA mode (Beta) : persiste un patch {enabled?, positive?, negative?,
-    target_class?, anchor?, guidance?, anchor_strength?} (validé côté service,
-    colonne dédiée train_slider). Renvoie l'état slider effectif."""
+    """Persist Slider LoRA (Beta) patch {enabled?, positive?, negative?,
+    target_class?, anchor?, guidance?, anchor_strength?}, service-validated
+    in train_slider. Return effective slider state."""
     gate = _require_aitoolkit()
     if gate:
         return gate
@@ -1212,9 +1219,9 @@ _STYLE_BUILTIN_PRESETS = [
                        'timesteps and 250-step probes.',
         'settings': _style_preset_settings(32, 32, timestep_type='weighted'),
     },
-    # Corrected from 32/16: the concept research recommends FULL alpha for
-    # style ("Alpha = dim, recommandé style") — half-strength stays a
-    # character-recipe trick. SDXL is ddpm: no flow-match timestep weighting.
+    # Corrected from 32/16: concept research recommends full alpha for style
+    # (alpha=dim). Half-strength remains a character-recipe choice. SDXL uses
+    # DDPM, without flow-match timestep weighting.
     {
         'id': 'builtin-style-sdxl',
         'name': 'SDXL · Style',
@@ -1587,8 +1594,8 @@ def dataset_train_preset_apply(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/train/prepare-base')
 def dataset_train_prepare_base(dataset_id):
-    """Convertit un merge ComfyUI en diffusers (thread d'arrière-plan) pour
-    pouvoir entraîner dessus. Statut via /train/base-info (convert)."""
+    """Convert a ComfyUI merge to diffusers in a background thread for training.
+    Status is available in /train/base-info under convert."""
     gate = _require_aitoolkit()
     if gate:
         return gate
@@ -1597,8 +1604,8 @@ def dataset_train_prepare_base(dataset_id):
     bm = (request.get_json(silent=True) or {}).get('base_model', '')
     if not bm:
         return jsonify({'error': 'base model required'}), 400
-    # Whitelist stricte : seul un modèle Z-Image réellement listé est convertible
-    # (anti path-traversal - l'entrée transporte un chemin jusqu'à un subprocess).
+    # Strict allowlist: only a listed Z-Image model is convertible. Prevent
+    # path traversal because the input carries a path into a subprocess.
     if bm not in get_zimage_models():
         return jsonify({'error': 'unknown base model'}), 400
     if zc.is_converted(bm):
@@ -1612,10 +1619,10 @@ def dataset_train_prepare_base(dataset_id):
 
 @bp.post('/dataset/<int:dataset_id>/train/open-folder')
 def dataset_train_open_folder(dataset_id):
-    """Ouvre un dossier dans l'explorateur du poste (app locale) : target 'loras'
-    (import ComfyUI de la famille), 'run' (checkpoints du run) ou 'dataset'
-    (images + captions .txt du dataset — pas de dépendance ai-toolkit).
-    Chemins résolus serveur — le body ne transporte jamais de chemin."""
+    """Open a server-resolved folder in the local file explorer: loras for
+    the family's ComfyUI import, run for checkpoints, or dataset for images
+    and caption sidecars without needing ai-toolkit. Request bodies never
+    carry filesystem paths."""
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     d = request.get_json(silent=True) or {}
@@ -1730,24 +1737,35 @@ def dataset_train_run_checkpoint_delete(dataset_id):
     """Move ONE RUN checkpoint to the trash — run-dir file, or a cloud run's
     synced save when cloud_run_id is given (the deployed-LoRA delete above is
     a separate route). Nothing is destroyed until 'Empty trash' in Settings."""
+    body = request.get_json(silent=True) or {}
+    if body.get('cloud_run_id'):
+        @_cloud_provider_required
+        def delete_cloud():
+            from lds_sdk import cloud_training
+            run = cloud_training.get_run(LOCAL_USER, body['cloud_run_id'],
+                                         dataset_id=dataset_id, dataset_table='face_dataset')
+            if run is None:
+                return jsonify({'error': 'not found'}), 404
+            try:
+                removed = cloud_training.delete_cloud_checkpoint(
+                    dataset_id, run.id, body.get('filename', ''), dataset_table='face_dataset')
+            except Exception as exc:
+                return _map_error(exc)
+            return jsonify({'ok': True, 'removed': removed})
+        return delete_cloud()
     gate = _require_aitoolkit()
     if gate and not capabilities.probe().get('cloud_training'):
         return gate
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
-    body = request.get_json(silent=True) or {}
     try:
-        if body.get('cloud_run_id'):
-            removed = ct.delete_cloud_checkpoint(dataset_id, body['cloud_run_id'],
-                                                 body.get('filename', ''))
-        else:
-            kw = {} if 'base_model' not in body else {'base_model': body.get('base_model')}
-            if body.get('train_type'):
-                kw['family'] = body.get('train_type')
-            if body.get('variant'):
-                kw['variant'] = body.get('variant')
-            removed = lt.delete_checkpoint(LOCAL_USER, dataset_id,
-                                           body.get('filename', ''), **kw)
+        kw = {} if 'base_model' not in body else {'base_model': body.get('base_model')}
+        if body.get('train_type'):
+            kw['family'] = body.get('train_type')
+        if body.get('variant'):
+            kw['variant'] = body.get('variant')
+        removed = lt.delete_checkpoint(LOCAL_USER, dataset_id,
+                                       body.get('filename', ''), **kw)
     except Exception as e:
         return _map_error(e)
     return jsonify({'ok': True, 'removed': removed})
@@ -1776,7 +1794,6 @@ def dataset_train_checkpoints_cleanup(dataset_id):
     return jsonify({'ok': True, **res})
 
 
-@bp.post('/dataset/train/cloud/purge')
 def dataset_train_cloud_purge():
     """Trash the working files of finished cloud runs — the exported dataset
     copy, the sample images and the logs. Checkpoints are moved into the durable
@@ -1785,7 +1802,6 @@ def dataset_train_cloud_purge():
     return jsonify({'ok': True, **ct.purge_finished_runs()})
 
 
-@bp.get('/dataset/train/cloud/orphans')
 def dataset_train_cloud_orphans():
     """Run folders on disk that no run row claims — the tens of GB the cleanup
     used to answer 'already clean' about. Walks the disk, so it is its own
@@ -1795,7 +1811,6 @@ def dataset_train_cloud_orphans():
                     'total_bytes': sum(o['size_bytes'] for o in orphans)})
 
 
-@bp.post('/dataset/train/cloud/purge-orphans')
 def dataset_train_cloud_purge_orphans():
     """Trash the named orphan run folders (all of them when `names` is absent).
     Loose checkpoints inside them are rescued into the store first."""
@@ -1810,7 +1825,6 @@ def dataset_train_cloud_purge_orphans():
     return jsonify({'ok': True, **res})
 
 
-@bp.get('/dataset/train/cloud/staging-sizes')
 def dataset_train_cloud_staging_sizes():
     """How much disk each cloud run's staging dir still holds, so the Runs hub can
     show "8.2 GB on disk" on a card and name that weight in the per-run 🧹
@@ -1830,7 +1844,6 @@ def dataset_train_cloud_staging_sizes():
                     'total_bytes': sum(sizes.values())})
 
 
-@bp.post('/dataset/train/cloud/purge-run')
 def dataset_train_cloud_purge_run():
     """Trash the staging dir of ONE finished cloud run — targeted cleanup, so a
     45-run history no longer forces an all-or-nothing purge. Spares exactly what
@@ -1854,8 +1867,8 @@ def dataset_train_import(dataset_id):
         return jsonify({'error': 'not found'}), 404
     body = request.get_json(silent=True) or {}
     fn = body.get('filename', '')
-    # base_model = base du run d'où vient le checkpoint (absente → base persistée) ;
-    # train_type = famille sélectionnée (absente → persistée) → même run + même dossier.
+    # base_model identifies the checkpoint's source run and train_type the
+    # selected family; absent fields use persisted values for the same run/folder.
     kw = {} if 'base_model' not in body else {'base_model': body.get('base_model')}
     fam = body.get('train_type') or None
     if fam:
@@ -1913,7 +1926,6 @@ def dataset_train_import(dataset_id):
     return jsonify(out)
 
 
-@bp.post('/dataset/<int:dataset_id>/train/cloud')
 def dataset_train_cloud(dataset_id):
     gate = _require_cloud()
     if gate:
@@ -1954,7 +1966,6 @@ def dataset_train_cloud(dataset_id):
     return jsonify({'ok': True, **res})
 
 
-@bp.get('/dataset/<int:dataset_id>/train/cloud/custom-base')
 def dataset_train_cloud_custom_base(dataset_id):
     """Readiness of a CUSTOM base for cloud training: is it already pushed to
     the private `lds-base-<hash>` repo on the user's Hugging Face account
@@ -1980,7 +1991,6 @@ def dataset_train_cloud_custom_base(dataset_id):
     return jsonify({'ok': True, **state})
 
 
-@bp.post('/dataset/<int:dataset_id>/train/cloud/custom-base/push')
 def dataset_train_cloud_custom_base_push(dataset_id):
     """One-time background upload of the custom base to a PRIVATE repo on the
     user's Hugging Face account (private is forced server-side — no toggle).
@@ -2044,7 +2054,6 @@ def _hf_storage_namespace():
 # already on this machine. No ai-toolkit and no cloud gate: it is a pure
 # file-in / file-out operation on the CPU (see fp8_quantize's module note).
 
-@bp.post('/tools/fp8-quantize/plan')
 def tools_fp8_quantize_plan():
     """What quantizing this file would produce, or WHY it is refused.
 
@@ -2056,7 +2065,6 @@ def tools_fp8_quantize_plan():
     return jsonify(fp8_quantize.describe(d.get('path')))
 
 
-@bp.post('/tools/fp8-quantize')
 def tools_fp8_quantize_start():
     from ..services import fp8_quantize
     d = request.get_json(silent=True) or {}
@@ -2069,7 +2077,6 @@ def tools_fp8_quantize_start():
     return jsonify({'ok': True, **info, 'status': fp8_quantize.status()})
 
 
-@bp.get('/tools/fp8-quantize/status')
 def tools_fp8_quantize_status():
     from ..services import fp8_quantize
     return jsonify({'ok': True, **(fp8_quantize.status() or {})})
@@ -2082,7 +2089,6 @@ def tools_fp8_quantize_status():
 # ComfyUI folder that loads it. NOT behind _require_cloud: nothing is rented, and
 # the person who most needs this has no vast key at all.
 
-@bp.post('/tools/fp8-deliver/plan')
 def tools_fp8_deliver_plan():
     """Where the file will land, what it will weigh, and whether the disk can
     take it — answered BEFORE the click. Always 200: a refusal is a disabled
@@ -2095,7 +2101,6 @@ def tools_fp8_deliver_plan():
         destination_dir=d.get('destination_dir')))
 
 
-@bp.post('/tools/fp8-deliver')
 def tools_fp8_deliver_start():
     from ..services import fp8_local_delivery
     d = request.get_json(silent=True) or {}
@@ -2111,13 +2116,11 @@ def tools_fp8_deliver_start():
     return jsonify({'ok': True, **info, 'status': fp8_local_delivery.status()})
 
 
-@bp.get('/tools/fp8-deliver/status')
 def tools_fp8_deliver_status():
     from ..services import fp8_local_delivery
     return jsonify({'ok': True, **(fp8_local_delivery.status() or {})})
 
 
-@bp.post('/tools/fp8-deliver/cancel')
 def tools_fp8_deliver_cancel():
     """Stop the job. The bytes already downloaded stay on disk, so starting
     again resumes rather than restarts."""
@@ -2132,7 +2135,6 @@ def tools_fp8_deliver_cancel():
 # That asymmetry is the whole point of this lane, so it lives in the routes too:
 # there is no endpoint here that could deploy a master, not even by mistake.
 
-@bp.post('/dataset/<int:dataset_id>/train/dense/send-plan')
 def dataset_dense_send_plan(dataset_id):
     """What "Send to ComfyUI" would do — link or copy, where, at what cost.
     Always 200: a refusal is a disabled button carrying its reason."""
@@ -2143,7 +2145,6 @@ def dataset_dense_send_plan(dataset_id):
     return jsonify(dense_artifacts.send_plan(dataset_id, d.get('run_id')))
 
 
-@bp.post('/dataset/<int:dataset_id>/train/dense/send')
 def dataset_dense_send(dataset_id):
     from ..services import dense_artifacts
     if not svc.get_dataset(LOCAL_USER, dataset_id):
@@ -2157,14 +2158,12 @@ def dataset_dense_send(dataset_id):
     return jsonify({'ok': True, **info, 'job': dense_artifacts.status()})
 
 
-@bp.get('/tools/dense-send/status')
 def tools_dense_send_status():
     """Global, like the fp8 job's: one send at a time, and it outlives the tab."""
     from ..services import dense_artifacts
     return jsonify({'ok': True, **(dense_artifacts.status() or {})})
 
 
-@bp.post('/dataset/<int:dataset_id>/train/dense/delete')
 def dataset_dense_delete(dataset_id):
     """Move ONE of a full model's files to the app trash — recoverable on
     purpose: these cost hours of GPU, and a mis-click must not be final."""
@@ -2180,7 +2179,6 @@ def dataset_dense_delete(dataset_id):
     return jsonify({'ok': True, **out})
 
 
-@bp.post('/cloud/quantize/plan')
 def cloud_quantize_plan():
     """Cost, duration cap and storage impact of quantizing a delivered artifact
     in the cloud — always answered BEFORE anything is rented."""
@@ -2197,7 +2195,6 @@ def cloud_quantize_plan():
         return _map_error(e)
 
 
-@bp.post('/cloud/quantize')
 def cloud_quantize_start():
     gate = _require_cloud()
     if gate:
@@ -2216,7 +2213,6 @@ def cloud_quantize_start():
     return jsonify({'ok': True, **planned, 'status': cloud_quantize.status()})
 
 
-@bp.get('/cloud/quantize/status')
 def cloud_quantize_status():
     """State of the cloud quantization, and a sweep for orphaned pods.
 
@@ -2231,7 +2227,6 @@ def cloud_quantize_status():
     return jsonify({'ok': True, 'reaped': reaped, **(cloud_quantize.status() or {})})
 
 
-@bp.get('/cloud/hf-storage')
 def cloud_hf_storage():
     """Measured private storage + the lds-base-* cache inventory.
 
@@ -2267,7 +2262,6 @@ def cloud_hf_storage():
                     'forecast': forecast, **inventory})
 
 
-@bp.delete('/cloud/hf-storage/base/<repo_name>')
 def cloud_hf_storage_delete_base(repo_name):
     """Delete ONE lds-base-* cache repo (the service validates the name)."""
     gate = _require_cloud()
@@ -2287,7 +2281,6 @@ def cloud_hf_storage_delete_base(repo_name):
     return jsonify(out)
 
 
-@bp.post('/cloud/hf-storage/base/delete-all')
 def cloud_hf_storage_delete_all_bases():
     """Delete every lds-base-* cache of the account. Partial failures reported."""
     gate = _require_cloud()
@@ -2331,10 +2324,9 @@ def dataset_train_retry():
     return jsonify({'ok': True, **res})
 
 
-@bp.post('/dataset/train/cloud/retry')
 def dataset_train_cloud_retry():
-    """↻ Retry d'un run en erreur (page Cloud) : relance avec les paramètres
-    exacts du run raté — pod frais, mêmes garde-fous que tout launch."""
+    """Retry a failed cloud run using its exact parameters on a fresh pod
+    with the normal launch safeguards."""
     gate = _require_cloud()
     if gate:
         return gate
@@ -2346,13 +2338,11 @@ def dataset_train_cloud_retry():
     return jsonify({'ok': True, **res})
 
 
-@bp.post('/dataset/train/cloud/continue')
 def dataset_train_cloud_continue():
-    """▶ Continue d'un run cloud TERMINÉ (page Runs) : reprend depuis un checkpoint
-    harvesté (from_step, défaut = dernier) et vise step_de_reprise + extra_steps —
-    pod frais, mêmes garde-fous que tout launch ; le monitor dépose le checkpoint
-    sur le pod avant de démarrer (auto-resume ai-toolkit). overrides = réglages sûrs
-    (le service refuse toute autre clé → 400)."""
+    """Continue a terminal cloud run from a harvested checkpoint, latest by
+    default, targeting resume_step+extra_steps. Use a fresh pod and normal
+    launch guards. Monitor stages the checkpoint before ai-toolkit auto-resume.
+    overrides accepts safe settings only; other keys return 400."""
     gate = _require_cloud()
     if gate:
         return gate
@@ -2371,7 +2361,6 @@ def dataset_train_cloud_continue():
     return jsonify({'ok': True, **res})
 
 
-@bp.post('/dataset/train/cloud/resume-plan')
 def dataset_train_cloud_resume_plan():
     """The two roads a full model can take back to a pod, with their duration
     and their GPU cost — answered BEFORE anything is rented, like every other
@@ -2390,7 +2379,6 @@ def dataset_train_cloud_resume_plan():
         return _map_error(e)
 
 
-@bp.post('/dataset/train/cloud/recheck-delivery')
 def dataset_train_cloud_recheck_delivery():
     """Re-verify one dense run's Hugging Face delivery without renting a GPU."""
     body = request.get_json(silent=True) or {}
@@ -2404,6 +2392,7 @@ def dataset_train_cloud_recheck_delivery():
 
 
 @bp.post('/dataset/train/cloud/hub-presence')
+@_cloud_provider_required
 def dataset_train_cloud_hub_presence():
     """Are these runs' Hugging Face repositories still there — asked NOW.
 
@@ -2419,7 +2408,8 @@ def dataset_train_cloud_hub_presence():
     ``recheck-delivery`` above is the one operation allowed to restate it).
     """
     from ..models import CloudTrainingRun
-    from ..services import hub_presence
+    from lds_sdk.cloud_host.services import hub_presence, cloud_run_dataset
+    from lds_sdk.cloud_training import get_run
 
     body = request.get_json(silent=True) or {}
     wanted = body.get('run_ids')
@@ -2433,6 +2423,9 @@ def dataset_train_cloud_hub_presence():
             continue
     repo_of = {}
     for run in CloudTrainingRun.query.filter(CloudTrainingRun.id.in_(ids)).all():
+        if get_run(LOCAL_USER, run.id, dataset_id=run.dataset_id,
+                   dataset_table=cloud_run_dataset.table_of(run)) is None:
+            continue
         if not ct._is_full_transformer_run(run):
             continue
         repo = str(ct._run_param(run, 'hf_repo_id') or '').strip()
@@ -2445,7 +2438,6 @@ def dataset_train_cloud_hub_presence():
         for run_id, repo in repo_of.items() if repo in checked}})
 
 
-@bp.post('/dataset/train/cloud/fetch-local')
 def dataset_train_cloud_fetch_local():
     """Bring ONE kept dense run's files home (or stop doing it).
 
@@ -2464,13 +2456,11 @@ def dataset_train_cloud_fetch_local():
     return jsonify(result)
 
 
-@bp.post('/dataset/<int:dataset_id>/train/cloud/continue-local')
 def dataset_train_cloud_continue_local(dataset_id):
-    """▶ Continue d'un checkpoint LOCAL dans le CLOUD (voie « Cloud » de la modale
-    Continue, côté dataset) : le fichier du run local est semé sur un pod frais
-    (resume_ckpt_path) et le job vise step_de_reprise + extra_steps. Mêmes
-    garde-fous que tout launch cloud (clé vast.ai, budget, limite de runs actifs,
-    unicité par famille) — c'est un launch_cloud_training normal."""
+    """Continue a local checkpoint in the cloud from the dataset dialog.
+    Stage resume_ckpt_path on a fresh pod and target resume_step+extra_steps.
+    Use ordinary cloud launch guards: vast.ai key, budget, active-run limit
+    and uniqueness by family."""
     gate = _require_cloud()
     if gate:
         return gate
@@ -2512,7 +2502,6 @@ def dataset_train_cloud_continue_local(dataset_id):
     return jsonify({'ok': True, **res})
 
 
-@bp.get('/dataset/<int:dataset_id>/train/cloud/offers')
 def dataset_train_cloud_offers(dataset_id):
     """Live GPU speed tiers for the launch dialog (price/h + approx time+cost).
     Read-only — rents nothing; the launch call rents the chosen class."""
@@ -2534,12 +2523,10 @@ def dataset_train_cloud_offers(dataset_id):
     return jsonify({'ok': True, **data})
 
 
-@bp.get('/dataset/train/cloud/status')
 def dataset_train_cloud_status():
     return jsonify(ct.cloud_status())
 
 
-@bp.get('/dataset/train/cloud/runs')
 def dataset_train_cloud_runs():
     """Active + recent cloud runs for the dedicated Cloud-runs hub page.
     Open like status (no gate): an unconfigured backend just returns empties."""
@@ -2786,7 +2773,6 @@ def _parse_run_id_arg():
         return None, False
 
 
-@bp.get('/dataset/<int:dataset_id>/train/cloud/progress')
 def dataset_train_cloud_progress(dataset_id):
     run_id, ok = _parse_run_id_arg()
     if not ok:
@@ -2802,7 +2788,6 @@ def dataset_train_cloud_progress(dataset_id):
         return _map_error(e)
 
 
-@bp.post('/dataset/train/cloud/stop')
 def dataset_train_cloud_stop():
     """Stop a cloud run and report what really happened.
 
@@ -2914,7 +2899,6 @@ def train_activity():
     return jsonify(ct.training_activity())
 
 
-@bp.get('/train/canvas/datasets')
 def train_canvas_datasets():
     """◉ LoRA Canvas index: which datasets have runs worth drawing, how many, and
     in which families. Cheap by design (no checkpoints, no disk) — the canvas
@@ -2923,7 +2907,6 @@ def train_canvas_datasets():
     return jsonify(ct.canvas_dataset_index(LOCAL_USER))
 
 
-@bp.post('/train/canvas/generate')
 def train_canvas_generate():
     """◉ Generate from the LoRA Canvas — the same Test-Studio engine, driven by
     the checkpoints ticked on the board instead of by a picker. Body:
@@ -2950,8 +2933,8 @@ def train_canvas_generate():
         res = ct.canvas_generate(
             LOCAL_USER, d.get('selections') or [],
             d.get('strengths') or [1.0],
-            # Réglages partagés (mêmes clés wire que le Studio) ; 📝 Lot : une
-            # passe par prompt coché. ◉ La base est un AXE (z_models).
+            # Shared settings use the Studio wire keys; one pass per selected prompt.
+            # The base is an axis (z_models).
             StudioGenSettings.from_payload(d),
             prompts=d.get('prompts'),
             external_loras=d.get('external_loras'), combine=d.get('combine'))
@@ -3286,7 +3269,6 @@ def train_checkpoint_images_zip_plan(record_id, step):
     return jsonify({k: v for k, v in plan.items() if k != 'entries'})
 
 
-@bp.get('/train/canvas/positions')
 def train_canvas_positions():
     """◉ LoRA Canvas: every remembered card position, grouped by dataset id.
     One request for the whole board — the lanes need their overrides before the
@@ -3295,7 +3277,6 @@ def train_canvas_positions():
     return jsonify(ct.canvas_positions(LOCAL_USER))
 
 
-@bp.put('/dataset/<int:dataset_id>/canvas/positions')
 def dataset_canvas_positions_save(dataset_id):
     """Remember where cards sit in ONE lane. Body: {positions:[{record_id,x,y}]}.
     Upsert, so re-sending the same coordinates is a no-op — the canvas re-pins a
@@ -3308,7 +3289,6 @@ def dataset_canvas_positions_save(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.delete('/dataset/<int:dataset_id>/canvas/positions')
 def dataset_canvas_positions_clear(dataset_id):
     """✦ Tidy up one lane: forget every dragged position and fall back to the
     automatic tree."""
@@ -3318,7 +3298,6 @@ def dataset_canvas_positions_clear(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.get('/train/canvas/lanes')
 def train_canvas_lanes():
     """◉ LoRA Canvas: every arranged LANE — where it sits and how much room it
     keeps. Travels with the card positions above and for the same reason: the
@@ -3326,7 +3305,6 @@ def train_canvas_lanes():
     return jsonify(ct.canvas_lane_placements(LOCAL_USER))
 
 
-@bp.put('/dataset/<int:dataset_id>/canvas/lane')
 def dataset_canvas_lane_save(dataset_id):
     """Remember one lane's placement. Body: {x?, y?, h?}.
     A MERGE — the client sends only what its gesture changed, so moving a lane
@@ -3338,7 +3316,6 @@ def dataset_canvas_lane_save(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.delete('/dataset/<int:dataset_id>/canvas/lane')
 def dataset_canvas_lane_clear(dataset_id):
     """✦ Tidy up one lane: back to the automatic stack."""
     try:
@@ -3347,13 +3324,11 @@ def dataset_canvas_lane_clear(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.get('/train/canvas/external-loras')
 def canvas_external_loras_get():
     """🔌 The board's external LoRA plugin nodes, as persisted."""
     return jsonify({'loras': cfg.get('canvas.external_loras', []) or []})
 
 
-@bp.put('/train/canvas/external-loras')
 def canvas_external_loras_put():
     """Replace the board's external LoRA nodes. Sanitizes: dedupe by filename,
     reject path-traversal/absolute/drive-letter names (dropped, not erred —
@@ -3389,7 +3364,6 @@ def canvas_external_loras_put():
     return jsonify({'ok': True, 'loras': cleaned})
 
 
-@bp.get('/train/canvas/images')
 def train_canvas_images():
     """🖼 Every image pinned on the ◉ LoRA Canvas, grouped by dataset id, with
     the image row alongside its geometry — one request for the whole board, like
@@ -3398,7 +3372,6 @@ def train_canvas_images():
     return jsonify(ct.canvas_image_nodes(LOCAL_USER))
 
 
-@bp.put('/dataset/<int:dataset_id>/canvas/images')
 def dataset_canvas_images_save(dataset_id):
     """Remember pinned images of ONE lane.
     Body: {nodes:[{image_id,x,y,w,h,visible}]}.
@@ -3414,7 +3387,6 @@ def dataset_canvas_images_save(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.delete('/dataset/<int:dataset_id>/canvas/images')
 def dataset_canvas_images_clear(dataset_id):
     """Forget every pinned image of one lane, geometry included. Deliberately
     NOT what ✦ Tidy up calls — see clear_canvas_image_nodes."""
@@ -3424,13 +3396,11 @@ def dataset_canvas_images_clear(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.get('/train/canvas/layouts')
 def train_canvas_layouts():
     """💾 The named board arrangements this install has kept."""
     return jsonify(ct.canvas_layout_presets(LOCAL_USER))
 
 
-@bp.post('/train/canvas/layouts')
 def train_canvas_layouts_save():
     """Keep the board's current arrangement under a name.
     Body: {name, positions:{ds:[{record_id,x,y}]}, images:{ds:[{image_id,...}]},
@@ -3448,7 +3418,6 @@ def train_canvas_layouts_save():
         return jsonify({'error': str(e)}), 400
 
 
-@bp.post('/train/canvas/layouts/<int:preset_id>/apply')
 def train_canvas_layouts_apply(preset_id):
     """Put a remembered arrangement back. Everything travels through the live
     writers, so anything that no longer exists is simply not restored."""
@@ -3458,7 +3427,6 @@ def train_canvas_layouts_apply(preset_id):
         return jsonify({'error': 'not found'}), 404
 
 
-@bp.delete('/train/canvas/layouts/<int:preset_id>')
 def train_canvas_layouts_delete(preset_id):
     try:
         return jsonify(ct.delete_canvas_layout_preset(LOCAL_USER, preset_id))

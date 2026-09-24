@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "id": "dlss5",
+  "bundled": true,
+  "name": "DLSS 5 Neural Rendering",
+  "version": "1.0.0",
+  "api": 1,
+  "publisher": { "id": "lds", "name": "LDS" },
+  "description": "Improve a finished video's lighting and materials with NVIDIA DLSS 5. Import a video, render it, compare with the untouched original and download the result. Includes its own Python engine and preparation.",
+  "requires": [],
+  "python_package": "lds_dlss5",
+  "frontend": "frontend/index.js",
+  "requirements": "requirements-workers.txt",
+  "in_process_requirements": false,
+  "owns": {
+    "install_actions": ["dlss5nr_bridge"],
+    "install_groups": [],
+    "probes": ["dlss5nr"],
+    "engines": [],
+    "config_sections": ["plugins.dlss5"],
+    "config_keys_in_shared_sections": {},
+    "help_topics": ["video-neural-render", "setup-dlss5-install"],
+    "tables": [],
+    "whats_new_ids": ["2026-09-22-dlss5-open-folder", "2026-09-02-video-neural-render", "2026-09-03-compare-export"],
+    "model_slots": [],
+    "job_kinds": []
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": ["filesystem", "gpu", "network"],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [{ "label": "Open DLSS 5", "path": "/dlss5" }],
+    "setup": { "label": "Prepare DLSS 5", "path": "/plugins/dlss5/settings" },
+    "setup_hint": "Prepare the isolated Python engine and the pinned bridge here. Windows, an NVIDIA driver and your own NVIDIA model file are required. Existing DLSS files are reused in place.",
+    "surfaces": ["DLSS 5 studio", "DLSS 5 preparation", "DLSS 5 settings"]
+  },
+  "compatibility": { "lds": ">=2026.9.4", "api": ">=1.21,<2", "python": ">=3.10,<4",
+    "os": ["windows"], "arch": ["x86_64"] },
+  "guide_ownership": { "chapters": [], "sections": ["using-the-app#neural-render-for-video-clips"] }
+}

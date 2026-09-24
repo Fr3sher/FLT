@@ -11,12 +11,15 @@ before the cache existed, and the fix is one pass, not a different body.
 import pytest
 
 from app.config import LOCAL_USER
-from app.models import VideoSource
-from app.services import shot_probs
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoSource
+from lds_video import shot_probs
+from lds_video import video_bank_service as svc
 
 # Imported for its autouse effect; see _video_extra.py for why not importorskip.
 from _video_extra import video_extra_ready  # noqa: F401
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _probe(_path):
@@ -26,7 +29,7 @@ def _probe(_path):
 
 def _detect_seam(single):
     def run(path, fps_native=None, **kwargs):
-        from app.services import shot_detect as sd
+        from lds_video import shot_detect as sd
         probs = {'single': single, 'all': None}
         return {'clips': sd.clips_from_probs(probs, fps_native=fps_native or 25.0,
                                              threshold=kwargs.get('threshold'),

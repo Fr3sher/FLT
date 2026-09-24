@@ -9,7 +9,7 @@
  * so every console page the app links to — sign-up, Billing, Keys, the
  * instances console — carries the id, through vastUrl()/VastLink. The
  * disclosure (VastReferralDisclosure) says so next to the two "create an
- * account" moments and offers the one deliberately untagged link.
+ * account" moments. Every outbound console link carries the configured id.
  * `vastReferral.test.js` refuses a vast.ai URL spelled anywhere else in the
  * sources, and mirrors the id into README, the guides and .env.example.
  *
@@ -23,8 +23,10 @@ export const VAST_REFERRAL_ID = '683073'
 /** A vast.ai console URL for `path` ('/', '/billing/', '/instances/'…), tagged when an id is set. */
 export function vastUrl(path = '/', referralId = VAST_REFERRAL_ID) {
   const id = String(referralId ?? '').trim()
-  const base = VAST_CONSOLE_URL + String(path ?? '/').replace(/^\/+/, '')
-  return id ? `${base}?ref_id=${encodeURIComponent(id)}` : base
+  const url = new URL(VAST_CONSOLE_URL + String(path ?? '/').replace(/^\/+/, ''))
+  if (id) url.searchParams.set('ref_id', id)
+  else url.searchParams.delete('ref_id')
+  return url.href
 }
 
 /** The sign-up link the "create an account" steps point at — the console root. */

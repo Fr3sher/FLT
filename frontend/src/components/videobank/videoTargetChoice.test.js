@@ -9,7 +9,7 @@ import {
   insetProblem, insetHint, insetOutcome,
   capProblem, capHint, capBalanceNote,
   lengthSuggestion, lengthSuggestionNote,
-} from './videoTargetChoice.js'
+} from "../../../../bundled/video/frontend/videobank/videoTargetChoice.js"
 
 // Verbatim shapes of GET /api/video/targets — kept as fixtures rather than
 // invented, so a catalogue change that breaks the picker breaks a test.

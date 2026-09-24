@@ -1,4 +1,8 @@
 """Cloud config section, VAST_API_KEY secret, cloud_training capability."""
+import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def test_cloud_defaults_present(app):
@@ -64,7 +68,7 @@ def test_training_visible_with_cloud_key_only(client, monkeypatch):
 
 
 def test_settings_test_target_vast_no_key(client):
-    r = client.post('/api/settings/test/vast')
+    r = client.post('/api/settings/test/vast?plugin=cloud_training')
     assert r.status_code == 200
     body = r.get_json()
     assert body['ok'] is False
@@ -88,7 +92,7 @@ def test_settings_test_target_vast_with_key(client, monkeypatch):
         return R()
 
     monkeypatch.setattr('app.capabilities.requests.get', fake_get)
-    body = client.post('/api/settings/test/vast').get_json()
+    body = client.post('/api/settings/test/vast?plugin=cloud_training').get_json()
     assert body['ok'] is True
     assert calls['auth'] == 'Bearer k-test'
     assert 'console.vast.ai' in calls['url']

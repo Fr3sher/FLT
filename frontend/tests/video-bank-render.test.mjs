@@ -33,21 +33,27 @@ import { readSource } from './support/readSource.mjs'
 import assert from 'node:assert/strict'
 
 import { createElement, render, renderToStaticMarkup } from './support/mountJsx.mjs'
+import { installRuntimeHost } from './support/runtimeHost.mjs'
+import { registerBundledDescriptor } from './support/bundledDescriptors.mjs'
+import { pluginWhatsNew, setEnabled, whatsNewEntries } from '../src/plugins/registry.js'
+import videoDescriptor from '../../bundled/video/frontend/index.js'
+
+test.beforeEach(installRuntimeHost)
 
 /* ⚠️ Dynamic, and it has to be: the hooks that teach Node to read .jsx are
    installed while mountJsx.mjs is EVALUATED, and a static import of a .jsx file
    would already have been loaded by then — the whole graph is linked before the
    first line of any module runs. */
 const { default: VideoClipGrid } =
-  await import('../src/components/videobank/VideoClipGrid.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoClipGrid.jsx")
 const { default: VideoClipLightbox } =
-  await import('../src/components/videobank/VideoClipLightbox.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoClipLightbox.jsx")
 const { default: VideoCapabilityStrip } =
-  await import('../src/components/videobank/VideoCapabilityStrip.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoCapabilityStrip.jsx")
 const { default: VideoSourceList } =
-  await import('../src/components/videobank/VideoSourceList.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoSourceList.jsx")
 const { default: VideoTargetPicker } =
-  await import('../src/components/videobank/VideoTargetPicker.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoTargetPicker.jsx")
 
 const { ToastProvider } = await import('../src/components/common/Toast.jsx')
 
@@ -109,7 +115,7 @@ test('the grid source file declares no video element in any branch', () => {
   // the source is checked too, comments stripped: the file's own docstring
   // quotes the `<video preload="none">` version precisely to rule it out, and
   // that sentence must stay allowed to exist.
-  const src = read('src/components/videobank/VideoClipGrid.jsx')
+  const src = read('../bundled/video/frontend/videobank/VideoClipGrid.jsx')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '')
   assert.ok(!/<video[\s>]/.test(src), 'VideoClipGrid.jsx must not render a <video> tag')
@@ -335,12 +341,12 @@ test('nothing in this lane can scroll the page sideways at 400 px', () => {
   //    stretches it past the viewport and `truncate` never fires;
   //  · anything holding a path needs min-w-0 + truncate, because a flex child's
   //    default min-width is auto, not 0.
-  const grid = read('src/components/videobank/VideoClipGrid.jsx')
+  const grid = read('../bundled/video/frontend/videobank/VideoClipGrid.jsx')
   assert.match(grid, /grid-cols-2/, 'the clip grid must declare its narrow column count')
   for (const rel of [
-    'src/pages/VideoBankPage.jsx',
-    'src/components/videobank/VideoSourceList.jsx',
-    'src/components/videobank/VideoBankWorkspace.jsx',
+    '../bundled/video/frontend/pages/VideoBankPage.jsx',
+    '../bundled/video/frontend/videobank/VideoSourceList.jsx',
+    '../bundled/video/frontend/videobank/VideoBankWorkspace.jsx',
   ]) {
     const src = read(rel)
     assert.match(src, /min-w-0/, `${rel}: a path container needs min-w-0`)
@@ -348,7 +354,7 @@ test('nothing in this lane can scroll the page sideways at 400 px', () => {
     assert.ok(!/grid gap-\d+ sm:grid-cols/.test(src),
       `${rel}: a grid must declare grid-cols-1 before its sm: breakpoint`)
   }
-  const page = read('src/pages/VideoBankPage.jsx')
+  const page = read('../bundled/video/frontend/pages/VideoBankPage.jsx')
   assert.match(page, /grid-cols-1 sm:grid-cols-2/)
 })
 
@@ -358,7 +364,16 @@ test('the video bank is announced and documented', async () => {
   const { WHATS_NEW } = await import('../src/whatsNew.js')
   // The entry may have moved to the archive since it shipped — search the union.
   const { WHATS_NEW_ARCHIVE } = await import('../src/whatsNewArchive.js')
-  const entry = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE].find((e) => e.id === '2026-08-04-video-bank')
+  const { getHelpTopic } = await import('../src/help/helpRegistry.js')
+  const allWhatsNew = () => [...WHATS_NEW, ...WHATS_NEW_ARCHIVE, ...whatsNewEntries()]
+  const helpIds = ['page-video-bank', 'video-bank-passes', 'video-capability-pieces',
+    'video-datasets', 'video-promote-target']
+  for (const id of helpIds) assert.equal(getHelpTopic(id), undefined, `absent owner: ${id}`)
+  assert.ok(!allWhatsNew().some(e => e.id === '2026-08-04-video-bank'))
+  assert.deepEqual(pluginWhatsNew('video'), [])
+  assert.equal(registerBundledDescriptor(videoDescriptor), true)
+  setEnabled(['video'])
+  const entry = allWhatsNew().find((e) => e.id === '2026-08-04-video-bank')
   assert.ok(entry, 'the What’s-new entry is what a release note is generated from')
   // Archived entries drop their in-app target by doctrine (whatsNew.js,
   // rule "Keep the list tidy") — the deep link lived while the entry was live.
@@ -366,10 +381,12 @@ test('the video bank is announced and documented', async () => {
   // Benefit-first, and it names the silence it removes.
   assert.match(entry.title, /rushes/)
 
-  const { getHelpTopic } = await import('../src/help/helpRegistry.js')
-  for (const id of ['page-video-bank', 'video-bank-passes', 'video-capability-pieces',
-    'video-datasets', 'video-promote-target']) {
+  for (const id of helpIds) {
     assert.ok(getHelpTopic(id), `missing help topic ${id}`)
   }
   assert.equal(getHelpTopic('page-video-bank').app.route, '/video-bank')
+  setEnabled([])
+  for (const id of helpIds) assert.equal(getHelpTopic(id), undefined, `disabled owner: ${id}`)
+  assert.ok(!allWhatsNew().some(e => e.id === '2026-08-04-video-bank'))
+  assert.ok(pluginWhatsNew('video').some(e => e.id === entry.id), 'installed owner history remains readable')
 })

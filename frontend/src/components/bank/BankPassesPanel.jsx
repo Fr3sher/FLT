@@ -22,7 +22,6 @@ import { GroupLabel, PassButton } from './BankAtoms.jsx'
 import SettingsLink from '../common/SettingsLink'
 import { captionButtonLabel, captionScopeNote } from './bankCaptionScope.js'
 import { holdsTheGpu } from './bankScoreDevice.js'
-import { openerLabel } from './scoringPython.js'
 import { activeLocalLlm, localLlmLabel } from '../../utils/localLlm'
 
 /* Below lg the panel folds everything that is not a pass button. Measured by
@@ -182,20 +181,15 @@ export default function BankPassesPanel({
                 : ', which saves installing them twice.'}
             </p>
           )}
-          {/* The interpreter picker, offered where it can actually help: the pass is
-              about to crawl on the CPU of a machine that HAS a card, or the scoring
-              packages are missing and another Python here may already carry them
-              (true with or without a card — it saves an install either way). The
-              LABEL adapts: a machine with no NVIDIA card must never be promised "a
-              GPU Python", and the note it gets alongside is "this is how it is",
-              not a fix to chase. */}
-          {!capsLoading && (scoreNote?.tone === 'warn' || !caps.bank_scoring) && (
+          {/* Import detection cannot prove a CUDA calculation works. Keep the
+              recovery route accessible even when detection looks healthy. */}
+          {onPickPython && (
             <div>
               <button type="button" onClick={() => onPickPython('scoring')}
-                className={`min-h-10 lg:min-h-0 rounded-md border px-2 py-1 text-xs font-medium ${scoreGpuPresent
-                  ? 'border-amber-400/50 text-amber-300 hover:bg-amber-500/10'
-                  : 'border-border text-content-muted hover:bg-surface-raised hover:text-content'}`}>
-                {openerLabel(scoreGpuPresent)}
+                disabled={live || semanticOperationBusy}
+                title="Inspect, test or change the Python used by Score"
+                className="min-h-10 lg:min-h-0 rounded-md border border-border px-2 py-1 text-xs font-medium text-content-muted hover:bg-surface-raised hover:text-content disabled:opacity-50">
+                Manage Score Python…
               </button>
             </div>
           )}

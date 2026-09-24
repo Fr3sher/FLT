@@ -1,10 +1,9 @@
 // react-frontend/src/components/dataset/studio/ResultsArea.jsx
 /**
- * Zone « 📊 Résultats » du Studio de test LoRA. Possède l'état d'affichage
- * (repli `showResults`) et le run sélectionné (`selRun`), recalcule tout le
- * regroupement par run / config / variante à partir de `d.cells` et `d.scores`
- * (extraction behavior-preserving depuis l'ancien LoraTestStudio.jsx), puis rend
- * le sélecteur de run + une grille par variante (format × cfg × steps).
+ * LoRA Test Studio Results area owns showResults and selRun state. Recompute
+ * run/configuration/variant groupings from d.cells and d.scores, preserving the old
+ * LoraTestStudio.jsx behavior, then show the run selector and one grid per aspect/CFG/steps
+ * variant.
  */
 import { useCallback, useMemo, useState } from 'react';
 import { fmt } from '../../../utils/studioFormat';
@@ -15,24 +14,22 @@ import ResultsGrid from './ResultsGrid';
 import ExportGridModal from './ExportGridModal';
 
 export default function ResultsArea({ datasetId, d, studio, vote, onOpen }) {
-  // Repli des grilles de résultats (pour ne pas encombrer la page).
+  // Collapse results grids to keep the page uncluttered.
   const [showResults, setShowResults] = useState(true);
-  // Run sélectionné (null = run le plus récent par défaut).
+  // Selected run; null defaults to the most recent run.
   const [selRun, setSelRun] = useState(null);
-  // Modale « Export grid » (compose le run affiché en UNE image partageable).
+  // Export grid dialog combines the displayed run into ONE shareable image.
   const [exportOpen, setExportOpen] = useState(false);
 
-  // --- Regroupement par RUN (un lancement = même seed + prompt + modèle). On
-  // n'affiche que le run sélectionné (le plus récent par défaut) pour ne pas
-  // mélanger d'anciens tests déjà votés avec un nouveau run.
+  // Group by RUN: one launch shares seed, prompt and model setup. Show only the selected run,
+  // newest by default, to avoid mixing previously voted tests with a new launch.
   const runs = useMemo(() => {
     const groups = new Map();
     for (const c of d?.cells || []) {
-      // Un lancement = son `run_id` (cf. resultKeys.runKey) : les N seeds d'un
-      // batch, TOUS les modèles de base balayés ET tous les prompts du lot 📝.
-      // Le modèle comme le prompt sont des axes de VARIANTE, pas des runs
-      // distincts — les mettre dans cette clé coupait un lot de N prompts en N
-      // pseudo-runs, dont la vue n'en montrait qu'un.
+      // A launch is identified by run_id (see resultKeys.runKey), including all batch seeds, swept
+      // base models and batch prompts. Model and prompt are VARIANT axes, not separate runs;
+      // putting them in the run key split N prompts into N pseudo-runs, only one of which was
+      // displayed.
       const key = runKey(c);
       let g = groups.get(key);
       if (!g) {
@@ -48,8 +45,8 @@ export default function ResultsArea({ datasetId, d, studio, vote, onOpen }) {
     }
     return [...groups.values()].map((g) => ({
       ...g, modelLabel: g.models.size > 1 ? `${g.models.size} models` : ([...g.models][0] || ''),
-      // Même règle que les modèles : un lot annonce son COMPTE, pas le premier de
-      // ses prompts — le sélecteur mentirait en nommant un seul des cinq.
+      // Like models, a prompt batch announces its COUNT, not its first prompt; naming one of five
+      // would misrepresent the selection.
       promptLabel: g.prompts.size > 1 ? `${g.prompts.size} prompts` : g.prompt,
     })).sort((a, b) => b.latestId - a.latestId);
   }, [d]);
@@ -59,10 +56,9 @@ export default function ResultsArea({ datasetId, d, studio, vote, onOpen }) {
     return r ? r.cells : [];
   }, [runs, activeRunKey]);
 
-  // Cellules par config dans le run affiché (clé : resultKeys.cellKey — checkpoint
-  // × strength × la variante, PROMPT COMPRIS ; c'est la même fonction que celle
-  // dont `ResultCell` se sert pour retrouver sa case).
-  // Batch : TOUTES les cellules par config (les N seeds), triées par seed → bande.
+  // Index displayed-run configurations with resultKeys.cellKey: checkpoint, strength and variant
+  // INCLUDING PROMPT, using the same function as ResultCell lookup. Include ALL batch seeds per
+  // configuration, sorted into a seed strip.
   const cellList = useMemo(() => {
     const m = new Map();
     for (const c of displayedCells) {
@@ -74,13 +70,10 @@ export default function ResultsArea({ datasetId, d, studio, vote, onOpen }) {
     return m;
   }, [displayedCells]);
 
-  // --- Ordre de FEUILLETAGE de la lightbox --------------------------------------
-  // Le set navigable = les cellules AFFICHÉES (run courant), triées pour que les
-  // variantes de strength d'un même rendu soient adjacentes : variante (z_model /
-  // aspect / cfg / steps / prompt) → checkpoint → seed → STRENGTH en dernier.
-  // Le prompt se range AVEC les autres axes de variante, pour que feuilleter suive
-  // les grilles affichées au lieu de sauter d'un prompt à l'autre. Sur un run
-  // mono-prompt il est constant : l'ordre y est exactement celui d'avant.
+  // Lightbox navigation uses DISPLAYED cells from the current run. Keep strength variants of the
+  // same rendering adjacent: variant (z_model/aspect/cfg/steps/prompt), checkpoint, seed, then
+  // STRENGTH last. Prompt belongs with variant axes so navigation follows displayed grids instead
+  // of jumping among prompts. A single prompt is constant, preserving previous ordering.
   const navImages = useMemo(
     () => flipOrder(displayedCells, (c) => [
       c.z_model_label || c.z_model || '', c.aspect || '', c.cfg ?? 0,
@@ -89,11 +82,11 @@ export default function ResultsArea({ datasetId, d, studio, vote, onOpen }) {
     ]),
     [displayedCells],
   );
-  // On remonte le set ordonné À CÔTÉ de la cellule ouverte (le parent tient l'état
-  // lightbox mais ne connaît pas ce tri — il vit ici avec displayedCells).
+  // Pass the ordered set ALONGSIDE the opened cell. The parent owns lightbox state but this
+  // component owns ordering with displayedCells.
   const handleOpen = useCallback((cell) => onOpen(cell, navImages), [onOpen, navImages]);
 
-  // Score cross-runs PAR CONFIG (modèle + cfg + steps inclus) — aligné backend.
+  // Cross-run scores PER CONFIG include model, CFG and steps, matching the backend.
   const scoreMap = useMemo(() => {
     const m = new Map();
     for (const s of d?.scores || []) {
@@ -102,27 +95,25 @@ export default function ResultsArea({ datasetId, d, studio, vote, onOpen }) {
     return m;
   }, [d]);
 
-  // Variantes présentes dans le run affiché (format × cfg × steps × PROMPT) → une
-  // grille par variante. Le prompt est un axe comme les autres : un lot de N
-  // prompts rend N tables, exactement comme un balayage de N CFG.
+  // One grid per displayed-run variant: aspect, CFG, steps and PROMPT. Prompt is another axis: N
+  // prompts produce N tables, just like N CFG values.
   const variantsInData = useMemo(() => {
     const m = new Map();
     for (const c of displayedCells) {
       const k = variantKey(c);
       if (!m.has(k)) m.set(k, variantOf(c));
     }
-    // Aucun critère sur le prompt : les variantes d'un lot ne diffèrent QUE par
-    // lui, elles se comparent donc toutes à égalité et le tri (stable) leur laisse
-    // l'ordre d'insertion — c'est-à-dire l'ordre dans lequel l'utilisateur a coché
-    // ses prompts, le seul qui lui parle. Un tri alphabétique le lui reprendrait.
+    // Do not sort by prompt text: batch variants differing only in prompt compare equal, so stable
+    // sorting retains the user's selection order. Alphabetical sorting would discard that
+    // meaningful order.
     return [...m.values()].sort((a, b) =>
       (a.zModelLabel || '').localeCompare(b.zModelLabel || '')
       || a.aspect.localeCompare(b.aspect) || ((a.cfg ?? 0) - (b.cfg ?? 0))
       || ((a.steps ?? 0) - (b.steps ?? 0)) || ((a.steps2 ?? 0) - (b.steps2 ?? 0)));
   }, [displayedCells]);
 
-  // Un run mono-prompt n'a rien à étiqueter — sa légende répéterait le même texte
-  // sur chacune de ses tables. Le lot 📝, lui, ne se lit pas sans le prompt.
+  // Single-prompt runs need no prompt labels repeating the same text on every table. Batches need
+  // labels to distinguish prompts.
   const showPromptLabels = useMemo(() => distinctPrompts(displayedCells) > 1, [displayedCells]);
 
   const gridRows = useMemo(() => {
@@ -135,19 +126,18 @@ export default function ResultsArea({ datasetId, d, studio, vote, onOpen }) {
   const gridCols = useMemo(() => {
     const set = new Set(displayedCells.map((c) => c.strength));
     return [...set].sort((a, b) => a - b);
-  }, [displayedCells]);  // dépend des cellules affichées (pas de d) — sinon colonnes figées au changement de run
-
-  // Run actif (objet) + axes présents pour la modale d'export.
+  }, [displayedCells]);  // Depend on displayed cells, not d, or columns stay frozen when switching runs.
+  // Active run object and available axes for the export dialog.
   const activeRun = useMemo(() => runs.find((r) => r.key === activeRunKey) || null, [runs, activeRunKey]);
   const exportAspects = useMemo(
     () => [...new Set(displayedCells.map((c) => c.aspect).filter(Boolean))].sort(),
     [displayedCells]);
   const canExport = displayedCells.some((c) => c.status === 'done' && c.filename);
 
-  // --- Mode vote rapide : enchaîne les images non votées (swipe / 👍 / 👎) ----
+  // Quick-vote mode steps through unvoted images with swipe, like and dislike.
   const unvoted = displayedCells.filter((c) => c.status === 'done' && c.filename && !c.rating);
-  // 2e passe : revoter UNIQUEMENT les 👍 pour resserrer (un 👎 les bascule rouge,
-  // un 👍 les reconfirme, passer les laisse vertes).
+  // Second pass: revote ONLY liked images to refine selection. Dislike turns
+  // them red, like reconfirms them, and skipping leaves them green.
   const greens = displayedCells.filter((c) => c.status === 'done' && c.filename && c.rating === 1);
 
   if (gridRows.length === 0) return null;

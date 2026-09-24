@@ -156,8 +156,7 @@ export default function WatermarkReviewLightbox({ datasetId, queue, caps, nonces
   const outcome = item ? outcomes[item.id] : null;
   // One-time tip: the first time a clean lands, point out Restore + the other engine.
   useEffect(() => { if (outcome === 'cleaned') requestHelpTip('watermark-clean-done'); }, [outcome]);
-  // useMemo: un [] neuf par rendu changeait les deps du useCallback plus bas
-  // a chaque frame.
+  // useMemo: a new [] on every render changed the useCallback dependencies below every frame.
   const regions = useMemo(
     () => (item ? (regionsById[item.id] || []) : []), [item, regionsById]);
   const manual = item ? Boolean(manualById[item.id]) : false;

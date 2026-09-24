@@ -51,6 +51,7 @@ export function TestResult({ result }) {
 }
 
 export function TestButton({ target, onResult, beforeTest }) {
+  const pluginId = useContext(SettingsScopeContext)
   const [busy, setBusy] = useState(false)
   const run = async () => {
     setBusy(true)
@@ -59,7 +60,7 @@ export function TestButton({ target, onResult, beforeTest }) {
       // write-only input: the probe reads the SAVED key, so testing an unsaved
       // paste would always answer "key missing".
       if (beforeTest) await beforeTest()
-      onResult(await postJson(`/api/settings/test/${target}`, {}))
+      onResult(await postJson(settingsApiUrl(pluginId, `/api/settings/test/${encodeURIComponent(target)}`), {}))
     } catch (e) {
       onResult({ ok: false, detail: e.message || 'Test failed' })
     } finally {
@@ -163,3 +164,6 @@ export function SecretField({
     </div>
   )
 }
+import { useContext } from 'react'
+import { SettingsScopeContext } from './settingsScope.js'
+import { settingsApiUrl } from '../../pages/pluginSettings.js'

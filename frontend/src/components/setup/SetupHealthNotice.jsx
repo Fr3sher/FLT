@@ -10,7 +10,7 @@
  * A machine the server has never seen working keeps the classic first-run
  * behaviour, redirect included — nothing about a genuine first launch changes.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import { useCapabilities } from '../../context/CapabilitiesContext'
@@ -32,6 +32,19 @@ export default function SetupHealthNotice() {
   const [result, setResult] = useState(null)    // POST /api/setup-state/recheck
   const [hidden, setHidden] = useState(false)   // the "all good" line has faded
   const startedRef = useRef(false)
+  const mountedRef = useRef(false)
+  const currentRef = useRef({ caps, loading, known, navigate, pathname, refresh })
+
+  // Component lifetime is separate from changing capability snapshots or route
+  // callbacks. StrictMode's effect replay retains the one pass already started;
+  // a real unmount leaves this instance inactive for every late continuation.
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  useLayoutEffect(() => {
+    currentRef.current = { caps, loading, known, navigate, pathname, refresh }
+  }, [caps, loading, known, navigate, pathname, refresh])
 
   // One pass per page load. Runs only once capabilities have ANSWERED (not
   // merely settled), so the cached probe the state endpoint reads is already
@@ -39,7 +52,7 @@ export default function SetupHealthNotice() {
   useEffect(() => {
     if (loading || !known || startedRef.current) return
     startedRef.current = true
-    let alive = true
+    const alive = () => mountedRef.current
     ;(async () => {
       // The server's answer, or nothing. A request that failed used to fall
       // back to "never verified" — and a phone coming back to the app after
@@ -48,7 +61,7 @@ export default function SetupHealthNotice() {
       // One quiet retry, then silence: the next page load asks again, and
       // a genuine first run is still redirected the moment the server says so.
       let s = null
-      for (let attempt = 0; attempt < 2 && alive; attempt += 1) {
+      for (let attempt = 0; attempt < 2 && alive(); attempt += 1) {
         try {
           s = await apiFetch('/api/setup-state', { background: true })
           break
@@ -56,52 +69,56 @@ export default function SetupHealthNotice() {
           await new Promise((r) => setTimeout(r, 1500))
         }
       }
-      if (!alive || !s) return
+      if (!alive() || !s) return
       setState(s)
-      if (!s.verified) {
+      // The wizard already owns its check, including when navigation happened
+      // while the state request was pending. Do not start a competing recheck.
+      if (currentRef.current.pathname === '/setup') {
+        setResult({ regressions: [], skipped: true })
+        return
+      }
+      if (!s.verified && !s.completed) {
         // Only asked for when the answer can change the decision — a Docker
         // install looks `configured` on its first boot because ComfyUI is
         // bundled, and would otherwise never be shown the Ollama choice its
         // own launcher is blocking on.
         let pendingDockerChoice = false
-        if (shouldProbeDockerChoice({ state: s, caps })) {
+        if (shouldProbeDockerChoice({ state: s, caps: currentRef.current.caps })) {
           try {
             pendingDockerChoice = needsDockerDeploymentChoice(
               await apiFetch('/api/setup/runtime-readiness', { background: true }))
           } catch {
             // Older backend without the route: keep the previous behaviour.
           }
-          if (!alive) return
+          if (!alive()) return
         }
-        if (shouldRedirectToSetup({
-          loading: false, caps, capsKnown: known, state: s, pendingDockerChoice,
+        const current = currentRef.current
+        if (current.pathname !== '/setup' && shouldRedirectToSetup({
+          loading: current.loading, caps: current.caps, capsKnown: current.known,
+          state: s, pendingDockerChoice, pathname: current.pathname,
           alreadyRedirected: !!sessionStorage.getItem(SETUP_REDIRECT_KEY),
         })) {
           sessionStorage.setItem(SETUP_REDIRECT_KEY, '1')
-          navigate('/setup', { replace: true })
+          current.navigate('/setup', { replace: true })
         }
         return
       }
-      // Already on the wizard: the user is re-checking by hand, on a page that
-      // shows far more than this line ever could. Don't race it.
-      if (pathname === '/setup') { setResult({ regressions: [], skipped: true }); return }
       setChecking(true)
       try {
         const r = await postJson('/api/setup-state/recheck', {}, { background: true })
-        if (!alive) return
+        if (!alive()) return
         setResult(r)
         // The forced probe just refreshed the server-side cache; this reads it
         // back into the app (no second probe) so every gated screen sees the
         // freshly verified truth.
-        refresh()
+        currentRef.current.refresh()
       } catch {
-        if (alive) setResult({ regressions: [] })   // silent: a failed re-check is not a regression
+        if (alive()) setResult({ regressions: [], skipped: true }) // a failed check proves neither success nor regression
       } finally {
-        if (alive) setChecking(false)
+        if (alive()) setChecking(false)
       }
     })()
-    return () => { alive = false }
-  }, [loading, known, caps, navigate, pathname, refresh])
+  }, [loading, known])
 
   const phase = setupHealthPhase({ state, checking, result })
 
@@ -119,6 +136,10 @@ export default function SetupHealthNotice() {
     setResult({ regressions: [] })
     try { await postJson('/api/setup-state/dismiss', { keys }) } catch { /* best-effort */ }
   }, [notice])
+
+  // An already-running request may finish while the user is in the wizard.
+  // Keep its result, but let Setup own all status and regression presentation.
+  if (pathname === '/setup') return null
 
   if (notice) {
     return (

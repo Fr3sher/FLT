@@ -12,6 +12,8 @@ because they are the two that would fail silently in production:
   nobody can attach a debugger to; a typo in them is not a thing to discover
   there.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import http.server
 import json
 import os
@@ -21,9 +23,11 @@ import threading
 
 import pytest
 
-from app.services import dense_pod_hub as hub
-from app.services import pod_checkpoint_push as push
-from app.services.aitoolkit_remote import RemoteAiToolkit, RemoteError
+from lds_cloud_training import dense_pod_hub as hub
+from lds_cloud_training import pod_checkpoint_push as push
+from lds_cloud_training.aitoolkit_remote import RemoteAiToolkit, RemoteError
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 # --- slicing arithmetic ---------------------------------------------------------
@@ -341,7 +345,7 @@ def test_seed_checkpoint_still_sends_the_whole_file(pod_route, tmp_path):
 def test_a_body_refuses_to_be_sent_twice(tmp_path):
     """Iterating again would send a SHORT body under a full Content-Length — a
     redirect or a replaying retry would corrupt the slice silently."""
-    from app.services.aitoolkit_remote import _StreamedPart
+    from lds_cloud_training.aitoolkit_remote import _StreamedPart
     path = tmp_path / 'f.bin'
     path.write_bytes(b'x' * 100)
     part = _StreamedPart('files', 'f.bin', str(path))
@@ -353,7 +357,7 @@ def test_a_body_refuses_to_be_sent_twice(tmp_path):
 def test_a_file_that_shrinks_mid_send_fails_instead_of_padding(tmp_path):
     """Padding to Content-Length would land a file of the right SIZE and the
     wrong BYTES, which ai-toolkit's auto-resume would happily train from."""
-    from app.services.aitoolkit_remote import _StreamedPart
+    from lds_cloud_training.aitoolkit_remote import _StreamedPart
     path = tmp_path / 'f.bin'
     path.write_bytes(b'x' * 100_000)
     part = _StreamedPart('files', 'f.bin', str(path))

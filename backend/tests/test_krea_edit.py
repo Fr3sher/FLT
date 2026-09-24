@@ -32,7 +32,8 @@ def _fresh_config(monkeypatch, tmp_path):
     monkeypatch.setenv('LDS_CONFIG', str(tmp_path / 'config.json'))
     monkeypatch.setenv('LDS_ENV', str(tmp_path / '.env'))
     import app.config as config
-    importlib.reload(config)
+    monkeypatch.setattr(config, 'ENV_PATH', tmp_path / '.env')
+    monkeypatch.setattr(config, '_cache', None)
     return config
 
 
@@ -815,17 +816,14 @@ def test_the_local_engine_ids_and_labels_match_the_frontend():
     import re
     from pathlib import Path
     from app.services import face_dataset_service as svc
-    js = (Path(__file__).resolve().parents[2] / 'frontend' / 'src' / 'components'
-          / 'dataset' / 'engineSelection.js')
+    js = (Path(__file__).resolve().parents[2] / 'frontend' / 'src' / 'engines'
+          / 'catalog.js')
     if not js.exists():
         pytest.skip('frontend source not present')
     src = js.read_text(encoding='utf-8')
-    m = re.search(r'export const LOCAL_ENGINES\s*=\s*\[(.*?)\];', src, re.S)
-    assert m, 'LOCAL_ENGINES declaration not found in engineSelection.js'
-    assert tuple(re.findall(r"'([^']+)'", m.group(1))) == svc.LOCAL_ENGINES
     labels = dict(re.findall(
-        r"(\w+):\s*'([^']*)'",
-        re.search(r'export const ENGINE_LABELS\s*=\s*\{(.*?)\};', src, re.S).group(1)))
+        r"\{ id: '([^']+)', label: '([^']+)', kind: 'local'", src))
+    assert tuple(labels) == svc.LOCAL_ENGINES
     for engine in svc.LOCAL_ENGINES:
         assert labels.get(engine) == svc.LOCAL_ENGINE_LABELS[engine], engine
 
@@ -1071,6 +1069,7 @@ def test_an_unknown_engine_is_still_refused(client):
     assert 'unknown engine' in r.get_json()['error']
 
 
+@pytest.mark.plugins('api_engines')
 def test_nsfw_shots_are_allowed_on_krea_and_still_refused_on_an_api_engine(client):
     """The NSFW rule is "local only", not "Klein only" — widening it must not
     open the API lane by accident."""
@@ -1096,10 +1095,13 @@ def test_capabilities_publishes_the_krea_engine_and_its_gaps(client):
     assert 'krea_missing' in caps['comfyui'] and 'krea_nodes_missing' in caps['comfyui']
 
 
-def test_a_krea_row_is_badged_krea_and_a_legacy_klein_row_still_reads_klein():
+def test_a_krea_row_is_badged_krea_and_a_legacy_klein_row_still_reads_klein(monkeypatch):
     """`klein_model` carries an engine TAG for API + Krea rows and a model FILE
     for Klein ones. A wrong badge is worse than none."""
     from app.services import face_dataset_service as svc
+    # Persisted legacy tags must survive an empty registry as well as a
+    # disabled provider: these rows do not yet carry generation_meta.
+    monkeypatch.setattr(svc, 'known_engine_ids', lambda: ())
 
     class Row:
         def __init__(self, value):
@@ -1107,6 +1109,8 @@ def test_a_krea_row_is_badged_krea_and_a_legacy_klein_row_still_reads_klein():
 
     assert svc._image_engine(Row('krea')) == 'krea'
     assert svc._image_engine(Row('chatgpt')) == 'chatgpt'
+    assert svc._image_engine(Row('nanobanana')) == 'nanobanana'
+    assert svc._image_engine(Row('openrouter')) == 'openrouter'
     assert svc._image_engine(Row('Krea\\krea2_turbo_fp8.safetensors')) == 'klein'
     assert svc._image_engine(Row(None)) is None
 

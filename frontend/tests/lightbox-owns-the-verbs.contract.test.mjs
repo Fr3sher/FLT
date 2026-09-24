@@ -8,11 +8,22 @@
    different days. This file makes the next verb land everywhere at once, and
    makes a host that quietly re-wires one fail by name.
 
-   Source-read, like every contract here: node --test parses no JSX. */
+   Host wiring is read as source. The installed owners' actions are also
+   rendered through the real SDK host; effects and keyboard events are not
+   executed by that server render. */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { render } from './support/mountJsx.mjs';
+import { installRuntimeHost } from './support/runtimeHost.mjs';
+import { registerBundledDescriptor } from './support/bundledDescriptors.mjs';
+import { contributions, setEnabled } from '../src/plugins/registry.js';
+import { contributionKey, createLayerTracker } from '../src/plugins/layerTracker.js';
+import cameraDescriptor from '../../bundled/camera_angles/frontend/index.js';
+import civitaiDescriptor from '../../bundled/civitai_publish/frontend/index.js';
+
+test.beforeEach(installRuntimeHost);
 
 const read = (p) => fs.readFileSync(path.join(process.cwd(), p), 'utf8');
 
@@ -21,7 +32,7 @@ const VIEWER = 'src/components/shared/GeneratedImageLightbox.jsx';
 // a new host appears — the point is that a NEW host gets every verb for free.
 const HOSTS = [
   'src/pages/GalleryPage.jsx',
-  'src/components/canvas/LineageCanvas.jsx',
+  '../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx',
   'src/components/shared/CheckpointGalleryPanel.jsx',
   'src/components/dataset/PreviewLightbox.jsx',
   // The Test Studio (normal view AND run comparison) — it replaced its own
@@ -32,9 +43,11 @@ const HOSTS = [
 ];
 
 const viewer = read(VIEWER);
+const cameraAction = read('../bundled/camera_angles/frontend/panels/GalleryCameraAction.jsx');
+const civitaiAction = read('../bundled/civitai_publish/frontend/panels/GalleryCivitaiAction.jsx');
 
 test('the host list above is the real host list', () => {
-  const dirs = ['src/pages', 'src/components'];
+  const dirs = ['src/pages', 'src/components', '../bundled/canvas/frontend'];
   const found = [];
   const walk = (dir) => {
     for (const e of fs.readdirSync(path.join(process.cwd(), dir), { withFileTypes: true })) {
@@ -49,16 +62,35 @@ test('the host list above is the real host list', () => {
     'a new GeneratedImageLightbox host appeared — add it to HOSTS here; it gets every verb for free');
 });
 
-test('the viewer draws ✦ and 📷 itself, gated by the row, not by the host', () => {
+test('the shared viewer offers ✦ and the active 📷 verb, gated by the row, not by the host', async () => {
   assert.match(viewer, /data-testid="lightbox-repair"/);
-  assert.match(viewer, /data-testid="lightbox-camera-angles"/);
-  assert.match(viewer, /import CameraAnglePicker from '.\/CameraAnglePicker'/);
+  assert.match(viewer, /<PluginSlot slot="lightbox.action" surface="gallery" img=\{img\}/);
+  assert.match(viewer, /hasRow=\{hasRow\} disabled=\{busy\}/);
+  assert.match(cameraAction, /data-testid="lightbox-camera-angles"/);
+  assert.match(cameraAction, /import CameraAnglePicker from '.\/CameraAnglePicker'/);
   // The standard repair wiring lives here — a host passes onRepair only to
   // OVERRIDE it, never because the button would otherwise not exist.
   assert.match(viewer, /\/api\/studio\/image\/\$\{imageId\}\/repair/);
   assert.match(viewer, /repair\/undo/);
   // 📷 disabled-with-reason, not hidden: the refusal is the explanation.
-  assert.match(viewer, /cameraRefusal\(img\)/);
+  assert.match(cameraAction, /cameraRefusal\(img\)/);
+  assert.deepEqual(contributions('lightbox.action', 'gallery'), [], 'absent camera owner has no verb');
+  assert.equal(registerBundledDescriptor(cameraDescriptor), true);
+  setEnabled(['camera_angles']);
+  const [item] = contributions('lightbox.action', 'gallery');
+  assert.equal(item.plugin, 'camera_angles');
+  const { default: CameraAction } = await item.panels.gallery();
+  const html = render(CameraAction, { img: { id: 7, status: 'done' }, hasRow: true });
+  assert.match(html, /data-testid="lightbox-camera-angles"/);
+  assert.doesNotMatch(html, /disabled=""/);
+  const refused = render(CameraAction, {
+    img: { id: 8, status: 'done', derivation_kind: 'camera_angle' }, hasRow: true,
+  });
+  assert.match(refused, /disabled=""/);
+  assert.match(refused, /cannot itself be re-shot/);
+  assert.equal(render(CameraAction, { img: { url: '/p.png' }, hasRow: false }), '');
+  setEnabled([]);
+  assert.deepEqual(contributions('lightbox.action', 'gallery'), [], 'disabled camera owner has no verb');
 });
 
 test('no host re-wires a viewer verb', () => {
@@ -75,7 +107,7 @@ test('no host re-wires a viewer verb', () => {
   }
 });
 
-test('the picker has exactly two mounts: this viewer and the dataset lightbox', () => {
+test('the picker has exactly two mounts, contributed to this viewer and the dataset lightbox', async () => {
   // Two id spaces, two mounts — lora_test_image here, face_dataset_image in
   // DatasetLightbox. A third mount is a copy about to drift.
   const all = [];
@@ -87,27 +119,69 @@ test('the picker has exactly two mounts: this viewer and the dataset lightbox', 
     }
   };
   walk('src');
+  for (const entry of fs.readdirSync(path.join(process.cwd(), '../bundled'), { withFileTypes: true })) {
+    const dir = `../bundled/${entry.name}/frontend`;
+    if (entry.isDirectory() && fs.existsSync(path.join(process.cwd(), dir))) walk(dir);
+  }
   assert.deepEqual(all.sort(), [
-    'src/components/dataset/DatasetLightbox.jsx',
-    'src/components/shared/GeneratedImageLightbox.jsx',
+    '../bundled/camera_angles/frontend/panels/DatasetCameraAction.jsx',
+    '../bundled/camera_angles/frontend/panels/GalleryCameraAction.jsx',
   ]);
+  assert.match(read('src/components/dataset/DatasetLightbox.jsx'),
+    /<PluginSlot slot="lightbox.action" surface="dataset" img=\{img\}/);
+  assert.equal(registerBundledDescriptor(cameraDescriptor), true);
+  setEnabled(['camera_angles']);
+  for (const [surface, expected] of [
+    ['dataset', '../../bundled/camera_angles/frontend/panels/DatasetCameraAction.jsx'],
+    ['gallery', '../../bundled/camera_angles/frontend/panels/GalleryCameraAction.jsx'],
+  ]) {
+    const items = contributions('lightbox.action', surface);
+    assert.equal(items.length, 1, `one camera mount on ${surface}`);
+    const actual = await items[0].panels[surface]();
+    assert.equal(actual.default, (await import(expected)).default);
+  }
+  setEnabled([]);
+  for (const surface of ['dataset', 'gallery']) assert.deepEqual(contributions('lightbox.action', surface), []);
 });
 
 test('while the picker is open, the viewer stands down its window keys', () => {
   // The dataset lightbox lesson, applied here: Escape peels the picker first,
   // arrows must not walk the list under the open dial.
-  assert.match(viewer, /if \(cameraOpen\) \{\s*if \(e\.key === 'Escape'\) setCameraOpen\(false\);\s*return;/);
+  assert.match(viewer, /if \(pluginLayersRef.current.any\(\)\) return;/);
+  assert.match(viewer, /onLayer: pluginLayersRef.current.onLayerFor\(contributionKey\(item\)\)/);
+  assert.match(cameraAction, /onLayer\?\.\(open\)/);
+  assert.match(cameraAction, /return \(\) => onLayer\?\.\(false\)/);
+  assert.match(cameraAction, /if \(!open\) return undefined;/);
+  assert.match(cameraAction, /if \(e.key === 'Escape'\) \{ e.stopPropagation\(\); setOpen\(false\); \}/);
+  assert.match(cameraAction, /addEventListener\('keydown', onKey, true\)/);
+  assert.match(cameraAction, /removeEventListener\('keydown', onKey, true\)/);
+  assert.equal(registerBundledDescriptor(cameraDescriptor), true);
+  assert.equal(registerBundledDescriptor(civitaiDescriptor), true);
+  setEnabled(['camera_angles', 'civitai_publish']);
+  const items = contributions('lightbox.action', 'gallery');
+  assert.equal(items.length, 2, 'camera and publishing coexist in the shared viewer');
+  const tracker = createLayerTracker();
+  const cameraLayer = tracker.onLayerFor(contributionKey(items.find(item => item.plugin === 'camera_angles')));
+  const civitaiLayer = tracker.onLayerFor(contributionKey(items.find(item => item.plugin === 'civitai_publish')));
+  cameraLayer(true);
+  civitaiLayer(false);
+  assert.equal(tracker.any(), true, 'another closed verb must not release the camera layer');
+  cameraLayer(false);
+  assert.equal(tracker.any(), false, 'closing the camera layer returns keys to the viewer');
 });
 
-test('📤 Civitai is the viewer\'s verb too — drawn here, addressed by the row\'s own checkpoint stamp', () => {
-  assert.match(viewer, /data-testid="lightbox-civitai"/);
-  assert.match(viewer, /import CivitaiPublishModal from '.\/CivitaiPublishModal'/);
+test('📤 Civitai is the active viewer verb, addressed by the row\'s own checkpoint stamp', async () => {
+  assert.match(civitaiAction, /data-testid="lightbox-civitai"/);
+  assert.match(civitaiAction, /import CivitaiPublishModal from '.\/CivitaiPublishModal'/);
   // The image door: the modal is told it is about THIS row, nothing else.
-  assert.match(viewer, /<CivitaiPublishModal context=\{\{ kind: 'image', img \}\}/);
+  assert.match(civitaiAction, /<CivitaiPublishModal context=\{\{ kind: 'image', img \}\}/);
   // Disabled-with-reason, like 📷.
-  assert.match(viewer, /civitaiVerbRefusal\(img\)/);
+  assert.match(civitaiAction, /civitaiVerbRefusal\(img\)/);
   // A layer like ✦ / 📷 / ✨: the window keys stand down under it.
-  assert.match(viewer, /if \(repairOpen \|\| improveOpen \|\| civitaiOpen\) return;/);
+  assert.match(viewer, /if \(repairOpen \|\| improveOpen\) return;/);
+  assert.match(viewer, /if \(pluginLayersRef.current.any\(\)\) return;/);
+  assert.match(civitaiAction, /onLayer\?\.\(open\)/);
+  assert.match(civitaiAction, /return \(\) => onLayer\?\.\(false\)/);
   for (const h of HOSTS) {
     const src = read(h);
     assert.ok(!src.includes('lightbox-civitai'), `${h}: the Civitai button belongs to the viewer`);
@@ -115,4 +189,20 @@ test('📤 Civitai is the viewer\'s verb too — drawn here, addressed by the ro
     // row); the IMAGE door is the viewer's alone.
     assert.ok(!src.includes("kind: 'image'"), `${h}: the image door of the Civitai dialog is the viewer's`);
   }
+  assert.deepEqual(contributions('lightbox.action', 'gallery'), [], 'absent publisher has no verb');
+  assert.equal(registerBundledDescriptor(civitaiDescriptor), true);
+  setEnabled(['civitai_publish']);
+  const [item] = contributions('lightbox.action', 'gallery');
+  assert.equal(item.plugin, 'civitai_publish');
+  const { default: CivitaiAction } = await item.panels.gallery();
+  const html = render(CivitaiAction, { img: { id: 7 }, hasRow: true });
+  assert.match(html, /data-testid="lightbox-civitai"/);
+  assert.doesNotMatch(html, /disabled=""/);
+  const refused = render(CivitaiAction, { img: { id: 'missing' }, hasRow: true });
+  assert.match(refused, /disabled=""/);
+  assert.match(refused, /no library entry to post/);
+  assert.equal(render(CivitaiAction, { img: { url: '/p.png' }, hasRow: false }), '');
+  assert.deepEqual(contributions('lightbox.action', 'dataset'), [], 'the publisher has no dataset door');
+  setEnabled([]);
+  assert.deepEqual(contributions('lightbox.action', 'gallery'), [], 'disabled publisher has no verb');
 });

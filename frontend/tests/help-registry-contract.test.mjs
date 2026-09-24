@@ -1,20 +1,26 @@
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import { readSource } from './support/readSource.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import {
-  helpTopics, getHelpTopic, helpTopicsForChapter, searchHelpTopics, helpTips,
+  helpTopics as coreHelpTopics, allHelpTopics, getHelpTopic, helpTopicsForChapter, searchHelpTopics, helpTips,
 } from '../src/help/helpRegistry.js'
 import { markdownHeadingId } from '../src/utils/headingId.js'
 import { SETTINGS_SECTIONS } from '../src/components/settings/registry.js'
 import { WORKSPACE_SECTIONS } from '../src/components/dataset/workspaceSections.js'
-import { VIDEO_DATASET_SECTIONS } from '../src/components/videobank/videoDatasetSections.js'
+import { VIDEO_DATASET_SECTIONS } from "../../bundled/video/frontend/videobank/videoDatasetSections.js"
 import { SETUP_DEEP_LINK_STEPS } from '../src/hooks/useSetupSteps.js'
 import { getWorkspacePanel } from '../src/components/dataset/workspaceNavigation.js'
 import { buildGuideTextIndex, matchGuideAnchors } from '../src/help/guideTextIndex.js'
 import { shouldShowTip, markTipSeen } from '../src/help/helpTips.js'
+import { guideChapters, setEnabled } from '../src/plugins/registry.js'
+import { mountPublicPlugins, PUBLIC_DESCRIPTORS, PUBLIC_PLUGIN_IDS } from './support/publicPluginFixtures.mjs'
+
+mountPublicPlugins()
+const helpTopics = allHelpTopics()
+beforeEach(() => { mountPublicPlugins(); anchorCache.clear() })
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -29,11 +35,13 @@ const CHAPTER_MD = {
   'troubleshooting': '../docs/guide/troubleshooting.md',
   'getting-help': '../docs/guide/getting-help.md',
 }
+const composedChapters = () => guideChapters(Object.entries(CHAPTER_MD)
+  .map(([id, source]) => ({ id, source: read(source) })))
 
 // The H2 anchor set of a chapter, computed with the SAME markdownHeadingId the
 // app uses — the registry's anchors are validated against exactly this.
 const chapterAnchors = (chapterId) => {
-  const md = read(CHAPTER_MD[chapterId])
+  const md = composedChapters().find(chapter => chapter.id === chapterId)?.source || ''
   return new Set([...md.matchAll(/^##\s+(.+)$/gm)].map((m) => markdownHeadingId(m[1])))
 }
 const anchorCache = new Map()
@@ -44,7 +52,7 @@ const anchorsFor = (chapterId) => {
 
 const SETTINGS_IDS = new Set(SETTINGS_SECTIONS.map((s) => s.id))
 const WORKSPACE_IDS = new Set(WORKSPACE_SECTIONS.map((s) => s.id))
-const STATIC_ROUTES = new Set(['/datasets', '/bank', '/video-bank', '/setup', '/settings', '/studio', '/cloud', '/canvas', '/gallery', '/help'])
+const STATIC_ROUTES = new Set(['/datasets', '/bank', '/video-bank', '/setup', '/settings', '/studio', '/cloud', '/canvas', '/gallery', '/help', '/plugins'])
 
 // route ∈ {static} OR /settings/<settings-id> OR /setup?step=<setup-step-id>
 //         OR /datasets?section=<ws-id>[&panel=<panel>]
@@ -52,6 +60,8 @@ const routeValid = (route) => {
   const [path, qs] = route.split('?')
   if (!qs) {
     if (STATIC_ROUTES.has(path)) return true
+    const pluginSettings = path.match(/^\/plugins\/([^/]+)\/settings$/)
+    if (pluginSettings) return PUBLIC_PLUGIN_IDS.includes(pluginSettings[1])
     const m = path.match(/^\/settings\/([a-z0-9-]+)$/)
     return !!(m && SETTINGS_IDS.has(m[1]))
   }
@@ -86,7 +96,8 @@ const walk = (dirUrl) => {
   }
   return out
 }
-const SRC = walk(new URL('../src/', import.meta.url)).join('\n')
+const PLUGIN_SOURCE = PUBLIC_PLUGIN_IDS.map(id => walk(new URL(`../../bundled/${id}/frontend/`, import.meta.url)).join('\n')).join('\n')
+const SRC = walk(new URL('../src/', import.meta.url)).join('\n') + '\n' + PLUGIN_SOURCE
 
 // DOM ids declared in the Settings components: literal id="…" plus SecretField
 // keys (they render id={f.key}, so the config key IS the DOM id).
@@ -94,6 +105,7 @@ const settingsDomIds = () => {
   const dir = new URL('../src/components/settings/', import.meta.url)
   let src = ''
   for (const f of readdirSync(dir)) if (f.endsWith('.jsx')) src += read(`src/components/settings/${f}`) + '\n'
+  src += PLUGIN_SOURCE
   const ids = new Set()
   for (const m of src.matchAll(/id="([^"]+)"/g)) ids.add(m[1])
   for (const m of src.matchAll(/\bkey:\s*'([^']+)'/g)) ids.add(m[1])
@@ -118,11 +130,24 @@ test('(1) topics have unique ids, non-empty title and keywords', () => {
 // ---- (2) guide chapter + anchor -------------------------------------------
 
 test('(2) every guide.chapter is known and anchor is a real H2', () => {
+  const chapters = new Set(composedChapters().map(chapter => chapter.id))
   for (const t of helpTopics) {
-    assert.ok(CHAPTER_MD[t.guide.chapter], `${t.id}: unknown chapter ${t.guide.chapter}`)
+    assert.ok(chapters.has(t.guide.chapter), `${t.id}: unknown chapter ${t.guide.chapter}`)
     assert.ok(anchorsFor(t.guide.chapter).has(t.guide.anchor),
       `${t.id}: anchor #${t.guide.anchor} not an H2 of ${t.guide.chapter}`)
   }
+})
+
+test('disabling each public owner removes its help and tips while core help remains', () => {
+  for (const descriptor of PUBLIC_DESCRIPTORS) {
+    setEnabled(PUBLIC_PLUGIN_IDS.filter(id => id !== descriptor.id))
+    for (const topic of descriptor.help || []) {
+      assert.equal(getHelpTopic(topic.id), undefined, `${descriptor.id}: ${topic.id} survived OFF`)
+      if (topic.tip) assert.ok(!helpTips().some(tip => tip.trigger === topic.tip.trigger), topic.tip.trigger)
+    }
+  }
+  setEnabled([])
+  assert.deepEqual(allHelpTopics(), coreHelpTopics)
 })
 
 // ---- (3) app route ---------------------------------------------------------

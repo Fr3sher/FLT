@@ -5,7 +5,7 @@ import {
   TRIAGE_STATUSES, toggleSelection, selectRange, triagePayload, triageAllPayload,
   triageAllConfirmation, STATUS_FILTERS, statusFilterCount, emptyGridMessage,
   hasMore,
-} from './videoTriage.js'
+} from "../../../../bundled/video/frontend/videobank/videoTriage.js"
 
 // ---- THE footgun -------------------------------------------------------------
 
@@ -84,7 +84,7 @@ test('the chips carry their counts without a request each', () => {
 test('an empty grid explains WHY it is empty', () => {
   // "No results" on a bank that was never scanned reads as a broken app.
   assert.match(emptyGridMessage({ counts: { sources: 0 } }), /no files yet/)
-  assert.match(emptyGridMessage({ counts: { sources: 12, clips: 0 } }), /Run everything/)
+  assert.match(emptyGridMessage({ counts: { sources: 12, clips: 0 } }), /Scan files/)
   assert.equal(emptyGridMessage({ status: 'keep', counts: { sources: 1, clips: 5 } }),
     'No kept shot in this bank.')
   assert.equal(emptyGridMessage({ status: 'pending', sourceName: 'a.mp4', counts: { sources: 1, clips: 5 } }),

@@ -1,26 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import {
-  canSelect, DEFAULT_PICKER, detectionFailure, detectionSummary, dialogCopy,
-  enteredNote, missingLabels, pickerProfile, sortInterpreters, statusBadge,
+  calculationNote, canSelect, DEFAULT_PICKER, detectionFailure, detectionSummary, dialogCopy,
+  enteredNote, interpreterPaths, missingLabels, pickerProfile, sortInterpreters, statusBadge,
 } from './scoringPython.js'
 
-/** ⚡ Use a GPU Python you already have — the picker behind the "✨ Score runs on
- * the CPU" warning, and behind the same warning for the SigLIP 2 semantic index.
- *
- * ONE dialog for both, driven by `profile`: the detector, the read-only rule and
- * the refusal are identical, only the dependency list and the config key differ
- * and both live on the server. A twin screen would be a second place to fix
- * every future wording bug — and the two would drift the first time one of them
- * was touched.
- *
- * This app never installs into an environment it did not build. ai-toolkit's venv
- * runs the user's training; ComfyUI's runs their generation. We read them, we
- * report exactly what each one is missing, and we hand over the command — the
- * user decides whether to run it. Anything we could not prove able to run the
- * whole pass is refused by the server, so a pick can never turn an hour of
- * scoring into an import error.
- */
+/** One picker for the Bank's isolated runtimes. Discovery is read-only;
+ * calculation is an explicit gesture and never downloads a model. */
 const TONE = {
   ok: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300',
   warn: 'border-amber-400/50 bg-amber-500/10 text-amber-300',
@@ -62,10 +48,13 @@ export default function ScoringPythonDialog({ onClose, onChanged,
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [typed, setTyped] = useState('')
+  const [checking, setChecking] = useState('')
+  const [checks, setChecks] = useState({})
 
   const load = useCallback(async (opts = {}) => {
     setLoading(true)
     setError('')
+    setChecks({})
     try {
       const qs = new URLSearchParams()
       if (opts.force) qs.set('force', '1')
@@ -95,8 +84,26 @@ export default function ScoringPythonDialog({ onClose, onChanged,
     }
   }
 
+  const checkCalculation = async (path) => {
+    setChecking(path)
+    try {
+      const check = await postJson(`${picker.endpoint}/check`, { python: path })
+      setChecks((previous) => ({ ...previous, [path]: check }))
+    } catch (e) {
+      setChecks((previous) => ({ ...previous, [path]: {
+        status: e.body?.status || (e.status === 409 ? 'busy' : 'failed'),
+        detail: e.body?.detail || e.message || 'Could not test this interpreter.',
+      } }))
+    } finally {
+      setChecking('')
+    }
+  }
+
   const rows = sortInterpreters(result?.interpreters)
   const hasOverride = Boolean(result?.selected)
+  const paths = interpreterPaths(result)
+  const managedRow = rows.find((r) => r.path === paths.managed)
+  const actionBusy = loading || !!busy || !!checking
   // Until the probe answers, assume a card: claiming "no NVIDIA card" on a
   // machine that has one is the one wrong thing to flash.
   const nvidia = result ? result.nvidia_present !== false : true
@@ -122,6 +129,34 @@ export default function ScoringPythonDialog({ onClose, onChanged,
           )}
         </div>
 
+        {!loading && (
+          <div className="rounded-lg border border-border p-3 space-y-2 text-xs">
+            <p className="font-semibold text-content">Python used for {picker.feature}</p>
+            <p className="break-all font-mono text-content-muted">{paths.effective || 'Not resolved yet'}</p>
+            <p className="text-content-muted">Managed environment{paths.usesManaged ? ' · in use' : ''}</p>
+            <p className="break-all font-mono text-content-subtle">{paths.managed || 'Not available yet'}</p>
+            <p className="text-content-muted">
+              Setup ▸ Quality tools ▸ Reinstall repairs the managed environment. It keeps
+              an external Python selection unchanged. To use the repaired environment,
+              select it here explicitly.
+            </p>
+            <button type="button" disabled={actionBusy || paths.usesManaged || !managedRow?.usable}
+              onClick={() => choose(paths.managed)}
+              title={paths.usesManaged ? 'The managed environment is already in use'
+                : managedRow?.usable ? 'Select the managed environment explicitly'
+                  : 'Install or repair this tool in Setup ▸ Quality tools, then check again'}
+              className="min-h-10 lg:min-h-0 rounded-md border border-border px-2.5 py-1 text-xs text-content hover:bg-surface-raised disabled:opacity-40">
+              Use managed environment
+            </button>
+          </div>
+        )}
+
+        <p className="text-xs text-content-muted">
+          Test calculation runs a small convolution and attention check in the chosen
+          Python. It uses the detected device, downloads no models and starts no Bank
+          pass or training. Passing this check does not verify every model or a whole pass.
+        </p>
+
         {failure && (
           <div className="rounded-md border border-amber-500/60 bg-amber-500/10 p-3 text-sm text-amber-200 space-y-1">
             <p className="font-semibold">⚠ {failure.title}</p>
@@ -135,7 +170,7 @@ export default function ScoringPythonDialog({ onClose, onChanged,
         )}
 
         {error && (
-          <p className="rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          <p role="alert" className="break-words rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs text-red-300">
             {error}
           </p>
         )}
@@ -148,6 +183,7 @@ export default function ScoringPythonDialog({ onClose, onChanged,
           <ul className="space-y-2">
             {rows.map((r) => {
               const missing = missingLabels(r)
+              const check = calculationNote(checks[r.path])
               return (
                 <li key={r.path}
                   className={`rounded-lg border p-3 space-y-2 ${r.selected
@@ -182,14 +218,28 @@ export default function ScoringPythonDialog({ onClose, onChanged,
                     </div>
                   )}
                   <div className="flex flex-wrap gap-2">
-                    <button type="button" disabled={!canSelect(r) || !!busy}
+                    <button type="button" disabled={!canSelect(r) || actionBusy}
                       onClick={() => choose(r.path)}
                       title={canSelect(r) ? `Point ${picker.feature} at this interpreter`
-                        : r.selected ? 'Already in use' : 'This one cannot run the pass yet'}
-                      className="rounded-md border border-border px-2.5 py-1 text-xs text-content hover:bg-surface-raised disabled:opacity-40 disabled:hover:bg-transparent">
+                        : r.selected ? 'Already in use' : 'Required packages are missing or could not be checked'}
+                      className="min-h-10 lg:min-h-0 rounded-md border border-border px-2.5 py-1 text-xs text-content hover:bg-surface-raised disabled:opacity-40 disabled:hover:bg-transparent">
                       {busy === r.path ? 'Checking…' : 'Use this one'}
                     </button>
+                    <button type="button" disabled={!r.usable || actionBusy}
+                      onClick={() => checkCalculation(r.path)}
+                      aria-label={`Test calculation in ${r.label}`}
+                      className="min-h-10 lg:min-h-0 rounded-md border border-border px-2.5 py-1 text-xs text-content hover:bg-surface-raised disabled:opacity-40">
+                      {checking === r.path ? 'Testing calculation…' : 'Test calculation'}
+                    </button>
                   </div>
+                  {(checking === r.path || check) && (
+                    <div role="status" aria-live="polite" className={`break-words rounded-md border p-2 text-xs ${TONE[check?.tone || 'off']}`}>
+                      {checking === r.path ? 'Testing calculation in this Python…' : <>
+                        <p className="font-semibold">{check.title}</p>
+                        {check.detail && <p className="mt-1 whitespace-pre-wrap break-all">{check.detail}</p>}
+                      </>}
+                    </div>
+                  )}
                 </li>
               )
             })}
@@ -205,9 +255,9 @@ export default function ScoringPythonDialog({ onClose, onChanged,
               onChange={(e) => setTyped(e.target.value)}
               placeholder="…/envs/myenv  or  …/envs/myenv/Scripts/python.exe"
               className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-content" />
-            <button type="button" disabled={!typed.trim() || loading}
+            <button type="button" disabled={!typed.trim() || actionBusy}
               onClick={() => load({ force: true, path: typed.trim() })}
-              className="rounded-md border border-border px-2.5 py-1 text-xs text-content hover:bg-surface-raised disabled:opacity-40">
+              className="min-h-10 lg:min-h-0 rounded-md border border-border px-2.5 py-1 text-xs text-content hover:bg-surface-raised disabled:opacity-40">
               Check it
             </button>
           </div>
@@ -226,21 +276,21 @@ export default function ScoringPythonDialog({ onClose, onChanged,
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-          <button type="button" onClick={() => load({ force: true })} disabled={loading || !!busy}
+          <button type="button" onClick={() => load({ force: true })} disabled={actionBusy}
             title="Re-check every interpreter — use this right after installing a package"
-            className="rounded-md border border-border px-2.5 py-1 text-xs text-content-muted hover:text-content hover:bg-surface-raised disabled:opacity-40">
+            className="min-h-10 lg:min-h-0 rounded-md border border-border px-2.5 py-1 text-xs text-content-muted hover:text-content hover:bg-surface-raised disabled:opacity-40">
             ↻ Check again
           </button>
           <div className="flex flex-wrap gap-2">
             {hasOverride && (
-              <button type="button" onClick={() => choose('')} disabled={!!busy}
-                title="Go back to the environment the app set up for this pass"
-                className="rounded-md border border-border px-2.5 py-1 text-xs text-content-muted hover:text-content hover:bg-surface-raised disabled:opacity-40">
+              <button type="button" onClick={() => choose('')} disabled={actionBusy}
+                title="Clear this explicit choice and follow the configured defaults; this can select an external Python"
+                className="min-h-10 lg:min-h-0 rounded-md border border-border px-2.5 py-1 text-xs text-content-muted hover:text-content hover:bg-surface-raised disabled:opacity-40">
                 Back to the app default
               </button>
             )}
             <button type="button" onClick={onClose}
-              className="rounded-md border border-border px-3 py-1 text-xs text-content hover:bg-surface-raised">
+              className="min-h-10 lg:min-h-0 rounded-md border border-border px-3 py-1 text-xs text-content hover:bg-surface-raised">
               Close
             </button>
           </div>

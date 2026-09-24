@@ -1,5 +1,6 @@
 import { checkpointActionModel } from './checkpointPopover.js';
 import { Trash2 } from 'lucide-react';
+import PluginSlot from '../../plugins/PluginSlot.jsx';
 
 /* ◉ THE checkpoint actions popover — one component, two surfaces.
 
@@ -18,7 +19,11 @@ import { Trash2 } from 'lucide-react';
 
    `pill` may be null. A click on a run CARD opens the same popover with only its
    run-level row (ⓘ Details), which is what took the detail drawer off the
-   click: it now opens because it was asked for, not because a card was touched. */
+   click: it now opens because it was asked for, not because a card was touched.
+
+   `surface` names the host ('graph' | 'canvas') for the rows the PLUGINS add
+   (`checkpoint.action`): a plugin row asks its host-mounted layer for a dialog
+   and closes the popover, so the dialog outlives it. */
 
 const ROW = 'flex items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875rem] font-medium';
 // Disabled rows are TEXT, not buttons: a greyed-out button invites the click it
@@ -26,10 +31,10 @@ const ROW = 'flex items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875r
 const MUTED = 'rounded-md border border-border bg-app/40 px-2 py-1 text-content-subtle text-[0.625rem]';
 
 export default function CheckpointActionsPopover({
-  node, pill, runLabel = null,
+  node, pill, runLabel = null, surface = 'graph',
   continueSource = 'cloud', continueReason = null, folderLabel = null,
   importing = false, deleting = false,
-  onContinue, onDeploy, onDelete, onDetails, onPublish, onClose,
+  onContinue, onDeploy, onDelete, onDetails, onClose,
 }) {
   const a = checkpointActionModel(node, pill, {
     continueSource, hasContinueHandler: typeof onContinue === 'function',
@@ -101,21 +106,12 @@ export default function CheckpointActionsPopover({
           <span className={MUTED}><span aria-hidden>📦</span> {a.deploy.reason}</span>
         ))}
 
-        {/* 📤 Civitai — publish this checkpoint as a model page, or mark the
-            page it already has so the viewer's "post this image" lands under
-            it. The lineage payload stamps the link on the pill (`civitai`), so
-            the row can say which page without a request. Host-gated like ⓘ:
-            a host with no modal to open shows no row. */}
-        {typeof onPublish === 'function' && !a.isRun && (
-          <button type="button" onClick={() => { onPublish(node, pill); onClose?.(); }}
-            data-testid="checkpoint-civitai"
-            title={pill?.civitai
-              ? `On Civitai: ${pill.civitai.model_name || `model ${pill.civitai.model_id}`}${pill.civitai.version_name ? ` · ${pill.civitai.version_name}` : ''} — open, relink, or post images from the viewer`
-              : 'Publish this checkpoint on Civitai, or mark the model page it already has'}
-            className={ROW + ' border-indigo-400/40 bg-indigo-500/15 text-indigo-100 hover:bg-indigo-500/25'}>
-            <span aria-hidden>📤</span> {pill?.civitai ? 'On Civitai' : 'Civitai'}
-          </button>
-        )}
+        {/* The rows the plugins add (checkpoint.action): a publisher's "make
+            this save a model page", for instance. Each gets the same facts —
+            the node, the pill, whether this is a run card — and closes the
+            popover itself; the dialog it opens is its host-mounted layer's. */}
+        <PluginSlot slot="checkpoint.action" surface={surface} node={node} pill={pill}
+          isRun={a.isRun} onClose={onClose} />
 
         {/* ⓘ The detail drawer — config, run note, checkpoint notes — now ASKED
             for. It used to spring open on any card click, which turned a glance

@@ -30,9 +30,9 @@ import test from 'node:test'
 import { isNodeControlTarget, nodePointerIntent } from '../src/utils/canvasNodeChrome.js'
 
 const src = readFileSync(
-  new URL('../src/components/canvas/ExternalLoraNodes.jsx', import.meta.url), 'utf8')
+  new URL("../../bundled/canvas/frontend/components/canvas/ExternalLoraNodes.jsx", import.meta.url), 'utf8')
 const canvas = readFileSync(
-  new URL('../src/components/canvas/LineageCanvas.jsx', import.meta.url), 'utf8')
+  new URL("../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8')
 
 /** The body of `export function ExternalLoraAddFlow(` … end of file. */
 const addFlow = (() => {

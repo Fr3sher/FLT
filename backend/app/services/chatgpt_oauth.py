@@ -11,6 +11,7 @@ Everything specific to it is contained in this module + the subscription path
 of chatgpt_image.py; the API-key path is untouched.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 import base64
 import json
 import logging
@@ -118,7 +119,7 @@ def _refresh(tok: dict) -> dict | None:
     try:
         r = requests.post(TOKEN_URL, data={'grant_type': 'refresh_token',
                                            'client_id': CLIENT_ID,
-                                           'refresh_token': rt}, timeout=30)
+                                           'refresh_token': rt}, timeout=network_timeout(30))
     except requests.RequestException as e:
         logger.warning(f"chatgpt_oauth: refresh network error: {e}")
         return None
@@ -193,7 +194,7 @@ def _clear_pending() -> None:
 
 def login_start() -> dict:
     try:
-        r = requests.post(DEVICE_USERCODE_URL, json={'client_id': CLIENT_ID}, timeout=15)
+        r = requests.post(DEVICE_USERCODE_URL, json={'client_id': CLIENT_ID}, timeout=network_timeout(15))
     except requests.RequestException as e:
         return {'ok': False, 'detail': f'network error: {e}'}
     if r.status_code != 200:
@@ -215,7 +216,7 @@ def _exchange_code(code: str, verifier: str) -> dict | None:
         r = requests.post(TOKEN_URL, data={'grant_type': 'authorization_code',
                                            'client_id': CLIENT_ID, 'code': code,
                                            'code_verifier': verifier,
-                                           'redirect_uri': DEVICE_REDIRECT_URI}, timeout=30)
+                                           'redirect_uri': DEVICE_REDIRECT_URI}, timeout=network_timeout(30))
     except requests.RequestException as e:
         logger.warning(f"chatgpt_oauth: code exchange network error: {e}")
         return None
@@ -243,7 +244,7 @@ def login_poll() -> dict:
     try:
         r = requests.post(DEVICE_TOKEN_URL,
                           json={'device_auth_id': pending['device_auth_id'],
-                                'user_code': pending['user_code']}, timeout=15)
+                                'user_code': pending['user_code']}, timeout=network_timeout(15))
     except requests.RequestException:
         return {'status': 'pending', 'detail': 'network hiccup — still waiting'}
     if r.status_code in (403, 404):

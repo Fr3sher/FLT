@@ -1,6 +1,7 @@
+import PluginSlot from './plugins/PluginSlot.jsx'
 import { Suspense, useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, Navigate, Outlet, NavLink, useLocation } from 'react-router'
-import { Archive, ArrowUp, Dumbbell, FlaskConical, FolderOpen, Images, Loader2, Menu, Network, Settings, X } from 'lucide-react'
+import { Archive, ArrowUp, Dumbbell, FlaskConical, FolderOpen, Images, Loader2, Menu, Settings, X } from 'lucide-react'
 import { apiFetch, postJson } from './api/fetchClient'
 import { JobsProvider } from './context/JobsContext'
 import { ToastProvider, useToast } from './components/common/Toast'
@@ -10,6 +11,7 @@ import ErrorBoundary from './components/common/ErrorBoundary'
 import { WhatsNewButton, WhatsNewModal } from './components/common/WhatsNew'
 import ConnectionBanner from './components/common/ConnectionBanner'
 import SetupHealthNotice from './components/setup/SetupHealthNotice'
+import SetupJourneyNotice from './components/setup/SetupJourneyNotice'
 import ComfyRecoveryBanner from './components/common/ComfyRecoveryBanner'
 import GenerationQueueDock from './components/common/GenerationQueueDock'
 import DockerUpdateInstructions from './components/common/DockerUpdateInstructions'
@@ -21,26 +23,37 @@ import { lazyPage } from './utils/lazyPage'
 // stale-chunk reload after an Update & restart (see utils/lazyPage.js).
 const DatasetPage = lazyPage(() => import('./pages/DatasetPage'))
 const BankPage = lazyPage(() => import('./pages/BankPage'))
-const VideoBankPage = lazyPage(() => import('./pages/VideoBankPage'))
-const VideoDatasetPage = lazyPage(() => import('./pages/VideoDatasetPage'))
 const StudioPage = lazyPage(() => import('./pages/StudioPage'))
 const SettingsPage = lazyPage(() => import('./pages/SettingsPage'))
 const SetupPage = lazyPage(() => import('./pages/SetupPage'))
 const GuidePage = lazyPage(() => import('./pages/GuidePage'))
 const CloudRunsPage = lazyPage(() => import('./pages/CloudRunsPage'))
-const CanvasPage = lazyPage(() => import('./pages/CanvasPage'))
 const GalleryPage = lazyPage(() => import('./pages/GalleryPage'))
-import { recommendedMet } from './hooks/useSetupSteps'
+const PluginsPage = lazyPage(() => import('./pages/PluginsPage'))
+const PluginSettingsPage = lazyPage(() => import('./pages/PluginSettingsPage'))
+import { navItems as pluginNavItems, routes as pluginRoutes } from './plugins/registry'
+import { lazyRoute } from './plugins/lazyRoute'
+import UnavailablePluginPage from './pages/UnavailablePluginPage.jsx'
+
+// A page a plugin contributes: `page` is its `() => import(...)`, wrapped in
+// the same lazyPage as the core's routes so it gets the stale-chunk reload —
+// through a cache keyed by the route, NOT a useMemo: a render that suspends
+// never commits, so a memo made in it is remade on the retry, with a fresh
+// import each time, and the page spins forever (plugins/lazyRoute.js).
+function PluginRoute({ routeKey, page }) {
+  const Page = lazyRoute(routeKey, page)
+  return <Page />
+}
 import { HelpModeProvider, useHelpMode, TipHost } from './help/HelpMode'
 import HeaderMenu from './components/common/HeaderMenu'
 import QuicIndicator from './components/common/QuicIndicator'
-import SystemStatsReadout from './components/shared/SystemStatsReadout'
-import { HEADER_MACHINE_LOAD_PREF_KEY } from './utils/systemStats'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { versionLabel } from './utils/versionLabel'
 import { useTrainingActivity } from './hooks/useTrainingActivity'
 import { activityLabel } from './utils/trainingActivity'
 import { installMode } from './components/settings/updateStatus'
+import { UsageStatisticsProvider } from './usage/UsageStatisticsContext'
+import UsageStatisticsBanner from './usage/UsageStatisticsBanner'
 
 // px-2 up to `lg`: the desktop bar starts at `md` (768 px) and now carries five
 // workspaces (Datasets · Bank · Runs · Canvas · Test Studio) plus the utility
@@ -82,8 +95,8 @@ function CheckUpdatesButton() {
         setAvailable(!!d?.update_available)
         // The dot always lights up; the banner only surfaces if the user
         // hasn't dismissed it this session (manual checks clear the flag).
-        if (d?.update_available
-            && sessionStorage.getItem('updateBannerDismissed') !== '1') {
+        if (d?.ok && (!d.update_available
+            || sessionStorage.getItem('updateBannerDismissed') !== '1')) {
           window.dispatchEvent(new CustomEvent('lds:update-available', { detail: d }))
         }
       } catch { /* offline — the manual button stays available */ }
@@ -100,9 +113,9 @@ function CheckUpdatesButton() {
     try {
       const d = await apiFetch('/api/update/check?force=1')
       setAvailable(!!d?.update_available)
+      window.dispatchEvent(new CustomEvent('lds:update-available', { detail: d }))
       if (d?.update_available) {
         sessionStorage.removeItem('updateBannerDismissed')     // re-show even if dismissed
-        window.dispatchEvent(new CustomEvent('lds:update-available', { detail: d }))
         toast.success(`Update available — v${d.latest || d.remote_sha || 'new'}`)
       } else if (d?.ok) {
         // On a git checkout the release number alone is misleading — see versionLabel.
@@ -176,17 +189,14 @@ function NavBar() {
   // reflect the active-nav style when you're on one of their screens.
   const path = useLocation().pathname
   const helpMenuActive = path === '/guide' || path === '/help'
-  const settingsMenuActive = path === '/setup' || path.startsWith('/settings')
-  const setupNeedsAttention = !recommendedMet(caps)
+  const settingsMenuActive = path === '/setup' || path.startsWith('/settings') || path.startsWith('/plugins')
   // 📊 The machine-load readout is mounted ONCE and PLACED (useMediaQuery, the
   // board's own rule): in the desktop bar's utility cluster, or in the mobile
   // panel. Tailwind's `hidden` cannot serve here — a CSS-hidden mount still
   // POLLS, and this is the only thing in the header that would.
   const desktopNav = useMediaQuery('(min-width: 768px)')
   const machineLoad = (
-    <SystemStatsReadout prefKey={HEADER_MACHINE_LOAD_PREF_KEY}
-      defaultEnabled={false} testId="header-system-stats"
-      helpTopic="canvas-machine-load" />
+    <PluginSlot slot="resource_monitor.readout" surface="header" />
   )
 
   // The four workspaces, left-aligned on desktop AND reused (flat) in the
@@ -218,30 +228,9 @@ function NavBar() {
           </span>
         </NavLink>
       )}
-      {/* ◉ Canvas — the whole training history on one board. It lives next to
-          Runs because it answers the same question from the other end: Runs
-          lists what happened, the canvas shows how the runs descend from each
-          other, across every dataset at once. */}
-      {(caps.cloud_training || caps.training_visible) && (
-        <NavLink to="/canvas" className={navItemClass} onClick={() => setOpen(false)}>
-          <span className="inline-flex items-center gap-1"><Network aria-hidden="true" className="h-3.5 w-3.5" /> Canvas
-            {/* The Beta chip marks the newest surface, not the oldest: the Bank
-                has been in daily use for weeks, the canvas ships today.
-
-                It hides ONLY on the tight desktop bar (md→lg), where a fifth
-                workspace already overflows the row. It stays visible in the
-                mobile panel — a vertical list with room to spare — because that
-                is where this app is actually browsed, and a "beta" warning that
-                disappears on the reader's own screen warns nobody. */}
-            <span className="px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none md:hidden lg:inline">Beta</span>
-          </span>
-        </NavLink>
-      )}
-      {caps.studio_visible && (
-        <NavLink to="/studio" className={navItemClass} onClick={() => setOpen(false)}>
-          <span className="inline-flex items-center gap-1"><FlaskConical aria-hidden="true" className="h-3.5 w-3.5" /> Test Studio</span>
-        </NavLink>
-      )}
+      <NavLink to="/studio" className={navItemClass} onClick={() => setOpen(false)}>
+        <span className="inline-flex items-center gap-1"><FlaskConical aria-hidden="true" className="h-3.5 w-3.5" /> Test Studio</span>
+      </NavLink>
       {/* 🖼 Gallery — every generated image, one feed. Last: it is where the
           OUTPUT of the other workspaces accumulates, so it reads as the shelf
           at the end of the row. Visible whenever any surface that generates
@@ -261,14 +250,20 @@ function NavBar() {
   const mobileLinks = (
     <>
       {workspaceLinks}
+      {/* Nav entries an enabled plugin contributes ({ to, label, when(caps) }). */}
+      {pluginNavItems(caps).map((item) => (
+        <NavLink key={`${item.plugin}:${item.to}`} to={item.to} className={navItemClass} onClick={() => setOpen(false)}>
+          {item.label}
+        </NavLink>
+      ))}
       <NavLink to="/guide" className={navItemClass} onClick={() => setOpen(false)}>Guide</NavLink>
       <NavLink to="/setup" className={navItemClass} onClick={() => setOpen(false)}>
         <span className="inline-flex items-center gap-1">
           Setup
-          {setupNeedsAttention && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-primary" />}
         </span>
       </NavLink>
       <NavLink to="/settings" className={navItemClass} onClick={() => setOpen(false)}>Settings</NavLink>
+      <NavLink to="/plugins" className={navItemClass} onClick={() => setOpen(false)}>Plugins</NavLink>
       <NavLink to="/help" className={navItemClass} onClick={() => setOpen(false)}>Help</NavLink>
       <HelpModeToggle onToggle={() => setOpen(false)} />
     </>
@@ -289,6 +284,15 @@ function NavBar() {
         <nav className="hidden md:flex flex-1 min-w-0 flex-wrap items-center gap-x-1 gap-y-1.5" aria-label="Main navigation">
           <div className="app-header-workspaces flex min-w-0 shrink grow basis-auto flex-wrap items-center gap-1">
             {workspaceLinks}
+            {/* Nav entries an enabled plugin contributes — on the desktop bar as
+                on the phone panel below (measured missing here, 2026-09-04: a
+                plugin's page was reachable from a phone and from nowhere on a
+                desktop). */}
+            {pluginNavItems(caps).map((item) => (
+              <NavLink key={`${item.plugin}:${item.to}`} to={item.to} className={navItemClass}>
+                {item.label}
+              </NavLink>
+            ))}
           </div>
           <div className="app-header-tools ml-auto flex shrink-0 items-center gap-1">
             {desktopNav && machineLoad}
@@ -303,16 +307,16 @@ function NavBar() {
               )}
             </HeaderMenu>
             <HeaderMenu triggerLabel={<Settings aria-hidden="true" className="h-4 w-4" />}
-              triggerTitle="Setup & settings" active={settingsMenuActive} dot={setupNeedsAttention}>
+              triggerTitle="Setup & settings" active={settingsMenuActive}>
               {(close) => (
                 <>
                   <NavLink to="/setup" role="menuitem" className={menuItemClass} onClick={close}>
                     <span className="inline-flex items-center gap-1">
                       Setup
-                      {setupNeedsAttention && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-primary" />}
                     </span>
                   </NavLink>
                   <NavLink to="/settings" role="menuitem" className={menuItemClass} onClick={close}>Settings</NavLink>
+                  <NavLink to="/plugins" role="menuitem" className={menuItemClass} onClick={close}>Plugins</NavLink>
                 </>
               )}
             </HeaderMenu>
@@ -325,6 +329,7 @@ function NavBar() {
           <CheckUpdatesButton />
           <button type="button" onClick={() => setOpen((v) => !v)}
             aria-expanded={open} aria-label={open ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-controls="mobile-navigation"
             className="rounded-md p-2 text-content-muted hover:text-content hover:bg-surface-raised">
             {open
             ? <X aria-hidden="true" className="h-5 w-5" />
@@ -333,8 +338,8 @@ function NavBar() {
         </div>
       </div>
       {open && (
-        <nav aria-label="Main navigation (mobile)"
-          className="flex flex-col gap-1 border-t border-border px-4 py-2 md:hidden">
+        <nav id="mobile-navigation" aria-label="Main navigation (mobile)"
+          className="app-mobile-nav absolute inset-x-0 top-full flex flex-col gap-1 overflow-y-auto overscroll-contain border-t border-border bg-surface-overlay px-4 py-2 shadow-lg md:hidden">
           {mobileLinks}
           {/* Mounted only while the panel is open, so a phone pays for the
               poll exactly while someone is looking at the answer. */}
@@ -345,9 +350,8 @@ function NavBar() {
   )
 }
 
-/** One-shot update banner: the server caches the GitHub release check 6 h, the
- * banner shows once per browser session and is dismissible. Silent when the
- * feed is unreachable (offline / no public release yet). */
+/** Cached installation-aware check, shared with the nav badge and Settings:
+ * Git compares its branch; packaged installs compare releases. */
 function UpdateBanner() {
   const [info, setInfo] = useState(null)
   const [applying, setApplying] = useState(false)
@@ -355,14 +359,17 @@ function UpdateBanner() {
   const [error, setError] = useState(null)
   useEffect(() => {
     if (sessionStorage.getItem('updateBannerDismissed') === '1') return
-    apiFetch('/api/update/check')
+    apiFetch('/api/update/check?auto=1', { background: true })
       .then((d) => { if (d && d.update_available) setInfo(d) })
       .catch(() => { /* best-effort */ })
   }, [])
   // A manual "Check for updates" (nav button) surfaces the banner even after it
   // was dismissed this session, or when the passive mount check found nothing yet.
   useEffect(() => {
-    const onFound = (e) => { if (e.detail) setInfo(e.detail) }
+    const onFound = (e) => {
+      if (e.detail?.update_available) setInfo(e.detail)
+      else if (e.detail?.ok && !e.detail.reason) setInfo(null)
+    }
     window.addEventListener('lds:update-available', onFound)
     return () => window.removeEventListener('lds:update-available', onFound)
   }, [])
@@ -430,10 +437,10 @@ function UpdateBanner() {
                   : info.behind
                     ? `${info.behind} new commit${info.behind === 1 ? '' : 's'}`
                     : 'a new version'}
-              </span> (you run v{info.current}).
+              </span> (you run {versionLabel(info)}).
             </span>
             {dockerMode ? (
-              <DockerUpdateInstructions />
+              <DockerUpdateInstructions status={info} />
             ) : pinokioMode ? (
               <PinokioUpdateInstructions />
             ) : (
@@ -486,7 +493,7 @@ function PageLoading() {
 function Shell() {
   const { pathname } = useLocation();
   const wideWorkspaceRoute = pathname === '/canvas' || pathname === '/bank'
-    || pathname === '/gallery';
+    || pathname === '/gallery' || pathname === '/plugins';
   /* 🖼 THE BOARD IS THE WHOLE SCREEN. The canvas is not a document with a
      picture in it — it is a surface you pan and zoom, and every pixel the page
      keeps for itself is a pixel of board you have to pan to reach. So `/canvas`
@@ -522,6 +529,7 @@ function Shell() {
       <SetupHealthNotice />
       <ComfyRecoveryBanner />
       <UpdateBanner />
+      <UsageStatisticsBanner />
       <main id="main-content" tabIndex={-1}
         className={boardRoute
           ? 'flex min-h-0 w-full flex-1 flex-col p-0 sm:px-3 sm:py-3'
@@ -533,6 +541,7 @@ function Shell() {
             banners and the queue dock stay put — wrapping <Routes> instead
             made the whole chrome blink away on every first visit. */}
         <Suspense fallback={<PageLoading />}>
+          <SetupJourneyNotice />
           <Outlet />
         </Suspense>
       </main>
@@ -562,24 +571,15 @@ function AppInner() {
         Skip to main content
       </a>
       <HashRouter>
+        <UsageStatisticsProvider>
         <HelpModeProvider>
         <Routes>
           <Route element={<Shell />}>
             <Route path="/" element={<Navigate to="/datasets" replace />} />
             <Route path="/datasets" element={<DatasetPage />} />
             <Route path="/bank" element={<BankPage />} />
-            {/* Its OWN route rather than a sixth nav item: the desktop bar
-                already overflows at 768 px with five workspaces, and these are
-                two kinds of material for one job — the lane switch lives on both
-                bank pages (components/videobank/BankLaneTabs). */}
-            <Route path="/video-bank" element={<VideoBankPage />} />
-            {/* One video training set, worked on. NOT a nav item either — it is
-                reached from the library, exactly like an image dataset's
-                workspace, and for the same reason: a dataset is something you
-                open, not a place you go. Having an ADDRESS is the point (a
-                reload, a link, a back button all worked on the image side and
-                on none of this one). */}
-            <Route path="/video-dataset/:id" element={<VideoDatasetPage />} />
+            {/* /video-bank and /video-dataset/:id are the video plugin's routes
+                (bundled/video/frontend/index.js) — rendered with the plugins' below. */}
             <Route path="/guide" element={<GuidePage />} />
             <Route path="/guide/getting-help" element={<Navigate to="/help" replace />} />
             <Route path="/guide/:section" element={<GuidePage />} />
@@ -587,15 +587,25 @@ function AppInner() {
             <Route path="/studio" element={<StudioPage />} />
             <Route path="/dataset/studio/:id" element={<StudioPage />} />
             <Route path="/cloud" element={<CloudRunsPage />} />
-            <Route path="/canvas" element={<CanvasPage />} />
             <Route path="/gallery" element={<GalleryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/:section" element={<SettingsPage />} />
             <Route path="/setup" element={<SetupPage />} />
+            <Route path="/plugins" element={<PluginsPage />} />
+            <Route path="/plugins/:pluginId/settings" element={<PluginSettingsPage />} />
+            {/* Pages an enabled plugin contributes: each one its own lazy chunk,
+                registered before React mounted (plugins/loadPlugins.js). */}
+            {pluginRoutes().map((r) => (
+              <Route key={`${r.plugin}:${r.path}`} path={r.path} element={<PluginRoute routeKey={`${r.plugin}:${r.path}`} page={r.page} />} />
+            ))}
+            {['/canvas', '/video-bank', '/video-dataset/:id'].filter(path => !pluginRoutes().some(route => route.path === path)).map(path => (
+              <Route key={path} path={path} element={<UnavailablePluginPage />} />
+            ))}
             <Route path="*" element={<Navigate to="/datasets" replace />} />
           </Route>
         </Routes>
         </HelpModeProvider>
+        </UsageStatisticsProvider>
       </HashRouter>
     </>
   )

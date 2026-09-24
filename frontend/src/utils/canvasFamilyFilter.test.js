@@ -6,7 +6,7 @@ import {
   filterLineageTreeByFamilies, readCanvasExtraFilters, readFamilySelection,
   resolveFamilySelection, runStatusCategory,
   toggleFamilySelection, writeFamilySelection,
-} from './canvasFamilyFilter.js';
+} from "../../../bundled/canvas/frontend/utils/canvasFamilyFilter.js";
 
 const memoryStore = () => {
   const data = {};

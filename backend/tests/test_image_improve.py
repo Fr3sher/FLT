@@ -289,6 +289,7 @@ def test_batch_keep_makes_improvement_win_after_all_selected_rows_are_kept(app):
         assert svc.db.session.get(FaceDatasetImage, parent.id).status == 'pending'
 
 
+@pytest.mark.plugins('image_upscale')
 @pytest.mark.parametrize('configured_prompt', [
     '',
     'Restore natural detail while preserving the person and composition.',
@@ -434,6 +435,7 @@ def test_improve_existing_image_rejects_missing_and_review_sources(app, monkeypa
             svc.regenerate_image(LOCAL_USER, improve_candidate.id)
 
 
+@pytest.mark.plugins('image_upscale')
 def test_an_improve_result_can_be_improved_again(app, monkeypatch):
     """Improves chain on the dataset lane too — parity with the Canvas lane,
     reversed on the same phone report: Klein detail THEN SeedVR2 resolution on
@@ -472,6 +474,7 @@ def test_an_improve_result_can_be_improved_again(app, monkeypatch):
         assert queued[0]['source_path'] == svc._img_path(improve_result)
 
 
+@pytest.mark.plugins('image_upscale')
 def test_improve_existing_image_preflights_models_and_fanout(app, monkeypatch):
     from app.config import LOCAL_USER
     from app.models import FaceDatasetImage
@@ -499,6 +502,7 @@ def test_improve_existing_image_preflights_models_and_fanout(app, monkeypatch):
             derivation_kind=svc.KLEIN_IMAGE_IMPROVE).count() == 0
 
 
+@pytest.mark.plugins('image_upscale')
 def test_improve_existing_image_removes_candidate_when_enqueue_fails(app, monkeypatch):
     from app.config import LOCAL_USER
     from app.models import FaceDatasetImage
@@ -523,6 +527,7 @@ def test_improve_existing_image_removes_candidate_when_enqueue_fails(app, monkey
             assert fh.read() == raw
 
 
+@pytest.mark.plugins('image_upscale')
 def test_concurrent_improve_requests_enqueue_only_once(app, monkeypatch):
     from app.config import LOCAL_USER
     from app.models import FaceDatasetImage

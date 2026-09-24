@@ -9,12 +9,15 @@ import json
 import threading
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
 def ct(app, monkeypatch):
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
-    from app.services import cloud_training
+    from lds_cloud_training import cloud_training
     # never start the real monitor thread in launch tests
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     # launch_cloud_training now reconciles orphans on every call (so a user
@@ -24,6 +27,10 @@ def ct(app, monkeypatch):
     # reconcile_orphans itself) leaves the reconcile-policy tests below,
     # which call reconcile_orphans() directly, exercising the real thing.
     monkeypatch.setattr(cloud_training, '_reconcile_before_launch', lambda a: None)
+    monkeypatch.setattr(cloud_training.vast_client, 'get_instance',
+                        lambda iid, **kw: next((item for item in
+                            cloud_training.vast_client.list_instances(**kw)
+                            if str(item['instance_id']) == str(iid)), None))
     return cloud_training
 
 
@@ -116,7 +123,7 @@ def test_launch_flux2klein_coerces_foreign_variant_to_4b(ct, app, seeded_dataset
 
 def test_launch_without_key_raises(app, seeded_dataset, monkeypatch):
     monkeypatch.delenv('VAST_API_KEY', raising=False)
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         with pytest.raises(RuntimeError, match='key'):
             ct.launch_cloud_training('local', seeded_dataset)
@@ -612,7 +619,7 @@ def test_provision_leak_safe_on_post_create_failure(ct, app, seeded_dataset, mon
                                        'gpu_ram_gb': 24.0}])
     monkeypatch.setattr(ct.vast_client, 'create_instance', lambda *a, **kw: '777')
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(iid) or True)
+                        lambda iid, **_kw: destroyed.append(iid) or True)
     # make the post-create registration explode
     monkeypatch.setattr(ct, '_register_instance',
                         lambda run, iid, offer, token: (_ for _ in ()).throw(OSError('db gone')))
@@ -632,13 +639,20 @@ def test_reconcile_destroys_orphans_keeps_active(ct, app, seeded_dataset, monkey
         run = ct.get_active_run()
         run.vast_instance_id = '111'
         ct.db.session.commit()
-        monkeypatch.setattr(ct.vast_client, 'list_instances', lambda: [
+        # A terminal local row plus an exact provider identity proves ownership.
+        orphan = ct.CloudTrainingRun(
+            id=99, dataset_id=99, status='error', job_name='orphan',
+            vast_instance_id='222', vast_label='lds-99')
+        ct.db.session.add(orphan)
+        ct.db.session.commit()
+        monkeypatch.setattr(ct.vast_client, 'list_instances', lambda **_kw: [
             {'instance_id': '111', 'label': f'lds-{run.id}'},   # active -> keep
             {'instance_id': '222', 'label': 'lds-99'},          # orphan -> destroy
             {'instance_id': '333', 'label': 'other-app'},       # not ours -> keep
+            {'instance_id': '444', 'label': 'lds-100'},  # foreign prefix -> keep
         ])
         monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                            lambda iid: destroyed.append(iid) or True)
+                            lambda iid, **_kw: destroyed.append(iid) or True)
         n = ct.reconcile_orphans(app)
         assert destroyed == ['222']
         assert n == 1
@@ -646,7 +660,7 @@ def test_reconcile_destroys_orphans_keeps_active(ct, app, seeded_dataset, monkey
 
 def test_reconcile_without_key_is_noop(app, monkeypatch):
     monkeypatch.delenv('VAST_API_KEY', raising=False)
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     assert ct.reconcile_orphans(app) == 0
 
 
@@ -655,7 +669,7 @@ def test_reconcile_never_raises(ct, app, monkeypatch):
     vast_client calls (db not ready, config error...) is swallowed and logged."""
     monkeypatch.setattr(ct, 'get_active_run',
                         lambda: (_ for _ in ()).throw(RuntimeError('db not ready')))
-    monkeypatch.setattr(ct.vast_client, 'list_instances', lambda: [])
+    monkeypatch.setattr(ct.vast_client, 'list_instances', lambda **_kw: [])
     assert ct.reconcile_orphans(app) == 0      # swallowed, boot not blocked
 
 
@@ -673,9 +687,9 @@ def test_reconcile_spares_recent_error_pod_kept(ct, app, monkeypatch):
         ct.db.session.add(run)
         ct.db.session.commit()
         monkeypatch.setattr(ct.vast_client, 'list_instances',
-                            lambda: [{'instance_id': '555', 'label': f'lds-{run.id}'}])
+                            lambda **_kw: [{'instance_id': '555', 'label': f'lds-{run.id}'}])
         monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                            lambda iid: destroyed.append(iid) or True)
+                            lambda iid, **_kw: destroyed.append(iid) or True)
         n = ct.reconcile_orphans(app)
         assert destroyed == []
         assert n == 0
@@ -704,9 +718,9 @@ def test_reconcile_reaps_expired_error_pod_kept(ct, app, monkeypatch):
         ct.db.session.add(run)
         ct.db.session.commit()
         monkeypatch.setattr(ct.vast_client, 'list_instances',
-                            lambda: [{'instance_id': '555', 'label': f'lds-{run.id}'}])
+                            lambda **_kw: [{'instance_id': '555', 'label': f'lds-{run.id}'}])
         monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                            lambda iid: destroyed.append(iid) or True)
+                            lambda iid, **_kw: destroyed.append(iid) or True)
         n = ct.reconcile_orphans(app)
         assert destroyed == ['555']
         assert n == 1
@@ -729,9 +743,9 @@ def test_reconcile_error_pod_kept_absent_from_instances_is_noop(ct, app, monkeyp
                                   finished_at=naive_utcnow() - timedelta(minutes=500))
         ct.db.session.add(run)
         ct.db.session.commit()
-        monkeypatch.setattr(ct.vast_client, 'list_instances', lambda: [])
+        monkeypatch.setattr(ct.vast_client, 'list_instances', lambda **_kw: [])
         monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                            lambda iid: (_ for _ in ()).throw(
+                            lambda iid, **_kw: (_ for _ in ()).throw(
                                 AssertionError('nothing to destroy')))
         n = ct.reconcile_orphans(app)
         assert n == 0
@@ -756,13 +770,20 @@ def test_reconcile_keeps_active_and_spares_error_pod_kept_together(ct, app, monk
         ct.db.session.add_all([active, kept_run])
         ct.db.session.commit()
         active_id, kept_id = active.id, kept_run.id
-        monkeypatch.setattr(ct.vast_client, 'list_instances', lambda: [
+        # A terminal local row plus an exact provider identity proves ownership.
+        orphan = ct.CloudTrainingRun(
+            id=99, dataset_id=99, status='error', job_name='orphan',
+            vast_instance_id='222', vast_label='lds-99')
+        ct.db.session.add(orphan)
+        ct.db.session.commit()
+        monkeypatch.setattr(ct.vast_client, 'list_instances', lambda **_kw: [
             {'instance_id': '111', 'label': f'lds-{active_id}'},   # active -> keep
             {'instance_id': '555', 'label': f'lds-{kept_id}'},     # recoverable -> spare
             {'instance_id': '222', 'label': 'lds-99'},             # orphan -> destroy
+            {'instance_id': '444', 'label': 'lds-100'},  # foreign prefix -> keep
         ])
         monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                            lambda iid: destroyed.append(iid) or True)
+                            lambda iid, **_kw: destroyed.append(iid) or True)
         n = ct.reconcile_orphans(app)
         assert destroyed == ['222']
         assert n == 1
@@ -806,7 +827,7 @@ def test_launch_refuses_same_dataset_twice_even_with_higher_limit(ct, app, clien
      (False, 1, 'limit reached')],
 )
 def test_concurrent_launch_reservation_is_atomic(
-        ct, tmp_path, monkeypatch,
+        ct, tmp_path, monkeypatch, plugin_app_factory,
         same_dataset, limit, error_fragment):
     """Two requests that both pass preflight may reserve exactly one slot.
 
@@ -816,18 +837,17 @@ def test_concurrent_launch_reservation_is_atomic(
     completed its first guardrail query before either could insert a row.
     """
     _fake_export(monkeypatch, ct)
-    ct.cfg.save_config({'cloud': {'max_concurrent_runs': limit}})
     # The suite's normal app uses SQLite ``:memory:`` (one shared connection),
     # which cannot safely execute two thread-local sessions at once. Production
     # uses a file-backed WAL database, so mirror that here for the concurrency
     # test instead of accidentally testing StaticPool internals.
-    from app import create_app
     db_path = tmp_path / 'threaded-cloud-launch.db'
-    threaded_app = create_app({
+    threaded_app = plugin_app_factory(enabled=('cloud_training',), config_object={
         'TESTING': True,
         'WTF_CSRF_ENABLED': False,
         'SQLALCHEMY_DATABASE_URI': f'sqlite:///{db_path}',
     })
+    ct.cfg.save_config({'cloud': {'max_concurrent_runs': limit}})
     threaded_client = threaded_app.test_client()
     first_dataset = threaded_client.post(
         '/api/dataset/create',
@@ -902,13 +922,20 @@ def test_reconcile_keeps_multiple_actives_destroys_orphan(ct, app, monkeypatch):
         ct.db.session.add_all([active1, active2])
         ct.db.session.commit()
         a1_id, a2_id = active1.id, active2.id
-        monkeypatch.setattr(ct.vast_client, 'list_instances', lambda: [
+        # A terminal local row plus an exact provider identity proves ownership.
+        orphan = ct.CloudTrainingRun(
+            id=99, dataset_id=99, status='error', job_name='orphan',
+            vast_instance_id='333', vast_label='lds-99')
+        ct.db.session.add(orphan)
+        ct.db.session.commit()
+        monkeypatch.setattr(ct.vast_client, 'list_instances', lambda **_kw: [
             {'instance_id': '111', 'label': f'lds-{a1_id}'},   # active -> keep
             {'instance_id': '222', 'label': f'lds-{a2_id}'},   # active -> keep
             {'instance_id': '333', 'label': 'lds-99'},         # orphan -> destroy
+            {'instance_id': '444', 'label': 'lds-100'},  # foreign prefix -> keep
         ])
         monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                            lambda iid: destroyed.append(iid) or True)
+                            lambda iid, **_kw: destroyed.append(iid) or True)
         n = ct.reconcile_orphans(app)
         assert destroyed == ['333']
         assert n == 1
@@ -1244,7 +1271,7 @@ def test_launch_without_gpu_name_omits_requested_gpu(ct, app, seeded_dataset, mo
 
 
 def test_pick_offer_prefers_requested_class_cheapest():
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     offers = [                                    # already cheapest-first
         {'offer_id': 1, 'gpu_name': 'RTX 3090', 'dph_total': 0.12},
         {'offer_id': 2, 'gpu_name': 'RTX 5090', 'dph_total': 0.60},
@@ -1258,7 +1285,7 @@ def test_pick_offer_falls_back_to_similar_tier_not_potato():
     """Requested class sold out -> an offer of a SIMILAR-OR-BETTER speed tier,
     never the global cheapest (a $0.13 RTX 3090 handed to a 12B Krea retry,
     user-reported: bottom-barrel hosts are the flaky ones, and ~3x slower)."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     offers = [
         {'offer_id': 1, 'gpu_name': 'RTX 3090', 'dph_total': 0.12},   # 1.0x — too slow
         {'offer_id': 2, 'gpu_name': 'RTX 5090', 'dph_total': 0.60},   # 2.8x ≈ 93% of 3.0
@@ -1363,7 +1390,7 @@ def test_gpu_tiers_flags_tiers_slower_than_the_runtime_cap(ct, app, seeded_datas
 
 def test_gpu_tiers_requires_key(app, seeded_dataset, monkeypatch):
     monkeypatch.delenv('VAST_API_KEY', raising=False)
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         with pytest.raises(RuntimeError, match='key'):
             ct.gpu_tiers('local', seeded_dataset)
@@ -1635,10 +1662,10 @@ def test_continue_seeds_checkpoint_in_monitor_flow(ct, app, seeded_dataset,
                                        'dph_total': 0.4, 'gpu_ram_gb': 24.0}])
     monkeypatch.setattr(ct.vast_client, 'create_instance', lambda *a, **kw: '777')
     monkeypatch.setattr(ct.vast_client, 'get_instance',
-                        lambda iid: {'jupyter_token': 'tok', 'actual_status': 'running',
+                        lambda iid, **_kw: {'jupyter_token': 'tok', 'actual_status': 'running',
                                      'ports': {'18675/tcp': [{}]}})
     monkeypatch.setattr(ct.vast_client, 'derive_base_url', lambda inst, port: 'http://pod')
-    monkeypatch.setattr(ct.vast_client, 'destroy_instance', lambda iid: True)
+    monkeypatch.setattr(ct.vast_client, 'destroy_instance', lambda iid, **_kw: True)
     monkeypatch.setattr(ct, '_make_remote', lambda run: fake)
     monkeypatch.setattr(ct.lt, 'build_job_config', lambda *a, **kw: {'config': {'process': [{}]}})
     monkeypatch.setattr(ct, '_cloudify_job_config', lambda *a, **kw: {})
