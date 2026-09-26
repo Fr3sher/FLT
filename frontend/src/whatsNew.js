@@ -84,6 +84,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-27-python-picker-close',
+    date: '2026-09-27',
+    title: 'Close the Python picker without making a selection',
+    blurb: 'The Python picker in Setup and Bank now keeps its close button visible above the scrolling list. You can also press Escape or click outside to dismiss it. Thanks to kennhardy for reporting this.',
+    to: '/setup?step=quality',
+  },
+  {
     id: '2026-09-26-windows-dataset-forge',
     date: '2026-09-26',
     title: 'Dataset Forge is available to Windows ZIP installations',

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { X } from 'lucide-react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import {
   calculationNote, canSelect, DEFAULT_PICKER, detectionFailure, detectionSummary, dialogCopy,
@@ -70,6 +71,17 @@ export default function ScoringPythonDialog({ onClose, onChanged,
 
   useEffect(() => { load() }, [load])
 
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
   const choose = async (path) => {
     setBusy(path || 'default')
     setError('')
@@ -114,10 +126,18 @@ export default function ScoringPythonDialog({ onClose, onChanged,
 
   return (
     <div role="dialog" aria-modal="true" aria-label={picker.ariaLabel}
+      onClick={(event) => { if (event.target === event.currentTarget) onClose() }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-4">
-      <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-xl border border-border bg-surface-overlay p-4 shadow-2xl space-y-4 sm:p-5">
-        <div>
+      <div className="flex w-full max-w-2xl max-h-[92vh] flex-col overflow-hidden rounded-xl border border-border bg-surface-overlay shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
           <h2 className="text-base font-bold text-content">{copy.title}</h2>
+          <button type="button" onClick={onClose} aria-label="Close Python picker"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-content-muted hover:bg-surface-raised hover:text-content">
+            <X size={20} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-4 space-y-4 sm:p-5">
+        <div>
           <p className="mt-1 text-sm text-content-muted">{copy.intro}</p>
           {picker.extraNote && (
             <p className="mt-2 text-xs text-content-subtle">{picker.extraNote}</p>
@@ -294,6 +314,7 @@ export default function ScoringPythonDialog({ onClose, onChanged,
               Close
             </button>
           </div>
+        </div>
         </div>
       </div>
     </div>
