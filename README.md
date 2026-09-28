@@ -1,3 +1,5 @@
+**[Support us on Patreon](https://www.patreon.com/c/Loraperfectgf) · [Join our Discord](https://discord.gg/j6hnJBFtXE)**
+
 > [!WARNING]
 > **No affiliation with loradataset.com.** That website is not operated, endorsed, or supported by the LoRA Dataset Studio team. Any payments made to that service do not support this project. Use this repository and the links provided here to find our official downloads and community channels.
 
