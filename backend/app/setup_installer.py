@@ -3417,6 +3417,7 @@ def _run_companion_downloads(action) -> int:
 
 def _fetch_companions(action, spec, companions) -> int:
     headers, provider = _download_auth(spec)
+    headers = {**headers, 'Accept-Encoding': 'identity'}
     for comp in companions:
         dest = _companion_dest_path(comp)
         part = dest + '.part'
@@ -3439,20 +3440,7 @@ def _fetch_companions(action, spec, companions) -> int:
                 if resp.status_code >= 400:
                     _append(action, f'HTTP {resp.status_code} on {os.path.basename(dest)}')
                     return 1
-                total = int(resp.headers.get('content-length') or 0)
-                done = 0
-                _set_progress(action, 0, total)
-                with open(part, 'wb') as fh:
-                    for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
-                        if not chunk:
-                            continue
-                        fh.write(chunk)
-                        done += len(chunk)
-                        _set_progress(action, done, total)
-            if total and done < total:
-                _append(action, f'incomplete download ({done}/{total} bytes) - retry')
-                os.remove(part)
-                return 1
+                _stream_model_download(action, resp, comp['url'], part, headers)
             if comp.get('kind') == 'json':
                 reason = _companion_unusable_reason(comp, part)
                 if reason:
@@ -3484,11 +3472,20 @@ def _discard_part(part):
         pass
 
 
+def _stream_model_download(action, response, url, part, headers):
+    from .services.model_download import stream_model
+    return stream_model(
+        response, url, part, headers=headers, timeout=network_timeout((10, 120)),
+        progress=lambda done, total: _set_progress(action, done, total),
+        log=lambda line: _append(action, line),
+    )
+
+
 def _run_primary_download(action) -> int:
     """Stream one model asset (Klein or Krea) into the validated ComfyUI tree.
     Writes to a .part file then renames (a killed download never leaves a half
     file the model scanners would pick up), then verifies the result is real
-    weights. Progress lines land in the ring log (~every 512 MB). An
+    weights. Aggregate byte progress is published for the UI. An
     access-denied host (401/403) -> actionable recovery steps for THAT provider,
     rc 1."""
     spec = model_download_spec(action)
@@ -3538,6 +3535,7 @@ def _run_primary_download(action) -> int:
         return 0
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     headers, provider = _download_auth(spec)
+    headers = {**headers, 'Accept-Encoding': 'identity'}
     _append(action, f"downloading {spec['url']}")
     _append(action, f'-> {dest}')
     part = dest + '.part'
@@ -3556,25 +3554,7 @@ def _run_primary_download(action) -> int:
             if resp.status_code >= 400:
                 _append(action, f'HTTP {resp.status_code}')
                 return 1
-            total = int(resp.headers.get('content-length') or 0)
-            done = 0
-            next_mark = 0
-            _set_progress(action, 0, total)   # show the bar from the first byte
-            with open(part, 'wb') as fh:
-                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
-                    if not chunk:
-                        continue
-                    fh.write(chunk)
-                    done += len(chunk)
-                    _set_progress(action, done, total)   # live % for the UI bar (every chunk)
-                    if done >= next_mark:                 # coarse milestone in the text log
-                        pct = f' ({done * 100 // total}%)' if total else ''
-                        _append(action, f'{done / 1e9:.2f} / {total / 1e9:.2f} GB{pct}')
-                        next_mark = done + 512 * 1024 * 1024
-        if total and done < total:
-            _append(action, f'incomplete download ({done}/{total} bytes) - retry')
-            os.remove(part)
-            return 1
+            _stream_model_download(action, resp, spec['url'], part, headers)
         # Verify BEFORE the rename: a 200-with-a-login-page must not have already
         # taken the place of whatever was there.
         if not _verify_downloaded_model(action, part, spec, provider):
@@ -3588,8 +3568,9 @@ def _run_primary_download(action) -> int:
         return 0
     except requests.RequestException as e:
         _append(action, f'network error: {e}')
-        try:
-            os.remove(part)
-        except OSError:
-            pass
+        _discard_part(part)
+        return 1
+    except OSError as e:
+        _append(action, f'could not write {os.path.basename(dest)}: {e} — retry the download')
+        _discard_part(part)
         return 1

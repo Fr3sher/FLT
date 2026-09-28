@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-28-segmented-model-downloads',
+    date: '2026-09-28',
+    title: 'Download large models with parallel connections',
+    blurb: 'Model preparation can now download large files through four parallel connections when the host supports it. Interrupted segments retry automatically, with a single-connection fallback and the same file checks before replacing an installed model.',
+  },
+  {
     id: '2026-09-28-processing-stage-counters',
     date: '2026-09-28',
     title: 'Follow each stage of image processing',
