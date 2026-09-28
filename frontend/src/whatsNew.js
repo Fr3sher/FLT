@@ -84,6 +84,18 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-28-processing-stage-counters',
+    date: '2026-09-28',
+    title: 'Follow each stage of image processing',
+    blurb: 'Concept captions, text detection and face analysis now show progress while they run, including reused face measurements. Text and watermark cleanup show separate preparation, processing and saving counters, so a prepared batch no longer looks finished.',
+  },
+  {
+    id: '2026-09-28-training-progress-dataset-kind',
+    date: '2026-09-28',
+    title: 'Keep image and video training status separate',
+    blurb: 'An image dataset no longer appears to be training when a video dataset with the same number is running.',
+  },
+  {
     id: '2026-09-28-joycaption-live-progress',
     date: '2026-09-28',
     title: 'Follow JoyCaption progress as images finish',

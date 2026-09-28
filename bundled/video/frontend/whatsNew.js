@@ -2,6 +2,8 @@
 // entries. Keep ids and published copy stable; new video updates belong here.
 // Data only: release tooling reads this export without loading the application.
 export const WHATS_NEW = [
+  { id: '2026-09-28-video-analysis-progress', date: '2026-09-28', title: 'Follow Video Bank analysis as it runs',
+    blurb: 'AI check now advances its counter while clips are being analyzed. Find scenes shows a separate count for look scoring and scene coherence, so its progress follows the current phase.', to: '/video-bank' },
   { id: '2026-09-26-video-publishing-help', date: '2026-09-26', title: 'Open the publishing guide from video checkpoint help',
     blurb: 'The help link for publishing video checkpoints now opens the available Civitai publishing guide instead of a missing section.', to: '/datasets' },
   { id: '2026-09-25-video-continue-references', date: '2026-09-25', title: 'Keep your selected references when continuing a clip',

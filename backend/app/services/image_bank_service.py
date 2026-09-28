@@ -6520,12 +6520,14 @@ def _infer_subprocess_argv(python, script) -> list:
 
 
 def _drive_infer_subprocess(job, python, script, payload, cache_path,
-                            progress_re, window):
+                            progress_re, window, *, include_cached=False):
     """Run an infer subprocess, streaming its stderr progress into ``job`` and
     honouring Stop cooperatively. Returns (data, stderr_tail, returncode) where
     ``data`` is the child's last JSON line (``cancelled: true`` when it stopped
     cleanly). On the first "N cached" line it sets a "resuming" hint, so relaunching
-    over a partly-cached bank doesn't look like a full recompute."""
+    over a partly-cached bank doesn't look like a full recompute. ``include_cached``
+    counts reused faces too; other workers may retry incomplete cached entries,
+    so their progress cannot use that offset."""
     import json
     import threading
     cancel_file = str(cache_path) + '.cancel'
@@ -6533,7 +6535,7 @@ def _drive_infer_subprocess(job, python, script, payload, cache_path,
         os.remove(cancel_file)   # never inherit a stale sentinel from a past run
     except OSError:
         pass
-    hint = {'shown': False}
+    hint = {'shown': False, 'cached': 0, 'total': None}
     with window:
         # Borrowed ML interpreters (notably ComfyUI portable) must not inherit
         # unrelated per-user site-packages. The readiness probe uses the same
@@ -6570,7 +6572,11 @@ def _drive_infer_subprocess(job, python, script, payload, cache_path,
                     stderr_tail.append(line)
                 m = progress_re.search(line)
                 if m:
-                    bank_jobs.progress(job, done=int(m.group(1)), total=int(m.group(2)))
+                    done, total = int(m.group(1)), int(m.group(2))
+                    if include_cached and hint['total'] is not None:
+                        total = hint['total']
+                        done = min(total, hint['cached'] + done)
+                    bank_jobs.progress(job, done=done, total=total)
                 mp = _PHASE_RE.search(line)
                 if mp:
                     # A step with no per-image counter. The count is CLEARED with
@@ -6585,7 +6591,10 @@ def _drive_infer_subprocess(job, python, script, payload, cache_path,
                     if mc:
                         hint['shown'] = True
                         total, cached = int(mc.group(1)), int(mc.group(2))
-                        if 0 < cached < total:
+                        if include_cached:
+                            hint.update(cached=cached, total=total)
+                            bank_jobs.progress(job, done=cached, total=total)
+                        if 0 < cached <= total:
                             bank_jobs.progress(
                                 job,
                                 detail=f'resuming — {cached} of {total} already cached')
@@ -6801,7 +6810,8 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
         window = gpu_exclusive_vision_window(flag_ttl=1800) if use_gpu else nullcontext()
         _release_db_before_inference()
         data, stderr_tail, returncode = _drive_infer_subprocess(
-            job, python, _EMBED_SCRIPT, payload, cache_path, _PROGRESS_RE, window)
+            job, python, _EMBED_SCRIPT, payload, cache_path, _PROGRESS_RE, window,
+            include_cached=True)
         # Stopped by the user — say exactly what's kept, never a mute ✗ (the cached
         # embeddings are safe; relaunching skips them and only finishes the rest).
         if data.get('cancelled') or (bank_jobs.cancelled(job) and not data.get('ok')):
@@ -6824,16 +6834,21 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
         done = vanished = stale = 0
         cluster_valid = not unresolved_ids
         valid_rows = {}
+        bank_jobs.progress(
+            job, done=0, total=len(by_path),
+            detail='saving angles' if angles_only else 'saving face measurements')
         for p, image_id in by_path.items():
             row = _live_image(image_id)
             if row is None:      # deleted while the pass ran — see _live_image
                 vanished += 1
+                bank_jobs.bump(job)
                 continue
             if not angles_only and row.face_cluster_origin == 'asserted':
                 # The user may have asserted this folder while inference was in
                 # flight.  Their newer decision wins and this row can no longer
                 # be a member of the computed partition.
                 cluster_valid = False
+                bank_jobs.bump(job)
                 continue
             res = results.get(p) or {}
             if not _prepare_analysis_write(row, p, res.get('fingerprint')):
@@ -6842,6 +6857,7 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
                 # no trace anywhere.
                 stale += 1
                 cluster_valid = False
+                bank_jobs.bump(job)
                 continue
             # A yaw is written whenever the child measured one. It is never
             # written back as NULL over a value we already have: the ⤢ backfill
@@ -6858,7 +6874,9 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
             done += 1
             if done % 200 == 0:
                 db.session.commit()
+            bank_jobs.bump(job)
         if not angles_only:
+            bank_jobs.progress(job, done=0, total=0, detail='saving person groups')
             if asserted_membership() != asserted_generation:
                 cluster_valid = False
             if cluster_valid and len(valid_rows) == len(by_path):
@@ -6918,9 +6936,10 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
         # person?" costs nothing here and would cost a pass of its own later.
         # It only ever produces a suggestion the user confirms (folder_person).
         if not angles_only and not bank_jobs.cancelled(job):
+            bank_jobs.progress(job, done=0, total=0, detail='checking person folders')
             detail += folder_person.probe_after_faces(job, bank_id)
         detail += _skipped_note(vanished=vanished, stale=stale)
-        bank_jobs.progress(job, detail=detail)
+        bank_jobs.progress(job, done=len(by_path), total=len(by_path), detail=detail)
     return run
 
 
@@ -8297,10 +8316,18 @@ def _text_scan_job(bank_id, rescan, statuses=None, ids=None, limit=None):
             if bank_jobs.cancelled(job):
                 break
             chunk = planned[chunk_start:chunk_start + TEXT_SCAN_CHUNK]
+            chunk_base = len(rows) - len(planned) + chunk_start
             frames = [{'key': str(rid), 'path': path} for rid, path in chunk]
+            chunk_size = len(chunk)
+
+            def report_text_progress(done, _total, base=chunk_base, size=chunk_size):
+                # Reader thread: only the in-memory job, never ORM rows.
+                bank_jobs.progress(job, done=base + min(size, max(0, done)))
+
             try:
                 boxes_by_key = read_text_boxes(
                     frames, should_stop=lambda: bank_jobs.cancelled(job),
+                    on_progress=report_text_progress,
                     score_min=text_score_min())
             except RuntimeError as e:
                 # The engine could not run (uninstalled mid-pass, a broken
@@ -8332,11 +8359,9 @@ def _text_scan_job(bank_id, rescan, statuses=None, ids=None, limit=None):
                     row = _live_image(rid)
                     if row is None:
                         vanished += 1
-                        bank_jobs.bump(job)
                         continue
                     row.text_state = 'error'
                     errors += 1
-                    bank_jobs.bump(job)
                     db.session.commit()
                     continue
                 row = _live_image(rid)
@@ -8344,12 +8369,10 @@ def _text_scan_job(bank_id, rescan, statuses=None, ids=None, limit=None):
                     logger.info('bank text scan: image %s was deleted while it '
                                 'was being read, skipping it', rid)
                     vanished += 1
-                    bank_jobs.bump(job)
                     continue
                 fingerprint = bank_transfer_metadata.content_fingerprint_path(path)
                 if not _prepare_watermark_write(row, path, fingerprint):
                     stale += 1      # same silent skip as both watermark routes
-                    bank_jobs.bump(job)
                     db.session.commit()
                     continue
                 line_boxes = boxes_by_key[key]
@@ -8362,7 +8385,6 @@ def _text_scan_job(bank_id, rescan, statuses=None, ids=None, limit=None):
                     # pages into the 🔤 family.
                     row.text_state = 'none'
                     clean += 1
-                    bank_jobs.bump(job)
                     db.session.commit()
                     continue
                 existing, _manual, problem = _clean_regions(row)
@@ -8391,10 +8413,16 @@ def _text_scan_job(bank_id, rescan, statuses=None, ids=None, limit=None):
                     row.text_state = 'detected'
                     found += 1
                     uncovered += dropped
-                bank_jobs.bump(job)
                 # Per image, same reason as every scan here: never hold the one
                 # SQLite write lock across an unbounded run.
                 db.session.commit()
+            # Results can outlive a missing final stderr line. Do not recount
+            # writes after streamed OCR progress or erase attempted unreadables
+            # from a cancelled chunk.
+            handled = (sum(str(rid) in boxes_by_key for rid, _path in chunk)
+                       if bank_jobs.cancelled(job) else len(chunk))
+            bank_jobs.progress(job, done=max(job.get('done', 0),
+                                             chunk_base + handled))
         db.session.commit()
         skipped = _skipped_note(vanished=vanished, missing=missing, stale=stale,
                                 unreadable=errors)
@@ -9292,7 +9320,7 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None,
             return
         rows = (_clean_pool_query(bank_id, statuses, ids, target=target)
                 .order_by(BankImage.id.asc()).all())
-        bank_jobs.progress(job, done=0, total=len(rows), detail='inpainting')
+        bank_jobs.progress(job, done=0, total=len(rows), detail='preparing cleanup')
         row_ids = [r.id for r in rows]
         counts = {'inpainted': 0, 'klein': 0, 'text_filled': 0, 'review': 0,
                   'failed': 0, 'skipped': 0, 'empty': 0, 'vanished': 0}
@@ -9446,11 +9474,15 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None,
                     pending = []
                     pending_text = []
                 if pending_text:
+                    bank_jobs.progress(job, done=0, total=len(pending_text),
+                                       detail='filling text')
                     try:
                         fill_results = text_fill.fill_batch(
                             [{'image_path': str(dst), 'regions': boxes}
                              for _rid, dst, boxes, _src, _fp in pending_text],
-                            should_stop=lambda: bank_jobs.cancelled(job))
+                            should_stop=lambda: bank_jobs.cancelled(job),
+                            on_progress=lambda done, total: bank_jobs.progress(
+                                job, done=done, total=total))
                     except RuntimeError as fill_exc:
                         # The filler could not run at all: fall back to the
                         # whole-rectangle route for every text row — the
@@ -9459,7 +9491,10 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None,
                                        '(%s), falling back to rectangles',
                                        fill_exc)
                         fill_results = {}
-                    for rid, dst, boxes, src, fp in pending_text:
+                    bank_jobs.progress(job, done=0, total=len(pending_text),
+                                       detail='saving text cleanup')
+                    for processed, (rid, dst, boxes, src, fp) in enumerate(pending_text):
+                        bank_jobs.progress(job, done=processed)
                         res = fill_results.get(str(dst))
                         if res is None:
                             pending.append((rid, dst, boxes, src, fp, 'lama'))
@@ -9504,12 +9539,27 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None,
                         _invalidate_effective_analysis(row)
                         counts['text_filled'] += 1
                         db.session.commit()
+                    bank_jobs.progress(job, done=len(pending_text))
+                if pending and bank_jobs.cancelled(job):
+                    # A stop during text filling must not start a new LaMa
+                    # batch for its unfinished rows or glyph leftovers.
+                    for pid, _dst, _boxes, _src, _fingerprint, _label in pending:
+                        _drop_clean_blob_by_id(bank_id, pid)
+                    pending = []
                 if pending:
+                    bank_jobs.progress(job, done=0, total=len(pending),
+                                       detail='inpainting')
                     results = watermark_lama.inpaint_batch(
                         [{'image_path': str(dst), 'bboxes': boxes}
                          for _rid, dst, boxes, _src, _fingerprint, _label in pending],
-                        device=device)
-                    for pid, dst, _boxes, src, expected_raw_fingerprint, label in pending:
+                        device=device,
+                        on_progress=lambda done, total: bank_jobs.progress(
+                            job, done=done, total=total))
+                    bank_jobs.progress(job, done=0, total=len(pending),
+                                       detail='saving cleaned images')
+                    for processed, item in enumerate(pending):
+                        bank_jobs.progress(job, done=processed)
+                        pid, dst, _boxes, src, expected_raw_fingerprint, label = item
                         row = _live_image(pid)
                         if row is None:
                             # Deleted while the batch ran: no row is left to point
@@ -9540,7 +9590,8 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None,
                 reset_score_memo()
         done = counts['inpainted'] + counts['klein'] + counts['text_filled']
         if bank_jobs.cancelled(job):
-            bank_jobs.progress(job, detail=f'cancelled — {done} inpainted so far')
+            bank_jobs.progress(job, done=sum(counts.values()), total=len(row_ids),
+                               detail=f'cancelled — {done} inpainted so far')
             return
         detail = f'done — {done} inpainted'
         if target != 'all':
@@ -9567,7 +9618,8 @@ def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None,
         # What the SCOPE never reached, named. Silent when it reached everything,
         # and silent on a selection — there the user pointed at the images.
         detail += _scope_note(bank_id, _clean_todo_clause(), statuses, ids)
-        bank_jobs.progress(job, detail=detail)
+        bank_jobs.progress(job, done=sum(counts.values()), total=len(row_ids),
+                           detail=detail)
     return run
 
 

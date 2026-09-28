@@ -313,13 +313,12 @@ export function useDataset() {
     return () => clearInterval(id);
   }, [captioningRuns, currentId, refresh]);
 
-  // Same poller for a watermark scan, and it is not decoration: `hasActivity`
-  // below only starts once a refresh has ALREADY seen activity ≠ null, and
-  // findWatermarks does not refresh until the pass ends. So in the tab that
-  // launched the scan the "Scanning… N/M" counter never moved and a ⏹ Stop
-  // button in the banner would never appear at all.
+  // Start polling for every local synchronous pass. The generic activity
+  // poller cannot start until a refresh has first discovered the server job.
   useEffect(() => {
-    if (!localActivityRuns.has(`watermark:${currentId}`) || !currentId) return undefined;
+    const running = ['watermark', 'analyze', 'text']
+      .some((kind) => localActivityRuns.has(`${kind}:${currentId}`));
+    if (!running || !currentId) return undefined;
     const id = setInterval(() => refresh(currentId), 2000);
     return () => clearInterval(id);
   }, [localActivityRuns, currentId, refresh]);
