@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-28-joycaption-live-progress',
+    date: '2026-09-28',
+    title: 'Follow JoyCaption progress as images finish',
+    blurb: 'Image Bank and dataset caption counters now advance while JoyCaption is working, instead of staying at zero until the whole batch finishes.',
+  },
+  {
     id: '2026-09-27-python-picker-close',
     date: '2026-09-27',
     title: 'Close the Python picker without making a selection',

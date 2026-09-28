@@ -7975,7 +7975,9 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                     jc = caption_images_joycaption(
                         [p for _, p in todo], prompt=cap_prompt, activity_token=token,
                         should_cancel=lambda: dataset_activity.cancel_requested(dataset_id),
-                        errors_out=jc_errors)
+                        errors_out=jc_errors,
+                        on_progress=lambda ready, total: dataset_activity.progress(
+                            token, done=ready))
                 elif backend == 'joycaption':
                     # Explicit choice, explicit failure: a user who forced 'joycaption' in
                     # Settings must be told WHY (the exact missing deps + pip command),
@@ -7997,12 +7999,10 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                     img = _live_image_row(image_id)
                     if img is None:      # deleted while the batch ran
                         vanished += 1
-                        dataset_activity.bump(token)
                         continue
                     if _caption_write_blocked(img, force=force,
                                               spare_asserted=spare_asserted):
                         spared += 1
-                        dataset_activity.bump(token)
                         continue
                     cleaned = cleaner(cap) or cap
                     caption_origin.stamp(
@@ -8011,12 +8011,12 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                     db.session.commit()
                     n += 1
                     _writer(report, CAPTION_WRITER_JOYCAPTION)
-                    dataset_activity.bump(token)   # this image is captioned (done)
                 else:
                     still.append((image_id, p))
             remaining = still
             dataset_activity.progress(
-                token, detail=f'JoyCaption finished; {len(remaining)} image(s) remaining…')
+                token, done=n + vanished + spared,
+                detail=f'JoyCaption finished; {len(remaining)} image(s) remaining…')
             if backend == 'joycaption':  # Forced JoyCaption backend: no Ollama fallback.
                 # These images are HANDLED — refused, but handled: nothing else will
                 # look at them in this run. Leaving them uncounted is what made a
@@ -8166,6 +8166,7 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
         cap_prompt = _with_caption_instructions(cap_prompt, (extra_instructions or '').strip())
     ollama_model = (ollama_model or '').strip() or None
     done = 0
+    joycaption_ready = 0
     if outcome is not None:
         for key in ('fenced', 'unanswered', 'failed'):
             outcome.setdefault(key, 0)
@@ -8197,7 +8198,13 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
             on_caption(p, cap, engine)
         done += 1
         if progress:
-            progress(done, total)
+            progress(max(done, joycaption_ready), total)
+
+    def _joycaption_progress(ready, _total):
+        nonlocal joycaption_ready
+        joycaption_ready = ready
+        if progress:
+            progress(ready, total)
 
     remaining = list(paths)
     # 1) JoyCaption batch (single 8B NF4 load via the ai-toolkit venv) — skipped when
@@ -8209,7 +8216,8 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
             from .joycaption import availability, caption_images_joycaption, is_available
             if is_available():
                 jc = caption_images_joycaption(remaining, prompt=cap_prompt,
-                                               should_cancel=should_cancel)
+                                               should_cancel=should_cancel,
+                                               on_progress=_joycaption_progress)
             elif backend == 'joycaption':
                 raise RuntimeError(
                     'JoyCaption backend is not available — '
