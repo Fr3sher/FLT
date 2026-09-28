@@ -1,3 +1,6 @@
+> [!WARNING]
+> **No affiliation with loradataset.com.** That website is not operated, endorsed, or supported by the LoRA Dataset Studio team. Any payments made to that service do not support this project. Use this repository and the links provided here to find our official downloads and community channels.
+
 # LoRA Dataset Studio V2
 
 Build, curate, caption and train image datasets from one browser interface. LDS runs on your machine and uses [ai-toolkit](https://github.com/ostris/ai-toolkit) for training and [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for local generation and checkpoint testing.
