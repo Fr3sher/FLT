@@ -373,8 +373,8 @@ def test_a_second_crop_moves_the_blob_and_the_thumbnail_name(client, app, tmp_pa
         assert second_blob != first_blob
         assert second_thumb != first_thumb
         assert second_blob.is_file()
-        # The superseded generation is pruned once the row points at the new one.
-        assert not first_blob.exists()
+        # The previous crop remains available for comparison and stepwise undo.
+        assert first_blob.exists()
         with Image.open(str(second_blob)) as im:
             # Cut from the FIRST crop, which is what the user was looking at.
             assert im.size == (200, 150)

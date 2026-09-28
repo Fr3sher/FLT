@@ -74,7 +74,8 @@ export const ACTION_TOPICS = [
   action('action-bank-revert-edits', 'Undo a crop or an upscale made in a bank',
     ['revert', 'undo crop', 'undo upscale', 'undo improve', 'restore', 'original',
      'back to original', 'cancel edit', 'remove edit', 'edits', 'mistake',
-     'wrong crop', 'redo', 'improve again', 'run it again', 'bank'],
+     'wrong crop', 'redo', 'improve again', 'run it again', 'bank',
+     'undo last edit', 'history', 'previous edit', 'keep crop', 'compare', 'before after'],
     '/bank', 'using-the-app', 'crop-and-upscale-inside-a-bank'),
   // 🎨 Medium and ⤢ Angle share one guide section but get a topic EACH: they are
   // two separate chip rows, asked about in two very different words ("is this

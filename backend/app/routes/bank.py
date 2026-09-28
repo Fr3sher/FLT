@@ -712,6 +712,18 @@ def bank_image_crop(bank_id, image_id):
     return jsonify({'ok': True, **result})
 
 
+@bp.post('/bank/<int:bank_id>/edits/undo')
+def bank_edits_undo(bank_id):
+    data = request.get_json(silent=True) or {}
+    try:
+        result = banks.undo_edits(LOCAL_USER, bank_id, data.get('image_ids') or None)
+    except bank_jobs.BankJobBusy as e:
+        return _busy(e)
+    except (ValueError, TypeError) as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **result})
+
+
 @bp.post('/bank/<int:bank_id>/edits/revert')
 def bank_edits_revert(bank_id):
     """Drop the bank-side ✂ crop / ✨ improve of {image_ids} (empty = all) and go
@@ -1509,9 +1521,12 @@ def bank_file(bank_id, image_id):
     bank, row = _row_or_404(bank_id, image_id)
     if not bank or not row:
         return jsonify({'error': 'not found'}), 404
-    path = (banks.abs_image_path(bank, row)
-            if request.args.get('original') in ('1', 'true')
-            else banks.resolved_image_path(bank, row))
+    if request.args.get('previous') in ('1', 'true'):
+        path = banks.bank_edit_history.previous_path(bank, row)
+    else:
+        path = (banks.abs_image_path(bank, row)
+                if request.args.get('original') in ('1', 'true')
+                else banks.resolved_image_path(bank, row))
     if not path or not os.path.isfile(path):
         return jsonify({'error': 'file missing'}), 404
     return send_file(path, max_age=0)

@@ -571,6 +571,10 @@ class BankImage(db.Model):
     # turn the pixels twice). Kept here so reverting the edit gives the user their
     # rotation back instead of silently discarding it.
     edit_baked_rotation = db.Column(Integer, nullable=True)
+    # Previous crop/upscale states, oldest first. Blobs stay in edited/ until
+    # undone or fully reverted; the sequence never rewinds (HTTP cache keys).
+    edit_history = db.Column(Text, nullable=True)
+    edit_sequence = db.Column(Integer, nullable=True)
     # Triage decision — same words as dataset images (pending|keep|reject).
     # reject_reason: blur|noise|uniform|small|duplicate|unreadable|manual
     #                |low_aesthetic|nsfw|watermark (the V2 score-derived flags)
