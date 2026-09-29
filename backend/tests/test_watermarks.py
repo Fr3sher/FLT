@@ -472,7 +472,7 @@ def test_clean_batches_multiple_lama_images_in_one_worker(app, monkeypatch):
     calls = []
     monkeypatch.setattr(watermark_lama, 'is_available', lambda: True)
 
-    def _batch(jobs, *, device, timeout=900):
+    def _batch(jobs, *, device, timeout=900, on_progress=None):
         calls.append((jobs, device))
         return {job['image_path']: (True, None) for job in jobs}
 

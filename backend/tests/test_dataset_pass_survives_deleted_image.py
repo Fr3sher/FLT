@@ -160,7 +160,7 @@ def test_the_watermark_cleaner_survives_an_image_deleted_under_its_batch(ctx, mo
                              watermark_bbox=json.dumps([0.0, 0.90, 1.0, 1.0]))
     ids = _ids(ds.id)
 
-    def fake_batch(items, device='cpu'):
+    def fake_batch(items, device='cpu', on_progress=None):
         _delete_image_row(ids[1])          # deleted while the batch was running
         return {it['image_path']: (True, None) for it in items}
 

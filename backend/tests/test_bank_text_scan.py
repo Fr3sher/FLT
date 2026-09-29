@@ -363,7 +363,7 @@ class TestTextClean:
         monkeypatch.setattr(watermark_lama, 'is_available', lambda: True)
         monkeypatch.setattr(watermark_lama, 'resolve_device', lambda: 'cpu')
 
-        def fake_batch(items, device='cpu'):
+        def fake_batch(items, device='cpu', on_progress=None):
             if lama_calls is not None:
                 lama_calls.extend(items)
             return {i['image_path']: (True, None) for i in items}
@@ -618,7 +618,7 @@ class TestCleanTarget:
         monkeypatch.setattr(watermark_lama, 'is_available', lambda: True)
         monkeypatch.setattr(watermark_lama, 'resolve_device', lambda: 'cpu')
 
-        def fake_batch(items, device='cpu'):
+        def fake_batch(items, device='cpu', on_progress=None):
             if lama_calls is not None:
                 lama_calls.extend(items)
             return {i['image_path']: (True, None) for i in items}

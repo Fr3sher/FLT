@@ -457,7 +457,7 @@ def _fake_lama(monkeypatch, *, available=True, ok=True):
     monkeypatch.setattr(watermark_lama, 'resolve_device', lambda: 'cpu')
     calls = []
 
-    def fake_batch(jobs, *, device, timeout=900):
+    def fake_batch(jobs, *, device, timeout=900, on_progress=None):
         out = {}
         for job in jobs:
             calls.append(job['image_path'])
@@ -509,7 +509,7 @@ def test_inpaint_discards_result_when_raw_source_changes_during_engine_work(
         monkeypatch.setattr(watermark_lama, 'is_available', lambda: True)
         monkeypatch.setattr(watermark_lama, 'resolve_device', lambda: 'cpu')
 
-        def batch(jobs, *, device, timeout=900):
+        def batch(jobs, *, device, timeout=900, on_progress=None):
             replace_source()
             return {job['image_path']: (True, None) for job in jobs}
 
@@ -570,7 +570,7 @@ def test_bank_inpaint_stages_exif_upright_metadata_free_copy_for_each_engine(
         monkeypatch.setattr(watermark_lama, 'is_available', lambda: True)
         monkeypatch.setattr(watermark_lama, 'resolve_device', lambda: 'cpu')
 
-        def _batch(jobs, *, device, timeout=900):
+        def _batch(jobs, *, device, timeout=900, on_progress=None):
             for job in jobs:
                 _assert_staged(job['image_path'])
             return {job['image_path']: (True, None) for job in jobs}

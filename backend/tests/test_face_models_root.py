@@ -166,7 +166,7 @@ def test_every_face_surface_hands_its_child_the_resolved_root(
 
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         seen[job['kind']] = json.loads(payload)['models_root']
         imgs = json.loads(payload)['images']
         return ({'ok': True,
