@@ -84,13 +84,6 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
-    id: '2026-09-28-bank-edit-history',
-    date: '2026-09-29',
-    title: 'Undo an upscale without losing your crop',
-    blurb: 'Bank now keeps the steps of new crops and upscales. Undo the last edit on one image or a selection, and compare before / after in Review. Earlier edits stay intact; versions discarded before this update cannot be recovered. Suggested by nofaceman on Discord.',
-    to: '/bank',
-  },
-  {
     id: '2026-09-29-unlimited-api-dataset-batches',
     date: '2026-09-29',
     title: 'Generate dataset batches beyond 60 images',
@@ -101,6 +94,13 @@ export const WHATS_NEW = [
     date: '2026-09-29',
     title: 'Help keep LDS development going',
     blurb: 'Monthly support on Patreon helps fund continued development, and even €1 a month makes a difference. A small, dismissible message on the datasets page links to Patreon and GitHub Sponsors. Both links are always available under Help & guide → Support LDS.',
+  },
+  {
+    id: '2026-09-28-bank-edit-history',
+    date: '2026-09-29',
+    title: 'Undo an upscale without losing your crop',
+    blurb: 'Bank now keeps the steps of new crops and upscales. Undo the last edit on one image or a selection, and compare before / after in Review. Earlier edits stay intact; versions discarded before this update cannot be recovered. Suggested by nofaceman on Discord.',
+    to: '/bank',
   },
   {
     id: '2026-09-28-segmented-model-downloads',
