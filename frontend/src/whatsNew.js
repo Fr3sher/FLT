@@ -96,6 +96,12 @@ export const WHATS_NEW = [
     blurb: 'Monthly support on Patreon helps fund continued development, and even €1 a month makes a difference. A small, dismissible message on the datasets page links to Patreon and GitHub Sponsors. Both links are always available under Help & guide → Support LDS.',
   },
   {
+    id: '2026-09-29-keep-dataset-comparison',
+    date: '2026-09-29',
+    title: 'Keep comparing as you browse dataset images',
+    blurb: 'Original and reference comparison stay selected when you move between dataset images with the arrows. Each image shows its own comparison; images without a matching original stay in single-image view until a comparison is available again.',
+  },
+  {
     id: '2026-09-28-bank-edit-history',
     date: '2026-09-29',
     title: 'Undo an upscale without losing your crop',
