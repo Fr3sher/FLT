@@ -46,8 +46,8 @@ open a GitHub issue with the *Feature request* template.
 LoRA Dataset Studio is free, open source and built in the open. We need funding
 to keep developing it, testing APIs and renting test GPUs.
 
-**Monthly support on [Patreon](https://www.patreon.com/c/Loraperfectgf) is the
-best way to help us plan continued development. Even €1 a month makes a difference.**
+**Monthly support** on [Patreon](https://www.patreon.com/c/Loraperfectgf) is the
+best way to help us plan continued development. Even €1 a month makes a difference.
 You can also support the project through
 [GitHub Sponsors](https://github.com/sponsors/perfectgf).
 
