@@ -90,6 +90,12 @@ export const WHATS_NEW = [
     blurb: 'The fixed 60-image limit is gone for API and mixed-engine dataset batches. Keep all your selected shots in Split or All mode. Local images still follow your configured ComfyUI queue limit, independently of API images.',
   },
   {
+    id: '2026-09-29-monthly-project-support',
+    date: '2026-09-29',
+    title: 'Help keep LDS development going',
+    blurb: 'Monthly support on Patreon helps fund continued development, and even €1 a month makes a difference. A small, dismissible message on the datasets page links to Patreon and GitHub Sponsors. Both links are always available under Help & guide → Support LDS.',
+  },
+  {
     id: '2026-09-28-segmented-model-downloads',
     date: '2026-09-28',
     title: 'Download large models with parallel connections',

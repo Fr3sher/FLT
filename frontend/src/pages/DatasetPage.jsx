@@ -7,6 +7,7 @@ import { useDataset } from '../hooks/useDataset';
 import DatasetListPanel from '../components/dataset/DatasetListPanel';
 import DatasetWorkspace from '../components/dataset/DatasetWorkspace';
 import PluginSlot from '../plugins/PluginSlot.jsx';
+import SupportProjectNotice from '../components/common/SupportProjectNotice.jsx';
 
 export default function DatasetPage() {
   const ds = useDataset();
@@ -19,6 +20,7 @@ export default function DatasetPage() {
            browsing surface — more columns beat a narrower reading measure.
            The empty-state hero and the creation form re-cap themselves. */
         <div className="flex flex-col gap-4">
+          <SupportProjectNotice />
           <DatasetListPanel datasets={ds.datasets} onOpen={ds.open} onCreate={ds.create}
             onDelete={ds.deleteDataset} onRestore={ds.importBackup}
             onExportZip={ds.exportZipFor} onExportBackup={ds.exportBackupFor}
