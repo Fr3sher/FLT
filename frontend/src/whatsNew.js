@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-29-video-plugin-startup',
+    date: '2026-09-29',
+    title: 'H3 plugins start correctly again',
+    blurb: 'Plugins using H3 can start again after the latest model update. A startup error no longer prevents enabled plugins from appearing.',
+  },
+  {
     id: '2026-09-29-unlimited-api-dataset-batches',
     date: '2026-09-29',
     title: 'Generate dataset batches beyond 60 images',
