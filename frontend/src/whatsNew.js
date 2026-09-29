@@ -84,6 +84,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-09-29-unlimited-api-dataset-batches',
+    date: '2026-09-29',
+    title: 'Generate dataset batches beyond 60 images',
+    blurb: 'The fixed 60-image limit is gone for API and mixed-engine dataset batches. Keep all your selected shots in Split or All mode. Local images still follow your configured ComfyUI queue limit, independently of API images.',
+  },
+  {
     id: '2026-09-28-segmented-model-downloads',
     date: '2026-09-28',
     title: 'Download large models with parallel connections',

@@ -910,12 +910,12 @@ def dataset_generate(dataset_id):
         return _map_error(exc)
     created, per_engine = 0, {}
     try:
-        # The per-engine calls each enforce MAX_FANOUT on their own share, which
-        # would let a 3-engine run create rows for two engines before the third
-        # is refused. Check the AGGREGATE first: all-or-nothing.
+        # API batches have no size cap. Check the configured local queue budget
+        # before dispatching anything, including the API part of a mixed run.
+        local_batches = [(g, v) for g, v in batches if g in svc.local_engine_ids()]
         svc.check_fanout_budget(
-            dataset_id, sum(len(v) for _, v in batches) * max(1, int(multiplier or 1)),
-            generators=[generator for generator, _ in batches])
+            dataset_id, sum(len(v) for _, v in local_batches) * max(1, int(multiplier or 1)),
+            generators=[generator for generator, _ in local_batches])
         for generator, variations in batches:
             if generator in svc.api_engine_ids():
                 # API path (Gemini Nano Banana Pro or OpenAI ChatGPT gpt-image-2):

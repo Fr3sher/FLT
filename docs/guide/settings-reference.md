@@ -115,7 +115,7 @@ Good to know:
 
 - **The cost shown is the whole run's.** The two local engines contribute nothing (it's your GPU) and neither does ChatGPT on the subscription lane.
 - **The local engines run last and in series.** The API batches start immediately in the background; the local GPU handles its own shots one at a time behind them. The Klein and Krea cards say so while a mixed run is being set up.
-- **There is a cap per batch** (60 images in flight on one dataset). A run over it is refused *before* it starts, with the number named — switch to Split, untick an engine, or select fewer shots.
+- **API batches have no fixed image-count limit.** Select as many shots as needed in Split or All mode. Local images respect the configurable **Local generation queue limit** in Settings → Local tools → ComfyUI, including in a mixed run; API images do not count towards that local budget.
 - **🔞 NSFW shots stay local-only.** The uncensored catalog unlocks only when **every** ticked engine is local (Klein, Krea 2 Edit, or both), because those shots must never reach a third-party API.
 - **Regenerating one tile** (🔄) uses the **first** ticked engine, not all of them.
 
@@ -356,7 +356,7 @@ Where you point the app at the local programs that unlock the full pipeline: **C
 
 ### ComfyUI
 
-- **Local generation queue limit** → `comfyui.local_queue_limit`. Default **1,000**, range **1–10,000** unfinished images per dataset. Klein and Krea generation can queue long unattended runs; images still run one at a time on the GPU. Existing unfinished images count towards the limit. Runs that include API engines keep their separate 60-image limit. The generation multiplier offers up to 20 images per selected shot.
+- **Local generation queue limit** → `comfyui.local_queue_limit`. Default **1,000**, range **1–10,000** unfinished local images per dataset. Local engines can queue long unattended runs; images still run one at a time on the GPU. Existing unfinished local images count towards the limit, including in mixed runs. API images have no fixed batch limit and do not consume this local budget. The generation multiplier offers up to 20 images per selected shot.
 - **Generation time limit (minutes)** → `comfyui.generation_timeout_minutes`. Default **15**, range **0–1,440**, before the processing multiplier below. Increase this for slow hardware, or use **0** to wait without an elapsed-time limit. It applies when a new ComfyUI job starts; cancellation and checks for a disconnected worker remain active. If a finite limit expires while ComfyUI is still working, LDS holds the queue until the uncertain job is reconciled rather than submitting overlapping work.
 
 **Time limits** in **Settings → Local tools** keeps the existing defaults and lets you adjust them for slower hardware or competing workloads:

@@ -249,28 +249,29 @@ def image_pixel_size(path):
 
 
 _VALID_STATUS = ('pending', 'keep', 'reject', 'failed')
+# Admission budget for rescue/improve operations, not a variation batch limit.
 MAX_FANOUT = 60
 
 
 def fanout_in_flight(dataset_id) -> int:
-    """Generations already queued on this dataset (pending row, no file yet)."""
+    """Local generations already queued on this dataset, excluding API rows."""
     return (FaceDatasetImage.query
             .filter_by(dataset_id=dataset_id, status='pending')
-            .filter(FaceDatasetImage.filename.is_(None)).count())
+            .filter(FaceDatasetImage.filename.is_(None))
+            .filter(FaceDatasetImage.klein_model.is_(None)
+                    | FaceDatasetImage.klein_model.notin_(api_engine_ids())).count())
 
 
 def check_fanout_budget(dataset_id, total, *, generators=()):
-    """Refuse a WHOLE multi-engine batch before exceeding its queue budget.
+    """Enforce the configured local queue budget; API batches have no size cap.
 
-    generate_variations / generate_variations_nanobanana each enforce the cap on
-    their own call, which is enough for a single engine but NOT for a run split
-    across several: three 25-image calls each pass individually while the run
-    totals 75, and the third one would be refused only after the first two had
-    already created rows — a half-dispatched batch. The multi-engine route calls
-    this with the aggregate BEFORE dispatching anything, so the run is all-or-
-    nothing. The per-call checks stay as defense in depth."""
+    The route checks the aggregate local share before dispatching any engine,
+    so a mixed run cannot bill its API share before a local budget refusal.
+    Per-engine local calls repeat the check for direct service callers."""
+    if not generators or not all(g in local_engine_ids() for g in generators):
+        return
     from ..generation_limits import local_queue_limit
-    limit = local_queue_limit() if generators and all(g in local_engine_ids() for g in generators) else MAX_FANOUT
+    limit = local_queue_limit()
     total = int(total)
     if total > limit:
         raise ValueError(f'fan-out too large ({total} > {limit})')
@@ -12483,8 +12484,6 @@ def generate_variations_nanobanana(app, user_id, dataset_id, variations, multipl
     total = len(variations) * mult
     if total == 0:
         raise ValueError('no variations selected')
-    if total > MAX_FANOUT:
-        raise ValueError(f'fan-out too large ({total} > {MAX_FANOUT})')
     # Main plus additional references: Nano Banana uses all for identity
     # consistency. One reference preserves historical behavior.
     ref_bytes = _all_ref_bytes(ds)

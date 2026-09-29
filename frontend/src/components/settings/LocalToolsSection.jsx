@@ -411,7 +411,7 @@ export default function LocalToolsSection(props) {
             value={config.comfyui.local_queue_limit ?? comfyDefault('local_queue_limit')}
             onChange={(e) => setField('comfyui', 'local_queue_limit', Number(e.target.value))}
             className={INPUT_CLASS} />
-          <p className="mt-1 text-xs text-content-muted">Maximum unfinished images per dataset for local generation. Queue a long run and let ComfyUI render it one image at a time. Batches using API engines keep their separate limit.</p>
+          <p className="mt-1 text-xs text-content-muted">Maximum unfinished local images per dataset. Queue a long run and let ComfyUI render it one image at a time. API images have no fixed batch limit and do not count towards this setting.</p>
           <ResetToDefault label="Local generation queue limit" section="comfyui" field="local_queue_limit"
             config={config} configDefaults={configDefaults} setField={setField} />
         </div>
