@@ -20,7 +20,7 @@ def manifest(pid):
     return json.loads((ROOT / 'bundled' / pid / 'plugin.json').read_text(encoding='utf-8'))
 
 
-def test_video_claims_its_public_decoding_and_shot_settings():
+def test_video_claims_its_product_settings_and_leaves_shared_decoders_to_host():
     assert set(manifest('video')['owns']['config_sections']) == {
         'custom_shots', 'video_caption', 'video_bank'}
     assert manifest('live')['owns']['config_sections'] == []

@@ -37,6 +37,7 @@ import {
   REVIEW_SHORTCUT_HINT, ownsTypedKeys, reviewKeyAction,
 } from '../shared/reviewShortcuts.js'
 import ShortcutKey from '../shared/ShortcutKey'
+import BankEditComparison from './BankEditComparison.jsx'
 
 // How many upcoming images we pull metadata for in one go (the decision helpers
 // below the image). The grid page only holds the ids it rendered.
@@ -140,6 +141,7 @@ export default function BankReviewLightbox({
      the grid tile deliberately keeps its three hit targets and no more, which is
      the same reason the quarter-turn is a bulk action there and a button here. */
   const [cropId, setCropId] = useState(null)
+  const [compareKey, setCompareKey] = useState(null)
   const dialogRef = useRef(null)
   const requested = useRef(new Set())
   // ids whose image BYTES we've already asked for (prefetch), so we never re-hit them
@@ -155,6 +157,8 @@ export default function BankReviewLightbox({
   const done = isFinished(session)
   const p = progress(session)
   const img = id == null ? null : meta[id]
+  const editKey = `${id}:${img?.edit_generation || 0}:${img?.edit_sequence || 0}`
+  const comparing = compareKey === editKey && img?.edit_history_count > 0
 
   // Pull metadata for the current image and the ones just behind it, in one
   // request. Ids already asked for are never re-asked (an image deleted from the
@@ -299,6 +303,8 @@ export default function BankReviewLightbox({
           [target]: { ...prev[target],
             edit_method: state.edit_method ?? null,
             edit_generation: state.edit_generation ?? 0,
+            edit_history_count: state.edit_history_count ?? 0,
+            edit_sequence: state.edit_sequence ?? 0,
             rotation: state.rotation ?? 0,
             width: state.width ?? prev[target].width,
             height: state.height ?? prev[target].height } }
@@ -323,9 +329,30 @@ export default function BankReviewLightbox({
     }
   }, [applyEdit, bankId, busy, cropId])
 
+  const undoCurrent = useCallback(async () => {
+    const target = currentId(session)
+    if (target == null || busy) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const d = await postJson(`/api/bank/${bankId}/edits/undo`, { image_ids: [target] })
+      const state = d?.images?.find((row) => row.id === target)
+      if (!state) throw new Error('The previous version is unavailable. Nothing was changed.')
+      applyEdit(target, state)
+      setCompareKey(null)
+      setNotice('Last edit undone. Earlier edits have been kept.')
+    } catch (e) {
+      setError(e?.message || 'Could not undo the last edit.')
+    } finally {
+      setBusy(false)
+    }
+  }, [applyEdit, bankId, busy, session])
+
   const revertCurrent = useCallback(async () => {
     const target = currentId(session)
     if (target == null || busy) return
+    if (!window.confirm('Revert all edits on this image? Earlier crops and upscales will also be removed.')) return
     setBusy(true)
     setError(null)
     try {
@@ -438,12 +465,12 @@ export default function BankReviewLightbox({
           {/* Batched review WebPs keep navigation instant. Once pixels have been
               turned or edited, bypass any prefetched blob and use the shared
               version key so the updated image cannot be hidden by that cache. */}
-          <img key={id}
+          {comparing ? <BankEditComparison key={editKey} bankId={bankId} image={img} /> : <img key={id}
             src={imageVersionQuery(img)
               ? `/api/bank/${bankId}/review-file/${id}${imageVersionQuery(img)}`
               : (blobUrls[id] || `/api/bank/${bankId}/review-file/${id}`)}
             alt={img?.name || `Bank image ${id}`}
-            className="max-h-full max-w-full select-none object-contain" />
+            className="max-h-full max-w-full select-none object-contain" />}
         </div>
       )}
 
@@ -484,11 +511,26 @@ export default function BankReviewLightbox({
               ✂ Crop{shortcut('C')}
             </button>
             {img?.edit_method && (
+              <>
+              {img.edit_history_count > 0 && <>
+                <button type="button" onClick={undoCurrent} disabled={busy}
+                  title="Undo only the last crop or upscale, keeping earlier edits."
+                  className="min-h-10 rounded-lg border border-white/25 px-3 py-2 text-sm text-white disabled:opacity-50 hover:bg-white/10">
+                  ↩ Undo last edit
+                </button>
+                <button type="button" onClick={() => setCompareKey(comparing ? null : editKey)}
+                  disabled={busy} aria-pressed={!!comparing}
+                  title="Compare the current result with the image just before its last edit."
+                  className="min-h-10 rounded-lg border border-white/25 px-3 py-2 text-sm text-white disabled:opacity-50 hover:bg-white/10">
+                  {comparing ? 'Close comparison' : 'Compare before / after'}
+                </button>
+              </>}
               <button type="button" onClick={revertCurrent} disabled={busy}
                 title="Throw away the ✂ crop / upscale made in this bank and go back to the image it started from. Only a copy made by the app is deleted — your own file was never modified."
                 className="min-h-10 lg:min-h-0 rounded-lg border border-white/25 px-4 py-2 text-sm text-white disabled:opacity-50 hover:bg-white/10">
-                ↩ Revert edit
+                Revert all edits
               </button>
+              </>
             )}
             {canEditMask(img) && (
               <button type="button" onClick={() => setMaskId(id)} disabled={busy}

@@ -16,9 +16,9 @@ def _graph(**kw):
 
 
 def test_the_arena_podium_stays_at_six_steps_alongside_optional_vdn():
-    podium = [a for a in vts.ACCELERATIONS if a['id'] != 'vdn']
-    assert [a['id'] for a in podium[-3:]] == ['turbo', 'parasyte', 'dareties']
-    assert all(a['steps'] == vts.TURBO_STEPS == 6 for a in podium[-3:])
+    podium = [a for a in vts.ACCELERATIONS if a.get('arena')]
+    assert [a['id'] for a in podium] == ['turbo', 'parasyte', 'dareties']
+    assert all(a['steps'] == vts.TURBO_STEPS == 6 for a in podium)
     assert vts.accel_spec('turbo')['file'] == vts.TURBO_LORA
     for a in podium[-3:]:
         assert a['arena'].startswith('#') and a['hint'] and a['action']

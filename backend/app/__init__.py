@@ -442,6 +442,8 @@ _SCHEMA_ADDITIONS = (
     ('bank_image', 'edit_method', 'VARCHAR(16)'),
     ('bank_image', 'edit_generation', 'INTEGER'),
     ('bank_image', 'edit_baked_rotation', 'INTEGER'),
+    ('bank_image', 'edit_history', 'TEXT'),
+    ('bank_image', 'edit_sequence', 'INTEGER'),
     # Where a face_cluster id came from: NULL = the embeddings pass computed it
     # (what every existing row means), 'asserted' = a "this subfolder is one
     # person" declaration wrote it with no inference. Additive: a database that

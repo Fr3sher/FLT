@@ -777,14 +777,11 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   // a subscription lane spends plan quota, not dollars) — the cost
   // estimate and the billing confirm both read this one list.
   const free = freeEngines({ caps, engineConfig });
-  // What this run costs and, when it can't run, why. `caps.max_fanout` is the
-  // SERVER's per-batch cap, published by /api/capabilities — mirrored so the
-  // limit is explained before the click, never hardcoded here. A server that
-  // doesn't publish it (older build) simply keeps the check off.
+  // The full run's cost and the configured budget for its local images.
+  // API images have no fixed per-batch limit.
   const runCost = estimateCost(selected.size, engines, engineMode, { multiplier, free });
   const blockedReason = generateBlockedReason({
     engines, shotCount: selected.size, mode: engineMode, multiplier,
-    maxFanout: Number(caps.max_fanout) || 0,
     maxLocalFanout: Number(caps.max_local_fanout) || 0,
   });
   // Klein unavailable has FOUR distinct causes and the hint must name the right

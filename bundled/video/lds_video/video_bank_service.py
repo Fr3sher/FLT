@@ -1744,12 +1744,17 @@ def _rate_the_look(job, bank_id, reembed):
     from lds_video import video_aesthetic
     if bank_jobs.cancelled(job):
         return {}
-    if not video_aesthetic.pending_clips(bank_id, bool(reembed)):
+    total = len(video_aesthetic.pending_clips(bank_id, bool(reembed)))
+    if not total:
         return {}
-    bank_jobs.progress(job, detail='rating how each shot looks')
+    bank_jobs.progress(job, done=0, total=total,
+                       detail='rating how each shot looks')
     out = video_aesthetic.run_aesthetic(
         bank_id, rescore=bool(reembed),
+        on_clip=lambda: bank_jobs.bump(job),
         should_stop=lambda: bank_jobs.cancelled(job))
+    if not out['error'] and not bank_jobs.cancelled(job):
+        bank_jobs.progress(job, done=out['rated'] + out['unrated'])
     # `unrated` rides along — run_aesthetic's docstring promises it is "reported
     # rather than folded into a total", and dropping it here was exactly the
     # silence it warns about: a store missing half its vectors read as a clean
@@ -1783,12 +1788,18 @@ def _check_coherence(job, bank_id, reembed):
     from lds_video import video_temporal_coherence
     if bank_jobs.cancelled(job):
         return {}
-    if not video_temporal_coherence.pending_clips(bank_id, bool(reembed)):
+    total = len(video_temporal_coherence.pending_clips(bank_id, bool(reembed)))
+    if not total:
         return {}
-    bank_jobs.progress(job, detail='checking each shot holds one scene')
+    bank_jobs.progress(job, done=0, total=total,
+                       detail='checking each shot holds one scene')
     out = video_temporal_coherence.run_coherence(
         bank_id, recheck=bool(reembed),
+        on_clip=lambda: bank_jobs.bump(job),
         should_stop=lambda: bank_jobs.cancelled(job))
+    if not bank_jobs.cancelled(job):
+        bank_jobs.progress(job, done=sum(out[key] for key in
+                                        ('measured', 'one_frame', 'unmeasured')))
     # Namespaced rather than merged into the embed run's own keys: `measured`
     # already means something else in half this module's results, and a caller
     # reading one dictionary must not have to know which pass wrote which word.
@@ -2072,7 +2083,8 @@ def _ai_check_job(bank_id, recheck):
                            detail=notice or 'checking how each shot moves')
         out = video_ai_check.run_ai_check(
             bank_id, recheck,
-            on_clip=lambda: bank_jobs.bump(job),
+            on_progress=lambda done, total: bank_jobs.progress(
+                job, done=done, total=total, detail='checking how each shot moves'),
             should_stop=lambda: bank_jobs.cancelled(job))
         detail = f'done — {out["measured"]} shot(s) checked'
         if out['too_short']:

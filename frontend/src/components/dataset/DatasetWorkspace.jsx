@@ -900,6 +900,14 @@ export default function DatasetWorkspace({ ds, onBack }) {
   // e.g. "Scanning for watermarks… 12/64". CPU passes (face analysis, watermark
   // clean) don't pause ComfyUI, so their note omits that claim.
   const act = ds.activity;
+  const activityCount = act?.total > 0 ? `${act.done || 0}/${act.total}` : '';
+  // Stage details must not hide the counter. Some workers include it already.
+  const detailHasCount = activityCount && new RegExp(
+    `\\b${act.done || 0}\\s*/\\s*${act.total}\\b`,
+  ).test(act.detail || '');
+  const activityDetail = act?.detail
+    ? `${act.detail}${activityCount && !detailHasCount ? ` — ${activityCount}` : ''}`
+    : '';
   const importBusy = isDatasetImportBlocked({ localBusy: ds.localBusy, activity: act });
   // Which activities actually hold ComfyUI, and therefore fight the import's
   // auto head-crop for the exclusive GPU vision window. This used to name
@@ -909,7 +917,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
   // queue-lane kind, and fails safe as local on an unknown engine.
   const visionImportBusy = holdsLocalGpu(act);
   const activityBanner = ds.captioning
-    ? `${act?.detail || `Captioning in progress — ${keptCaptioned}/${kept} captioned…`} ComfyUI is paused.`
+    ? `${activityDetail || `Captioning in progress — ${keptCaptioned}/${kept} captioned…`} ComfyUI is paused.`
     : (() => {
         if (act) {
           const prog = act.total ? ` ${act.done}/${act.total}` : '';
@@ -955,7 +963,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
             // Copy/freeze details are stable phase names, while done/total lives
             // beside them. Prefer the count-aware labels so progress stays visible.
             const detailed = ['bank_export', 'bank_import', 'training_export']
-              .includes(act.kind) ? label : (act.detail || label);
+              .includes(act.kind) ? label : (activityDetail || label);
             return `${detailed}${cpu ? '' : ' ComfyUI is paused during the pass.'}`;
           }
         }

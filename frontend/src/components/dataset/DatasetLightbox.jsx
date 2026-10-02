@@ -231,14 +231,9 @@ export default function DatasetLightbox({
      lives in lightboxActionPlacement.js because `node --test` cannot parse JSX
      and this is the part that must be tested case by case. */
   const imageId = img?.id ?? null;
-  /* `compareMode` ('none' | 'derived' | 'reference') sits INSIDE the stamped
-     state, where the boolean `comparing` used to. Two reasons, and the second
-     is the one that matters: a mode held in its own useState would have been
-     the one piece of per-image state that travels — ⟩ would have carried
-     "reference comparison open" onto the next picture, and, worse, an open
-     "original" pane onto an image whose parent is somebody else's. Inside the
-     slot the guarantee is structural: a foreign stamp yields a fresh state, so
-     moving image closes the comparison with no reset effect to get right. */
+  /* Navigation keeps the comparison mode but resets image-specific controls.
+     The comparison below always uses this image's current original/reference,
+     and falls back to the single image when that comparison is unavailable. */
   const {
     pluginLayer, full, compareMode, improving, actionsOpen, repairOpen, improveOpen, deciding,
   } = lightboxImageState(storedState, imageId);

@@ -85,10 +85,6 @@ setuptools==84.0.0
 # true.
 numpy>=1.26,<2
 opencv-python-headless>=4.9
-# Video import contracts encode and decode real clips; the Video plugin normally
-# installs these host extras, while CI's shared base must declare them explicitly.
-av>=13,<19
-imageio-ffmpeg>=0.5,<1
 
 # safetensors belongs HERE and not in the Torch overlay: that overlay carries
 # `--index-url .../whl/cpu`, so anything added to it resolves from PyTorch's
@@ -120,3 +116,9 @@ safetensors>=0.4
 # post that refuses to parse stays a real failure. Pure Python, no wheels to
 # build, so running it for real costs nothing.
 instaloader>=4.12
+
+# Direct video-dataset import tests encode and decode real CPU clips. The
+# optional product runtime is not installed by CI, so declare its decoder and
+# bundled encoder here rather than depend on a system-wide ffmpeg installation.
+av==18.1.0
+imageio-ffmpeg==0.6.0

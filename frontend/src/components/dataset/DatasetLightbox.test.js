@@ -79,9 +79,8 @@ test('any dataset image can be inspected next to the reference photo', () => {
   assert.match(lightbox, /w-full sm:w-auto[^]{0,400}Compare with reference/);
   // ONE state for both readings ⇒ entering either leaves the other; two
   // booleans would have allowed two pairs of panes at once. And it lives in the
-  // id-STAMPED per-image slot, not in a useState of its own: that is what makes
-  // ⟩ leave the comparison behind with the image it belonged to, instead of
-  // carrying an "Original" pane onto a picture whose parent is someone else's.
+  // id-stamped slot so late image callbacks cannot change the current view.
+  // Navigation preserves the mode and resolves the current image's original.
   assert.match(lightbox, /pluginLayer, full, compareMode, improving, actionsOpen, repairOpen, improveOpen, deciding,\n  \} = lightboxImageState\(/);
   assert.doesNotMatch(lightbox, /useState\((true|false|'none')\)/);
   assert.match(lightbox,

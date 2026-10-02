@@ -76,8 +76,8 @@ test('the button counts the clips — in the rail and in the phone bar — and t
 })
 
 test('↻ Reuse puts the clip’s own frame ALONE in the strip, and the picker gets the strip and its three verbs', () => {
-  assert.match(STUDIO, /setSources\(\[\{ key: `staged:\$\{clip\.source_image\}`, image: clip\.source_image, ratio: null, preview: null,\n\s*continues: clip\.continues_of \|\| null \}\]\);/)
-  assert.match(STUDIO, /<VideoSourcePicker mode=\{mode\} onMode=\{setMode\} frames=\{sources\} identityReferences=\{useRefmods\}[\s\S]*?onAdd=\{addSources\} onRemove=\{removeSource\} onClear=\{clearSources\}/)
+  assert.match(STUDIO, /setSources\(\[\{ key: `staged:\$\{clip\.source_image\}`, image: clip\.source_image, ratio: null, preview: null,\s*continues: clip\.continues_of \|\| null \}\]\);/)
+  assert.match(STUDIO, /<VideoSourcePicker mode=\{mode\} onMode=\{setMode\} frames=\{sources\} identityReferences=\{useRefmods\}\n\s*aspect=\{aspect\} onAspect=\{setAspect\}\n\s*onAdd=\{addSources\} onRemove=\{removeSource\} onClear=\{clearSources\}/)
   // Additions go through the helper's dedupe by origin, on the latest state.
   assert.match(STUDIO, /const addSources = useCallback\(\(list\) => setSources\(\(prev\) => addFrames\(prev, list\)\.frames\), \[\]\);/)
   assert.match(STUDIO, /const removeSource = useCallback\(\(key\) => setSources\(\(prev\) => removeFrame\(prev, key\)\), \[\]\);/)

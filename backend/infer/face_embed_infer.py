@@ -570,6 +570,7 @@ def main() -> int:
                       'fingerprint': digest.hex() if digest else None,
                       # null, never 0.0 — "not measured" is its own answer.
                       'yaw': None if yaw != yaw else float(yaw)}
+    _log('[phase] grouping people')
     clusters = _cluster(images, cache, threshold)
     out = {'ok': True, 'results': results, 'clusters': clusters,
            'used_gpu': used_gpu}

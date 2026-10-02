@@ -10509,6 +10509,8 @@ def training_progress(user_id, dataset_id, base_model=_PERSISTED, family=None,
         raise ValueError('dataset not found')
     cur_id = queue_manager._get_system_state('training_dataset_id', None)
     active = (bool(queue_manager._get_system_state('training_in_progress', False))
+              and (queue_manager._get_system_state('training_dataset_table', None)
+                   or _crd.FACE) == _crd.FACE
               and cur_id is not None and int(cur_id) == int(dataset_id)
               and not _training_process_is_definitely_dead(
                   queue_manager._get_system_state('training_pid', None)))

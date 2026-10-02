@@ -36,7 +36,7 @@ test('the clip list is a scrolling grid, not a flex column that shrinks its rows
   assert.ok(!classes.includes('flex-col'), `a flex column shrinks its rows under a max height: ${scrollBox[1]}`)
 })
 
-test('one Preview size dial drives all three grids, and remembers itself', () => {
+test('one Preview size dial drives all four grids, and remembers itself', () => {
   // Asked for from the picker (2026-09-02): "a slider to enlarge the start
   // frame previews". One dial, not one per tab — a size chosen on the Bank
   // grid holds on the Gallery and the Dataset clip grids.
@@ -46,7 +46,12 @@ test('one Preview size dial drives all three grids, and remembers itself', () =>
   assert.match(ranges[0], /min=\{TILE_MIN\} max=\{TILE_MAX\} step=\{TILE_STEP\}/,
     'the dial\u2019s range comes from videoPickerTile, not from literals that can drift from it')
   const grids = PICKER.match(/className="grid gap-1 overflow-y-auto" style=\{gridStyle\}/g) || []
-  assert.equal(grids.length, 4, 'the Bank, Gallery, Dataset clip and last-frame grids all take the one gridStyle')
+  assert.equal(grids.length, 2, 'Dataset clip and Rendered clip use the shared gridStyle')
+  const virtualGrids = PICKER.match(/<VideoPickerGrid[^>]*tile=\{tile\}/g) || []
+  assert.equal(virtualGrids.length, 2, 'Bank and Gallery pass the same tile size to their virtual grids')
+  const virtual = read('../../../../../../bundled/video/frontend/studio/video/VideoPickerGrid.jsx')
+  assert.match(virtual, /\(tile \+ GAP\)/)
+  assert.match(virtual, /gridBoxHeight\(tile\)\}px, 70vh/)
   assert.doesNotMatch(PICKER, /grid-cols-\d|sm:grid-cols-\d/,
     'a fixed column count would ignore the dial')
   assert.match(PICKER, /repeat\(auto-fill, minmax\(\$\{tile\}px, 1fr\)\)/)

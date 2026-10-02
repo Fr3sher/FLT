@@ -94,12 +94,11 @@ test('an image that is not in the shown list gets no navigation at all', () => {
 
 // ── 2. The state that must NOT travel ───────────────────────────────────────
 
-test('state computed for one image is never rendered for another', () => {
+test('navigation keeps comparison but resets controls belonging to the previous image', () => {
   // Everything a previous image could have been left in: zoomed to 100 %, its
   // comparison pane open, an improve pass running. `compareMode` covers BOTH
-  // comparisons (against the original, against the reference photo) — the
-  // reference one is the dangerous one to carry over, since it is offered on
-  // every image and would silently follow you all the way down the grid.
+  // comparisons (against the original, against the reference photo). Only
+  // this viewing preference follows navigation; image-specific state resets.
   // `actionsOpen` joined them for a narrow-screen reason: the panel is a
   // full-screen drawer on a phone, and ⟩ pressed behind it would land you on an
   // image you cannot see, under a panel you never reopened.
@@ -117,7 +116,7 @@ test('state computed for one image is never rendered for another', () => {
   }
   const live = lightboxImageState(stale, 22)
   assert.deepEqual(live, {
-    imageId: 22, full: false, compareMode: 'none', improving: false, actionsOpen: false,
+    imageId: 22, full: false, compareMode: 'reference', improving: false, actionsOpen: false,
     // 📷 The picker is the same literal case as ✦ Repair: a full-screen overlay
     // about ONE image — carried over, ⟩ would aim a camera run at a picture
     // that is no longer the one on screen.
@@ -125,15 +124,25 @@ test('state computed for one image is never rendered for another', () => {
     // panel is about the image it was opened on, never the one ⟩ lands on.
     repairOpen: false, pluginLayer: false, improveOpen: false, deciding: false,
   })
-  // The derived pane is the one that would be actively MISLEADING: captioned
-  // "Original", showing the previous image's parent.
+  // The selected mode travels; DatasetLightbox resolves this image's parent.
   assert.equal(
     lightboxImageState({ imageId: 11, full: false, compareMode: 'derived', improving: false }, 22)
       .compareMode,
-    'none')
+    'derived')
   // …while the image it WAS computed for keeps it — a reset that fires on every
   // render would make the zoom un-holdable.
   assert.equal(lightboxImageState(stale, 11), stale)
+})
+
+test('comparison survives consecutive moves and stays off after an explicit exit', () => {
+  let stored = stampedPatch(freshLightboxImageState(11), { compareMode: 'derived' }, 11, 11)
+  for (const id of [22, 33, 22, 11]) {
+    stored = stampedPatch(stored, { pluginLayer: false }, id, id)
+    assert.equal(lightboxImageState(stored, id).compareMode, 'derived')
+  }
+  stored = stampedPatch(stored, { compareMode: 'none' }, 11, 11)
+  assert.equal(lightboxImageState(stored, 22).compareMode, 'none')
+  assert.equal(freshLightboxImageState(22).compareMode, 'none', 'reopening starts a new viewing session')
 })
 
 test('a write that lands after the move is ignored, not applied to the new image', () => {

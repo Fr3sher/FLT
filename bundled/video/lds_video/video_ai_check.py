@@ -81,13 +81,16 @@ single cut across them would be a silent lie. Sixteen frames, or no measurement.
 from __future__ import annotations
 
 from pathlib import Path
+from collections import deque
 
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import threading
 
 from lds_sdk.video_host import config as cfg
 from lds_sdk import workers as infer_env
@@ -103,6 +106,7 @@ logger = logging.getLogger(__name__)
 _INFER_DIR = Path(__file__).resolve().parents[1] / 'infer'
 
 _SCRIPT = str(_INFER_DIR / 'video_ai_check_infer.py')
+_PROGRESS_RE = re.compile(r'^\[aicheck\] (\d+)/(\d+)\b')
 
 # The encoder. A CONSTANT and not a setting, unlike `video_caption.model`: that
 # one is a choice between checkpoints that all do the same job differently, while
@@ -406,13 +410,72 @@ def _write_window(src_path, times, dest_dir, stem):
     return out
 
 
-def score_chunk(payload, *, timeout=None):
+def _run_score_worker(python, request, env, timeout, on_progress):
+    """Drain both pipes while the CPU worker runs; progress never touches the DB."""
+    proc = subprocess.Popen(
+        infer_env.worker_argv(python, _SCRIPT),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding='utf-8', errors='replace', env=env,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    output = []
+    stderr_lines = deque(maxlen=10)
+
+    def _read_stdout():
+        with proc.stdout:
+            output.append(proc.stdout.read())
+
+    def _read_stderr():
+        with proc.stderr:
+            for line in proc.stderr:
+                stderr_lines.append(line.rstrip())
+                match = _PROGRESS_RE.match(line)
+                if match and on_progress:
+                    try:
+                        on_progress(int(match.group(1)), int(match.group(2)))
+                    except Exception:  # a display callback must not stop pipe draining
+                        logger.debug('AI check progress callback failed', exc_info=True)
+
+    def _write_stdin():
+        try:
+            with proc.stdin:
+                proc.stdin.write(request + '\n')
+        except OSError:
+            pass  # An early worker exit is explained by its JSON or stderr below.
+
+    # Sending a large chunk can itself fill the pipe before the worker reads
+    # stdin. Keep it off the waiting thread so the timeout covers that too.
+    streams = [threading.Thread(target=target, daemon=True)
+               for target in (_read_stdout, _read_stderr, _write_stdin)]
+    timed_out = False
+    try:
+        for stream in streams:
+            stream.start()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+    finally:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            proc.wait()
+        for stream in streams:
+            if stream.ident is not None:
+                stream.join(timeout=5)
+    return ''.join(output), list(stderr_lines), proc.returncode, timed_out
+
+
+def score_chunk(payload, *, timeout=None, on_progress=None):
     """{clip_id: [step distance, ...]} for a chunk — the MODEL seam.
 
     `payload` is [{'id': int, 'frames': [path, ...]}]. One subprocess in the
     ✨ Score interpreter, monkeypatched in tests so nothing here ever imports
     torch or downloads weights. Raises RuntimeError carrying the child's own
     words; the caller turns that into a result rather than a 500.
+    ``on_progress(done, total)`` runs on the stderr reader thread and must only
+    update thread-safe progress state, never database rows.
 
     CPU, ALWAYS, and it is a design decision rather than an omission. The card
     would help — the reference measures 0.056 s per clip on a 4090 against the
@@ -435,23 +498,20 @@ def score_chunk(payload, *, timeout=None):
         _TIMEOUT_FLOOR_S, _TIMEOUT_PER_CLIP_S * len(payload))
     request = json.dumps({'clips': payload, 'model': MODEL_ID,
                           'models_root': cfg.get('bank_scoring.models_root') or None})
+
     try:
-        proc = subprocess.run(
-            infer_env.worker_argv(python, _SCRIPT),
-            input=request + '\n', capture_output=True,
-            text=True, encoding='utf-8', errors='replace', timeout=budget,
-            env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    except subprocess.TimeoutExpired:
-        raise RuntimeError('the AI check timed out — check the ✨ Score '
-                           'interpreter') from None
+        stdout, stderr_lines, returncode, timed_out = _run_score_worker(
+            python, request, env, budget, on_progress)
     except Exception as e:  # noqa: BLE001
         raise RuntimeError(f'could not start the AI check: '
                            f'{type(e).__name__}: {e}') from None
+    if timed_out:
+        raise RuntimeError('the AI check timed out — check the ✨ Score interpreter')
     # Last line STARTING with '{' rather than blindly the last line — the same
     # scan the look score and person_mask use: a stray warning printed after the
     # payload must not turn a successful run into "no result".
     data = {}
-    for text in reversed((proc.stdout or '').strip().splitlines()):
+    for text in reversed((stdout or '').strip().splitlines()):
         if text.lstrip().startswith('{'):
             try:
                 data = json.loads(text)
@@ -460,7 +520,7 @@ def score_chunk(payload, *, timeout=None):
             break
     if not data:
         logger.warning('AI check: no JSON from the worker (rc=%s) stderr=%s',
-                       proc.returncode, (proc.stderr or '')[-400:])
+                       returncode, '\n'.join(stderr_lines)[-400:])
         raise RuntimeError('the AI check produced no result — check the '
                            '✨ Score interpreter')
     if not data.get('ok'):
@@ -469,7 +529,8 @@ def score_chunk(payload, *, timeout=None):
             for cid, values in (data.get('steps') or {}).items()}
 
 
-def run_ai_check(bank_id, rescan=False, *, on_clip=None, should_stop=None):
+def run_ai_check(bank_id, rescan=False, *, on_clip=None, should_stop=None,
+                 on_progress=None):
     """Measure every shot of a bank that has no reading yet.
 
     Returns {'measured', 'too_short', 'unreadable', 'error'}. `error` is the
@@ -477,7 +538,9 @@ def run_ai_check(bank_id, rescan=False, *, on_clip=None, should_stop=None):
     for the reason the watermark and safe-zone passes make it one: everything
     measured before it is real and kept, and a machine with no egress must not
     have its whole run reported as failed because a first-run download did not
-    come back.
+    come back. ``on_clip`` stays on the calling thread after a stored verdict;
+    ``on_progress(done, total)`` also reports live model work from a reader
+    thread, including attempted clips the model could not measure.
     """
     out = {'measured': 0, 'too_short': 0, 'unreadable': 0, 'error': None}
     bank = db.session.get(VideoBank, bank_id)
@@ -497,6 +560,7 @@ def run_ai_check(bank_id, rescan=False, *, on_clip=None, should_stop=None):
             chunk = rows[start:start + CHUNK]
             payload, short, unreadable = _extract_chunk(bank, chunk, relpaths,
                                                         scratch)
+            handled = start
             # The too-short and unreadable verdicts are written BEFORE the model
             # runs, and they are written even if the model then fails: they were
             # decided by the decode and re-deciding them on every run is how a
@@ -506,17 +570,26 @@ def run_ai_check(bank_id, rescan=False, *, on_clip=None, should_stop=None):
                 out['too_short'] += 1
                 if on_clip is not None:
                     on_clip()
+                handled += 1
+                if on_progress is not None:
+                    on_progress(handled, len(rows))
             for clip in unreadable:
                 _store(clip, {STATE_KEY: 'unreadable'})
                 out['unreadable'] += 1
                 if on_clip is not None:
                     on_clip()
+                handled += 1
+                if on_progress is not None:
+                    on_progress(handled, len(rows))
             if not payload:
                 _empty(scratch)
                 continue
             try:
+                progress_kw = ({'on_progress': lambda done, _total, base=handled:
+                                on_progress(base + done, len(rows))}
+                               if on_progress is not None else {})
                 steps = score_chunk([{'id': cid, 'frames': paths}
-                                     for cid, paths, _clip in payload])
+                                     for cid, paths, _clip in payload], **progress_kw)
             except RuntimeError as e:
                 logger.warning('video bank %s: AI check unavailable: %s',
                                bank_id, e)
@@ -538,6 +611,8 @@ def run_ai_check(bank_id, rescan=False, *, on_clip=None, should_stop=None):
                 out['measured'] += 1
                 if on_clip is not None:
                     on_clip()
+            if on_progress is not None:
+                on_progress(start + len(chunk), len(rows))
             _empty(scratch)
     finally:
         _empty(scratch)

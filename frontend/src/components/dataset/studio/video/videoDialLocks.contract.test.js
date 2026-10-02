@@ -69,11 +69,17 @@ test('the lock is the app’s one implementation, not a second one', () => {
   assert.match(VIDEO_LORA_WRAPPER, /<H3LoraPicker \{\.\.\.props\}/)
   // The video lane wearing its own padlock is how the two lanes drift apart.
   for (const [name, src] of Object.entries(PANELS)) {
-    assert.match(src, /(?:import \{ SliderLock, useSliderLock \} from '@lds\/plugin-sdk\/ui'|import SliderLock, \{ useSliderLock \} from '\.\/SliderLock\.jsx')/,
+    const importPattern = name === 'H3LoraPicker.jsx'
+      ? /import SliderLock, \{ useSliderLock \} from '\.\/SliderLock\.jsx'/
+      : /import \{ SliderLock, useSliderLock \} from '@lds\/plugin-sdk\/ui'/
+    assert.match(src, importPattern,
       `${name} does not use the shared lock`)
     assert.doesNotMatch(src, /localStorage/,
       `${name} keeps its own lock memory instead of the shared one`)
   }
+  const wrapper = read('../../../../../../bundled/video/frontend/studio/video/VideoLoraPicker.jsx')
+  assert.match(wrapper, /import \{ H3LoraPicker \} from '@lds\/plugin-sdk\/ui'/)
+  assert.match(wrapper, /<H3LoraPicker \{\.\.\.props\} apiBase="\/api\/video-studio"/)
   const shared = read('../../../shared/LockableSlider.jsx')
   assert.match(shared, /useSliderLock/,
     'LockableSlider still holds a second copy of the lock')

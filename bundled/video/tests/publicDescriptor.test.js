@@ -18,6 +18,8 @@ test('every help topic belongs to Video; global Canvas and Live topics are absen
   assert.equal(new Set(ids).size, ids.length)
   assert.deepEqual([...ids].sort(), [...manifest.owns.help_topics].sort())
   assert.ok(ids.includes('setup-video-studio'))
+  assert.ok(ids.includes('video-studio-reference-model'))
+  assert.ok(ids.includes('video-auto-continue'))
   assert.ok(!ids.includes('setup-dlss5-install'))
   assert.ok(ids.every(id => !/^(canvas-|live-|battle-)/.test(id)))
 })

@@ -8,6 +8,7 @@ import LoadingScreen from '../components/common/LoadingScreen';
 import { useDataset } from '../hooks/useDataset';
 import DatasetListPanel from '../components/dataset/DatasetListPanel';
 import PluginSlot from '../plugins/PluginSlot.jsx';
+import SupportProjectNotice from '../components/common/SupportProjectNotice.jsx';
 
 // Keep the training workspace out of the library's initial bundle.
 const DatasetWorkspace = lazy(() => import('../components/dataset/DatasetWorkspace'));
@@ -25,6 +26,7 @@ export default function DatasetPage() {
            browsing surface — more columns beat a narrower reading measure.
            The empty-state hero and the creation form re-cap themselves. */
         <div className="flex flex-col gap-4">
+          <SupportProjectNotice />
           <DatasetListPanel datasets={ds.datasets} onOpen={ds.open} onCreate={ds.create}
             onDelete={ds.deleteDataset} onRestore={ds.importBackup}
             onExportZip={ds.exportZipFor} onExportBackup={ds.exportBackupFor}

@@ -21,15 +21,14 @@
  * the next picture".
  *
  * ── The state that must not travel ──────────────────────────────────────────
- * Zoom, the comparison pane and "an improvement is running" are properties of
- * ONE image. Carried onto the next one they range from merely wrong (a 100 %
- * zoom on a picture you have not looked at yet) to dangerous (a pane captioned
- * "original" showing the parent of the PREVIOUS image).
+ * Zoom and "an improvement is running" belong to ONE image. The comparison
+ * mode is a viewing preference and travels with navigation; its image URLs
+ * are resolved from the current image's props, never carried from the last one.
  *
  * The guarantee here is structural rather than a reset effect: the state is
  * stamped with the id it was computed for, and a render that finds a foreign
- * stamp ignores it and uses a fresh one. There is therefore no frame in which
- * stale state is painted, and no ordering to get right.
+ * stamp resets image-specific fields while keeping the comparison mode. No
+ * stale image state is painted, and there is no ordering to get right.
  *
  * READING a foreign stamp is not enough on its own, because there is ONE slot.
  * A late writer — the `finally` of an improve that started on the previous
@@ -47,8 +46,8 @@
  * against the original an improve pass came from, and against the dataset's
  * reference photo — and they are mutually exclusive, so 'none' | 'derived' |
  * 'reference' is the honest shape. It replaced a boolean `comparing`; keeping
- * the state in one slot is what makes "moving image closes whichever pane was
- * open" true for both without a second reset path.
+ * the state in one slot lets navigation preserve either mode while still
+ * rejecting late updates from a different image.
  *
  * `repairOpen` — the ✦ Repair dialog — is here for exactly that reason too: it
  * is a full-screen overlay showing ONE image, so ⟩ pressed behind it would
@@ -58,7 +57,7 @@
  * reason, not because a panel belongs to a picture: it is a full-screen overlay
  * on a phone, and ⟩ pressed behind it would otherwise land you on an image you
  * cannot see, under a panel you did not reopen. Sharing the stamped slot makes
- * "moving image gives you the picture back" structural, like the two panes.
+ * "moving image gives you the picture back" structural.
  *
  * `deciding` — a ✓ Keep / ✕ Reject verdict is in flight for THIS image — lives
  * here for the plainest reason of the lot: the verdict advances to the next
@@ -87,11 +86,14 @@ export function freshLightboxImageState(imageId) {
 
 /**
  * The state to RENDER for `imageId`: the stored one when it belongs to this
- * image, a fresh one otherwise. Pure — call it during render.
+ * image, fresh image-specific fields with the same comparison mode otherwise.
+ * Pure — call it during render. Closing the lightbox starts a fresh session.
  */
 export function lightboxImageState(stored, imageId) {
   const id = imageId ?? null;
-  if (!stored || stored.imageId !== id) return freshLightboxImageState(id);
+  if (!stored || stored.imageId !== id) {
+    return { ...freshLightboxImageState(id), compareMode: stored?.compareMode ?? 'none' };
+  }
   return stored;
 }
 

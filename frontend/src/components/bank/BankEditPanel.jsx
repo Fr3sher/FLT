@@ -97,6 +97,23 @@ export default function BankEditPanel({
     return { ok: true }
   }
 
+  const undo = async () => {
+    const ids = selectedIds.length ? [...selectedIds] : null
+    if (!window.confirm(`Undo the last edit of ${ids ? `${ids.length} selected image(s)` : 'each edited image in this bank'}? Earlier edits will be kept.`)) return
+    setBusy(true)
+    try {
+      const d = await postJson(`/api/bank/${bankId}/edits/undo`, ids ? { image_ids: ids } : {})
+      const unavailable = d.unavailable?.length || 0
+      toast[d.restored ? 'success' : 'info'](`${d.restored || 0} image(s): last edit undone.`
+        + (unavailable ? ` ${unavailable} previous version(s) unavailable; those images were kept unchanged.` : ''))
+      await onChanged?.()
+    } catch (e) {
+      toast.error(e?.message || 'Could not undo the last edit.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const revert = async () => {
     const ids = selectedIds.length ? [...selectedIds] : null
     if (!window.confirm(revertConfirmMessage(payload, ids))) return
@@ -191,6 +208,11 @@ export default function BankEditPanel({
               bank that has never been edited is a button that can only say "0". */}
           {counts.total > 0 && (
             <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={undo} disabled={live || busy}
+                title="Undo one crop or upscale per image, preserving earlier edits. History is available for edits made after this update."
+                className="rounded-md border border-border px-2 py-1 text-xs font-medium text-content-muted hover:bg-surface-raised hover:text-content disabled:opacity-40">
+                ↩ Undo last edit {selectedIds.length ? `of selection (${selectedIds.length})` : 'of each image'}
+              </button>
               <button type="button" onClick={revert} disabled={live || busy}
                 title={selectedIds.length
                   ? `Throw away the crops and upscales of the ${selectedIds.length} selected image(s) and go back to what this bank started from.`
@@ -199,8 +221,8 @@ export default function BankEditPanel({
                 ↩ Revert {selectedIds.length ? `selection (${selectedIds.length})` : `all (${counts.total})`}
               </button>
               <span className="text-[0.6875rem] text-content-subtle">
-                Deletes only copies the app made. The measurements taken from the edited
-                pixels go with them, so those images are analysed again.
+                Undo keeps earlier edits. Revert removes all edits. Open Review to compare
+                before / after. History starts with edits made after this update.
               </span>
             </div>
           )}

@@ -60,7 +60,8 @@ def _reflect_stage(line: str, activity_token) -> None:
 def caption_images_joycaption(paths, prompt: str | None = None,
                               max_tokens: int = 300, timeout: int = 1800,
                               activity_token=None, should_cancel=None,
-                              errors_out=None, diagnostics_out=None) -> dict:
+                              errors_out=None, diagnostics_out=None,
+                              on_progress=None) -> dict:
     """Caption an image list with one model load. Return {path: caption},
     or {} for nonfatal unavailability/failure.
 
@@ -78,7 +79,10 @@ def caption_images_joycaption(paths, prompt: str | None = None,
     failures do not abort the batch, but their explanations must be
     available beyond server logs. Optional diagnostics_out receives the worker
     returncode, timed_out flag and last 25 stderr lines, redacted for display.
-    Both outputs preserve the existing caption return value."""
+    Both outputs preserve the existing caption return value.
+    on_progress(ready, total) reports unique successful captions as stdout arrives.
+    It runs on the reader thread: use it only for thread-safe activity updates,
+    never database writes. Failed images remain eligible for the caller's fallback."""
     if diagnostics_out is not None:
         diagnostics_out.update(returncode=None, timed_out=False, stderr_tail=[])
     paths = [p for p in (paths or []) if p and os.path.isfile(p)]
@@ -122,10 +126,12 @@ def caption_images_joycaption(paths, prompt: str | None = None,
     errors: dict[str, str] = {}
     cancelled = {'flag': False}
     stderr_tail: collections.deque = collections.deque(maxlen=25)
+    reported = 0
 
     def _consume_json_line(line: str) -> None:
         """Parse one stdout JSON line: a per-image {i,path,caption|error}, or the final
         {captions,errors} aggregate (merged defensively for a stale worker)."""
+        nonlocal reported
         try:
             obj = json.loads(line)
         except (ValueError, TypeError):
@@ -143,6 +149,14 @@ def caption_images_joycaption(paths, prompt: str | None = None,
                 if cap and p not in captions:
                     captions[p] = str(cap).strip()
             errors.update(obj.get('errors') or {})
+        ready = sum(bool(cap) for cap in captions.values())
+        if ready > reported:
+            reported = ready
+            if on_progress:
+                try:
+                    on_progress(ready, len(paths))
+                except Exception:  # noqa: BLE001 — UI updates must not stop pipe draining
+                    logger.warning('joycaption: progress callback failed', exc_info=True)
 
     def _drain_stdout():
         try:
