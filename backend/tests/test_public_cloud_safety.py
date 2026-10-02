@@ -492,7 +492,7 @@ def test_video_http_refuses_foreign_user_or_dataset_type(host, owner, table):
         assert ct.db.session.get(ct.CloudTrainingRun, run_id) is not None
 
 
-def test_video_http_off_deletes_released_history_and_serves_local_catalog(host):
+def test_video_http_off_can_delete_released_history_and_serve_local_catalog(host):
     activate(host, {'video'})
     from app.models import VideoDataset, CloudTrainingRun
     from app.extensions import db
@@ -507,7 +507,9 @@ def test_video_http_off_deletes_released_history_and_serves_local_catalog(host):
         route = f'/api/video-dataset/{video.id}/train/cloud/run/{run.id}'
     client = host[0].test_client()
     response = client.delete(route)
-    assert response.status_code == 200
+    assert response.status_code == 200, response.get_data(as_text=True)
+    with host[0].app_context():
+        assert db.session.get(CloudTrainingRun, run.id) is None
     assert client.get('/api/video/targets').status_code == 200
 
 

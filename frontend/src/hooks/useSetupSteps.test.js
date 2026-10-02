@@ -413,7 +413,8 @@ const fullCaps = () => ({
   // reachable matters for the Krea node pack: an unreachable ComfyUI's node probe
   // fails open, so "nothing missing" from a stopped ComfyUI must not read as
   // "the pack is installed".
-  comfyui: { dir_valid: true, reachable: true, klein_missing: [], krea_missing: [] },
+  comfyui: { dir_valid: true, reachable: true, klein_missing: [], krea_missing: [],
+    video_studio_reference: { missing_weights: [], missing_nodes: [] } },
 });
 
 test('installAllPlan is empty when everything installable is present', () => {
@@ -500,7 +501,8 @@ test('installCatalog lists every app-installable component, present + available'
 test('installCatalog stays fully available for reinstall when all is green', () => {
   // The menu must never collapse once installed — each item can always be repaired.
   const cat = installCatalog(fullCaps());
-  assert.ok(cat.length > 36 && cat.every((c) => c.available))   // core plus explicitly active independent products; shared OCR appears once.
+  assert.equal(cat.length, 49); // Core plus explicitly active products; shared OCR appears once.
+  for (const c of cat) assert.equal(c.available, true, `${c.action} available to reinstall`);
 });
 
 test('installCatalog marks missing ML extras not-present but still available', () => {

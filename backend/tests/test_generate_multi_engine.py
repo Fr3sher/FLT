@@ -225,36 +225,38 @@ def test_recovery_barrier_refuses_mixed_local_run_before_any_api_dispatch(
     assert client.get(f'/api/dataset/{ds_id}').get_json()['images'] == []
 
 
-def test_aggregate_fanout_cap_refuses_the_whole_run(client, no_threads):
-    """MAX_FANOUT is a per-batch cap: three 25-image entries each pass on their
-    own while the run totals 75. The aggregate check refuses up front instead of
-    creating rows for the first entries and failing on the last."""
+@pytest.mark.parametrize('shot_count,multiplier', [(52, 1), (52, 20)])
+def test_api_batches_have_no_fixed_image_cap(client, no_threads, shot_count, multiplier):
+    """Large batches reach every engine, including each shot's repetitions."""
     ds_id = _dataset_with_ref(client)
-    over = svc.MAX_FANOUT // 2 + 1
     resp = client.post(f'/api/dataset/{ds_id}/generate', json={
         'engine_batches': [
-            {'generator': 'nanobanana', 'variations': _shots(over)},
-            {'generator': 'chatgpt', 'variations': _shots(over)},
+            {'generator': 'nanobanana', 'variations': _shots(shot_count)},
+            {'generator': 'chatgpt', 'variations': _shots(shot_count)},
         ],
-        'multiplier': 1,
+        'multiplier': multiplier,
     })
-    assert resp.status_code == 400
-    assert 'fan-out too large' in resp.get_json()['error']
-    assert not no_threads
-    assert client.get(f'/api/dataset/{ds_id}').get_json()['images'] == []
+    assert resp.status_code == 200, resp.json
+    per_engine = shot_count * multiplier
+    assert resp.json['created'] == per_engine * 2
+    assert resp.json['per_engine'] == {'nanobanana': per_engine, 'chatgpt': per_engine}
+    assert len(no_threads) == 2
+    assert all(len(args[1]) == per_engine for args in no_threads)
+    assert len(client.get(f'/api/dataset/{ds_id}').json['images']) == per_engine * 2
 
 
-def test_in_flight_generations_count_against_the_budget(client, no_threads):
-    """A second run must see the first one's still-pending rows."""
+def test_pending_api_generations_do_not_limit_a_new_batch(client, no_threads):
+    """A second API run is accepted while all of the first run is pending."""
     ds_id = _dataset_with_ref(client)
-    half = svc.MAX_FANOUT // 2
     first = client.post(f'/api/dataset/{ds_id}/generate', json={
-        'engine_batches': [{'generator': 'chatgpt', 'variations': _shots(half)}]})
+        'engine_batches': [{'generator': 'chatgpt', 'variations': _shots(104)}]})
     assert first.status_code == 200
     second = client.post(f'/api/dataset/{ds_id}/generate', json={
-        'engine_batches': [{'generator': 'nanobanana', 'variations': _shots(half + 1)}]})
-    assert second.status_code == 400
-    assert 'in flight' in second.get_json()['error']
+        'generator': 'nanobanana', 'variations': _shots(104)})
+    assert second.status_code == 200, second.json
+    assert second.json['created'] == 104
+    assert len(no_threads) == 2
+    assert len(client.get(f'/api/dataset/{ds_id}').json['images']) == 208
 
 
 def test_empty_engine_batches_is_a_clean_400(client, no_threads):
@@ -312,11 +314,10 @@ def test_image_engine_is_absent_rather_than_wrong(client, no_threads):
         assert svc._image_engine(img) is None
 
 
-def test_capabilities_publishes_the_fanout_cap(client):
-    """The workspace mirrors this number to warn BEFORE the click; it must not
-    hardcode its own copy."""
+def test_capabilities_disables_the_fixed_cap_and_keeps_the_local_setting(client):
+    """Zero also disables the former fixed limit for older frontend builds."""
     caps = client.get('/api/capabilities').get_json()
-    assert caps['max_fanout'] == svc.MAX_FANOUT
+    assert caps['max_fanout'] == 0
     assert caps['max_local_fanout'] == 1000
 
 
@@ -349,14 +350,51 @@ def test_local_runs_queue_three_hundred_images_and_keep_the_configured_budget(cl
     assert len(calls) == 300
 
 
-def test_mixed_local_and_api_batch_keeps_the_paid_guardrail(client, no_threads, monkeypatch):
+@pytest.mark.parametrize('api_count,local_count,multiplier', [(1, 100, 1), (104, 2, 1), (52, 52, 2)])
+def test_mixed_batches_only_count_local_images_against_the_local_budget(
+        client, no_threads, monkeypatch, api_count, local_count, multiplier):
+    from app import config as cfg
+    from app.routes import datasets
     from app.services import klein_edit_helper as klein
     ds_id = _dataset_with_ref(client)
+    cfg.save_config({'comfyui': {'local_queue_limit': local_count * multiplier}})
+    calls = []
+
+    def enqueue(**kwargs):
+        calls.append(kwargs)
+        return f'synthetic-local-{len(calls)}'
+
     monkeypatch.setattr(klein, 'klein_missing_nodes', lambda: [])
     monkeypatch.setattr(klein, 'klein_missing_assets', lambda: [])
+    monkeypatch.setattr(klein, 'enqueue_klein_edit', enqueue)
+    monkeypatch.setattr(datasets, '_autostart_optional_klein', lambda: None)
+    response = client.post(f'/api/dataset/{ds_id}/generate', json={
+        'engine_batches': [
+            {'generator': 'chatgpt', 'variations': _shots(api_count)},
+            {'generator': 'klein', 'variations': _shots(local_count)},
+        ],
+        'multiplier': multiplier,
+    })
+    assert response.status_code == 200, response.json
+    assert response.json['created'] == (api_count + local_count) * multiplier
+    assert response.json['per_engine'] == {
+        'chatgpt': api_count * multiplier, 'klein': local_count * multiplier}
+    assert len(no_threads) == 1 and len(calls) == local_count * multiplier
+
+
+def test_mixed_batch_checks_the_aggregate_local_budget_before_api_dispatch(
+        client, no_threads, monkeypatch):
+    from app import config as cfg
+    from app.services import klein_edit_helper as klein, krea_edit_helper as krea
+    ds_id = _dataset_with_ref(client)
+    cfg.save_config({'comfyui': {'local_queue_limit': 3}})
+    monkeypatch.setattr(klein, 'klein_missing_nodes', lambda: [])
+    monkeypatch.setattr(klein, 'klein_missing_assets', lambda: [])
+    monkeypatch.setattr(krea, 'preflight', lambda: None)
     response = client.post(f'/api/dataset/{ds_id}/generate', json={'engine_batches': [
-        {'generator': 'chatgpt', 'variations': _shots(1)},
-        {'generator': 'klein', 'variations': _shots(100)},
+        {'generator': 'chatgpt', 'variations': _shots(104)},
+        {'generator': 'klein', 'variations': _shots(2)},
+        {'generator': 'krea', 'variations': _shots(2)},
     ]})
     assert response.status_code == 400 and 'fan-out too large' in response.json['error']
     assert not no_threads

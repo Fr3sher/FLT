@@ -96,7 +96,7 @@ Protocol (one JSON line in, one JSON line out — a batch, not a warm worker):
             "model": "microsoft/xclip-base-patch16", "models_root": path|null}
   stdout : {"ok": true, "steps": {"12": [d0, ...]}, "clips": N, "device": "cpu"}
            {"ok": false, "error": "<ExcType>: <message>"}
-  stderr : "[aicheck] …" progress lines; the parent does not parse them.
+  stderr : "[aicheck] done/total" after each attempted group of clips.
 
 STEPS OUT, NOT A SCORE. The child returns the per-adjacent-pair distances and
 stops there. Turning T-1 distances into one number per shot is a product
@@ -313,6 +313,7 @@ def main() -> int:
             # it back in the queue". A whole bank must not be lost to one
             # unreadable JPEG.
             _log(f'[aicheck] group at {start} failed: {type(e).__name__}: {e}')
+            _log(f'[aicheck] {start + len(group)}/{len(clips)}')
             continue
         offset = 0
         for clip, tensor in zip(group, tensors):
@@ -320,6 +321,7 @@ def main() -> int:
             steps[str(clip.get('id'))] = step_distances(
                 features[offset:offset + take])
             offset += take
+        _log(f'[aicheck] {start + len(group)}/{len(clips)}')
     _emit({'ok': True, 'steps': steps, 'clips': len(steps), 'device': 'cpu'})
     return 0
 

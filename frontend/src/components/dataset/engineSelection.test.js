@@ -176,28 +176,29 @@ test('billingEngines names only the lanes that really charge', () => {
   assert.deepEqual(billingEngines(['klein']), []);
 });
 
-test('long local runs use their own cap without increasing API fan-out', () => {
+test('the configured local queue budget counts only the local share', () => {
   const run = { engines: ['klein'], shotCount: 100, mode: 'all', multiplier: 3,
     maxFanout: 60, maxLocalFanout: 1000 };
   assert.equal(generateBlockedReason(run), null);
   assert.match(generateBlockedReason({ ...run, multiplier: 20 }), /Local tools/);
-  assert.match(generateBlockedReason({ ...run, engines: ['klein', 'chatgpt'] }), /60-per-batch/);
-  assert.match(generateBlockedReason({ ...run, maxLocalFanout: undefined }), /60/);
+  assert.equal(generateBlockedReason({ ...run, engines: ['klein', 'chatgpt'] }), null);
+  assert.equal(generateBlockedReason({ ...run, maxLocalFanout: undefined }), null);
+  const mixed = { engines: ['klein', 'nanobanana', 'chatgpt'], shotCount: 104,
+    mode: 'split', multiplier: 2, maxLocalFanout: 70 };
+  assert.equal(generateBlockedReason(mixed), null); // 35 local shots, twice each.
+  assert.match(generateBlockedReason({ ...mixed, maxLocalFanout: 69 }), /70 images/);
+  assert.match(generateBlockedReason({ ...mixed, mode: 'all' }), /208 images/);
 });
 
-test('generateBlockedReason: no silent empty batch, and the server cap is explained', () => {
+test('generateBlockedReason: empty selections are blocked, large batches are accepted', () => {
   assert.match(generateBlockedReason({ engines: [], shotCount: 5, mode: 'split' }), /at least one engine/);
   assert.match(generateBlockedReason({ engines: ['klein'], shotCount: 0, mode: 'split' }), /at least one shot/);
   assert.equal(generateBlockedReason({ engines: ['klein'], shotCount: 5, mode: 'split' }), null);
-  // 25 shots × 3 engines = 75 > 60: refused HERE, before the click, not by a
-  // half-dispatched batch on the server.
-  const over = generateBlockedReason({
-    engines: ['klein', 'nanobanana', 'chatgpt'], shotCount: 25, mode: 'all', maxFanout: 60 });
-  assert.match(over, /75 images/);
-  assert.match(over, /switch to Split/);
-  assert.equal(generateBlockedReason({
-    engines: ['klein', 'nanobanana', 'chatgpt'], shotCount: 25, mode: 'split', maxFanout: 60 }), null);
-  // Unknown cap (older server / probe failed) → never blocks the user.
-  assert.equal(generateBlockedReason({
-    engines: ['klein', 'nanobanana', 'chatgpt'], shotCount: 25, mode: 'all' }), null);
+  for (const mode of ['split', 'all']) {
+    for (const shotCount of [104, 100_000]) {
+      // An old cached capability value must not bring back the fixed cap.
+      assert.equal(generateBlockedReason({ engines: ['nanobanana', 'chatgpt'],
+        shotCount, mode, multiplier: 20, maxFanout: 60, maxLocalFanout: 1000 }), null);
+    }
+  }
 });

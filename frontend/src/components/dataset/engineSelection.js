@@ -227,20 +227,22 @@ export function billingEngines(engines, { free = [] } = {}) {
 
 /** Why Generate is unavailable, or null when it can run. The empty selection is
  *  a real, reachable state (every card unchecked), and it must SAY so instead of
- *  queueing an empty batch. `maxFanout` mirrors the server cap; it is read from
- *  /api/capabilities, never hardcoded here, and 0/undefined disables the check
- *  (the server stays the authority and refuses with its own message). */
-export function generateBlockedReason({ engines, shotCount, mode, multiplier = 1, maxFanout = 0, maxLocalFanout = 0 }) {
+ *  queueing an empty batch. Only the configured local queue budget applies;
+ *  API images have no fixed batch cap. */
+export function generateBlockedReason({ engines, shotCount, mode, multiplier = 1, maxLocalFanout = 0 }) {
   const list = canonicalEngines(engines);
   if (!list.length) return 'Pick at least one engine above';
   if (!Number(shotCount)) return 'Select at least one shot';
-  const total = totalImages(shotCount, list, mode, multiplier);
-  const local = localOnly(list) && maxLocalFanout > 0;
-  const limit = local ? maxLocalFanout : maxFanout;
-  if (limit > 0 && total > limit) {
-    if (local) return `${total} images is over the ${limit}-image local queue limit — select fewer shots or raise it in Settings > Local tools > ComfyUI`;
-    return `${total} images is over the ${limit}-per-batch limit — `
-      + (mode === 'all' ? 'switch to Split, ' : '') + 'uncheck an engine or select fewer shots';
+  const n = Math.max(0, Number(shotCount) || 0);
+  const mult = Math.max(1, Number(multiplier) || 1);
+  const localIds = localEngineIds();
+  const localTotal = list.reduce((sum, engine, i) => {
+    if (!localIds.includes(engine)) return sum;
+    const share = mode === 'all' ? n : Math.floor(n / list.length) + (i < n % list.length ? 1 : 0);
+    return sum + share * mult;
+  }, 0);
+  if (maxLocalFanout > 0 && localTotal > maxLocalFanout) {
+    return `${localTotal} images is over the ${maxLocalFanout}-image local queue limit — select fewer shots or raise it in Settings > Local tools > ComfyUI`;
   }
   return null;
 }

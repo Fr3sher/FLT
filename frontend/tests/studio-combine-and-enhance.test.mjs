@@ -105,6 +105,8 @@ test('the studio sends `combine` instead of the strength axis when the stack is 
   // Send checked weights ALONGSIDE sliders; sliders alone would render one
   // image while the panel promises N.
   assert.match(source, /\.\.\.\(combine \? \{ combine: true \} : \{ strengths \}\)/)
+  // A blocked stack participates in the complete readiness guard.
+  assert.match(source, /const launchBlocked =[\s\S]*?\|\| combineBlocked;/)
   // A blocked stack must never reach the network.
   assert.match(source, /\|\| combineBlocked;/)
   assert.match(source, /if \(!selection\.length \|\| launchBlocked\) return/)

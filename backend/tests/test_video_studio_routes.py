@@ -557,6 +557,7 @@ def _job(app, job_id='job-1', started=None, completed=None, status='completed'):
     import json
     from app.extensions import db
     from app.models import ImageGenerationQueue
+    import json
     row = ImageGenerationQueue(job_id=job_id, user_id='local', status=status,
                                started_at=started, completed_at=completed,
                                job_metadata=json.dumps({'is_video_test': True,

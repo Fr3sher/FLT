@@ -1,4 +1,4 @@
-"""Failed plugin entry points leave no active in-memory contributions at boot."""
+"""Plugin entry points load SDK recipes and roll back failed contributions."""
 from copy import deepcopy
 import json
 import sys
@@ -101,6 +101,27 @@ PARTIAL = '''
         cfg.load_config()
         raise RuntimeError('Registration failed after contributions')
 '''
+
+
+def test_plugin_registers_shared_h3_downloads_with_revision_metadata(host):
+    from app import setup_installer
+    from lds_sdk.h3_downloads import H3_DOWNLOADS
+
+    app, csrf, root = host
+    write_plugin(root / 'plugins', 'sample.models', package='lds_registration_models', code='''
+        from lds_sdk.h3_downloads import H3_DOWNLOADS
+        def register(ctx):
+            for key, spec in H3_DOWNLOADS.items():
+                ctx.register_model_download('sample_' + key, **spec)
+    ''', owns={'install_actions': ['sample_' + key for key in H3_DOWNLOADS]})
+
+    loaded = load_plugins(app, csrf)
+
+    assert loaded.records['sample.models'].state == 'loaded', loaded.records['sample.models'].error
+    for key, source in H3_DOWNLOADS.items():
+        registered = setup_installer.model_download_spec('sample_' + key)
+        assert registered['plugin'] == 'sample.models'
+        assert all(registered[field] == value for field, value in source.items())
 
 
 @pytest.mark.parametrize('preexisting', [False, True])

@@ -265,6 +265,7 @@ function NavBar() {
       <NavLink to="/settings" className={navItemClass} onClick={() => setOpen(false)}>Settings</NavLink>
       <NavLink to="/plugins" className={navItemClass} onClick={() => setOpen(false)}>Plugins</NavLink>
       <NavLink to="/help" className={navItemClass} onClick={() => setOpen(false)}>Help</NavLink>
+      <NavLink to="/help?h=support-the-project" className={navItemClass} onClick={() => setOpen(false)}>Support LDS</NavLink>
       <HelpModeToggle onToggle={() => setOpen(false)} />
     </>
   )
@@ -302,6 +303,7 @@ function NavBar() {
                 <>
                   <NavLink to="/guide" role="menuitem" className={menuItemClass} onClick={close}>Guide</NavLink>
                   <NavLink to="/help" role="menuitem" className={menuItemClass} onClick={close}>Help</NavLink>
+                  <NavLink to="/help?h=support-the-project" role="menuitem" className={menuItemClass} onClick={close}>Support LDS</NavLink>
                   <HelpModeToggle onToggle={close} />
                 </>
               )}

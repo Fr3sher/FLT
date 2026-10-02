@@ -2621,16 +2621,13 @@ def _probe_uncached():
     ollama_skipped = bool(cfg.get('ollama.setup_skipped')) and not _llm_ok
 
 
-    from .services.face_dataset_service import MAX_FANOUT as _max_fanout
     from .generation_limits import local_queue_limit
 
     caps = {
         'configured': cfg.is_configured(),
-        # Images one generation batch may queue at once. Published so the
-        # workspace can say "75 is over the limit" BEFORE the click instead of
-        # letting a multi-engine run be refused after the fact — the server
-        # stays the authority, the UI just mirrors the number it is told.
-        'max_fanout': _max_fanout,
+        # Zero disables the former fixed batch cap, including in older tabs.
+        # Local images still respect the operator's ComfyUI queue setting.
+        'max_fanout': 0,
         'max_local_fanout': local_queue_limit(),
         'engines': {
             'klein': klein_ready,

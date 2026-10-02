@@ -1,5 +1,10 @@
 # FLT - Fresh LoRa Trainer
 
+[![Support upstream on Patreon](https://img.shields.io/badge/Patreon-Support%20upstream-FF424D?style=for-the-badge&logo=patreon&logoColor=white)](https://www.patreon.com/c/Loraperfectgf) [![Join upstream Discord](https://img.shields.io/badge/Discord-Upstream%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/j6hnJBFtXE)
+
+> [!WARNING]
+> **No affiliation with loradataset.com.** That website is not operated, endorsed, or supported by the LoRA Dataset Studio team. Payments made to that service do not support the upstream project. Use this repository for FLT downloads and the links above for upstream support and community channels.
+
 [![CI](https://github.com/Fr3sher/FLT/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Fr3sher/FLT/actions/workflows/ci.yml) [![Join our Discord](https://img.shields.io/discord/1525908170331914411?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/j6hnJBFtXE) [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/perfectgf) [![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/perfectgf)
 
 [Install](#setup--install) · [Documentation](docs/README.md) · [Plugins](#plugins) · [Releases](https://github.com/Fr3sher/FLT/releases) · [Discord](https://discord.gg/j6hnJBFtXE)
@@ -456,7 +461,7 @@ Which of the two serves those features is a single setting (**Settings ▸ Local
 | Hugging Face | Gated weights and optional publishing | [Hugging Face tokens](https://huggingface.co/settings/tokens) |
 | vast.ai | Optional cloud training | [vast.ai console](https://cloud.vast.ai/?ref_id=683073) (referral link — disclosed below) |
 
-> **Affiliate disclosure.** The vast.ai links in this README, in the guides and in the app are referral links. If you create an account through one of them, vast.ai pays this project 3% of what you spend on their platform, for as long as your account lives. It costs you nothing extra — vast.ai's prices are the same either way — and it changes nothing in the app: the cloud lane was vast.ai-only before these links existed and still runs on your own API key, vast.ai bills you directly, and the app sends no data about you anywhere. If you would rather not, use the untagged link: <https://cloud.vast.ai/>
+> **Affiliate disclosure.** The [vast.ai links](https://cloud.vast.ai/?ref_id=683073) in this README, in the guides and in the app are referral links supporting the upstream LoRA Dataset Studio project. They pay upstream 3% of referred users' spending for the lifetime of their account, at no extra cost. Rentals use your own API key and are billed directly by vast.ai. This is separate from optional usage statistics. If you would rather not, use the untagged link: <https://cloud.vast.ai/>
 
 Secrets saved in Settings live in the git-ignored `.env`, never in `config.json` or a commit. Full-model Krea 2 cloud runs use a separate `HF_CLOUD_TOKEN`; a narrowly scoped fine-grained token is recommended, while a global `role=write` token is accepted with a broad-access warning and read-only is rejected. Follow the [cloud-token instructions](docs/guide/settings-reference.md#cloud-training).
 

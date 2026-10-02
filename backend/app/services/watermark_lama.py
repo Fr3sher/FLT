@@ -11,6 +11,7 @@ import json
 import logging
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -150,8 +151,13 @@ def inpaint_watermark(image_path, bbox, timeout: int = 300, device: str = 'cpu')
     return inpaint_watermarks(image_path, [normalized], timeout=timeout, device=device)
 
 
-def inpaint_batch(jobs, *, device: str, timeout: int = 900) -> dict:
-    """Run multiple image jobs in one worker so SimpleLama is loaded only once."""
+def inpaint_batch(jobs, *, device: str, timeout: int = 900,
+                  on_progress=None) -> dict:
+    """Run multiple image jobs in one worker so SimpleLama is loaded only once.
+
+    Optional on_progress(done, total) runs on the stderr reader thread; it
+    must only update thread-safe activity state, never database rows.
+    """
     normalized = []
     for job in jobs or []:
         path = str(job.get('image_path') or '')
@@ -165,12 +171,28 @@ def inpaint_batch(jobs, *, device: str, timeout: int = 900) -> dict:
         return {job['image_path']: (False, err) for job in normalized}
     payload_json = json.dumps({'jobs': normalized, 'device': device})
     try:
-        proc = subprocess.run(infer_env.worker_argv(lama_python(), _SCRIPT),
-                              input=payload_json,
-                              capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=processing_timeout(timeout),
-                              env=infer_env.worker_env(lama_python()),
-                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if on_progress is None:
+            proc = subprocess.run(infer_env.worker_argv(lama_python(), _SCRIPT),
+                                  input=payload_json,
+                                  capture_output=True, text=True, encoding='utf-8',
+                                  errors='replace', timeout=processing_timeout(timeout),
+                                  env=infer_env.worker_env(lama_python()),
+                                  creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        else:
+            from .infer_stream import run_infer_script
+
+            def _on_line(line):
+                match = re.search(r'^\[lama\]\s+(\d+)/(\d+)\b', line)
+                if match:
+                    on_progress(int(match.group(1)), int(match.group(2)))
+
+            stdout, stderr_lines, rc, timed_out = run_infer_script(
+                lama_python(), _SCRIPT, payload_json, timeout, on_line=_on_line)
+            if timed_out:
+                raise subprocess.TimeoutExpired(_SCRIPT, processing_timeout(timeout))
+            proc = subprocess.CompletedProcess(
+                args=[_SCRIPT], returncode=rc, stdout=stdout,
+                stderr='\n'.join(stderr_lines))
     except (subprocess.TimeoutExpired, OSError) as e:
         err = {'kind': 'failed', 'detail': str(e)}
         return {job['image_path']: (False, err) for job in normalized}

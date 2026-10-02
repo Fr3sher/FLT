@@ -63,6 +63,8 @@ export function useReviewLightbox({
       ? { ...im,
           edit_method: state?.edit_method ?? null,
           edit_generation: state?.edit_generation ?? 0,
+          edit_history_count: state?.edit_history_count ?? 0,
+          edit_sequence: state?.edit_sequence ?? 0,
           rotation: state?.rotation ?? 0,
           width: state?.width ?? im.width,
           height: state?.height ?? im.height }

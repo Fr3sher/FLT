@@ -2043,14 +2043,25 @@ the result replaces what the bank shows.
 next to the bank, exactly like the watermark cleaning. **↩ Revert** on the ✂
 Edits panel throws those copies away — for the selection, or for the whole bank —
 and gives you back the image it started from, including any rotation the edit had
-absorbed. In ▶ Review, **↩ Revert edit** does it for the image on screen.
+absorbed. In ▶ Review, **Revert all edits** does it for the image on screen.
+
+**↩ Undo last edit** goes back just one step: after a manual crop and an upscale,
+it removes the upscale and keeps your crop. Repeat to undo earlier edits. The
+Edits panel offers the same action for the selection or for each edited image.
+In Review, **Compare before / after** shows the input of the last edit beside
+the current result, including the cropped input of an upscale.
+
+History is saved for new edits from this update onward; previous versions already
+discarded by older releases cannot be recovered. Retained versions use disk space
+until undone or fully reverted. Missing or changed previous files are reported
+and left unchanged when undoing.
 
 Two consequences worth knowing. First, an edit **clears every measurement taken
 from the old pixels**, so ✨ Score, 📐 Framing and the rest pass over those images
 again — which is the point: a sharpness score read off the shot before you cropped
 it describes an image the bank no longer holds. Second, ✨ Upscale & improve does
-not re-run on an image it has already improved; ↩ Revert is how you ask for a
-second attempt, and it is one click.
+not re-run on an image it has already improved; **↩ Undo last edit** lets you try
+again without losing the crop underneath. **↩ Revert** also remains available.
 
 ## Repaint one detail without regenerating the image
 

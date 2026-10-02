@@ -165,6 +165,8 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
     continuation carries every file of the chosen step, and `_seed_resume_checkpoint`
     ships all of them.
     """
+    if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= 256:
+        raise ValueError('LoRA rank must be an integer between 1 and 256')
     ds = db.session.get(VideoDataset, int(video_dataset_id))
     if ds is None or str(ds.user_id) != str(user_id):
         raise ValueError('video dataset not found')
@@ -195,8 +197,6 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
     # Keep the complete requested sample list in the launch stamp. Each
     # preview adds a full generation on the rented GPU; the UI explains the
     # cost and leaves sampling off by default.
-    if isinstance(rank, bool) or not isinstance(rank, int) or not 1 <= rank <= 256:
-        raise ValueError('LoRA rank must be an integer between 1 and 256')
     if sample_prompts is not None and (not isinstance(sample_prompts, list)
                                        or any(not isinstance(p, str) for p in sample_prompts)):
         raise ValueError('sample_prompts must be a list of text prompts')

@@ -198,7 +198,7 @@ class PluginContext:
 
     def register_model_download(self, key: str, *, url: str, dest, min_free_gb, min_bytes,
                                 license_url: str | None = None, gated: bool = False,
-                                legacy_names=(), expected_bytes: int | None = None,
+                                legacy_names=(), superseded_bytes=(), expected_bytes: int | None = None,
                                 sha256: str | None = None, companions=(), complete=None, extra_roots=None) -> None:
         """A weight file Setup can fetch into ComfyUI's models folder, under the
         core's own downloader (streaming, disk precondition, integrity, the
@@ -209,6 +209,8 @@ class PluginContext:
         an optional product-owned check for a complete stage under extra roots.
         ``extra_roots`` returns product-derived model roots for read-only presence
         checks; the downloader still writes only to the configured base folder.
+        ``superseded_bytes`` identifies obsolete file sizes that Setup must
+        replace with a verified download of the current model revision.
         """
         self._must_own('install_actions', key)
         if self._registry.install_actions.get(key, {}).get('node_pack') is not None:
@@ -237,6 +239,7 @@ class PluginContext:
             'url': url, 'dest': tuple(dest), 'min_free_gb': min_free_gb, 'min_bytes': min_bytes,
             'gated': bool(gated), 'license_url': license_url,
             **({'legacy_names': tuple(legacy_names)} if legacy_names else {}),
+            **({'superseded_bytes': tuple(int(size) for size in superseded_bytes)} if superseded_bytes else {}),
             **({'expected_bytes': int(expected_bytes)} if expected_bytes else {}),
             **({'sha256': sha256} if sha256 else {}),
             **({'companions': tuple(checked)} if checked else {}),

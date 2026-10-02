@@ -48,7 +48,11 @@ test('a running watermark scan can be stopped from its banner', () => {
 });
 
 test('the scan is polled while it runs, or the Stop would never appear', () => {
-  assert.match(hook, /if \(!localActivityRuns\.has\(`watermark:\$\{currentId\}`\) \|\| !currentId\) return undefined;/);
+  assert.match(hook, /const running = \['watermark', 'analyze', 'text'\]/);
+  assert.match(hook, /\.some\(\(kind\) => localActivityRuns\.has\(`\$\{kind\}:\$\{currentId\}`\)\)/);
+  assert.match(hook, /if \(!running \|\| !currentId\) return undefined;/);
+  assert.match(hook, /setInterval\(\(\) => refresh\(currentId\), 2000\)/);
+  assert.match(hook, /clearInterval\(id\)/);
   assert.match(hook, /\}, \[localActivityRuns, currentId, refresh\]\);/);
 });
 

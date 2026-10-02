@@ -1,4 +1,4 @@
-import { registeredDescriptors } from './plugins/registry.js';
+import { registeredDescriptors, routes as pluginRoutes } from './plugins/registry.js';
 // =====================================================================
 //  🎁 What's new — in-app changelog feed (source of truth)
 // =====================================================================
@@ -83,6 +83,89 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
+  {
+    id: '2026-10-02-bank-review-edits',
+    date: '2026-10-02',
+    title: 'See your latest crop while reviewing a bank',
+    blurb: 'Bank Review now refreshes its cached image after a crop or upscale. Undo and re-crop show the matching version while keeping fast image loading.',
+    to: '/bank',
+  },
+  {
+    id: '2026-09-29-video-plugin-startup',
+    date: '2026-09-29',
+    title: 'H3 plugins start correctly again',
+    blurb: 'Plugins using H3 can start again after the latest model update. A startup error no longer prevents enabled plugins from appearing.',
+  },
+  {
+    id: '2026-09-29-unlimited-api-dataset-batches',
+    date: '2026-09-29',
+    title: 'Generate dataset batches beyond 60 images',
+    blurb: 'The fixed 60-image limit is gone for API and mixed-engine dataset batches. Keep all your selected shots in Split or All mode. Local images still follow your configured ComfyUI queue limit, independently of API images.',
+  },
+  {
+    id: '2026-09-29-monthly-project-support',
+    date: '2026-09-29',
+    title: 'Help keep LDS development going',
+    blurb: 'Monthly support on Patreon helps fund continued development, and even €1 a month makes a difference. A small, dismissible message on the datasets page links to Patreon and GitHub Sponsors. Both links are always available under Help & guide → Support LDS.',
+  },
+  {
+    id: '2026-09-29-keep-dataset-comparison',
+    date: '2026-09-29',
+    title: 'Keep comparing as you browse dataset images',
+    blurb: 'Original and reference comparison stay selected when you move between dataset images with the arrows. Each image shows its own comparison; images without a matching original stay in single-image view until a comparison is available again.',
+  },
+  {
+    id: '2026-09-28-bank-edit-history',
+    date: '2026-09-29',
+    title: 'Undo an upscale without losing your crop',
+    blurb: 'Bank now keeps the steps of new crops and upscales. Undo the last edit on one image or a selection, and compare before / after in Review. Earlier edits stay intact; versions discarded before this update cannot be recovered. Suggested by nofaceman on Discord.',
+    to: '/bank',
+  },
+  {
+    id: '2026-09-28-segmented-model-downloads',
+    date: '2026-09-28',
+    title: 'Download large models with parallel connections',
+    blurb: 'Model preparation can now download large files through four parallel connections when the host supports it. Interrupted segments retry automatically, with a single-connection fallback and the same file checks before replacing an installed model.',
+  },
+  {
+    id: '2026-09-28-processing-stage-counters',
+    date: '2026-09-28',
+    title: 'Follow each stage of image processing',
+    blurb: 'Concept captions, text detection and face analysis now show progress while they run, including reused face measurements. Text and watermark cleanup show separate preparation, processing and saving counters, so a prepared batch no longer looks finished.',
+  },
+  {
+    id: '2026-09-28-training-progress-dataset-kind',
+    date: '2026-09-28',
+    title: 'Keep image and video training status separate',
+    blurb: 'An image dataset no longer appears to be training when a video dataset with the same number is running.',
+  },
+  {
+    id: '2026-09-28-joycaption-live-progress',
+    date: '2026-09-28',
+    title: 'Follow JoyCaption progress as images finish',
+    blurb: 'Image Bank and dataset caption counters now advance while JoyCaption is working, instead of staying at zero until the whole batch finishes.',
+  },
+  {
+    id: '2026-09-27-python-picker-close',
+    date: '2026-09-27',
+    title: 'Close the Python picker without making a selection',
+    blurb: 'The Python picker in Setup and Bank now keeps its close button visible above the scrolling list. You can also press Escape or click outside to dismiss it. Thanks to kennhardy for reporting this.',
+    to: '/setup?step=quality',
+  },
+  {
+    id: '2026-09-26-windows-dataset-forge',
+    date: '2026-09-26',
+    title: 'Dataset Forge is available to Windows ZIP installations',
+    blurb: 'Update LDS, then install the free Dataset Forge plugin from Plugins to generate dataset variations locally with Qwen-Image 2.1. Prepare its models in the plugin settings and choose Qwen-Image 2.1 in Generate variations. This release brings the required plugin catalog and engine support to the Windows ZIP update path. Thanks to vitokorn (GitHub #71) for reporting the release gap.',
+    to: '/plugins',
+  },
+  {
+    id: '2026-09-26-cloud-video-release-compatibility',
+    date: '2026-09-26',
+    title: 'Start cloud video training with installed plugins',
+    blurb: 'Cloud video launches work with the default rank on existing Cloud training installations. Update Cloud training from Plugins to use another rank and preserve it when retrying or continuing a run. Released rental records can be removed from history while pending cleanup remains protected.',
+    to: '/plugins',
+  },
   {
     id: '2026-09-23-zzzzzzzz-plugin-engine-settings-save',
     date: '2026-09-23',
@@ -1953,5 +2036,6 @@ export function isValidTarget(to) {
   }
 
   // Everything else must be a bare, param-less top-level route.
-  return TOP_LEVEL_ROUTES.has(path) && !section && !panel;
+  return (TOP_LEVEL_ROUTES.has(path) || pluginRoutes().some(route => route.path === path))
+    && !section && !panel;
 }

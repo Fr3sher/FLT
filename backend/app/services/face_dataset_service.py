@@ -249,28 +249,29 @@ def image_pixel_size(path):
 
 
 _VALID_STATUS = ('pending', 'keep', 'reject', 'failed')
+# Admission budget for rescue/improve operations, not a variation batch limit.
 MAX_FANOUT = 60
 
 
 def fanout_in_flight(dataset_id) -> int:
-    """Generations already queued on this dataset (pending row, no file yet)."""
+    """Local generations already queued on this dataset, excluding API rows."""
     return (FaceDatasetImage.query
             .filter_by(dataset_id=dataset_id, status='pending')
-            .filter(FaceDatasetImage.filename.is_(None)).count())
+            .filter(FaceDatasetImage.filename.is_(None))
+            .filter(FaceDatasetImage.klein_model.is_(None)
+                    | FaceDatasetImage.klein_model.notin_(api_engine_ids())).count())
 
 
 def check_fanout_budget(dataset_id, total, *, generators=()):
-    """Refuse a WHOLE multi-engine batch before exceeding its queue budget.
+    """Enforce the configured local queue budget; API batches have no size cap.
 
-    generate_variations / generate_variations_nanobanana each enforce the cap on
-    their own call, which is enough for a single engine but NOT for a run split
-    across several: three 25-image calls each pass individually while the run
-    totals 75, and the third one would be refused only after the first two had
-    already created rows — a half-dispatched batch. The multi-engine route calls
-    this with the aggregate BEFORE dispatching anything, so the run is all-or-
-    nothing. The per-call checks stay as defense in depth."""
+    The route checks the aggregate local share before dispatching any engine,
+    so a mixed run cannot bill its API share before a local budget refusal.
+    Per-engine local calls repeat the check for direct service callers."""
+    if not generators or not all(g in local_engine_ids() for g in generators):
+        return
     from ..generation_limits import local_queue_limit
-    limit = local_queue_limit() if generators and all(g in local_engine_ids() for g in generators) else MAX_FANOUT
+    limit = local_queue_limit()
     total = int(total)
     if total > limit:
         raise ValueError(f'fan-out too large ({total} > {limit})')
@@ -7515,14 +7516,16 @@ def _caption_write_blocked(img, *, force, spare_asserted, field='caption'):
 
 def _cc_store_joy_drafts(ds, refine_targets, remaining, jc_errors, concept_desc,
                          force, spare_asserted, token, report, outcome):
-    """Forced-JoyCaption store: mechanical scrub of the Joy drafts, refused
-    images counted as handled. Moved verbatim from _caption_concept; returns
-    the (written, vanished, spared) deltas."""
+    """Store mechanically scrubbed Joy drafts and report refused images.
+    Live progress belongs to the draft batch; returns the (written,
+    vanished, spared) deltas without counting those drafts twice."""
     n = 0
     vanished = 0
     spared = 0
+    if dataset_activity.cancel_requested(ds.id):
+        # Unreached images are not refusals when Stop ended the draft batch.
+        remaining = [(image_id, p) for image_id, p in remaining if p in jc_errors]
     if remaining:
-        dataset_activity.bump(token, len(remaining))
         _record_caption_skips(outcome, remaining, jc_errors)
         logger.info('caption concept: %d image(s) refused by JoyCaption, first '
                     'reason: %s', len(remaining),
@@ -7531,7 +7534,6 @@ def _cc_store_joy_drafts(ds, refine_targets, remaining, jc_errors, concept_desc,
     for image_id, p, joycap in refine_targets:
         if dataset_activity.cancel_requested(ds.id):
             break   # graceful stop at an image boundary (see caption_images)
-        dataset_activity.bump(token)
         img = _live_image_row(image_id)
         if img is None:      # deleted while the pass ran
             vanished += 1
@@ -7566,7 +7568,6 @@ def _cc_refine_joy_drafts(ds, refine_targets, describe, leak_re, cap_prompt,
     for image_id, p, joycap in refine_targets:
         if dataset_activity.cancel_requested(ds.id):
             break   # graceful stop at an image boundary (see caption_images)
-        dataset_activity.bump(token)
         with open(p, 'rb') as fh:
             data = fh.read()
         refined = ''
@@ -7621,9 +7622,11 @@ def _cc_refine_joy_drafts(ds, refine_targets, describe, leak_re, cap_prompt,
         img = _live_image_row(image_id)
         if img is None:
             vanished += 1
+            dataset_activity.bump(token)
             continue
         if _caption_write_blocked(img, force=force, spare_asserted=spare_asserted):
             spared += 1
+            dataset_activity.bump(token)
             continue
         if not _usable_caption(final):
             # Refine AND direct both unusable → fall back to the Joy draft (clean
@@ -7642,12 +7645,14 @@ def _cc_refine_joy_drafts(ds, refine_targets, describe, leak_re, cap_prompt,
                     db.session.commit()
                 logger.info('caption concept: no usable caption for image %s '
                             '-> left blank', image_id)
+                dataset_activity.bump(token)
                 continue
         caption_origin.stamp(img, _cap_caption(_with_camera_pose_phrase(img, final)),
                              origin)
         db.session.commit()
         n += 1
         _writer(report, writer)
+        dataset_activity.bump(token)
     return n, vanished, spared
 
 
@@ -7662,7 +7667,6 @@ def _cc_direct_captions(ds, remaining, describe, leak_re, cap_prompt,
     for image_id, p in remaining:
         if dataset_activity.cancel_requested(ds.id):
             break   # graceful stop at an image boundary (see caption_images)
-        dataset_activity.bump(token)
         with open(p, 'rb') as fh:
             data = fh.read()
         cap = describe(
@@ -7677,9 +7681,11 @@ def _cc_direct_captions(ds, remaining, describe, leak_re, cap_prompt,
         img = _live_image_row(image_id)
         if img is None:
             vanished += 1
+            dataset_activity.bump(token)
             continue
         if _caption_write_blocked(img, force=force, spare_asserted=spare_asserted):
             spared += 1
+            dataset_activity.bump(token)
             continue
         if _usable_caption(cap):
             caption_origin.stamp(img, _cap_caption(_with_camera_pose_phrase(img, cap)),
@@ -7693,6 +7699,7 @@ def _cc_direct_captions(ds, remaining, describe, leak_re, cap_prompt,
                 db.session.commit()
             logger.info('caption concept: no usable direct caption for image '
                         '%s -> left blank', image_id)
+        dataset_activity.bump(token)
     return n, vanished, spared
 
 
@@ -7752,10 +7759,14 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
             if is_available():
                 dataset_activity.progress(
                     token, detail=f'Loading JoyCaption model and captioning {len(todo)} images…')
+                joy_detail = ('Drafting concept captions with JoyCaption…'
+                              if backend == 'auto' else 'Captioning with JoyCaption…')
                 jc = caption_images_joycaption(
                     [p for _, p in todo], prompt=cap_prompt, activity_token=token,
                     should_cancel=lambda: dataset_activity.cancel_requested(ds.id),
-                    errors_out=jc_errors)
+                    errors_out=jc_errors,
+                    on_progress=lambda ready, total: dataset_activity.progress(
+                        token, done=ready, detail=joy_detail))
             elif backend == 'joycaption':
                 raise RuntimeError('JoyCaption backend is not available - check the ai-toolkit folder in Settings')
         except RuntimeError:
@@ -7784,10 +7795,22 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
         n += jn
         vanished += jv
         spared += js
+        # Live draft progress already counted successes. Refused images are
+        # handled too, unless Stop left them unreached; never bump both here
+        # and while storing the same draft.
+        if not dataset_activity.cancel_requested(ds.id):
+            dataset_activity.progress(token, done=len(todo))
         return n
     # 2b) Qwen passes ('auto'/'ollama'): refine Joy drafts, direct-caption the rest, all
     #     enforced. One model load -> unload once at the end.
     if refine_targets or remaining:
+        if dataset_activity.cancel_requested(ds.id):
+            return n
+        # Drafts are inputs to this phase, not completed concept captions.
+        dataset_activity.progress(
+            token, done=0, total=len(refine_targets) + len(remaining),
+            detail='Refining concept captions…' if refine_targets
+            else 'Captioning concept images…')
         try:
             from .vision_llm import describe_image as describe_image_ollama, unload_vision_model
         except ImportError:
@@ -7981,7 +8004,9 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                     jc = caption_images_joycaption(
                         [p for _, p in todo], prompt=cap_prompt, activity_token=token,
                         should_cancel=lambda: dataset_activity.cancel_requested(dataset_id),
-                        errors_out=jc_errors)
+                        errors_out=jc_errors,
+                        on_progress=lambda ready, total: dataset_activity.progress(
+                            token, done=ready))
                 elif backend == 'joycaption':
                     # Explicit choice, explicit failure: a user who forced 'joycaption' in
                     # Settings must be told WHY (the exact missing deps + pip command),
@@ -8003,12 +8028,10 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                     img = _live_image_row(image_id)
                     if img is None:      # deleted while the batch ran
                         vanished += 1
-                        dataset_activity.bump(token)
                         continue
                     if _caption_write_blocked(img, force=force,
                                               spare_asserted=spare_asserted):
                         spared += 1
-                        dataset_activity.bump(token)
                         continue
                     cleaned = cleaner(cap) or cap
                     caption_origin.stamp(
@@ -8017,12 +8040,12 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                     db.session.commit()
                     n += 1
                     _writer(report, CAPTION_WRITER_JOYCAPTION)
-                    dataset_activity.bump(token)   # this image is captioned (done)
                 else:
                     still.append((image_id, p))
             remaining = still
             dataset_activity.progress(
-                token, detail=f'JoyCaption finished; {len(remaining)} image(s) remaining…')
+                token, done=n + vanished + spared,
+                detail=f'JoyCaption finished; {len(remaining)} image(s) remaining…')
             if backend == 'joycaption':  # Forced JoyCaption backend: no Ollama fallback.
                 # These images are HANDLED — refused, but handled: nothing else will
                 # look at them in this run. Leaving them uncounted is what made a
@@ -8172,6 +8195,7 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
         cap_prompt = _with_caption_instructions(cap_prompt, (extra_instructions or '').strip())
     ollama_model = (ollama_model or '').strip() or None
     done = 0
+    joycaption_ready = 0
     if outcome is not None:
         for key in ('fenced', 'unanswered', 'failed'):
             outcome.setdefault(key, 0)
@@ -8203,7 +8227,13 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
             on_caption(p, cap, engine)
         done += 1
         if progress:
-            progress(done, total)
+            progress(max(done, joycaption_ready), total)
+
+    def _joycaption_progress(ready, _total):
+        nonlocal joycaption_ready
+        joycaption_ready = ready
+        if progress:
+            progress(ready, total)
 
     remaining = list(paths)
     # 1) JoyCaption batch (single 8B NF4 load via the ai-toolkit venv) — skipped when
@@ -8215,7 +8245,8 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
             from .joycaption import availability, caption_images_joycaption, is_available
             if is_available():
                 jc = caption_images_joycaption(remaining, prompt=cap_prompt,
-                                               should_cancel=should_cancel)
+                                               should_cancel=should_cancel,
+                                               on_progress=_joycaption_progress)
             elif backend == 'joycaption':
                 raise RuntimeError(
                     'JoyCaption backend is not available — '
@@ -9683,14 +9714,24 @@ def detect_text(user_id, dataset_id, *, rescan=False, should_cancel=None,
                 if img is None:
                     continue
                 path = _img_path(img)
-                if not os.path.exists(path):
+                if not path or not os.path.exists(path):
                     missing += 1     # counted, not silently absent from 'checked'
                     continue
                 frames.append({'key': str(image_id), 'path': path})
-            done += len(chunk_ids)
+            # Missing/deleted rows are handled immediately; OCR advances only
+            # as its worker finishes each frame, not when a chunk is queued.
+            done += len(chunk_ids) - len(frames)
+            dataset_activity.progress(token, done=done)
             if frames:
+                frame_count = len(frames)
+
+                def _on_text_progress(ready, total, offset=done, count=frame_count):
+                    # Called by the reader thread: only the locked registry.
+                    dataset_activity.progress(token, done=offset + min(max(0, ready), count))
+
                 boxes_by_key = read_text_boxes(frames, should_stop=should_cancel,
-                                               score_min=text_score_min())
+                                               score_min=text_score_min(),
+                                               on_progress=_on_text_progress)
                 for frame in frames:
                     image_id = int(frame['key'])
                     if frame['key'] not in boxes_by_key:
@@ -9739,6 +9780,12 @@ def detect_text(user_id, dataset_id, *, rescan=False, should_cancel=None,
                         counts['none'] += 1
                     counts['checked'] += 1
                     db.session.commit()
+                if should_cancel and should_cancel():
+                    stopped = True
+                    # Keep the worker's last completed count. Absent results
+                    # can be unreached frames, so never finish the whole chunk.
+                    break
+                done += len(frames)
             dataset_activity.progress(token, done=done)
     finally:
         db.session.commit()
@@ -9883,7 +9930,9 @@ def _wm_route_images(user_id, row_ids, token, method, allow_crop, lama_ok,
             _discard_staged_watermark_edit(staged)
 
     for i, image_id in enumerate(row_ids):
-        dataset_activity.progress(token, done=i + 1)
+        # This phase also runs direct crops/Klein edits. Only the preceding
+        # images are handled; the current image may still take a full render.
+        dataset_activity.progress(token, done=i)
         img = _live_image_row(image_id)
         if img is None:      # deleted while the pass ran
             vanished += 1
@@ -10014,11 +10063,12 @@ def _wm_route_images(user_id, row_ids, token, method, allow_crop, lama_ok,
             else:  # 'review' -> stays 'detected' so the badge/count keep flagging it
                 out['needs_review'] += 1
         db.session.commit()
+    dataset_activity.progress(token, done=len(row_ids))
     return lama_pending, text_pending, error, vanished
 
 
 def _wm_text_fill_tail(dataset_id, text_pending, lama_pending, out, error,
-                       vanished):
+                       vanished, token=None):
     """The bubble-aware filler's batch, between routing and the LaMa tail.
 
     One child over every text-flagged staged copy: balloons are emptied
@@ -10032,15 +10082,21 @@ def _wm_text_fill_tail(dataset_id, text_pending, lama_pending, out, error,
     from . import text_fill
     if not text_pending:
         return error, vanished
+    dataset_activity.progress(
+        token, done=0, total=len(text_pending), detail='Filling text regions…')
     try:
         fill_results = text_fill.fill_batch(
             [{'image_path': staged, 'regions': regions}
-             for _pid, _live, staged, regions in text_pending])
+             for _pid, _live, staged, regions in text_pending],
+            on_progress=lambda done, total: dataset_activity.progress(
+                token, done=done))
     except RuntimeError as fill_exc:
         logger.warning('watermark: text filler unavailable for dataset %s '
                        '(%s), falling back to rectangles', dataset_id, fill_exc)
         fill_results = {}
-    for pending_id, live_path, staged_path, regions in text_pending:
+    dataset_activity.progress(token, done=0, detail='Saving text cleanup results…')
+    for i, (pending_id, live_path, staged_path, regions) in enumerate(text_pending):
+        dataset_activity.progress(token, done=i)
         res = fill_results.get(staged_path)
         if res is None:
             lama_pending.append((pending_id, live_path, staged_path,
@@ -10072,10 +10128,11 @@ def _wm_text_fill_tail(dataset_id, text_pending, lama_pending, out, error,
             error = {'kind': 'failed',
                      'detail': 'could not promote staged watermark edit'}
         db.session.commit()
+    dataset_activity.progress(token, done=len(text_pending))
     return error, vanished
 
 
-def _wm_lama_tail(dataset_id, lama_pending, device, out, error, vanished):
+def _wm_lama_tail(dataset_id, lama_pending, device, out, error, vanished, token=None):
     """The LaMa batch tail, moved verbatim: one call for a single staged
     image (manual regions vs single bbox), one batch otherwise; every
     result is promoted onto a re-fetched LIVE row (the pass runs for
@@ -10084,6 +10141,10 @@ def _wm_lama_tail(dataset_id, lama_pending, device, out, error, vanished):
     disposable copy. Returns the updated (error, vanished)."""
     from . import watermark_lama
     if lama_pending:
+        device_label = 'GPU' if device == 'cuda' else 'CPU'
+        dataset_activity.progress(
+            token, done=0, total=len(lama_pending),
+            detail=f'Cleaning watermarks with LaMa on {device_label}…')
         try:
             if len(lama_pending) == 1:
                 _pid, live_path, staged_path, boxes, manual = lama_pending[0]
@@ -10101,8 +10162,12 @@ def _wm_lama_tail(dataset_id, lama_pending, device, out, error, vanished):
                     [{'image_path': staged_path, 'bboxes': boxes}
                      for _pid, _live_path, staged_path, boxes, _manual in lama_pending],
                     device=device,
+                    on_progress=lambda done, total: dataset_activity.progress(
+                        token, done=done),
                 )
-            for pending_id, live_path, staged_path, _boxes, manual in lama_pending:
+            dataset_activity.progress(token, done=0, detail='Saving watermark cleanup results…')
+            for i, (pending_id, live_path, staged_path, _boxes, manual) in enumerate(lama_pending):
+                dataset_activity.progress(token, done=i)
                 img = _live_image_row(pending_id)
                 if img is None:
                     # Deleted while the batch ran: there is no row left to
@@ -10139,7 +10204,9 @@ def _wm_lama_tail(dataset_id, lama_pending, device, out, error, vanished):
         except Exception as exc:  # engine/process faults must not leak a staged edit
             logger.exception('watermark: LaMa execution failed for dataset %s', dataset_id)
             error = {'kind': 'failed', 'detail': f'watermark inpaint failed: {exc}'}
-            for pending_id, _live_path, _staged_path, _boxes, manual in lama_pending:
+            dataset_activity.progress(token, done=0, detail='Recording watermark cleanup failures…')
+            for i, (pending_id, _live_path, _staged_path, _boxes, manual) in enumerate(lama_pending):
+                dataset_activity.progress(token, done=i)
                 img = _live_image_row(pending_id)
                 if img is None:
                     vanished += 1
@@ -10154,6 +10221,7 @@ def _wm_lama_tail(dataset_id, lama_pending, device, out, error, vanished):
             # master remains exactly where it was.
             for _pid, _live_path, staged_path, _boxes, _manual in lama_pending:
                 _discard_staged_watermark_edit(staged_path)
+        dataset_activity.progress(token, done=len(lama_pending))
     return error, vanished
 
 
@@ -10245,15 +10313,15 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
     device_label = 'GPU' if device == 'cuda' else 'CPU'
     token = dataset_activity.begin(
         dataset_id, 'watermark_clean', total=len(rows),
-        detail=f'Cleaning watermarks on {device_label}…')
+        detail=f'Preparing cleanup and applying direct edits on {device_label}…')
     try:
         lama_pending, text_pending, error, vanished = _wm_route_images(
             user_id, row_ids, token, method, allow_crop, lama_ok,
             klein_ok, klein_model, out)
         error, vanished = _wm_text_fill_tail(
-            dataset_id, text_pending, lama_pending, out, error, vanished)
+            dataset_id, text_pending, lama_pending, out, error, vanished, token=token)
         error, vanished = _wm_lama_tail(
-            dataset_id, lama_pending, device, out, error, vanished)
+            dataset_id, lama_pending, device, out, error, vanished, token=token)
         if vanished:
             logger.info('watermark clean: %s image(s) were deleted while the pass '
                         'ran, skipped', vanished)
@@ -12433,8 +12501,6 @@ def generate_variations_nanobanana(app, user_id, dataset_id, variations, multipl
     total = len(variations) * mult
     if total == 0:
         raise ValueError('no variations selected')
-    if total > MAX_FANOUT:
-        raise ValueError(f'fan-out too large ({total} > {MAX_FANOUT})')
     # Main plus additional references: Nano Banana uses all for identity
     # consistency. One reference preserves historical behavior.
     ref_bytes = _all_ref_bytes(ds)
