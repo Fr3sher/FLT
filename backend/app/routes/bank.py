@@ -24,6 +24,7 @@ from ._common import _map_error, _require_no_stalled_comfyui
 from .datasets import _improve_engine_error
 from ..services import bank_filter_translator as translator
 from ..services import image_bank_service as banks
+from ..usage_statistics import record_operation_error
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ def _busy(e):
     It matters that this rides on the 409 itself: the refusal often arrives
     BEFORE the first 2 s progress poll, so at that instant the response body is
     the only thing that knows which pass is in the way."""
+    record_operation_error(e)
     return jsonify({'error': str(e), 'busy_kind': e.kind}), 409
 
 
@@ -52,6 +54,11 @@ def _busy(e):
 def _busy_after_service_fence(e):
     """Map service-level lease races to the same 409 as the advisory guard."""
     return _busy(e)
+
+
+@bp.errorhandler(banks.BankSourceReadOnly)
+def _source_read_only(e):
+    return jsonify({'error': str(e), 'code': 'bank_source_read_only'}), 403
 
 
 _BUSY_WRITE_EXEMPT_ENDPOINTS = frozenset({
@@ -129,15 +136,19 @@ def banks_list():
 @bp.post('/bank/create')
 def bank_create():
     data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'request body must be an object'}), 400
     try:
         bank, added = banks.create_bank(LOCAL_USER, data.get('name'),
-                                        data.get('folder'))
+                                        data.get('folder'),
+                                        read_only=data.get('read_only', False))
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        return _map_error(e)
     # Nested folders mean two banks over the same files: harmless while triaging
     # (statuses are per bank), but 🗑 Delete rejected in one amputates the other.
     # Say it now, once, rather than at the destructive click only.
     return jsonify({'ok': True, 'id': bank.id, 'added': added,
+                    'read_only': bool(bank.read_only),
                     'overlaps': banks.overlapping_banks(LOCAL_USER, bank.id)})
 
 
@@ -252,6 +263,17 @@ def bank_upload_folder_complete():
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'id': bank.id, 'added': added,
                     'overlaps': banks.overlapping_banks(LOCAL_USER, bank.id)})
+
+
+@bp.patch('/bank/<int:bank_id>/read-only')
+def bank_read_only(bank_id):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get('read_only'), bool):
+        return jsonify({'error': 'read_only must be a boolean'}), 400
+    result = banks.set_read_only(LOCAL_USER, bank_id, data['read_only'])
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **result})
 
 
 @bp.post('/bank/from-dataset')

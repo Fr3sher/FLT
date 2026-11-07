@@ -11,6 +11,10 @@ export const ACTION_TOPICS = [
   action('action-store-install-selection', 'Install several plugins together',
     ['plugins', 'store', 'install', 'batch', 'selection', 'one restart', 'docker'],
     '/plugins', 'getting-started', 'the-setup-wizard'),
+  action('action-patreon-access', 'Connect Patreon for LDS updates and exclusive plugins',
+    ['patreon', 'membership', 'lds member', 'members', 'exclusive plugins', 'updates',
+     'update lds', 'connect patreon', 'join', 'disconnect'],
+    '/plugins', 'getting-help', 'support-the-project'),
   // ---- Action topics (kind 'action') -------------------------------------
   action('action-edit-reference', 'Edit the reference photo',
     ['edit', 'reference', 'prompt', 'chatgpt', 'nano banana', 'openrouter', 'klein',
@@ -332,9 +336,11 @@ export const ACTION_TOPICS = [
 
 
 
-  action('action-import-from-bank', 'Import images from a bank',
+  action('action-import-from-bank', 'Import images from a bank or another dataset',
     ['bank', 'import from bank', 'promote', 'triaged', 'kept images', 'add images',
-     'copy from bank', 'reuse bank', 'nothing to promote', 'already imported'],
+     'copy from bank', 'reuse bank', 'nothing to promote', 'already imported',
+     'import from dataset', 'copy from another dataset', 'reuse dataset',
+     'pick images', 'one by one', 'select images'],
     '/datasets?section=add', 'using-the-app', 'the-image-bank-triage-a-big-folder'),
   action('action-edit-identity-prompt', 'Edit the identity instruction (Extra refs ✎)',
     ['identity', 'instruction', 'prompt', 'extra refs', 'multiple references', 'identity lock',

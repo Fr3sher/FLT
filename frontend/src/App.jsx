@@ -1,5 +1,5 @@
 import PluginSlot from './plugins/PluginSlot.jsx'
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useState, useSyncExternalStore } from 'react'
 import { HashRouter, Routes, Route, Navigate, Outlet, NavLink, useLocation } from 'react-router'
 import { Archive, ArrowUp, Dumbbell, FlaskConical, FolderOpen, Images, Loader2, Menu, Settings, X } from 'lucide-react'
 import { apiFetch, postJson } from './api/fetchClient'
@@ -31,7 +31,8 @@ const CloudRunsPage = lazyPage(() => import('./pages/CloudRunsPage'))
 const GalleryPage = lazyPage(() => import('./pages/GalleryPage'))
 const PluginsPage = lazyPage(() => import('./pages/PluginsPage'))
 const PluginSettingsPage = lazyPage(() => import('./pages/PluginSettingsPage'))
-import { navItems as pluginNavItems, routes as pluginRoutes } from './plugins/registry'
+import { navItems as pluginNavItems, routes as pluginRoutes, subscribePlugins, pluginRevision } from './plugins/registry'
+import { watchMembership } from './plugins/membership.js'
 import { lazyRoute } from './plugins/lazyRoute'
 import UnavailablePluginPage from './pages/UnavailablePluginPage.jsx'
 
@@ -51,7 +52,9 @@ import { useMediaQuery } from './hooks/useMediaQuery'
 import { versionLabel } from './utils/versionLabel'
 import { useTrainingActivity } from './hooks/useTrainingActivity'
 import { activityLabel } from './utils/trainingActivity'
-import { installMode } from './components/settings/updateStatus'
+import { installMode, membersUpdateAvailable, patreonCheckFailure, updateCheckFeedback } from './components/settings/updateStatus'
+import { settingsLinkHref } from './components/common/settingsLinkHref'
+import { waitForRelaunchedServer } from './utils/serverRestart'
 import { UsageStatisticsProvider } from './usage/UsageStatisticsContext'
 import UsageStatisticsBanner from './usage/UsageStatisticsBanner'
 
@@ -86,8 +89,20 @@ function CheckUpdatesButton() {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   const [available, setAvailable] = useState(false)
+  const [members, setMembers] = useState(null)
   useEffect(() => {
     let alive = true
+    const onPublicStatus = (event) => setAvailable(!!event.detail?.update_available)
+    const onPatreonStatus = (event) => {
+      const status = event.detail
+      // A failed refresh must not erase a previously confirmed update.
+      if (!status || !['ready', 'not_configured'].includes(status.status)) return
+      const next = membersUpdateAvailable(status) ? status : null
+      setMembers(next)
+      window.dispatchEvent(new CustomEvent('lds:members-update', { detail: next }))
+    }
+    window.addEventListener('lds:update-available', onPublicStatus)
+    window.addEventListener('lds:patreon-status', onPatreonStatus)
     const autoCheck = async () => {
       try {
         const d = await apiFetch('/api/update/check?auto=1', { background: true })
@@ -100,49 +115,98 @@ function CheckUpdatesButton() {
           window.dispatchEvent(new CustomEvent('lds:update-available', { detail: d }))
         }
       } catch { /* offline — the manual button stays available */ }
+      const m = await membersUpdate()
+      if (!alive) return
+      window.dispatchEvent(new CustomEvent('lds:patreon-status', { detail: m }))
     }
     autoCheck()
     // 1 h: the project ships several times a day right now — 6 h let a tab
     // sit stale most of a working day. Server-side TTL matches.
     const t = setInterval(autoCheck, 3600 * 1000)
-    return () => { alive = false; clearInterval(t) }
+    return () => {
+      alive = false; clearInterval(t)
+      window.removeEventListener('lds:update-available', onPublicStatus)
+      window.removeEventListener('lds:patreon-status', onPatreonStatus)
+    }
   }, [])
   const check = async () => {
     if (busy) return
     setBusy(true)
     try {
       const d = await apiFetch('/api/update/check?force=1')
+      const m = await membersUpdate(true)
       setAvailable(!!d?.update_available)
       window.dispatchEvent(new CustomEvent('lds:update-available', { detail: d }))
+      if (membersUpdateAvailable(m)) sessionStorage.removeItem('membersUpdateBannerDismissed')
+      window.dispatchEvent(new CustomEvent('lds:patreon-status', { detail: m }))
       if (d?.update_available) {
         sessionStorage.removeItem('updateBannerDismissed')     // re-show even if dismissed
-        toast.success(`Update available — v${d.latest || d.remote_sha || 'new'}`)
-      } else if (d?.ok) {
-        // On a git checkout the release number alone is misleading — see versionLabel.
-        toast.info(`You're up to date — ${versionLabel(d)}`)
-      } else {
-        toast.error(d?.reason || 'Could not check for updates.')
       }
+      const feedback = updateCheckFeedback(d, m)
+      toast[feedback.type](feedback.message)
     } catch (e) {
       toast.error(e?.message || 'Update check failed.')
     } finally {
       setBusy(false)
     }
   }
+  const lit = available || !!members
   return (
     <button type="button" onClick={check} disabled={busy}
-      title={available ? 'Update available — click to review' : 'Check for updates'}
-      className={`${NAV_ITEM_BASE} relative ${available
+      title={lit ? 'Update available — click to review' : 'Check for updates'}
+      className={`${NAV_ITEM_BASE} relative ${lit
         ? 'text-emerald-300 hover:text-emerald-200'
         : 'text-content-muted hover:text-content'} hover:bg-surface-raised disabled:opacity-50`}>
       {busy
         ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
         : <ArrowUp aria-hidden="true" className="h-4 w-4" />}
-      {available && (
+      {lit && (
         <span aria-hidden className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400" />
       )}
-      <span className="sr-only">{available ? 'Update available' : 'Check for updates'}</span>
+      <span className="sr-only">{lit ? 'Update available' : 'Check for updates'}</span>
     </button>
+  )
+}
+
+/** The members version comes through the Patreon channel, which
+ * /api/update/check cannot see: a member who had just linked Patreon on a
+ * public install was never told it existed. Preserve the full result so an
+ * unreachable channel cannot be mistaken for "no update". */
+async function membersUpdate(force = false) {
+  try {
+    return await apiFetch(`/api/update/patreon${force ? '?force=1' : ''}`, { background: true })
+  } catch (error) { return patreonCheckFailure(error) }
+}
+
+/** Says that the members version exists. Settings › Updates installs it: its
+ * card owns the download, the progress and the restart. */
+function MembersUpdateBanner() {
+  const [info, setInfo] = useState(null)
+  useEffect(() => {
+    const onFound = (e) => setInfo(e.detail || null)
+    window.addEventListener('lds:members-update', onFound)
+    return () => window.removeEventListener('lds:members-update', onFound)
+  }, [])
+  const version = info?.release?.version || ''
+  if (!info || sessionStorage.getItem('membersUpdateBannerDismissed') === version) return null
+  return (
+    <div className="mx-auto max-w-5xl px-4 pt-3">
+      <div role="status"
+        className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-sm">
+        <span aria-hidden>⬆</span>
+        <span className="text-content">
+          LDS members version <span className="font-semibold">{version || 'update'}</span> is available.
+        </span>
+        <a href={settingsLinkHref('maintenance', 'settings-updates')}
+          className="rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-gray-950 transition-transform hover:-translate-y-px">
+          Install it from Updates
+        </a>
+        <button type="button"
+          onClick={() => { sessionStorage.setItem('membersUpdateBannerDismissed', version); setInfo(null) }}
+          aria-label="Dismiss members update notice"
+          className="ml-auto px-1.5 text-content-subtle hover:text-content">✕</button>
+      </div>
+    </div>
   )
 }
 
@@ -376,17 +440,11 @@ function UpdateBanner() {
     return () => window.removeEventListener('lds:update-available', onFound)
   }, [])
 
-  // Poll /api/health until the re-execed server answers, then hard-reload so the
-  // new frontend/dist loads. Mirrors the Settings "Updates" card.
+  // Wait for the re-execed server (not the old process still answering), then
+  // hard-reload so the new frontend/dist loads. Mirrors the Settings "Updates" card.
   const waitForHealthAndReload = async () => {
-    for (let i = 0; i < 120; i += 1) {
-      await new Promise((r) => setTimeout(r, 1000))
-      try {
-        const res = await fetch('/api/health', { cache: 'no-store' })
-        if (res.ok) { window.location.reload(); return }
-      } catch { /* still restarting — keep waiting */ }
-    }
-    setApplying(false); setPhase('')          // gave up after ~2 min
+    if (await waitForRelaunchedServer()) { window.location.reload(); return }
+    setApplying(false); setPhase('')          // gave up after 15 min
   }
 
   // One-click pull + restart, same backend action as the Settings card. A packaged
@@ -531,6 +589,7 @@ function Shell() {
       <SetupHealthNotice />
       <ComfyRecoveryBanner />
       <UpdateBanner />
+      <MembersUpdateBanner />
       <UsageStatisticsBanner />
       <main id="main-content" tabIndex={-1}
         className={boardRoute
@@ -557,6 +616,8 @@ function Shell() {
 }
 
 function AppInner() {
+  useSyncExternalStore(subscribePlugins, pluginRevision, pluginRevision)
+  useEffect(() => watchMembership(), [])
   const toast = useToast()
   useEffect(() => { setToastRef(toast) }, [toast])
   return (
@@ -603,6 +664,7 @@ function AppInner() {
             {['/canvas', '/video-bank', '/video-dataset/:id'].filter(path => !pluginRoutes().some(route => route.path === path)).map(path => (
               <Route key={path} path={path} element={<UnavailablePluginPage />} />
             ))}
+            <Route path="/p/:pluginId/*" element={<UnavailablePluginPage />} />
             <Route path="*" element={<Navigate to="/datasets" replace />} />
           </Route>
         </Routes>

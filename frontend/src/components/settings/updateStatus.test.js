@@ -14,7 +14,48 @@ import {
   zipUpdateHeadline,
   progressPercent,
   progressLabel,
+  patreonCheckFailure,
+  patreonUpdateView,
+  publicReleaseNotice,
+  membersUpdateAvailable,
+  updateCheckFeedback,
+  latestUpdateLabel,
 } from './updateStatus.js';
+
+test('a newer Patreon build takes precedence over a current public channel', () => {
+  const current = { ok: true, channel: 'patreon', current: '2026.10.24.8', update_available: false };
+  const members = { status: 'ready', on_channel: true, entitled: true, can_apply: true,
+    update_available: true, release: { version: '2026.10.30.1' } };
+  const feedback = updateCheckFeedback(current, members);
+  assert.equal(feedback.type, 'success');
+  assert.match(feedback.message, /2026\.10\.30\.1 is available with your Patreon membership/);
+  assert.doesNotMatch(feedback.message, /up to date/i);
+  assert.equal(latestUpdateLabel(current, members), 'v2026.10.30.1 (Patreon)');
+  assert.equal(membersUpdateAvailable(members), true);
+});
+
+test('an unavailable or pending Patreon check never claims the installation is current', () => {
+  const current = { ok: true, channel: 'patreon', current: '2026.10.24.8' };
+  for (const status of ['unavailable', 'not_configured']) {
+    const failed = { status, message: 'Patreon could not be checked.' };
+    const feedback = updateCheckFeedback(current, failed);
+    assert.equal(feedback.type, 'warning');
+    assert.doesNotMatch(feedback.message, /up to date/i);
+    assert.equal(latestUpdateLabel(current, failed), 'Patreon check unavailable');
+    assert.equal(membersUpdateAvailable(failed), false);
+  }
+  assert.match(updateCheckFeedback(current, null).message, /Checking Patreon/);
+});
+
+test('update feedback distinguishes members access, a pending restart and a completed check', () => {
+  const current = { ok: true, current: '2026.10.30.1', update_available: false };
+  const offered = { status: 'ready', update_available: true, release: { version: '2026.10.31.1' } };
+  assert.equal(membersUpdateAvailable(offered), false);
+  assert.match(updateCheckFeedback(current, offered).message, /available to Patreon members/);
+  assert.match(updateCheckFeedback(current, { ...offered, restart_required: true }).message, /Restart LDS/);
+  assert.match(updateCheckFeedback(current, { status: 'ready', update_available: false }).message, /up to date/);
+  assert.equal(latestUpdateLabel({ ok: true }, { status: 'not_configured' }), 'No newer public build reported');
+});
 
 test('formatMB is compact and empty for unknown sizes', () => {
   assert.equal(formatMB(0), '');
@@ -118,3 +159,58 @@ test('progressLabel renders each active phase and defers idle/done', () => {
   assert.equal(progressLabel({ phase: 'done' }), null);
   assert.equal(progressLabel({ phase: 'idle' }), null);
 });
+
+test('the Patreon block offers an install only when the server can apply it', () => {
+  const ready = { status: 'ready', release: { version: '2026.10.20' }, update_available: true }
+  assert.equal(patreonUpdateView(null).kind, 'hidden')
+  assert.equal(patreonUpdateView({ status: 'not_configured' }).kind, 'hidden')
+  assert.equal(patreonUpdateView({ status: 'unavailable', message: 'offline' }).text, 'offline')
+  assert.equal(patreonUpdateView({ ...ready, can_apply: true, entitled: true }).kind, 'install')
+  assert.equal(patreonUpdateView({ ...ready, can_apply: false, entitled: false }).kind, 'join')
+  // Docker or local changes: never a button, always the server's reason.
+  const docker = patreonUpdateView({ ...ready, can_apply: false, entitled: true, blocked_reason: 'Docker limit' })
+  assert.deepEqual([docker.kind, docker.reason], ['blocked', 'Docker limit'])
+  assert.equal(patreonUpdateView({ ...ready, can_apply: false, entitled: true }).kind, 'blocked')
+  // Docker with a release the host updater can install: the command, never a button.
+  const host = patreonUpdateView({ ...ready, can_apply: false, entitled: true, host_command: 'update-docker.bat patreon' })
+  assert.deepEqual([host.kind, host.command], ['host', 'update-docker.bat patreon'])
+  assert.equal(patreonUpdateView({ ...ready, can_apply: false, entitled: false,
+    host_command: 'update-docker.bat patreon' }).kind, 'join')
+  assert.equal(patreonUpdateView({ ...ready, restart_required: true }).kind, 'restart')
+  // A stale verification is a retry, not an invitation to join.
+  const stale = patreonUpdateView({ ...ready, can_apply: false, entitled: false,
+    access: { status: 'ready', patreon: { linked: true, status: 'verification_required' } } })
+  assert.equal(stale.kind, 'blocked')
+  assert.match(stale.reason, /could not verify/)
+  assert.equal(patreonUpdateView({ status: 'ready', update_available: false, on_channel: true,
+    release: { version: '2026.10.20' } }).text, 'Up to date on the Patreon channel (v2026.10.20).')
+  assert.equal(patreonUpdateView({ status: 'ready', update_available: false }).kind, 'none')
+})
+
+test('the Patreon block is read without administration and says why it cannot install here', () => {
+  const ready = { status: 'ready', release: { version: '2026.10.20' }, update_available: true }
+  // LAN browser: the server can apply, this browser may not ask it to.
+  const remote = patreonUpdateView({ ...ready, can_apply: true, entitled: true, can_manage: false })
+  assert.equal(remote.kind, 'blocked')
+  assert.match(remote.reason, /computer that runs LDS/)
+  assert.equal(patreonUpdateView({ ...ready, can_apply: true, entitled: true, can_manage: true }).kind, 'install')
+  // A failed read shows a message instead of hiding the block.
+  const failed = patreonUpdateView(patreonCheckFailure(Object.assign(new Error('HTTP 503'), { status: 503 })))
+  assert.equal(failed.kind, 'unavailable')
+  assert.match(failed.text, /could not be checked/)
+  assert.equal(patreonUpdateView(patreonCheckFailure({ body: { error: 'Patreon is offline.' } })).text,
+    'Patreon is offline.')
+})
+
+test('a Patreon ZIP or Docker install hears of a public release without being offered it', () => {
+  assert.equal(publicReleaseNotice({ ok: true, update_available: true, latest: '2026.11.01' }), null)
+  assert.equal(publicReleaseNotice({ ok: true, channel: 'patreon', public_update_available: false }), null)
+  const zip = publicReleaseNotice({ ok: true, channel: 'patreon', update_available: false,
+    public_update_available: true, latest: '2026.11.01', can_force: true })
+  assert.match(zip.text, /Public release v2026\.11\.01/)
+  assert.match(zip.text, /removes the Patreon changes/)
+  assert.deepEqual([zip.canForce, zip.command], [true, null])
+  const docker = publicReleaseNotice({ ok: true, channel: 'patreon', install_mode: 'docker',
+    public_update_available: true, latest: '2026.11.01' })
+  assert.deepEqual([docker.canForce, docker.command], [false, 'update-docker.bat stable force'])
+})

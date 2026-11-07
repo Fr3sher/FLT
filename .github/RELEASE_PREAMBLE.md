@@ -1,16 +1,17 @@
-> ### Two ways to install — and they do not update the same way
->
-> **`git clone` is the one to prefer.** *Update & restart* then runs `git pull --ff-only`,
-> so you get every fix the moment it lands — often days before it is packaged into a
-> release like this one.
->
-> **This ZIP is a snapshot of this tag.** *Update & restart* will only ever move you to
-> the next release, so a fix shipped today reaches you whenever the next one is cut.
->
-> ```
-> git clone https://github.com/Fr3sher/FLT.git
-> cd lora-dataset-studio
-> start.bat
-> ```
->
-> Already running a clone? You do not need the ZIP below.
+## FLT - Fresh LoRa Trainer
+
+FLT tracks the maintained upstream V2 code while keeping `main` as this fork's branch. Existing FLT Git checkouts should stay on `main`; upstream's branch migration instructions apply to upstream checkouts.
+
+### Install the core, then choose your plugins
+
+Extract the Windows ZIP into a new folder and run `start.bat`. Complete Setup, then install the public plugins you need through Plugins → Store. External API engines and rented GPUs charge separately. Optional usage statistics are off by default. Upstream Patreon membership provides members-only plugins and early upstream builds; the installed public core keeps working without membership.
+
+### Two ways to install and update
+
+ZIP installations update to the next published FLT release, preserving data and local configuration. Git installations follow their configured branch with a fast-forward update. Plugins are installed and updated separately through the Store.
+
+```text
+git clone https://github.com/Fr3sher/FLT.git
+cd FLT
+start.bat
+```

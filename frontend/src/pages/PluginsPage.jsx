@@ -288,7 +288,8 @@ export default function PluginsPage() {
         rejected={Boolean(adminToken) && adminToken === adminDraft && !catalogLoading && catalog.status === 'ready'} />}
 
       {storePlan && <InstallPlan plan={storePlan} busy={busy} onConfirm={installFromStore} onCancel={() => setStorePlan(null)}
-        restart={data?.restart}
+        restart={data?.restart} adminToken={adminToken}
+        onRecheck={() => planInstall(storePlan.requested, storePlan.version, Boolean(storePlan.update_only))}
         onAcquire={id => { setPurchaseId(id); setStorePlan(null); setTab('purchases'); }} />}
 
       {error && <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">{error}</p>}
@@ -322,7 +323,7 @@ export default function PluginsPage() {
           onUpdateAll={ids => planInstall(ids, undefined, true)} pendingRestart={pendingRestart}
           loading={catalogLoading} onRetry={loadCatalog}
           onToggle={toggle} onRemove={remove} onInstalled={() => { load(); refreshCaps(true); }} caps={caps} capsKnown={capsKnown}
-          onUnlock={() => document.getElementById('plugin-admin-token')?.focus()}
+          onUnlock={() => document.getElementById('plugin-admin-token')?.focus()} adminToken={adminToken}
           selectedId={requestedPlugin} onClearSelection={() => {
             const next = new URLSearchParams(searchParams); next.delete('plugin'); next.set('tab', 'plugins'); next.set('filter', 'all'); setSearchParams(next, { replace: true });
           }} />

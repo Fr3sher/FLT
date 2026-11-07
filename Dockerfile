@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r backend/requirements-docker-extras.txt \
     -c backend/requirements-ml.txt
 COPY backend backend
 COPY frontend/dist frontend/dist
-COPY store/bootstrap.json store/public-root.json store/
+COPY store/bootstrap.json store/public-root.json store/patreon.json store/
 COPY config.example.json .
 COPY packaging/docker/seed_comfy_config.py /app/packaging/docker/seed_comfy_config.py
 COPY packaging/docker/studio_api_entrypoint.sh /usr/local/bin/studio-api-entrypoint.sh

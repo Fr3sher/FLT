@@ -10,6 +10,7 @@ import { dualCaptionsSupport } from './dualCaptions.js';
 import { maskedCarryOverAction, clearLegacyMasked } from './maskedMigration.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
 import PluginSlot from '../../plugins/PluginSlot.jsx';
+import { MemberOptions } from '../patreon/MemberPreviews.jsx';
 import { contributions } from '../../plugins/registry.js';
 import {
   checkpointSelectionMatchesTraining,
@@ -24,6 +25,7 @@ import {
   trainFamilyLabel,
 } from '../../utils/checkpointBrowser';
 import { stepsRecipeRefreshDelay } from '../../utils/stepsRecipeRefresh';
+import { singleFlight } from '../../utils/singleFlight';
 import { confirmableRetryFlag } from '../../utils/trainingRefusals';
 import {
   deployedFilenamesOf,
@@ -68,6 +70,7 @@ import {
   memoryRiskLine, memoryStateLabel,
 } from './memorySavingAdvice';
 import SettingsLink from '../common/SettingsLink';
+import HuggingFaceTokenSetup from '../common/HuggingFaceTokenSetup.jsx';
 import { DatasetVersionChip, RunIdChip } from './RunIdentityBadges';
 import {
   cloudGroupsFrom, localRunIdentity, runRowDomId,
@@ -186,6 +189,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   };
   const [status, setStatus] = useState({ in_progress: false, installed: true, queue: [], current: null });
   const [statusLoaded, setStatusLoaded] = useState(false);
+  const launchOnce = useRef(singleFlight());
+  const [launchPending, setLaunchPending] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [checkpointsOpen, setCheckpointsOpen] = useState(false);
   // ◉ Graph of this dataset's runs + checkpoints — now the DEFAULT surface of the
@@ -676,7 +681,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // never claim 768+1024 for a run that will emit 768.
   const advResStored = adv?.resolution ?? '768,1024';
   const advRes = (!!slider?.enabled && !adv?.resolution_explicit) ? '768' : advResStored;
-  const advResLabel = { '768': '768px', '1024': '1024px', '768,1024': '768+1024px' }[advRes] || advRes;
+  const advResLabel = {
+    '768': '768px', '1024': '1024px', '512,768': '512+768px',
+    '768,1024': '768+1024px', '512,768,1024': '512+768+1024px',
+  }[advRes] || advRes;
   const advSave = adv?.save_every ?? 250;
   const advSampleEvery = adv?.sample_every ?? 250;
   const advSampleEveryChoices = adv?.sample_every_choices ?? [100, 250, 500, 1000];
@@ -1618,7 +1626,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           <GraduationCap aria-hidden="true" className="h-4 w-4" /> {fullMode ? 'Full-model training' : 'LoRA Training'} ({typeLabel})
         </span>
         {!status.installed && (
-          <span className="text-amber-300 text-[0.6875rem]">ai-toolkit not ready — point to its Python (its venv/Scripts/python.exe) in Settings › Local tools</span>
+          <span className="text-amber-300 text-[0.6875rem]">
+            ai-toolkit not ready — check its{' '}
+            <SettingsLink section="local-tools" focus="aitoolkit-dir" tone="warning">installation folder</SettingsLink>
+            {' '}and{' '}
+            <SettingsLink section="local-tools" focus="aitoolkit-python" tone="warning">Python interpreter</SettingsLink>.
+          </span>
         )}
         {status.in_progress
           ? <span className="ml-auto flex items-center gap-2">
@@ -1701,12 +1714,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               <div className="font-semibold">{view.hfGated.title}</div>
               <p className="m-0 mt-0.5 break-words text-amber-200/90">{view.hfGated.message}</p>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                {view.hfGated.status === 401 && (
-                  <a href="#/settings/local-tools"
-                    className="text-amber-300 underline decoration-amber-300/50">
-                    Settings ▸ API keys →
-                  </a>
-                )}
+                <SettingsLink section="local-tools" focus="HF_TOKEN" tone="warning">
+                  Configure Hugging Face token
+                </SettingsLink>
                 {view.hfGated.repo && (
                   <a href={view.hfGated.url} target="_blank" rel="noreferrer"
                     className="min-w-0 break-all text-amber-300 underline decoration-amber-300/50">
@@ -1714,6 +1724,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                   </a>
                 )}
               </div>
+              <HuggingFaceTokenSetup />
             </div>
           )}
           {view.excerpt && (
@@ -1739,6 +1750,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             <span className="min-w-0 text-red-300/80">{view.note}</span>
           </div>
           {view.causes && <div className="mt-1 text-red-300/80">{view.causes}</div>}
+          {view.checkToolkit && (
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+              <SettingsLink section="local-tools" focus="aitoolkit-python" tone="warning">Check AI Toolkit Python</SettingsLink>
+              {!view.excerpt && <SettingsLink section="local-tools" focus="aitoolkit-dir" tone="warning">Check AI Toolkit folder</SettingsLink>}
+            </div>
+          )}
         </div>
         );
       })()}
@@ -1790,7 +1807,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             {trainingModeError}
           </span>
         )}
-        {!fullMode && <button type="button" disabled={!status.installed || belowFloor || status.in_progress || baseBlocksTrain || sdxlNeedsBase || customWeightsEmpty || sliderPromptsMissing}
+        {!fullMode && <button type="button" aria-busy={launchPending} disabled={!status.installed || belowFloor || status.in_progress || baseBlocksTrain || sdxlNeedsBase || customWeightsEmpty || sliderPromptsMissing || launchPending}
           title={baseBlocksTrain ? baseBlockTitle
             : customWeightsEmpty ? 'Enter the path to your custom weights .safetensors'
             : sdxlNeedsBase ? 'Choose a base SDXL checkpoint'
@@ -1800,42 +1817,49 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 ? `${keptCount} kept image(s) — slider training still needs ${trainMinFloor}+ images as a denoising substrate`
                 : `${keptCount} kept image(s) — the minimum for ${typeLabel} is ${trainMinFloor}`)
               : undefined}
-          onClick={async () => {
-            if (!(await preflightOk())) return;
-            // Existing run: Resume continues the LoRA; Fresh archives the run and starts over.
-            // Mismatch retry remains fresh because the first call failed in assert_trainable
-            // BEFORE archiving, so nothing was discarded.
-            const mode = await askResumeOrFresh();
-            if (!mode) return;
-            // The old "Resume" button called /train and let ai-toolkit infer
-            // what it would restore. Route every existing run through the
-            // shared dialog instead, where Full state vs Weights only is
-            // explicit and checkpoint-specific.
-            if (mode === 'continue') {
-              setContinueInitialStep(null); // null deliberately selects the latest save
-              setContinueSource(null);
-              setContinueOpen(true);
-              return;
+          onClick={() => launchOnce.current(async () => {
+            setLaunchPending(true);
+            try {
+              if (!(await preflightOk())) return;
+              // Existing run: Resume continues the LoRA; Fresh archives the run and starts over.
+              // Mismatch retry remains fresh because the first call failed in assert_trainable
+              // BEFORE archiving, so nothing was discarded.
+              const mode = await askResumeOrFresh();
+              if (!mode) return;
+              // The old "Resume" button called /train and let ai-toolkit infer
+              // what it would restore. Route every existing run through the
+              // shared dialog instead, where Full state vs Weights only is
+              // explicit and checkpoint-specific.
+              if (mode === 'continue') {
+                setContinueInitialStep(null); // null deliberately selects the latest save
+                setContinueSource(null);
+                setContinueOpen(true);
+                return;
+              }
+              const fresh = mode === 'fresh';
+              // ds.train takes camelCase opts — map the confirmable force flags.
+              const OPT_FOR_FLAG = { allow_caption_mismatch: 'allowCaptionMismatch',
+                                     allow_uncaptioned: 'allowUncaptioned',
+                                     allow_caption_quality: 'allowCaptionQuality',
+                                     allow_unverified_weights: 'allowUnverifiedWeights' };
+              let opts = { baseModel: base, variant, trainType, trainingMode, masked: maskedOpt,
+                           steps: stepsN, fresh,
+                           vaePath, tePath, allowNotReady };
+              let d = await ds.train(opts);
+              for (let flag; d && d.ok === false && (flag = confirmableRetryFlag(d.error, 'Train anyway (force)')); ) {
+                if (flag === 'declined') break;        // the confirm WAS the answer
+                opts = { ...opts, [OPT_FOR_FLAG[flag]]: true };
+                d = await ds.train(opts);
+              }
+              await refreshStatus();
+            } catch (error) {
+              toastTrainError({ error: error?.message }, 'Could not start training');
+            } finally {
+              setLaunchPending(false);
             }
-            const fresh = mode === 'fresh';
-            // ds.train takes camelCase opts — map the confirmable force flags.
-            const OPT_FOR_FLAG = { allow_caption_mismatch: 'allowCaptionMismatch',
-                                   allow_uncaptioned: 'allowUncaptioned',
-                                   allow_caption_quality: 'allowCaptionQuality',
-                                   allow_unverified_weights: 'allowUnverifiedWeights' };
-            let opts = { baseModel: base, variant, trainType, trainingMode, masked: maskedOpt,
-                         steps: stepsN, fresh,
-                         vaePath, tePath, allowNotReady };
-            let d = await ds.train(opts);
-            for (let flag; d && d.ok === false && (flag = confirmableRetryFlag(d.error, 'Train anyway (force)')); ) {
-              if (flag === 'declined') break;        // the confirm WAS the answer
-              opts = { ...opts, [OPT_FOR_FLAG[flag]]: true };
-              d = await ds.train(opts);
-            }
-            refreshStatus();
-          }}
+          })}
           className="px-3 py-1.5 rounded-lg bg-gradient-primary text-gray-950 text-sm font-semibold disabled:opacity-40">
-          <Rocket aria-hidden="true" className="h-4 w-4" /> Train the LoRA
+          <Rocket aria-hidden="true" className="h-4 w-4" /> {launchPending ? 'Preparing training…' : 'Train the LoRA'}
         </button>}
         {!fullMode && <HelpBadge topic="action-training-launch" />}
         <PluginSlot slot="training.launch" surface="dataset"
@@ -1889,6 +1913,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           </>)}
         </span>
       </div>
+
+      {/* Members previews of training options (free installations only). */}
+      <MemberOptions placements={['training.options']} />
 
       <div className="contents" ref={setCloudNoticeHost} />
 
@@ -2431,13 +2458,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                   aria-label="Training resolution"
                   className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem]">
                   <option value="768,1024">768 + 1024 (multi-scale)</option>
+                  <option value="512,768,1024">512 + 768 + 1024 (multi-scale)</option>
+                  <option value="512,768">512 + 768 (multi-scale)</option>
                   <option value="1024">1024 only</option>
                   <option value="768">768 only (low VRAM)</option>
                 </select>
               </div>
               <span className="text-content-subtle text-[0.6875rem] leading-relaxed">
                 <b className="text-content-muted font-medium">Why:</b> the size(s) images are trained at — and the #1
-                VRAM lever. <b className="text-content-muted font-medium">How:</b> multi-scale trains at two sizes so
+                VRAM lever. <b className="text-content-muted font-medium">How:</b> multi-scale trains at several sizes so
                 the LoRA holds up from a close-up face to a full-body shot; single 1024 is a bit faster.
                 <b className="text-content-muted font-medium"> 768 only</b> cuts memory use sharply and trains much
                 faster — on the 12B families (Krea 2, FLUX) it is your best shot on a GPU under

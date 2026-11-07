@@ -3,9 +3,13 @@ import { apiFetch, postJson } from '../../api/fetchClient'
 import DiagnosticReport from '../common/DiagnosticReport'
 import DockerUpdateInstructions from '../common/DockerUpdateInstructions'
 import PinokioUpdateInstructions from '../common/PinokioUpdateInstructions'
-import { installMode, zipUpdateHeadline, progressLabel, progressPercent } from './updateStatus'
+import {
+  installMode, patreonCheckFailure, publicReleaseNotice, zipUpdateHeadline, progressLabel, progressPercent,
+  latestUpdateLabel, updateCheckFeedback,
+} from './updateStatus'
+import PatreonUpdates from '../patreon/PatreonUpdates'
 import { Card } from './primitives'
-import { versionLabel } from '../../utils/versionLabel'
+import { waitForRelaunchedServer } from '../../utils/serverRestart'
 import UsageStatisticsCard from './UsageStatisticsCard'
 
 /* In-app updater: "Check for updates" hits the git-aware check (commits-behind for a
@@ -19,21 +23,65 @@ function UpdatesCard() {
   const [applying, setApplying] = useState(false)
   const [phase, setPhase] = useState('')     // '' | 'pulling' | 'restarting'
   const [progress, setProgress] = useState(null)   // ZIP mode: {phase, downloaded, total}
+  // Patreon core channel (GET /api/update/patreon, readable without plugin
+  // administration). Null only while the first answer is pending.
+  const [patreon, setPatreon] = useState(null)
+  const [patreonError, setPatreonError] = useState('')
+  const [patreonInstalled, setPatreonInstalled] = useState(null)
 
   // Same cached Git/release check as the nav badge and banner, so a Git clone
   // never advertises a release ZIP instead of its configured branch.
   useEffect(() => {
     let alive = true
+    const onPublicStatus = (event) => setStatus(event.detail)
+    const onPatreonStatus = (event) => {
+      const next = event.detail
+      if (!next) return
+      if (next.status === 'unavailable') {
+        setPatreon((prev) => prev || next)
+        setPatreonError(next.message)
+      } else {
+        setPatreon(next)
+        setPatreonError('')
+      }
+    }
+    window.addEventListener('lds:update-available', onPublicStatus)
+    window.addEventListener('lds:patreon-status', onPatreonStatus)
     apiFetch('/api/update/check?auto=1', { background: true })
       .then((d) => { if (alive) setStatus((prev) => prev || d) })
       .catch(() => { /* best-effort — the manual button stays available */ })
-    return () => { alive = false }
+    apiFetch('/api/update/patreon', { background: true })
+      .then((d) => { if (alive) setPatreon((prev) => prev || d) })
+      .catch((e) => { if (alive) setPatreon((prev) => prev || patreonCheckFailure(e)) })
+    return () => {
+      alive = false
+      window.removeEventListener('lds:update-available', onPublicStatus)
+      window.removeEventListener('lds:patreon-status', onPatreonStatus)
+    }
   }, [])
+
+  const checkPatreon = async () => {
+    try {
+      const next = await apiFetch('/api/update/patreon?force=1', { background: true })
+      setPatreon(next)
+      window.dispatchEvent(new CustomEvent('lds:patreon-status', { detail: next }))
+      setPatreonError('')
+    } catch (e) {
+      // Keep the last answer and say this check failed; without a real answer
+      // yet, the block itself shows the failure (never twice).
+      const failure = patreonCheckFailure(e)
+      setPatreon((prev) => prev || failure)
+      setPatreonError(patreon && patreon.status !== 'unavailable' ? failure.message : '')
+      window.dispatchEvent(new CustomEvent('lds:patreon-status', { detail: failure }))
+    }
+  }
 
   const check = async () => {
     setChecking(true)
     try {
-      setStatus(await apiFetch('/api/update/check?force=1'))
+      const [publicStatus] = await Promise.all([apiFetch('/api/update/check?force=1'), checkPatreon()])
+      setStatus(publicStatus)
+      window.dispatchEvent(new CustomEvent('lds:update-available', { detail: publicStatus }))
     } catch (e) {
       setStatus({ ok: false, reason: e.message || 'Check failed' })
     } finally {
@@ -42,16 +90,10 @@ function UpdatesCard() {
   }
 
   const waitForHealthAndReload = async () => {
-    // The server is re-execing: /api/health refuses connections for a few seconds,
-    // then answers again on the same port. Poll, then hard-reload to pull new dist.
-    for (let i = 0; i < 120; i += 1) {
-      await new Promise((r) => setTimeout(r, 1000))
-      try {
-        const res = await fetch('/api/health', { cache: 'no-store' })
-        if (res.ok) { window.location.reload(); return }
-      } catch { /* still down — keep waiting */ }
-    }
-    setApplying(false); setPhase('')          // gave up after ~2 min
+    // Waits for the NEW process (the old one answers until it exits), then
+    // hard-reloads to pull the new dist. Changed dependencies can take minutes.
+    if (await waitForRelaunchedServer()) { window.location.reload(); return }
+    setApplying(false); setPhase('')          // gave up after 15 min
   }
 
   // Packaged (ZIP) installs download+swap the release (with a progress bar); a git
@@ -78,7 +120,7 @@ function UpdatesCard() {
     setApplying(false); setPhase(''); setProgress(null)   // gave up
   }
 
-  const apply = async () => {
+  const apply = async ({ forcePublic = false } = {}) => {
     // Defense in depth: Docker owns /app as image content. The button is not
     // rendered in this mode, and a stale callback must not POST an apply anyway.
     if (mode === 'docker') return
@@ -87,7 +129,8 @@ function UpdatesCard() {
     if (mode === 'pinokio') return
     setApplying(true); setPhase('pulling'); setProgress(null)
     try {
-      const res = await postJson('/api/update/apply', {})
+      // force_public: a ZIP install on the Patreon channel leaves it on purpose.
+      const res = await postJson('/api/update/apply', forcePublic ? { force_public: true } : {})
       if (res.restarting) {                   // git path: synchronous restart
         setPhase('restarting')
         waitForHealthAndReload()              // not awaited: UI shows "restarting…"
@@ -104,18 +147,53 @@ function UpdatesCard() {
     }
   }
 
+  // The Patreon channel installs through the same restart / progress flows:
+  // git and Pinokio fast-forward a verified bundle, a ZIP install swaps the
+  // verified archive. Pinokio keeps its own Stop / Update / Start.
+  const applyPatreon = async () => {
+    setApplying(true); setPhase('pulling'); setProgress(null); setPatreonError('')
+    try {
+      const res = await postJson('/api/update/patreon/apply', {})
+      if (res.restarting) {
+        setPhase('restarting')
+        waitForHealthAndReload()
+      } else if (res.async) {
+        setProgress({ phase: 'downloading', downloaded: 0, total: res.total || 0 })
+        pollProgress()
+      } else {
+        if (res.restart_required) setPatreonInstalled(res)
+        else if (!res.changed) await checkPatreon()
+        setApplying(false); setPhase('')
+      }
+    } catch (e) {
+      setPatreonError(e.message || 'The Patreon update could not be installed. Your files were not changed.')
+      setApplying(false); setPhase('')
+    }
+  }
+
   const s = status
   // In-app update is possible for a git clone (pull) or a packaged install whose
   // latest release ships a ZIP asset (download + swap). Otherwise: link out.
   const dockerMode = mode === 'docker'
   const pinokioMode = mode === 'pinokio'
   const canPull = s && s.update_available && (mode === 'git' || mode === 'zip')
+  // A Patreon ZIP or Docker install is never offered the public release; this
+  // names it and the explicit way back.
+  const notice = publicReleaseNotice(s)
+  const patreonOwnsStatus = patreon?.status === 'ready'
+    && (patreon.on_channel || patreon.update_available || patreon.restart_required)
+  const installPublic = () => {
+    if (!window.confirm('Install the public release over this Patreon release? The Patreon changes are '
+      + 'removed; your data and settings are kept, and Patreon updates stay available later.')) return
+    apply({ forcePublic: true })
+  }
   return (
-    <Card title="Updates" help={dockerMode
-      ? 'Docker installs are updated by pulling the host checkout and rebuilding the image.'
+    <Card id="settings-updates" title="Updates" help={dockerMode
+      ? 'Docker installs are updated from the host: update-docker.bat downloads the new version and '
+        + 'rebuilds the image (a Git checkout is pulled by hand).'
       : pinokioMode
         ? 'Pinokio starts and stops this app, so it also owns the update: Stop, Update, Start.'
-        : 'Pull the latest version from GitHub and restart — without leaving the app.'}>
+        : 'Check available LDS versions and install updates for this installation.'}>
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" onClick={check} disabled={checking || applying}
           className="rounded-md border border-border-strong px-3 py-1.5 text-sm font-medium text-content hover:bg-surface-raised disabled:opacity-50">
@@ -131,11 +209,7 @@ function UpdatesCard() {
           <span className="text-xs text-content-subtle">
             Latest build:{' '}
             <span className="font-medium text-content">
-              {s.remote_sha
-                ? `${s.remote_sha}${typeof s.behind === 'number' && s.behind > 0 ? ` (+${s.behind} commit${s.behind === 1 ? '' : 's'})` : ''}`
-                : s.latest ? `v${s.latest}`
-                : s.update_available ? 'update available'
-                : '— press “Check for updates”'}
+              {latestUpdateLabel(s, patreon)}
             </span>
           </span>
         )}
@@ -211,17 +285,33 @@ function UpdatesCard() {
               </a>{' '}and replace the folder.
             </p>
           ) : s.ok ? (
-            <p className="text-emerald-400">
-              <span aria-hidden>✓</span> You’re up to date.{' '}
-              {/* Name the COMMIT on a git checkout: the release number alone would
-                  claim the last release while the tree may be well past it. */}
-              <span className="text-content-subtle">{versionLabel(s)}</span>
-            </p>
+            <div className="space-y-2">
+              {(!patreonOwnsStatus || patreonError) && <p className="text-content-muted">
+                {updateCheckFeedback(s, patreonError ? { status: 'unavailable', message: patreonError } : patreon).message}
+              </p>}
+              {notice && (
+                <div className="space-y-1 text-content-muted">
+                  <p>{notice.text}</p>
+                  {notice.canForce && (
+                    <button type="button" onClick={installPublic}
+                      className="rounded-md border border-border-strong px-3 py-1.5 text-sm font-medium text-content hover:bg-surface-raised">
+                      Install the public release instead
+                    </button>
+                  )}
+                  {notice.command && (
+                    <p>To return to public releases, run on the host: <code className="text-content">{notice.command}</code></p>
+                  )}
+                </div>
+              )}
+            </div>
           ) : (
             <p className="text-content-muted"><span aria-hidden>⚠</span> {s.reason || 'Could not check for updates.'}</p>
           )}
         </div>
       )}
+
+      <PatreonUpdates patreon={patreon} installed={patreonInstalled} error={patreonError}
+        applying={applying} onApply={applyPatreon} onChanged={checkPatreon} />
     </Card>
   )
 }

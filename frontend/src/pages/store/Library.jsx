@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { KeyRound, RefreshCw, ShoppingBag } from 'lucide-react';
 import { apiFetch, getCsrfToken } from '../../api/fetchClient.js';
+import PatreonCard from '../../components/patreon/PatreonAccess.jsx';
 
 const ENDPOINT = '/api/plugins/store/commerce';
 const BTN = 'min-h-10 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-surface-raised disabled:opacity-50';
@@ -90,14 +91,19 @@ export default function Library({ catalog, refresh = 0, onChanges, onPlan, admin
   };
   const unavailable = !library || ['not_configured', 'unavailable'].includes(library.status);
   const canManage = library?.can_manage !== false;
-  return <section aria-label="Plugin purchase library" className="space-y-4 rounded-xl border border-border bg-surface p-5">
+  // The license-key library exists only where an operator configured it. Without
+  // it, the card would say "not connected" right under an active Patreon membership.
+  const licenseLibrary = library && library.status !== 'not_configured';
+  return <div className="space-y-4">
+  <PatreonCard adminToken={adminToken} />
+  {licenseLibrary && <section aria-label="Plugin purchase library" className="space-y-4 rounded-xl border border-border bg-surface p-5">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h2 className="text-lg font-semibold">Your plugin library</h2>
       <button type="button" className={BTN + ' inline-flex items-center gap-2'} disabled={busy} onClick={() => load()}>
         <RefreshCw className="h-4 w-4" aria-hidden="true" />Refresh library
       </button>
     </div>
-    <p className="text-sm text-content-muted">Installed plugins keep working offline. Purchases and renewals control new downloads and eligible updates.</p>
+    <p className="text-sm text-content-muted">Purchased plugins keep working offline. Members-only plugins require an active Patreon membership. Your installed files are kept.</p>
     {error && <p role="alert" className="text-sm text-amber-500">{error}</p>}
     {unavailable && <p role="status" className="text-sm text-content-muted">{library?.message || (!library ? 'Loading your library…' : 'The purchase service is unavailable. Existing installations are unaffected.')}</p>}
     {library?.status === 'not_connected' && <div className="space-y-2">
@@ -134,5 +140,6 @@ export default function Library({ catalog, refresh = 0, onChanges, onPlan, admin
       <a href={checkout.url} target="_blank" rel="noopener noreferrer" className={BTN + ' inline-block'}>Open secure checkout</a>
       <p className="text-xs text-content-muted">After payment, refresh your library to check acquisition. Opening checkout does not confirm a purchase.</p>
     </div>}
-  </section>;
+  </section>}
+  </div>;
 }

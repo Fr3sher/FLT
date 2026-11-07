@@ -8,11 +8,13 @@ actual installation.
 from __future__ import annotations
 
 import os
+import hashlib
 import json
 import shutil
 import stat
 import struct
 import subprocess
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -312,6 +314,9 @@ def _run_updater(
     max_entry_bytes: int = 0,
     max_expanded_bytes: int = 0,
     required_free_bytes: int = 0,
+    docker: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+    force_public: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
     runtime_temp = workspace / "température runner !"
     runtime_temp.mkdir(parents=True, exist_ok=True)
@@ -356,7 +361,12 @@ def _run_updater(
         args += ["-TestMaxExpandedBytes", str(max_expanded_bytes)]
     if required_free_bytes:
         args += ["-TestRequiredFreeBytes", str(required_free_bytes)]
+    if docker is not None:
+        args += ["-DockerPath", str(docker)]
+    if force_public:
+        args += ["-ForcePublic"]
     env = os.environ.copy()
+    env.pop("LDS_DNS", None)
     env.update(
         {
             "TEMP": str(runtime_temp),
@@ -365,6 +375,7 @@ def _run_updater(
             "LDS_TEST_COUNT": str(count),
             "LDS_TEST_FAIL_FIRST": "1" if fail_first else "0",
             "LDS_TEST_ALWAYS_FAIL": "1" if always_fail else "0",
+            **(extra_env or {}),
         }
     )
     completed = subprocess.run(
@@ -475,7 +486,7 @@ function Get-ImmutableCommit { param($Repo, $Reference)
 Resolve-ArchiveSource -SelectedChannel $Channel -Repo 'sample/project' | ConvertTo-Json -Compress
 ''', encoding='utf-8')
     result = subprocess.run([POWERSHELL, '-NoProfile', '-File', str(harness),
-                             str(UPDATER), channel], capture_output=True, text=True, timeout=30)
+                             str(UPDATER), channel], capture_output=True, text=True, timeout=BAT_TIMEOUT)
     assert result.returncode == 0, result.stderr
     source = json.loads(result.stdout)
     assert source['Tag'] == 'main'
@@ -1332,3 +1343,364 @@ def test_git_ignored_nonprotected_unicode_path_is_rejected(tmp_path):
     assert _git_run(install, "rev-parse", "HEAD") == old
     assert ignored.read_bytes() == b"UNEXPECTED IGNORED CODE"
     _assert_clean_transaction_dirs(install, runtime_temp)
+
+
+# --- Patreon channel: disposable fetch container, then the same transaction ---
+
+INSTALLED = "2026.09.29"
+PATREON = "2026.10.20"
+PATREON_MARKER = "patreon-channel.json"
+
+FAKE_DOCKER = r'''
+import hashlib, json, os, sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with open(os.environ["LDS_TEST_DOCKER_LOG"], "a", encoding="utf-8") as log:
+    log.write(json.dumps(args) + "\n")
+scenario = os.environ.get("LDS_TEST_DOCKER_SCENARIO", "fetch")
+if args[:2] == ["image", "inspect"]:
+    if scenario == "no-image":
+        print("Error: No such image: " + args[-1], file=sys.stderr)
+        sys.exit(1)
+    print("sha256:" + hashlib.sha256(args[-1].encode()).hexdigest())
+    sys.exit(0)
+volumes = [args[i + 1] for i, value in enumerate(args) if value == "--volume"]
+out = Path(next(v for v in volumes if v.endswith(":/out:rw"))[:-len(":/out:rw")])
+if scenario == "current":
+    print("No newer LDS release on the Patreon channel.")
+    sys.exit(3)
+if scenario == "membership":
+    print("[ERROR] This update is available to Patreon members.", file=sys.stderr)
+    sys.exit(4)
+if scenario == "silent":  # An image from before fetch-source existed.
+    sys.exit(0)
+archive = Path(os.environ["LDS_TEST_DOCKER_ARCHIVE"]).read_bytes()
+(out / "lds-core-source.zip").write_bytes(archive)
+manifest = {"format": "lds-core-source/1", "version": os.environ["LDS_TEST_DOCKER_VERSION"],
+            "commit": "a" * 40, "archive": "lds-core-source.zip", "length": len(archive),
+            "sha256": hashlib.sha256(archive).hexdigest()}
+if scenario == "tampered":
+    manifest["sha256"] = hashlib.sha256(archive + b"x").hexdigest()
+if scenario == "extra":
+    (out / "node.py").write_bytes(b"print('not part of a release')\n")
+(out / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+print("Fetched LDS v" + manifest["version"])
+'''
+
+
+def _patreon_setup(workspace: Path, *, launcher_mode: str | None = None,
+                   archive_version: str = PATREON) -> tuple[Path, Path, Path]:
+    install = workspace / "install patreon é !"
+    _make_install(install, launcher_mode=launcher_mode)
+    _write(install / "backend" / "app" / "version.py", f"APP_VERSION = '{INSTALLED}'\n")
+    payload = _archive_payload()
+    payload["backend/app/version.py"] = f"APP_VERSION = '{archive_version}'\n".encode()
+    archive = _write_archive(workspace, payload)
+    docker = workspace / "fake docker.cmd"
+    _write(workspace / "fake_docker.py", FAKE_DOCKER)
+    _write(docker, b'@echo off\r\n"%LDS_TEST_PYTHON%" "%~dp0fake_docker.py" %*\r\nexit /b %ERRORLEVEL%\r\n')
+    return install, archive, docker
+
+
+def _run_patreon(workspace: Path, install: Path, archive: Path, docker: Path, *,
+                 scenario: str = "fetch", version: str = PATREON, **options):
+    calls = workspace / "docker calls.jsonl"
+    result, launches, runtime_temp = _run_updater(
+        workspace, install, channel="patreon", docker=docker, extra_env={
+            "LDS_TEST_PYTHON": sys.executable, "LDS_TEST_DOCKER_LOG": str(calls),
+            "LDS_TEST_DOCKER_SCENARIO": scenario, "LDS_TEST_DOCKER_ARCHIVE": str(archive),
+            "LDS_TEST_DOCKER_VERSION": version}, **options)
+    recorded = ([json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+                if calls.exists() else [])
+    return result, launches, runtime_temp, recorded
+
+
+@pytest.mark.parametrize("launcher_mode", [None, "gpu", "studio"])
+def test_patreon_channel_fetches_in_a_disposable_container_then_applies(tmp_path, launcher_mode):
+    install, archive, docker = _patreon_setup(tmp_path, launcher_mode=launcher_mode)
+    if launcher_mode == "gpu":  # Compose reads ${LDS_DNS:-1.1.1.1} from .env.
+        with (install / ".env").open("ab") as env:
+            env.write(b"LDS_DNS=9.9.9.9 # local resolver\r\n")
+    before_state = _snapshot_named_state(install)
+
+    result, launches, runtime_temp, calls = _run_patreon(tmp_path, install, archive, docker)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    studio = launcher_mode == "studio"
+    assert launches == ["STUDIO-NEW --update-rebuild" if studio else "LEGACY-NEW --update-rebuild"]
+    assert (install / "backend" / "app" / "version.py").read_text() == f"APP_VERSION = '{PATREON}'\n"
+    assert (install / "brand-new-code.txt").read_bytes() == b"CREATED BY UPDATE\n"
+    data = install / ("data-docker" if studio else "data-docker-gpu")
+    # The lane's data folder records the channel, so public channels refuse.
+    after_state = _snapshot_named_state(install)
+    marker = json.loads(after_state[data.name].pop(PATREON_MARKER).decode("utf-8"))
+    assert marker == {"format": "lds-patreon-channel/1", "version": PATREON, "commit": "a" * 40}
+    assert after_state == before_state
+    _assert_confirmed_rebuild_commits_transaction(install, runtime_temp)
+
+    image = "lora-dataset-studio" if studio else "lora-dataset-studio-gpu"
+    inspect, run = calls
+    assert inspect == ["image", "inspect", "--format", "{{.Id}}", image]
+    volumes = [run[index + 1] for index, value in enumerate(run) if value == "--volume"]
+    # Exactly two mounts: data read-only, and a fresh folder of this run only.
+    assert len(volumes) == 2 and volumes[0] == f"{data}:/data:ro"
+    out = Path(volumes[1][:-len(":/out:rw")])
+    assert out.name == "patreon" and out.parent.parent == runtime_temp
+    dns = [] if studio else ["--dns", "9.9.9.9" if launcher_mode == "gpu" else "1.1.1.1"]
+    assert run == [
+        "run", "--rm", "--pull", "never", "--no-healthcheck", "--user", "0:0",
+        "--entrypoint", "/usr/local/bin/python" if studio else "/app/.venv/bin/python",
+        "--workdir", "/app/backend", "--env", "PYTHONPATH=", "--env", "PYTHONHOME=",
+        "--volume", volumes[0], "--volume", volumes[1], *dns,
+        "sha256:" + hashlib.sha256(image.encode()).hexdigest(),
+        "-m", "app.services.patreon_core", "fetch-source",
+        "--out", "/out", "--data", "/data", "--newer-than", INSTALLED]
+
+
+@pytest.mark.parametrize("scenario,version,message", [
+    ("tampered", PATREON, "does not match the SHA-256"),
+    ("extra", PATREON, "exactly one release archive"),
+    ("silent", PATREON, "exactly one release archive"),
+    ("membership", PATREON, "Patreon did not allow this download"),
+    ("fetch", "2026.09.01", "not newer than the installed"),
+    ("fetch", "2026.10.25", "does not contain the release of its manifest"),
+    ("no-image", PATREON, "could not find the image"),
+])
+def test_patreon_channel_applies_nothing_it_cannot_verify(tmp_path, scenario, version, message):
+    install, archive, docker = _patreon_setup(tmp_path)
+    before_code = _snapshot_code(install)
+
+    result, launches, runtime_temp, calls = _run_patreon(
+        tmp_path, install, archive, docker, scenario=scenario, version=version)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert message in result.stdout + result.stderr
+    assert launches == []
+    assert _snapshot_code(install) == before_code
+    _assert_clean_transaction_dirs(install, runtime_temp)
+    assert [call[0] for call in calls] == (["image"] if scenario == "no-image" else ["image", "run"])
+    assert not list(install.glob(f"data-docker*/{PATREON_MARKER}"))
+
+
+def test_patreon_channel_up_to_date_changes_nothing(tmp_path):
+    install, archive, docker = _patreon_setup(tmp_path)
+    before_code = _snapshot_code(install)
+
+    result, launches, runtime_temp, _ = _run_patreon(tmp_path, install, archive, docker, scenario="current")
+
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert f"LDS v{INSTALLED} is up to date on the Patreon channel" in result.stdout
+    assert launches == []
+    assert _snapshot_code(install) == before_code
+    _assert_clean_transaction_dirs(install, runtime_temp)
+
+
+@pytest.mark.skipif(not GIT, reason="git is required for checkout-path tests")
+def test_patreon_channel_refuses_a_git_checkout_before_docker(tmp_path):
+    install, old = _make_git_install(tmp_path)
+    _, archive, docker = _patreon_setup(tmp_path / "unused")
+
+    result, launches, runtime_temp, calls = _run_patreon(tmp_path, install, archive, docker)
+
+    assert result.returncode == 1
+    assert "patreon channel updates ZIP installations only" in result.stdout + result.stderr
+    assert launches == [] and calls == []
+    assert _git_run(install, "rev-parse", "HEAD") == old
+    _assert_clean_transaction_dirs(install, runtime_temp)
+
+
+@pytest.mark.parametrize("archive_version,applied", [("2026.09.01", False), (INSTALLED, True)])
+def test_github_channels_never_install_an_older_version(tmp_path, archive_version, applied):
+    """After a Patreon update the public release can be older: double-clicking
+    update-docker.bat must not silently take the installation back."""
+    install = tmp_path / "patreon installed é !"
+    _make_install(install)
+    _write(install / "backend" / "app" / "version.py", f"APP_VERSION = '{INSTALLED}'\n")
+    payload = _archive_payload()
+    payload["backend/app/version.py"] = f"APP_VERSION = '{archive_version}'\n".encode()
+    before_code = _snapshot_code(install)
+
+    result, launches, runtime_temp = _run_updater(tmp_path, install, archive=_write_archive(tmp_path, payload))
+
+    if applied:  # Same version: reapplying stays possible.
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert launches == ["LEGACY-NEW --update-rebuild"]
+    else:
+        assert result.returncode == 1
+        assert "older than the installed" in result.stdout + result.stderr
+        assert launches == [] and _snapshot_code(install) == before_code
+    _assert_clean_transaction_dirs(install, runtime_temp)
+
+
+@pytest.mark.skipif(not COMSPEC, reason="cmd.exe is required")
+def test_bat_forwards_patreon_and_reports_an_up_to_date_installation(tmp_path):
+    install = tmp_path / "bat patreon é !"
+    (install / "scripts").mkdir(parents=True)
+    shutil.copy2(GPU_BAT, install / GPU_BAT.name)
+    shutil.copy2(GENERIC_BAT, install / GENERIC_BAT.name)
+    probe = (
+        "param([string]$Channel,[string]$InstallRoot)\n"
+        "[IO.File]::WriteAllText((Join-Path $InstallRoot 'bat-result.txt'), $Channel)\n"
+        "exit 3\n"
+    )
+    _write(install / "scripts" / UPDATER.name, probe)
+    completed = subprocess.run(
+        [COMSPEC, "/d", "/c", str(install / GENERIC_BAT.name), "patreon"],
+        input="\n", capture_output=True, text=True, errors="replace",
+        timeout=BAT_TIMEOUT, check=False)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "already up to date" in completed.stdout
+    assert "Rebuild started" not in completed.stdout
+    assert (install / "bat-result.txt").read_text() == "patreon"
+
+
+@pytest.mark.skipif(not COMSPEC, reason="cmd.exe is required")
+@pytest.mark.parametrize("updater_code, returncode, message", [
+    (0, 0, "Rebuild started"),
+    (3, 0, "already up to date"),
+    (1, 1, "did not complete"),
+    (4, 1, "did not complete"),
+    (-1, 1, "did not complete"),
+])
+def test_bat_exit_code_follows_the_updater(tmp_path, updater_code, returncode, message):
+    """A caller reads the exit code, not the text. An exit /b inside a nested
+    block that more commands follow left the process code at 0: on a real
+    install (2026-10-18) a refused update printed "did not complete" and
+    returned 0."""
+    install = tmp_path / "bat exit é !"
+    (install / "scripts").mkdir(parents=True)
+    shutil.copy2(GPU_BAT, install / GPU_BAT.name)
+    shutil.copy2(GENERIC_BAT, install / GENERIC_BAT.name)
+    _write(install / "scripts" / UPDATER.name, f"exit {updater_code}\n")
+    completed = subprocess.run(
+        [COMSPEC, "/d", "/c", str(install / GENERIC_BAT.name), "stable"],
+        input="\n", capture_output=True, text=True, errors="replace",
+        timeout=BAT_TIMEOUT, check=False)
+    assert completed.returncode == returncode, completed.stdout + completed.stderr
+    assert message in completed.stdout
+
+
+# --- The channel marker: public channels never replace a Patreon release ----
+
+def _marker_bytes(version: str = PATREON) -> bytes:
+    return json.dumps({"format": "lds-patreon-channel/1", "version": version,
+                       "commit": "b" * 40}).encode("utf-8")
+
+
+@pytest.mark.parametrize("previous", [None, _marker_bytes("2026.10.01")])
+def test_a_rejected_patreon_rebuild_restores_the_channel_marker(tmp_path, previous):
+    install, archive, docker = _patreon_setup(tmp_path)
+    marker = install / "data-docker-gpu" / PATREON_MARKER
+    if previous is not None:
+        _write(marker, previous)
+    before_code = _snapshot_code(install)
+
+    result, launches, runtime_temp, _ = _run_patreon(tmp_path, install, archive, docker, fail_first=True)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Old code restored" in result.stdout + result.stderr
+    assert launches == ["LEGACY-NEW --update-rebuild", "LEGACY-OLD --update-rebuild"]
+    assert _snapshot_code(install) == before_code
+    assert (marker.read_bytes() if marker.exists() else None) == previous
+
+
+@pytest.mark.parametrize("lane", ["data-docker-gpu", "data-docker"])
+def test_public_channels_refuse_to_replace_a_patreon_installation(tmp_path, lane):
+    """Either lane's data folder counts: both lanes share this code folder."""
+    install = tmp_path / "patreon marker é !"
+    _make_install(install)
+    _write(install / lane / PATREON_MARKER, _marker_bytes())
+    before_code = _snapshot_code(install)
+
+    result, launches, runtime_temp = _run_updater(tmp_path, install, archive=_write_archive(tmp_path))
+
+    assert result.returncode == 1
+    output = result.stdout + result.stderr
+    assert f"LDS v{PATREON} from the Patreon channel" in output
+    assert "update-docker.bat patreon" in output and "update-docker.bat main force" in output
+    assert launches == [] and _snapshot_code(install) == before_code
+    _assert_clean_transaction_dirs(install, runtime_temp)
+
+
+def test_force_installs_the_public_release_and_leaves_the_patreon_channel(tmp_path):
+    install = tmp_path / "patreon force é !"
+    _make_install(install)
+    # A damaged marker still counts; force removes every lane's marker.
+    _write(install / "data-docker-gpu" / PATREON_MARKER, b"{")
+    _write(install / "data-docker" / PATREON_MARKER, _marker_bytes())
+
+    result, launches, runtime_temp = _run_updater(
+        tmp_path, install, archive=_write_archive(tmp_path), force_public=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert launches == ["LEGACY-NEW --update-rebuild"]
+    assert (install / "brand-new-code.txt").read_bytes() == b"CREATED BY UPDATE\n"
+    assert not list(install.glob(f"data-docker*/{PATREON_MARKER}"))
+    _assert_confirmed_rebuild_commits_transaction(install, runtime_temp)
+
+
+def test_force_is_refused_on_the_patreon_channel(tmp_path):
+    install, archive, docker = _patreon_setup(tmp_path)
+
+    result, launches, runtime_temp, calls = _run_patreon(tmp_path, install, archive, docker, force_public=True)
+
+    assert result.returncode == 1
+    assert "applies to the stable, v2 and main channels only" in result.stdout + result.stderr
+    assert launches == [] and calls == []
+
+
+@pytest.mark.skipif(not COMSPEC, reason="cmd.exe is required")
+def test_bat_forwards_force_only_as_the_second_argument(tmp_path):
+    install = tmp_path / "bat force é !"
+    (install / "scripts").mkdir(parents=True)
+    shutil.copy2(GPU_BAT, install / GPU_BAT.name)
+    shutil.copy2(GENERIC_BAT, install / GENERIC_BAT.name)
+    probe = (
+        "param([string]$Channel,[string]$InstallRoot,[switch]$ForcePublic)\n"
+        "[IO.File]::WriteAllText((Join-Path $InstallRoot 'bat-result.txt'), "
+        "($Channel + '|' + $ForcePublic + '|' + (@($args) -join ',')))\n"
+        "exit 0\n"
+    )
+    _write(install / "scripts" / UPDATER.name, probe)
+    result = install / "bat-result.txt"
+
+    def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+        # An inherited variable never forces: only the argument does.
+        env = {**os.environ, "LDS_UPDATE_FORCE": "-ForcePublic"}
+        return subprocess.run(
+            [COMSPEC, "/d", "/c", str(install / GENERIC_BAT.name), *arguments],
+            input="\n", capture_output=True, text=True, errors="replace", env=env,
+            timeout=BAT_TIMEOUT, check=False)
+
+    assert run("stable", "force").returncode == 0
+    assert result.read_text() == "stable|True|"
+    result.unlink()
+    assert run("v2").returncode == 0
+    assert result.read_text() == "v2|False|"
+    result.unlink()
+    refused = run("v2", "forced")
+    assert refused.returncode == 2 and "Too many arguments" in refused.stdout
+    assert not result.exists()
+
+
+def test_versions_compare_as_numbers_on_every_channel(tmp_path):
+    """2026.10.11.10 is newer than 2026.10.11.9, which an ordinal comparison
+    denies: neither a public channel nor the Patreon channel may refuse it."""
+    public = tmp_path / "public"
+    install = public / "numeric é !"
+    _make_install(install)
+    _write(install / "backend" / "app" / "version.py", "APP_VERSION = '2026.10.11.9'\n")
+    payload = _archive_payload()
+    payload["backend/app/version.py"] = b"APP_VERSION = '2026.10.11.10'\n"
+    public.mkdir(exist_ok=True)
+    result, launches, _ = _run_updater(public, install, archive=_write_archive(public, payload))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert launches == ["LEGACY-NEW --update-rebuild"]
+
+    member = tmp_path / "patreon"
+    install, archive, docker = _patreon_setup(member, archive_version="2026.10.11.10")
+    _write(install / "backend" / "app" / "version.py", "APP_VERSION = '2026.10.11.9'\n")
+    result, launches, _, _ = _run_patreon(member, install, archive, docker, version="2026.10.11.10")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (install / "backend" / "app" / "version.py").read_text() == "APP_VERSION = '2026.10.11.10'\n"

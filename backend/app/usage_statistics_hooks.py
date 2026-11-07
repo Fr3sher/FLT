@@ -1,7 +1,7 @@
-"""Explicit operation allowlist, never URLs, request bodies, or exception text."""
+"""Explicit operations and closed context categories; never raw request content."""
 from flask import g, request
 
-from .usage_statistics import begin_operation, finish_operation
+from .usage_statistics import begin_operation, finish_operation, operation_context, caption_context
 
 # (feature, action, successful request means). Background work is ACCEPTED,
 # not completed. Bank's worker separately reports its actual terminal outcome.
@@ -18,9 +18,9 @@ OPERATIONS = {
     'bank.bank_faces': ('bank', 'faces', 'accepted'),
     'bank.bank_score': ('bank', 'score', 'accepted'),
     'bank.bank_promote': ('bank', 'promote', 'accepted'),
-    'training.dataset_train': ('training', 'train', 'accepted'),
-    'training.dataset_train_enqueue': ('training', 'train', 'accepted'),
-    'training.dataset_train_continue': ('training', 'train', 'accepted'),
+    'training.dataset_train': ('training', 'train_start', 'accepted'),
+    'training.dataset_train_enqueue': ('training', 'train_enqueue', 'accepted'),
+    'training.dataset_train_continue': ('training', 'train_resume', 'accepted'),
     'setup_state.complete': ('setup', 'setup', 'completed'),
 }
 
@@ -31,6 +31,13 @@ def install_hooks(app):
         operation = OPERATIONS.get(request.endpoint)
         if operation and request.method in {'GET', 'POST'}:
             g.lds_usage_operation = (operation, begin_operation(operation[0]))
+            try:
+                body = request.get_json(silent=True) if request.is_json else None
+                family = body.get('train_type') if isinstance(body, dict) else None
+            except Exception:
+                family = None  # Diagnostics must not change request handling.
+            g.lds_usage_context = (caption_context() if operation[1] == 'caption' else
+                                   operation_context(execution='local', model_family=family))
 
     @app.after_request
     def usage_operation_finished(response):
@@ -38,6 +45,7 @@ def install_hooks(app):
         if tracked:
             (feature, action, success), ticket = tracked
             result, error = success, 'none'
+            reason = 'none'
             status = response.status_code
             # Only known endpoints with small JSON responses. Strings in the
             # body are never copied or logged; these booleans describe outcome.
@@ -49,9 +57,10 @@ def install_hooks(app):
                     pass
             if status >= 400 or (isinstance(data, dict) and (data.get('ok') is False or data.get('error'))):
                 result = 'failed'
-                error = {400: 'invalid_input', 404: 'not_found', 409: 'busy',
+                error = {400: 'invalid_input', 404: 'not_found', 409: 'conflict',
                          429: 'busy', 502: 'unavailable', 503: 'unavailable',
                          504: 'timeout'}.get(status, 'operation_failed')
+                error, reason = getattr(g, 'lds_usage_error', (error, 'unknown'))
             elif isinstance(data, dict) and (data.get('stopped') is True or data.get('cancelled') is True):
                 result = 'cancelled'
             elif (action == 'import' and isinstance(data, dict)
@@ -64,5 +73,8 @@ def install_hooks(app):
                 error = 'operation_failed'
             elif status == 202:
                 result = 'accepted'
-            finish_operation(ticket, feature, action, result, error)
+            if error != 'none' and reason == 'none':
+                reason = 'unknown'
+            finish_operation(ticket, feature, action, result, error, reason,
+                             context=getattr(g, 'lds_usage_context', None))
         return response

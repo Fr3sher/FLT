@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { apiFetch } from '../../api/fetchClient';
 import { HelpBadge } from '../../help/HelpMode';
+import InstallRunner from './InstallRunner';
+import SettingsLink from '../common/SettingsLink';
 
 const UPDATE_GUIDE = 'https://docs.comfy.org/installation/update_comfyui';
 const PORTABLE_RELEASES = 'https://github.com/Comfy-Org/ComfyUI/releases/latest';
@@ -37,6 +39,8 @@ export default function ComfyNodeRepair({ nodes = [], nodePacks = [], onRefresh 
   const packs = Array.isArray(nodePacks) ? nodePacks : [];
   const custom = names.map((name) => packs.find((pack) => pack.class_type === name && !pack.core))
     .filter(Boolean);
+  const installGroups = custom.filter((pack, index) => !pack.install_action
+    || custom.findIndex((other) => other.install_action === pack.install_action) === index);
   const hasCore = names.some((name) => !custom.some((pack) => pack.class_type === name));
   const currentResult = result?.key === namesKey ? result : null;
   const resolved = currentResult?.missing.length === 0;
@@ -116,12 +120,21 @@ export default function ComfyNodeRepair({ nodes = [], nodePacks = [], onRefresh 
       {expanded && (
         <div id={helpId} className="min-w-0 space-y-3 border-t border-border pt-3">
           {comfyUrl && <a href={comfyUrl} target="_blank" rel="noopener noreferrer" className={linkClass}>Open ComfyUI</a>}
-          {addressError && <p role="alert" className="break-words text-red-400">{addressError}</p>}
+          {addressError && <p role="alert" className="break-words text-red-400">
+            {addressError}{' '}
+            <SettingsLink section="local-tools" focus="comfyui-api-url" tone="warning">Check ComfyUI address</SettingsLink>
+          </p>}
           <p>Let running and queued jobs finish before closing ComfyUI.</p>
-          {custom.map((pack) => (
+          {installGroups.map((pack) => (
             <div key={pack.class_type} className="space-y-1">
               <p><code className="break-all">{pack.class_type}</code> needs <b>{pack.pack}</b>.</p>
-              {safeComfyLink(pack.url) ? (
+              {pack.install_action === 'moss_nodes' ? (
+                <>
+                  <InstallRunner action="moss_nodes" buttonLabel={`Install ${pack.pack}`} onDone={onRefresh} />
+                  <p>Let running and queued jobs finish, restart ComfyUI, then use “Check nodes again”.
+                    {' MOSS uses the bundled LDS loaders and requires ComfyUI with Qwen3.5 support.'}</p>
+                </>
+              ) : safeComfyLink(pack.url) ? (
                 <>
                   <p>In ComfyUI-Manager, search for “{pack.search || pack.pack}” and install that package.
                     Restart ComfyUI when installation finishes.</p>
@@ -180,7 +193,7 @@ export default function ComfyNodeRepair({ nodes = [], nodePacks = [], onRefresh 
                 <a href={MODEL_PATHS} target="_blank" rel="noopener noreferrer" className={linkClass}>Share existing models with a separate installation</a>
               </div>
               <p>For a separate installation, select its folder and API address in LDS Settings before checking again.</p>
-              <a href="#/settings/local-tools" className={linkClass}>Open ComfyUI settings</a>
+              <SettingsLink section="local-tools" focus="comfyui-base-dir">Select ComfyUI folder</SettingsLink>
             </>
           )}
         </div>

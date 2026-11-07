@@ -124,7 +124,7 @@ that cost hours of GPU is recoverable.
 **☁ on Hugging Face** on the board and in its card, and the app refuses to remove
 it: doing so would discard the only record of where that model is.
 
-### Testing a full model
+## Testing a full model
 
 Once the fp8 twin is in ComfyUI, the **Test Studio** lists it as a base and
 **🧪 Test in Studio** opens straight onto it, with its own sample settings filled
@@ -133,11 +133,22 @@ real CFG and a real step count (CFG 4 / 25 steps for Krea 2). The family's
 few-step Turbo defaults render a blurry sketch on it that reads as a failed
 training.
 
-One limit worth knowing before you go looking for a button that is not there:
-**the Test Studio is entered through a LoRA of the dataset.** A dataset trained
-only as a full model has none, so it cannot open the Studio at all. If you have
-any LoRA of that dataset deployed, pick it and set its **strength to 0** — no
-LoRA node is added at 0, so you generate with the bare model.
+Open **Test Studio → Base model only**, choose the **Model family** and its
+**Base model**, then enter a prompt or select a prompt batch. No trained dataset
+or LoRA is required. CFG, steps, format, seed and images per configuration work
+as usual. Images are saved in a **Test Studio · … (base model)** dataset; the
+latest run for each family reopens when you return, including Stop and Resume.
+Select a LoRA above whenever you want to test its effect or compare checkpoints.
+
+**MOSS-Image** is available in **Base model only**. It uses the SFT BF16 model,
+Qwen3.5 9B INT8 text encoder and FLUX.2 VAE. Compatible files already present in
+ComfyUI's model folders are reused. Download missing files from the Studio, and
+use **Fix missing ComfyUI nodes → Install MOSS-Image loaders** when needed.
+Let queued jobs finish, restart ComfyUI, then check the nodes again. A ComfyUI
+version with Qwen3.5 support is required. The default is 50 steps, CFG 3,
+Euler / sgm_uniform, shift 5 and negative-branch skipping at layer 22.
+This integration generates images from text; MOSS LoRA testing and photo editing
+are not exposed.
 
 ## The generation queue
 
@@ -455,7 +466,9 @@ setup into a single file so you can move to a new machine — or recover from on
   still stands (the run is what marks it trained, not the file on disk). Nothing
   is ever overwritten — a dataset whose name already exists comes back with a
   `(restored)` suffix — and you get an honest final report of what was restored,
-  renamed or skipped.
+  renamed or skipped. There is no size limit: LDS only checks that the drives
+  receiving the backup have room for it, and tells you how much space is missing
+  when they don't.
 
 ## The image bank (triage a big folder)
 
@@ -702,6 +715,27 @@ pass left **off by default** (it's the slowest GPU pass and a clean-up run
 rarely needs a description on every shot). Stop it any time — and when you come
 back, a saved report at the top of the bank tells you exactly what ran, what was
 skipped and why, with the headline counts.
+
+## Read-only bank sources
+
+Enable **Read-only source** when creating an Image bank, or use the same
+checkbox beside an existing bank's name. This is useful for a NAS or a folder
+of original photos: **Delete rejected from disk** and web imports into the
+source folder are refused by the server, even from an old browser tab.
+Banks whose source folders overlap a protected bank are also blocked from
+deleting or adding source files.
+
+You can still browse, scan, keep/reject, caption, crop or improve working copies,
+and **Promote** images into datasets or new banks. These operations leave the
+source files untouched. Removing a protected bank removes its LDS record and
+working data; its source folder is preserved, including an imported bank's copy.
+The protection setting belongs to that bank and is removed with its record.
+
+Existing banks keep their current behavior until you enable protection.
+Turning it off requires confirmation. Wait for any running bank operation to
+finish before changing protection; the app refuses a change while an overlapping
+bank is busy too. This setting controls LDS bank operations; it does not change
+filesystem permissions or prevent other programs from modifying the folder.
 
 ## Choosing where a bank pass runs
 

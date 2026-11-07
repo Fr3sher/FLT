@@ -654,6 +654,21 @@ _update_cache = {'ts': 0.0, 'data': None}
 _git_check_cache = {'ts': 0.0, 'data': None}
 
 
+def _patreon_channel_view(out, docker_runtime):
+    """A ZIP or Docker install on the Patreon channel (updater.patreon_channel):
+    the public release is reported, never offered, because installing it would
+    replace the Patreon version (a Git checkout answers through its own ref).
+    Applied after the cache, so a marker written since is never missed."""
+    from ..services import updater
+    if (not docker_runtime and updater.is_git_checkout()) or updater.patreon_channel() is None:
+        return out
+    view = {**out, 'channel': 'patreon', 'update_available': False,
+            'public_update_available': bool(out.get('update_available'))}
+    if not docker_runtime:
+        view['can_force'] = True  # POST /update/apply {"force_public": true}
+    return view
+
+
 @bp.get('/update/check')
 def update_check():
     import time
@@ -684,7 +699,7 @@ def update_check():
     now = time.time()
     if (_update_cache['data'] is not None and (now - _update_cache['ts']) < _UPDATE_TTL
             and not force):
-        return jsonify(_update_cache['data'])
+        return jsonify(_patreon_channel_view(_update_cache['data'], docker_runtime))
     repo = cfg.get('updates.repo') or 'Fr3sher/FLT'
     out = {'ok': True, 'current': APP_VERSION, 'latest': None,
            'update_available': False, 'url': f'https://github.com/{repo}/releases'}
@@ -703,8 +718,8 @@ def update_check():
             latest = (j.get('tag_name') or '').lstrip('vV').strip()
             out['latest'] = latest or None
             out['url'] = j.get('html_url') or out['url']
-            # Date-based versions (YYYY.MM.DD[.N]) -> plain string comparison.
-            out['update_available'] = bool(latest) and latest > APP_VERSION
+            # Date-based versions (YYYY.MM.DD[.N]), compared as numbers.
+            out['update_available'] = updater.version_newer(latest, APP_VERSION)
             # can_apply: this release ships a downloadable ZIP asset, so a packaged
             # (non-git) install can update in-app instead of only linking out to the
             # releases page. The button keys off this for a ZIP install.
@@ -729,7 +744,7 @@ def update_check():
     except requests.RequestException:
         out['reason'] = 'offline or GitHub unreachable'
     _update_cache.update(ts=now, data=out)
-    return jsonify(out)
+    return jsonify(_patreon_channel_view(out, docker_runtime))
 
 
 @bp.post('/update/apply')
@@ -771,9 +786,40 @@ def update_apply():
             _git_check_cache.update(ts=0.0, data=None)
             updater.schedule_restart(install_requirements=bool(res.get('deps_changed')))
         return jsonify(res)
-    # Packaged install: async release update with a progress poll.
+    # Packaged install: async release update with a progress poll. On the
+    # Patreon channel it refuses unless the body says {"force_public": true}.
     _update_cache.update(ts=0.0, data=None)
+    body = request.get_json(silent=True)
+    if isinstance(body, dict) and body.get('force_public') is True:
+        return jsonify(updater.start_zip_update(force_public=True))
     return jsonify(updater.start_zip_update())
+
+
+@bp.get('/update/patreon')
+def update_patreon_status():
+    """The Patreon core channel: latest signed release, membership, and whether
+    this install shape can apply it. Reading needs no plugin administration: a
+    browser behind Docker's bridge or on the LAN sees the channel too, and the
+    Updates card never sends the admin token. ``can_manage`` says whether this
+    request could install; the apply route keeps requiring administration."""
+    from ..plugins.admin import is_admin
+    from ..services import patreon_core
+    response = jsonify({**patreon_core.status(force=bool(request.args.get('force'))), 'can_manage': is_admin()})
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.post('/update/patreon/apply')
+def update_patreon_apply():
+    """Install the latest Patreon core release (git/Pinokio fast-forward, or the
+    async staged ZIP swap polled through /api/update/progress)."""
+    from ..plugins.admin import require_admin
+    from ..services import patreon_core
+    if (denied := require_admin()) is not None:
+        return denied
+    _update_cache.update(ts=0.0, data=None)
+    _git_check_cache.update(ts=0.0, data=None)
+    return patreon_core.apply_response()
 
 
 @bp.get('/update/progress')

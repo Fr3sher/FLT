@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,10 +11,12 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from ..compatibility import host_issues
-from ..manifest import parse_manifest
+from ..manifest import ManifestNeedsNewerApp, parse_manifest
 from ..ownership import conflict
 from .client import StoreError
 from .media_contract import parse_presentation
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -35,29 +38,41 @@ class Release:
 
 
 def parse_catalog(data, config):
-    """The root configuration, not a publisher claim, authorizes historic IDs."""
+    """The root configuration, not a publisher claim, authorizes historic IDs.
+
+    Any invalid entry still refuses the whole catalog, with one exception: a
+    release whose manifest uses vocabulary added after this app is left out on
+    its own. A members plugin declaring a new permission once made the entire
+    Patreon catalog unavailable on every older installation."""
     if not isinstance(data, dict) or data.get('schema_version') != 1:
         raise StoreError('The catalog format is not supported by this app.')
     products = data.get('products')
     if not isinstance(products, list) or len(products) > 1000:
         raise StoreError('The catalog product list is invalid.')
-    result = {}
+    result, seen = {}, set()
     try:
         for product in products:
             plugin_id = product['id']
-            if config.selected_ids and plugin_id not in config.selected_ids:
+            if config.scoped and not config.serves(plugin_id):
                 continue
-            if plugin_id in result:
+            # Every identity seen, not only the kept ones: a product whose
+            # releases were all left out must still expose a duplicate of it.
+            if plugin_id in seen:
                 raise ValueError('duplicate product')
+            seen.add(plugin_id)
             versions = {}
             releases = product['releases']
             if not isinstance(releases, list) or not releases or len(releases) > 100:
                 raise ValueError('invalid releases')
             for release in releases:
-                manifest = parse_manifest(release['manifest'], Path('.'), official=plugin_id in config.official_ids)
+                try:
+                    manifest = parse_manifest(release['manifest'], Path('.'), official=plugin_id in config.official_ids)
+                except ManifestNeedsNewerApp as exc:
+                    log.info('Store: %s release left out, it needs a newer LDS (%s)', plugin_id, exc)
+                    continue
                 if manifest.bundled or manifest.id != plugin_id or manifest.contract['schema_version'] != 2:
                     raise ValueError('invalid package identity')
-                if not manifest.official and plugin_id not in config.external_ids:
+                if not manifest.official and not config.serves(plugin_id):
                     raise ValueError('publisher is not approved for this store')
                 version = Version(manifest.version)
                 if version in versions:
@@ -72,12 +87,18 @@ def parse_catalog(data, config):
                     raise ValueError('invalid price')
                 if price['kind'] == 'paid' and (not isinstance(price.get('product'), str) or not price['product']):
                     raise ValueError('invalid commerce product')
+                # Only the operator-configured Patreon source may label a
+                # release as a Patreon product; that source sells nothing else.
+                patreon = getattr(config, 'provider', '') == 'patreon'
+                if patreon != (price.get('provider') == 'patreon') or (patreon and price['kind'] != 'paid'):
+                    raise ValueError('invalid Patreon release')
                 changelog = release.get('changelog', [])
                 if not isinstance(changelog, list) or any(not isinstance(s, str) for s in changelog):
                     raise ValueError('invalid changelog')
                 images = parse_presentation(release.get('presentation'), manifest.id, manifest.version)
                 versions[version] = Release(manifest, target, digest, tuple(changelog), price, images)
-            result[plugin_id] = sorted(versions.values(), key=lambda r: Version(r.manifest.version), reverse=True)
+            if versions:
+                result[plugin_id] = sorted(versions.values(), key=lambda r: Version(r.manifest.version), reverse=True)
     except (KeyError, TypeError, ValueError) as exc:
         raise StoreError('The authenticated catalog contains an invalid product or release.') from exc
     return result
@@ -88,6 +109,61 @@ def _satisfies(version, ranges, *, installed=False):
     if version.is_prerelease and not ranges:
         return installed
     return all(SpecifierSet(spec).contains(version, prereleases=SpecifierSet(spec).prereleases is True) for spec in ranges)
+
+
+# Requirements that the members version of LDS changes. Python or platform
+# issues would refuse a release on every core.
+_CORE_REQUIREMENTS = ('compatibility.lds', 'compatibility.api', 'host_dependencies.')
+# The core's own version requirements. A core dependency refused alone is this
+# installation's environment, which repairing the public core fixes.
+_CORE_VERSIONS = ('compatibility.lds', 'compatibility.api')
+
+
+def members_releases(releases, members, *, current, public_version=None):
+    """The releases of a public-catalog plugin that need the members version of LDS.
+
+    ``releases`` are ``Release.payload()`` values, newest first. ``members``
+    are the published members core versions (Patreon ``core-releases.json``),
+    newest first; when they cannot be read, nothing is claimed.
+
+    On the public core (``current``), a release qualifies while only core
+    requirements refuse it (LDS range, plugin API, core dependencies), at least
+    one of them its LDS range or plugin API, and its LDS range admits the
+    latest members core. Assumption: the members core meets the plugin API and
+    the core dependencies, since it always carries the newest API and pins its
+    own dependencies; ``core-releases.json`` names only its version. The first
+    release the public core accepts ends the list.
+
+    A published members core compares against the actual published public
+    version supplied by the host. Dates and suffixes cannot identify that
+    version: a members release may be on another day or have no fourth part.
+    Without a verified public version, no exclusivity is claimed. A release
+    refused by the public plugin API alone cannot be recognized on a members
+    core from version metadata alone.
+    Members-only plugins (the Patreon catalog) are reserved as a whole and list
+    nothing here."""
+    if not members:
+        return []
+    public = None  # This core is the public one: its issues are the public refusals.
+    if current in members:
+        if not public_version:
+            return []
+        public = public_version
+    found = []
+    for release in releases:
+        if release['price'].get('provider') == 'patreon':
+            return []
+        lds = release['manifest']['compatibility']['lds']
+        issues = release['compatibility_issues']
+        refused = (any(issue['field'] in _CORE_VERSIONS for issue in issues) if public is None
+                   else not _satisfies(public, [lds]))
+        if not refused:
+            break  # The public core accepts this release, and the older ones.
+        if (_satisfies(members[0], [lds])
+                and all(issue['field'].startswith(_CORE_REQUIREMENTS) for issue in issues)):
+            found.append({'version': release['manifest']['version'], 'changelog': release['changelog'],
+                          'available': not issues})
+    return found
 
 
 def resolve(catalog, requested, installed, *, version=None, active=None, enable_requested=True):

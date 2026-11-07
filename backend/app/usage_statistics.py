@@ -19,7 +19,7 @@ import uuid
 
 from .version import APP_VERSION
 
-POLICY_VERSION = 1
+POLICY_VERSION = 2
 RETENTION_POLICY = 'posthog_free_plan_v1'
 COLLECTOR = 'https://eu.i.posthog.com/batch/'
 MAX_EVENTS = 500
@@ -34,12 +34,57 @@ ACTIONS = frozenset({
     'create', 'import', 'caption', 'export', 'generate', 'train',
     'scan', 'faces', 'score', 'framing', 'watermark', 'promote', 'setup',
     'semantic_index', 'semantic_dedup', 'text', 'angles', 'medium', 'pipeline',
+    'train_start', 'train_resume', 'train_enqueue', 'train_run',
 })
 RESULTS = frozenset({'completed', 'accepted', 'partial', 'failed', 'cancelled'})
 ERRORS = frozenset({
     'none', 'invalid_input', 'not_found', 'busy', 'unavailable',
     'out_of_memory', 'timeout', 'dependency_missing', 'operation_failed',
+    'conflict',
 })
+ERROR_REASONS = frozenset({
+    'none', 'unknown', 'training_already_running', 'caption_backend_unavailable',
+    'gpu_busy', 'dataset_busy', 'bank_busy', 'ollama_fence_blocked',
+    'bank_name_required', 'bank_folder_unavailable', 'bank_dataset_folder_conflict',
+    'bank_image_limit', 'training_process_failed', 'training_resume_failed',
+    'studio_generation_failed', 'studio_result_save_failed', 'cloud_training_failed',
+})
+CONTEXT_VALUES = {
+    'execution': frozenset({'local', 'cloud', 'unknown'}),
+    'model_family': frozenset({'zimage', 'krea', 'flux2klein', 'sdxl', 'flux',
+                               'anima', 'qwenimage21', 'moss', 'ltx', 'unknown'}),
+    'caption_backend': frozenset({'ollama', 'lmstudio', 'unknown'}),
+}
+FAILURE_STAGES = frozenset({'none', 'unknown', 'validation', 'queued', 'preparation',
+                          'provisioning', 'uploading', 'generation', 'training',
+                          'downloading', 'saving', 'terminating'})
+
+
+def operation_context(*, execution=None, model_family=None, caption_backend=None):
+    """Only fixed categories survive; never infer a family from a file name."""
+    values = {'execution': execution, 'model_family': model_family, 'caption_backend': caption_backend}
+    return {key: value if isinstance(value, str) and value in CONTEXT_VALUES[key] else 'unknown'
+            for key, value in values.items()}
+
+
+def caption_context():
+    try:
+        from .services.vision_llm import provider
+        return operation_context(execution='local', caption_backend=provider())
+    except Exception:
+        return operation_context(execution='local')
+
+
+def failure_stage(error_code, error_reason):
+    if not isinstance(error_code, str) or not isinstance(error_reason, str):
+        return 'unknown'
+    if error_reason in {'caption_backend_unavailable', 'training_resume_failed'}:
+        return 'preparation'
+    if error_reason.startswith('bank_') and error_reason not in {'bank_busy'}:
+        return 'validation'
+    if error_code in {'invalid_input', 'not_found', 'busy', 'conflict'}:
+        return 'validation'
+    return 'unknown'
 DURATIONS = ('under_1s', '1_to_10s', '10_to_60s', '1_to_10m', 'over_10m')
 EVENTS = frozenset({'lds_active_day', 'lds_feature_used', 'lds_action_result'})
 
@@ -88,11 +133,18 @@ def _valid_row(row):
     expected = {'feature'} if row['event'] == 'lds_feature_used' else set()
     if row['event'] == 'lds_action_result':
         expected = {'feature', 'action', 'result', 'error_code', 'duration_bucket'}
+        # Already queued events from older builds remain valid after an update.
+        if 'error_reason' in props:
+            expected.add('error_reason')
+        expected.update(key for key in (*CONTEXT_VALUES, 'failure_stage') if key in props)
     return (set(props) == expected and all(isinstance(value, str) for value in props.values())
             and ('feature' not in props or props['feature'] in FEATURES)
             and ('action' not in props or props['action'] in ACTIONS)
             and ('result' not in props or props['result'] in RESULTS)
             and ('error_code' not in props or props['error_code'] in ERRORS)
+            and ('error_reason' not in props or props['error_reason'] in ERROR_REASONS)
+            and all(key not in props or props[key] in values for key, values in CONTEXT_VALUES.items())
+            and ('failure_stage' not in props or props['failure_stage'] in FAILURE_STAGES)
             and ('duration_bucket' not in props or props['duration_bucket'] in DURATIONS))
 
 
@@ -259,17 +311,27 @@ class UsageStatistics:
             self._save()
 
     def operation(self, generation, feature, action, result, *, seconds=0,
-                  error_code='none'):
+                  error_code='none', error_reason='none', context=None, stage=None):
+        context = operation_context() if context is None else context
+        if (not isinstance(context, dict) or set(context) != set(CONTEXT_VALUES)
+                or any(not isinstance(value, str) or value not in CONTEXT_VALUES[key]
+                       for key, value in context.items())):
+            return
+        stage = (stage or failure_stage(error_code, error_reason)) if result in {'failed', 'partial'} else 'none'
+        if not isinstance(stage, str) or stage not in FAILURE_STAGES:
+            return
         with self._lock:
             if (not self.enabled or generation is None
                     or generation != self._state['generation']
                     or feature not in FEATURES or action not in ACTIONS
-                    or result not in RESULTS or error_code not in ERRORS):
+                    or result not in RESULTS or error_code not in ERRORS
+                    or error_reason not in ERROR_REASONS):
                 return
             bucket = DURATIONS[sum(seconds >= threshold for threshold in (1, 10, 60, 600))]
             self._queue('lds_action_result', {
                 'feature': feature, 'action': action, 'result': result,
-                'error_code': error_code, 'duration_bucket': bucket}, self._clock())
+                'error_code': error_code, 'error_reason': error_reason,
+                'duration_bucket': bucket, 'failure_stage': stage, **context}, self._clock())
             self._save()
 
     def _ensure_worker(self):
@@ -352,6 +414,8 @@ def install(app):
         start_worker=not app.config.get('TESTING'))
     from .usage_statistics_hooks import install_hooks
     install_hooks(app)
+    from .usage_lifecycle import install as install_lifecycle
+    install_lifecycle(app)
 
 
 def current():
@@ -373,12 +437,32 @@ def begin_operation(feature):
     return None
 
 
-def finish_operation(ticket, feature, action, result, error_code='none'):
+def error_categories(exc):
+    """Never inspect or forward exception messages, paths or model names."""
+    code = getattr(exc, 'usage_error_code', None)
+    reason = getattr(exc, 'usage_error_reason', None)
+    if not isinstance(code, str) or code not in ERRORS or code == 'none':
+        code = ('invalid_input' if isinstance(exc, ValueError) else
+                'timeout' if isinstance(exc, TimeoutError) else 'operation_failed')
+    if not isinstance(reason, str) or reason not in ERROR_REASONS or reason == 'none':
+        reason = 'unknown'
+    return code, reason
+
+
+def record_operation_error(exc):
+    from flask import g, has_request_context
+    if has_request_context():
+        g.lds_usage_error = error_categories(exc)
+
+
+def finish_operation(ticket, feature, action, result, error_code='none', error_reason='none', *,
+                     context=None, stage=None):
     if ticket is None:
         return
     try:
         service, generation, started = ticket
         service.operation(generation, feature, action, result,
-                          seconds=max(0, time.monotonic() - started), error_code=error_code)
+                          seconds=max(0, time.monotonic() - started), error_code=error_code,
+                          error_reason=error_reason, context=context, stage=stage)
     except Exception:
         pass

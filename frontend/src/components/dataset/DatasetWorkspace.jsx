@@ -86,9 +86,11 @@ import { WORKSPACE_SECTIONS, SECTION_FOR_TARGET } from './workspaceSections';
 import { apiFetch, postJson, putJson } from '../../api/fetchClient';
 import { datasetToBankRequest, datasetToBankUrl } from './datasetToBank';
 import { HelpBadge } from '../../help/HelpMode';
+import SettingsLink from '../common/SettingsLink';
 import { requestHelpTip } from '../../help/helpTips';
 import { openCollapsedAncestors } from '../../help/revealTarget';
 import { activeLocalLlm } from '../../utils/localLlm';
+import { MemberOptions } from '../patreon/MemberPreviews.jsx';
 import {
   PANEL_STATUS,
   getWorkspacePanel,
@@ -1080,9 +1082,9 @@ export default function DatasetWorkspace({ ds, onBack }) {
     </button>
   );
 
-  // Third source next to the dropzone and the scraper: an already-triaged bank.
-  // The server's promote path does the copying (normalize + dedup vs THIS
-  // dataset) in a background job — we only pick the bank and refresh at the end.
+  // Third source next to the dropzone and the scraper: a bank or another dataset,
+  // image by image (or a bank's whole kept set). The server does the copying
+  // (normalize + dedup vs THIS dataset); the panel refreshes us at the end.
   const bankImport = (
     <BankImportPanel datasetId={d.id} disabled={importBusy}
       onImported={() => ds.refresh()} />
@@ -1671,6 +1673,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
                       Klein <span className="font-normal opacity-70">quality</span>
                     </button>
                   </div>
+                  {/* Members previews of the clean engines plugins add, without an active membership. */}
+                  <MemberOptions placements={['watermark.engines']} variant="line" />
                   {/* 🔤/🚩 WHAT to clean — only offered once Find text flagged
                       something (no text page = the three choices collapse into
                       one, a dead dial). Same three choices, same words as the
@@ -2396,7 +2400,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
                 </button>
               ) : (
                 <p className="m-0 rounded-lg border border-border bg-surface px-3 py-2 text-content-muted text-sm">
-                  Configure ComfyUI in Settings to use the LoRA testing Studio.
+                  Connect ComfyUI to use the LoRA testing Studio.{' '}
+                  <SettingsLink section="local-tools" focus="comfyui-api-url">Configure ComfyUI address</SettingsLink>
                 </p>
               )}
               <div><HelpBadge topic="action-studio-open" /></div>
@@ -2411,7 +2416,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
       {cropImg && cropImg.filename && (
         <CropModal imageUrl={`/api/dataset/${d.id}/img/${encodeURIComponent(cropImg.filename)}${
           ds.nonces?.[cropImg.id] ? `?v=${ds.nonces[cropImg.id]}` : ''}`}
-          onCancel={() => setCropImg(null)}
+          onCancel={() => setCropImg(null)} previewPlacement="dataset.crop"
           onConfirm={async (box) => { await ds.crop(cropImg.id, box); setCropImg(null); }} />
       )}
       {refCrop && d.ref_filename && (

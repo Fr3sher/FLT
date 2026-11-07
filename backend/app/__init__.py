@@ -5,6 +5,7 @@ import sqlite3
 import hashlib
 import hmac
 import json
+import tempfile
 from pathlib import Path
 from flask import (
     Flask, Request, current_app, jsonify, request, send_from_directory)
@@ -110,13 +111,18 @@ def pin_static_mime_types():
 
 pin_static_mime_types()
 
-_DEFAULT_DATASET_ARCHIVE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 _DEFAULT_DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+# Archives carry no size ceiling: they come off the user's own disk, and a full
+# backup holds the whole library, trained LoRAs included. The old 2 GiB ceiling
+# refused a 43.6 GB backup while the browser was still sending it, so all the
+# user saw was "Failed to fetch" (GitHub #76). What guards these uploads is the
+# free space of the drive they are staged on (_get_file_stream). An operator can
+# still set LDS_DATASET_ARCHIVE_MAX_UPLOAD_BYTES to impose one.
 _DATASET_ARCHIVE_UPLOAD_ENDPOINTS = frozenset({
     'datasets.dataset_backup_import',
     'datasets.dataset_import_zip',
     # 'Back up everything' restore accepts a master archive that can be as large
-    # as the whole library — it needs the same raised request ceiling.
+    # as the whole library.
     'backup.full_restore',
 })
 
@@ -167,11 +173,12 @@ class ArchiveAwareRequest(Request):
                 if plugin_available(limit[0]):
                     return limit[1]
         if self.endpoint in _DATASET_ARCHIVE_UPLOAD_ENDPOINTS and current_app:
-            archive_max = int(
-                current_app.config['DATASET_ARCHIVE_MAX_UPLOAD_BYTES'])
+            archive_max = current_app.config.get('DATASET_ARCHIVE_MAX_UPLOAD_BYTES')
+            if not archive_max:
+                return None
             overhead = max(0, int(
                 current_app.config['DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES']))
-            return archive_max + overhead
+            return int(archive_max) + overhead
         if self.endpoint in _DATASET_IMPORT_UPLOAD_ENDPOINTS and current_app:
             return int(current_app.config['DATASET_IMPORT_MAX_UPLOAD_BYTES'])
         return super().max_content_length
@@ -201,6 +208,27 @@ class ArchiveAwareRequest(Request):
     def get_data(self, *args, **kwargs):
         self._raise_if_declared_body_is_too_large()
         return super().get_data(*args, **kwargs)
+
+    def _get_file_stream(self, total_content_length, content_type,
+                         filename=None, content_length=None):
+        """Stage an archive upload on the drive of the LDS data folder.
+
+        Werkzeug's default rolls a large upload into the system temp folder,
+        usually on C:, which can be much smaller than the drive holding the data.
+        The file lands in the backups folder instead, after a check that this
+        drive can take the whole request; a refusal names the figures (507).
+        It is an anonymous temporary file: closing it deletes it, and so does the
+        system if the app is killed mid-upload. The restore route hands it to the
+        restore worker open, with no second copy of a multi-GB archive.
+        """
+        if self.endpoint not in _DATASET_ARCHIVE_UPLOAD_ENDPOINTS or not current_app:
+            return super()._get_file_stream(
+                total_content_length, content_type, filename, content_length)
+        from .services import full_backup
+        folder = cfg.backups_dir()
+        full_backup.ensure_free_space(
+            [(folder, total_content_length or 0)], 'receive this upload')
+        return tempfile.TemporaryFile(prefix='.upload-', suffix='.part', dir=str(folder))
 
 
 def _positive_env_int(name, default):
@@ -462,6 +490,7 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset_image', 'caption_origin', 'VARCHAR(16)'),
     ('face_dataset_image', 'caption_short_origin', 'VARCHAR(16)'),
     ('image_bank', 'pipeline_report', 'TEXT'),
+    ('image_bank', 'read_only', 'BOOLEAN NOT NULL DEFAULT 0'),
     # When each pass last completed. A bank that predates it keeps NULL and
     # simply reports "never recorded" until its next pass writes a row.
     ('image_bank', 'last_passes', 'TEXT'),
@@ -678,12 +707,12 @@ def create_app(config_object=None):
         SQLALCHEMY_DATABASE_URI=f"sqlite:///{data_dir / 'studio.db'}",
         SQLALCHEMY_ENGINE_OPTIONS={'connect_args': {'check_same_thread': False}},
         MAX_CONTENT_LENGTH=64 * 1024 * 1024,
-        # ZIP imports legitimately exceed the ordinary upload ceiling.  The exact
-        # archive-file cap stays separate from multipart framing overhead so the
-        # route can enforce the former after Werkzeug has spooled the upload.
+        # Archive uploads have no ceiling unless an operator sets one (see
+        # _DATASET_ARCHIVE_UPLOAD_ENDPOINTS). An explicit cap stays separate from
+        # multipart framing overhead so the route can enforce the exact file size
+        # after Werkzeug has staged the upload.
         DATASET_ARCHIVE_MAX_UPLOAD_BYTES=_positive_env_int(
-            'LDS_DATASET_ARCHIVE_MAX_UPLOAD_BYTES',
-            _DEFAULT_DATASET_ARCHIVE_MAX_UPLOAD_BYTES),
+            'LDS_DATASET_ARCHIVE_MAX_UPLOAD_BYTES', None),
         DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES=(
             _DEFAULT_DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES),
         # The photo-import ceiling (see _DEFAULT_DATASET_IMPORT_MAX_UPLOAD_BYTES):
@@ -729,16 +758,23 @@ def create_app(config_object=None):
     csrf.init_app(app)
 
     from werkzeug.exceptions import RequestEntityTooLarge
+    from .services.full_backup import DiskSpaceError
+
+    @app.errorhandler(DiskSpaceError)
+    def _disk_space_error(error):
+        # Raised while an archive upload is staged (ArchiveAwareRequest): say
+        # how much is missing instead of failing on a full disk.
+        return jsonify({'ok': False, 'error': str(error)}), 507
 
     @app.errorhandler(RequestEntityTooLarge)
     def _request_entity_too_large(error):
         if not request.path.startswith('/api/'):
             return error
-        if request.endpoint in _DATASET_ARCHIVE_UPLOAD_ENDPOINTS:
-            limit = int(app.config['DATASET_ARCHIVE_MAX_UPLOAD_BYTES'])
+        limit = app.config.get('DATASET_ARCHIVE_MAX_UPLOAD_BYTES')
+        if request.endpoint in _DATASET_ARCHIVE_UPLOAD_ENDPOINTS and limit:
             return jsonify({
                 'ok': False,
-                'error': f'archive too large (maximum {limit // (1024 * 1024)} MiB)',
+                'error': f'archive too large (maximum {int(limit) // (1024 * 1024)} MiB)',
             }), 413
         # Name the numbers: "upload too large" alone sent people resizing
         # single photos when the whole DROP was the problem — five to eight
@@ -803,9 +839,8 @@ def create_app(config_object=None):
     from .routes import register_blueprints
     register_blueprints(app, csrf)
 
-    # Non-loopback clients must present the access token (run.py generates one
-    # when the bind is opened) — without this, `server.host: 0.0.0.0` would hand
-    # the whole LAN the API keys, the GPU and the datasets. Loopback = untouched.
+    # Install the access gate before plugin hooks. The operator can require
+    # authentication on loopback too with LDS_REQUIRE_LOCAL_TOKEN=1.
     from .netguard import install_network_guard
     install_network_guard(app)
 
@@ -833,9 +868,13 @@ def create_app(config_object=None):
         register_builtin()
         load_plugins(app, csrf)
 
+    # A fresh id per process: after an update the browser reloads only once it
+    # changes, since the old process keeps answering until it exits.
+    boot_id = os.urandom(8).hex()
+
     @app.get('/api/health')
     def health():
-        return {'ok': True}
+        return {'ok': True, 'boot': boot_id}
 
     @app.get('/api/csrf-token')
     def csrf_token():

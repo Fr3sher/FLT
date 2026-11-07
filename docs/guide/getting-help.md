@@ -49,7 +49,16 @@ LoRA Dataset Studio development, API testing and test GPUs through
 **monthly support** on [Patreon](https://www.patreon.com/c/Loraperfectgf)
 or [GitHub Sponsors](https://github.com/sponsors/perfectgf).
 
-The small support message on the datasets page can be dismissed. These links
+Connect Patreon under **Plugins → Purchases**. Members-only plugins then install
+from the Store like any other plugin, and new LDS versions appear under
+**Settings → Maintenance → Updates**. Members-only plugins and the online Library
+require an active connected membership. Disconnecting locks them immediately;
+your installed files and data are kept. Public plugins and the installed LDS core
+remain usable. You can also support development through
+[GitHub Sponsors](https://github.com/sponsors/perfectgf); it does not include
+the Patreon membership benefits.
+
+The small Patreon announcement on the datasets page can be dismissed. These links
 remain available through **Help & guide → Support LDS**.
 The best free ways to help are just as welcome: report bugs, share ideas on
 Discord, and star the repo.

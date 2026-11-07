@@ -14,8 +14,10 @@ from .. import official, storage
 from ..install import inspect_archive, inspect_plugin_zip
 from ..loader import external_dir
 from .catalog import parse_catalog, plan_digest, resolve
-from .client import StoreError, StoreSession, load_config, load_private_configs, config_for_plugins
+from .client import (StoreError, StoreNotConfigured, StoreSession, config_for_plugins, load_config,
+                     load_private_configs, patreon_source)
 from .commerce import CommerceClient, download_release
+from .patreon import PatreonClient
 
 
 def installed_manifests(registry):
@@ -37,7 +39,13 @@ def browse():
     except StoreError as exc:
         sources = []
         messages.append(str(exc))
-    for source in sources:
+    try:
+        patreon = patreon_source(sources)
+    except StoreError:
+        patreon = None
+        messages.append('The Patreon catalog configuration is invalid. Other catalogs remain available.')
+    for source in sources + ([patreon] if patreon else []):
+        name = 'The Patreon catalog' if source.provider == 'patreon' else 'A private plugin catalog'
         try:
             additional = _browse(source)
             payload['products'].extend(additional['products'])
@@ -45,9 +53,9 @@ def browse():
                 payload['status'] = additional['status']
                 payload['checked_at'] = additional['checked_at']
             if additional['message']:
-                messages.append('A private plugin catalog is offline; showing its last verified releases.')
+                messages.append(name + ' is offline; showing its last verified releases.')
         except StoreError:
-            messages.append('A private plugin catalog is unavailable. Other catalogs remain available.')
+            messages.append(name + ' is unavailable. Other catalogs remain available.')
     payload['message'] = ' '.join(dict.fromkeys(messages))
     return payload
 
@@ -147,17 +155,49 @@ def _plan(sessions, registry, plugin_id, version, *, update_only=False):
 
 
 def preview_plan(registry, plugin_id, version=None, *, update_only=False):
+    """The reviewed plan. Update all (``update_only`` over several plugins)
+    leaves out the members-only plugins this installation may not download,
+    instead of blocking every other update: they keep their installed version
+    and are listed in ``excluded``. ``requested`` then names what the
+    confirmation must send back."""
+    plan = _preview_plan(registry, plugin_id, version, update_only=update_only)
+    if update_only and not isinstance(plugin_id, str):
+        locked = [pid for pid in plan['patreon_required'] if pid in plugin_id]
+        remaining = [pid for pid in plugin_id if pid not in locked]
+        if locked and remaining:
+            names = {package['manifest']['id']: package['manifest'].get('name') or package['manifest']['id']
+                     for package in plan['packages']}
+            plan = _preview_plan(registry, remaining, version, update_only=True)
+            plan['excluded'] = [{'id': pid, 'name': names.get(pid, pid)} for pid in locked]
+    return plan
+
+
+def _preview_plan(registry, plugin_id, version=None, *, update_only=False):
     with _plan_sessions(plugin_id) as sessions:
-        changes, identity, needed, _owners = _plan(sessions, registry, plugin_id, version, update_only=update_only)
+        changes, identity, needed, owners = _plan(sessions, registry, plugin_id, version, update_only=update_only)
         paid = [r.manifest.id for r in changes if r.target and r.price['kind'] == 'paid']
-        acquired, commerce_status = set(), 'not_required'
-        if paid:
+        # The owning source, not the release label, selects the acquisition service.
+        patreon_paid = [pid for pid in paid if owners[pid].config.provider == 'patreon']
+        acquired, commerce_status, patreon_access = set(), 'not_required', None
+        other_paid = [pid for pid in paid if pid not in patreon_paid]
+        if other_paid:
             try:
                 library = CommerceClient().library()
                 commerce_status = library['status']
-                acquired = {item['plugin_id'] for item in library['items'] if item['status'] == 'active'}
+                acquired |= {item['plugin_id'] for item in library['items']
+                             if item['status'] == 'active' and item['plugin_id'] in other_paid}
             except StoreError:
                 commerce_status = 'unavailable'
+        if patreon_paid:
+            try:
+                library = PatreonClient().library()
+                patreon_access = {'status': library['status'], 'patreon': library['patreon']}
+                acquired |= {item['plugin_id'] for item in library['items']
+                             if item['status'] == 'active' and item['plugin_id'] in patreon_paid}
+            except StoreNotConfigured:
+                patreon_access = {'status': 'not_configured', 'patreon': None}
+            except StoreError:
+                patreon_access = {'status': 'unavailable', 'patreon': None}
         installed = installed_manifests(registry)
         flags = cfg.get('plugins.enabled') or {}
         requested = {plugin_id} if isinstance(plugin_id, str) else set(plugin_id)
@@ -170,7 +210,9 @@ def preview_plan(registry, plugin_id, version=None, *, update_only=False):
                               'remains_disabled': r.manifest.id not in needed and flags.get(r.manifest.id) is False,
                               } for r in changes], 'restart_required': True,
                 'paid_packages': paid, 'commerce_status': commerce_status,
-                'purchase_required': [pid for pid in paid if pid not in acquired]}
+                'purchase_required': [pid for pid in paid if pid not in acquired],
+                'patreon_required': [pid for pid in patreon_paid if pid not in acquired],
+                'patreon_access': patreon_access}
 
 
 def prepare(registry, plugin_id, version, accepted_plan, *, check_change=None, update_only=False):
@@ -194,7 +236,8 @@ def prepare(registry, plugin_id, version, accepted_plan, *, check_change=None, u
                 target = session.target_info(release.target)
                 # A cached paid archive is not an entitlement. Every acquisition
                 # gets a fresh server grant bound to these authenticated bytes.
-                path = download_release(release, target, session.target_destination(target))
+                path = download_release(release, target, session.target_destination(target),
+                                        provider=session.config.provider)
             else:
                 path, target = session.target(release.target)
             m, prefix = inspect_plugin_zip(path, official=release.manifest.id in session.config.official_ids)
@@ -210,7 +253,7 @@ def prepare(registry, plugin_id, version, accepted_plan, *, check_change=None, u
                 provenance = {'id': m.id, 'publisher': 'lds', 'source': 'verified_store',
                               'manifest_sha256': digest, 'archive_sha256': target.hashes['sha256'],
                               'store': session.config.identity, 'target': release.target}
-            elif m.id not in session.config.external_ids:
+            elif not session.config.serves(m.id):
                 raise StoreError('This publisher is not approved for automatic installation.')
             old = registry.records.get(m.id) if registry else None
             flags = cfg.get('plugins.enabled') or {}

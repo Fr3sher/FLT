@@ -84,6 +84,162 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-11-07-setup-opens-on-tools',
+    date: '2026-11-07',
+    title: 'Setup opens on your tools',
+    blurb: 'Setup now opens on the overview of your tools: what is ready, what is missing, and Downloads & repair. '
+      + 'The guided setup by goal is one click away.',
+    to: '/setup',
+  },
+  {
+    id: '2026-11-03-members-features-in-place',
+    date: '2026-11-03',
+    title: 'See the members features where they apply',
+    blurb: 'Without an active LDS Patreon membership, Test Studio, Training, the crop windows and the watermark clean '
+      + 'now name the members features that apply there, with a link to join. Nothing else changes.',
+  },
+  {
+    id: '2026-10-31-huggingface-error-settings',
+    date: '2026-10-31',
+    title: 'Fix Hugging Face access errors from the failed run',
+    blurb: 'Hugging Face access errors now offer a read-token creation link and a field to save it without leaving the run. '
+      + 'Links also open the model’s access page and the exact token setting, including the dedicated token for full-model cloud runs.',
+  },
+  {
+    id: '2026-10-31-error-setting-shortcuts',
+    date: '2026-10-31',
+    title: 'Open the relevant setting directly from a warning',
+    blurb: 'Warnings about AI Toolkit, ComfyUI, local prompt models and quality thresholds now link to their exact settings.',
+  },
+  {
+    id: '2026-10-31-consistent-update-status',
+    date: '2026-10-31',
+    title: 'Update checks show the available members version consistently',
+    blurb: 'The update notification and Settings now use the same Patreon result. A newer members build takes precedence over '
+      + 'a current public version, a failed channel check cannot claim you are up to date, and Latest build names the offered Patreon version.',
+    to: '/settings/maintenance?focus=settings-updates',
+  },
+  {
+    id: '2026-10-30-z-members-update-notice',
+    date: '2026-10-30',
+    title: 'See when the LDS members version is available',
+    blurb: 'Once your Patreon membership is linked, the update dot and a banner tell you when a newer members version '
+      + 'exists, with a button that opens Updates to install it.',
+    to: '/settings/maintenance',
+  },
+  {
+    id: '2026-10-30-store-newer-plugin',
+    date: '2026-10-30',
+    title: 'One plugin can no longer hide the whole Patreon catalog',
+    blurb: 'A plugin made for a newer LDS is now left out on its own: every other plugin of the catalog stays visible '
+      + 'and installable.',
+    to: '/plugins',
+  },
+  {
+    id: '2026-10-30-simpler-setup-start',
+    date: '2026-10-30',
+    title: 'A simpler first setup',
+    blurb: 'Generate images asks one question first: Local or API. Local asks for your ComfyUI folder, then offers its '
+      + 'engines. Captioning always offers Ollama and LM Studio, and an API engine card that needs a key links straight to its settings.',
+    to: '/setup?step=welcome',
+  },
+  {
+    id: '2026-10-24-plugin-free-member-comparison',
+    date: '2026-10-24',
+    title: 'See what each plugin includes for free and for members',
+    blurb: 'Plugin cards compare the published free version with member additions, even when you already '
+      + 'use the members version of LDS. Free features and member additions have their own sections.',
+    to: '/plugins',
+  },
+  {
+    id: '2026-10-23-usage-context-choice', date: '2026-10-23',
+    title: 'Help pinpoint failures with a fresh sharing choice',
+    blurb: 'Optional usage sharing can now include Studio and cloud training outcomes, failure stages, model families and captioning engines. Sharing these categories requires a new opt-in; earlier refusals stay saved, and your images, prompts and files stay private.',
+    to: '/settings/maintenance',
+  },
+  {
+    id: '2026-10-22-training-launch-once',
+    date: '2026-10-22',
+    title: 'One training launch per click sequence',
+    blurb: 'The Train button stays busy through preparation and confirmation, so repeated clicks cannot submit overlapping launches. It becomes available again if preparation is cancelled or fails.',
+  },
+  {
+    id: '2026-10-22-bank-read-only-source', date: '2026-10-22',
+    title: 'Protect your image bank originals with read-only mode',
+    blurb: 'Enable Read-only source when adding a bank or in an existing bank to block source file deletion and new imports. Triage, captions, edits to working copies and copying into datasets still work. Protection also covers other banks pointing at the same folder tree. Thanks to kennhardy for the suggestion (GitHub #72).',
+    to: '/bank',
+  },
+  {
+    id: '2026-10-20-restore-backups-of-any-size', date: '2026-10-20',
+    title: 'Restore a backup of any size',
+    blurb: 'Import backup refused archives over 2 GB, so a full backup with its trained LoRAs ended on "Failed to fetch". Any size now restores as long as the drive holding the LDS data folder has room, and LDS tells you how much space is missing when it does not. The upload stays on screen while it runs, and an interrupted upload says so plainly. Thanks to lunchingfriar (GitHub #76) for reporting this.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-10-19-plugins-membership-features', date: '2026-10-19',
+    title: 'See what Patreon members get in each plugin',
+    blurb: 'Plugin cards now show their Membership features: members-only plugins, and the plugin versions that come with the members version of LDS. Members see what they already have.',
+    to: '/plugins',
+  },
+  {
+    id: '2026-10-18-z-docker-restart-port', date: '2026-10-18',
+    title: 'Docker: LDS stays reachable after installing a plugin',
+    blurb: 'On the Docker GPU installation, Apply and restart could bring LDS back on a port Docker does not publish, which left the app unreachable. LDS now always restarts on its published port.',
+  },
+  {
+    id: '2026-10-18-studio-moss-image', date: '2026-10-18',
+    title: 'Create with MOSS-Image in Test Studio',
+    blurb: 'Choose Base model only, then MOSS-Image. Existing model files are reused; missing files and the MOSS loaders can be prepared from the Studio.',
+    to: '/studio',
+  },
+  {
+    id: '2026-10-17-studio-base-model-only', date: '2026-10-17',
+    title: 'Generate in Test Studio without a LoRA',
+    blurb: 'Choose Base model only, pick a model family and base, then enter your prompt. No trained dataset or LoRA selection is required.',
+    to: '/studio',
+  },
+  {
+    id: '2026-10-17-dataset-import-picked-images',
+    date: '2026-10-17',
+    title: 'Pick the images to import from a bank or another dataset',
+    blurb: '"Import from a bank or a dataset" in Add images now shows the source\'s images: click the ones you want and only those are copied, with their captions. Your other datasets are offered as sources next to your banks, and a bank can still send its whole kept set.',
+    to: '/datasets?section=add',
+  },
+  {
+    id: '2026-10-17-civitai-model-link-prompts',
+    date: '2026-10-17',
+    title: 'Grab the prompts of one Civitai model page',
+    blurb: 'Paste a Civitai model link (civitai.com or civitai.red) into the 🌐 Civitai browser to see the images of that page next to their prompts: the creator’s showcase and the whole gallery of that version. Use, copy or batch them like the top prompts.',
+    to: '/studio',
+  },
+  {
+    id: '2026-10-13-qwen21-community-training-preset',
+    date: '2026-10-13',
+    title: 'Start Qwen-Image 2.1 character training from a community recipe',
+    blurb: 'Character datasets now offer a Qwen-Image 2.1 LoKr preset under Advanced options → Presets. It applies the reported full-rank factor-4, Automagic3 and multi-resolution settings, with a 2,000–3,000-step target and previews every 250 steps. The Guide links the reports and explains where results vary.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-10-11-z-lmstudio-framing',
+    date: '2026-10-11',
+    title: 'Classify framing reads close-ups again with LM Studio',
+    blurb: 'With LM Studio as the local LLM provider, Classify framing labelled every image as bust. LDS now sends the image before the question, as it does with Ollama, so close-ups come back as face again. Thanks to vitokorn for reporting this.',
+  },
+  {
+    id: '2026-10-11-runs-page-local-training',
+    date: '2026-10-11',
+    title: 'Follow local training on the Runs page again',
+    blurb: 'Without the Cloud training plugin, the Runs page showed HTTP 404 instead of your runs. It now shows your local training in progress and your saved runs. Thanks to somedude1001 for reporting this.',
+    to: '/cloud',
+  },
+  {
+    id: '2026-10-05-patreon-access',
+    date: '2026-10-05',
+    title: 'Early LDS versions and exclusive plugins on Patreon',
+    blurb: 'New LDS versions now reach Patreon members (LDS Member) first, then everyone, and some plugins are members-only. The version you have stays free and keeps working. Connect Patreon under Plugins → Purchases to install members-only plugins, and update LDS from Settings → Maintenance.',
+    to: '/plugins?tab=purchases',
+  },
+  {
     id: '2026-10-02-bank-review-edits',
     date: '2026-10-02',
     title: 'See your latest crop while reviewing a bank',
