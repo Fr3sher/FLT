@@ -84,6 +84,18 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-11-07-z-flt-mobile-header-fit',
+    date: '2026-11-07',
+    title: 'Keep the navigation menu on narrow phone screens',
+    blurb: 'The FLT title now fits beside the header controls on small phones, keeping the navigation menu fully on screen.',
+  },
+  {
+    id: '2026-11-07-y-python311-cloud-continuation',
+    date: '2026-11-07',
+    title: 'Continue downloaded cloud checkpoints on older Python installs',
+    blurb: 'Local continuation works on Python 3.10 and 3.11 while still refusing linked checkpoints and folders that do not belong to the selected run.',
+  },
+  {
     id: '2026-11-07-setup-opens-on-tools',
     date: '2026-11-07',
     title: 'Setup opens on your tools',

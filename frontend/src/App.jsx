@@ -337,7 +337,7 @@ function NavBar() {
     <header className="app-header border-b border-border bg-surface-overlay/90 backdrop-blur-sm sticky top-0 z-40">
       <div className="app-header-shell mx-auto flex max-w-5xl items-center gap-3 px-4 py-3 sm:gap-6">
         <NavLink to="/datasets" title="Back to the datasets page" onClick={goHome}
-          className="shrink-0 whitespace-nowrap bg-gradient-primary bg-clip-text text-base font-bold text-transparent no-underline">
+          className="shrink-0 whitespace-nowrap bg-gradient-primary bg-clip-text text-sm sm:text-base font-bold text-transparent no-underline">
           FLT - Fresh LoRa Trainer
         </NavLink>
         <QuicIndicator />

@@ -24,8 +24,19 @@ def _fingerprint(info):
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, created)
 
 
+def _is_link_or_junction(path):
+    # Path.is_junction was added in Python 3.12. Older supported Windows
+    # runtimes expose the same junction tag through lstat without following it.
+    try:
+        info = path.lstat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    mount_point = getattr(stat, 'IO_REPARSE_TAG_MOUNT_POINT', 0xA0000003)
+    return stat.S_ISLNK(info.st_mode) or getattr(info, 'st_reparse_tag', 0) == mount_point
+
+
 def _stamp(path):
-    if path.is_symlink() or path.is_junction():
+    if _is_link_or_junction(path):
         _refuse()
     info = path.stat()
     if not stat.S_ISREG(info.st_mode) or info.st_size <= 0 or info.st_nlink != 1:
@@ -83,7 +94,7 @@ def resolve_cloud_checkpoint(user_id, dataset_id, family, base, variant,
         allowed.append(Path(run.staging_dir))
     try:
         if (path.name != chosen['filename'] or not any(
-                not folder.is_symlink() and not folder.is_junction()
+                not _is_link_or_junction(folder)
                 and path.absolute().parent == folder.absolute()
                 and path.resolve().parent == folder.resolve() for folder in allowed)):
             _refuse()

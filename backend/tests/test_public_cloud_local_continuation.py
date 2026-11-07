@@ -67,6 +67,27 @@ def test_exact_cloud_source_remains_local_when_plugin_absent(history):
         lt._expected_resume_record({'record_id': 11, 'step': 100}, 11, 3, 'krea', '', 'base', user_id='local')
 
 
+@pytest.mark.parametrize('target', ['checkpoint', 'folder'])
+def test_reparse_checkpoint_and_folder_are_refused_without_path_is_junction(history, monkeypatch, target):
+    # Python 3.10/3.11 lack Path.is_junction, but Windows lstat still reports
+    # junction tags. Compatibility must not turn that ownership check off.
+    monkeypatch.delattr(Path, 'is_junction', raising=False)
+    original_lstat = Path.lstat
+    tagged = history.source if target == 'checkpoint' else history.source.parent
+
+    def junction_stat(path, *args, **kwargs):
+        info = original_lstat(path, *args, **kwargs)
+        if path == tagged:
+            return SimpleNamespace(st_mode=info.st_mode, st_reparse_tag=0xA0000003)
+        return info
+
+    monkeypatch.setattr(Path, 'lstat', junction_stat)
+    with pytest.raises(ValueError, match='no longer belongs'):
+        resolve()
+    assert history.source.read_bytes() == b'PUBLIC-CLOUD-CHECKPOINT-100'
+    assert history.old.read_bytes() == b'DIFFERENT-LOCAL-RUN-SAME-STEP'
+
+
 @pytest.mark.parametrize('change', ['user', 'dataset', 'table', 'family', 'base', 'variant',
                                   'run_id', 'deleted', 'dense', 'record_missing', 'step', 'file'])
 def test_foreign_or_stale_identity_cannot_select_a_file(history, change):
