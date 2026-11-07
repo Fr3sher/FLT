@@ -1,15 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  EDIT_ENGINES, defaultEditEngine, editBlockedReason, editEngineChoiceMessage,
+  editEngines, defaultEditEngine, editBlockedReason, editEngineChoiceMessage,
   batchLiveNote, editPhase, editEngineOptions, editCostNote, editKeepNote,
   editRefNote, acceptsExtraEditRefs, acceptsExtraEditRefsForBatch, editRefSupport,
   editBatchBlockedReason, referenceEditCandidates,
   retryRequestForReferenceEdit, MAX_EDIT_REFS, maxEditRefsForBatch, pendingEditNote,
 } from './referenceEdit.js';
 import {
-  STORAGE_ENGINES, STORAGE_PRIMARY, ENGINES, API_ENGINES, LOCAL_ENGINES, ENGINE_LABELS,
+  STORAGE_ENGINES, STORAGE_PRIMARY, engineIds, apiEngineIds, localEngineIds, engineLabel,
 } from './engineSelection.js';
+
+import apiEngines from '../../../../bundled/api_engines/frontend/index.js';
+import { registerBundledDescriptor } from '../../../tests/support/bundledDescriptors.mjs';
+import { resetRegistry, setEnabled } from '../../plugins/registry.js';
+test.beforeEach(() => {
+  resetRegistry();
+  assert.equal(registerBundledDescriptor(apiEngines), true);
+  setEnabled(['api_engines']);
+});
+test.afterEach(resetRegistry);
 
 function fakeStorage(seed = {}) {
   const data = { ...seed };
@@ -24,26 +34,26 @@ function fakeStorage(seed = {}) {
    every other local render. Both local engines were then missing from the app's
    only free edit lane, for a rule nobody re-read. */
 test('every engine can edit the reference, including the local ones', () => {
-  assert.ok(EDIT_ENGINES.includes('krea'));
-  assert.ok(EDIT_ENGINES.includes('klein'));
-  for (const e of API_ENGINES) assert.ok(EDIT_ENGINES.includes(e), e);
+  assert.ok(editEngines().includes('krea'));
+  assert.ok(editEngines().includes('klein'));
+  for (const e of apiEngineIds()) assert.ok(editEngines().includes(e), e);
 });
 
-test('EDIT_ENGINES is derived from ENGINES, so it cannot drift from it', () => {
-  assert.deepEqual(EDIT_ENGINES, [...ENGINES]);
-  assert.notEqual(EDIT_ENGINES, ENGINES);   // a copy: mutating one can't move the other
+test('editEngines() is derived from engineIds(), so it cannot drift from it', () => {
+  assert.deepEqual(editEngines(), [...engineIds()]);
+  assert.notEqual(editEngines(), engineIds());   // a copy: mutating one can't move the other
 });
 
 test('the free local engines are listed FIRST — cheapest option first', () => {
   // Not a ranking: this gesture is billed per press, and the list is read
   // top-down. Burying the free option under three paid ones is a price tag.
-  assert.deepEqual(EDIT_ENGINES.slice(0, LOCAL_ENGINES.length), [...LOCAL_ENGINES]);
+  assert.deepEqual(editEngines().slice(0, localEngineIds().length), [...localEngineIds()]);
 });
 
 test('OpenRouter can edit the reference, like the other API engines', () => {
   // Regression pin for the gap this wave closed: the engine existed for
   // generation while the edit path still refused it.
-  assert.ok(EDIT_ENGINES.includes('openrouter'));
+  assert.ok(editEngines().includes('openrouter'));
   assert.equal(editBlockedReason('add glasses', 'openrouter'), null);
 });
 
@@ -65,7 +75,7 @@ test('defaultEditEngine skips a local primary this install cannot run', () => {
   // No ComfyUI: opening on a disabled button is a bad first impression, so the
   // first API engine that IS usable takes over.
   const storage = fakeStorage({ [STORAGE_ENGINES]: JSON.stringify(['krea']) });
-  assert.equal(defaultEditEngine(storage, (e) => !LOCAL_ENGINES.includes(e)), 'nanobanana');
+  assert.equal(defaultEditEngine(storage, (e) => !localEngineIds().includes(e)), 'nanobanana');
 });
 
 test('defaultEditEngine with no stored preference uses the historic default (Nano Banana)', () => {
@@ -107,7 +117,7 @@ test('the refusal names the engines that DO edit, derived from the list', () => 
   // hardcoded list again, and it is what made the old message name two engines
   // after a third became editable.
   const msg = editEngineChoiceMessage();
-  for (const e of EDIT_ENGINES) assert.ok(msg.includes(ENGINE_LABELS[e]), e);
+  for (const e of editEngines()) assert.ok(msg.includes(engineLabel(e)), e);
   assert.equal(msg, 'Pick Klein, Krea 2 Edit, Nano Banana Pro, ChatGPT or OpenRouter');
 });
 
@@ -117,7 +127,7 @@ test('an install with no ComfyUI is offered no local engine at all', () => {
   // Not a gap to fix from this modal — a product the user hasn't got. Two
   // permanently dead buttons would be worse than three live ones.
   const opts = editEngineOptions({ comfyuiConfigured: false });
-  assert.deepEqual(opts.map((o) => o.engine), [...API_ENGINES]);
+  assert.deepEqual(opts.map((o) => o.engine), [...apiEngineIds()]);
   assert.ok(opts.every((o) => o.usable));
 });
 
@@ -138,7 +148,7 @@ test('an unavailable local engine is never silently offered as usable', () => {
   // No diagnostic available (older server, unknown gap): still says something,
   // still not usable. Silence is the failure mode being removed.
   const opts = editEngineOptions({ comfyuiConfigured: true, available: {} });
-  for (const e of LOCAL_ENGINES) {
+  for (const e of localEngineIds()) {
     const o = opts.find((x) => x.engine === e);
     assert.equal(o.usable, false, e);
     assert.ok(o.blocked && o.blocked.length, e);
@@ -148,14 +158,14 @@ test('an unavailable local engine is never silently offered as usable', () => {
 test('API engines are never blocked by capabilities here — the paid lane is untouched', () => {
   const opts = editEngineOptions({ comfyuiConfigured: true, available: {},
     reasonFor: () => '⚠ nope' });
-  for (const e of API_ENGINES) {
+  for (const e of apiEngineIds()) {
     assert.equal(opts.find((o) => o.engine === e).usable, true, e);
   }
 });
 
 test('the cost line tells the truth per engine — free is not "a paid API call"', () => {
   assert.match(editCostNote('chatgpt'), /paid API call/);
-  for (const e of LOCAL_ENGINES) {
+  for (const e of localEngineIds()) {
     assert.doesNotMatch(editCostNote(e), /paid/i, e);
     assert.match(editCostNote(e), /your own ComfyUI/, e);
   }

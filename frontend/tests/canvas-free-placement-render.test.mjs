@@ -19,19 +19,22 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { installRuntimeHost } from './support/runtimeHost.mjs'
 
-import { clampImageBox, imageNodeExtent } from '../src/utils/canvasImageNodes.js'
-import { layoutImageNodes } from '../src/utils/canvasImageGroups.js'
-import { fitView, stackLanes } from '../src/utils/canvasLayout.js'
-import { laneStackEntries } from '../src/utils/canvasPinBatch.js'
+test.beforeEach(installRuntimeHost)
+
+import { clampImageBox, imageNodeExtent } from "../../bundled/canvas/frontend/utils/canvasImageNodes.js"
+import { layoutImageNodes } from "../../bundled/canvas/frontend/utils/canvasImageGroups.js"
+import { fitView, stackLanes } from "../../bundled/canvas/frontend/utils/canvasLayout.js"
+import { laneStackEntries } from "../../bundled/canvas/frontend/utils/canvasPinBatch.js"
 import { render } from './support/mountJsx.mjs'
 
 /* ⚠️ Dynamic — the hooks that teach Node to read .jsx are installed while
    mountJsx.mjs is evaluated, and a static import would already be linked. */
 const { default: CanvasImageNode } =
-  await import('../src/components/canvas/CanvasImageNode.jsx')
+  await import("../../bundled/canvas/frontend/components/canvas/CanvasImageNode.jsx")
 const { default: CanvasImageGroup } =
-  await import('../src/components/canvas/CanvasImageGroup.jsx')
+  await import("../../bundled/canvas/frontend/components/canvas/CanvasImageGroup.jsx")
 
 const img = (id, x, y, extra = {}) => ({
   imageId: id, x, y, w: 200, h: 150, visible: true, groupId: null, groupPos: null,
@@ -184,7 +187,7 @@ test('the stack is measured on the RESTING rows, never on the gesture', () => {
      lane below it"); what is checked here is that the component still routes
      through it, with the resting rows in the resting slot. */
   const canvas = readFileSync(
-    new URL('../src/components/canvas/LineageCanvas.jsx', import.meta.url), 'utf8')
+    new URL("../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8')
   /* The memo gained a body when lanes became arrangeable (a lane being dragged
      is merged in as a placement override before the stack is computed), so the
      assertion is on the memo's WHOLE body rather than on a one-expression

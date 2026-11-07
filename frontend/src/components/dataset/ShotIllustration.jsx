@@ -1,12 +1,9 @@
 /**
- * ShotIllustration — parametric inline-SVG pictogram for a dataset shot.
- *
- * Draws a stylized mannequin cropped to the shot framing (face / bust / body /
- * back), with the head orientation derived from the FRENCH catalog label
- * (profil / 3-4 gauche-droite) and the photo aspect ratio (paysage / vertical /
- * cinéma) rendered as the outer frame. Everything uses `currentColor`, so the
- * pictogram inherits the state color of its parent chip (amber = quota deficit,
- * indigo = selected) and doubles as a state indicator.
+ * ShotIllustration: parametric inline SVG pictogram for a dataset shot. Draws a stylized mannequin
+ * cropped to face/bust/body/back framing. Head orientation comes from legacy French catalog labels
+ * such as profil and 3-4 gauche-droite; the outer frame represents aspect-ratio labels paysage,
+ * vertical and cinéma. Uses currentColor to inherit its parent chip's state (amber = quota
+ * deficit, indigo = selected), doubling as a state indicator.
  */
 
 // First matching entry wins — keep the most specific words first.

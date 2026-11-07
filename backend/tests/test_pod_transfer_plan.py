@@ -6,9 +6,13 @@ this app already makes, and when there is no history the estimate SAYS it is an
 assumption. A forecast labelled "measured" that was in fact a guess is worth
 less than no forecast, because it will be believed.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import pytest
 
-from app.services import pod_transfer_plan as ptp
+from lds_cloud_training import pod_transfer_plan as ptp
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 # --- what the estimate is built on ----------------------------------------------

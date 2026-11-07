@@ -9,7 +9,7 @@ const lightbox = readFileSync(new URL('./DatasetLightbox.jsx', import.meta.url),
 const workspace = readFileSync(new URL('./DatasetWorkspace.jsx', import.meta.url), 'utf8');
 const hook = readFileSync(new URL('../../hooks/useDataset.js', import.meta.url), 'utf8');
 const grid = readFileSync(new URL('./DatasetGrid.jsx', import.meta.url), 'utf8');
-const settings = readFileSync(new URL('../settings/ScrapingSection.jsx', import.meta.url), 'utf8');
+const settings = readFileSync(new URL('../../../../bundled/scrape/frontend/panels/ScrapeSettingsGroup.jsx', import.meta.url), 'utf8');
 const attribution = readFileSync(new URL('./PexelsAttribution.jsx', import.meta.url), 'utf8');
 const sourceAttribution = readFileSync(new URL('./SourceAttribution.jsx', import.meta.url), 'utf8');
 
@@ -79,10 +79,9 @@ test('any dataset image can be inspected next to the reference photo', () => {
   assert.match(lightbox, /w-full sm:w-auto[^]{0,400}Compare with reference/);
   // ONE state for both readings ⇒ entering either leaves the other; two
   // booleans would have allowed two pairs of panes at once. And it lives in the
-  // id-STAMPED per-image slot, not in a useState of its own: that is what makes
-  // ⟩ leave the comparison behind with the image it belonged to, instead of
-  // carrying an "Original" pane onto a picture whose parent is someone else's.
-  assert.match(lightbox, /full, compareMode, improving, actionsOpen, repairOpen, cameraOpen, improveOpen, deciding,\n  \} = lightboxImageState\(/);
+  // id-stamped slot so late image callbacks cannot change the current view.
+  // Navigation preserves the mode and resolves the current image's original.
+  assert.match(lightbox, /pluginLayer, full, compareMode, improving, actionsOpen, repairOpen, improveOpen, deciding,\n  \} = lightboxImageState\(/);
   assert.doesNotMatch(lightbox, /useState\((true|false|'none')\)/);
   assert.match(lightbox,
     /patchImageState\(\{\s*full: false,\s*compareMode: compareMode === mode \? 'none' : mode,/);
@@ -137,7 +136,7 @@ test('✦ Repair owns every shortcut while it is open, not just Escape', () => {
   assert.ok(guard < grammar,
     'a close-only guard still lets R reject the picture under the dialog');
   // A listener registered once with repairOpen=false would keep judging forever.
-  assert.match(lightbox, /panelOpen, closePanel,\s*\n\s*repairOpen, cameraOpen, improveOpen, patchImageState\]\);/);
+  assert.match(lightbox, /pluginLayer, panelOpen, closePanel,\s*\n\s*repairOpen, improveOpen, patchImageState\]\);/);
 });
 
 test('a verdict advances only once the write has landed, and skip touches nothing', () => {
@@ -231,9 +230,9 @@ test('settings separates scraper rescue instructions from manual lightbox improv
   // manual pass had a fixed profile, which stopped being true once its strength and
   // step count became editable.
   assert.match(settings, /manual Upscale & improve is a different flow/);
-  assert.match(settings, /Settings ▸ Image engines/);
+  assert.match(settings, /Plugins ▸ Klein Improve ▸ Settings/);
   // the rescue card points at the separate manual "Identity, Klein & Krea 2 prompts" card
-  assert.match(settings, /separate from the manual .Klein upscale &amp; improve. prompt/i);
+  assert.match(settings, /Manual improvement belongs to the optional Klein Improve plug-in/i);
 });
 
 test('manual improvement candidates cannot use the unrelated generic regenerate path', () => {

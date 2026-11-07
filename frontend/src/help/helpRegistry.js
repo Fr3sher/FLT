@@ -1,3 +1,4 @@
+import { helpTopics as pluginHelpTopics } from '../plugins/registry.js';
 /* The help registry — the single pivot for the bidirectional Help mode.
    PURE JS (zero JSX, zero Vite ?raw imports) so node --test can import it and
    the contract test (tests/help-registry-contract.test.mjs) can validate every
@@ -48,21 +49,23 @@ const BY_ID = new Map(TOPICS.map((t) => [t.id, t]));
 /** The frozen registry array (registry order preserved). */
 export const helpTopics = TOPICS;
 
+export function allHelpTopics() { return [...TOPICS, ...pluginHelpTopics()]; }
+
 /** Look up a single topic by id, or undefined. */
 export function getHelpTopic(id) {
-  return BY_ID.get(id);
+  return BY_ID.get(id) || pluginHelpTopics().find(topic => topic.id === id);
 }
 
 /** All topics whose guide.chapter === chapterId, in registry order. */
 export function helpTopicsForChapter(chapterId) {
-  return TOPICS.filter((t) => t.guide.chapter === chapterId);
+  return allHelpTopics().filter((t) => t.guide.chapter === chapterId);
 }
 
 /** Case-insensitive search over id / title / keywords. Registry order. */
 export function searchHelpTopics(query) {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return [];
-  return TOPICS.filter((t) =>
+  return allHelpTopics().filter((t) =>
     t.id.toLowerCase().includes(q)
     || t.title.toLowerCase().includes(q)
     || t.keywords.some((k) => k.toLowerCase().includes(q)));
@@ -70,7 +73,7 @@ export function searchHelpTopics(query) {
 
 /** All one-time tips, flattened: { topicId, trigger, text, guide }. */
 export function helpTips() {
-  return TOPICS.filter((t) => t.tip).map((t) => ({
+  return allHelpTopics().filter((t) => t.tip).map((t) => ({
     topicId: t.id, trigger: t.tip.trigger, text: t.tip.text, guide: t.guide,
   }));
 }

@@ -1,17 +1,17 @@
-"""Watermark inpainting via simple-lama-inpainting (LaMa), lance dans un interprete
-DEDIE (le paquet est absent du venv Flask). Meme pattern subprocess que
-person_mask.py / face_similarity.py. Le device est configurable (Auto/GPU/CPU) ;
-le routeur reserve la fenetre GPU uniquement quand CUDA est effectivement utilise.
+"""LaMa watermark inpainting in a dedicated interpreter outside Flask's
+venv, like person_mask.py/face_similarity.py. Auto/GPU/CPU device choice
+reserves the exclusive GPU window only when CUDA is actually used.
 
-LaMa est NON-generatif : seuls les pixels du rectangle masque changent, le reste de
-l'image reste identique. Sert la V1 de la correction automatique des watermarks : les
-bbox HORS bande de bord mais d'aire <= 10% sont repeintes ici (les bbox de bord sont
-croppees en PIL pur, sans ce module)."""
+Only masked-rectangle pixels change; the rest remains identical.
+Watermark correction inpaints non-edge boxes covering at most 10%
+of the image. Edge boxes are cropped in PIL without this module."""
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 import json
 import logging
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -21,20 +21,20 @@ from . import infer_env
 
 logger = logging.getLogger(__name__)
 
-# lama_infer.py vit dans backend/infer/ (pas app/services/).
+# lama_infer.py lives in backend/infer, not app/services.
 _SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'lama_infer.py')
 _cuda_probe = {'python': None, 'checked': 0.0, 'available': False}
 
 
 def lama_python() -> str:
-    # Cle dediee, sinon on reutilise le python ML existant (rembg/insightface), sinon
-    # l'interpreteur courant. simple-lama vit dans le MEME extra ML (requirements-ml.txt).
-    # PUBLIC : le bouton « Install inpainting » (setup_installer) cible CE meme
-    # resolveur, pour que l'install atterrisse la ou le wrapper importe ensuite.
+    # Use the dedicated setting, then existing rembg/InsightFace ML Python,
+    # then the current interpreter. simple-lama shares requirements-ml.txt.
+    # The public Install inpainting action uses this same resolver so
+    # installation and runtime imports target the same environment.
     return cfg.get('watermark.python') or cfg.get('masks.python') or sys.executable
 
 
-# Back-compat alias (le nom prive etait le point d'entree historique).
+# Backward-compatible alias (the private name was the original entry point).
 _lama_python = lama_python
 
 
@@ -54,7 +54,7 @@ def _cuda_available() -> bool:
             infer_env.worker_argv(
                 python, '-c',
                 'import torch; print("1" if torch.cuda.is_available() else "0")'),
-            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=20,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=processing_timeout(20),
             env=infer_env.worker_env(python),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
@@ -83,7 +83,7 @@ def _stderr_tail(proc) -> str:
 
 
 def _run_lama_payload(payload, timeout: int = 300) -> tuple[bool, dict | None]:
-    """Execute le worker LaMa en preservant son protocole subprocess/JSON."""
+    """Run the LaMa worker while preserving its subprocess/JSON protocol."""
     image_path = payload.get('image_path')
     if not image_path or not os.path.isfile(image_path):
         return False, {'kind': 'failed', 'detail': 'image not found'}
@@ -95,45 +95,42 @@ def _run_lama_payload(payload, timeout: int = 300) -> tuple[bool, dict | None]:
         proc = subprocess.run(infer_env.worker_argv(_lama_python(), _SCRIPT),
                               input=payload_json,
                               capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=timeout,
+                              errors='replace', timeout=processing_timeout(timeout),
                               env=infer_env.worker_env(_lama_python()),
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except (subprocess.TimeoutExpired, OSError) as e:
-        logger.warning('watermark_lama: subprocess echec : %s', e)
+        logger.warning('watermark_lama: subprocess failed: %s', e)
         return False, {'kind': 'failed', 'detail': str(e)}
     line = next((ln for ln in reversed((proc.stdout or '').splitlines())
                  if ln.strip().startswith('{')), '')
     if not line:
         tail = _stderr_tail(proc)
-        logger.warning('watermark_lama: pas de JSON (rc=%s) stderr=%s',
+        logger.warning('watermark_lama: no JSON (rc=%s) stderr=%s',
                        proc.returncode, (proc.stderr or '')[-400:])
         return False, {'kind': 'failed',
                        'detail': tail or f'inpainter produced no output (rc={proc.returncode})'}
     try:
         data = json.loads(line)
     except json.JSONDecodeError as e:
-        logger.warning('watermark_lama: JSON illisible : %s', e)
+        logger.warning('watermark_lama: unreadable JSON: %s', e)
         return False, {'kind': 'failed', 'detail': f'unreadable inpainter output: {e}'}
     if not data.get('ok'):
         detail = data.get('error') or 'inpaint failed'
-        logger.warning('watermark_lama: echec : %s', detail)
+        logger.warning('watermark_lama: failed: %s', detail)
         return False, {'kind': 'failed', 'detail': detail}
     return True, None
 
 
 def inpaint_watermarks(image_path, bboxes, timeout: int = 300, device: str = 'cpu') -> tuple[bool, dict | None]:
-    """Repeint en une passe LaMa les rectangles normalises de ``bboxes``.
-
-    L'image est modifiee en place. Le retour ``(ok, error)`` conserve le contrat
-    historique : ``error`` vaut ``None`` en cas de succes, sinon contient ``kind``
-    et ``detail``.
-    """
+    """Inpaint normalized bboxes in one LaMa pass, modifying the image in
+    place. Preserve the historical (ok, error) contract: error is None
+    on success, otherwise contains kind/detail."""
     payload = {'image_path': str(image_path), 'bboxes': bboxes, 'device': device}
     return _run_lama_payload(payload, timeout=timeout)
 
 
 def inpaint_watermark(image_path, bbox, timeout: int = 300, device: str = 'cpu') -> tuple[bool, dict | None]:
-    """Adaptateur compatible pour l'ancien appel a un seul rectangle."""
+    """Compatibility adapter for the former single-rectangle call."""
     try:
         bbox = [float(value) for value in bbox]
         if len(bbox) != 4:
@@ -154,8 +151,13 @@ def inpaint_watermark(image_path, bbox, timeout: int = 300, device: str = 'cpu')
     return inpaint_watermarks(image_path, [normalized], timeout=timeout, device=device)
 
 
-def inpaint_batch(jobs, *, device: str, timeout: int = 900) -> dict:
-    """Run multiple image jobs in one worker so SimpleLama is loaded only once."""
+def inpaint_batch(jobs, *, device: str, timeout: int = 900,
+                  on_progress=None) -> dict:
+    """Run multiple image jobs in one worker so SimpleLama is loaded only once.
+
+    Optional on_progress(done, total) runs on the stderr reader thread; it
+    must only update thread-safe activity state, never database rows.
+    """
     normalized = []
     for job in jobs or []:
         path = str(job.get('image_path') or '')
@@ -169,12 +171,28 @@ def inpaint_batch(jobs, *, device: str, timeout: int = 900) -> dict:
         return {job['image_path']: (False, err) for job in normalized}
     payload_json = json.dumps({'jobs': normalized, 'device': device})
     try:
-        proc = subprocess.run(infer_env.worker_argv(lama_python(), _SCRIPT),
-                              input=payload_json,
-                              capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=timeout,
-                              env=infer_env.worker_env(lama_python()),
-                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if on_progress is None:
+            proc = subprocess.run(infer_env.worker_argv(lama_python(), _SCRIPT),
+                                  input=payload_json,
+                                  capture_output=True, text=True, encoding='utf-8',
+                                  errors='replace', timeout=processing_timeout(timeout),
+                                  env=infer_env.worker_env(lama_python()),
+                                  creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        else:
+            from .infer_stream import run_infer_script
+
+            def _on_line(line):
+                match = re.search(r'^\[lama\]\s+(\d+)/(\d+)\b', line)
+                if match:
+                    on_progress(int(match.group(1)), int(match.group(2)))
+
+            stdout, stderr_lines, rc, timed_out = run_infer_script(
+                lama_python(), _SCRIPT, payload_json, timeout, on_line=_on_line)
+            if timed_out:
+                raise subprocess.TimeoutExpired(_SCRIPT, processing_timeout(timeout))
+            proc = subprocess.CompletedProcess(
+                args=[_SCRIPT], returncode=rc, stdout=stdout,
+                stderr='\n'.join(stderr_lines))
     except (subprocess.TimeoutExpired, OSError) as e:
         err = {'kind': 'failed', 'detail': str(e)}
         return {job['image_path']: (False, err) for job in normalized}

@@ -22,7 +22,10 @@ const { keptCaptions, pickDatasetCaptions } =
 const { UseDatasetCaptionsButton } =
   await import('../src/components/dataset/UseDatasetCaptionsButton.jsx')
 const { FullTransformerAdvancedRecipe } =
-  await import('../src/components/dataset/TrainingPanel.jsx')
+  await import('../../bundled/cloud_training/frontend/dataset/FullTransformerRecipe.jsx')
+
+import { installRuntimeHost } from './support/runtimeHost.mjs'
+test.beforeEach(installRuntimeHost)
 
 const img = (id, caption, status = 'keep', extra = {}) =>
   ({ id, caption, status, ...extra })

@@ -4,7 +4,7 @@ import {
   INITIAL_MIN_SCALE, LANE_GAP, LANE_HEADER_H, MAX_SCALE, MIN_SCALE,
   clampScale, clampView, fitView, initialView, panBy, pinchCenter, pinchDistance,
   stackLanes, toWorld, viewTransform, zoomAt,
-} from './canvasLayout.js';
+} from "../../../bundled/canvas/frontend/utils/canvasLayout.js";
 
 // ---- stackLanes ------------------------------------------------------------
 

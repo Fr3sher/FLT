@@ -97,7 +97,7 @@ test('the preview never lets a 1000-character prompt scroll the page sideways', 
 })
 
 test('the preview says the API engines ignore four of the boxes', () => {
-  assert.match(preview, /API_ENGINES/)
+  assert.match(preview, /apiEngineIds\(\)\.includes\(engine\)/)
   assert.match(preview, /no framing\s*\n?\s*block, no rendering tail and no markings hold/)
 })
 

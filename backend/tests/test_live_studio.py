@@ -6,15 +6,18 @@ submit, complete, encode — with the queue and ffmpeg stubbed, so the ORDER of
 things (prefill before the rate, the file kept while it waits, the viewer's
 position bounding the producer) is what the tests pin, not thread timing.
 """
-import os
-import queue
-
-import os
-import pathlib
 
 import pytest
 
-from app.services import live_studio as live
+pytestmark = pytest.mark.plugins('live')
+
+import os
+import queue
+
+import pathlib
+
+
+from lds_live import live_studio as live
 
 
 # --- scenes -------------------------------------------------------------------
@@ -125,11 +128,22 @@ def stubbed(app, monkeypatch, tmp_path):
     monkeypatch.setattr(live, 'ffmpeg_facts', lambda force=False: {'path': 'ffmpeg', 'rubberband': True})
     monkeypatch.setattr(vts, 'registered_classes', lambda: {'PathchSageAttentionKJ'})
     monkeypatch.setattr(vts, 'eros_on_disk', lambda: False)
+    # Session steps are driven below; a producer must not outlive this test's
+    # SQLite fixture. Thread scheduling is outside these state-machine cases.
+    monkeypatch.setattr(live.LiveSession, 'start', lambda self: None)
     jobs = []
 
     def fake_add_job(**kw):
+        import json
+        from app.extensions import db
+        from app.models import ImageGenerationQueue
         jobs.append(kw)
-        return f'job-{len(jobs)}'
+        job_id = f'job-{len(jobs)}'
+        # Real SDK admission/cancellation checks the persisted owner metadata.
+        db.session.add(ImageGenerationQueue(job_id=job_id, user_id=kw['user_id'],
+                                             status='pending', job_metadata=json.dumps(kw['metadata'])))
+        db.session.commit()
+        return job_id
     monkeypatch.setattr(queue_manager, 'add_job', fake_add_job)
     cancelled = []
     monkeypatch.setattr(queue_manager, 'cancel_job', lambda job_id, user_id=None, **k: cancelled.append(job_id) or True)
@@ -583,13 +597,16 @@ def test_a_new_channel_sweeps_the_live_clips_a_previous_one_left_in_comfyuis_out
 
 def test_render_seconds_come_from_the_queue_row_like_the_studio_cards(app):
     from datetime import datetime, timedelta
+    import json
     from app.extensions import db
     from app.models import ImageGenerationQueue
     with app.app_context():
         t0 = datetime(2026, 9, 3, 1, 0, 0)
         db.session.add(ImageGenerationQueue(job_id='j', user_id='local', status='completed',
+                                            job_metadata=json.dumps({'is_live': True, 'model_name': live.JOB_NAME}),
                                             started_at=t0, completed_at=t0 + timedelta(seconds=47.62)))
         db.session.add(ImageGenerationQueue(job_id='c', user_id='local', status='cancelled',
+                                            job_metadata=json.dumps({'is_live': True, 'model_name': live.JOB_NAME}),
                                             started_at=t0, completed_at=t0 + timedelta(hours=3)))
         db.session.commit()
         assert live._render_seconds('j') == 47.6

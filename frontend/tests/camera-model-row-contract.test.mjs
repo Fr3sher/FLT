@@ -19,7 +19,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const read = (p) => fs.readFileSync(path.join(process.cwd(), p), 'utf8');
-const picker = read('src/components/shared/CameraAnglePicker.jsx');
+const picker = read('../bundled/camera_angles/frontend/panels/CameraAnglePicker.jsx');
 
 test('the Model row edits the app-wide camera.unet through the shared widget', () => {
   assert.match(picker, /GlobalModelPicker/,

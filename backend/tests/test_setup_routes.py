@@ -54,7 +54,11 @@ def test_install_all_plan_endpoint(client, monkeypatch):
     assert r.status_code == 200 and r.get_json()['plan'] == ['face_scoring', 'masks']
 
 
-def test_install_all_starts_plan(client, monkeypatch):
+@pytest.mark.parametrize('scrape_installed', [
+    pytest.param(False, marks=pytest.mark.plugins()),
+    pytest.param(True, marks=pytest.mark.plugins('scrape')),
+])
+def test_install_all_starts_plan(client, monkeypatch, scrape_installed):
     from app import capabilities, setup_installer
     started = []
     monkeypatch.setattr(capabilities, 'probe', lambda force=False: {})
@@ -66,10 +70,17 @@ def test_install_all_starts_plan(client, monkeypatch):
     r = client.post('/api/setup/install-all')
     body = r.get_json()
     assert r.status_code == 200
-    # the {} snapshot -> the always-runnable extras (scrape stack + the three ML ones)
-    assert body['plan'] == ['scrape_extras', 'face_scoring', 'masks', 'watermark_inpaint']
+    # The core-only snapshot proposes its managed ML extras; Scrape owns its own install.
+    expected = ['face_scoring', 'masks', 'watermark_inpaint']
+    assert body['plan'] == expected
     assert set(body['statuses']) == set(body['plan'])
     assert started == body['plan']
+    # Scrape remains explicit in the owner's preparation, even when installed.
+    assert setup_installer.known_action('scrape_extras') is scrape_installed
+    if scrape_installed:
+        prepared = client.post('/api/setup/install/scrape_extras')
+        assert prepared.status_code == 200 and prepared.get_json()['state'] == 'running'
+        assert started == expected + ['scrape_extras']
 
 
 def test_install_all_status_batches_requested_actions(client):

@@ -1,9 +1,13 @@
 """Focused contract tests for the Krea 2 dense-training MVP."""
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 from app.extensions import db
 
 import pytest
 from sqlalchemy import text
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _dataset(app, *, train_type='krea'):
@@ -18,6 +22,7 @@ def _dataset(app, *, train_type='krea'):
 
 
 def _valid_training_capabilities(monkeypatch):
+    monkeypatch.setattr('app.capabilities.probe_aitoolkit', lambda: {'ok': True})
     monkeypatch.setattr(
         'app.routes.training.capabilities.probe',
         lambda: {'aitoolkit': {'valid': True}, 'cloud_training': True})
@@ -422,7 +427,7 @@ def test_preflight_uses_exact_selected_base_and_variant(app, monkeypatch):
 
     dataset_id = _dataset(app)
     monkeypatch.setattr(
-        'app.services.cloud_training.full_transformer_token_preflight',
+        'lds_cloud_training.cloud_training.full_transformer_token_preflight',
         lambda **_kw: {'ok': True, 'configured': True, 'namespace': 'tester'})
     with app.app_context():
         ds = db.session.get(FaceDataset, dataset_id)
@@ -459,7 +464,7 @@ def test_dense_preflight_route_reports_dedicated_cloud_token(
     _valid_training_capabilities(monkeypatch)
     dataset_id = _dataset(app)
     monkeypatch.setattr(
-        'app.services.cloud_training.full_transformer_token_preflight',
+        'lds_cloud_training.cloud_training.full_transformer_token_preflight',
         lambda **_kw: dict(token_status))
 
     response = client.get(
@@ -489,6 +494,59 @@ def test_dense_preflight_route_reports_dedicated_cloud_token(
                        for blocker in payload['blockers'])
 
 
+@pytest.mark.plugins()
+def test_dense_preflight_with_cloud_off_never_imports_the_product_or_reads_hf_secrets(
+        app, client, monkeypatch):
+    import builtins
+    from app import config
+    from lds_sdk.lifecycle import is_available
+
+    _valid_training_capabilities(monkeypatch)
+    dataset_id = _dataset(app)
+    real_import = builtins.__import__
+    real_secret = config.secret
+    secret_reads = []
+
+    def guarded_import(name, *args, **kwargs):
+        if name == 'lds_cloud_training' or name.startswith('lds_cloud_training.'):
+            pytest.fail('A disabled Cloud owner must not be imported by preflight')
+        return real_import(name, *args, **kwargs)
+
+    def guarded_secret(name):
+        secret_reads.append(name)
+        if name.startswith('HF_'):
+            pytest.fail('A disabled Cloud owner must not read Hugging Face secrets')
+        return real_secret(name)
+
+    def forbidden_transport(*_args, **_kwargs):
+        pytest.fail('A disabled Cloud owner must not call a provider transport')
+
+    monkeypatch.setattr(builtins, '__import__', guarded_import)
+    monkeypatch.setattr(config, 'secret', guarded_secret)
+    monkeypatch.setattr('urllib.request.urlopen', forbidden_transport)
+    monkeypatch.setattr('requests.Session.request', forbidden_transport)
+    with app.app_context():
+        assert is_available('cloud_training') is False
+    response = client.get(
+        f'/api/dataset/{dataset_id}/train/preflight'
+        '?lane=cloud&train_type=krea&variant=base&base_model='
+        '&training_mode=full_transformer')
+    assert response.status_code == 200
+    payload = response.get_json()
+    token_status = payload['hf_cloud_token_status']
+    assert token_status['ok'] is False
+    assert token_status['configured'] is False
+    assert 'Install and enable Cloud training in Plugins' in token_status['error']
+    token_check = next(c for c in payload['checks'] if c['id'] == 'hf_cloud_token')
+    assert token_check['status'] == 'fail'
+    assert token_check['scope'] == 'cloud'
+    assert token_check['bypassable'] is False
+    assert 'Plugins' in token_check['hint']
+    assert token_status['error'] in payload['blockers']
+    assert payload['verdict'] == 'blocked'
+    assert not any(name.startswith('HF_') for name in secret_reads)
+
+
 def test_local_continuation_routes_force_source_lora_mode(
         app, client, monkeypatch):
     from app.extensions import db
@@ -507,7 +565,7 @@ def test_local_continuation_routes_force_source_lora_mode(
         'app.services.lora_training.continue_training',
         lambda *args, **kwargs: local_seen.update(kwargs) or {'started': True})
     monkeypatch.setattr(
-        'app.services.cloud_training.continue_local_run_in_cloud',
+        'lds_cloud_training.cloud_training.continue_local_run_in_cloud',
         lambda *args, **kwargs: cloud_seen.update(kwargs) or {'run_id': 9})
 
     local = client.post(

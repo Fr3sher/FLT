@@ -14,6 +14,11 @@ it back is TRUSTWORTHY, so these tests are mostly about the restore:
     you had closed would be putting a different board back.
 """
 
+import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
+
 
 def _dataset(name='Ada', trigger='ada'):
     from app.services import face_dataset_service as svc
@@ -201,7 +206,7 @@ def test_applying_a_preset_that_does_not_exist_is_a_404(client):
 
 
 def test_the_number_of_presets_is_capped_with_a_sentence(client, app):
-    from app.services.cloud_training import CANVAS_PRESET_MAX
+    from lds_canvas.canvas_state import CANVAS_PRESET_MAX
     with app.app_context():
         ds_id = _dataset().id
     rows = {str(ds_id): [{'record_id': 1, 'x': 1, 'y': 1}]}

@@ -98,7 +98,7 @@ def _stub_klein(monkeypatch, calls, job_id='klein-job-1'):
 
 # --- the list ---------------------------------------------------------------
 
-def test_both_local_engines_can_edit_the_reference():
+def test_both_local_engines_can_edit_the_reference(app):
     """THE red assertion. Krea 2 Edit (and Klein) were simply not in the set the
     route accepts, so the modal could not offer them however it was written."""
     editable = svc.editable_engines()
@@ -106,7 +106,8 @@ def test_both_local_engines_can_edit_the_reference():
     assert 'klein' in editable
 
 
-def test_the_api_engines_stay_editable_and_come_after_the_free_ones():
+@pytest.mark.plugins('api_engines')
+def test_the_api_engines_stay_editable_and_come_after_the_free_ones(app):
     """Non-regression on the paid lane, plus the reading order: a gesture billed
     per press lists its free options first."""
     editable = svc.editable_engines()
@@ -115,7 +116,7 @@ def test_the_api_engines_stay_editable_and_come_after_the_free_ones():
     assert editable[:len(svc.LOCAL_ENGINES)] == tuple(svc.LOCAL_ENGINES)
 
 
-def test_the_refusal_names_every_editable_engine_including_the_local_ones():
+def test_the_refusal_names_every_editable_engine_including_the_local_ones(app):
     msg = svc.edit_engine_choice_message()
     labels = svc.engine_labels()
     for engine in svc.editable_engines():
@@ -339,6 +340,7 @@ def test_discarding_a_running_local_edit_cancels_the_render(client, monkeypatch)
     assert dataset_activity.get(did) is None
 
 
+@pytest.mark.plugins('api_engines')
 def test_switching_to_an_api_engine_cancels_the_local_render_it_supersedes(
         client, monkeypatch):
     """Cross-lane supersede. Starting a ChatGPT edit over a running Krea one used
@@ -381,6 +383,7 @@ def test_a_landing_nobody_awaits_deletes_its_output(client, monkeypatch):
     assert dropped == ['out_00002_.png']
 
 
+@pytest.mark.plugins('api_engines')
 def test_mixed_api_local_batch_shares_snapshot_and_activity_until_local_lands(
         app, client, monkeypatch):
     from werkzeug.datastructures import MultiDict
@@ -460,6 +463,7 @@ def test_mixed_api_local_batch_shares_snapshot_and_activity_until_local_lands(
     assert len(ended) == 1
 
 
+@pytest.mark.plugins('api_engines')
 def test_discard_mixed_batch_cancels_all_locals_and_deletes_ready_api_candidate(
         client, monkeypatch):
     from werkzeug.datastructures import MultiDict

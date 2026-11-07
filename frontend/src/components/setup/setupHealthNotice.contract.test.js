@@ -12,15 +12,19 @@ const CAPS = fs.readFileSync(new URL('../../context/CapabilitiesContext.jsx', im
 test('a failed setup-state request is retried once, then ignored — never read as "never verified"', () => {
   assert.doesNotMatch(NOTICE, /s = \{ verified: false, checks: \{\}, regressions: \[\] \}/,
     'the fallback that turned a dropped request into a first run must stay gone')
-  assert.match(NOTICE, /for \(let attempt = 0; attempt < 2 && alive; attempt \+= 1\) \{\n\s*try \{\n\s*s = await apiFetch\('\/api\/setup-state', \{ background: true \}\)\n\s*break/)
-  assert.match(NOTICE, /if \(!alive \|\| !s\) return\n\s*setState\(s\)/)
+  assert.match(NOTICE, /for \(let attempt = 0; attempt < 2 && alive\(\); attempt \+= 1\) \{\n\s*try \{\n\s*s = await apiFetch\('\/api\/setup-state', \{ background: true \}\)\n\s*break/)
+  assert.match(NOTICE, /const alive = \(\) => mountedRef\.current/)
+  assert.match(NOTICE, /return \(\) => \{ mountedRef\.current = false \}/)
+  assert.match(NOTICE, /if \(!alive\(\) \|\| !s\) return\n\s*setState\(s\)/)
 })
 
 test('the notice waits for capabilities that ANSWERED, and hands the rule that fact', () => {
   assert.match(NOTICE, /const \{ caps, loading, known, refresh \} = useCapabilities\(\)/)
   assert.match(NOTICE, /if \(loading \|\| !known \|\| startedRef\.current\) return/)
-  assert.match(NOTICE, /capsKnown: known, state: s, pendingDockerChoice,/)
-  assert.match(NOTICE, /\}, \[loading, known, caps, navigate, pathname, refresh\]\)/)
+  assert.match(NOTICE, /capsKnown: current\.known,\s*state: s, pendingDockerChoice,/)
+  assert.match(NOTICE, /const current = currentRef\.current/)
+  assert.match(NOTICE, /useLayoutEffect\(\(\) => \{\s*currentRef\.current = \{ caps, loading, known, navigate, pathname, refresh \}\s*\}, \[caps, loading, known, navigate, pathname, refresh\]\)/)
+  assert.match(NOTICE, /\}, \[loading, known\]\)/)
 })
 
 test('the capabilities context says whether its answer is real, and retries the first load once', () => {

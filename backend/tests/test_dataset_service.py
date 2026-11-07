@@ -1,5 +1,9 @@
-import io, json, zipfile
+
 import pytest
+
+pytestmark = pytest.mark.plugins('api_engines')
+
+import io, json, zipfile
 from PIL import Image
 
 
@@ -1737,7 +1741,7 @@ def test_subscription_quota_fails_remaining_rows_fast(app, monkeypatch):
     to the paid API key."""
     import concurrent.futures
     from app.services import face_dataset_service as svc
-    from app.services.chatgpt_image import SubscriptionQuotaExceeded
+    from lds_api_engines.chatgpt_image import SubscriptionQuotaExceeded
     from app.models import FaceDatasetImage
     from app.config import LOCAL_USER
     monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', _SerialPool)
@@ -1772,8 +1776,8 @@ def test_subscription_disconnect_never_falls_back_to_api_key(app, monkeypatch):
     instead of silently calling the API-key path."""
     import concurrent.futures
     from app.services import face_dataset_service as svc
-    from app.services import chatgpt_image
-    from app.services.chatgpt_image import SubscriptionUnavailable
+    from lds_api_engines import chatgpt_image
+    from lds_api_engines.chatgpt_image import SubscriptionUnavailable
     from app.models import FaceDatasetImage
     from app.config import LOCAL_USER
     monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', _SerialPool)

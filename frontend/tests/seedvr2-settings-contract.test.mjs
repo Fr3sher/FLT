@@ -1,3 +1,4 @@
+import { GUIDE as SEED_GUIDE } from '../../bundled/seedvr2/frontend/guide.js'
 /* SeedVR2 settings — every dial reaches the user, or it does not exist.
  *
  * Requested by SurpassHR (GitHub #32) alongside the engine: "DiT/VAE model
@@ -13,11 +14,14 @@ import test from 'node:test'
 import { readSource } from './support/readSource.mjs'
 import assert from 'node:assert/strict'
 
-import { helpTopics } from '../src/help/helpRegistry.js'
+import { allHelpTopics } from '../src/help/helpRegistry.js'
+
+import { installRestorationOwners } from './support/restorationOwners.mjs'
+test.beforeEach(t => installRestorationOwners(t, { ids: ['seedvr2'] }))
 
 const read = readSource
-const CARD = read('src/components/settings/EnginesSection.jsx')
-const GUIDE = read('../docs/guide/settings-reference.md')
+const CARD = read('../bundled/seedvr2/frontend/panels/SeedVr2Settings.jsx')
+const GUIDE = SEED_GUIDE.sections.map(section => section.markdown).join('\n')
 const DEFAULTS = read('../backend/app/config.py')
 
 // field → the DOM id of its control in the card.
@@ -55,7 +59,7 @@ test('the config defaults carry every field the card writes', () => {
 test('the new dials are documented and findable in Help', () => {
   // The three this wave added. The older ones predate the contract and are
   // covered by the guide check below on their config key alone.
-  const topics = new Set(helpTopics.map((t) => t.id))
+  const topics = new Set(allHelpTopics().map((t) => t.id))
   for (const id of ['seedvr2.vae', 'seedvr2.tile_px', 'seedvr2.tile_threshold']) {
     assert.ok(topics.has(id), `${id}: no help topic — Help search cannot find it`)
   }
@@ -66,7 +70,7 @@ test('the new dials are documented and findable in Help', () => {
 })
 
 test('the tile bounds mirrored in the card match the backend clamps', () => {
-  const helper = read('../backend/app/services/seedvr2_helper.py')
+  const helper = read('../bundled/seedvr2/lds_seedvr2/seedvr2_helper.py')
   assert.match(helper, /TILE_PX_MIN, TILE_PX_MAX = 512, 2048/)
   assert.match(helper, /TILE_ABOVE_FACTOR = 1\.5/)
   assert.match(CARD, /const SEEDVR2_TILE_MIN = 512/)

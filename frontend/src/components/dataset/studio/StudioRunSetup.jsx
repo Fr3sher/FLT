@@ -1,13 +1,9 @@
 // react-frontend/src/components/dataset/studio/StudioRunSetup.jsx
 /**
- * Panneau de réglage d'un run du Studio autonome : strengths à balayer, prompt
- * libre, seed (+ relance aléatoire), nombre d'images par config. Affiche le COÛT
- * GPU (nombre de cellules = LoRA × strengths × count) AVANT lancement, puis le
- * bouton « 🚀 Lancer le test ».
- *
- * État local minimal (inspiré de RunSetupPanel/useStudioForm mais autonome — pas
- * lié à un dataset précis puisqu'on teste plusieurs LoRA). Le parent (StudioShell)
- * possède la sélection de LoRA et déclenche le POST.
+ * Standalone Studio run setup: strength sweep, free prompt, seed/reroll and images per
+ * configuration. Show GPU cell count (LoRAs x strengths x count) BEFORE launch. Minimal local
+ * state follows RunSetupPanel/useStudioForm but is not bound to one dataset because multiple LoRAs
+ * are tested. Parent StudioShell owns LoRA selection and triggers POST.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Dices } from 'lucide-react';
@@ -29,52 +25,44 @@ export default function StudioRunSetup({
   prompt, onPrompt, seed, onReroll, count, onCount,
   onLaunch, launching, gpuBusy, batchMult = 1, combine = false, combineBlocked = null,
   configCount = 1,
-  // 🎛 Axes de rendu (CFG / steps / 2e passe) rendus par l'appelant. `axisTotal`
-  // est le facteur qu'ils ajoutent à la grille : le compteur de coût DOIT le
-  // porter, sinon le panneau annonce 6 cellules et la file en reçoit 18.
+  // Caller renders CFG/steps/second-pass axes. axisTotal is their grid multiplier and MUST affect
+  // cost; otherwise the panel could promise 6 cells while queueing 18.
   axisSlot = null, axisTotal = 1,
-  // ⏱ Rythme MESURÉ de la machine (médiane du backend). null → repli affiché
-  // avec un « ~ », jamais un chiffre précis inventé.
+  // MEASURED machine pace from the backend median. null uses an explicitly approximate fallback,
+  // never invented precision.
   secondsPerImage = null,
-  // 🔤 Case « Trigger word » (préfixer ou non le trigger de chaque LoRA au prompt
-  // monté) — traversant, l'état et la persistance vivent chez l'appelant.
+  // Trigger word optionally prefixes each LoRA's trigger. Pass through only; caller owns state and
+  // persistence.
   injectTrigger = true, onInjectTrigger = null,
-  // 📝 Le LOT DE PROMPTS. Cette surface ne l'avait pas : `create_comparison_run`
-  // acceptait déjà l'argument `prompts`, mais POST /api/studio/run ne le
-  // transmettait pas et ce panneau ne l'offrait pas — donc ni l'historique, ni les
-  // scènes, ni Civitai ne pouvaient produire de lot ici, alors que les deux autres
-  // surfaces de lancement le font depuis toujours. Traversant, comme partout :
-  // l'état vit chez ComparisonStudio, seul à savoir ce qu'un lancement envoie.
+  // PROMPT BATCH was missing here: create_comparison_run already accepted prompts, but POST
+  // /api/studio/run did not forward it and this panel had no control. History, scenes and Civitai
+  // could not batch here despite support on both other launch surfaces. Pass through to
+  // ComparisonStudio, which owns state and request construction.
   batchPrompts = null, onToggleBatchPrompt = null, onClearBatchPrompts = null,
   civitaiPicks = null, onToggleCivitaiPick = null, onClearCivitaiPicks = null,
-  // Le lot FUSIONNÉ (dédoublonné) que le lancement emportera — le compteur de coût
-  // et le libellé du bouton doivent parler de CELUI-LÀ, pas de la somme des cases.
+  // Use the MERGED, deduplicated launch batch for cost and button text, not the raw total of
+  // checked boxes.
   pickedPrompts = null,
 }) {
-  // batchMult = 1 + nb de LoRA cochés « ⚖ batch » (axe sans/avec) — le backend
-  // multiplie les cellules d'autant, le compteur de coût doit suivre.
-  // En mode « pile » (combine) l'axe strengths disparaît : chaque LoRA porte son
-  // propre poids. La pile vaut UNE configuration — ou `configCount` quand des
-  // cases de poids sont cochées et que le lancement balaye leurs combinaisons.
-  // 📝 Chaque prompt du lot est une passe de plus sur la MÊME grille : le compteur
-  // doit le porter AVANT le clic, jamais la file d'attente après.
+  // batchMult is 1 plus the count of with/without batch LoRAs, matching backend cell
+  // multiplication. Combine mode has no strengths axis: each LoRA has its own weight and the stack
+  // is ONE configuration, or configCount when sweeping checked weights. Each batch prompt adds
+  // another pass over that grid; show its cost BEFORE clicking.
   const picked = Array.isArray(pickedPrompts) ? pickedPrompts : [];
   const cells = cellCount({
     selectionCount, strengthCount: strengths.length, count, batchMult, combine, configCount,
     axisTotal, promptCount: Math.max(1, picked.length),
   });
   const canLaunch = cells > 0 && !launching && !gpuBusy && !combineBlocked;
-  // ⏱ Même règle que l'autre panneau : on chiffre, on demande UNE fois, on
-  // n'interdit jamais.
+  // Same long-run rule as the other panel: estimate, ask ONCE, never forbid.
   const cost = runCost(cells, secondsPerImage);
   const launchGuarded = () => {
     if (cost.heavy && !window.confirm(heavyRunConfirm(cost))) return;
     onLaunch();
   };
 
-  // Prompts de test récents GLOBAUX (tous datasets — la comparaison n'en avait
-  // aucun avant). Rechargé après un lancement (nouveau prompt mémorisé) et après
-  // une suppression.
+  // GLOBAL recent test prompts across datasets, previously absent in comparison. Reload after
+  // launch saves a prompt and after deletion.
   const [recentPrompts, setRecentPrompts] = useState([]);
   const [describeOpen, setDescribeOpen] = useState(false);
   const applyDescription = (text) => {
@@ -96,10 +84,9 @@ export default function StudioRunSetup({
   useEffect(() => { loadRecent(); }, [loadRecent, launching]);
   const deleteRecent = useCallback(async (p) => {
     await postJson('/api/studio/recent-prompts/delete', { prompt: p }).catch(() => {});
-    // 🗑 supprime le prompt ET ses images : un lot qui le garderait lancerait sur
-    // une ligne que l'écran ne montre plus. L'autre surface s'en protège par
-    // `visibleBatch` (elle reçoit l'historique de son parent) ; ici l'historique
-    // est local, donc on le retire au seul endroit où il peut disparaître.
+    // Deletion removes the prompt AND its images. Also remove it from the batch or launch would
+    // use an invisible row. The other surface guards with visibleBatch because history comes from
+    // its parent; local history must remove it here at its deletion point.
     if (typeof onToggleBatchPrompt === 'function'
       && (batchPrompts || []).includes(p)) onToggleBatchPrompt(p);
     loadRecent();
@@ -117,9 +104,11 @@ export default function StudioRunSetup({
         <StrengthPicker choices={STRENGTH_CHOICES} selected={strengths} onToggle={onToggleStrength} fmt={fmt} />
       )}
 
-      {/* 🎛 CFG / steps / 2e passe. En 🧬 Blend l'axe des strengths disparaît (chaque
-          LoRA porte son poids) mais celui-ci reste : les steps sont un réglage de
-          RENDU, pas de LoRA — les cacher là était le bug signalé. */}
+      {/*
+       * CFG, steps and second pass remain in Blend even though strengths disappear into per-LoRA
+       * weights. Steps are a RENDER setting, not a LoRA setting; hiding them here was the reported
+       * bug.
+       */}
       {axisSlot}
 
       <div className="flex flex-col gap-1">

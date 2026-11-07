@@ -1,16 +1,14 @@
 # app/scrape/sources/websearch.py
-"""Recherche d'images par mot-clé sur le web ouvert — sans clé ni compte.
+"""Keyword image search on the open web, without an API key or account.
 
-Le formulaire fabrique côté client une URL DuckDuckGo (`?q=…&iax=images&kp=…`) et
-la poste au même /api/scrape/scan que toutes les autres sources : le contrat
-« une URL entre » ne change pas (même patron que Pexels). Cette source la matche,
-en ré-extrait le mot-clé et interroge `ddgs`, un métamoteur qui agrège plusieurs
-backends — si l'un tombe, la recherche se dégrade au lieu de mourir.
+The client builds a DuckDuckGo URL (?q=...&iax=images&kp=...) and posts it to
+/api/scrape/scan, preserving the same URL-input contract as other sources.
+This source extracts the keyword and queries ddgs, a metasearch library with
+multiple backends, allowing degraded service when one backend fails.
 
-Pourquoi ni Google ni Bing : leurs API de recherche d'images sont fermées aux
-nouveaux clients (Google Custom Search s'arrête le 2027-01-01, Bing Search a été
-retirée le 2025-08-11). Une source à clé serait morte chez tout nouvel installeur.
-"""
+Google and Bing image search APIs no longer accept new clients: Google Custom
+Search ends on 2027-01-01, and Bing Search retired on 2025-08-11. Requiring
+one of those keys would leave new installations without a working source."""
 import logging
 from urllib.parse import parse_qs, urlsplit
 
@@ -20,11 +18,8 @@ from . import gdl, registry
 logger = logging.getLogger(__name__)
 
 PLATFORM = 'websearch'
-# Même fenêtre que les sources gdl-backed : une page = une page. Dérivée de la
-# constante partagée plutôt que recopiée — un ancien commentaire ici promettait
-# la même chose en dur (120), et rien n'empêchait plus les deux valeurs de
-# diverger un jour en silence pendant que le commentaire continuait d'affirmer
-# qu'elles restaient égales.
+# Use the same per-page window as gallery-dl sources by importing the shared
+# constant. A copied literal and a comment would not prevent silent drift.
 MAX_RESULTS = gdl.DEFAULT_MAX_ITEMS
 _HOSTS = frozenset({'duckduckgo.com', 'www.duckduckgo.com'})
 _MISSING_DEP = ("Web image search needs the 'ddgs' package: "
@@ -32,16 +27,16 @@ _MISSING_DEP = ("Web image search needs the 'ddgs' package: "
 
 
 def _images(**kwargs):
-    """Appel réel à la bibliothèque. Import PARESSEUX : le registry importe toutes
-    les sources au démarrage de l'app, une dépendance optionnelle absente ne doit
-    jamais empêcher le boot. C'est aussi le seul point de monkeypatch des tests."""
+    """Call the search library (the single test monkeypatch seam).
+    Import lazily: the registry loads every source at startup, so a missing
+    optional dependency must not prevent the application from starting."""
     from ddgs import DDGS
     return DDGS().images(**kwargs)
 
 
 def _safe_https(value):
-    """URL https sans credentials, ou None. Les résultats viennent de sites
-    arbitraires : on ne restreint pas l'hôte, seulement la forme."""
+    """Return a credential-free HTTPS URL or None. Results can come from any
+    site, so validate the URL structure here rather than restricting hosts."""
     if not isinstance(value, str) or not value.strip():
         return None
     trimmed = value.strip()
@@ -56,16 +51,13 @@ def _safe_https(value):
 
 
 def _safe_public_url(value):
-    """Comme `_safe_https`, mais accepte aussi http:// — réservé au SEUL champ
-    `thumbnail`. `image` (le média réellement téléchargé à l'import) reste
-    https-only ; la miniature n'est jamais qu'affichée via le proxy serveur
-    `/api/scrape/thumb`, qui fetch lui-même côté serveur et re-sert en https
-    depuis notre origine (`_validate_public_http_url` y accepte déjà http comme
-    https — aucune fuite de contenu mixte côté navigateur). Beaucoup de sites du
-    web ouvert servent encore leur vignette en clair même quand l'image pleine
-    résolution est en https ; exiger https ici pour rien que forçait le repli
-    sur l'image complète (voir `_item`), payé en bande passante sur une page de
-    résultats de 100+ images."""
+    """Like _safe_https, but allow HTTP solely for thumbnail URLs.
+
+    The full image downloaded during import remains HTTPS-only. Thumbnails use
+    /api/scrape/thumb, whose server fetch already accepts public HTTP(S) URLs and
+    serves them from our HTTPS origin without browser mixed content. Many sites
+    still expose HTTP thumbnails alongside HTTPS originals; rejecting those
+    would force full-image downloads across large result pages."""
     if not isinstance(value, str) or not value.strip():
         return None
     trimmed = value.strip()
@@ -80,8 +72,8 @@ def _safe_public_url(value):
 
 
 def _item(result):
-    """Résultat ddgs → schéma commun, ou None. `image` = le média DIRECT (ce que
-    l'import télécharge), `url` = la page où il a été trouvé (provenance)."""
+    """Convert a ddgs result to the shared schema, or return None. image is the
+    direct media downloaded during import; url is its source page for provenance."""
     if not isinstance(result, dict):
         return None
     image = _safe_https(result.get('image'))
@@ -100,7 +92,7 @@ def _item(result):
 
 class WebSearchSource(Source):
     name = 'websearch'
-    priority = 100          # coiffe la fallback universelle (priorité 0)
+    priority = 100          # takes precedence over the universal fallback at 0
     paginated = True
     category = 'image'
     capabilities = Capabilities(media_kinds=frozenset({'image'}),
@@ -119,9 +111,8 @@ class WebSearchSource(Source):
             return None
         m = Match(url=url)
         m.query = query
-        # `kp` est le drapeau SafeSearch de DuckDuckGo lui-même : '1' strict,
-        # '-2' désactivé (notre défaut). Il voyage dans l'URL parce que l'API de
-        # scan n'accepte rien d'autre — pas de champ de requête ajouté.
+        # kp is DuckDuckGo's SafeSearch flag: '1' is strict, '-2' disables it
+        # (our default). Keep it in the URL to preserve the scan request contract.
         m.safesearch = 'on' if (params.get('kp') or [''])[0] == '1' else 'off'
         return m
 
@@ -132,22 +123,19 @@ class WebSearchSource(Source):
                               type_image='photo', max_results=MAX_RESULTS,
                               page=page + 1)
             if results is None:
-                # Un blocage doux (ratelimit, filtre) peut renvoyer None au lieu
-                # de lever : traiter ça comme une liste vide effacerait la panne
-                # derrière un « aucun résultat » silencieux. Voir la règle du
-                # module — vide ≠ panne déguisée.
+                # Soft blocking, such as rate limits or filtering, may return None
+                # instead of raising. Treating that as an empty list would hide the
+                # failure behind a misleading "no results" message.
                 return None, "Web image search returned no data (search may be blocked)."
             items = [item for item in (_item(r) for r in results) if item]
         except ImportError:
             return None, _MISSING_DEP
         except Exception as exc:
-            # La bibliothèque ne documente pas ses exceptions ; le contrat de
-            # scan() est « ne lève jamais ». Un 429 doit dire qu'il a échoué,
-            # surtout PAS « aucun résultat ». `results` peut être un itérateur
-            # paresseux dont l'I/O réseau se déclenche à l'itération : la
-            # compréhension ci-dessus DOIT rester dans ce try pour que ces
-            # exceptions-là soient aussi rattrapées.
-            logger.warning("websearch: la recherche a échoué: %r", exc)
+            # The library does not document its exceptions, but scan() never raises.
+            # Report a 429 as a failure rather than "no results". results may be a lazy
+            # iterator that performs I/O during iteration, so keep the comprehension
+            # inside this try block to catch those failures too.
+            logger.warning("websearch: search failed: %r", exc)
             return None, f"Web image search failed ({exc})."
         return items, None
 

@@ -50,6 +50,7 @@ own and never read these keys — see ``setup_installer._bank_semantic_install_p
 and ``test_setup_installer.py``. That separation is the whole reason it is safe
 to point the semantic engine at someone's ai-toolkit venv.
 """
+from ..timeout_settings import processing_timeout
 import json
 import os
 import subprocess
@@ -211,7 +212,7 @@ def _run_probe(python: str):
         proc = subprocess.run(
             infer_env.worker_argv(python, '-c', _PROBE_CODE),
             capture_output=True, text=True,
-            encoding='utf-8', errors='replace', timeout=PROBE_TIMEOUT,
+            encoding='utf-8', errors='replace', timeout=processing_timeout(PROBE_TIMEOUT),
             env=infer_env.worker_env(python),
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except Exception:      # noqa: BLE001 — OSError, TimeoutExpired, anything
@@ -388,10 +389,10 @@ def describe(python: str, info, profile=None) -> dict:
         out['status'] = 'gpu_ready'
         out['gpu'] = True
         card = out['device_name'] or 'a CUDA GPU'
-        out['detail'] = f'ready — runs on {card}'
+        out['detail'] = f'CUDA detected on {card}; packages import, calculation not tested'
     else:
         out['status'] = 'cpu_only'
-        out['detail'] = 'ready, but torch here has no usable CUDA — runs on the CPU'
+        out['detail'] = 'packages import; CPU only, calculation not tested'
     return out
 
 
@@ -498,6 +499,9 @@ def detect(force=False, extra_path='', profile=None) -> dict:
     raises: a candidate that explodes degrades to 'unreachable'."""
     prof = get_profile(profile)
     selected = (cfg.get(prof.config_key) or '').strip()
+    effective = selected or default_python(prof)
+    from .. import setup_installer
+    managed = setup_installer._bank_scoring_env_python()
     entries = list(candidates(prof))
     known = {_norm(e['path']) for e in entries}
     # A hand-typed path is a FIRST-CLASS route, not a fallback: most installs
@@ -528,7 +532,7 @@ def detect(force=False, extra_path='', profile=None) -> dict:
     out = []
     for entry, verdict in zip(entries, verdicts):
         verdict.update(source=entry['source'], label=entry['label'],
-                       selected=bool(selected) and _norm(entry['path']) == _norm(selected),
+                       selected=_norm(entry['path']) == _norm(effective),
                        # Marks the row the typed path landed on — INCLUDING one we
                        # already knew about. Without it, entering a path the list
                        # already holds looks like the button did nothing, which is
@@ -537,6 +541,9 @@ def detect(force=False, extra_path='', profile=None) -> dict:
         out.append(verdict)
     return {
         'selected': selected,
+        'effective_python': effective,
+        'managed_python': managed,
+        'uses_managed': _norm(effective) == _norm(managed),
         'profile': prof.key,
         # No explicit selection = the pass runs wherever the resolver lands.
         # Naming it keeps "what am I on right now" answerable in both states —

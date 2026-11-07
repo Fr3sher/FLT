@@ -50,6 +50,7 @@ report at 90 %: it is a refusal to make at 0 %. ``plan`` computes what the whole
 chain will claim and says no with the two numbers in it.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import logging
 import os
@@ -600,7 +601,7 @@ def _download_master(info, on_progress):
             headers['Range'] = f'bytes={got}-'
         try:
             with requests.get(url, stream=True, headers=headers,
-                              timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT)) as r:
+                              timeout=network_timeout((_CONNECT_TIMEOUT, _READ_TIMEOUT))) as r:
                 if got and r.status_code == 416:
                     pass                                # nothing left to serve
                 else:

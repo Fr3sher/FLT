@@ -8,7 +8,7 @@ class XSource(GalleryDlSource):
     name = 'x'
     priority = 100
     platform_enum = Platform.X
-    cookies_key = 'x'   # x.com requiert des cookies authentifiés (timelines/NSFW)
+    cookies_key = 'x'   # x.com requires authenticated cookies for timelines/adult content
     capabilities = Capabilities(can_enumerate_profile=True, needs_auth=True, polite=True,
                                 media_kinds=frozenset({'video', 'image'}), own_downloader=True)
 

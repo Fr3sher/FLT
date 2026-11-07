@@ -21,7 +21,7 @@ const {
   denseHubBackupView, denseLocalArtifactView, denseResumeBlocker,
   fullTransformerArtifactFiles,
 } = await import('../src/utils/trainingMode.js')
-const { FullArtifactStatus } = await import('../src/pages/CloudRunsPage.jsx')
+const { FullArtifactStatus } = await import('../src/components/runs/RunsHub.jsx')
 
 const legacyRun = (extra = {}) => ({
   run_id: 1, training_mode: 'full_transformer', status: 'done',

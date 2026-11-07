@@ -1,18 +1,16 @@
-"""Retrait produit de Coomer/Kemono/Bunkr/Cyberdrop (sites de dump/leak).
+"""Coomer/Kemono/Bunkr/Cyberdrop sources were removed from the product: no source
+modules or registry entries. validators retains host detection only to return an
+explicit named refusal before source resolution. Never crash or silently fall back
+to generic scraping, since gallery-dl/yt-dlp support some of these sites
+internally. All tests are local; no network or gallery-dl process."""
 
-Ces 4 sources sont retirées : plus de module `sources/<name>.py`, plus
-d'enregistrement dans le registry. `validators.py` garde uniquement assez
-d'identification d'hôte pour renvoyer un refus EXPLICITE et NOMMÉ dès
-`validate_url()`, avant toute résolution de source — jamais un crash, jamais
-un repli silencieux vers le scraper générique (gallery-dl/yt-dlp supportent
-nativement certains de ces sites en interne, donc le risque de contournement
-est réel si on les laissait passer en Platform.GENERIC).
-
-Tout est local/pur — aucun appel réseau ni process gallery-dl."""
 import pytest
 
-from app.scrape.sources import registry
-from app.scrape.validators import Platform, url_validator
+pytestmark = pytest.mark.plugins('scrape')
+
+
+from lds_scrape.sources import registry
+from lds_scrape.validators import Platform, url_validator
 
 
 _REMOVED_URLS = [

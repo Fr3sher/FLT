@@ -14,13 +14,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readSource } from './support/readSource.mjs'
 
-const image = readSource('src/components/dataset/CloudLaunchDialog.jsx')
-const video = readSource('src/components/videobank/VideoCloudLaunchDialog.jsx')
-const shared = readSource('src/components/shared/CloudTierEstimate.jsx')
+const image = readSource('../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx')
+const video = readSource('../bundled/cloud_training/frontend/video/VideoCloudLaunchDialog.jsx')
+const shared = readSource('../bundled/cloud_training/frontend/shared/CloudTierEstimate.jsx')
 
 test('both launch dialogs import the shared estimate line', () => {
   for (const [name, src] of [['image', image], ['video', video]]) {
-    assert.match(src, /import CloudTierEstimate from '\.\.\/shared\/CloudTierEstimate'/,
+    assert.match(src, /import CloudTierEstimate from ['"]\.\.\/shared\/CloudTierEstimate['"]/,
       `the ${name} dialog must import the shared CloudTierEstimate`)
     assert.match(src, /<CloudTierEstimate tier=\{t\}/,
       `the ${name} dialog must render the shared CloudTierEstimate per tier`)

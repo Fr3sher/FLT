@@ -30,7 +30,11 @@ Both heavy seams — the frame decode and the model — are monkeypatched here, 
 the suite runs with neither PyAV nor torch.
 """
 
-from app.services import video_caption as vc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_caption as vc
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- which frames the captioner is shown -----------------------------------------
@@ -224,7 +228,7 @@ def _worker_code():
     on a file that is right for exactly the reason it explains."""
     import ast
     from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / 'infer'
+    src = (Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'infer'
            / 'video_caption_infer.py').read_text(encoding='utf-8')
     tree = ast.parse(src)
     # Drop every docstring, then unparse: comments are already gone (ast does not
@@ -274,7 +278,7 @@ def _fake_seams(monkeypatch):
 
 def _bank_with_clips(app, n):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -291,21 +295,21 @@ def _bank_with_clips(app, n):
 
 
 def _clip_ids(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.id for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]
 
 
 def _captions(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.caption for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]
 
 
 def _states(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.caption_state for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]
@@ -316,7 +320,7 @@ def test_the_model_is_told_how_long_the_shot_really_is():
     at a default 24 fps and the model reads a five-second action as a third of
     a second — every judgement of speed and duration wrong at the source. The
     span the sampled instants actually cover must ride the seam to the worker."""
-    from app.services import video_caption as vc
+    from lds_video import video_caption as vc
 
     seen = {}
 
@@ -368,9 +372,9 @@ def test_the_token_budget_matches_the_asked_for_length():
     room. Pinned in BOTH processes — the worker default and the infer fallback —
     because they disagree in silence."""
     from pathlib import Path
-    worker = (Path(__file__).resolve().parents[1] / 'app' / 'services'
+    worker = (Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'lds_video'
               / 'video_caption_worker.py').read_text(encoding='utf-8')
-    infer = (Path(__file__).resolve().parents[1] / 'infer'
+    infer = (Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'infer'
              / 'video_caption_infer.py').read_text(encoding='utf-8')
     assert 'max_new_tokens=400' in worker
     assert "req.get('max_new_tokens') or 400" in infer

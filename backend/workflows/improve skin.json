@@ -38,7 +38,7 @@
     },
     "class_type": "SaveImage",
     "_meta": {
-      "title": "Enregistrer Image"
+      "title": "Save Image"
     }
   },
   "10": {
@@ -47,7 +47,7 @@
     },
     "class_type": "VAELoader",
     "_meta": {
-      "title": "Charger VAE"
+      "title": "Load VAE"
     }
   },
   "52": {
@@ -56,7 +56,7 @@
     },
     "class_type": "LoadImage",
     "_meta": {
-      "title": "Charger Image"
+      "title": "Load Image"
     }
   },
   "53": {
@@ -113,7 +113,7 @@
     },
     "class_type": "CLIPLoader",
     "_meta": {
-      "title": "Charger CLIP"
+      "title": "Load CLIP"
     }
   },
   "91": {
@@ -130,7 +130,7 @@
     },
     "class_type": "EmptyFlux2LatentImage",
     "_meta": {
-      "title": "Flux vide vers latent"
+      "title": "Empty Flux Latent"
     }
   },
   "92": {
@@ -181,7 +181,7 @@
     },
     "class_type": "ModelSamplingFlux",
     "_meta": {
-      "title": "ModèleÉchantillonnageFlux"
+      "title": "ModelSamplingFlux"
     }
   },
   "110": {
@@ -207,7 +207,7 @@
     },
     "class_type": "UNETLoader",
     "_meta": {
-      "title": "Charger Modèle Diffusion"
+      "title": "Load Diffusion Model"
     }
   },
   "119": {
@@ -260,7 +260,7 @@
     },
     "class_type": "ImageScaleToTotalPixels",
     "_meta": {
-      "title": "Redimensionner l'image en fonction du nombre total de pixels"
+      "title": "Scale image by total pixel count"
     }
   },
   "175": {
@@ -272,7 +272,7 @@
     },
     "class_type": "GetImageSize",
     "_meta": {
-      "title": "Obtenir la taille de l'image"
+      "title": "Get image size"
     }
   }
 }

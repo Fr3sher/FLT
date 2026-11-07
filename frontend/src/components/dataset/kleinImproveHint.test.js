@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   readImproveInstruction, improveInstructionLine, improveAnimeCaution,
   shortenPrompt, IMPROVE_LINE_UNKNOWN, IMPROVE_LINE_OFF,
-} from './kleinImproveHint.js';
+} from "../../../../bundled/image_upscale/frontend/lib/kleinImproveHint.js";
 
 const SHIPPED = 'add detailed texture, add sharp details, add candid shot, add soft focus effect';
 const payload = (identity_prompts = {}) => ({

@@ -97,7 +97,8 @@ test('face_mask is NOT machine-scope — it is the inverse trap', () => {
 // --- the call sites that were skipping the gate -------------------------------
 
 test('the cloud launch runs the preflight before spending money', () => {
-  assert.match(panel, /const launchCloud = async \(gpuName\) => \{\s*(\/\/[^\n]*\n\s*)*if \(!\(await preflightOk\(\{ lane: 'cloud' \}\)\)\) return false;/);
+  const cloud = fs.readFileSync(new URL('../../../../bundled/cloud_training/frontend/dataset/DatasetCloudTraining.jsx', import.meta.url), 'utf8');
+  assert.match(cloud, /const launchCloud = async \(gpuName\) => \{\s*(\/\/[^\n]*\n\s*)*if \(!\(await preflightOk\(\{ lane: 'cloud', validateReport \}\)\)\) return false;/);
 });
 
 test('▶ Continue runs it too, on whichever lane it resumes', () => {
@@ -105,7 +106,7 @@ test('▶ Continue runs it too, on whichever lane it resumes', () => {
   assert.match(panel, /const lane = laneOfPayload\(payload\);/);
   // (…and its blockers are routed INTO the still-open dialog via onRefused,
   // instead of a toast over a form that had already been thrown away.)
-  assert.match(panel, /await preflightOk\(\{ lane, trainType: checkpointTrainType,\s*variant: checkpointVariant, baseModel: checkpointBase,\s*onRefused: setContinueError \}\)/);
+  assert.match(panel, /await preflightOk\(\{ lane, trainType: continueType,\s*variant: continueVariant, baseModel: continueBase,\s*onRefused: setContinueError \}\)/);
 });
 
 test('the modal names the cloud lane and keeps its fix-in-place lists', () => {

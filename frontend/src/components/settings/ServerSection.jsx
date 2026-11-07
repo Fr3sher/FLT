@@ -172,11 +172,11 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
           <p className="font-medium">Host and port are managed by Docker Compose.</p>
           <p className="mt-1 text-xs text-content-muted">
             Set <code className="text-content">LDS_HOST_PORT</code> in the host checkout&apos;s{' '}
-            <code className="text-content">.env</code> (for example <code className="text-content">127.0.0.1:5050</code>),
-            then recreate the container:
+            <code className="text-content">.env</code> (for example <code className="text-content">5050</code>),
+            then use the same Compose files as at launch to recreate the Studio service with:
           </p>
           <code className="mt-2 block overflow-x-auto whitespace-nowrap rounded bg-app/70 px-2 py-1.5 text-xs text-content">
-            docker compose -f docker-compose.gpu.yml up -d --force-recreate
+            up -d --force-recreate studio
           </code>
         </div>
       )}

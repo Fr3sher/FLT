@@ -19,7 +19,11 @@ this file runs with no PyAV, no torch and no weights on disk.
 """
 import json
 
-from app.services import video_watermark as wm
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_watermark as wm
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- which frame gets looked at ----------------------------------------------------
@@ -48,7 +52,7 @@ def test_the_frame_is_extracted_larger_than_an_embedding_thumbnail():
     """A watermark is a few dozen pixels in a corner. At the embed pass's 256 px
     long side it is gone before the classifier sees it — the two passes want two
     different sizes from the same decode seam, on purpose."""
-    from app.services import video_clip_search
+    from lds_video import video_clip_search
     assert wm.FRAME_LONG_SIDE > video_clip_search.EMBED_LONG_SIDE
 
 
@@ -221,7 +225,7 @@ def test_the_pass_never_changes_a_triage_decision(app, monkeypatch):
     _fake_detector(monkeypatch, {f'clip_{ids[0]}.jpg': ('detected', 0.99)})
 
     with app.app_context():
-        from app.models import VideoClip
+        from lds_video.models import VideoClip
         wm.run_watermark(bank_id)
         assert db_status(VideoClip, ids[0]) == 'pending'
 
@@ -235,7 +239,7 @@ def db_status(model, clip_id):
 
 def _bank_with_clips(app, n):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -297,7 +301,7 @@ def _fake_detector(monkeypatch, by_name):
 
 def _measured(app, sharpness_by_id):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         for cid, sharp in sharpness_by_id.items():
             db.session.get(VideoClip, cid).metrics_json = json.dumps(
@@ -306,7 +310,7 @@ def _measured(app, sharpness_by_id):
 
 
 def _summaries(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         rows = VideoClip.query.filter_by(bank_id=bank_id).all()
         return {r.id: (json.loads(r.metrics_json) if r.metrics_json else {})

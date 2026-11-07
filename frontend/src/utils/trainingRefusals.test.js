@@ -233,7 +233,8 @@ test('confirmableRetryFlag defaults to the shared list when none is passed', asy
 
 // --- the call site ----------------------------------------------------------
 
-const page = fs.readFileSync(new URL('../pages/CloudRunsPage.jsx', import.meta.url), 'utf8');
+const page = fs.readFileSync(new URL('../components/runs/RunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + fs.readFileSync(new URL('../../../bundled/cloud_training/frontend/CloudRunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('every mutating handler of the Runs hub says something when it is refused', () => {
   // fetchClient's postJson REJECTS on a 400 and shows nothing of its own for

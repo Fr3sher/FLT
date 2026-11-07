@@ -36,11 +36,11 @@ the .npz and written every CACHE_EVERY images, so killing the pass mid-way loses
 most that slice.
 
 RESUMING is what the cache is for, and it has two halves:
-  * a path already cached (and unchanged on disk) is never embedded again — that
+  * a successfully cached path (and unchanged on disk) is never embedded again — that
     is the cheap half, and it is why the payload stays the WHOLE bank instead of
     "the unscored rows". The clustering below needs every embedding, so shrinking
     the payload would not save inference, it would only make the style partition
-    wrong;
+    wrong. Failed entries are retried on the next run;
   * a path cached while a head was DOWN carries a hole (aesthetic or nsfw None)
     and state 'ok'. Those used to be cached forever: the entry existed, so the
     image was skipped, so the missing score never came back — a permanent gap
@@ -450,9 +450,10 @@ def main() -> int:
     # temporaries get swept instead of accumulating forever.
     _salvage_cache(cache_path)
     cache = {} if rescore else _load_cache(cache_path)
-    # Re-score anything not cached OR whose file changed on disk since (a same-path
-    # edit invalidates the stale embedding/scores).
-    todo = [p for p in images if p not in cache or _is_stale(p, cache[p])]
+    # A cached error is a failed attempt, not completed work. Retrying it must
+    # not require throwing away the successful embeddings from the same run.
+    todo = [p for p in images if p not in cache or cache[p][0] != 'ok'
+            or _is_stale(p, cache[p])]
     todo_set = set(todo)
     # Cached entries with a hole a head could not fill last time. Whether they are
     # really worth re-running depends on which heads load THIS time, so the list is
@@ -466,6 +467,7 @@ def main() -> int:
     # Why a head produced nothing, per head. Empty when every head loaded — and
     # when no work ran at all, since heads are only loaded for real work.
     head_errors = {}
+    image_errors = []
     if todo or holed:
         try:
             import numpy as np  # noqa: F401
@@ -543,16 +545,24 @@ def main() -> int:
                         emb = clip_model.encode_image(tens)
                         emb = emb / emb.norm(dim=-1, keepdim=True)
                         emb_np = emb.cpu().numpy()[0].astype('float32')
+                        if not np.isfinite(emb_np).all() or not np.any(emb_np):
+                            raise ValueError('CLIP produced an invalid image embedding')
                         aesthetic = keep[1] if keep else None
                         if aes_ok:
-                            aesthetic = round(float(aes_head(emb)[0][0].item()), 3)
+                            try:
+                                aesthetic = round(float(aes_head(emb)[0][0].item()), 3)
+                            except Exception as e:  # noqa: BLE001 — preserve CLIP and NSFW
+                                head_errors.setdefault('aesthetic', _reason(e))
                         nsfw = keep[2] if keep else None
                         if nsfw_ok:
-                            model, proc, nsfw_idx = nsfw_bundle
-                            inp = proc(images=im, return_tensors='pt').to(device)
-                            logits = model(**inp).logits
-                            probs = torch.softmax(logits, dim=-1)[0]
-                            nsfw = round(float(probs[nsfw_idx].item()), 4)
+                            try:
+                                model, proc, nsfw_idx = nsfw_bundle
+                                inp = proc(images=im, return_tensors='pt').to(device)
+                                logits = model(**inp).logits
+                                probs = torch.softmax(logits, dim=-1)[0]
+                                nsfw = round(float(probs[nsfw_idx].item()), 4)
+                            except Exception as e:  # noqa: BLE001 — preserve CLIP and aesthetic
+                                head_errors.setdefault('nsfw', _reason(e))
                     result = ('ok', aesthetic, nsfw, emb_np, signature, payload_hash)
                 # CLIP and the heads can take long enough for a live Bank path
                 # to be replaced.  Publish only while it still identifies the
@@ -562,6 +572,9 @@ def main() -> int:
                     raise RuntimeError('image changed while it was scored')
                 cache[p] = result
             except Exception as e:  # noqa: BLE001 — one broken file never sinks the pass
+                reason = _reason(e)
+                if reason not in image_errors and len(image_errors) < 3:
+                    image_errors.append(reason)
                 if not signature or _file_sig(p) != signature:
                     changed_while_scoring = True
                 # A hole-retry that fails KEEPS its entry: the embedding in it is
@@ -632,7 +645,7 @@ def main() -> int:
     _phase(f'handing {len(results)} result(s) back to the app…')
     print(json.dumps({'ok': True, 'results': results, 'clusters': clusters,
                       'computed': computed, 'reused': reused,
-                      'head_errors': head_errors}))
+                      'head_errors': head_errors, 'image_errors': image_errors}))
     return 0
 
 

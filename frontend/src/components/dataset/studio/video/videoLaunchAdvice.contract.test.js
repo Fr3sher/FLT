@@ -17,7 +17,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(join(here, 'VideoTestStudio.jsx'), 'utf8')
+const src = readFileSync(join(here, '../../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx'), 'utf8')
   .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')   // JSX comments say what the code must do, not do it
   .replace(/\/\/[^\n]*/g, '');
 

@@ -166,7 +166,8 @@ def _require_no_stalled_comfyui():
 
 
 _STUDIO_FAMILY_LABELS = {'zimage': 'Z-Image', 'sdxl': 'SDXL', 'krea': 'Krea 2 Turbo',
-                         'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein'}
+                         'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein',
+                         'anima': 'Anima', 'qwenimage21': 'Qwen-Image 2.1'}
 
 
 def _studio_missing_response(e):
@@ -196,11 +197,22 @@ def _studio_missing_response(e):
         # Name WHAT to install for the nodes we recognise (pack + ComfyUI-Manager
         # search term + URL), so the user doesn't have to reverse-map a class_type.
         from ..services.lora_test_studio import studio_missing_node_hints
+        from ..utils.trained_image_workflows import REQUIRED_NODES
         node_packs = studio_missing_node_hints(e.missing_nodes)
-        msg += f"{len(e.missing_nodes)} custom node(s) are missing — install them into ComfyUI. "
+        core = set().union(*REQUIRED_NODES.values()) | {'EmptyFlux2LatentImage'}
+        native_missing = [name for name in e.missing_nodes if name in core]
+        msg += f"{len(e.missing_nodes)} required ComfyUI node(s) are missing. "
+        if native_missing:
+            msg += 'Update ComfyUI to add its built-in nodes, then restart ComfyUI. '
         for h in node_packs:
-            msg += (f"For “{h['class_type']}”, install “{h['pack']}” via ComfyUI-Manager "
-                    f"(search “{h['search']}”: {h['url']}). ")
+            if h.get('url'):
+                msg += (f"For “{h['class_type']}”, install “{h['pack']}” via ComfyUI-Manager "
+                        f"({h['url']}). ")
+            else:
+                msg += (f"For “{h['class_type']}”, install “{h['pack']}” from "
+                        f"{h.get('setup', 'Setup')}, then restart ComfyUI. ")
+        node_packs += [{'class_type': name, 'pack': 'ComfyUI', 'core': True}
+                       for name in native_missing]
     msg += "Then relaunch the test."
     return jsonify({'ok': False, 'error': msg,
                     'studio_missing': {'family': e.family,

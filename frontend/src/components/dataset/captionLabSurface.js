@@ -21,6 +21,8 @@ export const imageDisplayName = (img) => img.filename || img.name || String(img.
 export function datasetLabSurface({ datasetId, imageId }) {
   return {
     kind: 'dataset',
+    optionsUrl: `/api/dataset/${datasetId}/caption/options`,
+    promptHelp: 'Uses the saved caption method and the prompt for this dataset type. The caption format follows the training family (booru for SDXL, prose otherwise).',
     preview: (body) => postJson(
       `/api/dataset/${datasetId}/image/${imageId}/caption/preview`, body),
     cancel: () => postJson(`/api/dataset/${datasetId}/caption/cancel`, {}),
@@ -45,6 +47,7 @@ export function datasetLabSurface({ datasetId, imageId }) {
 export function bankLabSurface({ bankId, imageId, onApplyRunConfig }) {
   return {
     kind: 'bank',
+    promptHelp: 'Uses the descriptive bank prompt, including visible identity features.',
     preview: (body) => postJson(
       `/api/bank/${bankId}/image/${imageId}/caption/preview`, body),
     // The Bank has ONE Stop for whatever holds it, and the bench takes the bank lease

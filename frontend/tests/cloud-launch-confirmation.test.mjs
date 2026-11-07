@@ -55,7 +55,7 @@ test('the cloud launch does not retry on a shape postJson never returns', () => 
   // call site posts through postJson, which THROWS, so a `d.ok === false` loop
   // around it is unreachable no matter how right it looks.
   const src = readFileSync(
-    new URL('../src/components/dataset/TrainingPanel.jsx', import.meta.url), 'utf8')
+    new URL('../../bundled/cloud_training/frontend/dataset/DatasetCloudTraining.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
   // Bounded to launchCloud's OWN body: this file holds two other retry loops that
   // are correct (they post through postTrain, which returns instead of throwing)
   // and one more on the local lane, and a greedy slice would accuse all three.

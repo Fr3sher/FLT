@@ -1,10 +1,10 @@
-/* Renderer markdown minimal, SANS dépendance — couvre exactement ce que
-   docs/DATASET_GUIDE.md utilise (h1-h3, paragraphes, listes ± cases à cocher,
-   tables, blockquotes, code fences, hr, gras/italique/code/liens inline).
-   On garde le bundle distribué léger plutôt que d'embarquer react-markdown
-   pour une seule page. Si le guide adopte un jour une syntaxe non couverte,
-   elle sortira en texte brut — visible d'un coup d'œil, jamais dangereux
-   (aucun dangerouslySetInnerHTML : tout passe par des éléments React). */
+/*
+ * Minimal dependency-free Markdown renderer covering exactly what docs/DATASET_GUIDE.md uses:
+ * h1-h3, paragraphs, lists with optional checkboxes, tables, blockquotes, code fences, horizontal
+ * rules, and inline bold/italic/code/links. Avoid shipping react-markdown for one page.
+ * Unsupported syntax appears as plain text, visibly and safely: all output uses React elements,
+ * never dangerouslySetInnerHTML.
+ */
 
 // Shared slugifier — lives in utils/headingId.js so the help registry and the
 // node --test contract can import it without pulling JSX/Vite in. Re-exported
@@ -15,8 +15,8 @@ export { markdownHeadingId }
 // ---- inline: **bold**, *italic*, `code`, [text](url) ----
 function renderInline(text, keyBase = 'i') {
   const out = [];
-  // tokenise par priorité : code d'abord (son contenu est littéral), puis gras,
-  // italique, lien. Regex global unique → un seul passage gauche→droite.
+  // Tokenize by priority: code first (its contents are literal), then bold, italic and links. One
+  // global regex makes a single left-to-right pass.
   const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(\[[^\]]+\]\([^)]+\))/g;
   let last = 0, m, k = 0;
   while ((m = re.exec(text)) !== null) {
@@ -58,7 +58,7 @@ function parseBlocks(md) {
     const h = line.match(/^(#{1,3})\s+(.*)$/);
     if (h) { blocks.push({ t: `h${h[1].length}`, body: h[2] }); i++; continue; }
     if (/^(-{3,}|\*{3,})\s*$/.test(line)) { blocks.push({ t: 'hr' }); i++; continue; }
-    if (line.startsWith('>')) {                         // blockquote (multi-ligne)
+    if (line.startsWith('>')) {                         // Multiline blockquote
       const buf = [];
       while (i < lines.length && lines[i].startsWith('>')) buf.push(lines[i++].replace(/^>\s?/, ''));
       blocks.push({ t: 'quote', body: buf.join(' ') });
@@ -69,18 +69,18 @@ function parseBlocks(md) {
       while (i < lines.length && /^\|/.test(lines[i])) rows.push(lines[i++]);
       const cells = (r) => r.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
       const header = cells(rows[0]);
-      // ligne 2 = séparateur |---|--- ; le corps commence après
+      // Line 2 is the |---|--- separator; the body starts after it.
       const body = rows.slice(2).map(cells);
       blocks.push({ t: 'table', header, body });
       continue;
     }
-    if (/^(\s*)([-*]|\d+\.)\s+/.test(line)) {           // liste (± cases [ ]/[x], ± ordonnée)
+    if (/^(\s*)([-*]|\d+\.)\s+/.test(line)) {           // List: optionally ordered, with optional [ ]/[x] checkboxes.
       const items = [];
       const ordered = /^\s*\d+\./.test(line);
       while (i < lines.length && /^(\s*)([-*]|\d+\.)\s+/.test(lines[i])) {
         let item = lines[i].replace(/^(\s*)([-*]|\d+\.)\s+/, '');
         i++;
-        // continuation indentée (wrap doux du markdown source)
+        // Indented continuation from soft wrapping in the Markdown source.
         while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !/^(\s*)([-*]|\d+\.)\s+/.test(lines[i])) {
           item += ' ' + lines[i++].trim();
         }

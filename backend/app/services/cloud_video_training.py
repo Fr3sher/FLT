@@ -192,13 +192,10 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
             'be nothing to train on; rebuild it before launching')
 
     n_steps = max(100, int(steps or 1000))
-    # Previews: capped and cleaned here, once, so the stamp is what runs. Each
-    # preview is a full video generation on the paid GPU (num_frames at 28
-    # sampling steps), which is why the cap is small and the default is none.
+    # Keep the complete requested sample list in the launch stamp. Each
+    # preview adds a full generation on the rented GPU; the UI explains the
+    # cost and leaves sampling off by default.
     prompts = [str(x).strip() for x in (sample_prompts or []) if str(x).strip()]
-    if len(prompts) > 4:
-        raise ValueError('at most 4 sample prompts — each preview is a full '
-                         'video generation on the rented GPU')
     if distillation not in ('auto', 'off'):
         raise ValueError("distillation must be 'auto' or 'off'")
     # Built HERE, before the reservation, purely so an unsupported target raises

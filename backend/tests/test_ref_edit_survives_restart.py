@@ -27,11 +27,15 @@ Freshness stays ONE rule, not two: recovery honours the same `_TTL_SECONDS` the
 in-process purge and the disk sweep already use. A restart must not extend the
 life of an abandoned edit beyond what staying up would have allowed.
 """
+
+import pytest
+
+pytestmark = pytest.mark.plugins('api_engines')
+
 import io
 import json
 import os
 
-import pytest
 from PIL import Image
 
 from app.services import dataset_activity

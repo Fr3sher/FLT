@@ -1,16 +1,11 @@
 // react-frontend/src/components/dataset/studio/FaceRankingPanel.jsx
 /**
- * FaceRankingPanel — « best epoch » OBJECTIF (méthode jandordoe automatisée).
- *
- * Bouton « 🎯 Score faces » : le serveur score chaque cellule terminée du Studio
- * (InsightFace antelopev2 vs la photo de RÉFÉRENCE du dataset, subprocess CPU —
- * le GPU/ComfyUI n'est pas touché), puis le classement des checkpoints par
- * similarité moyenne s'affiche ici. Le 1er = 🏆 best epoch mesuré, plus besoin
- * de deviner quel checkpoint garder. Mêmes seuils que le Dataset Maker :
- * ≥0.50 vert (match), ≥0.45 orange (limite), sinon rouge.
- *
- * ⚠️ Rappel jandordoe : un epoch surentraîné peut scorer mieux en étant plus
- * moche (artefacts) — le score CLASSE, l'œil tranche.
+ * FaceRankingPanel finds an OBJECTIVE best epoch using the automated jandordoe method. Score faces
+ * asks the server to compare completed Studio cells against the dataset REFERENCE using
+ * InsightFace antelopev2 in a CPU subprocess, leaving GPU/ComfyUI untouched. Rank checkpoints by
+ * mean similarity; first is the measured best epoch. Match Dataset Maker thresholds: at least 0.50
+ * green/match, 0.45 orange/borderline, otherwise red. As jandordoe notes, overtrained epochs can
+ * score higher while looking worse from artifacts: scores rank, visual judgment decides.
  */
 const scoreCls = (avg) => (avg >= 0.50 ? 'text-emerald-300'
   : avg >= 0.45 ? 'text-amber-300' : 'text-red-300');

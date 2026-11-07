@@ -9,7 +9,11 @@ default negative, rank 32), the official base is PUBLIC (no gate), deploy routin
 lands in loras/anima, and — crucially for THIS wave — the cloud path is REFUSED
 (local-first until the pod image ships a recent ai-toolkit + diffusers).
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import pytest
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _configure_aitoolkit(tmp_path, app, supports_anima=True):
@@ -135,7 +139,7 @@ def test_cloud_training_refuses_anima(app, tmp_path, monkeypatch):
     """Local-first: cloud must refuse Anima BEFORE reserving anything, with a
     readable reason (the pod image predates the 'anima' arch). Both cloud entry
     points (tiers estimate + launch) enforce it."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import face_dataset_service as svc
     from app.config import LOCAL_USER
     # Fake VAST key so the anima refusal (which sits AFTER the key check) is reached.

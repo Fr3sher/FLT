@@ -1,0 +1,96 @@
+{
+  "id": "camera_angles",
+  "bundled": true,
+  "name": "Camera angles",
+  "version": "1.1.0",
+  "api": 1,
+  "description": "Import an image into the Camera angles workspace and re-shoot it from other camera positions with Qwen-Image-Edit and the Multiple-Angles LoRA. Preview and download each view, or use the same controls on Gallery and dataset images.",
+  "requires": [],
+  "python_package": "lds_camera_angles",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": true,
+  "owns": {
+    "install_actions": [
+      "camera_model",
+      "camera_lora",
+      "camera_speed_lora",
+      "camera_text_encoder"
+    ],
+    "install_groups": [
+      "camera"
+    ],
+    "probes": [
+      "comfyui.camera_missing",
+      "comfyui.camera_ready"
+    ],
+    "config_sections": [
+      "camera"
+    ],
+    "config_keys_in_shared_sections": {},
+    "help_topics": [
+      "setup-camera-install",
+      "action-camera-angles",
+      "action-camera-model",
+      "action-dataset-camera-angles"
+    ],
+    "tables": [],
+    "whats_new_ids": [
+      "2026-09-24-camera-standalone",
+      "2026-08-28-camera-model-choice",
+      "2026-08-26-camera-angles-dataset",
+      "2026-08-26-camera-setup-card",
+      "2026-08-26-camera-angles"
+    ],
+    "model_slots": [
+      "camera_unet"
+    ],
+    "job_kinds": [
+      "is_camera_studio"
+    ]
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "comfyui",
+    "datasets:write"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Open Camera angles",
+        "path": "/camera-angles"
+      },
+      {
+        "label": "Open Gallery",
+        "path": "/gallery"
+      },
+      {
+        "label": "Open datasets",
+        "path": "/datasets?section=images"
+      }
+    ],
+    "setup": {
+      "label": "Configure",
+      "path": "/plugins/camera_angles/settings"
+    },
+    "setup_hint": "Requires a configured ComfyUI and Camera model weights. Open Camera angles and import an image, then choose your viewpoints.",
+    "surfaces": [
+      "Camera angles",
+      "Gallery",
+      "Dataset",
+      "Camera setup"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.16,<2"
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "settings-reference#camera-angles-local",
+      "using-the-app#re-shoot-an-image-with-camera-angles"
+    ]
+  }
+}

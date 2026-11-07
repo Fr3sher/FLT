@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import {
   captionEditPlan, captionEditConfirmation, captionEditProgressLabel,
   captionEditReport, CAPTION_OPS,
-} from './videoDatasetCaptionTools.js'
+} from "../../../../bundled/video/frontend/videobank/videoDatasetCaptionTools.js"
 
 const clip = (id, caption) => ({ id, filename: `clip_000${id}.mp4`, caption })
 

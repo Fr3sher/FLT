@@ -1,4 +1,4 @@
-import { WORKSPACE_SECTIONS, isWorkspaceSection } from './workspaceSections.js';
+import { WORKSPACE_SECTIONS, isWorkspaceSection, sectionPanels } from './workspaceSections.js';
 
 export const PANEL_STATUS = Object.freeze({
   AVAILABLE: 'available',
@@ -23,7 +23,6 @@ const AVAILABILITY = {
   hasKeptImages: (c) => boolStatus(c.hasKeptImages),
   leakReview: (c) => boolStatus(c.kind !== 'style' && c.hasKeptImages && c.hasLeakMetadata),
   hasCaptionedKept: (c) => boolStatus(c.hasCaptionedKept),
-  huggingFace: (c) => boolStatus(c.hfPublish && c.hasKeptImages),
   trainingVisible: (c) => boolStatus(c.trainingVisible),
   trainingQueue: (c) => {
     if (!c.trainingVisible) return PANEL_STATUS.UNAVAILABLE;
@@ -35,12 +34,14 @@ const AVAILABILITY = {
 
 export function getWorkspacePanel(sectionId, panelId) {
   const section = WORKSPACE_SECTIONS.find((item) => item.id === sectionId);
-  return section?.panels?.find((item) => item.id === panelId) || null;
+  return sectionPanels(section).find((item) => item.id === panelId) || null;
 }
 
 export function getWorkspacePanelStatus(sectionId, panelId, context) {
   const panel = getWorkspacePanel(sectionId, panelId);
   if (!panel) return PANEL_STATUS.UNKNOWN;
+  // A plugin's row carries its own predicate; a core row names one of ours.
+  if (typeof panel.when === 'function') return boolStatus(Boolean(panel.when(context || {})));
   const predicate = AVAILABILITY[panel.when];
   if (!predicate) return PANEL_STATUS.UNKNOWN;
   return predicate(context || {});
@@ -49,7 +50,7 @@ export function getWorkspacePanelStatus(sectionId, panelId, context) {
 export function getWorkspacePanels(sectionId, context) {
   const section = WORKSPACE_SECTIONS.find((item) => item.id === sectionId);
   if (!section) return [];
-  return section.panels.filter(
+  return sectionPanels(section).filter(
     (panel) => getWorkspacePanelStatus(sectionId, panel.id, context) === PANEL_STATUS.AVAILABLE,
   );
 }
@@ -68,7 +69,11 @@ export function resolveWorkspaceLocation(searchParams, context) {
   if (requestedSection === 'training' && requestedPanel === 'studio') {
     return { section: 'studio', panel: 'launcher', pending: false, needsNormalization: true };
   }
-  if (!isWorkspaceSection(requestedSection)) {
+  // A section that exists to host a plugin slot is hidden while no plugin
+  // fills it (context.hiddenSections, from the workspace): a stored
+  // ?section=scrape then lands on the default section, not an empty page.
+  const hidden = Array.isArray(context?.hiddenSections) ? context.hiddenSections : [];
+  if (!isWorkspaceSection(requestedSection) || hidden.includes(requestedSection)) {
     // Opening a dataset with no section asked for lands on ADD IMAGES, not the
     // review grid: you open a dataset to put something in it far more often than
     // to look at what is already there, and the grid is one click away. Invalid

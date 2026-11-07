@@ -28,6 +28,10 @@ from app.utils.timestamps import naive_utcnow
 from datetime import timedelta
 
 from test_cloud_training_monitor import ct, FakeRemote, _launch    # noqa: F401
+import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 _POD = {'instance_id': '777', 'actual_status': 'running',
@@ -45,6 +49,8 @@ def _resumed_training_run(ct, app, run_id, *, age_minutes=180):
                 status='training', base_url='http://1.2.3.4:40123',
                 auth_token='tok',
                 created_at=naive_utcnow() - timedelta(minutes=age_minutes))
+        # The previous process observed and pinned this rental before restart.
+        ct._run_credentials(run)
 
 
 def test_a_vast_listing_gap_never_condemns_a_pod_that_answers(
@@ -59,9 +65,9 @@ def test_a_vast_listing_gap_never_condemns_a_pod_that_answers(
     _resumed_training_run(ct, app, run_id)
     listings = {'n': 0}
 
-    def with_a_gap(iid):
+    def with_a_gap(iid, **_kw):
         listings['n'] += 1
-        return None if listings['n'] <= 2 else dict(_POD)
+        return None if remote.polls == 0 else dict(_POD, label=remote.rental['label'])
 
     monkeypatch.setattr(ct.vast_client, 'get_instance', with_a_gap)
     with app.app_context():
@@ -70,7 +76,8 @@ def test_a_vast_listing_gap_never_condemns_a_pod_that_answers(
         assert run.status == 'done'
         # It never even needed the listing to come back: the pod's own answer
         # is the evidence, so the boot wait broke out on the first poll.
-        assert listings['n'] == 1
+        assert listings['n'] == 2  # one boot probe, one identity check before DELETE
+        assert destroyed == ['777']
         assert remote.uploaded == {}            # still a reattach, not a relaunch
         assert remote.job_config is None
 
@@ -93,9 +100,9 @@ def test_a_pod_silent_for_two_polls_is_not_a_dead_pod(
     _resumed_training_run(ct, app, run_id)
     listings = {'n': 0}
 
-    def with_a_gap(iid):
+    def with_a_gap(iid, **_kw):
         listings['n'] += 1
-        return None if listings['n'] <= 2 else dict(_POD)
+        return None if listings['n'] <= 2 else dict(_POD, label=remote.rental['label'])
 
     monkeypatch.setattr(ct.vast_client, 'get_instance', with_a_gap)
     with app.app_context():
@@ -110,8 +117,8 @@ def test_a_pod_silent_for_two_polls_is_not_a_dead_pod(
 def _dense_run(ct, dataset_id, staging):
     run = ct.CloudTrainingRun(
         dataset_id=dataset_id, status='training', run_name='dense-reattach',
-        job_name='Krea_dense_reattach', vast_label='lds-dense',
-        vast_instance_id='pod-dense', remote_job_id='remote-dense',
+        job_name='Krea_dense_reattach', vast_label='lds-888',
+        vast_instance_id='888', remote_job_id='remote-dense',
         base_url='https://dense-pod.invalid', auth_token='tok',
         staging_dir=str(staging),
         train_params=json.dumps({
@@ -121,6 +128,9 @@ def _dense_run(ct, dataset_id, staging):
         }))
     ct.db.session.add(run)
     ct.db.session.commit()
+    # Receipt already pinned while the provider still listed the pod.
+    ct._bind_observed_legacy(run, ct.vast_client.capture_credentials(),
+                             {'instance_id': '888', 'label': 'lds-888'})
     return run.id
 
 
@@ -146,7 +156,7 @@ def test_a_pod_that_never_answers_again_is_given_up_without_a_stop_or_a_ban(
 
     polls = {'n': 0}
 
-    def never_listed(iid):
+    def never_listed(iid, **_kw):
         polls['n'] += 1
         return None
 
@@ -154,7 +164,7 @@ def test_a_pod_that_never_answers_again_is_given_up_without_a_stop_or_a_ban(
     monkeypatch.setattr(ct, '_make_remote', lambda run: Silent())
     monkeypatch.setattr(ct.vast_client, 'get_instance', never_listed)
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(iid) or True)
+                        lambda iid, **_kw: destroyed.append(iid) or True)
     clock = {'t': 0.0}
     monkeypatch.setattr(ct, '_now',
                         lambda: clock.__setitem__('t', clock['t'] + 30.0)

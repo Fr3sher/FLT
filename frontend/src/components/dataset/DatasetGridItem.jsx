@@ -1,3 +1,4 @@
+import { improvementAvailable } from '../../utils/improveEngines.js';
 /** One curation tile: image + keep/reject + source/framing badges + caption + crop. */
 import { improvementBadge } from './improveCandidates.js';
 import SelectionMark from '../shared/SelectionMark';
@@ -12,7 +13,7 @@ import CaptionEditorDialog from './CaptionEditorDialog';
 import { datasetLabSurface } from './captionLabSurface';
 import PromptEditPopover from './PromptEditPopover';
 import SourceAttribution from './SourceAttribution';
-import { ENGINE_ACCENTS, ENGINE_LABELS } from './engineSelection.js';
+import { engineAccent, engineLabel as labelOfEngine } from './engineSelection.js';
 import { canRegenerateGeneric, improveRerunAffordance, isImageImproveRow } from './improveRerun.js';
 import { rememberImageRatio } from './lightboxActionPlacement.js';
 import { datasetThumbUrl } from '../../utils/datasetThumbUrl.js';
@@ -40,16 +41,16 @@ const STATUS_CLS = {
   failed: 'border-red-600',
 };
 
-// Seuils calibres antelopev2 (test3) — face_score brut persiste -> ajustables dans
-// Settings (face_scoring.green/orange) ; ces valeurs ne servent que de repli.
+// Calibrated antelopev2 thresholds (test3). Raw face_score is persisted, so
+// Settings can adjust face_scoring.green/orange; these are fallback values only.
 const DEFAULT_FACE_VALID = 0.50, DEFAULT_FACE_ORANGE = 0.45;
 const GREY_LABEL = { no_face: 'no face detected', low_det: 'low detection',
   too_small: 'face too small', extreme_pose: 'profile — not scored',
   unreadable: 'unreadable', error: 'error' };
 
-// Retourne {border, icon, cls, label} d'apres face_state/face_score, ou null si pas analysé.
-// La bordure encode la largeur ET le style (plein=jugé / pointillé=non-jugeable) pour
-// ne PAS dépendre de la couleur seule (WCAG 1.4.1).
+// Return {border, icon, cls, label} from face_state/face_score, or null if not analyzed. Border
+// width AND style convey status (solid = assessed, dotted = unassessable), so color is not the
+// only signal (WCAG 1.4.1).
 function faceBadge(img, thresholds) {
   if (img.face_state == null) return null;
   if (img.face_state !== 'scorable' || img.face_score == null) {
@@ -144,7 +145,7 @@ export default function DatasetGridItem({ img, datasetId, thumbUrlFor, onStatus,
   // its OWN re-run below (same parent, current improve settings) instead.
   const isImageImproveCandidate = isImageImproveRow(img);
   const canRegenerate = canRegenerateGeneric(img, { isRescueDerived });
-  const rerunImprove = onReimprove ? improveRerunAffordance(img) : null;
+  const rerunImprove = onReimprove && improvementAvailable() ? improveRerunAffordance(img) : null;
   // Every refused write says WHICH pass holds it; idle, each keeps its own words.
   // There is no longer a single `refused`: a write is held by ONE of three gates
   // and must name that one, or it explains itself with a pass that is not the
@@ -206,7 +207,7 @@ export default function DatasetGridItem({ img, datasetId, thumbUrlFor, onStatus,
     && poseLabel(img.camera_pose))
     || DERIVATION_LABEL[img.derivation_kind]
     || (img.source === 'import' ? 'real' : 'generated');
-  const engineLabel = ENGINE_ACCENTS[img.engine] ? ENGINE_LABELS[img.engine] : null;
+  const engineLabel = img.engine ? labelOfEngine(img.engine) : null;
   const provenanceTitle = [originText, img.framing, engineLabel && `made with ${engineLabel}`]
     .filter(Boolean).join(' · ');
 
@@ -303,7 +304,7 @@ export default function DatasetGridItem({ img, datasetId, thumbUrlFor, onStatus,
             title={provenanceTitle} aria-label={provenanceTitle}>
             {originText}{img.framing ? ` · ${img.framing}` : ''}
             {engineLabel && (
-              <span className={`dataset-tile-badge__engine ml-1 px-1 rounded ${ENGINE_ACCENTS[img.engine].pill}`}>
+              <span className={`dataset-tile-badge__engine ml-1 px-1 rounded ${engineAccent(img.engine).pill}`}>
                 {engineLabel}
               </span>
             )}

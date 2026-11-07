@@ -90,7 +90,7 @@ test('edges take the tint, but the three meaningful colours still win', () => {
 });
 
 test('the canvas passes each lane its own tint, the in-card graph passes none', () => {
-  const canvas = src('components/canvas/LineageCanvas.jsx');
+  const canvas = src('../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx');
   const inCard = src('components/dataset/RunLineageGraph.jsx');
   assert.equal((canvas.match(/tintIndex=\{tintIndexFor\(lane\.datasetId\)\}/g) || []).length, 2);
   assert.doesNotMatch(inCard, /tintIndex/);

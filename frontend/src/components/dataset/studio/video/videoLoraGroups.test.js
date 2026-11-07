@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   isEnginePart, shortLoraName, checkpointStep, groupTrained, splitDeployed,
-} from './videoLoraGroups.js'
+} from "../../../../../../bundled/video/frontend/studio/video/videoLoraGroups.js"
 
 test('engine parts are recognised by what the graph grafts, candidates are not', () => {
   for (const f of ['h3/minimax_h3_fl2v_lightx2v_turbo_4step_v1.0.safetensors',

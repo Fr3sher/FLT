@@ -13,6 +13,11 @@ predates ON DELETE CASCADE answers HTTP 500. That bug has already shipped once i
 this project, so the deletion tests below run with PRAGMA foreign_keys=OFF —
 exactly the old-database shape where a missing flush order is fatal.
 """
+
+import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
 from sqlalchemy import text
 
 
@@ -22,7 +27,7 @@ def _dataset(name='Ada', trigger='ada'):
 
 
 def _positions(dataset_id):
-    from app.models import CanvasNodePosition
+    from lds_canvas.models import CanvasNodePosition
     return CanvasNodePosition.query.filter_by(dataset_id=dataset_id).count()
 
 
@@ -107,7 +112,7 @@ def test_positions_of_another_user_are_not_on_my_board(client, app):
     """The index is scoped to the caller's datasets — a row whose dataset is not
     mine never reaches the board."""
     from app.extensions import db
-    from app.models import CanvasNodePosition
+    from lds_canvas.models import CanvasNodePosition
     from app.services import face_dataset_service as svc
     with app.app_context():
         mine = _dataset('Mine', 'mine').id
@@ -129,7 +134,7 @@ def test_deleting_a_dataset_that_has_canvas_positions_does_not_500(client, app):
     an enforcing database would raise. The dataset must delete cleanly and take
     its position rows with it."""
     from app.extensions import db
-    from app.models import CanvasNodePosition
+    from lds_canvas.models import CanvasNodePosition
     from app.services import face_dataset_service as svc
     with app.app_context():
         ds_id = _dataset().id
@@ -150,7 +155,7 @@ def test_deleting_a_dataset_that_has_canvas_positions_does_not_500(client, app):
 def test_deleting_a_dataset_through_the_api_still_answers_200(client, app):
     """The user-visible half of the same guard: the HTTP path, not the service."""
     from app.extensions import db
-    from app.models import CanvasNodePosition
+    from lds_canvas.models import CanvasNodePosition
     with app.app_context():
         ds_id = _dataset().id
         db.session.add(CanvasNodePosition(dataset_id=ds_id, record_id=42, x=9, y=9))
@@ -165,8 +170,12 @@ def test_the_position_model_declares_its_relationship_to_face_dataset():
     unit of work has no reason to delete the children first, and the explicit
     cleanup in delete_dataset becomes the ONLY thing standing between a user and
     an HTTP 500 — a single refactor away from the bug coming back."""
-    from app.models import CanvasNodePosition, FaceDataset
+    from lds_canvas.models import CanvasNodePosition
+    from app.models import FaceDataset
     from sqlalchemy import inspect
-    rels = inspect(CanvasNodePosition).relationships
+    from app.models import CanvasNodePosition as HostCanvasNodePosition
+    # Host deletion owns flush ordering; the plugin maps that same table.
+    assert CanvasNodePosition.__table__ is HostCanvasNodePosition.__table__
+    rels = inspect(HostCanvasNodePosition).relationships
     assert 'dataset' in rels, 'CanvasNodePosition must declare relationship() to face_dataset'
     assert rels['dataset'].mapper.class_ is FaceDataset

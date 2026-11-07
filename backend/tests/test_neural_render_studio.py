@@ -9,13 +9,17 @@ import os
 
 import pytest
 
-from app.services import neural_render as nr
-from app.services import video_test_studio as vts
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import neural_render_media as nr
+from lds_dlss5 import neural_render as engine
+from lds_video import video_test_studio as vts
+
+pytestmark = pytest.mark.plugins('video', 'dlss5')
 
 
 def _clip(app, **kw):
     from app.extensions import db
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     with app.app_context():
         row = VideoTestClip(**{'status': 'done', 'filename': 'clip.mp4', 'mode': 'i2v',
                                'fps': 24, 'frames': 56, 'prompt': 'she turns',
@@ -26,7 +30,7 @@ def _clip(app, **kw):
 
 
 def _ready(monkeypatch):
-    monkeypatch.setattr(nr, 'status', lambda root=None, os_name=None, driver=None: {
+    monkeypatch.setattr(engine, 'status', lambda root=None, os_name=None, driver=None: {
         'ready': True, 'missing': [], 'driver_nvof': True})
 
 
@@ -37,7 +41,7 @@ def _join_thread(src_id):
 
 
 def test_the_render_is_a_new_row_pointing_at_its_source(app, tmp_path, monkeypatch):
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'ORIGINAL')
     _ready(monkeypatch)
@@ -48,7 +52,7 @@ def test_the_render_is_a_new_row_pointing_at_its_source(app, tmp_path, monkeypat
         with open(dst, 'wb') as fh:
             fh.write(b'RENDERED')
         return {'frames': 56, 'mode_note': 'still mode', 'mean_ms': 12.0}
-    monkeypatch.setattr(nr, 'render_video', fake)
+    monkeypatch.setattr(engine, 'render_video', fake)
     src_id = _clip(app)
     with app.app_context():
         out = nr.start_studio_render(app, 'local', src_id, {'tone': 0.5, 'temporal': 'off'})
@@ -71,14 +75,14 @@ def test_the_render_is_a_new_row_pointing_at_its_source(app, tmp_path, monkeypat
 
 
 def test_a_failed_render_lands_as_failed_with_the_childs_sentence(app, tmp_path, monkeypatch):
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'ORIGINAL')
     _ready(monkeypatch)
 
     def boom(src, dst, params, **kw):
         raise nr.NeuralRenderError('the model refused the frame')
-    monkeypatch.setattr(nr, 'render_video', boom)
+    monkeypatch.setattr(engine, 'render_video', boom)
     src_id = _clip(app)
     with app.app_context():
         new_id = nr.start_studio_render(app, 'local', src_id, {})['clip_id']
@@ -101,7 +105,7 @@ def test_refusals_are_sentences(app, tmp_path, monkeypatch):
         gone = _clip(app, filename='gone.mp4')
         with pytest.raises(nr.NeuralRenderError, match='no longer on disk'):
             nr.start_studio_render(app, 'local', gone, {})
-    monkeypatch.setattr(nr, 'status', lambda root=None, os_name=None, driver=None: {
+    monkeypatch.setattr(engine, 'status', lambda root=None, os_name=None, driver=None: {
         'ready': False, 'missing': ['Windows — x'], 'driver_nvof': False})
     with app.app_context():
         with pytest.raises(nr.NeuralRenderError, match='Windows'):
@@ -112,7 +116,7 @@ def test_the_route_and_the_clip_payload(app, client, tmp_path, monkeypatch):
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'ORIGINAL')
     _ready(monkeypatch)
-    monkeypatch.setattr(nr, 'render_video', lambda src, dst, params, **kw: (
+    monkeypatch.setattr(engine, 'render_video', lambda src, dst, params, **kw: (
         open(dst, 'wb').write(b'R') and {'frames': 1, 'mode_note': 'still mode'}))
     src_id = _clip(app)
     r = client.post(f'/api/video-studio/clip/{src_id}/neural-render', json={'tone': 3})
@@ -169,11 +173,11 @@ def test_a_render_remembers_its_dials_and_the_mode_it_used(app, client, tmp_path
     """The card can say seed and steps; for a render the dials are what
     differed, so they travel with the row — as asked, then as used."""
     import json
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'ORIGINAL')
     _ready(monkeypatch)
-    monkeypatch.setattr(nr, 'render_video', lambda src, dst, params, **kw: (
+    monkeypatch.setattr(engine, 'render_video', lambda src, dst, params, **kw: (
         open(dst, 'wb').write(b'R') and {'frames': 56, 'temporal': True, 'mean_ms': 31.7, 'mode_note': 'temporal mode'}))
     src_id = _clip(app)
     with app.app_context():
@@ -195,7 +199,7 @@ def test_a_render_remembers_its_dials_and_the_mode_it_used(app, client, tmp_path
 def test_a_neural_render_measures_its_own_time_done_or_failed(app, tmp_path, monkeypatch):
     """This lane never goes through the queue, so nothing stamps it: the thread
     times itself, on both outcomes, and the card can say how long the pass took."""
-    from app.models import VideoTestClip
+    from lds_video.models import VideoTestClip
     monkeypatch.setattr(vts, 'clips_dir', lambda create=True: str(tmp_path))
     (tmp_path / 'clip.mp4').write_bytes(b'ORIGINAL')
     _ready(monkeypatch)
@@ -206,7 +210,7 @@ def test_a_neural_render_measures_its_own_time_done_or_failed(app, tmp_path, mon
         with open(dst, 'wb') as fh:
             fh.write(b'RENDERED')
         return {'frames': 56, 'mode_note': 'still mode', 'mean_ms': 12.0}
-    monkeypatch.setattr(nr, 'render_video', slow_ok)
+    monkeypatch.setattr(engine, 'render_video', slow_ok)
     src_id = _clip(app)
     with app.app_context():
         new_id = nr.start_studio_render(app, 'local', src_id, {})['clip_id']
@@ -218,7 +222,7 @@ def test_a_neural_render_measures_its_own_time_done_or_failed(app, tmp_path, mon
 
     def boom(src, dst, params, **kw):
         raise nr.NeuralRenderError('the bridge refused the clip')
-    monkeypatch.setattr(nr, 'render_video', boom)
+    monkeypatch.setattr(engine, 'render_video', boom)
     src2 = _clip(app)
     with app.app_context():
         failed_id = nr.start_studio_render(app, 'local', src2, {})['clip_id']

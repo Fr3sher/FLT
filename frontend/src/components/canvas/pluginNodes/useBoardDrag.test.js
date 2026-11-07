@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { renderToStaticMarkup, createElement } from '../../../../tests/support/mountJsx.mjs';
-import { useBoardDrag } from './useBoardDrag.js';
+import { useBoardDrag } from "../../../../../bundled/canvas/frontend/components/canvas/boardNodes/useBoardDrag.js";
 
 // `useBoardDrag` is a hook — it needs a real render pass to call. A throwaway
 // component captures the handlers it returns into a plain object so the test

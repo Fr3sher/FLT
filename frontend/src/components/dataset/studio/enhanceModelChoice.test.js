@@ -49,7 +49,7 @@ test('the same button (gear included) reaches the Canvas through the shared pane
   // Studio-only — exactly the drift this repo forbids.
   const promptField = read('PromptField.jsx');
   const runSetup = read('RunSetupPanel.jsx');
-  const canvasPanel = read('../../canvas/CanvasGenerationPanel.jsx');
+  const canvasPanel = read("../../../../../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx");
   assert.match(promptField, /<EnhancePromptButton/);
   assert.match(runSetup, /<PromptField/);
   assert.match(canvasPanel, /RunSetupPanel/);

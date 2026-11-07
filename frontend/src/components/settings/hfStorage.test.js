@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   deletionSafety, formatBytes, lastRunLabel, sortedCaches, storageSummary,
-} from './hfStorage.js'
+} from "../../../../bundled/cloud_training/frontend/settings/hfStorage.js"
 import { CONFIRMABLE_REFUSALS, matchConfirmableRefusal } from '../../utils/trainingRefusals.js'
 
 const GB = 1000 ** 3

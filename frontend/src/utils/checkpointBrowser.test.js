@@ -9,9 +9,20 @@ import {
   defaultCheckpointVariant,
   loraFolderLabel,
   normalizeCheckpointVariant,
+  savedCheckpointSelection,
   trainingRunSelection,
   trainFamilyLabel,
 } from './checkpointBrowser.js';
+
+test('results can use the persisted selection before trainer discovery completes', () => {
+  assert.deepEqual(savedCheckpointSelection({
+    train_type: 'krea', train_base_model: 'models/custom.safetensors', train_variant: 'turbo',
+  }), { family: 'krea', base: 'models/custom.safetensors', variant: 'turbo' });
+  assert.deepEqual(savedCheckpointSelection({ train_type: 'krea' }),
+    { family: 'krea', base: '', variant: 'base' });
+  assert.deepEqual(savedCheckpointSelection({ train_type: 'flux2klein', train_variant: 'base' }),
+    { family: 'flux2klein', base: '', variant: '4b' });
+});
 
 test('results browser chooses the official base when a family provides one', () => {
   assert.equal(defaultCheckpointBase([{ value: 'custom', label: 'Custom' }, { value: '', label: 'Official' }]), '');
@@ -59,6 +70,8 @@ test('cloud payload always sends the selected base to the server guard', () => {
 test('family labels and ComfyUI folders stay tied to the results filter', () => {
   assert.equal(trainFamilyLabel('flux2klein'), 'FLUX.2 Klein');
   assert.equal(loraFolderLabel('flux2klein'), 'loras/flux2klein');
+  assert.equal(trainFamilyLabel('qwenimage21'), 'Qwen-Image 2.1');
+  assert.equal(loraFolderLabel('qwenimage21'), 'loras/qwenimage21');
   assert.equal(trainFamilyLabel('unknown'), 'Z-Image');
   assert.equal(loraFolderLabel('unknown'), 'loras/z image');
 });

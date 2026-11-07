@@ -739,6 +739,9 @@ def _readline_with_timeout(proc, timeout, budget=None):
     ``budget`` is the whole allowance this read is one slice of, so the message
     names the budget the user is actually up against and not whatever was left
     of it after a banner line."""
+    if budget is None:
+        from ..timeout_settings import processing_timeout
+        timeout = processing_timeout(timeout)
     box = {}
 
     def _read():
@@ -769,6 +772,8 @@ def _read_json_with_timeout(proc, timeout, noise=None):
     what really arrived instead of asserting that nothing did. The timeout is a
     budget for the WHOLE read, never per line: a child printing a line a second
     must not be able to extend the wait forever."""
+    from ..timeout_settings import processing_timeout
+    timeout = processing_timeout(timeout)
     deadline = time.monotonic() + timeout
     for _ in range(_MAX_NOISE_LINES):
         left = deadline - time.monotonic()

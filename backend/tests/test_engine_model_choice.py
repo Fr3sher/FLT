@@ -8,8 +8,7 @@ REQUEST we build and how we read an answer we hand ourselves.
 The invariants, in order of how badly they hurt when broken:
   1. the model the user configured is the model actually SENT (a setting that
      doesn't reach the wire is worse than no setting at all);
-  2. a blank setting keeps the historical default — nobody's behaviour changes
-     because a field appeared;
+  2. a blank setting uses the v2 default while an explicit choice stays intact;
   3. the documented precedence holds, including for someone who had set the
      pre-existing environment variable: setting > env var > built-in default;
   4. a model the provider refuses fails with a NAMED cause that says it is the
@@ -18,11 +17,15 @@ The invariants, in order of how badly they hurt when broken:
      Gemini it is now reported with the provider's own reason instead of a
      silent None the caller had to guess about.
 """
+
+import pytest
+
+pytestmark = pytest.mark.plugins('api_engines')
+
 import base64
 import logging
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 GEMINI_KEY = 'AIza-test-gemini-key-0123456789'
 OPENAI_KEY = 'sk-proj-testopenaikey0123456789'
@@ -66,11 +69,11 @@ def test_nanobanana_asks_for_the_model_from_settings(app, monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY', GEMINI_KEY)
     monkeypatch.delenv('NANOBANANA_MODEL', raising=False)
     from app import config as cfg
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     with app.app_context():
         cfg.save_config({'engines': {'nanobanana_model': 'gemini-4-flash-image'}})
         assert nanobanana.get_model() == 'gemini-4-flash-image'
-        with patch('app.services.nanobanana.requests.post',
+        with patch('lds_api_engines.nanobanana.requests.post',
                    return_value=_resp(200, _gemini_ok())) as post:
             assert nanobanana.generate_variation(b'ref', 'a portrait') == PNG
     assert post.call_args.args[0] == (
@@ -82,11 +85,11 @@ def test_chatgpt_sends_the_image_model_from_settings(app, monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', OPENAI_KEY)
     monkeypatch.delenv('CHATGPT_IMAGE_MODEL', raising=False)
     from app import config as cfg
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     with app.app_context():
         cfg.save_config({'engines': {'chatgpt_image_model': 'gpt-image-3'}})
         assert chatgpt_image.get_image_model() == 'gpt-image-3'
-        with patch('app.services.chatgpt_image.requests.post',
+        with patch('lds_api_engines.chatgpt_image.requests.post',
                    return_value=_resp(200, _openai_ok())) as post:
             assert chatgpt_image.generate_variation(b'ref', 'a portrait') == PNG
     assert post.call_args.kwargs['data']['model'] == 'gpt-image-3'
@@ -99,9 +102,9 @@ def test_a_model_typed_in_settings_applies_without_a_restart(app, monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY', GEMINI_KEY)
     monkeypatch.delenv('NANOBANANA_MODEL', raising=False)
     from app import config as cfg
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     with app.app_context():
-        with patch('app.services.nanobanana.requests.post',
+        with patch('lds_api_engines.nanobanana.requests.post',
                    return_value=_resp(200, _gemini_ok())) as post:
             cfg.save_config({'engines': {'nanobanana_model': 'model-one'}})
             nanobanana.generate_variation(b'r', 'p')
@@ -118,30 +121,30 @@ def test_a_blank_setting_keeps_the_historical_nanobanana_model(app, monkeypatch,
     monkeypatch.setenv('GEMINI_API_KEY', GEMINI_KEY)
     monkeypatch.delenv('NANOBANANA_MODEL', raising=False)
     from app import config as cfg
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     with app.app_context():
         cfg.save_config({'engines': {'nanobanana_model': blank}})
         assert nanobanana.get_model() == 'gemini-3-pro-image' == nanobanana.DEFAULT_MODEL
-        with patch('app.services.nanobanana.requests.post',
+        with patch('lds_api_engines.nanobanana.requests.post',
                    return_value=_resp(200, _gemini_ok())) as post:
             nanobanana.generate_variation(b'r', 'p')
     assert 'gemini-3-pro-image:generateContent' in post.call_args.args[0]
 
 
 @pytest.mark.parametrize('blank', ['', '   '])
-def test_a_blank_setting_keeps_the_historical_chatgpt_model(app, monkeypatch, blank):
+def test_a_blank_setting_uses_the_v2_chatgpt_model(app, monkeypatch, blank):
     monkeypatch.setenv('OPENAI_API_KEY', OPENAI_KEY)
     monkeypatch.delenv('CHATGPT_IMAGE_MODEL', raising=False)
     from app import config as cfg
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     with app.app_context():
         cfg.save_config({'engines': {'chatgpt_image_model': blank}})
-        assert chatgpt_image.get_image_model() == 'gpt-image-2' \
+        assert chatgpt_image.get_image_model() == 'gpt-image-2.5-sunburst' \
             == chatgpt_image.DEFAULT_IMAGE_MODEL
-        with patch('app.services.chatgpt_image.requests.post',
+        with patch('lds_api_engines.chatgpt_image.requests.post',
                    return_value=_resp(200, _openai_ok())) as post:
             chatgpt_image.generate_variation(b'r', 'p')
-    assert post.call_args.kwargs['data']['model'] == 'gpt-image-2'
+    assert post.call_args.kwargs['data']['model'] == 'gpt-image-2.5-sunburst'
 
 
 def test_a_fresh_install_ships_the_two_model_settings_blank(app):
@@ -170,7 +173,7 @@ def test_nanobanana_precedence_is_setting_then_env_then_default(app, monkeypatch
     have their choice ignored in silence — the env var still beats the built-in
     default, and only an explicit slug in Settings outranks it."""
     from app import config as cfg
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     if env is None:
         monkeypatch.delenv('NANOBANANA_MODEL', raising=False)
     else:
@@ -185,12 +188,12 @@ def test_nanobanana_precedence_is_setting_then_env_then_default(app, monkeypatch
     ('',                  'gpt-from-env', 'gpt-from-env'),
     ('   ',               'gpt-from-env', 'gpt-from-env'),
     ('gpt-from-settings', None,           'gpt-from-settings'),
-    ('',                  None,           'gpt-image-2'),
+    ('',                  None,           'gpt-image-2.5-sunburst'),
 ])
 def test_chatgpt_precedence_is_setting_then_env_then_default(app, monkeypatch,
                                                              setting, env, expected):
     from app import config as cfg
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     if env is None:
         monkeypatch.delenv('CHATGPT_IMAGE_MODEL', raising=False)
     else:
@@ -204,7 +207,7 @@ def test_an_env_var_set_after_import_is_still_honoured(app, monkeypatch):
     """Both variables used to be read at IMPORT, so a value exported later in the
     process was ignored. Reading at call time fixes that too."""
     monkeypatch.delenv('NANOBANANA_MODEL', raising=False)
-    from app.services import chatgpt_image, nanobanana
+    from lds_api_engines import chatgpt_image, nanobanana
     with app.app_context():
         assert nanobanana.get_model() == nanobanana.DEFAULT_MODEL
         monkeypatch.setenv('NANOBANANA_MODEL', 'late-gemini')
@@ -218,10 +221,10 @@ def test_an_explicit_model_argument_still_wins_over_everything(app, monkeypatch)
     monkeypatch.setenv('GEMINI_API_KEY', GEMINI_KEY)
     monkeypatch.setenv('NANOBANANA_MODEL', 'from-env')
     from app import config as cfg
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     with app.app_context():
         cfg.save_config({'engines': {'nanobanana_model': 'from-settings'}})
-        with patch('app.services.nanobanana.requests.post',
+        with patch('lds_api_engines.nanobanana.requests.post',
                    return_value=_resp(200, _gemini_ok())) as post:
             nanobanana.generate_variation(b'r', 'p', model='from-the-caller')
     assert 'from-the-caller:generateContent' in post.call_args.args[0]
@@ -234,10 +237,10 @@ def test_an_unknown_gemini_model_is_fatal_and_names_it(app, monkeypatch):
     batch stops — and the message points at the field that caused it."""
     monkeypatch.setenv('GEMINI_API_KEY', GEMINI_KEY)
     from app import config as cfg
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     with app.app_context():
         cfg.save_config({'engines': {'nanobanana_model': 'gemini-9-imaginary'}})
-        with patch('app.services.nanobanana.requests.post',
+        with patch('lds_api_engines.nanobanana.requests.post',
                    return_value=_resp(404, _gemini_err(
                        'models/gemini-9-imaginary is not found for API version v1beta',
                        404, 'NOT_FOUND'))):
@@ -255,13 +258,13 @@ def test_a_gemini_model_that_cannot_take_reference_images_is_fatal(app, monkeypa
     must read that, not 'often a content-policy refusal'."""
     monkeypatch.setenv('GEMINI_API_KEY', GEMINI_KEY)
     from app import config as cfg
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     detail = ('Model does not support the requested response modalities: image')
     with app.app_context():
         cfg.save_config({'engines': {'nanobanana_model': 'gemini-3-pro'}})
         # 400 twice: the first is consumed by the imageConfig retry, so the
         # classification has to survive that retry to be reached at all.
-        with patch('app.services.nanobanana.requests.post',
+        with patch('lds_api_engines.nanobanana.requests.post',
                    side_effect=[_resp(400, _gemini_err(detail)),
                                 _resp(400, _gemini_err(detail))]) as post:
             with pytest.raises(nanobanana.NanoBananaFatal) as e:
@@ -276,10 +279,10 @@ def test_a_gemini_model_that_cannot_take_reference_images_is_fatal(app, monkeypa
 def test_an_unknown_openai_model_is_fatal_and_names_it(app, monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', OPENAI_KEY)
     from app import config as cfg
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     with app.app_context():
         cfg.save_config({'engines': {'chatgpt_image_model': 'gpt-image-99'}})
-        with patch('app.services.chatgpt_image.requests.post',
+        with patch('lds_api_engines.chatgpt_image.requests.post',
                    return_value=_resp(404, _openai_err(
                        "The model 'gpt-image-99' does not exist",
                        code='model_not_found', param='model'))):
@@ -290,17 +293,15 @@ def test_an_unknown_openai_model_is_fatal_and_names_it(app, monkeypatch):
     assert 'Settings > Image engines' in msg
 
 
-def test_the_organization_verification_403_names_the_real_fix(app, monkeypatch):
-    """The trap that used to live only in a code comment: gpt-image-2 is the one
-    model usable without OpenAI organization verification. Someone who types a
-    newer slug gets a 403 and concludes their KEY is broken — so the message has
-    to name verification and the model to fall back to."""
+def test_the_organization_verification_403_keeps_the_provider_reason_and_settings_action(app, monkeypatch):
+    """Keep the upstream cause and the owner's settings action without promising
+    that switching model will bypass the provider's account requirements."""
     monkeypatch.setenv('OPENAI_API_KEY', OPENAI_KEY)
     from app import config as cfg
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     with app.app_context():
         cfg.save_config({'engines': {'chatgpt_image_model': 'gpt-image-1.5'}})
-        with patch('app.services.chatgpt_image.requests.post',
+        with patch('lds_api_engines.chatgpt_image.requests.post',
                    return_value=_resp(403, _openai_err(
                        'Your organization must be verified to use the model '
                        '`gpt-image-1.5`'))):
@@ -309,7 +310,7 @@ def test_the_organization_verification_403_names_the_real_fix(app, monkeypatch):
     msg = str(e.value)
     assert 'gpt-image-1.5' in msg
     assert 'verification' in msg or 'verified' in msg
-    assert 'gpt-image-2' in msg                     # the way back to a working setup
+    assert 'Plugins → API image engines → Settings' in msg
 
 
 def test_a_model_openai_will_not_edit_with_is_fatal(app, monkeypatch):
@@ -317,10 +318,10 @@ def test_a_model_openai_will_not_edit_with_is_fatal(app, monkeypatch):
     model, not the prompt. It must stop the batch, unlike a moderation 400."""
     monkeypatch.setenv('OPENAI_API_KEY', OPENAI_KEY)
     from app import config as cfg
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     with app.app_context():
         cfg.save_config({'engines': {'chatgpt_image_model': 'dall-e-3'}})
-        with patch('app.services.chatgpt_image.requests.post',
+        with patch('lds_api_engines.chatgpt_image.requests.post',
                    return_value=_resp(400, _openai_err(
                        "Invalid value: 'dall-e-3'. Supported values are: 'gpt-image-2'",
                        param='model'))):
@@ -341,10 +342,10 @@ def test_a_moderation_400_is_still_a_plain_row_failure(app, monkeypatch):
     it (ChatGPTImageRefused). What must NOT change is fatality — a refusal still
     costs one row, never the run. See test_chatgpt_refusal.py."""
     monkeypatch.setenv('OPENAI_API_KEY', OPENAI_KEY)
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     from app.services.engine_errors import EngineFatal
     with app.app_context():
-        with patch('app.services.chatgpt_image.requests.post',
+        with patch('lds_api_engines.chatgpt_image.requests.post',
                    return_value=_resp(400, _openai_err(
                        'Your request was rejected as a result of our safety system',
                        code='moderation_blocked'))):
@@ -358,14 +359,14 @@ def test_a_missing_key_says_so_instead_of_looking_like_a_refusal(app, monkeypatc
     """Both engines used to return None here, which the fan-out words as 'empty
     response (often a content-policy refusal)' — sending the user to rewrite a
     prompt when the fix is pasting a key."""
-    from app.services import chatgpt_image, nanobanana
+    from lds_api_engines import chatgpt_image, nanobanana
     with app.app_context():
-        with patch('app.services.nanobanana.requests.post') as post:
+        with patch('lds_api_engines.nanobanana.requests.post') as post:
             with pytest.raises(nanobanana.NanoBananaFatal) as e:
                 nanobanana.generate_variation(b'r', 'p')
         post.assert_not_called()
         assert 'GEMINI_API_KEY' in str(e.value) and 'Settings' in str(e.value)
-        with patch('app.services.chatgpt_image.requests.post') as post:
+        with patch('lds_api_engines.chatgpt_image.requests.post') as post:
             with pytest.raises(chatgpt_image.ChatGPTImageFatal) as e:
                 chatgpt_image.generate_variation(b'r', 'p', model='x')
         post.assert_not_called()
@@ -378,9 +379,9 @@ def test_a_missing_key_says_so_instead_of_looking_like_a_refusal(app, monkeypatc
 ])
 def test_a_transient_gemini_failure_stays_per_row(app, monkeypatch, status, expected):
     monkeypatch.setenv('GEMINI_API_KEY', GEMINI_KEY)
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     with app.app_context():
-        with patch('app.services.nanobanana.requests.post',
+        with patch('lds_api_engines.nanobanana.requests.post',
                    return_value=_resp(status, _gemini_err('busy', status))):
             with pytest.raises(nanobanana.NanoBananaError) as e:
                 nanobanana.generate_variation(b'r', 'p')
@@ -394,9 +395,9 @@ def test_a_transient_gemini_failure_stays_per_row(app, monkeypatch, status, expe
 ])
 def test_a_transient_openai_failure_stays_per_row(app, monkeypatch, status, expected):
     monkeypatch.setenv('OPENAI_API_KEY', OPENAI_KEY)
-    from app.services import chatgpt_image
+    from lds_api_engines import chatgpt_image
     with app.app_context():
-        with patch('app.services.chatgpt_image.requests.post',
+        with patch('lds_api_engines.chatgpt_image.requests.post',
                    return_value=_resp(status, _openai_err('busy'))):
             with pytest.raises(chatgpt_image.ChatGPTImageError) as e:
                 chatgpt_image.generate_variation(b'r', 'p')
@@ -415,10 +416,10 @@ def test_a_200_with_no_image_on_gemini_now_names_the_refusal(app, monkeypatch):
     engine is gone, not accidentally lost; see test_nanobanana_refusal.py for the
     full behaviour, and nanobanana.py for why no remedy is offered."""
     monkeypatch.setenv('GEMINI_API_KEY', GEMINI_KEY)
-    from app.services import nanobanana
+    from lds_api_engines import nanobanana
     from app.services.engine_errors import EngineFatal, EngineRefused
     with app.app_context():
-        with patch('app.services.nanobanana.requests.post',
+        with patch('lds_api_engines.nanobanana.requests.post',
                    return_value=_resp(200, {'candidates': [
                        {'content': {'parts': [{'text': 'I cannot help with that'}]}}]})):
             with pytest.raises(EngineRefused) as e:
@@ -440,15 +441,15 @@ def test_no_message_or_log_line_can_carry_either_key(app, monkeypatch, caplog,
     user is most likely to paste into a public help channel."""
     monkeypatch.setenv('GEMINI_API_KEY', GEMINI_KEY)
     monkeypatch.setenv('OPENAI_API_KEY', OPENAI_KEY)
-    from app.services import chatgpt_image, nanobanana
+    from lds_api_engines import chatgpt_image, nanobanana
     caplog.set_level(logging.DEBUG)
     with app.app_context():
-        with patch('app.services.nanobanana.requests.post',
+        with patch('lds_api_engines.nanobanana.requests.post',
                    return_value=_resp(status, _gemini_err(body, status), text=body)):
             with pytest.raises(nanobanana.NanoBananaError) as e:
                 nanobanana.generate_variation(b'r', 'p')
         assert GEMINI_KEY not in str(e.value) and GEMINI_KEY[6:] not in str(e.value)
-        with patch('app.services.chatgpt_image.requests.post',
+        with patch('lds_api_engines.chatgpt_image.requests.post',
                    return_value=_resp(status, _openai_err(body), text=body)):
             with pytest.raises(chatgpt_image.ChatGPTImageError) as e:
                 chatgpt_image.generate_variation(b'r', 'p')
@@ -468,8 +469,8 @@ class _SerialPool:
 
 
 @pytest.mark.parametrize('engine,exc_path', [
-    ('nanobanana', 'app.services.nanobanana.NanoBananaFatal'),
-    ('chatgpt', 'app.services.chatgpt_image.ChatGPTImageFatal'),
+    ('nanobanana', 'lds_api_engines.nanobanana.NanoBananaFatal'),
+    ('chatgpt', 'lds_api_engines.chatgpt_image.ChatGPTImageFatal'),
 ])
 def test_a_wrong_model_stops_the_batch_on_every_engine(app, monkeypatch, engine, exc_path):
     """Asking the provider the same refused question once per row costs the user
@@ -517,7 +518,7 @@ def test_the_openrouter_fatal_still_stops_the_batch_through_the_shared_base(app)
     """Rebasing OpenRouter's exceptions onto the shared taxonomy must not have
     unhooked the behaviour it shipped with."""
     from app.services.engine_errors import EngineError, EngineFatal
-    from app.services.openrouter import OpenRouterError, OpenRouterFatal
+    from lds_api_engines.openrouter import OpenRouterError, OpenRouterFatal
     assert issubclass(OpenRouterFatal, EngineFatal)
     assert issubclass(OpenRouterError, EngineError)
     assert not issubclass(OpenRouterError, EngineFatal)

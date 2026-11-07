@@ -1,0 +1,130 @@
+{
+  "id": "image_upscale",
+  "bundled": true,
+  "name": "Klein Improve",
+  "version": "1.1.1",
+  "api": 1,
+  "description": "Improve detail with Klein, including instruction editing, LoRA presets, settings and finishing. Independent of SeedVR2 and other LDS plug-ins.",
+  "requires": [],
+  "python_package": "lds_image_upscale",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": true,
+  "owns": {
+    "install_actions": [],
+    "install_groups": [],
+    "probes": [],
+    "engines": [
+      "klein"
+    ],
+    "config_sections": [],
+    "config_keys_in_shared_sections": {
+      "klein": [
+        "improve_consistency_strength",
+        "improve_character_lora_strength",
+        "improve_steps",
+        "improve_base_lora_strength",
+        "improve_megapixels",
+        "improve_lora_preset"
+      ],
+      "identity_prompts": [
+        "klein_improve",
+        "klein_improve_enabled"
+      ],
+      "improve": [
+        "colour_match",
+        "sharpen",
+        "grain",
+        "grain_saturation"
+      ]
+    },
+    "help_topics": [
+      "improve.colour_match",
+      "improve.sharpen",
+      "improve.grain",
+      "improve.grain_saturation",
+      "identity_prompts.klein_improve",
+      "klein.improve_strength",
+      "action-bank-improve",
+      "action-edit-improve-instruction",
+      "action-reimprove-tile",
+      "action-canvas-improve",
+      "image_upscale.default_engine"
+    ],
+    "tables": [],
+    "whats_new_ids": [
+      "2026-09-07-klein-improve-seedvr2-split",
+      "2026-09-01-bank-improve-carries-the-dials",
+      "2026-09-01-improve-panel-lora-strengths",
+      "2026-09-01-improve-result-zoom",
+      "2026-08-29-improve-settings-window",
+      "2026-08-24-use-these-improve-settings",
+      "2026-08-24-improve-output-size-in-note",
+      "2026-08-24-improve-lora-preset",
+      "2026-08-08-improve-instruction-editable-in-place",
+      "2026-08-05-upscale-improve-finds-its-lora-on-a-docker-install",
+      "2026-08-04-gallery-lightbox-upscale-improve",
+      "2026-08-03-canvas-lightbox-upscale-improve",
+      "2026-08-03-improve-note-cites-the-setting",
+      "2026-08-02-upscale-candidate-visible",
+      "2026-07-30-keep-an-improvement-without-training-on-both",
+      "2026-07-28-choose-the-klein-model-improve-runs-on",
+      "2026-07-28-improve-says-what-it-is-about-to-ask-klein",
+      "2026-07-27-rerun-upscale-and-improve",
+      "2026-07-23-bulk-improve-is-a-server-job",
+      "2026-07-22-improve-tuned-profile-and-loud-missing-lora",
+      "2026-07-22-enhancement-lora-installed-automatically",
+      "2026-07-22-improve-strength-settings",
+      "2026-09-07-image-upscale-product"
+    ],
+    "model_slots": []
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "comfyui",
+    "filesystem",
+    "datasets:write"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Improve dataset images",
+        "path": "/datasets?section=images"
+      },
+      {
+        "label": "Improve Bank images",
+        "path": "/bank"
+      },
+      {
+        "label": "Open settings",
+        "path": "/plugins/image_upscale/settings?focus=klein-improve-settings"
+      }
+    ],
+    "setup": {
+      "label": "Configure Klein Improve",
+      "path": "/plugins/image_upscale/settings?focus=klein-improve-settings"
+    },
+    "setup_hint": "Use the local Klein models configured in LDS. Adjust the improvement instruction, LoRA strengths and finishing here. SeedVR2 is a separate optional product.",
+    "surfaces": [
+      "Bank",
+      "Dataset",
+      "Gallery",
+      "Canvas",
+      "Upscale settings",
+      "Upscale setup"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.12,<2"
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "settings-reference#improve-finishing",
+      "using-the-app#upscale-a-picture-straight-from-the-board",
+      "settings-reference#klein-improvement-settings"
+    ]
+  }
+}

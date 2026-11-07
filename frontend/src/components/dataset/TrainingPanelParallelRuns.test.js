@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const panel = fs.readFileSync(
-  new URL('./TrainingPanel.jsx', import.meta.url), 'utf8');
+  new URL('../../../../bundled/cloud_training/frontend/dataset/DatasetCloudTraining.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const progress = fs.readFileSync(
-  new URL('./TrainingProgress.jsx', import.meta.url), 'utf8');
+  new URL('./TrainingProgress.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('the panel resolves ALL active cloud runs of this dataset, not the first', () => {
   assert.match(panel, /cloudActivesHere\s*=\s*actives\.filter/);
@@ -31,6 +31,6 @@ test('the Runs hub addresses each card\'s progress poll by ITS OWN run id', () =
   // With two same-family runs now launchable on purpose, every card must
   // watch its own run — steps, loss and samples included, not just the phase.
   const page = fs.readFileSync(
-    new URL('../../pages/CloudRunsPage.jsx', import.meta.url), 'utf8');
+    new URL('../../../../bundled/cloud_training/frontend/CloudRunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   assert.match(page, /<TrainingProgress datasetId=\{run\.dataset_id\}[\s\S]{0,200}?runId=\{run\.run_id\}/);
 });

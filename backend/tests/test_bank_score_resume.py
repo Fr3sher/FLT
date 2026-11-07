@@ -93,7 +93,8 @@ class _Clip:
         return _Tensor(vec[None, :])
 
 
-def _install_stubs(monkeypatch, mod, calls, aes_ok=True, nsfw_ok=True):
+def _install_stubs(monkeypatch, mod, calls, aes_ok=True, nsfw_ok=True,
+                   fail_heads=()):
     torch = types.ModuleType('torch')
     torch.cuda = types.SimpleNamespace(is_available=lambda: False)
 
@@ -117,13 +118,20 @@ def _install_stubs(monkeypatch, mod, calls, aes_ok=True, nsfw_ok=True):
     monkeypatch.setitem(sys.modules, 'torch', torch)
     monkeypatch.setitem(sys.modules, 'open_clip', open_clip)
 
-    head = (lambda emb: [[_Val(7.25)]]) if aes_ok else None
+    def _aesthetic(emb):
+        if 'aesthetic' in fail_heads:
+            raise RuntimeError('transient aesthetic inference failure')
+        return [[_Val(7.25)]]
+
+    head = _aesthetic if aes_ok else None
     monkeypatch.setattr(mod, '_load_aesthetic_head',
                         lambda *a, **k: (head, aes_ok,
                                          None if aes_ok else 'URLError: unreachable'))
 
     class _Model:
         def __call__(self, **kw):
+            if 'nsfw' in fail_heads:
+                raise RuntimeError('transient NSFW inference failure')
             return types.SimpleNamespace(logits=[[_Val(0.1), _Val(0.9)]])
 
     class _Proc:
@@ -192,6 +200,55 @@ def test_relaunch_embeds_only_the_images_that_have_no_score(tmp_path, monkeypatc
     assert len(data['clusters']) == 5       # the partition still covers everything
 
 
+def test_relaunch_retries_failed_embeddings_without_recomputing_successes(
+        tmp_path, monkeypatch):
+    mod = _load_child()
+    paths = _images(tmp_path, {'good.jpg': 30, 'retry.jpg': 200})
+    good, failed = paths
+    cache = str(tmp_path / 'score_cache.npz')
+    req = {'images': paths, 'cache': cache, 'style_threshold': 0.6}
+    calls = []
+    _install_stubs(monkeypatch, mod, calls)
+    encode_image = _Clip.encode_image
+
+    def _fail_bright_once(self, token):
+        if token.value > 128:
+            self.calls.append(token.value)
+            raise RuntimeError('transient CLIP inference failure')
+        return encode_image(self, token)
+
+    with monkeypatch.context() as transient:
+        transient.setattr(_Clip, 'encode_image', _fail_bright_once)
+        rc, first = _run_child(mod, monkeypatch, req)
+    assert rc == 0 and first['ok']
+    assert calls == [30, 200]
+    assert first['results'][good]['state'] == 'ok'
+    assert first['results'][failed]['state'] == 'error'
+    assert set(first['clusters']) == {good}
+    saved = mod._load_cache(cache)[good]
+
+    calls = []
+    mod2 = _load_child()
+    _install_stubs(monkeypatch, mod2, calls)
+    rc, recovered = _run_child(mod2, monkeypatch, req)
+    assert rc == 0 and recovered['ok']
+    assert calls == [200], 'retry the error entry without discarding paid work'
+    assert recovered['computed'] == 1 and recovered['reused'] == 1
+    assert all(row['state'] == 'ok' for row in recovered['results'].values())
+    assert set(recovered['clusters']) == set(paths)
+    preserved = mod2._load_cache(cache)[good]
+    assert preserved[:3] == saved[:3] and preserved[4:] == saved[4:]
+    np.testing.assert_array_equal(preserved[3], saved[3])
+
+    calls = []
+    mod3 = _load_child()
+    _install_stubs(monkeypatch, mod3, calls)
+    rc, complete = _run_child(mod3, monkeypatch, req)
+    assert rc == 0 and complete['ok']
+    assert calls == []
+    assert complete['computed'] == 0 and complete['reused'] == 2
+
+
 def test_style_cluster_ids_stay_one_partition_across_a_resume(tmp_path, monkeypatch):
     """The whole reason the pool is never filtered: ids are renumbered globally,
     so a resumed pass must still hand back ONE numbering covering every image."""
@@ -251,6 +308,58 @@ def test_a_head_that_was_down_is_retried_and_never_churns(tmp_path, monkeypatch)
     assert all(r['nsfw'] == pytest.approx(0.9) for r in data['results'].values())
     assert all(r['aesthetic'] == pytest.approx(7.25)
                for r in data['results'].values())
+
+
+@pytest.mark.parametrize('failed_head', ['aesthetic', 'nsfw'])
+def test_head_inference_failure_keeps_embedding_and_other_score_then_recovers(
+        tmp_path, monkeypatch, failed_head):
+    paths = _images(tmp_path, {'cached.jpg': 30, 'new.jpg': 200})
+    cached, new = paths
+    cache = str(tmp_path / 'score_cache.npz')
+    req = {'images': paths, 'cache': cache, 'style_threshold': 0.6}
+    other_head = 'nsfw' if failed_head == 'aesthetic' else 'aesthetic'
+    expected = {'aesthetic': 7.25, 'nsfw': 0.9}
+
+    mod = _load_child()
+    _install_stubs(monkeypatch, mod, [])
+    _run_child(mod, monkeypatch, {**req, 'images': [cached]})
+    saved = mod._load_cache(cache)[cached]
+
+    mod2 = _load_child()
+    calls = []
+    _install_stubs(monkeypatch, mod2, calls, fail_heads=(failed_head,))
+    rc, partial = _run_child(mod2, monkeypatch, req)
+    assert rc == 0 and partial['ok']
+    assert calls == [200]
+    assert partial['results'][new]['state'] == 'ok', \
+        'a score head must not discard the successful CLIP embedding'
+    assert failed_head not in partial['results'][new]
+    assert partial['results'][new][other_head] == pytest.approx(expected[other_head])
+    assert set(partial['clusters']) == set(paths)
+    partial_entry = mod2._load_cache(cache)[new]
+    assert np.linalg.norm(partial_entry[3]) == pytest.approx(1.0)
+
+    mod3 = _load_child()
+    calls = []
+    _install_stubs(monkeypatch, mod3, calls)
+    rc, recovered = _run_child(mod3, monkeypatch, req)
+    assert rc == 0 and recovered['ok']
+    assert calls == [200], 'only the image missing a score should be retried'
+    for head, value in expected.items():
+        assert recovered['results'][new][head] == pytest.approx(value)
+    recovered_cache = mod3._load_cache(cache)
+    np.testing.assert_array_equal(recovered_cache[new][3], partial_entry[3])
+    preserved = recovered_cache[cached]
+    assert preserved[:3] == saved[:3] and preserved[4:] == saved[4:]
+    np.testing.assert_array_equal(preserved[3], saved[3])
+
+    mod4 = _load_child()
+    calls = []
+    _install_stubs(monkeypatch, mod4, calls)
+    rc, complete = _run_child(mod4, monkeypatch, req)
+    assert rc == 0 and complete['ok']
+    assert calls == []
+    assert complete['computed'] == 0 and complete['reused'] == 2
 
 
 # --- 3. the explicit re-score lane -------------------------------------------

@@ -6,6 +6,7 @@ modifies anything below that installation.  In particular, ``*.bat`` files are
 only used as a passive layout marker and are never read, executed, or rewritten.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout, processing_timeout
 
 from dataclasses import dataclass
 import logging
@@ -171,7 +172,7 @@ _HISTORY_DOWN = 'down'
 def _history_state() -> str:
     """Classify only LDS's fixed local history endpoint without following redirects."""
     try:
-        response = requests.get(f'{_LOCAL_API_URL}/history', timeout=(1, 3),
+        response = requests.get(f'{_LOCAL_API_URL}/history', timeout=network_timeout((1, 3)),
                                 allow_redirects=False)
     except requests.ConnectTimeout:
         # On Windows, Requests can surface a missing loopback listener as a
@@ -275,7 +276,7 @@ def _memory_flags(layout: _PortableLayout) -> list:
 def _spawn(layout: _PortableLayout):
     """Spawn only the fixed, LDS-owned ComfyUI command.  No user .bat is involved."""
     argv = [
-        str(layout.python_exe), '-s', 'main.py',
+        str(layout.python_exe), '-X', 'utf8', '-s', 'main.py',
         '--windows-standalone-build',
         '--disable-auto-launch',
         '--preview-method', 'none',
@@ -372,6 +373,7 @@ def start_comfyui(*, wait_timeout: float = _READY_TIMEOUT,
             return _failure()
         process = _owned_process
 
+    wait_timeout = processing_timeout(wait_timeout)
     deadline = time.monotonic() + max(0.0, wait_timeout)
     while time.monotonic() < deadline:
         history = _history_state()

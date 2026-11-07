@@ -24,12 +24,16 @@ Contract under test:
 
 No HfApi is ever real here.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 from app.utils.timestamps import naive_utcnow
 import struct
 import types
 
 import pytest
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 GB = 1000 ** 3
 
@@ -88,7 +92,7 @@ class _BlindApi:
 # --- a) measurement -------------------------------------------------------------
 
 def test_usage_sums_private_repos_and_asks_for_used_storage(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     api = _StorageApi(
         models=[_Repo('tester/lds-base-h1111', used=24 * GB),
                 _Repo('tester/public-lora', private=False, used=9 * GB),
@@ -107,7 +111,7 @@ def test_usage_sums_private_repos_and_asks_for_used_storage(app):
 
 
 def test_usage_reports_unknown_instead_of_zero_when_it_cannot_list(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     with app.app_context():
         usage = hf_storage.private_storage_usage('tester', 'tok', _api=_BlindApi())
     assert usage['ok'] is False
@@ -116,7 +120,7 @@ def test_usage_reports_unknown_instead_of_zero_when_it_cannot_list(app):
 
 
 def test_unsized_private_repos_make_the_total_a_floor(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     api = _StorageApi(models=[_Repo('tester/a', used=10 * GB),
                               _Repo('tester/b')])       # no usedStorage at all
     with app.app_context():
@@ -129,7 +133,7 @@ def test_unsized_private_repos_make_the_total_a_floor(app):
 # --- b) forecast ----------------------------------------------------------------
 
 def test_checkpoint_size_is_measured_from_what_past_runs_delivered(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     rows = [
         types.SimpleNamespace(train_params=json.dumps({'training_mode': 'lora'})),
         types.SimpleNamespace(train_params=json.dumps({
@@ -147,7 +151,7 @@ def test_checkpoint_size_is_measured_from_what_past_runs_delivered(app):
 
 
 def test_forecast_blocks_and_passes_around_the_assumed_ceiling(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     full = {'ok': True, 'namespace': 'tester', 'used_bytes': 90 * GB,
             'repos': [{'name': 'lds-base-h1', 'private': True,
                        'used_bytes': 40 * GB}]}
@@ -163,7 +167,7 @@ def test_forecast_blocks_and_passes_around_the_assumed_ceiling(app):
 
 
 def test_forecast_is_unknown_not_full_when_usage_is_unknown(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     with app.app_context():
         f = hf_storage.dense_storage_forecast(
             'tester', 'tok', _usage={'ok': False, 'reason': 'listing_unavailable'})
@@ -173,7 +177,7 @@ def test_forecast_is_unknown_not_full_when_usage_is_unknown(app):
 
 def test_configured_ceiling_wins_over_the_documented_plan(app, monkeypatch):
     from app import config as cfg
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     with app.app_context():
         cfg.save_config({'cloud': {'full_transformer': {'private_storage_limit_gb': 50}}})
         limit, source = hf_storage.private_limit_bytes({'isPro': True})
@@ -181,7 +185,7 @@ def test_configured_ceiling_wins_over_the_documented_plan(app, monkeypatch):
 
 
 def test_refusal_message_names_the_gap_the_caches_and_the_escape(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     usage = {'ok': True, 'namespace': 'tester', 'used_bytes': 90 * GB,
              'repos': [{'name': 'lds-base-h1111', 'private': True,
                         'used_bytes': 24 * GB},
@@ -200,7 +204,7 @@ def test_refusal_message_names_the_gap_the_caches_and_the_escape(app):
 # --- c) launch guard ------------------------------------------------------------
 
 def test_assert_blocks_then_lets_an_explicit_override_through(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     api = _StorageApi(models=[_Repo('tester/lds-base-h1', used=95 * GB)])
     with app.app_context():
         with pytest.raises(ValueError) as excinfo:
@@ -213,7 +217,7 @@ def test_assert_blocks_then_lets_an_explicit_override_through(app):
 
 
 def test_assert_never_blocks_an_account_it_could_not_measure(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     with app.app_context():
         out = hf_storage.assert_dense_storage_headroom(
             'tester', 'tok', _api=_BlindApi())
@@ -237,7 +241,7 @@ def _dense_dataset_with_pushed_base(app, tmp_path, base_name='k.safetensors'):
     from app.config import LOCAL_USER
     from app.models import CloudTrainingRun, db
     from app.services import face_dataset_service as svc
-    from app.services import hf_base_push
+    from lds_cloud_training import hf_base_push
     with app.app_context():
         ds = svc.create_dataset(LOCAL_USER, 'CB', 'zc_cb', train_type='krea')
         base = _write_safetensors(tmp_path / base_name)
@@ -253,7 +257,7 @@ def _dense_dataset_with_pushed_base(app, tmp_path, base_name='k.safetensors'):
 
 
 def test_inventory_joins_size_local_source_and_last_run(app, tmp_path):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     repo_name, base, run_id = _dense_dataset_with_pushed_base(app, tmp_path)
     api = _StorageApi(models=[_Repo(f'tester/{repo_name}', used=24 * GB),
                               _Repo('tester/unrelated', used=1 * GB)])
@@ -273,7 +277,7 @@ def test_inventory_warns_when_the_local_source_is_gone(app, tmp_path):
     """A cache whose local file vanished is the LAST copy of those weights —
     deleting it is not an undo away, and the payload must say so."""
     import os
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     repo_name, base, _run = _dense_dataset_with_pushed_base(app, tmp_path)
     os.remove(base)
     api = _StorageApi(models=[_Repo(f'tester/{repo_name}', used=24 * GB)])
@@ -285,7 +289,7 @@ def test_inventory_warns_when_the_local_source_is_gone(app, tmp_path):
 
 
 def test_delete_refuses_any_repo_that_is_not_a_cache(app):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     api = _StorageApi()
     with app.app_context():
         for name in ('Krea_full_person_run12', '../lds-base-h1', 'lds-base',
@@ -296,7 +300,7 @@ def test_delete_refuses_any_repo_that_is_not_a_cache(app):
 
 
 def test_delete_all_sweeps_caches_and_reports_freed_space(app, tmp_path):
-    from app.services import hf_storage
+    from lds_cloud_training import hf_storage
     repo_name, _base, _run = _dense_dataset_with_pushed_base(app, tmp_path)
     api = _StorageApi(models=[_Repo(f'tester/{repo_name}', used=24 * GB),
                               _Repo('tester/lds-base-hdead00', used=20 * GB),
@@ -331,11 +335,11 @@ def test_storage_route_says_it_does_not_know_instead_of_failing(cloud_client):
 
 
 def test_delete_route_refuses_a_repo_that_is_not_a_cache(cloud_client, monkeypatch):
-    from app.routes import training as routes
+    from lds_cloud_training import routes
     api = _StorageApi()
     monkeypatch.setattr(routes, '_hf_storage_namespace',
                         lambda: ('tester', 'tok', {}))
-    monkeypatch.setattr('app.services.hf_storage._make_api', lambda token: api)
+    monkeypatch.setattr('lds_cloud_training.hf_storage._make_api', lambda token: api)
     res = cloud_client.delete('/api/cloud/hf-storage/base/Krea_full_person_run12')
     assert res.status_code == 400
     assert api.deleted == []
@@ -349,7 +353,7 @@ def test_delete_route_refuses_a_repo_that_is_not_a_cache(cloud_client, monkeypat
     'Error: private storage limit for this account',
 ])
 def test_storage_403_is_named_and_kept_recoverable(text):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     assert ct._hf_storage_full(text) is True
     detail, error = ct._dense_remote_failure('error', text, '')
     assert 'HF private storage full' in detail
@@ -358,7 +362,7 @@ def test_storage_403_is_named_and_kept_recoverable(text):
 
 
 def test_storage_verdict_also_reads_the_pod_log_not_only_the_job_info():
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     detail, _error = ct._dense_remote_failure(
         'error', 'Job failed',
         'Traceback...\n403 Client Error: Private repository storage limit reached\n')
@@ -366,7 +370,7 @@ def test_storage_verdict_also_reads_the_pod_log_not_only_the_job_info():
 
 
 def test_an_unrelated_dense_failure_keeps_its_generic_wording():
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     assert ct._hf_storage_full('CUDA out of memory') is False
     detail, error = ct._dense_remote_failure('error', 'CUDA out of memory', '')
     assert detail == 'Remote dense job unexpectedly error; pod kept'
@@ -377,7 +381,7 @@ def test_a_kept_dense_pod_stays_recoverable_and_is_never_destroyed(app, monkeypa
     """The 403 path must land on error_pod_kept WITHOUT terminating the
     instance: the ~26 GB checkpoint exists nowhere else."""
     from app.models import CloudTrainingRun, db
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     destroyed = []
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
                         lambda i: destroyed.append(i) or True)

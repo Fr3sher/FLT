@@ -28,12 +28,16 @@ it is the one claim in this feature a reader should not take on trust.
 """
 
 from app.services import clip_text_encoder
-from app.services import video_clip_search as vcs
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_clip_search as vcs
 
 # The video-extra gate answers for the MACHINE, so without this these route
 # tests pass where PyAV/ffmpeg are installed and 503 where they are not.
 # Imported for its autouse effect; see _video_extra.py for why not importorskip.
 from _video_extra import video_extra_ready  # noqa: F401
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 
 def _unit(*c):
@@ -182,7 +186,7 @@ def test_the_promotion_says_up_front_how_many_clips_have_no_caption(app, tmp_pat
     """An empty sidecar trains as an EMPTY PROMPT and ai-toolkit says nothing
     about it. That is exactly the kind of limit that has to be visible before the
     encode, not discovered in a training run."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     # The assertion is about the COUNTS this promotion announces BEFORE it
     # encodes, so the encode is stubbed - the same two seams every other
     # promotion test stubs (test_video_promote_composition, _inset). Without
@@ -211,7 +215,7 @@ def test_the_promotion_says_up_front_how_many_clips_have_no_caption(app, tmp_pat
 
 def _bank(app, n, keep=False):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -229,7 +233,7 @@ def _bank(app, n, keep=False):
 
 
 def _clip_ids(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return [c.id for c in VideoClip.query.filter_by(bank_id=bank_id)
                 .order_by(VideoClip.id).all()]
@@ -237,7 +241,7 @@ def _clip_ids(app, bank_id):
 
 def _caption(app, clip_id, text):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         clip = db.session.get(VideoClip, clip_id)
         clip.caption = text
@@ -247,7 +251,7 @@ def _caption(app, clip_id, text):
 
 def _store(app, bank_id, vectors):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         store = {}
         for cid, vecs in vectors.items():
@@ -268,8 +272,8 @@ def _promoted(app, tmp_path, monkeypatch, caption):
     paid for once."""
     from pathlib import Path
     from app.extensions import db
-    from app.models import VideoClip, VideoSource
-    from app.services import video_bank_service as svc
+    from lds_video.models import VideoClip, VideoSource
+    from lds_video import video_bank_service as svc
 
     folder = tmp_path / 'rushes'
     folder.mkdir(exist_ok=True)

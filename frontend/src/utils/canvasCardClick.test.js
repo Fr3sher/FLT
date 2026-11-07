@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { cardClickAction, runGalleryTarget } from './canvasCardClick.js';
+import { cardClickAction, runGalleryTarget } from "../../../bundled/canvas/frontend/utils/canvasCardClick.js";
 
 test('DRAGGING a card opens nothing', () => {
   assert.equal(cardClickAction({ dragged: true }), 'ignored');

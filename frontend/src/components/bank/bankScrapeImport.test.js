@@ -6,7 +6,7 @@ import {
   bankScrapeDestination,
   runBankScrapeImport,
   summarizeBankScrapeImport,
-} from './bankScrapeImport.js';
+} from "../../../../bundled/scrape/frontend/lib/bankScrapeImport.js";
 
 const items = (n) => Array.from({ length: n }, (_, i) => ({ url: `http://x/${i}.jpg` }));
 

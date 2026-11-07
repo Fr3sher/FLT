@@ -183,7 +183,7 @@ def test_face_pass_skips_asserted_images_and_never_reuses_their_id(
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
     seen = {}
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         imgs = json.loads(payload)['images']
         seen['images'] = imgs
         return ({'ok': True,
@@ -225,7 +225,7 @@ def test_face_pass_offsets_past_transferred_asserted_rows_without_a_rule(
 
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         imgs = json.loads(payload)['images']
         return ({'ok': True,
                  'results': {p: {'state': 'scorable', 'det': 0.9,
@@ -279,7 +279,7 @@ def test_face_partition_is_discarded_when_one_effective_input_is_unresolved(
         assert not banks.clean_image_path(bank_id, broken.id).exists()
         db.session.commit()
 
-        def fake_driver(job, python, script, payload, cache_path, rx, window):
+        def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
             paths = json.loads(payload)['images']
             return ({'ok': True,
                      'results': {p: {'state': 'scorable', 'det': 0.9,
@@ -301,7 +301,7 @@ def _run_check(app, bank_id, subfolder, clusters_of, monkeypatch, states=None):
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
     seen = {}
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         imgs = json.loads(payload)['images']
         seen['images'] = imgs
         seen['threshold'] = json.loads(payload)['threshold']
@@ -397,7 +397,7 @@ def test_sample_check_discards_report_when_effective_source_switches_midflight(
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
     changed = {}
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         paths = json.loads(payload)['images']
         results = {p: {'state': 'scorable', 'det': 0.9,
                        'fingerprint': _fingerprint(p)} for p in paths}
@@ -504,7 +504,7 @@ def test_the_saving_is_counted_in_inferences_not_claimed(client, tmp_path, app,
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
     seen = {}
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         req = json.loads(payload)
         imgs = req['images']
         # EVERY call is recorded, not the last one: the pass now chains a folder
@@ -546,7 +546,7 @@ def _big_tree(folders=3, per=20):
 
 
 def _probe_driver(seen, clusters_of):
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         req = json.loads(payload)
         imgs = req['images']
         seen.setdefault('calls', []).append(req)
@@ -719,7 +719,7 @@ def test_a_failing_probe_never_turns_a_finished_face_pass_red(
     from app.services import folder_person as fp, image_bank_service as banks
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         imgs = json.loads(payload)['images']
         return ({'ok': True,
                  'results': {p: {'state': 'scorable', 'det': 0.9,
@@ -818,7 +818,7 @@ def _face_probe_driver(seen, faces, person=lambda name, path: 1):
     def has_face(p):
         return int(os.path.splitext(os.path.basename(p))[0]) in faces
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         req = json.loads(payload)
         seen.setdefault('calls', []).append(req)
         return ({'ok': True,

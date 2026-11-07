@@ -8,12 +8,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const engines = readFileSync(new URL('./EnginesSection.jsx', import.meta.url), 'utf8');
-const settingsPage = readFileSync(new URL('../../pages/SettingsPage.jsx', import.meta.url), 'utf8');
-const scraping = readFileSync(new URL('./ScrapingSection.jsx', import.meta.url), 'utf8');
-const field = readFileSync(new URL('../common/PromptOverrideField.jsx', import.meta.url), 'utf8');
-const modal = readFileSync(new URL('../dataset/IdentityPromptModal.jsx', import.meta.url), 'utf8');
-const refPanel = readFileSync(new URL('../dataset/ReferencePanel.jsx', import.meta.url), 'utf8');
+const engines = readFileSync(new URL('./EnginesSection.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const improve = readFileSync(new URL('../../../../bundled/image_upscale/frontend/panels/KleinImproveSettings.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const settingsPage = readFileSync(new URL('../../pages/SettingsPage.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const scraping = readFileSync(new URL('../../../../bundled/scrape/frontend/panels/ScrapeSettingsGroup.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const field = readFileSync(new URL('../common/PromptOverrideField.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const modal = readFileSync(new URL('../dataset/IdentityPromptModal.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const refPanel = readFileSync(new URL('../dataset/ReferencePanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('SettingsPage reads identity_prompt_defaults from the payload and threads it down', () => {
   assert.match(settingsPage, /setPromptDefaults\(data\.identity_prompt_defaults \|\| \{\}\)/);
@@ -41,9 +42,9 @@ test('every identity prompt is rendered by the shared single-box field', () => {
   assert.match(engines, /identityPromptFields\(subject\)\.map\(\(f\) => \(\s*<PromptOverrideField/);
   assert.match(engines, /defaultText=\{defaults\[f\.key\]\}/);
   // and the Klein-improve prompt (D), which keeps its on/off toggle
-  assert.match(engines, /id="identity-prompt-klein-improve"/);
-  assert.match(engines, /defaultText=\{defaults\.klein_improve\}/);
-  assert.match(engines, /disabled=\{!improveEnabled\}/);
+  assert.match(improve, /id="identity-prompt-klein-improve"/);
+  assert.match(improve, /defaultText=\{defaults\.klein_improve\}/);
+  assert.match(improve, /disabled=\{!improveEnabled\}/);
 });
 
 test('the single box shows the default and normalises a copy of it back to ""', () => {
@@ -111,11 +112,12 @@ test('the modal shares the field and edits BOTH multi-reference prompts', () => 
 
 test('the two Klein cards cross-reference each other to remove the ambiguity', () => {
   // engines card -> points at the scraping rescue card
-  assert.match(engines, /Klein rescue — small scraped images/);
+  assert.doesNotMatch(engines, /identity-prompt-klein-improve/);
+  assert.match(scraping, /Plugins ▸ Klein Improve ▸ Settings/);
   // scraping card renamed + points at the manual identity prompts card
   assert.match(scraping, /title="Klein rescue — small scraped images"/);
   assert.match(scraping, /Small-image rescue instruction/);
-  assert.match(scraping, /Identity, Klein &amp; Krea 2 prompts/);
+  assert.match(scraping, /Manual improvement belongs to the optional Klein Improve plug-in/);
 });
 
 test('klein.small_image_prompt stays a genuinely optional EMPTY field', () => {

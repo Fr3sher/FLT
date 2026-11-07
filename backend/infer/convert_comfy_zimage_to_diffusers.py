@@ -1,44 +1,31 @@
-"""Convertit un checkpoint Z-Image au format ComfyUI (.safetensors single-file)
-vers le format diffusers (dossier transformer/) attendu par ai-toolkit, en
-utilisant la table de mapping OFFICIELLE de ComfyUI.
+"""Convert a single-file ComfyUI Z-Image checkpoint to the diffusers
+transformer directory expected by ai-toolkit, using ComfyUI's official map.
 
-Le mapping `z_image_to_diffusers` est copié verbatim depuis ComfyUI
-(comfy/utils.py) — c'est la table autoritative que ComfyUI emploie pour charger
-les modèles diffusers Z-Image. Aucune devinette : renommage des couches groupées
-(all_x_embedder.2-1, all_final_layer.2-1) + split de l'attention QKV fusionnée
-en to_q/to_k/to_v.
+z_image_to_diffusers is copied verbatim from comfy/utils.py, the
+authoritative table used to load diffusers Z-Image models. It renames
+grouped layers (all_x_embedder.2-1/all_final_layer.2-1) and splits fused
+QKV attention into to_q/to_k/to_v.
 
-Usage (lancer avec le python d'ai-toolkit pour la validation diffusers) :
-  python convert_comfy_zimage_to_diffusers.py <input.safetensors> <official_config.json> [--save <out_dir>]
+Run with ai-toolkit Python for diffusers validation:
+python convert_comfy_zimage_to_diffusers.py <input.safetensors> <official_config.json> [--save <out_dir>]
+Without --save, validate keys/shapes against ZImageTransformer2DModel
+on the meta device without writing.
 
-Sans --save : mode GATE seul (compare les clés/shapes à ZImageTransformer2DModel
-sur device 'meta', sans rien écrire).
+Memory: never map the full checkpoint. safetensors.torch.load_file
+previously mapped the entire container, immediately reserving Windows
+commit. On an 11.46 GB checkpoint, opening alone grew private commit
+from 0.18 to 11.67 GB in 0.1 seconds without changing resident memory.
+Building Q/K/V clones reached 14.87 GB; writing touched the remaining
+11.46 GB. A 16.9 GB checkpoint could need about 22 GB commit, causing
+OSError 1455 or OOM on a 16 GB machine with a default pagefile, while
+a development machine with a large pagefile hid the problem.
 
-MÉMOIRE — CE QUE CE FICHIER NE FAIT PLUS
-----------------------------------------
-Il appelait `safetensors.torch.load_file(comfy_path)`, qui memory-mappe le
-conteneur ENTIER. Windows facture ce mapping au commit système à sa CRÉATION,
-avant qu'un seul nombre soit lu. Mesuré ici sur le vrai
-`z_image_turbo_bf16.safetensors` (11,46 Go) : `load_file` seul fait passer le
-commit privé du process de 0,18 Go à 11,67 Go en 0,1 s, résident inchangé —
-signature d'une réservation, pas d'une lecture. La construction du state-dict
-diffusers montait ensuite à 14,87 Go de commit (les clones q/k/v), et l'écriture
-touchait les 11,46 Go restants.
-
-Ce sont des tailles ordinaires ici : les Z-Image sur ce disque vont de 5,7 Go à
-16,9 Go, et le gros demande donc ~22 Go de commit pour être CONVERTI. Sur une
-machine à 16 Go avec le fichier d'échange par défaut, c'est `OSError 1455` ("le
-fichier de pagination est insuffisant") ou une mort par OOM — sur la machine où
-le code s'écrit, qui a 106 Go de pagefile, c'est invisible. Même classe de
-défaut que celui corrigé dans `fp8_export` le même jour, sur une autre voie.
-
-Donc : plus aucun mapping. `_Reader` cherche l'offset que l'en-tête donne déjà et
-lit UN tenseur à la fois ; le plan de sortie (clés, dtypes, shapes, offsets) est
-une fonction pure de l'en-tête SOURCE, donc l'en-tête de sortie est écrit avant
-la première lecture et chaque tenseur est lu, découpé, écrit, puis relâché. Le
-pic tient un tenseur, pas un checkpoint. Le GATE, lui, ne lit plus AUCUN octet de
-poids : il ne compare que des shapes, et les shapes sont dans l'en-tête.
-"""
+_Reader instead seeks header offsets and reads one tensor at a time.
+Output keys/dtypes/shapes/offsets are derived purely from the source
+header, so the output header precedes all weight reads. Each tensor
+is read, sliced, written and released. Peak memory holds one tensor,
+not a checkpoint. Validation reads no weight bytes because shapes
+already live in the header. The same issue was fixed in fp8_export."""
 import sys
 import os
 import json
@@ -114,8 +101,8 @@ def z_image_to_diffusers(mmdit_config, output_prefix=""):
 
 PREFIX = "model.diffusion_model."
 
-# Un vrai en-tête safetensors est très en dessous ; au-delà, les 8 premiers
-# octets ne sont pas une longueur d'en-tête.
+# Real safetensors headers are far smaller. Above this bound, the first
+# eight bytes cannot plausibly be a header length.
 _HEADER_LEN_MAX = 512 * 1024 * 1024
 
 _DTYPE_BYTES = {
@@ -137,24 +124,24 @@ def _torch_dtype_for(name):
 
 
 def read_header(path):
-    """L'en-tête safetensors (index des tenseurs + `__metadata__`). En-tête SEUL :
-    le corps multi-Go n'est jamais touché."""
+    """Safetensors tensor index and __metadata__ only. Never touch the
+    multi-gigabyte weight body."""
     try:
         with open(path, 'rb') as fh:
             raw = fh.read(8)
             if len(raw) != 8:
-                raise ValueError('fichier trop court pour un conteneur safetensors')
+                raise ValueError('file too short for a safetensors container')
             n = struct.unpack('<Q', raw)[0]
             if n <= 0 or n > _HEADER_LEN_MAX:
-                raise ValueError("longueur d'en-tête safetensors implausible")
+                raise ValueError("implausible safetensors header length")
             blob = fh.read(n)
             if len(blob) != n:
-                raise ValueError("en-tête safetensors tronqué")
+                raise ValueError("truncated safetensors header")
             obj = json.loads(blob.decode('utf-8'))
     except (OSError, ValueError, UnicodeDecodeError) as e:
-        raise RuntimeError(f'fichier .safetensors illisible ({e})') from e
+        raise RuntimeError(f'unreadable .safetensors file ({e})') from e
     if not isinstance(obj, dict):
-        raise RuntimeError("l'en-tête safetensors n'est pas un objet")
+        raise RuntimeError("safetensors header is not an object")
     return obj
 
 
@@ -164,21 +151,16 @@ def _entries(header):
 
 
 class _Reader:
-    """Un tenseur à la fois hors d'un .safetensors, par I/O fichier ordinaire.
+    """Read one safetensors tensor at a time with ordinary file I/O.
 
-    DÉLIBÉRÉMENT PAS `safetensors.safe_open` / `load_file`. Ceux-là mappent le
-    conteneur entier, et Windows facture un mapping multi-Go au commit dès sa
-    création — mesures dans le docstring du module : 11,67 Go de commit pour
-    OUVRIR un fichier de 11,46 Go, avant toute lecture.
+    Deliberately avoid safetensors.safe_open/load_file, which map the entire
+    container and immediately charge Windows commit (11.67 GB just to open
+    an 11.46 GB file; see module documentation).
 
-    ET CETTE DUPLICATION DE `fp8_export._Reader` EST VOULUE — NE PAS LA FACTORISER.
-    Ce fichier n'est pas importé : il est lancé comme CLI par le python d'ai-toolkit
-    (un autre interpréteur, un autre venv), et il peut être expédié tel quel en
-    TEXTE SOURCE à un pod loué, sans le paquet LDS autour. Un `from ..services
-    import fp8_export` marcherait ici et échouerait là-bas — le pire endroit pour
-    l'apprendre. Même raison, même formulation que celle écrite dans fp8_export
-    le jour où le mapping y a été retiré.
-    """
+    Duplication of fp8_export._Reader is intentional: do not factor it out.
+    This file runs as a CLI with a separate ai-toolkit interpreter/venv and
+    can be sent as standalone source to a rented pod without LDS installed.
+    Importing fp8_export would work locally but fail there."""
 
     def __init__(self, path):
         self.path = str(path)
@@ -186,40 +168,40 @@ class _Reader:
         try:
             raw = self._fh.read(8)
             if len(raw) != 8:
-                raise ValueError('fichier trop court pour un conteneur safetensors')
+                raise ValueError('file too short for a safetensors container')
             n = struct.unpack('<Q', raw)[0]
             if n <= 0 or n > _HEADER_LEN_MAX:
-                raise ValueError("longueur d'en-tête safetensors implausible")
+                raise ValueError("implausible safetensors header length")
             blob = self._fh.read(n)
             if len(blob) != n:
-                raise ValueError("en-tête safetensors tronqué")
+                raise ValueError("truncated safetensors header")
             self.header = json.loads(blob.decode('utf-8'))
             if not isinstance(self.header, dict):
-                raise ValueError("l'en-tête safetensors n'est pas un objet")
+                raise ValueError("safetensors header is not an object")
         except Exception as e:
             self._fh.close()
-            raise RuntimeError(f'fichier .safetensors illisible ({e})') from e
+            raise RuntimeError(f'unreadable .safetensors file ({e})') from e
         self._start = 8 + n
         self.entries = _entries(self.header)
 
     def get_tensor(self, name):
         spec = self.entries.get(name)
         if spec is None:
-            raise RuntimeError(f'{name} absent de {os.path.basename(self.path)}')
+            raise RuntimeError(f'{name} missing from {os.path.basename(self.path)}')
         dtype = _torch_dtype_for(spec.get('dtype'))
         if dtype is None:
-            raise RuntimeError(f'dtype non supporté {spec.get("dtype")!r} sur {name}')
+            raise RuntimeError(f'unsupported dtype {spec.get("dtype")!r} for {name}')
         begin, end = int(spec['data_offsets'][0]), int(spec['data_offsets'][1])
         nbytes = end - begin
         self._fh.seek(self._start + begin)
-        # readinto sur un bytearray : torch.frombuffer avertit sur un buffer en
-        # lecture seule, et recopier ensuite tiendrait deux exemplaires du tenseur.
+        # Read into a bytearray: torch.frombuffer warns about read-only buffers,
+        # and copying afterward would hold two copies of the tensor.
         raw = bytearray(nbytes)
         got = self._fh.readinto(raw)
         if got != nbytes:
             raise RuntimeError(
-                f'{os.path.basename(self.path)} est tronqué : {name} annonce '
-                f'{nbytes} octets, {got} présents.')
+                f'{os.path.basename(self.path)} is truncated: {name} declares '
+                f'{nbytes} bytes, {got} present.')
         shape = [int(d) for d in (spec.get('shape') or [])]
         return torch.frombuffer(raw, dtype=dtype).reshape(shape)
 
@@ -238,9 +220,9 @@ class _Reader:
 
 
 def _raw_bytes(tensor):
-    """Payload contigu little-endian de n'importe quel tenseur, bf16 et fp8 inclus.
-    `numpy()` n'a ni float8 ni bfloat16 : on réinterprète par une vue entière de
-    MÊME itemsize — octets exacts, aucune conversion de valeurs."""
+    """Contiguous little-endian bytes for any tensor, including bf16/fp8.
+    NumPy lacks float8/bfloat16; reinterpret with a same-itemsize integer
+    view to preserve exact bytes without value conversion."""
     flat = tensor.detach().to('cpu').contiguous().reshape(-1)
     view = {torch.float8_e4m3fn: torch.uint8, torch.float8_e5m2: torch.uint8,
             torch.bfloat16: torch.int16}.get(flat.dtype)
@@ -254,22 +236,18 @@ def _pack_header(index, metadata=None):
     if metadata:
         obj['__metadata__'] = {str(k): str(v) for k, v in metadata.items()}
     blob = json.dumps(obj, separators=(',', ':')).encode('utf-8')
-    blob += b' ' * ((-len(blob)) % 8)        # section data alignée sur 8 octets
+    blob += b' ' * ((-len(blob)) % 8)        # Align the data section to eight bytes.
     return struct.pack('<Q', len(blob)) + blob
 
 
 def plan_diffusers_tensors(header):
-    """`(plan, unmapped, extra)` — fonction PURE de l'en-tête source.
+    """Return (plan, unmapped, extra) purely from the source header.
 
-    `plan` = liste ordonnée de `(diffusers_key, source_key, slice_or_None, dtype,
-    shape)`, où `slice` vaut `(dim, start, length)` pour les trois tranches d'un
-    QKV fusionné. Ordonnée PAR SOURCE : chaque tenseur source est donc lu une
-    seule fois même quand il alimente trois clés diffusers.
-
-    Tout ce dont le GATE a besoin — les clés et les shapes — sort d'ici, donc le
-    GATE ne lit aucun octet de poids. C'est aussi ce qui permet d'écrire l'en-tête
-    de sortie avant la première lecture, et donc de streamer.
-    """
+    plan is an ordered list of (diffusers_key, source_key, slice_or_None,
+    dtype, shape). A slice is (dim, start, length) for each fused-QKV part.
+    Group by source so each tensor is read once even when it feeds three
+    diffusers keys. Keys/shapes suffice for validation without weight I/O,
+    and the output header can be written before streaming any tensors."""
     entries = _entries(header)
     src = {}
     for k, spec in entries.items():
@@ -281,30 +259,28 @@ def plan_diffusers_tensors(header):
     n_noise = max([int(m.group(1)) for k in src if (m := re.match(r"noise_refiner\.(\d+)\.", k))], default=-1) + 1
     if 'layers.0.attention.qkv.weight' not in src:
         raise RuntimeError(
-            "layers.0.attention.qkv.weight absent : ce n'est pas un checkpoint "
-            "Z-Image au format ComfyUI.")
+            "layers.0.attention.qkv.weight missing: this is not a "
+            "ComfyUI-format Z-Image checkpoint.")
     qkv_rows = int(src['layers.0.attention.qkv.weight'][1]['shape'][0])
-    # // 3 suppose MHA (qkv fusionne = 3*dim, n_kv_heads == n_heads). Vrai pour
-    # Z-Image (30 heads, pas de GQA). On asserte la divisibilite : un format GQA
-    # (qkv = dim + 2*kv_dim) donnerait une dim fausse + des slices q/k/v decalees.
+    # Division by three assumes MHA: fused qkv=3*dim and n_kv_heads=n_heads.
+    # Z-Image has 30 heads without GQA. Assert divisibility: a GQA layout
+    # (qkv=dim+2*kv_dim) would yield wrong dimensions and shifted Q/K/V slices.
     if qkv_rows % 3 != 0:
         raise RuntimeError(
-            f"qkv.weight rows={qkv_rows} non divisible par 3 : checkpoint non-MHA "
-            f"(GQA ?) non supporte par ce convertisseur Z-Image.")
+            f"qkv.weight rows={qkv_rows} not divisible by 3: non-MHA checkpoint "
+            f"(GQA?) is not supported by this Z-Image converter.")
     dim = qkv_rows // 3
     print(f"  derived config: n_layers={n_layers} n_context_refiner={n_ref} n_noise_refiner={n_noise} dim={dim}")
     if n_noise != n_ref:
-        # z_image_to_diffusers utilise UN seul n_refiner_layers pour les DEUX refiners.
-        # Si les profondeurs different, la table n'emet que min(n_noise, n_ref) couches :
-        # les couches reelles en trop (ex. noise_refiner.n_ref..n_noise-1) seraient
-        # SILENCIEUSEMENT abandonnees, et le GATE (qui compare a un modele cfg.json a
-        # profondeur unique) afficherait quand meme PASSED. Le modele diffusers cible
-        # ne peut de toute facon pas representer des profondeurs asymetriques -> on
-        # refuse fort plutot que de produire un transformer incomplet en vert.
+        # z_image_to_diffusers uses one n_refiner_layers for both refiners.
+        # Different depths would emit only min(n_noise,n_ref) layers and silently
+        # drop extras, while validation against a single-depth config could pass.
+        # The target cannot represent asymmetric depths anyway: reject them
+        # instead of reporting success for an incomplete transformer.
         raise RuntimeError(
-            f"noise_refiner depth ({n_noise}) != context_refiner ({n_ref}) : profondeurs "
-            f"asymetriques non representables en diffusers ZImageTransformer2DModel "
-            f"(n_refiner_layers unique). Conversion refusee (poids seraient perdus).")
+            f"noise_refiner depth ({n_noise}) != context_refiner ({n_ref}): asymmetric depths "
+            f"cannot be represented in diffusers ZImageTransformer2DModel "
+            f"(single n_refiner_layers). Conversion refused to avoid losing weights.")
     key_map = z_image_to_diffusers({"n_layers": n_layers, "dim": dim, "n_refiner_layers": n_ref})
 
     plan, unmapped = [], []
@@ -328,8 +304,8 @@ def plan_diffusers_tensors(header):
         plan.append((diff_key, real_key, cut, str(spec.get('dtype')), shape))
     used = {(s[0] if isinstance(s, tuple) else s) for s in key_map.values()}
     extra = [k for k in src if k not in used]
-    # Groupé par source : un qkv fusionné alimente to_q/to_k/to_v et n'est donc
-    # relu ni deux ni trois fois pendant l'écriture.
+    # Group by source: fused qkv feeds to_q/to_k/to_v without being read
+    # two or three times during writing.
     plan.sort(key=lambda e: (e[1], e[0]))
     print(f"  mapped {len(plan)} diffusers keys | {len(unmapped)} src-absent | {len(extra)} comfy keys unused")
     for mk in unmapped[:8]:
@@ -340,9 +316,8 @@ def plan_diffusers_tensors(header):
 
 
 def gate(plan, cfg_path):
-    """Compare les clés/shapes du PLAN au ZImageTransformer2DModel de `cfg_path`,
-    construit sur device 'meta'. Aucun octet de poids n'est lu : les shapes
-    viennent de l'en-tête source."""
+    """Compare plan keys/shapes against ZImageTransformer2DModel from cfg_path
+    on the meta device. Read no weight bytes; shapes come from the header."""
     with open(cfg_path) as f:
         cfg = json.load(f)
     try:
@@ -364,31 +339,27 @@ def gate(plan, cfg_path):
         print("     unexpected:", u)
     for k, e, g in mism[:10]:
         print(f"     shape: {k} expected {e} got {g}")
-    # `unexpected` DOIT compter dans le verdict : diffusers/ai-toolkit chargent en
-    # strict=True et levent RuntimeError sur la moindre cle surnumeraire. Un GATE qui
-    # ignore `unexpected` peut afficher PASSED puis sauver un .safetensors inchargeable
-    # (ex. biais d'attention / adaLN context_refiner emis par la table mais absents du
-    # modele). On echoue donc aussi des qu'il y a des cles inattendues.
+    # Unexpected keys must fail validation: diffusers/ai-toolkit load with
+    # strict=True and reject extras. Ignoring them could report PASSED then
+    # write unloadable attention biases or context_refiner adaLN weights.
     ok = (len(missing) == 0 and len(mism) == 0 and len(unexpected) == 0)
-    print("\n[GATE PASSED] toutes les cles diffusers remplies, shapes OK, aucune cle en trop" if ok
-          else "\n[GATE FAILED] remap incomplet (manquantes / shapes / cles inattendues)")
+    print("\n[GATE PASSED] all diffusers keys populated, shapes OK, no extra keys" if ok
+          else "\n[GATE FAILED] incomplete remap (missing keys / shapes / unexpected keys)")
     return ok
 
 
 def write_transformer(comfy_path, plan, out_path):
-    """Écrit le .safetensors diffusers en STREAMING : l'en-tête de sortie est
-    calculé depuis le plan (donc depuis l'en-tête source), puis chaque tenseur
-    source est lu une fois, découpé si besoin, écrit, relâché.
-
-    Le pic mémoire est UN tenseur, pas un checkpoint — et rien n'est mappé, donc
-    la taille du fichier n'a plus de rapport avec le commit disponible. Écriture
-    dans un `.part` renommé à la fin : une conversion interrompue ne laisse pas
-    un transformer à moitié écrit que le cache prendrait pour valide."""
+    """Stream diffusers safetensors: derive the output header from the plan
+    and source header, then read, optionally slice, write and release each
+    source tensor once. Peak memory holds one tensor and nothing is mapped,
+    so file size no longer determines commit needs. Write to .part and
+    rename on completion so interrupted conversions cannot leave an
+    apparently valid, half-written cached transformer."""
     index, offset = {}, 0
     for diff_key, _src_key, _cut, dtype, shape in plan:
         width = _DTYPE_BYTES.get(str(dtype).upper())
         if not width:
-            raise RuntimeError(f'dtype non supporté {dtype!r} sur {diff_key}')
+            raise RuntimeError(f'unsupported dtype {dtype!r} for {diff_key}')
         numel = 1
         for d in shape:
             numel *= int(d)

@@ -1,35 +1,32 @@
 # app/scrape/sources/__init__.py
-"""Scrapers par source (énumération de médias d'un profil / niche / listing).
+"""Source-specific scrapers enumerate media from profiles, niches and listings.
 
-Chaque module expose `scan(validation_result) -> (items, error)` où items est une
-liste de dicts au schéma commun :
-    { 'url', 'title', 'thumbnail', 'type' ('video'|'image'), 'platform', ... }
-Le téléchargement effectif d'un item passe par /api/scrape/download (yt-dlp ou
-stratégie dédiée), pas par ces modules.
-"""
-# Enregistrement explicite des sources (ordre indifférent : la priorité décide).
-# AJOUTER UNE SOURCE = créer sources/<name>.py (sous-classe de base.Source,
-# match()/scan()/(optionnel)download() + registry.register(...) en bas de fichier)
-# PUIS l'importer ici. Pas de pkgutil (imports silencieux / ordre non déterministe).
-from . import registry   # noqa: F401  (expose le registry + crée _registry avant les sources)
+Each module exposes scan(validation_result) -> (items, error), where items
+is a list of shared-schema dictionaries:
+    {'url', 'title', 'thumbnail', 'type' ('video'|'image'), 'platform', ...}
+Actual downloads use /api/scrape/download with yt-dlp or a dedicated strategy."""
+# Register sources explicitly; priority determines order.
+# To add a source, create sources/<name>.py as a base.Source subclass with
+# match(), scan(), optional download(), and a registry.register(...) call,
+# then import it here. Avoid silent or nondeterministic pkgutil imports.
+from . import registry   # noqa: F401  (exposes and initializes the registry first)
 from . import redgifs    # noqa: F401
 from . import instagram  # noqa: F401
 from . import picazor    # noqa: F401
 from . import erome      # noqa: F401
-# Coomer/Kemono/Bunkr/Cyberdrop retirés (dump/leak sites) : validators.py refuse
-# ces domaines explicitement (Platform._REMOVED_PLATFORMS), plus de source à
-# enregistrer ici.
+# Removed dump/leak sites are explicitly rejected by validators.py;
+# Coomer/Kemono/Bunkr/Cyberdrop have no sources to register.
 from . import x          # noqa: F401
 from . import tiktok     # noqa: F401
-from . import image_sites  # noqa: F401  (pornpics — vraies photos par catégorie)
-from . import civitai     # noqa: F401  (civitai.com/.red — images IA par tag)
-from . import fapello     # noqa: F401  (fapello.com + miroirs de langue — page modèle)
-from . import reddit       # noqa: F401  (reddit.com — recherche mot-clé via API OAuth)
-from . import sexcom      # noqa: F401  (sex.com — recherche mot-clé via l'API du site)
-from . import pexels      # noqa: F401  (pexels.com — API officielle, clé requise)
-from . import websearch   # noqa: F401  (duckduckgo — recherche d'images par mot-clé)
+from . import image_sites  # noqa: F401  (PornPics: category-based photos)
+from . import civitai     # noqa: F401  (.com/.red: AI images by tag)
+from . import fapello     # noqa: F401  (model pages and language mirrors)
+from . import reddit       # noqa: F401  (keyword search through the OAuth API)
+from . import sexcom      # noqa: F401  (keyword search through the site's API)
+from . import pexels      # noqa: F401  (official API; key required)
+from . import websearch   # noqa: F401  (DuckDuckGo keyword image search)
 from . import universal  # noqa: F401
 
-# Invariant : exactement une source universelle, noms uniques. Lève au démarrage
-# si violé (mieux qu'un bug de dispatch silencieux).
+# Require exactly one universal source and unique names. Fail at startup
+# rather than silently dispatching to the wrong source.
 registry.assert_one_universal()

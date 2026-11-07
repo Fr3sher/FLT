@@ -7,8 +7,8 @@ undone, which is the half nobody writes down.
 > ## ⛔ The skin decision was REVERSED after seeing it running
 >
 > Encre was chosen from static mockups and looked right there. In the actual app,
-> beside the rest of the product, it read as foreign: **“la couleur ne me plaît
-> pas, on va rester sur ce qui se fait ici.”** The Bank keeps the app's own
+> beside the rest of the product, it read as foreign. The maintainer preferred
+> the existing colors, so the Bank keeps the app's own
 > palette.
 >
 > **What survives:** structure B, the split of `BankWorkspace.jsx`, the frozen

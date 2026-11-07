@@ -3,7 +3,7 @@ import test from 'node:test'
 import {
   ENRICH_UNKNOWN, addFrames, failureNotice, generateLabel, perImagePrompts, queueClips, queuedNotice, releasePreview,
   removeFrame, uploadKey,
-} from './videoStartFrames.js'
+} from "../../../../../../bundled/video/frontend/studio/video/videoStartFrames.js"
 
 const frame = (key, image = `${key}.png`, ratio = 1.5) => ({ key, image, ratio, preview: null })
 

@@ -1,0 +1,11 @@
+{
+  "name": "@lds-plugins/hf-publish",
+  "version": "1.0.5",
+  "private": true,
+  "type": "module",
+  "lds": {
+    "entry": "frontend/index.js",
+    "sdk": "1.7.0"
+  },
+  "dependencies": {}
+}

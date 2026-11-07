@@ -1,6 +1,9 @@
 import test from 'node:test';
+import { installRuntimeHost } from '../../tests/support/runtimeHost.mjs';
+
+test.beforeEach(installRuntimeHost);
 import assert from 'node:assert/strict';
-import { externalMembersOf, externalEdgesFor } from './canvasExternalEdges.js';
+import { externalMembersOf, externalEdgesFor } from "../../../bundled/canvas/frontend/utils/canvasExternalEdges.js";
 
 const IMG = (extra) => ({ imageId: 7, x: 10, y: 20, w: 100, h: 80, datasetId: 1,
   image: { extra_loras: extra } });

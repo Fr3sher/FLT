@@ -8,8 +8,8 @@ import {
   undoEntry, pushUndo, popUndo, undoLine,
   createQueue, queueDecision, startBatch, finishBatch, queueDepth,
   loadBurstPrefs, saveBurstPrefs,
-} from './videoBurstTriage.js'
-import { triagePayload } from './videoTriage.js'
+} from "../../../../bundled/video/frontend/videobank/videoBurstTriage.js"
+import { triagePayload } from "../../../../bundled/video/frontend/videobank/videoTriage.js"
 import { reviewKeyAction } from '../shared/reviewShortcuts.js'
 
 const press = (key, extra = {}) => ({ key, target: null, ...extra })

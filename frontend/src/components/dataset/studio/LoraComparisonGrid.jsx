@@ -1,18 +1,15 @@
 // react-frontend/src/components/dataset/studio/LoraComparisonGrid.jsx
 /**
- * Grille de comparaison multi-LoRA : une COLONNE par LoRA (libellée `lora_label`),
- * une LIGNE par strength. Chaque case empile les tuiles (un ResultTile par seed)
- * du LoRA × strength, votables comme partout ailleurs (réutilise ResultTile).
- *
- * Mono-LoRA est géré ailleurs (ResultsArea, grille checkpoint × strength). Ici on
- * répond au besoin « comparer plusieurs LoRA côte à côte » de façon simple et lisible.
+ * Multi-LoRA comparison grid: one COLUMN per lora_label and one ROW per strength. Each
+ * LoRA/strength cell stacks one reusable, votable ResultTile per seed. Single-LoRA
+ * checkpoint/strength grids belong to ResultsArea; this view compares multiple LoRAs side by side.
  */
 import { useMemo } from 'react';
 import { fmt } from '../../../utils/studioFormat';
 import ResultTile from './ResultTile';
 
 export default function LoraComparisonGrid({ loras, cells, onRate, onOpen }) {
-  // Index des cellules par (dataset_id | strength), tuiles triées par seed.
+  // Index cells by dataset_id | strength, with tiles sorted by seed.
   const byKey = useMemo(() => {
     const m = new Map();
     for (const c of cells || []) {
@@ -24,7 +21,7 @@ export default function LoraComparisonGrid({ loras, cells, onRate, onOpen }) {
     return m;
   }, [cells]);
 
-  // Lignes = strengths présentes (croissant). Colonnes = LoRA (ordre du payload).
+  // Rows are available strengths in ascending order; LoRA columns preserve payload order.
   const strengths = useMemo(() => {
     const set = new Set((cells || []).map((c) => c.strength));
     return [...set].sort((a, b) => a - b);

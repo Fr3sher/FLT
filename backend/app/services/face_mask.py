@@ -229,7 +229,7 @@ def _run_detail(images, out_dir, expand, timeout, on_progress=None,
             _face_python(), _SCRIPT, payload, timeout, _on_line,
             should_stop=should_stop, on_stop=on_stop)
     except OSError as e:
-        logger.warning('face_mask: subprocess échec : %s', e)
+        logger.warning('face_mask: subprocess failed: %s', e)
         return {'ok': False, 'error': f'could not start face detection: {e}'}
     finally:
         cleanup()
@@ -253,17 +253,17 @@ def _run_detail(images, out_dir, expand, timeout, on_progress=None,
         if should_stop and _asked(should_stop):
             return {'ok': True, 'cancelled': True, 'results': {}}
         tail = stderr_tail(stderr_lines)
-        logger.warning('face_mask: pas de JSON (rc=%s) stderr=%s', rc, tail)
+        logger.warning('face_mask: no JSON (rc=%s) stderr=%s', rc, tail)
         return {'ok': False,
                 'error': f'face detection stopped unexpectedly (exit {rc})'
                          + (f': {tail}' if tail else '')}
     try:
         data = json.loads(line)
     except json.JSONDecodeError as e:
-        logger.warning('face_mask: JSON illisible : %s', e)
+        logger.warning('face_mask: unreadable JSON: %s', e)
         return {'ok': False, 'error': f'unreadable face-detection output: {e}'}
     if not data.get('ok'):
-        logger.warning('face_mask: échec : %s', data.get('error'))
+        logger.warning('face_mask: failed: %s', data.get('error'))
         return {'ok': False, 'timed_out': timed_out,
                 'error': str(data.get('error') or 'face detection failed')}
     if timed_out:

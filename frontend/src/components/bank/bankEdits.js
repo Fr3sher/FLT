@@ -40,6 +40,7 @@ export function imageVersionQuery(img) {
   const parts = [];
   if (img?.rotation) parts.push(`r=${img.rotation}`);
   if (img?.edit_generation) parts.push(`e=${img.edit_generation}`);
+  if (img?.edit_sequence) parts.push(`v=${img.edit_sequence}`);
   return parts.length ? `?${parts.join('&')}` : '';
 }
 
@@ -166,4 +167,3 @@ export function revertOutcomeMessage(result) {
     text: `${n} image(s) back to the version this bank started from.`,
   };
 }
-

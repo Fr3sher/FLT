@@ -29,6 +29,7 @@ Every message is PASTE-SAFE: paths run through `redact_user_paths`, because thes
 strings are written to be dropped into a public help thread.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import logging
 import ntpath
@@ -226,7 +227,7 @@ def comfyui_sees_input(name) -> bool | None:
     try:
         r = requests.head(urljoin(api.rstrip('/') + '/', 'view'),
                           params={'filename': base, 'type': 'input'},
-                          timeout=VISIBILITY_TIMEOUT, allow_redirects=False)
+                          timeout=network_timeout(VISIBILITY_TIMEOUT), allow_redirects=False)
     except Exception:                    # unreachable, DNS, proxy, TLS — anything
         return None
     status = getattr(r, 'status_code', None)
@@ -253,7 +254,7 @@ def _comfy_folder_note() -> str:
     if not api:
         return ''
     try:
-        r = requests.get(f'{api.rstrip("/")}/system_stats', timeout=VISIBILITY_TIMEOUT)
+        r = requests.get(f'{api.rstrip("/")}/system_stats', timeout=network_timeout(VISIBILITY_TIMEOUT))
         if r.status_code != 200:
             return ''
         argv = ((r.json() or {}).get('system') or {}).get('argv')
@@ -504,10 +505,9 @@ _STAGED_INPUT_RE = re.compile(
     r'|^(?:krea_ref_b|wmklein_(?:crop|frame|mask))_[0-9a-f]{8}\.png$'
     r'|^lds_vstudio_[0-9a-f]{10}\.png$')
 
-# A staged input is dead once its job can no longer run. The worst case is a full
-# fan-out queued at once (MAX_FANOUT jobs) each burning the whole poll timeout
-# (15 min) before the last one starts — about 15 h. 48 h clears that with a wide
-# margin, so age ALONE would already spare an input a live job still needs.
+# Old orphan copies are collected after 48 h. Local queue depth and render
+# deadlines are configurable: a live job can wait longer, even indefinitely.
+# Its staged inputs MUST remain in the caller's keep set regardless of age.
 STAGED_INPUT_MAX_AGE_SECONDS = 48 * 3600
 
 
@@ -553,9 +553,8 @@ def prune_staged_inputs(input_dir, max_age_seconds=STAGED_INPUT_MAX_AGE_SECONDS,
     """Delete staged inputs older than `max_age_seconds`. Returns the count.
 
     `keep` is the set of basenames still referenced by a job that has not
-    reached a terminal state. They are spared unconditionally — the age fence
-    alone already covers them, but a queue that took longer than anyone planned
-    must not cost a user an in-flight generation.
+    reached a terminal state. They are spared unconditionally, including long
+    queues and jobs configured without an elapsed-time deadline.
     """
     if not input_dir:
         return 0

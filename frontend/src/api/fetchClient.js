@@ -40,11 +40,10 @@ function csrfHeaderName(headers) {
   return Object.keys(headers || {}).find((k) => k.toLowerCase() === 'x-csrftoken');
 }
 
-// Rebuild request options with a freshly-read CSRF token: the header for JSON
+// Rebuild request options with the refreshed CSRF token: the header for JSON
 // bodies, plus the csrf_token field for FormData bodies (the generation path
 // sends the token both ways). FormData is mutable, so it is reused in place.
-function withFreshCsrf(options) {
-  const token = getCsrfToken();
+function withFreshCsrf(options, token) {
   const name = csrfHeaderName(options.headers) || 'X-CSRFToken';
   if (typeof FormData !== 'undefined' && options.body instanceof FormData) {
     options.body.set?.('csrf_token', token);
@@ -66,8 +65,8 @@ export async function fetchWithCsrfRetry(url, options = {}) {
   const opts = { credentials: 'include', ...options };
   let res = await fetch(url, opts);
   if (isCsrfRejection(res) && csrfHeaderName(opts.headers)) {
-    await refreshCsrfToken();
-    res = await fetch(url, { credentials: 'include', ...withFreshCsrf(opts) });
+    const token = await refreshCsrfToken();
+    res = await fetch(url, { credentials: 'include', ...withFreshCsrf(opts, token) });
   }
   return res;
 }
@@ -192,14 +191,18 @@ async function doApiFetch(url, init, background) {
    being typed, and without this a server that blinked would speak once per keystroke.
    It was silently dropped before (the signature took two arguments), so callers
    passing it were passing nothing. */
+function mutationHeaders(provided, json = true) {
+  const headers = new Headers(provided);
+  headers.delete('Content-Type');
+  headers.delete('X-CSRFToken');
+  return { ...Object.fromEntries(headers), ...(json ? { 'Content-Type': 'application/json' } : {}), 'X-CSRFToken': getCsrfToken() };
+}
+
 export function postJson(url, body, opts = {}) {
   return apiFetch(url, {
     ...opts,
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRFToken': getCsrfToken(),
-    },
+    headers: mutationHeaders(opts.headers),
     body: JSON.stringify(body),
   });
 }
@@ -208,10 +211,7 @@ export function putJson(url, body, opts = {}) {
   return apiFetch(url, {
     ...opts,
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRFToken': getCsrfToken(),
-    },
+    headers: mutationHeaders(opts.headers),
     body: JSON.stringify(body),
   });
 }
@@ -224,40 +224,43 @@ export function patchJson(url, body, opts = {}) {
   return apiFetch(url, {
     ...opts,
     method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRFToken': getCsrfToken(),
-    },
+    headers: mutationHeaders(opts.headers),
     body: JSON.stringify(body),
   });
 }
 
-export function del(url) {
+export function del(url, opts = {}) {
   return apiFetch(url, {
+    ...opts,
     method: 'DELETE',
-    headers: { 'X-CSRFToken': getCsrfToken() },
+    headers: mutationHeaders(opts.headers, false),
   });
 }
 
-export function postForm(url, formData) {
-  formData.append('csrf_token', getCsrfToken());
+export function postForm(url, formData, opts = {}) {
+  formData.set('csrf_token', getCsrfToken());
   return apiFetch(url, {
+    ...opts,
     method: 'POST',
-    headers: { 'X-CSRFToken': getCsrfToken() },
+    headers: mutationHeaders(opts.headers, false),
     body: formData,
   });
 }
 
 /**
- * Refresh the CSRF token (server regenerates `session['csrf_token']` and
- * resets the matching cookie). Used as a recovery step when a POST fails
- * with a CSRF-mismatch 400 (typical after the session was regenerated
- * server-side — e.g. Flask-Login's session_protection='strong').
+ * Return this server's fresh token directly. Cookies are shared across ports:
+ * another local application can overwrite csrf_token before the retry reads it.
+ * The response body stays tied to the session that requested this refresh.
  */
 export async function refreshCsrfToken() {
   try {
-    await fetch('/api/csrf-token', { credentials: 'include' });
+    const res = await fetch('/api/csrf-token', { credentials: 'include', cache: 'no-store' });
+    if (res.ok) {
+      const body = await res.json();
+      if (typeof body?.csrf_token === 'string' && body.csrf_token) return body.csrf_token;
+    }
   } catch { /* network errors handled by caller */ }
+  return getCsrfToken();
 }
 
 /**

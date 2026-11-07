@@ -46,6 +46,7 @@ outage should heal within a poll or two, whereas a deletion is not going to
 un-happen.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import logging
 import re
@@ -107,7 +108,7 @@ def _http_get(url, token, timeout=_TIMEOUT):
     headers = {'Authorization': f'Bearer {token}'} if token else {}
     req = urllib.request.Request(url, headers=headers, method='GET')
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=network_timeout(timeout)) as resp:
             return int(getattr(resp, 'status', 200) or 200), resp.read(2048)
     except urllib.error.HTTPError as e:
         return int(e.code), b''

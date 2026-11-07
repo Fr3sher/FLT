@@ -15,6 +15,7 @@ import json
 import logging
 import threading
 import time
+from functools import wraps
 import uuid
 from typing import NamedTuple
 
@@ -38,6 +39,10 @@ COMFYUI_STALLED_MESSAGE = (
     'this Test Studio batch.'
 )
 POLL_STALLED = object()
+COMFYUI_CANCEL_INTERRUPTING_MESSAGE = (
+    'Cancelling — ComfyUI was asked to stop this render. The queue resumes as soon as '
+    'it lets go; a render that pages can take a minute or two to notice.'
+)
 COMFYUI_UNKNOWN_SUBMIT_MESSAGE = (
     'ComfyUI /prompt result was lost. Restart ComfyUI before cancelling or resuming '
     'this batch; LDS cannot safely identify the remote prompt.'
@@ -82,6 +87,52 @@ class _ComfySubmitUnknown(RuntimeError):
 # race between a vision window claim and a ComfyUI /prompt submission; the
 # persisted flags and queue rows remain the recovery record after a restart.
 GPU_ARBITER_LOCK = threading.RLock()
+
+# Separate from GPU arbitration: a terminal row can still be copying and
+# linking its result. Restart reserves this lock after the GPU lock and checks
+# the count; execution holds it only to change the count, never across I/O.
+QUEUE_EXECUTION_LOCK = threading.RLock()
+_queue_executions = 0
+
+
+def queue_execution_busy() -> bool:
+    with QUEUE_EXECUTION_LOCK:
+        return _queue_executions > 0
+
+
+def _reserve_execution(fn):
+    @wraps(fn)
+    def reserved(*args, **kwargs):
+        global _queue_executions
+        with QUEUE_EXECUTION_LOCK:
+            _queue_executions += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            with QUEUE_EXECUTION_LOCK:
+                _queue_executions -= 1
+    return reserved
+
+
+def _job_owner_available(job):
+    from .auth_policy import plugin_available
+    from .plugins.registry import active
+    try:
+        metadata = json.loads(job.job_metadata or '{}')
+    except (TypeError, ValueError):
+        return True  # Existing workflow validation owns malformed core jobs.
+    if not isinstance(metadata, dict):
+        return False
+    owners = {'is_live': 'live', 'is_video_test': 'video', 'is_bank_improve': 'image_upscale'}
+    registry = active()
+    if registry:
+        owners.update({kind: pid for kind, (pid, _fn) in registry.job_handlers.items()})
+    if any(metadata.get(kind) and not plugin_available(pid) for kind, pid in owners.items()):
+        return False
+    if metadata.get('dataset_engine_plugin'):
+        return plugin_available(metadata['dataset_engine_plugin'])
+    owner = {'seedvr2_upscale': 'seedvr2', 'qwen_camera_dataset': 'camera_angles'}.get(metadata.get('model_name'))
+    return owner is None or plugin_available(owner)
 
 
 def require_comfyui_enqueue_ready() -> None:
@@ -216,6 +267,23 @@ class ComfyBarrierProbe(NamedTuple):
     link: str | None = None
 
 
+# A cancelled render ComfyUI could not be asked to stop (a /queue read that
+# timed out under a paging GPU is not a verdict) is asked again by the probe
+# while it still runs — at most once per this many seconds (2026-09-06).
+INTERRUPT_RETRY_SECONDS = 20.0
+_last_interrupt_retry_at = 0.0
+
+
+def _retry_cancel_interrupt(job_id, prompt_id) -> bool:
+    global _last_interrupt_retry_at
+    now = time.monotonic()
+    if now - _last_interrupt_retry_at < INTERRUPT_RETRY_SECONDS:
+        return False
+    _last_interrupt_retry_at = now
+    with GPU_ARBITER_LOCK:
+        return queue_manager._interrupt_stalled_prompt(job_id, prompt_id)
+
+
 def probe_comfyui_barrier() -> ComfyBarrierProbe:
     """Clear the recovery barrier when the remote prompt is PROVABLY gone, and
     report what ComfyUI answered while being asked.
@@ -243,6 +311,10 @@ def probe_comfyui_barrier() -> ComfyBarrierProbe:
         # any extra request; None means LDS got nothing it could read.
         link = COMFYUI_LINK_UNREACHABLE if absent is None else COMFYUI_LINK_REACHABLE
         if absent is not True:
+            # Still listed: ask again to stop a render a person cancelled when
+            # the first ask was not answered (2026-09-06).
+            if absent is False and owner.get('cancel_requested') and not owner.get('interrupted'):
+                _retry_cancel_interrupt(owner['job_id'], prompt_id)
             return ComfyBarrierProbe(None, link)
         # reconcile_stalled_comfy_job re-verifies queue absence on both sides of
         # a /history read and refuses an unhealthy history. This is its only
@@ -404,7 +476,7 @@ def _pause_unconfirmed_comfyui_prompt(prompt_id, detail=None):
     return POLL_STALLED
 
 
-def _poll_outputs(prompt_id, timeout=POLL_TIMEOUT_SECONDS):
+def _poll_outputs(prompt_id, timeout=None):
     """Poll one ComfyUI prompt without mistaking an outage for an empty history.
 
     Returns (filename, failed) for normal terminal outcomes, or
@@ -414,8 +486,13 @@ def _poll_outputs(prompt_id, timeout=POLL_TIMEOUT_SECONDS):
     then resume.
     """
     from .utils.comfyui import ComfyHistoryHealth, get_comfyui_history_probe
+    from .generation_limits import generation_timeout_seconds
+    from .timeout_settings import network_timeout
 
+    if timeout is None:
+        timeout = generation_timeout_seconds()
     deadline = time.monotonic() + timeout
+    unhealthy_grace = network_timeout(COMFYUI_UNHEALTHY_GRACE_SECONDS)
     unhealthy_since = None
     cancel_event = _cancel_event(prompt_id)
     try:
@@ -436,7 +513,7 @@ def _poll_outputs(prompt_id, timeout=POLL_TIMEOUT_SECONDS):
                 # A shorter test/override timeout does not make an unhealthy
                 # history trustworthy. Either threshold means the remote state
                 # is unconfirmed and must be durably paused, never failed.
-                if (now - unhealthy_since >= COMFYUI_UNHEALTHY_GRACE_SECONDS
+                if (now - unhealthy_since >= unhealthy_grace
                         or now >= deadline):
                     return None, _pause_unconfirmed_comfyui_prompt(
                         prompt_id, probe.detail or 'ComfyUI history unhealthy')
@@ -449,6 +526,15 @@ def _poll_outputs(prompt_id, timeout=POLL_TIMEOUT_SECONDS):
             history = probe.history or {}
             entry = history.get(prompt_id, history) if isinstance(history, dict) else {}
             outputs = (entry or {}).get('outputs') or {}
+            status = (entry or {}).get('status') or {}
+            if status.get('status_str') == 'error':
+                detail = _execution_error_detail(status)
+                if detail:
+                    job = ImageGenerationQueue.query.filter_by(comfyui_prompt_id=prompt_id).first()
+                    if job:
+                        job.error_message = detail
+                        db.session.commit()
+                return None, True
             for node_output in outputs.values():
                 # `images` is what SaveImage and SaveVideo report under.
                 # `gifs` is what VideoHelperSuite reports EVERY video under —
@@ -461,16 +547,11 @@ def _poll_outputs(prompt_id, timeout=POLL_TIMEOUT_SECONDS):
                 for key in ('images', 'gifs'):
                     for img in (node_output or {}).get(key) or []:
                         if (isinstance(img, dict) and img.get('filename')
-                                and img.get('type', 'output') != 'temp'):
+                                and img.get('type', 'output') == 'output'):
                             return img['filename'], False
-            status = (entry or {}).get('status') or {}
-            if status.get('status_str') == 'error' or (status.get('completed') and not outputs):
-                detail = _execution_error_detail(status)
-                if detail:
-                    job = ImageGenerationQueue.query.filter_by(comfyui_prompt_id=prompt_id).first()
-                    if job:
-                        job.error_message = detail
-                        db.session.commit()
+            # LoadVideo also reports its INPUT under `images`. A completed
+            # history containing only inputs/previews/text has no saved result.
+            if status.get('completed'):
                 return None, True
 
             job = ImageGenerationQueue.query.filter_by(comfyui_prompt_id=prompt_id).first()
@@ -514,7 +595,8 @@ def _execution_error_detail(status) -> str | None:
 # name, and twelve images were generated, paid for in GPU time, marked done in
 # the queue — and never attached to their rows. The tile stayed at 0/12 forever
 # with nothing in the logs, because nothing had failed. A new engine must be
-# added HERE, and the contract test that walks this set is what says so.
+# added HERE for legacy helpers. API 1.23 plugin engines instead preserve the
+# host's dataset_engine_plugin marker; no per-plugin core entry is needed.
 DATASET_IMAGE_JOB_NAMES = frozenset({
     'klein_edit_dataset',           # Klein (FLUX.2)
     'krea_identity_edit_dataset',   # Krea 2 Identity Edit
@@ -556,6 +638,7 @@ def _drop_staged_inputs(md) -> None:
         logger.exception('job_queue: staged input cleanup failed')
 
 
+@_reserve_execution
 def _dispatch_completion(job, filename, failed):
     """Route a finished job to whichever service created it, per its metadata.
     A callback crash must never take down the worker thread."""
@@ -567,6 +650,24 @@ def _dispatch_completion(job, filename, failed):
         md = json.loads(job.job_metadata or '{}')
     except (TypeError, ValueError):
         md = {}
+    from .plugins.registry import active
+    registry = active()
+    handlers = registry.job_handlers if registry is not None else {}
+    for kind, (plugin_id, callback) in handlers.items():
+        if not md.get(kind):
+            continue
+        from .auth_policy import plugin_available
+        if not plugin_available(plugin_id):
+            return  # Preserve the result for the owner's next recovery pass.
+        try:
+            reason = job.error_message if job.error_message != 'generation failed' else None
+            callback(job.job_id, filename, failed=failed, reason=reason, metadata=md)
+            _drop_staged_inputs(md)
+        except Exception:
+            logger.exception('job_queue: plugin %s completion failed for %s', plugin_id, job.job_id)
+        return
+    if md.get('is_live') or md.get('is_video_test'):
+        return  # These historical kinds have no core owner any more.
     _drop_staged_inputs(md)
     try:
         if md.get('is_lora_test'):
@@ -587,23 +688,6 @@ def _dispatch_completion(job, filename, failed):
             reason = job.error_message if job.error_message != 'generation failed' else None
             face_dataset_service.link_completed_reference_edit(
                 job.job_id, filename, failed=failed, reason=reason)
-        elif md.get('is_live'):
-            # 🔴 A live channel clip. Ephemeral by design — no row anywhere —
-            # so it cannot ride the Studio's branch below, which looks one up.
-            # Its result goes into the channel's stream (live_studio).
-            from .services import live_studio
-            reason = job.error_message if job.error_message != 'generation failed' else None
-            live_studio.link_completed_live_clip(job.job_id, filename, failed=failed, reason=reason,
-                                                 session_id=md.get('live_session'))
-        elif md.get('is_video_test'):
-            # A Video Test Studio clip. Its own branch rather than a model_name
-            # match: the mp4 arrives under the history's `images` key like any
-            # image does, so nothing upstream distinguishes it — only the
-            # metadata this lane wrote can.
-            from .services import video_test_studio
-            reason = job.error_message if job.error_message != 'generation failed' else None
-            video_test_studio.link_completed_clip(job.job_id, filename,
-                                                  failed=failed, reason=reason)
         elif md.get('is_bank_improve'):
             # A Bank ✨ Upscale & improve. It rides the very same enqueue helpers
             # as the dataset lane, so it necessarily carries their model_name —
@@ -614,8 +698,10 @@ def _dispatch_completion(job, filename, failed):
             # the whole pass live in bank_jobs, not in one row per image.
             logger.debug('job_queue: bank improve %s finished (failed=%s) — the '
                          'bank pass owns its own result', job.job_id, failed)
-        elif md.get('model_name') in DATASET_IMAGE_JOB_NAMES:
+        elif md.get('dataset_engine_plugin') or md.get('model_name') in DATASET_IMAGE_JOB_NAMES:
             from .services import face_dataset_service
+            # The core owns dataset rows even if their rendering plugin has
+            # since been disabled. Always harvest/cancel already admitted work.
             # The bare fallback 'generation failed' is LESS useful than the tile's
             # own default (which points at the server log) — only pass real detail.
             reason = job.error_message if job.error_message != 'generation failed' else None
@@ -626,8 +712,8 @@ def _dispatch_completion(job, filename, failed):
         # The link callback crashed before flipping its row out of 'pending' -
         # without this it strands the row looking like it's still generating.
         try:
-            from .models import FaceDatasetImage, LoraTestImage, VideoTestClip
-            for model in (FaceDatasetImage, LoraTestImage, VideoTestClip):
+            from .models import FaceDatasetImage, LoraTestImage
+            for model in (FaceDatasetImage, LoraTestImage):
                 row = model.query.filter_by(job_id=job.job_id).first()
                 if row is not None:
                     row.status = 'failed'
@@ -1132,11 +1218,11 @@ class JobQueueManager:
                                 FaceDatasetImage.filename.is_(None),
                                 FaceDatasetImage.job_id.isnot(None))
                         .all())
-            if not stranded:
-                return
+            from .plugins.hooks import run_filter
+            job_ids = run_filter('job_queue.unlinked_results', [row.job_id for row in stranded], strict=True)
             repaired = 0
-            for row in stranded:
-                job = ImageGenerationQueue.query.filter_by(job_id=row.job_id).first()
+            for job_id in dict.fromkeys(job_ids):
+                job = ImageGenerationQueue.query.filter_by(job_id=job_id).first()
                 if job is None or job.status not in ('completed', 'failed'):
                     continue          # never finished, or still owed a real dispatch
                 try:
@@ -1178,6 +1264,8 @@ class JobQueueManager:
                 except (TypeError, ValueError):
                     continue
                 keep.update(md.get('staged_inputs') or ())
+            from .plugins.hooks import run_filter
+            keep = run_filter('job_queue.keep_inputs', keep, strict=True)
             comfy_fs.prune_staged_inputs(cfg.comfyui_dir('input'), keep=keep)
         except Exception:
             logger.exception('job_queue: staged input prune failed')
@@ -1235,6 +1323,7 @@ class JobQueueManager:
         """The same answer as a NOUN PHRASE, for a caller writing "waiting for {x}"."""
         return HOLD_LABELS.get(self.gpu_hold())
 
+    @_reserve_execution
     def process_one(self) -> bool:
         """Run one queued image while closing the local ComfyUI/vision race."""
         job = None
@@ -1255,9 +1344,10 @@ class JobQueueManager:
                     ).first() is not None):
                 return False
 
-            job = (ImageGenerationQueue.query.filter_by(status='pending')
-                   .order_by(ImageGenerationQueue.priority.desc(),
-                             ImageGenerationQueue.created_at.asc()).first())
+            candidates = (ImageGenerationQueue.query.filter_by(status='pending')
+                          .order_by(ImageGenerationQueue.priority.desc(),
+                                    ImageGenerationQueue.created_at.asc()))
+            job = next((candidate for candidate in candidates if _job_owner_available(candidate)), None)
             if job is None:
                 return False
             if not _claim(job.job_id):
@@ -1380,7 +1470,12 @@ class JobQueueManager:
             filename, failed, error_detail = None, True, submit_error
         else:
             try:
-                filename, failed = _poll_outputs(prompt_id, POLL_TIMEOUT_SECONDS)
+                from .generation_limits import generation_timeout_seconds
+                try:
+                    timeout_metadata = json.loads(job.job_metadata or '{}')
+                except (TypeError, ValueError):
+                    timeout_metadata = None
+                filename, failed = _poll_outputs(prompt_id, generation_timeout_seconds(timeout_metadata))
             except Exception as exc:
                 logger.exception('job_queue: poll for job %s failed', job.job_id)
                 # A thrown poll has no trustworthy remote terminal observation.
@@ -1527,6 +1622,9 @@ class JobQueueManager:
                 db.session.commit()
                 return 'retry'
             prompt_id = job.comfyui_prompt_id
+            # Read at entry: the stall below commits, which reloads the row
+            # as 'stalled' — a row that was live here has just been asked.
+            was_stalled = job.status == 'stalled'
             if job.status in ('sent_to_comfy', 'cancel_requested'):
                 if prompt_id:
                     paused = self._stall_comfy_job(
@@ -1538,6 +1636,12 @@ class JobQueueManager:
                         detail='cancellation requested before /prompt was durably mapped')
                 if not paused:
                     return 'retry'
+                if prompt_id:
+                    # The person asked for this render to stop: ComfyUI is
+                    # asked too, when the running prompt is exactly ours
+                    # (2026-09-06 — a cancelled render that paged kept the
+                    # card for an hour with nothing able to stop it).
+                    self._interrupt_stalled_prompt(job.job_id, prompt_id)
                 if not prompt_id:
                     logger.warning(
                         'job_queue: %s needs an external ComfyUI restart before '
@@ -1551,10 +1655,106 @@ class JobQueueManager:
                     'job_queue: %s has an unknown /prompt barrier; do not clear it '
                     'without an externally verified ComfyUI restart', job.job_id)
                 return 'restart_required'
+            if was_stalled:
+                # A Cancel on a paused row — the second press after an ask
+                # that went unanswered: the intent is recorded and ComfyUI
+                # asked to stop it again (found in review, 2026-09-06: a
+                # second Cancel used to reconcile only, so one starved
+                # /queue read put the person back behind the wall).
+                self._interrupt_stalled_prompt(job.job_id, job.comfyui_prompt_id)
             # Targeted delete / fresh absence checks happen while the exact raw
             # ownership barrier remains present.
             return ('cancelled' if self.reconcile_stalled_comfy_job(job.job_id)
                     else 'retry')
+
+    def _interrupt_stalled_prompt(self, job_id, prompt_id) -> bool:
+        """A person wants this paused render gone: the barrier records the
+        intent (`cancel_requested`, what the probe's retry reads) and ComfyUI
+        is asked to stop the prompt when it is exactly ours (prompt id AND
+        client id); once asked, the row and the barrier say so. Called under
+        the arbiter lock. True when ComfyUI was asked."""
+        from .utils.comfyui import interrupt_own_prompt
+        asked = interrupt_own_prompt(prompt_id, job_id) == 'interrupted'
+        # What the POST said, kept for the caller that cannot read it back
+        # from the barrier (a failed flag commit must not turn an interrupt
+        # that was sent into "did not answer" — found in review).
+        self._last_interrupt_ask = (str(job_id), asked)
+        row, _raw, owner, valid = self._read_comfyui_stalled_barrier()
+        if row is not None and valid and owner is not None and str(owner.get('job_id')) == str(job_id):
+            owner['cancel_requested'] = True
+            if asked:
+                owner['interrupted'] = True
+                owner['reason'] = COMFYUI_CANCEL_INTERRUPTING_MESSAGE
+                (ImageGenerationQueue.query.filter_by(job_id=str(job_id), status='stalled')
+                 .update({'error_message': COMFYUI_CANCEL_INTERRUPTING_MESSAGE}, synchronize_session=False))
+            row.value = self._encode_comfyui_stalled_barrier(owner)
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+        return asked
+
+    def own_running_job(self):
+        """What ComfyUI is running, seen from LDS: ('idle', None), ('own', row)
+        when the running prompt is exactly one of LDS's queue rows (prompt id
+        AND client id), ('foreign', None) for another client's prompt, and
+        ('unknown', None) when ComfyUI could not be asked."""
+        from .utils.comfyui import running_prompt_identity
+        identity = running_prompt_identity()
+        if identity is None:
+            return ('unknown', None)
+        prompt_id, client_id = identity
+        if not prompt_id:
+            return ('idle', None)
+        live = ('processing', 'sent_to_comfy', 'cancel_requested', 'stalled')
+        job = (ImageGenerationQueue.query.filter_by(comfyui_prompt_id=str(prompt_id))
+               .filter(ImageGenerationQueue.status.in_(live)).first())
+        if job is not None and str(job.job_id) == str(client_id or ''):
+            return ('own', job)
+        if client_id:
+            # Our client id on a prompt no row knows: the /prompt answer was
+            # lost (an unknown-submit barrier). Ours, but not interruptible
+            # by prompt id — the recovery banner is the way out, and the
+            # refusal must not call it "not LDS's" (found in review).
+            unmapped = (ImageGenerationQueue.query.filter_by(job_id=str(client_id))
+                        .filter(ImageGenerationQueue.comfyui_prompt_id.is_(None))
+                        .filter(ImageGenerationQueue.status.in_(live)).first())
+            if unmapped is not None:
+                return ('unmapped', unmapped)
+        return ('foreign', None)
+
+    def interrupt_own_running(self, expected_job_id=None):
+        """Stop the render ComfyUI runs for LDS, as a person asked: the job is
+        cancelled (its result dropped) and ComfyUI interrupted. Bound to the
+        job the person was told about: `expected_job_id` must be the running
+        job, or nothing is touched and its id travels back so the offer can
+        be made again for it (found in review: within the minute, the next
+        queued render could have been dropped instead).
+
+        Returns (verdict, job_id): 'interrupted'; 'idle'; 'foreign';
+        'unmapped' (ours, unknown-submit: not interruptible); 'other' (an own
+        job that is not the expected one); 'unknown' (ComfyUI mute, or a job
+        still being sent — nothing to interrupt yet)."""
+        state, job = self.own_running_job()
+        if state != 'own':
+            return (state, job.job_id if job is not None else None)
+        if not expected_job_id or str(job.job_id) != str(expected_job_id):
+            return ('other', job.job_id)
+        if job.status == 'stalled':
+            with GPU_ARBITER_LOCK:
+                asked = self._interrupt_stalled_prompt(job.job_id, job.comfyui_prompt_id)
+            return ('interrupted' if asked else 'unknown', job.job_id)
+        if job.status in ('sent_to_comfy', 'cancel_requested'):
+            self._last_interrupt_ask = None
+            if self.cancel_job_outcome(job.job_id) == 'cancelled':
+                return ('interrupted', job.job_id)   # ComfyUI no longer has it
+            if self._last_interrupt_ask == (str(job.job_id), True):
+                return ('interrupted', job.job_id)
+            owner = self.get_comfyui_stalled_barrier() or {}
+            if str(owner.get('job_id')) == str(job.job_id) and owner.get('interrupted'):
+                return ('interrupted', job.job_id)
+            return ('unknown', job.job_id)
+        return ('unknown', job.job_id)
 
     def cancel_job(self, job_id, user_id=None, job_type='image', *, commit=True) -> bool:
         """Compatibility boolean: only a proven cancellation is ``True``."""

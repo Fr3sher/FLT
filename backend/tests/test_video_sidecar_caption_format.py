@@ -43,8 +43,11 @@ from pathlib import Path
 
 import pytest
 
-from app.services import video_clip_export as ex
-from app.services import video_targets
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_clip_export as ex
+from lds_video import video_targets
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _promote(app, tmp_path, monkeypatch, *, caption, target_profile, frames):
@@ -54,8 +57,8 @@ def _promote(app, tmp_path, monkeypatch, *, caption, target_profile, frames):
     monkeypatch ONLY — a bare module assignment leaks the fake ffmpeg into every
     later test in the same process."""
     from app.extensions import db
-    from app.models import VideoClip, VideoSource
-    from app.services import video_bank_service as svc
+    from lds_video.models import VideoClip, VideoSource
+    from lds_video import video_bank_service as svc
 
     folder = tmp_path / target_profile
     folder.mkdir(exist_ok=True)

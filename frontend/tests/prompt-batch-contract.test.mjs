@@ -29,22 +29,22 @@ import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
 // (see whatsNew.js, rule "Keep the list tidy") — search the union.
 const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
 
-const read = (rel) => readSource(`src/${rel}`)
-const RECENT = read('components/dataset/studio/RecentPrompts.jsx')
-const FIELD = read('components/dataset/studio/PromptField.jsx')
-const SETUP = read('components/dataset/studio/RunSetupPanel.jsx')
-const SEED = read('components/dataset/studio/SeedControls.jsx')
-const STUDIO_HOOK = read('hooks/useLoraTestStudio.js')
-const CANVAS_HOOK = read('hooks/useCanvasStudio.js')
-const CANVAS_PANEL = read('components/canvas/CanvasGenerationPanel.jsx')
-const COMPARISON_SETUP = read('components/dataset/studio/StudioRunSetup.jsx')
-const STACK = read('components/dataset/studio/loraStack.js')
+const read = readSource
+const RECENT = read('src/components/dataset/studio/RecentPrompts.jsx')
+const FIELD = read('src/components/dataset/studio/PromptField.jsx')
+const SETUP = read('src/components/dataset/studio/RunSetupPanel.jsx')
+const SEED = read('src/components/dataset/studio/SeedControls.jsx')
+const STUDIO_HOOK = read('src/hooks/useLoraTestStudio.js')
+const CANVAS_HOOK = read('../bundled/canvas/frontend/hooks/useCanvasStudio.js')
+const CANVAS_PANEL = read('../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx')
+const COMPARISON_SETUP = read('src/components/dataset/studio/StudioRunSetup.jsx')
+const STACK = read('src/components/dataset/studio/loraStack.js')
 
 test('one history component, mounted by both surfaces — parity by construction', () => {
   // The board's panel mounts the Test Studio's own RunSetupPanel, which mounts
   // PromptField, which mounts RecentPrompts. A batch added to that chain exists
   // on both screens or on neither; there is no second list to keep in step.
-  assert.match(CANVAS_PANEL, /import RunSetupPanel from '\.\.\/dataset\/studio\/RunSetupPanel'/)
+  assert.match(CANVAS_PANEL, /import \{ RunSetupPanel \} from '@lds\/plugin-sdk\/canvas'/)
   assert.match(SETUP, /import PromptField from '\.\/PromptField'/)
   assert.match(FIELD, /import RecentPrompts from '\.\/RecentPrompts'/)
   // …and the batch props really run down that chain rather than stopping midway.

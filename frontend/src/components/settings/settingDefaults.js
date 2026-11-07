@@ -71,3 +71,9 @@ export const RESET_TO_DEFAULT_TEXT = 'Reset to default';
 export function resetAriaLabel(label, defaultValue) {
   return `${RESET_TO_DEFAULT_TEXT}: ${label}, ${describeDefault(defaultValue)}`;
 }
+
+/** Reset one owner's engine toggles without changing another owner's selection. */
+export function resetEngineSelection(enabled = [], defaults = [], ownedIds = []) {
+  const owned = new Set(ownedIds)
+  return [...enabled.filter(id => !owned.has(id)), ...defaults.filter(id => owned.has(id))]
+}

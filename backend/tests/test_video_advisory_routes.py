@@ -6,7 +6,11 @@ answer. So what is pinned here is which refusal each pass gives, and that the tw
 503s of the watermark pass stay two different sentences.
 """
 
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_bank_service as svc
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 
 def test_dedup_refuses_a_bank_that_was_never_embedded(client, app):
@@ -20,7 +24,7 @@ def test_dedup_refuses_a_bank_that_was_never_embedded(client, app):
 
 def test_dedup_starts_once_vectors_exist(client, app, monkeypatch):
     bank_id = _bank(app)
-    monkeypatch.setattr('app.services.video_clip_search.load_embeddings',
+    monkeypatch.setattr('lds_video.video_clip_search.load_embeddings',
                         lambda bid: {1: [{'vec': [1.0, 0.0]}]})
     monkeypatch.setattr(svc.bank_jobs, 'start', lambda *a, **k: {'kind': 'dedup'})
     r = client.post(f'/api/video-bank/{bank_id}/dedup', json={})
@@ -62,7 +66,7 @@ def test_both_passes_are_refused_while_another_owns_the_bank(client, app, monkey
     """409 with `busy_kind`, the same envelope as every other pass — so the UI
     names what to wait for instead of repeating "busy"."""
     bank_id = _bank(app)
-    monkeypatch.setattr('app.services.video_clip_search.load_embeddings',
+    monkeypatch.setattr('lds_video.video_clip_search.load_embeddings',
                         lambda bid: {1: [{'vec': [1.0, 0.0]}]})
 
     def busy(*a, **k):
@@ -76,7 +80,7 @@ def test_both_passes_are_refused_while_another_owns_the_bank(client, app, monkey
 def _bank(app):
     from app.config import LOCAL_USER
     from app.extensions import db
-    from app.models import VideoBank
+    from lds_video.models import VideoBank
     with app.app_context():
         bank = VideoBank(user_id=LOCAL_USER, name='b', source_path='/srv/rushes')
         db.session.add(bank)

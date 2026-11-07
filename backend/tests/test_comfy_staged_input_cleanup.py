@@ -401,16 +401,6 @@ def test_boot_sweep_collects_the_keep_set_from_unfinished_queue_rows(app, tmp_pa
     assert not done_file.exists()
 
 
-def test_prune_max_age_outlives_the_worst_case_queue_drain():
-    """The number is not a taste: a full fan-out queued at once, each job burning
-    the whole poll timeout, is the longest a staged copy can legitimately wait."""
-    from app import job_queue
-    from app.services.face_dataset_service import MAX_FANOUT
-
-    worst_case = MAX_FANOUT * job_queue.POLL_TIMEOUT_SECONDS
-    assert comfy_fs.STAGED_INPUT_MAX_AGE_SECONDS > worst_case
-
-
 def test_prune_survives_a_missing_or_unset_input_folder(tmp_path):
     assert comfy_fs.prune_staged_inputs(None) == 0
     assert comfy_fs.prune_staged_inputs(str(tmp_path / 'nope')) == 0

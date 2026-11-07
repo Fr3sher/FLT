@@ -197,7 +197,7 @@
   "600": {
     "class_type": "PathchSageAttentionKJ",
     "_meta": {
-      "title": "SageAttention (MiniMax uniquement)"
+      "title": "SageAttention (MiniMax only)"
     },
     "inputs": {
       "model": [

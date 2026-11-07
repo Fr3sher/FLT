@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { appendImages, datasetClips, galleryPage } from './videoPickerFeeds.js'
+import { appendImages, datasetClips, galleryPage } from "../../../../../../bundled/video/frontend/studio/video/videoPickerFeeds.js"
 
 /* The payload below is the shape the running server answers, keys copied from
    a live GET /api/video-dataset/<id>: `clips` is the COUNT and `items` is the

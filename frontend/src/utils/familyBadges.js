@@ -25,6 +25,7 @@ const FAMILY = {
   flux: ['FLUX.1', 'border-emerald-400/40 bg-emerald-500/10 text-emerald-300'],
   flux2klein: ['FLUX.2 Klein', 'border-rose-400/40 bg-rose-500/10 text-rose-300'],
   anima: ['Anima', 'border-teal-400/40 bg-teal-500/10 text-teal-300'],
+  qwenimage21: ['Qwen-Image 2.1', 'border-blue-400/40 bg-blue-500/10 text-blue-300'],
 };
 
 const FALLBACK_CLASS = 'border-border bg-surface-raised text-content-muted';

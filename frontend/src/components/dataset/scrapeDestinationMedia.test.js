@@ -12,7 +12,7 @@ import {
   setAsideNotice,
   sourceModesForDestination,
   splitScanItemsForDestination,
-} from './scrapeDestinationMedia.js';
+} from "../../../../bundled/scrape/frontend/lib/scrapeDestinationMedia.js";
 
 const image = (url = 'https://cdn.test/a.jpg') => ({ url, type: 'image' });
 const video = (url = 'https://cdn.test/a.mp4', extra = {}) =>
@@ -126,7 +126,7 @@ test('a tile always has a label, even when the source titled nothing', () => {
 // No JSX harness in this repo, so the wiring is pinned on the source, the same
 // convention as ConceptSourcesPanel.pagination.test.js.
 const panel = readFileSync(
-  new URL('./ConceptSourcesPanel.jsx', import.meta.url), 'utf8');
+  new URL("../../../../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx", import.meta.url), 'utf8');
 
 test('the panel no longer throws video items away at scan time', () => {
   assert.doesNotMatch(panel, /filter\(\(it\) => it\.type === 'image'\)/);
@@ -144,7 +144,7 @@ test('a tile only renders an <img> when there is a live thumbnail to render', ()
   // clip: the poster is a separate CDN asset from what the backend downloads,
   // so its 404 says nothing about the clip. `markBroken` stays the image
   // tiles' verdict, where the thumb falls back to the medium itself.
-  assert.match(panel, /const displayThumb = batchedThumb \|\| \(!posterBroken\.has\(it\.url\) \? thumb : null\)/);
+  assert.match(panel, /const displayThumb = posterBroken\.has\(it\.url\) \? null : \(batchedThumb \|\| thumb\)/);
   assert.match(panel, /\{displayThumb \? \(/);
   assert.match(panel, /isVideo\s*\n?\s*\? setPosterBroken/);
 });

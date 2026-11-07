@@ -1,33 +1,31 @@
 /**
- * 🎛 Axes de rendu (CFG / steps / 2e passe) de la branche COMPARAISON du Studio.
- *
- * Le studio mono-LoRA et le panneau du canvas les tiennent de `useStudioForm`,
- * qui lit le payload d'UN dataset. La comparaison multi-LoRA n'a pas de dataset —
- * elle n'avait donc aucun de ces axes, et « je ne peux pas régler les steps quand
- * j'ai deux LoRA » était exactement cela : pas un champ désactivé, un champ
- * absent, et un corps de requête qui ne portait pas la clé. Les échelles arrivent
- * maintenant avec les bases (`/api/studio/base-models` → `axes`) et ces trois
- * fonctions en font le même « effectif ou défaut » que partout ailleurs.
+ * COMPARISON render axes: CFG, steps and second pass. Single-LoRA Studio and Canvas get these from
+ * useStudioForm's dataset payload; multi-LoRA comparison has no single dataset, so these controls
+ * and request keys were absent. Choices now arrive in /api/studio/base-models axes; these helpers
+ * apply the same selected-or-default rules as other surfaces.
  */
 
-/** Un axe tel qu'il sera lancé : la sélection de l'utilisateur si elle existe,
- *  sinon la valeur par défaut de la famille, seule. `null` par défaut ⇒ axe vide
- *  (la 2e passe hors SDXL) : rien n'est envoyé et le backend garde son défaut. */
+/**
+ * Effective launch axis: user selection if present, otherwise the family's single default value. A
+ * null default means an empty axis, such as second pass outside SDXL: omit it and retain backend
+ * defaults.
+ */
 export function effectiveAxis(selected, fallback) {
   if (Array.isArray(selected) && selected.length) return selected;
   return fallback == null ? [] : [fallback];
 }
 
-/** Le facteur par lequel ces axes multiplient la grille. Un axe vide compte
- *  pour 1 : il ne balaye rien, il ne doit pas annuler le compte. */
+/** Grid multiplier from these axes. An empty axis counts as one: it sweeps
+ *  nothing and must not reduce the entire count to zero. */
 export function axisTotal({ cfgs, steps, steps2 } = {}) {
   const n = (a) => Math.max(1, (Array.isArray(a) ? a.length : 0));
   return n(cfgs) * n(steps) * n(steps2);
 }
 
-/** Ce que le lancement ajoute au corps. Une clé n'apparaît que si l'axe a des
- *  valeurs : un axe absent laisse le backend sur SON défaut, ce qui est le
- *  comportement d'avant pour toute install qui ne touche à rien. */
+/**
+ * Add request keys only for axes with values. Missing axes leave backend defaults unchanged,
+ * preserving behavior for installations that make no selection.
+ */
 export function axisPayload({ cfgs, steps, steps2 } = {}) {
   const out = {};
   if (Array.isArray(cfgs) && cfgs.length) out.cfgs = [...cfgs];
@@ -36,8 +34,10 @@ export function axisPayload({ cfgs, steps, steps2 } = {}) {
   return out;
 }
 
-/** Toggle multi-sélection qui garde toujours au moins une valeur — même règle
- *  que les pickers du studio mono-LoRA (`_toggleKeep` de useStudioForm). */
+/**
+ * Multi-select toggle always retains at least one value, matching solo Studio's useStudioForm
+ * _toggleKeep rule.
+ */
 export function toggleAxisValue(current, value) {
   const base = Array.isArray(current) ? current : [];
   const next = base.includes(value)

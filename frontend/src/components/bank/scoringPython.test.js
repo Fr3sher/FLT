@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   bestUpgrade,
+  calculationNote,
   canSelect,
   detectionFailure,
   detectionSummary,
   dialogCopy,
   enteredNote,
   missingLabels,
+  interpreterPaths,
   openerLabel,
   selectionNote,
   sortInterpreters,
@@ -53,7 +55,9 @@ test('the best suggestion is a GPU-ready interpreter that is not already in use'
   assert.equal(bestUpgrade(rows).label, 'ai-toolkit');
   assert.equal(sortInterpreters(rows)[0].label, 'ai-toolkit');
   assert.equal(sortInterpreters(rows).at(-1).label, 'App Python');
-  assert.equal(detectionSummary(rows), '1 of 3 can run ✨ Score on your GPU.');
+  assert.match(detectionSummary(rows), /1 of 3 detect CUDA/);
+  assert.match(detectionSummary(rows), /Calculation is not tested/);
+  assert.doesNotMatch(statusBadge('gpu_ready').label, /GPU ready/);
 });
 
 test('the one already selected is never offered again', () => {
@@ -121,8 +125,8 @@ test('nothing found at all is a state, not an error', () => {
 
 test('the wording defaults to "there is a card" while the probe has not answered', () => {
   // Flashing "no NVIDIA card" at someone who has one is the one wrong guess.
-  assert.match(detectionSummary([row()]), /can run/);
-  assert.match(dialogCopy().title, /GPU Python/);
+  assert.match(detectionSummary([row()]), /detect CUDA/);
+  assert.match(dialogCopy().title, /Manage Python/);
   assert.match(openerLabel(), /GPU Python/);
 });
 
@@ -204,4 +208,26 @@ test('the panel names the interpreter in use, and stays quiet on the default', (
   assert.match(selectionNote({ interpreters: [chosen] }), /4090/);
   assert.equal(selectionNote({ interpreters: [row()] }), null);
   assert.equal(selectionNote(null), null);
+});
+
+test('a CUDA runtime failure stays distinct from successful import detection', () => {
+  const found = row({ selected: true });
+  const note = calculationNote({ status: 'failed', detail: 'cuDNN: no engine for convolution' });
+  assert.equal(note.tone, 'warn');
+  assert.equal(note.title, 'Calculation failed');
+  assert.match(note.detail, /cuDNN/);
+  assert.match(statusBadge(found.status).label, /calculation not tested/);
+  assert.equal(calculationNote({ status: 'failed', detail: 'x'.repeat(5000) }).detail.length, 1200);
+  assert.match(calculationNote({ status: 'busy' }).title, /deferred/);
+  assert.match(calculationNote({ status: 'unavailable' }).title, /unavailable/);
+  assert.match(calculationNote({ status: 'passed', device: 'cpu' }).title, /passed \(cpu\)/);
+});
+
+test('managed and effective Python stay distinct when defaults inherit an external environment', () => {
+  const paths = interpreterPaths({ selected: '', effective_python: '/opt/trainer/bin/python',
+    managed_python: '/opt/lds/ml/scoring/bin/python', uses_managed: false });
+  assert.equal(paths.effective, '/opt/trainer/bin/python');
+  assert.equal(paths.managed, '/opt/lds/ml/scoring/bin/python');
+  assert.equal(paths.usesManaged, false);
+  assert.equal(interpreterPaths(null).effective, '');
 });

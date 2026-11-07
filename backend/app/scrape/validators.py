@@ -1,10 +1,9 @@
 # app/scrape/validators.py
-"""Validation d'URLs de scraping — détection de plateforme + type d'URL.
+"""Scraping URL validation: platform detection and URL classification.
 
-Port (quasi à l'identique) de `redgifs_downloader/api/validators.py` : pur
-stdlib, aucune dépendance réseau. Détecte RedGifs / Instagram / Picazor et
-délègue tout autre domaine http(s) à yt-dlp (Platform.GENERIC).
-"""
+Near-identical port of redgifs_downloader/api/validators.py using only the
+standard library, with no networking. Detect RedGifs/Instagram/Picazor and
+delegate other HTTP(S) domains to yt-dlp (Platform.GENERIC)."""
 import re
 from typing import Optional, List
 from dataclasses import dataclass, field
@@ -17,43 +16,41 @@ class Platform(Enum):
     INSTAGRAM = "instagram"
     PICAZOR = "picazor"
     EROME = "erome"
-    # Retrait produit volontaire (dump/leak sites) : ces 4 membres restent
-    # UNIQUEMENT pour que detect_platform() identifie encore l'hôte et que
-    # validate_url() puisse renvoyer un refus explicite et nommé (cf.
-    # _REMOVED_PLATFORMS) — aucune source ne les gère plus, aucun scan ni
-    # téléchargement ne doit jamais les atteindre.
+    # Deliberately removed dump/leak sites. Keep these four enum members ONLY
+    # so detect_platform can identify the host and validate_url can return a
+    # named rejection (_REMOVED_PLATFORMS). No source handles them; scans and
+    # downloads must never reach them.
     COOMER = "coomer"
     KEMONO = "kemono"
     BUNKR = "bunkr"
     CYBERDROP = "cyberdrop"
     X = "x"
     TIKTOK = "tiktok"
-    # Site d'images par catégorie (VRAIES photos) — énuméré via gallery-dl,
-    # l'équivalent images de RedGifs. Pas de boorus anime/dessin (hors sujet).
+    # Image categories with real photos, enumerated by gallery-dl: the image
+    # equivalent of RedGifs. Anime/drawing boorus are outside this scope.
     PORNPICS = "pornpics"
-    # Civitai (civitai.com / civitai.red) — listings d'images par tag/recherche
-    # (ex. /images?tags=5169), images directes énumérées via gallery-dl.
+    # Civitai (civitai.com/civitai.red): tag/search image listings, e.g.
+    # /images?tags=5169; direct images enumerated by gallery-dl.
     CIVITAI = "civitai"
-    # Fapello (fapello.com + miroirs de langue fr./de./es.…) — page modèle =
-    # file de posts, chaque post 1 média direct. Énuméré via gallery-dl.
+    # Fapello and language mirrors (fr./de./es.): a model page lists posts,
+    # each containing one direct media item. Enumerated by gallery-dl.
     FAPELLO = "fapello"
-    # Reddit (reddit.com — subreddits, posts, liens de partage /s/) — LE filon
-    # « vraies photos amateur » (r/OOTD, fit checks, photo dumps…) pour les
-    # datasets de style/concept. Énuméré via gallery-dl.
+    # Reddit subreddits, posts and /s/ share links: real amateur photos
+    # (outfit checks, photo dumps, etc.) for style/concept datasets.
+    # Enumerated by gallery-dl.
     REDDIT = "reddit"
-    # Sex.com — pinboard porno (chaque pin = UNE image). La recherche mot-clé
-    # (/pics?search=…) passe par l'API JSON du site ; pins/boards via gallery-dl.
+    # Sex.com adult pinboard: one image per pin. Keyword searches use the
+    # site JSON API; pins and boards use gallery-dl.
     SEXCOM = "sexcom"
-    # Pexels — recherches, collections accessibles et photos SFW via l'API
-    # officielle (PEXELS_API_KEY requise). Les profils ne sont pas exposés.
+    # Pexels searches, accessible collections and SFW photos use the official
+    # API (PEXELS_API_KEY required). Profiles are not exposed.
     PEXELS = "pexels"
-    GENERIC = "generic"   # toute autre URL http(s) — déléguée à yt-dlp
+    GENERIC = "generic"   # All other HTTP(S) URLs are delegated to yt-dlp.
     UNKNOWN = "unknown"
 
 
-# Plateformes retirées du produit (dump/leak sites) : validate_url() les refuse
-# explicitement avant toute résolution de source. Ne JAMAIS router ces membres
-# vers un scan ou un téléchargement, générique ou dédié.
+# Removed dump/leak sites: validate_url rejects them before source resolution.
+# Never route these members to a generic or dedicated scan/download.
 _REMOVED_PLATFORMS = frozenset({
     Platform.COOMER, Platform.KEMONO, Platform.BUNKR, Platform.CYBERDROP,
 })
@@ -80,7 +77,7 @@ class ValidationResult:
     suggestions: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        """Sérialisation JSON-safe pour les réponses API."""
+        """JSON-safe serialization for API responses."""
         return {
             'is_valid': self.is_valid,
             'platform': self.platform.value,
@@ -94,12 +91,10 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class PexelsRoute:
-    """Route publique Pexels strictement reconnue.
+    """A strictly recognized public Pexels route.
 
-    ``value`` conserve le segment public pour ``ValidationResult`` tandis que
-    ``api_value`` contient la valeur décodée et validée envoyée à l'API.
-    Seules les recherches localisées portent un paramètre ``api_locale``.
-    """
+    value retains the public segment for ValidationResult; api_value is the
+    decoded, validated API value. Only localized searches set api_locale."""
     kind: str
     value: str
     api_value: str
@@ -114,12 +109,10 @@ _PEXELS_SEARCH_ROUTES = {
 
 
 def parse_pexels_path(path: str) -> Optional[PexelsRoute]:
-    """Parse les seules routes publiques mappables vers l'API Pexels.
+    """Parse only public routes supported by the Pexels API.
 
-    Les préfixes localisés acceptés sont volontairement limités à ceux
-    testés ici. Une route ou une locale inconnue n'est jamais transformée en
-    recherche de secours.
-    """
+    Accepted locale prefixes are deliberately limited to those tested here.
+    Unknown routes/locales never become fallback searches."""
     if not isinstance(path, str) or not re.fullmatch(
             r'/[^/]+(?:/[^/]+){1,2}/?', path):
         return None
@@ -159,7 +152,7 @@ def parse_pexels_path(path: str) -> Optional[PexelsRoute]:
 
 
 class URLValidator:
-    """Validateur d'URLs : plateforme + type + valeur extraite."""
+    """URL validator: platform + type + extracted value."""
 
     PATTERNS = {
         Platform.REDGIFS: {
@@ -190,7 +183,7 @@ class URLValidator:
             ],
         },
         Platform.PICAZOR: {
-            # /fr/{creator}/{N} = page de DÉTAIL du média N (pas un listing)
+            #  /fr/{creator}/{N} is the media detail page for N, not a listing.
             "profile": [
                 r'picazor\.com/([^/]+)/([^/?]+)/page/(\d+)',
                 r'picazor\.com/([^/]+)/([^/?]+)/?$',
@@ -203,12 +196,12 @@ class URLValidator:
             ],
         },
         Platform.EROME: {
-            # Album = conteneur de médias ; search = liste d'albums.
+            # Albums contain media; searches list albums.
             "listing": [
                 r'erome\.com/a/([^/?#]+)',
                 r'erome\.com/search\?',
             ],
-            # /{user} = page profil (liste d'albums de l'utilisateur).
+            # /{user} is a profile page listing the user albums.
             "profile": [
                 r'erome\.com/([^/?#]+)/?$',
             ],
@@ -226,20 +219,19 @@ class URLValidator:
         Platform.SEXCOM: ['sex.com', 'www.sex.com'],
         Platform.CIVITAI: ['civitai.com', 'www.civitai.com', 'civitai.red', 'www.civitai.red'],
         Platform.PEXELS: ['pexels.com', 'www.pexels.com'],
-        # Coomer/Kemono/Cyberdrop/Bunkr : PAS de VALID_DOMAINS (source retirée, cf.
-        # _REMOVED_PLATFORMS) — validate_url() les refuse avant ce contrôle de toute
-        # façon. _HOST_PLATFORMS ci-dessous les identifie encore (message de refus nommé).
+        # Removed Coomer/Kemono/Cyberdrop/Bunkr sources have no VALID_DOMAINS entries.
+        # validate_url rejects them before this check. _HOST_PLATFORMS still identifies
+        # them so the rejection can name the source.
     }
 
-    # Domaines reconnus par host (host == d ou host.endswith('.'+d)).
+    # Recognized domains by host (host == d or host.endswith('.'+d)).
     _HOST_PLATFORMS = [
         ('redgifs.com', Platform.REDGIFS),
         ('instagram.com', Platform.INSTAGRAM),
         ('picazor.com', Platform.PICAZOR),
         ('erome.com', Platform.EROME),
-        # Sources retirées (cf. _REMOVED_PLATFORMS) : identifiées ici UNIQUEMENT pour
-        # que validate_url() puisse renvoyer un refus nommé plutôt qu'un générique
-        # « URL non reconnue » ou, pire, un repli silencieux vers le scraper générique.
+        # Identify removed sources ONLY to return a named rejection, rather than
+        # URL not recognized or, worse, silently falling back to the generic scraper.
         ('coomer.st', Platform.COOMER), ('coomer.su', Platform.COOMER),
         ('coomer.party', Platform.COOMER), ('coomer.cr', Platform.COOMER),
         ('kemono.cr', Platform.KEMONO), ('kemono.su', Platform.KEMONO),
@@ -253,13 +245,13 @@ class URLValidator:
         ('civitai.com', Platform.CIVITAI),
         ('civitai.red', Platform.CIVITAI),
         ('pexels.com', Platform.PEXELS),
-        # fapello.com + tout miroir de langue (fr./de./es.…) via endswith('.fapello.com').
-        # Volontairement ABSENT de VALID_DOMAINS → la garde stricte de domaine n'écarte
-        # pas les sous-domaines de langue (la source normalise l'hôte avant gallery-dl).
+        # fapello.com and language mirrors match endswith(.fapello.com).
+        # Deliberately omit VALID_DOMAINS so strict matching does not reject language
+        # subdomains; the source normalizes the host before calling gallery-dl.
         ('fapello.com', Platform.FAPELLO),
-        # reddit.com (www/old/new/sh.…) + redd.it (shortener + CDN i.redd.it). Comme
-        # Fapello : ABSENT de VALID_DOMAINS, la source canonicalise vers www.reddit.com
-        # (résolution des liens de partage /s/ incluse) avant gallery-dl.
+        # reddit.com (www/old/new/sh.) and redd.it (shortener plus i.redd.it CDN).
+        # Like Fapello, omit VALID_DOMAINS; the source canonicalizes to www.reddit.com,
+        # including /s/ share-link resolution, before calling gallery-dl.
         ('reddit.com', Platform.REDDIT),
         ('redd.it', Platform.REDDIT),
     ]
@@ -269,12 +261,10 @@ class URLValidator:
         host = (urlparse(url).hostname or '').lower()
         if not host:
             return Platform.UNKNOWN
-        # Bunkr (source retirée, cf. _REMOVED_PLATFORMS) : TLDs rotatifs → le label
-        # 'bunkr' doit être le SLD (avant-dernier label), ex : bunkr.cr, bunkrr.su —
-        # on vérifie labels[-2] pour éviter les sous-domaines trompeurs comme
-        # bunkr.cr.evil.com où 'bunkr' est un sous-domaine, pas le SLD. Uniquement
-        # pour que validate_url() puisse renvoyer un refus nommé, jamais pour router
-        # vers un scan ou un téléchargement.
+        # Removed Bunkr source: rotating TLDs mean bunkr must be the penultimate
+        # label (SLD), e.g. bunkr.cr/bunkrr.su. Check labels[-2] to reject deceptive
+        # subdomains such as bunkr.cr.evil.com. Used only for named rejection,
+        # never to route scans or downloads.
         labels = host.split('.')
         if len(labels) >= 2 and labels[-2].startswith('bunkr'):
             return Platform.BUNKR
@@ -314,10 +304,9 @@ class URLValidator:
         platform = cls.detect_platform(url)
 
         if platform in _REMOVED_PLATFORMS:
-            # Retrait produit volontaire (dump/leak sites) : refus explicite et nommé
-            # AVANT toute résolution de source, pour ne jamais retomber — silencieusement
-            # ou non — sur le scraper générique (gallery-dl/yt-dlp supportent nativement
-            # certains de ces sites en interne).
+            # Reject deliberately removed dump/leak sites by name BEFORE source resolution.
+            # Never fall back to generic scraping, even though gallery-dl/yt-dlp internally
+            # support some of these sites.
             return ValidationResult(
                 is_valid=False, platform=platform, url_type=URLType.UNKNOWN,
                 value="", original_url=url,
@@ -326,7 +315,7 @@ class URLValidator:
             )
 
         if platform == Platform.UNKNOWN:
-            # Domaine inconnu mais URL http(s) bien formée → délégué à yt-dlp.
+            # Unknown domain with a well-formed HTTP(S) URL: delegate to yt-dlp.
             if '.' in parsed.netloc:
                 return ValidationResult(
                     is_valid=True, platform=Platform.GENERIC, url_type=URLType.VIDEO,
@@ -366,8 +355,8 @@ class URLValidator:
                         Platform.SEXCOM):
             return cls._validate_gallerydl_platform(url, platform)
 
-        # Inatteignable : tout Platform détecté ci-dessus a son _validate_X.
-        # Garde-fou défensif (ne devrait jamais s'exécuter).
+        # Unreachable: every detected Platform above has its own _validate_X.
+        # Defensive fallback; should never execute.
         return ValidationResult(
             is_valid=False, platform=platform, url_type=URLType.UNKNOWN,
             value="", original_url=url, error="Unsupported platform.")
@@ -470,14 +459,14 @@ class URLValidator:
 
     @classmethod
     def _validate_erome(cls, url: str) -> ValidationResult:
-        # Album (/a/ID) ou recherche (/search?q=) = conteneurs de médias.
+        # Albums (/a/ID) and searches (/search?q=) are media containers.
         for pattern in cls.PATTERNS[Platform.EROME]["listing"]:
             m = re.search(pattern, url, re.IGNORECASE)
             if m:
                 value = m.group(1) if m.groups() else "search"
                 return ValidationResult(True, Platform.EROME, URLType.LISTING, value, url)
 
-        # Profil utilisateur (/USER) — exclure les chemins réservés.
+        # User profile (/USER): exclude reserved paths.
         for pattern in cls.PATTERNS[Platform.EROME]["profile"]:
             m = re.search(pattern, url, re.IGNORECASE)
             if m:
@@ -499,12 +488,11 @@ class URLValidator:
 
     @classmethod
     def _validate_pexels(cls, url: str) -> ValidationResult:
-        """Accepte uniquement les chemins couverts par l'API officielle.
+        """Accept only paths supported by the official API.
 
-        Recherche, collection et photo ont un endpoint documenté. Les profils
-        publics /@user, pages racine, vidéos, locales et routes inconnues sont
-        rejetés avant tout appel réseau avec des suggestions actionnables.
-        """
+        Searches, collections and photos have documented endpoints. Public
+        /@user profiles, root pages, videos, unknown locales/routes are rejected
+        with actionable suggestions before any network call."""
         parsed = urlparse(url)
         suggestions = [
             "Supported Pexels formats:",
@@ -537,9 +525,9 @@ class URLValidator:
 
     @classmethod
     def _validate_gallerydl_platform(cls, url, platform):
-        """Validation minimale pour les plateformes gérées par gallery-dl : on confirme
-        juste l'hôte (déjà fait) et on laisse gallery-dl parser le chemin. url_type
-        coarse (LISTING) suffit — le scan énumère via gallery-dl."""
+        """Minimal validation for gallery-dl platforms: confirm the host (already done)
+        and let gallery-dl parse the path. A coarse LISTING type suffices because
+        the scan enumerates through gallery-dl."""
         return ValidationResult(
             is_valid=True, platform=platform, url_type=URLType.LISTING,
             value=url, original_url=url)

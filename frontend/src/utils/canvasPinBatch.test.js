@@ -5,10 +5,10 @@ import {
   groupPinnedBatchBySource, pinBatchLabel, pinBatchPending,
   pinBatchPendingAcrossLanes, placeImageBatch, tidyGroupRows, tidyLaneReach,
   tidyLaneRows, laneStackEntries,
-} from './canvasPinBatch.js';
-import { layoutImageNodes, occupiedBox } from './canvasImageGroups.js';
+} from "../../../bundled/canvas/frontend/utils/canvasPinBatch.js";
+import { layoutImageNodes, occupiedBox } from "../../../bundled/canvas/frontend/utils/canvasImageGroups.js";
 import { CARD_W } from './lineageGraph.js';
-import { stackLanes } from './canvasLayout.js';
+import { stackLanes } from "../../../bundled/canvas/frontend/utils/canvasLayout.js";
 
 /* 📌 Pin all — the one assertion that decides whether this feature is worth
    having: NOTHING may end up on top of anything else.

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   MAX_MOUNTED_PLAYERS, clipFragmentSrc, clipLabel, playerBudgetWarning,
   shouldRemountPlayer,
-} from './videoClipFragment.js';
+} from "../../../../bundled/video/frontend/videobank/videoClipFragment.js";
 
 // --- the media fragment ------------------------------------------------------
 

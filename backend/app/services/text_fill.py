@@ -13,6 +13,7 @@ install, and a machine that can FIND text can always fill it.
 from __future__ import annotations
 import json
 import logging
+import re
 
 from .. import config as cfg
 
@@ -34,7 +35,7 @@ def is_available() -> bool:
     return bool(probe_video_text().get('ok'))
 
 
-def fill_batch(items, *, timeout=None, should_stop=None):
+def fill_batch(items, *, timeout=None, should_stop=None, on_progress=None):
     """{image_path: {'ok', 'filled', 'busy_boxes', 'error'?}} for a batch.
 
     ``items`` is [{'image_path', 'regions'}] with normalised [x0,y0,x1,y1]
@@ -43,6 +44,8 @@ def fill_batch(items, *, timeout=None, should_stop=None):
     child's own words when the child could not run at all; per-image failures
     come back as result rows instead, so one unreadable page never sinks a
     batch (the exact split read_text_boxes uses).
+    ``on_progress(done, total)`` runs on the reader thread and must only update
+    thread-safe activity state, never a database session.
     """
     from .infer_stream import run_infer_script, stderr_tail
     from .video_safe_zone import _stop_plumbing
@@ -53,9 +56,15 @@ def fill_batch(items, *, timeout=None, should_stop=None):
                             _TIMEOUT_PER_ITEM_S * len(items))
     cancel_path, ask_stop, cleanup = _stop_plumbing()
     payload = json.dumps({'items': items, 'cancel_file': cancel_path}) + '\n'
+
+    def _on_line(line):
+        match = re.search(r'^\[fill\]\s+(\d+)/(\d+)\b', line)
+        if match and on_progress:
+            on_progress(int(match.group(1)), int(match.group(2)))
+
     try:
         stdout, stderr_lines, rc, timed_out = run_infer_script(
-            python, _SCRIPT, payload, budget,
+            python, _SCRIPT, payload, budget, on_line=_on_line,
             should_stop=should_stop, on_stop=ask_stop)
     except Exception as e:  # noqa: BLE001
         raise RuntimeError(f'could not start the text filler: '

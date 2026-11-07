@@ -10,6 +10,11 @@ excluded, and an empty library answering 200 with an empty list rather than
 an error page.
 """
 
+import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
+
 
 def _dataset(name, user_id='local'):
     from app.extensions import db

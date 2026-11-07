@@ -15,29 +15,35 @@ import test from 'node:test'
 import { getHelpTopic } from '../src/help/helpRegistry.js'
 import { WHATS_NEW } from '../src/whatsNew.js'
 import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js'
+import { pluginWhatsNew, resetRegistry, setEnabled, whatsNewEntries } from '../src/plugins/registry.js'
+import { registerBundledDescriptor } from './support/bundledDescriptors.mjs'
+import canvasDescriptor from '../../bundled/canvas/frontend/index.js'
+
+test.beforeEach(() => { resetRegistry(); setEnabled([]) })
+test.afterEach(() => { resetRegistry(); setEnabled([]) })
 
 // The entry under test may have moved to the archive since it shipped
 // (see whatsNew.js, rule "Keep the list tidy") — search the union.
-const ALL_WHATS_NEW = [...WHATS_NEW, ...WHATS_NEW_ARCHIVE]
+const allWhatsNew = () => [...WHATS_NEW, ...WHATS_NEW_ARCHIVE, ...whatsNewEntries()]
 
-const read = (rel) => readSource(`src/${rel}`)
-const BLEND = read('components/canvas/CanvasBlendPanel.jsx')
-const PANEL = read('components/canvas/CanvasGenerationPanel.jsx')
-const HOOK = read('hooks/useCanvasStudio.js')
-const UTIL = read('utils/canvasGeneration.js')
-const SETUP = read('components/dataset/studio/RunSetupPanel.jsx')
-const ROW = read('components/dataset/studio/BlendWeightRow.jsx')
+const read = readSource
+const BLEND = read('../bundled/canvas/frontend/components/canvas/CanvasBlendPanel.jsx')
+const PANEL = read('../bundled/canvas/frontend/components/canvas/CanvasGenerationPanel.jsx')
+const HOOK = read('../bundled/canvas/frontend/hooks/useCanvasStudio.js')
+const UTIL = read('../bundled/canvas/frontend/utils/canvasGeneration.js')
+const SETUP = read('src/components/dataset/studio/RunSetupPanel.jsx')
+const ROW = read('src/components/dataset/studio/BlendWeightRow.jsx')
 
 test('the board imports the Test Studio stack module instead of copying it', () => {
   // A second clamp, a second "one family" rule or a second key shape is a second
   // chance for the two screens to disagree about what a blend is.
-  assert.match(UTIL, /from '\.\.\/components\/dataset\/studio\/loraStack\.js'/)
+  assert.match(UTIL, /from '@lds\/plugin-sdk\/canvas'/)
   assert.match(UTIL, /combineBlocker/)
   assert.match(UTIL, /stackWeight/)
-  // Le curseur ET les cases d'un LoRA sont UN composant partagé par les deux
-  // surfaces (BlendWeightRow) : deux copies du même contrôle, ce serait deux
-  // occasions de diverger sur « aucune case cochée = le curseur gouverne ».
-  assert.match(BLEND, /import BlendWeightRow from '\.\.\/dataset\/studio\/BlendWeightRow'/)
+  // A LoRA's slider AND checkboxes are one component shared by both surfaces
+  // (BlendWeightRow), keeping the "no checkbox selected = slider governs"
+  // rule consistent.
+  assert.match(BLEND, /import \{ BlendWeightRow \} from '@lds\/plugin-sdk\/canvas'/)
   assert.match(ROW, /from '\.\/loraStack'/)
   assert.match(ROW, /BLEND_WEIGHT_CHIPS/)
   assert.doesNotMatch(ROW, /const BLEND_WEIGHT_CHIPS\s*=/)
@@ -70,8 +76,8 @@ test('the launch really switches the request, and the deploy still runs first', 
   assert.match(HOOK, /blend && canvasRunSelections\(picks\)\.length > 1/)
   assert.match(HOOK, /\.\.\.\(blending \? \{ combine: true \} : \{ strengths \}\)/)
   assert.match(HOOK, /canvasRunSelections\(picks, \{[\s\S]{0,80}blend: blending, weights/)
-  // …et les cases de poids voyagent avec les curseurs, sinon le board annonce
-  // neuf images et en lance une.
+  // Selected weights travel with the sliders; otherwise the board could
+  // promise nine images while launching one.
   assert.match(HOOK, /sets: sets \|\| \{\}/)
   // The deploy gate is upstream of the payload: a blend can never load a subset
   // of the checkpoints it announced.
@@ -84,11 +90,11 @@ test('a blend announces ONE configuration, not one per pick and strength', () =>
   // The strength sweep has nothing left to sweep, so it leaves the panel AND the
   // counter — a panel promising six images while queueing one is the bug here.
   assert.match(PANEL, /showStrengths=\{!blend\}/)
-  // …et depuis le balayage, `configCount` combinaisons plutôt qu'une.
+  // Sweeps render `configCount` combinations rather than one.
   assert.match(PANEL, /cellTotal=\{blend \? form\.axisTotal \* configCount : null\}/)
   assert.match(PANEL, /const configCount = blend \? canvasBlendConfigCount/)
-  // `cells` = ce que la grille rend pour UN prompt ; le lot 📝 le multiplie
-  // ensuite (cf. prompt-batch-contract), il ne le remplace pas.
+  // `cells` is the grid output for ONE prompt; the 📝 batch then multiplies it
+  // (see prompt-batch-contract) rather than replacing it.
   assert.match(SETUP, /const cells = cellTotal != null \? cellTotal : form\.total/)
   assert.match(SETUP, /const total = cells \* promptMult/)
   assert.match(SETUP, /total=\{total \* batchMult\}/)
@@ -107,14 +113,23 @@ test('the honest line about what blending two identities does is on screen', () 
 })
 
 test('the toggle has a help topic and the wave has a What\'s-new entry', () => {
+  assert.equal(getHelpTopic('canvas-blend'), undefined, 'the absent owner contributes no help')
+  assert.ok(!allWhatsNew().some(e => e.id === '2026-08-03-canvas-blend'))
+  assert.deepEqual(pluginWhatsNew('canvas'), [])
+  assert.equal(registerBundledDescriptor(canvasDescriptor), true)
+  setEnabled(['canvas'])
   const topic = getHelpTopic('canvas-blend')
   assert.ok(topic, 'canvas-blend must be a registered help topic')
   assert.equal(topic.app.route, '/canvas')
   assert.ok(topic.keywords.includes('blend'))
   assert.match(BLEND, /topic="canvas-blend"/)
 
-  const entry = ALL_WHATS_NEW.find((e) => e.id === '2026-08-03-canvas-blend')
+  const entry = allWhatsNew().find((e) => e.id === '2026-08-03-canvas-blend')
   assert.ok(entry, 'the blend wave needs a What\'s-new entry')
   // Archived → no in-app target, by doctrine (whatsNew.js, "Keep the list tidy").
   assert.equal(entry.to, undefined)
+  setEnabled([])
+  assert.equal(getHelpTopic('canvas-blend'), undefined, 'a disabled owner contributes no help')
+  assert.ok(!allWhatsNew().some(e => e.id === '2026-08-03-canvas-blend'))
+  assert.ok(pluginWhatsNew('canvas').some(e => e.id === entry.id), 'installed owner history remains readable')
 })

@@ -24,11 +24,12 @@ import { fileURLToPath } from 'node:url'
 
 const SRC = new URL('../src/', import.meta.url)
 const SRC_DIR = fileURLToPath(SRC)
-const read = (p) => fs.readFileSync(new URL(p, SRC), 'utf8')
+const read = (p) => fs.readFileSync(new URL(p, SRC), 'utf8').replace(/\r\n/g, '\n')
 
 const chip = read('components/dataset/RunIdentityBadges.jsx')
 const panel = read('components/dataset/TrainingPanel.jsx')
-const runsPage = read('pages/CloudRunsPage.jsx')
+const runsPage = read('components/runs/RunsHub.jsx')
+  + read('../../bundled/cloud_training/frontend/CloudRunsHub.jsx')
 const card = read('components/dataset/lineageNodes.jsx')
 const tree = read('components/dataset/RunLineageTree.jsx')
 
@@ -40,10 +41,19 @@ const allJsx = []
     const p = path.join(dir, e.name)
     if (e.isDirectory()) walk(p)
     else if (e.name.endsWith('.jsx') && !e.name.includes('.test.')) {
-      allJsx.push([path.relative(SRC_DIR, p), fs.readFileSync(p, 'utf8')])
+      allJsx.push([path.relative(SRC_DIR, p), fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n')])
     }
   }
 })(SRC_DIR)
+; (function walk(dir) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name)
+    if (e.isDirectory()) walk(p)
+    else if (e.name.endsWith('.jsx') && !e.name.includes('.test.')) {
+      allJsx.push([path.relative(SRC_DIR, p), fs.readFileSync(p, 'utf8')])
+    }
+  }
+})(fileURLToPath(new URL('../../bundled/', import.meta.url)))
 
 test('the chip prints ONE number — the record id, cloud id as tooltip fallback only', () => {
   assert.match(chip, /const id = recordId \?\? cloudId/)

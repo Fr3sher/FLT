@@ -6,20 +6,33 @@ three engines and never learned a fourth existed. These tests pin both halves of
 the fix: the new engine shows up, and an engine the user deliberately unchecked
 never comes back.
 """
-import importlib, json
+import json
+
+import pytest
+
+from app.engines import registry
+
+pytestmark = pytest.mark.plugins('api_engines')
+
+
+@pytest.fixture(autouse=True)
+def _engine_owner(app, tmp_path):
+    """Exercise the catalog of a real boot with this engine owner installed."""
+    assert app.extensions['lds_plugins'].records['api_engines'].state == 'loaded'
+    (tmp_path / 'preferences').mkdir()
 
 
 def _fresh(monkeypatch, tmp_path):
     monkeypatch.setenv('LDS_DATA_DIR', str(tmp_path / 'data'))
-    monkeypatch.setenv('LDS_CONFIG', str(tmp_path / 'config.json'))
+    monkeypatch.setenv('LDS_CONFIG', str(tmp_path / 'preferences' / 'config.json'))
     monkeypatch.setenv('LDS_ENV', str(tmp_path / '.env'))
     import app.config as config
-    importlib.reload(config)
+    config._cache = None
     return config
 
 
 def _write(tmp_path, payload):
-    (tmp_path / 'config.json').write_text(json.dumps(payload), encoding='utf-8')
+    (tmp_path / 'preferences' / 'config.json').write_text(json.dumps(payload), encoding='utf-8')
 
 
 PRE_OPENROUTER = ['nanobanana', 'chatgpt', 'klein']
@@ -62,7 +75,7 @@ def test_merge_does_not_rewrite_the_config_file(tmp_path, monkeypatch):
     _write(tmp_path, saved)
     config = _fresh(monkeypatch, tmp_path)
     assert 'openrouter' in config.get('engines.enabled')
-    assert json.loads((tmp_path / 'config.json').read_text(encoding='utf-8')) == saved
+    assert json.loads((tmp_path / 'preferences' / 'config.json').read_text(encoding='utf-8')) == saved
 
 
 # --- but a deliberate opt-out is never undone ---------------------------------
@@ -71,7 +84,7 @@ def test_an_engine_unchecked_on_purpose_never_comes_back(tmp_path, monkeypatch):
     """The counter-test. Once a save has recorded which engines the app KNEW at
     the time, dropping one of them is an explicit choice and must stick."""
     config = _fresh(monkeypatch, tmp_path)
-    catalog = list(config.DEFAULTS['engines']['enabled'])
+    catalog = list(registry.ids())
     kept = [e for e in catalog if e != 'nanobanana']
     config.save_config({'engines': {'enabled': kept}})
     config = _fresh(monkeypatch, tmp_path)          # cold start, cache dropped
@@ -104,19 +117,19 @@ def test_a_legacy_optout_survives_the_merge(tmp_path, monkeypatch):
 
 def test_no_config_file_gets_the_full_default_catalog(tmp_path, monkeypatch):
     config = _fresh(monkeypatch, tmp_path)
-    assert config.get('engines.enabled') == config.DEFAULTS['engines']['enabled']
+    assert config.get('engines.enabled') == list(registry.ids())
 
 
 def test_config_without_an_engines_section(tmp_path, monkeypatch):
     _write(tmp_path, {'comfyui': {'api_url': 'http://127.0.0.1:8188'}})
     config = _fresh(monkeypatch, tmp_path)
-    assert config.get('engines.enabled') == config.DEFAULTS['engines']['enabled']
+    assert config.get('engines.enabled') == list(registry.ids())
 
 
 def test_corrupt_config_falls_back_to_defaults(tmp_path, monkeypatch):
-    (tmp_path / 'config.json').write_text('{not json at all', encoding='utf-8')
+    (tmp_path / 'preferences' / 'config.json').write_text('{not json at all', encoding='utf-8')
     config = _fresh(monkeypatch, tmp_path)
-    assert config.get('engines.enabled') == config.DEFAULTS['engines']['enabled']
+    assert config.get('engines.enabled') == list(registry.ids())
 
 
 def test_garbage_shapes_do_not_crash_the_load(tmp_path, monkeypatch):
@@ -143,7 +156,8 @@ def test_an_unknown_engine_left_in_a_config_is_preserved(tmp_path, monkeypatch):
     """Hand-edited or downgraded configs happen; never drop what we don't know."""
     _write(tmp_path, {'engines': {'enabled': ['chatgpt', 'some-future-engine']}})
     config = _fresh(monkeypatch, tmp_path)
-    assert 'some-future-engine' in config.get('engines.enabled')
+    assert 'some-future-engine' in config.load_config()['engines']['enabled']
+    assert 'some-future-engine' not in config.get('engines.enabled')
 
 
 # --- the ledger itself --------------------------------------------------------
@@ -151,8 +165,8 @@ def test_an_unknown_engine_left_in_a_config_is_preserved(tmp_path, monkeypatch):
 def test_saving_an_explicit_choice_records_the_catalog_it_was_made_from(tmp_path, monkeypatch):
     config = _fresh(monkeypatch, tmp_path)
     config.save_config({'engines': {'enabled': ['chatgpt']}})
-    on_disk = json.loads((tmp_path / 'config.json').read_text(encoding='utf-8'))
-    assert set(on_disk['engines']['known']) >= set(config.DEFAULTS['engines']['enabled'])
+    on_disk = json.loads((tmp_path / 'preferences' / 'config.json').read_text(encoding='utf-8'))
+    assert set(on_disk['engines']['known']) >= set(registry.ids())
 
 
 def test_a_save_that_does_not_touch_engines_does_not_freeze_the_catalog(tmp_path, monkeypatch):

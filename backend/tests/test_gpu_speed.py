@@ -41,9 +41,9 @@ def test_blackwell_pro_cards_are_tabulated():
 
 
 def test_baselines_match_live_measurements():
-    """Pinned to the values MEASURED on real pods (2026-07-13): zimage
-    4.49 s/it and krea 8.84 s/it on RTX 3090 — the original guessed baselines
-    (0.9/1.1 s) understated durations ~5-8x ('les calculs ne sont pas bons')."""
+    """Pinned to measurements on real pods (2026-07-13): zimage 4.49 s/it and krea
+    8.84 s/it on RTX 3090. Original guessed baselines of 0.9/1.1 s understated
+    duration by about 5-8 times."""
     assert gs.estimate_minutes('RTX 3090', 'zimage', 1000) == 1000 * 4.5 / 60
     assert gs.estimate_minutes('RTX 3090', 'krea', 1000) == 1000 * 8.8 / 60
 

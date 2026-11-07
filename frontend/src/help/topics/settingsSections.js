@@ -46,6 +46,11 @@ export const SETTINGS_SECTION_TOPICS = [
     keywords: ['maintenance', 'update', 'restart', 'log', 'diagnostic', 'version', 'bug report'],
     guide: { chapter: 'settings-reference', anchor: 'maintenance' },
     app: { route: '/settings/maintenance' } },
+  { id: 'settings-usage-statistics', kind: 'setting', title: 'Optional usage statistics',
+    keywords: ['usage', 'statistics', 'analytics', 'telemetry', 'privacy', 'consent',
+      'share', 'sharing', 'opt out', 'installation', 'posthog'],
+    guide: { chapter: 'settings-reference', anchor: 'usage-statistics' },
+    app: { route: '/settings/maintenance', focus: 'usage-statistics' } },
   { id: 'dataset-settings-modal', kind: 'section', title: 'Per-dataset settings',
     keywords: ['dataset settings', 'per-dataset', 'prompt suffix', 'framing', 'trigger',
       'override', 'modal', 'kind', 'character', 'concept', 'style'],
@@ -77,14 +82,7 @@ export const SETTINGS_SECTION_TOPICS = [
   // amount of settings can change back. Kept as its own topic rather than folded
   // into dataset-engine-mode: this one answers "why did I get fewer images than
   // I asked for", which is a question people arrive at already frustrated.
-  { id: 'nanobanana-filter-and-synthid', kind: 'section',
-    title: 'Nano Banana: the output filter, and SynthID',
-    keywords: ['nano banana', 'nanobanana', 'gemini', 'google', 'refused', 'refusal',
-      'blocked', 'content filter', 'safety', 'imagesafety', 'empty response',
-      'missing images', 'fewer images', 'synthid', 'watermark', 'provenance',
-      'nsfw', 'policy', 'bikini', 'lingerie'],
-    guide: { chapter: 'settings-reference', anchor: 'image-engines' },
-    app: { route: '/datasets?section=add' } },
+
   { id: 'dataset-engine-mode', kind: 'setting', title: 'Engines & how they share a batch',
     keywords: ['engine', 'engines', 'multiple engines', 'several engines', 'split',
       'all engines', 'compare engines', 'klein', 'krea', 'krea 2 edit', 'nano banana',

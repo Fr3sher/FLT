@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   FLAG_LABELS, flagCounts, filterByFlag, payloadFromDraft, thresholdFields,
-} from '../src/components/videobank/videoMetricsFilter.js'
+} from "../../bundled/video/frontend/videobank/videoMetricsFilter.js"
 
 // 🎚 The duration cut is the only one in the panel that reads a number the
 // DETECTOR wrote rather than one the metrics pass measured. Everything below is

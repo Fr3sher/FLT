@@ -43,7 +43,8 @@ def _fresh_config(monkeypatch, tmp_path):
     monkeypatch.setenv('LDS_CONFIG', str(tmp_path / 'config.json'))
     monkeypatch.setenv('LDS_ENV', str(tmp_path / '.env'))
     import app.config as config
-    importlib.reload(config)
+    monkeypatch.setattr(config, 'ENV_PATH', tmp_path / '.env')
+    monkeypatch.setattr(config, '_cache', None)
     return config
 
 
@@ -274,7 +275,8 @@ def test_a_local_build_is_named_for_what_it_is_not_called_official(app, krea, mo
 
 
 def test_the_note_says_it_when_the_only_base_carries_a_payload(app, krea, monkeypatch):
-    """« s'il n'y a que lui, il reste le défaut, mais dis-le »."""
+    """When it is the only available model, keep it as default and disclose that
+    choice."""
     from app.services import lora_test_studio as lts
     keh, kdir = krea
     _put(kdir, 'krea2_turbo_fp8.safetensors', _header(_EGG, _CAST))

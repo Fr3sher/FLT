@@ -214,7 +214,7 @@ def test_faces_job_cooperative_stop_reports_and_leaves_db_untouched(
     from app.services import image_bank_service as banks
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         return {'ok': True, 'cancelled': True, 'cached': 1, 'remaining': 1}, deque(), 0
 
     monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)
@@ -236,7 +236,7 @@ def test_faces_job_hard_kill_uses_sidecar_count(client, tmp_path, app, monkeypat
     from app.services import image_bank_service as banks
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         # Simulate a watchdog kill: no cancel line, but a flushed sidecar remains.
         os.makedirs(os.path.dirname(str(cache_path)), exist_ok=True)
         with open(str(cache_path) + '.count', 'w', encoding='utf-8') as f:
@@ -258,7 +258,7 @@ def test_score_job_cooperative_stop_reports_honestly(client, tmp_path, app, monk
     from app.services import image_bank_service as banks
     monkeypatch.setattr(capabilities, 'probe_bank_scoring', lambda: {'ok': True})
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         return {'ok': True, 'cancelled': True, 'cached': 1, 'remaining': 1}, deque(), 0
 
     monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)
@@ -276,7 +276,7 @@ def test_faces_job_success_still_persists(client, tmp_path, app, monkeypatch):
     from app.services import image_bank_service as banks
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         imgs = _paths_of(payload)
         results = {
             p: {
@@ -307,7 +307,7 @@ def test_launch_all_step_inherits_honest_stop(client, tmp_path, app, monkeypatch
     monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
     monkeypatch.setattr(banks, '_faces_prereq', lambda: None)
 
-    def fake_driver(job, python, script, payload, cache_path, rx, window):
+    def fake_driver(job, python, script, payload, cache_path, rx, window, *, include_cached=False):
         return {'ok': True, 'cancelled': True, 'cached': 5, 'remaining': 3}, deque(), 0
 
     monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)

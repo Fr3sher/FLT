@@ -21,16 +21,12 @@
    UNSAVED TEXT. Settings saves on an explicit button, so the request carries the
    in-flight `identity_prompts` tree: the preview shows what you are typing, not
    what you last saved. */
+import { apiEngineIds, engineCatalog } from '../../engines/catalog.js'
 import { useEffect, useState } from 'react'
 import { postJson } from '../../api/fetchClient'
 
-const ENGINES = [
-  { id: 'krea', label: 'Krea (local)' },
-  { id: 'klein', label: 'Klein (local)' },
-  { id: 'nanobanana', label: 'Nano Banana' },
-  { id: 'chatgpt', label: 'ChatGPT' },
-  { id: 'openrouter', label: 'OpenRouter' },
-]
+// The preview's engine rows come from the catalog in canonical order, read
+// inside the component (a plugin's engines are in it at render time).
 const FRAMINGS = [
   { id: 'face', label: 'Face' },
   { id: 'bust', label: 'Bust' },
@@ -45,7 +41,6 @@ const SELECT_CLASS =
 /** The API engines never see a framing detail, a rendering tail or a markings
  *  hold — wrap_variation is guard-first and has no such parts. Saying so beats
  *  letting the user wonder why their tail edit does not show up in the preview. */
-const API_ENGINES = ['nanobanana', 'chatgpt', 'openrouter']
 
 export default function PromptPreview({ subject, identityPrompts }) {
   const [engine, setEngine] = useState('krea')
@@ -72,7 +67,8 @@ export default function PromptPreview({ subject, identityPrompts }) {
     return () => { alive = false; clearTimeout(t) }
   }, [engine, framing, nsfw, subject, body])
 
-  const isApi = API_ENGINES.includes(engine)
+  const engines = engineCatalog().map((e) => ({ id: e.id, label: e.shortLabel || e.label }))
+  const isApi = apiEngineIds().includes(engine)
   const text = data?.prompt || ''
 
   const copy = async () => {
@@ -105,7 +101,7 @@ export default function PromptPreview({ subject, identityPrompts }) {
             onChange={(e) => setEngine(e.target.value)}
             className={SELECT_CLASS}
           >
-            {ENGINES.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}
+            {engines.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}
           </select>
         </div>
         <div>

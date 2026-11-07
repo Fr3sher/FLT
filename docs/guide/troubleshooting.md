@@ -205,6 +205,94 @@ latents are cached, and the step-0 preview images are rendered before step 1 (a
 video run skips the previews). Read the ETA after five minutes of steps, not
 before.
 
+### The card never fills at all: the run is on the CPU
+
+A cousin of the crawl above, with the opposite readout: **VRAM stays under a
+gigabyte for the whole run** while system RAM climbs by 30 GB or more. Two
+tells: during the `quantizing 28 transformer blocks` bar the VRAM figure does
+not move (on a card it rises by 2-3 GB right there), and `Caching latents to
+disk` in `training.log` (📂 Run folder) never gets past `0/N` (on a card image
+1 takes about three seconds). When steps do tick they take minutes each — an
+ETA of 300 hours for a recipe that runs at a few seconds per step on any 24 GB
+card. The seconds each block takes to quantise are NOT a tell: that is the
+weights paging in from disk, and a slow disk alone makes it 3-4 s per block.
+
+**What it is.** The run never lands on the GPU. ai-toolkit takes its device
+from Hugging Face Accelerate, not from the `device: cuda:0` line in the job
+config, and Accelerate falls back to the CPU without a word when the PyTorch
+inside the ai-toolkit venv cannot see the card: a CPU-only wheel (a plain `pip
+install torch` on Windows installs one), a CUDA build newer than the NVIDIA
+driver (the cu130 wheels need an R580 driver or newer, cu128 an R570), or a
+card hidden from the process (`CUDA_VISIBLE_DEVICES`, including one set in
+the `.env` file of the ai-toolkit folder). Accelerate's own switches
+(`ACCELERATE_USE_CPU`, `ACCELERATE_TORCH_DEVICE`) do the same with a torch
+that sees the card perfectly.
+
+**Check it in one line**, with the venv's own Python. Replace
+`<ai-toolkit venv python>`, angle brackets included, with the interpreter path
+shown on the ai-toolkit card in Settings ▸ Local tools:
+
+```
+<ai-toolkit venv python> -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+```
+
+A healthy venv prints something like `2.9.1+cu128 12.8 True`. `+cpu None
+False` is the CPU-only wheel (fix below); `+cu130 13.0 False` is a CUDA build
+the driver cannot serve: update the NVIDIA driver, that is the whole fix. If it
+prints `True` and the run still crawls, look for `ACCELERATE_USE_CPU`,
+`ACCELERATE_TORCH_DEVICE` or `CUDA_VISIBLE_DEVICES` in your environment and in
+the ai-toolkit folder's `.env` file.
+
+**Fix for the CPU-only wheel.** Install the CUDA build of the same PyTorch,
+keeping the versions the venv already has (the two `<version>` are the ones
+the check printed for torch, and the matching torchvision from `pip show
+torchvision`, both without the `+cpu` tag). The index depends on the torch
+version: `cu130` for torch 2.12 and newer (it needs an R580 driver or newer),
+`cu128` for 2.11 and older:
+
+```
+<ai-toolkit venv python> -m pip install --force-reinstall --no-deps torch==<version> torchvision==<version> --index-url https://download.pytorch.org/whl/cu130
+```
+
+Keep `--no-deps`: the PyTorch index replaces PyPI for that command, and without
+it pip re-resolves numpy from there and breaks every extension compiled against
+numpy 2 (`numpy.dtype size changed`). If pip answers "No matching distribution
+found", the pinned version is not on that index (a nightly build, or a cu128
+pin on a version newer than 2.11): drop the two `==<version>` pins and let pip
+take the newest pair.
+
+**Or let ai-toolkit rebuild the environment.** That command is the surgical fix
+— it swaps torch and nothing else. If you would rather not choose versions and
+indexes at all, ai-toolkit ships an installer that makes the choice from your
+driver:
+
+```
+python -m manager install
+```
+
+Run it from the ai-toolkit folder. It reads the NVIDIA driver, installs the
+CUDA build of PyTorch that driver can serve, and syncs the rest of ai-toolkit's
+requirements into the venv next to `run.py` (it reuses an existing `venv` or
+`.venv`). Use `install`, not `run_windows.bat`: that script ends by starting
+ai-toolkit's own web UI on port 8675, which this app never talks to.
+
+Two more things those logs say. The seconds per quantised block measure your
+disk, not your GPU: 3-4 s per block is about 0.2 GB/s, a mechanical drive
+reading a 26 GB model — every launch spends minutes on that alone, and an SSD
+under the Hugging Face cache (Settings ▸ Local tools ▸ ai-toolkit) is worth
+more than any other change. And a `.env` file in the ai-toolkit folder is
+loaded by every run: a line hiding the card there hides it from ai-toolkit and
+from nothing else.
+
+The app now asks this question before every local run, the way ai-toolkit
+asks it: from the ai-toolkit folder, with its `.env` loaded, reading the
+device Accelerate resolves to. Unfold the readiness card and a red **PyTorch
+can see the GPU** row names the problem; the launch is refused with the full
+explanation and, for a CPU-only wheel, a pip line ready to paste (the versions
+and the index filled in, the path written for PowerShell); and Settings ▸
+Local tools ▸ ai-toolkit ▸ **Test** says it too. Reported by acontentsheltie
+(Discord, RTX 3090).
+
 ## ai-toolkit isn't detected (conda / uv / no venv)
 
 **Why:** the app auto-detects ai-toolkit's Python from a `venv/` or `.venv/`

@@ -35,12 +35,34 @@ import { createElement, render, renderToStaticMarkup } from './support/mountJsx.
 
 const { MemoryRouter } = await import('react-router')
 const { default: VideoDatasetGrid } =
-  await import('../src/components/videobank/VideoDatasetGrid.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoDatasetGrid.jsx")
 const { default: VideoDatasetLightbox } =
-  await import('../src/components/videobank/VideoDatasetLightbox.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoDatasetLightbox.jsx")
 const { default: VideoDatasetWorkspace } =
-  await import('../src/components/videobank/VideoDatasetWorkspace.jsx')
+  await import("../../bundled/video/frontend/videobank/VideoDatasetWorkspace.jsx")
 const { ToastProvider } = await import('../src/components/common/Toast.jsx')
+
+const { configureHostRuntime } = await import('../src/plugins/runtimeHost.jsx')
+const { publishRuntime } = await import('../src/plugins/loadPlugins.js')
+const { resetRegistry, registerDescriptor, setEnabled, contributions } =
+  await import('../src/plugins/registry.js')
+const { default: VideoTrainingBlock } =
+  await import('../../bundled/video/frontend/videobank/VideoTrainingBlock.jsx')
+const { default: cloudTraining } = await import('../../bundled/cloud_training/frontend/index.js')
+const cloudManifest = JSON.parse(readSource('../bundled/cloud_training/plugin.json'))
+const { renderToReadableStream } = await import('react-dom/server')
+
+test.beforeEach(t => {
+  const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch }
+  t.after(() => { Object.assign(globalThis, saved); resetRegistry() })
+  globalThis.window = {}
+  globalThis.document = { cookie: '', querySelector: () => null }
+  globalThis.fetch = () => { throw new Error('A render must not contact any service') }
+  resetRegistry()
+  setEnabled([])
+  configureHostRuntime()
+  publishRuntime()
+})
 
 const countTag = (html, tag) => (html.match(new RegExp(`<${tag}[\\s>]`, 'g')) || []).length
 const srcsOf = (html) => [...html.matchAll(/<img[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1])
@@ -68,6 +90,10 @@ const DS = {
   references: 0, requires_references: false, items: CLIPS,
 }
 
+const renderTraining = (Component, props) => renderToStaticMarkup(
+  createElement(MemoryRouter, null,
+    createElement(ToastProvider, null, createElement(Component, props))))
+
 const renderWorkspace = (props) => renderToStaticMarkup(
   createElement(MemoryRouter, null,
     createElement(ToastProvider, null,
@@ -90,7 +116,7 @@ test('the grid source declares no video element in ANY branch', () => {
   // The mount only covers the states this file passes it; the source check
   // covers the ones nobody rendered. Comments stripped, because the file's own
   // docstring quotes the forbidden version in order to rule it out.
-  const src = readSource('src/components/videobank/VideoDatasetGrid.jsx')
+  const src = readSource('../bundled/video/frontend/videobank/VideoDatasetGrid.jsx')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '')
   assert.ok(!/<video[\s>]/.test(src), 'VideoDatasetGrid.jsx must not render a <video> tag')
@@ -239,7 +265,7 @@ const railOf = (html) => railsOf(html).join('\n<!-- rail boundary -->\n')
 
 test('the rail really lists every visible section, and the anchors it points at exist', async () => {
   const { VIDEO_DATASET_SECTIONS } = await import(
-    '../src/components/videobank/videoDatasetSections.js')
+    "../../bundled/video/frontend/videobank/videoDatasetSections.js")
   const html = renderWorkspace({ ds: { ...DS, requires_references: true } })
   for (const [which, rail] of railsOf(html).entries()) {
     for (const section of VIDEO_DATASET_SECTIONS) {
@@ -280,4 +306,37 @@ test('the caption tools are there for a set with NO caption at all', () => {
   // …and it is gone when there is genuinely nothing to work on.
   const empty = renderWorkspace({ ds: { ...DS, items: [] }, items: [] })
   assert.ok(!empty.includes('id="vds-captions-tools"'))
+})
+
+
+test('Video alone renders local training with no cloud contribution or cloud controls', () => {
+  const html = renderTraining(VideoTrainingBlock, { ds: DS })
+  assert.match(html, /Train on this PC/)
+  assert.doesNotMatch(html, /Train in the cloud|Retry|Train further/)
+  assert.deepEqual(contributions('training.launch', 'video'), [])
+})
+
+test('the real Cloud Training owner contributes only when enabled, and its dialog imports', async () => {
+  assert.equal(registerDescriptor(cloudTraining, { guideOwnership: cloudManifest.guide_ownership }), true)
+  assert.deepEqual(contributions('training.launch', 'video'), [])
+  setEnabled(['cloud_training'])
+  const [item] = contributions('training.launch', 'video')
+  assert.equal(item.plugin, 'cloud_training')
+  // Loading the actual contribution walks the dialog and estimate imports.
+  // This is the dependency that used to prevent Video itself from loading.
+  const { VideoCloudActions } = await item.panels.video()
+  const actions = renderTraining(VideoCloudActions, { busyCloud: false, opening: false,
+    blocked: '', run: null, latestGroup: null })
+  assert.match(actions, /Train in the cloud/)
+  const stream = await renderToReadableStream(createElement(MemoryRouter, null,
+    createElement(ToastProvider, null,
+      createElement(VideoTrainingBlock, { ds: { ...DS, clips: 0 } }))))
+  await stream.allReady
+  const enabled = await new Response(stream).text()
+  assert.match(enabled, /Train on this PC/)
+  assert.match(enabled, /no clips on disk/)
+  setEnabled([])
+  const disabled = renderTraining(VideoTrainingBlock, { ds: { ...DS, clips: 0 } })
+  assert.match(disabled, /Train on this PC/)
+  assert.doesNotMatch(disabled, /no clips on disk|Train in the cloud/)
 })

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   DOCKER_UPDATE_COMMANDS,
   DOCKER_UPDATE_GUIDE_URL,
+  dockerUpdateCommands,
   PINOKIO_UPDATE_STEPS,
   PINOKIO_UPDATE_GUIDE_URL,
   formatMB,
@@ -75,13 +76,21 @@ test('pinokio update steps are three clicks, not shell commands', () => {
   assert.match(PINOKIO_UPDATE_GUIDE_URL, /#option-5--pinokio-one-click-any-os$/);
 });
 
-test('docker update instructions are exact, ordered and point to the GPU guide', () => {
+test('docker update instructions preserve the legacy fallback and link to all lanes', () => {
   assert.deepEqual(DOCKER_UPDATE_COMMANDS, [
     'git pull',
     'docker compose -f docker-compose.gpu.yml up -d --build',
   ]);
   assert.equal(Object.isFrozen(DOCKER_UPDATE_COMMANDS), true);
-  assert.match(DOCKER_UPDATE_GUIDE_URL, /#option-4--docker-gpu--comfyui$/);
+  assert.match(DOCKER_UPDATE_GUIDE_URL, /docs\/guide\/docker.md#updates-and-restarts$/);
+});
+
+test('Docker update instructions follow the runtime instead of always rebuilding GPU', () => {
+  const commands = ['git pull', 'docker compose up -d --build'];
+  assert.deepEqual(dockerUpdateCommands({ instructions: commands }), commands);
+  for (const status of [null, {}, { instructions: [] }, { instructions: [null] }]) {
+    assert.deepEqual(dockerUpdateCommands(status), DOCKER_UPDATE_COMMANDS);
+  }
 });
 
 test('zipUpdateHeadline announces the release and its size when known', () => {

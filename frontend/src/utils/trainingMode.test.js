@@ -25,16 +25,21 @@ import { preflightUrl } from '../components/dataset/preflightLane.js';
 
 // Slice 1 moved the dense recipe/picker and the cloud dialog to their own
 // files; the mode contract spans all three, so it reads them as one text.
-const panel = readFileSync(new URL('../components/dataset/TrainingPanel.jsx', import.meta.url), 'utf8')
-  + readFileSync(new URL('../components/dataset/FullTransformerRecipe.jsx', import.meta.url), 'utf8')
-  + readFileSync(new URL('../components/dataset/CloudLaunchDialog.jsx', import.meta.url), 'utf8')
+const panel = readFileSync(new URL('../components/dataset/TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + readFileSync(new URL('../../../bundled/cloud_training/frontend/dataset/FullTransformerRecipe.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + readFileSync(new URL("../../../bundled/cloud_training/frontend/dataset/CloudLaunchDialog.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n')
   // The estimate line moved to a SHARED component the video launch window mounts
-  // too (cloud-tier-estimate-contract.test.mjs); its user-facing copy is still
+  // too (cloud-tier-estimate-contract.test.mjs)
+  + readFileSync(new URL('../../../bundled/cloud_training/frontend/dataset/DatasetCloudTraining.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + readFileSync(new URL('../../../bundled/cloud_training/frontend/dataset/DenseModePicker.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  // Its user-facing copy is still
   // the image dialog's copy, and still owes the same words.
-  + readFileSync(new URL('../components/shared/CloudTierEstimate.jsx', import.meta.url), 'utf8');
-const datasetHook = readFileSync(new URL('../hooks/useDataset.js', import.meta.url), 'utf8');
-const runsPage = readFileSync(new URL('../pages/CloudRunsPage.jsx', import.meta.url), 'utf8');
-const stopDialog = readFileSync(new URL('../pages/cloudStopDialog.js', import.meta.url), 'utf8');
+  + readFileSync(new URL("../../../bundled/cloud_training/frontend/shared/CloudTierEstimate.jsx", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const datasetHook = readFileSync(new URL('../hooks/useDataset.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const runsPage = readFileSync(new URL('../components/runs/RunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + readFileSync(new URL('../components/runs/RunHistoryAtoms.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + readFileSync(new URL('../../../bundled/cloud_training/frontend/CloudRunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const stopDialog = readFileSync(new URL("../../../bundled/cloud_training/frontend/shared/cloudStopDialog.js", import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('training mode enum is exact and every legacy or invalid value falls back to LoRA', () => {
   assert.equal(TRAINING_MODE_LORA, 'lora');
@@ -511,14 +516,16 @@ test('the full Advanced branch cannot render the unchanged LoRA controls', () =>
   assert.ok(split > 0, 'Advanced must have explicit dense and LoRA render arms');
   const denseArm = branch.slice(0, split);
   const loraArm = branch.slice(split);
-  assert.match(denseArm, /<FullTransformerAdvancedRecipe/);
+  assert.match(denseArm, /<PluginSlot slot="training.dense" surface="dataset" placement="recipe"/);
   // LoRA-ONLY controls must not leak in. The base picker is deliberately NOT on
   // this list any more: a dense run can now be pointed at Raw, Turbo or a local
   // checkpoint, so the base/variant selectors are shared, not LoRA-only — and
   // the dense arm renders its own copy (the LoRA arm's lives below the split
   // and would otherwise be unreachable in full-model mode, which is exactly why
   // the Turbo option looked missing).
-  assert.match(denseArm, /DENSE_BASE_PICKER_START/);
+  const recipeHost = readFileSync(new URL('../../../bundled/cloud_training/frontend/dataset/DenseRecipePanel.jsx', import.meta.url), 'utf8');
+  assert.match(recipeHost, /DENSE_BASE_PICKER_START/);
+  assert.match(recipeHost, /<FullTransformerAdvancedRecipe/);
   assert.doesNotMatch(denseArm, /Presets|advNetworkType|Masked \(bg 10%\)|saveAdv\(/);
   assert.match(loraArm, /Presets/);
   assert.match(loraArm, /CUSTOM_BASE_SENTINEL/);
@@ -543,7 +550,7 @@ test('offers use the exact recipe and refetch when any recipe input changes', ()
   assert.match(panel, /hfCloudTokenReadiness\(data \|\| \{\}\)/);
   assert.match(panel, /disabled=\{!selected \|\| launching \|\| !customBaseReady \|\| hfTokenBlocked\}/);
   assert.match(panel, /focus="HF_CLOUD_TOKEN"/);
-  assert.match(panel, /checksDenseCloudToken/);
+  assert.match(panel, /hfCloudTokenReadiness/);
 });
 
 test('a verified cloud token stops asking the user to configure it', () => {
@@ -570,7 +577,7 @@ test('empty cloud offers preserve the cap message and link to its exact setting'
   assert.match(emptyOffersBranch,
     /No GPU available under \$\{data\?\.max_price_per_hour\}\/h right now/);
   assert.match(emptyOffersBranch,
-    /<SettingsLink section="training" focus="cloud-max-price-per-hour">\s*increase the price cap in Settings\s*<\/SettingsLink>/);
+    /<SettingsLink pluginId="cloud_training" focus="cloud-max-price-per-hour">\s*increase the price cap in Settings\s*<\/SettingsLink>/);
   assert.equal([...panel.matchAll(/focus="cloud-max-price-per-hour"/g)].length, 1,
     'the price-cap link must appear only in the tiers.length === 0 branch');
 });

@@ -12,6 +12,8 @@ two bugs with one root cause (the batch only existed in the tab):
 These tests cover the fixed contract: the job drains the WHOLE selection in waves
 under the cap, and Stop really ends it.
 """
+
+import pytest
 import io
 import os
 
@@ -49,6 +51,7 @@ def _stub_klein(monkeypatch, keh, jobs):
                         lambda **kwargs: (jobs.append(kwargs) or f'job-{len(jobs)}'))
 
 
+@pytest.mark.plugins('image_upscale')
 def test_batch_larger_than_max_fanout_eventually_processes_everything(app, monkeypatch):
     """The wave mechanism: when the cap is reached the worker WAITS for a slot
     instead of firing a request doomed to be refused, and the whole selection is
@@ -100,6 +103,7 @@ def test_batch_larger_than_max_fanout_eventually_processes_everything(app, monke
     assert waits == [svc.IMPROVE_SLOT_POLL_SECONDS] * 7
 
 
+@pytest.mark.plugins('image_upscale')
 def test_stop_generation_really_ends_the_batch(app, monkeypatch):
     """⏹ Stop generation (cancel_pending) arms the cooperative flag the worker polls,
     so the batch stops at the next image instead of re-queuing another wave."""
@@ -198,6 +202,7 @@ def test_eligible_ids_mirror_the_client_partition(app, monkeypatch):
         assert svc.bulk_improve_eligible_ids(LOCAL_USER, ds.id, selection) == source_ids[1:]
 
 
+@pytest.mark.plugins('image_upscale')
 def test_route_starts_the_job_and_refuses_a_second_one(app, client, monkeypatch):
     from app.config import LOCAL_USER
     from app.models import FaceDatasetImage
@@ -254,6 +259,7 @@ def test_batch_route_recovery_barrier_has_no_service_side_effect(
     assert response.get_json()['code'] == 'comfyui_recovery_required'
 
 
+@pytest.mark.plugins('image_upscale')
 def test_the_batch_leaves_the_fanout_budget_to_the_user(app, monkeypatch):
     """GitHub #44, the half a grey button would not have fixed.
 
@@ -310,6 +316,7 @@ def test_the_batch_leaves_the_fanout_budget_to_the_user(app, monkeypatch):
     assert min(headroom) == 17
 
 
+@pytest.mark.plugins('image_upscale')
 def test_the_batch_does_not_wait_on_generations_that_are_not_its_own(app, monkeypatch):
     """A user's own ⚡ Generate batch used to park the drain: the wait was measured
     over EVERY unfinished generation on the dataset, not the improvements. With a
@@ -351,6 +358,7 @@ def test_the_batch_does_not_wait_on_generations_that_are_not_its_own(app, monkey
     assert waits == []
 
 
+@pytest.mark.plugins('image_upscale')
 def test_a_batch_is_not_declared_stalled_while_the_queue_is_held_by_training(app, monkeypatch):
     """The regression the shallower wave depth opened.
 
@@ -408,6 +416,7 @@ def test_a_batch_is_not_declared_stalled_while_the_queue_is_held_by_training(app
     assert len(jobs) == 6
 
 
+@pytest.mark.plugins('image_upscale')
 def test_a_batch_still_gives_up_when_nothing_holds_the_queue_and_no_slot_frees(app, monkeypatch):
     """The other half: the stall timeout must still exist. A ComfyUI that died
     mid-batch frees no slot and reports no hold — that one is a real stall, and

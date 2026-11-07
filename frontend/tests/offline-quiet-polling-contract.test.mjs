@@ -14,6 +14,15 @@ import assert from 'node:assert/strict';
 
 const read = (rel) => readSource(`src/${rel}`)
 
+test('all update surfaces use the installation-aware cached check on mount', () => {
+  for (const file of ['App.jsx', 'components/settings/MaintenanceSection.jsx']) {
+    const source = read(file)
+    assert.doesNotMatch(source, /apiFetch\('\/api\/update\/check'\)/,
+      `${file} must not mistake an up-to-date Git branch for an old release ZIP`)
+    assert.match(source, /apiFetch\('\/api\/update\/check\?auto=1', \{ background: true \}\)/)
+  }
+})
+
 test('apiFetch accepts a background flag and strips it from the fetch init', () => {
   const s = read('api/fetchClient.js');
   assert.match(s, /const \{ background = false, \.\.\.init \} = options/,

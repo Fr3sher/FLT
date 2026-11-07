@@ -97,7 +97,7 @@ def _capture_lama(monkeypatch, *, available=True, ok=True):
             im.convert('RGB').resize((im.width, im.height // 2)).save(
                 path, 'WEBP', quality=92)
 
-    def fake_batch(jobs, *, device, timeout=900):
+    def fake_batch(jobs, *, device, timeout=900, on_progress=None):
         out = {}
         for job in jobs:
             seen.append([[round(float(v), 4) for v in b] for b in job['bboxes']])

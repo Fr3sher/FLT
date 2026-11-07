@@ -3,14 +3,13 @@ import { AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
 import { readinessSignature, overrideAck } from '../../utils/readinessOverride';
 import { HelpBadge } from '../../help/HelpMode';
 
-/* Pastille de préparation à l'entraînement — miroir du preflight serveur
-   (GET /train/preflight, champs checks+verdict) : 🟢 ready / 🟡 warnings /
-   🔴 blocked, avec la liste des contrôles dépliable. Chaque ligne en défaut
-   qui cible une section du workspace porte un bouton « Fix → » (onJump).
-   Re-fetch débouncé quand les compteurs pertinents changent (curation,
-   captions, fuites) — pas à chaque poll (le preflight relit les images sur
-   disque pour le dHash). Rendu nul tant que rien n'est chargé ou si le
-   backend gate (ai-toolkit absent → 409). */
+/*
+ * Training-readiness badge mirrors server GET /train/preflight checks and verdict: ready, warnings
+ * or blocked, with expandable checks. Failed checks targeting workspace sections offer Fix through
+ * onJump. Debounce refetches when relevant curation/caption/leak counters change, not every poll,
+ * because preflight reads images from disk for dHash. Render nothing before loading or when the
+ * backend gates training with 409 because ai-toolkit is absent.
+ */
 
 const VERDICT = {
   ready: { icon: CheckCircle2, label: 'Ready to train', cls: 'border-emerald-400/40 bg-emerald-500/10', iconCls: 'text-emerald-400' },
@@ -28,14 +27,14 @@ export default function TrainingReadiness({ datasetId, trainType, variant, refre
                                             onOverrideChange, endpoint = null }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState(false);
-  // « Continue anyway » : ack de l'utilisateur pour lever un blocker QUALITÉ. Se
-  // DÉcoche à chaque changement de l'état bloquant (signature) — jamais d'ack
-  // fantôme qui survivrait à un nouveau blocker (physique compris).
+  // Continue anyway acknowledges a bypassable QUALITY blocker. Uncheck whenever the blocking-state
+  // signature changes, preventing a stale acknowledgment from surviving a new blocker, including a
+  // physical one.
   const [ack, setAck] = useState(false);
   const timer = useRef(null);
   useEffect(() => {
     let alive = true;
-    // Débounce : les compteurs bougent en rafale pendant une passe de caption.
+    // Debounce because counters update in bursts during captioning.
     clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
       try {
@@ -45,10 +44,10 @@ export default function TrainingReadiness({ datasetId, trainType, variant, refre
         const qs = params.size ? `?${params.toString()}` : '';
         const url = endpoint || `/api/dataset/${datasetId}/train/preflight${qs}`;
         const r = await fetch(url, { credentials: 'include' });
-        if (!r.ok) { if (alive) setData(null); return; }   // 409 ai-toolkit absent → rien
+        if (!r.ok) { if (alive) setData(null); return; }   // 409 AI Toolkit missing → no data
         const d = await r.json();
         if (alive && d.ok) setData(d);
-      } catch { /* transient — le prochain changement de compteur retentera */ }
+      } catch { /* Transient failure: retry on the next counter change. */ }
     }, 400);
     return () => { alive = false; clearTimeout(timer.current); };
   }, [datasetId, trainType, variant, refreshKey, endpoint]);
@@ -98,11 +97,12 @@ export default function TrainingReadiness({ datasetId, trainType, variant, refre
           ))}
         </ul>
       )}
-      {/* « Continue anyway » : offerte UNIQUEMENT quand tous les blockers sont des
-          garde-fous QUALITÉ contournables (data.can_override, miroir du garde
-          serveur). Une impossibilité physique (0 image, prompt slider absent) →
-          la case ne s'affiche pas et le launch reste refusé. Toujours visible
-          (hors dépliage) tant qu'il y a un blocker contournable. */}
+      {/*
+       * Offer Continue anyway ONLY when every blocker is a bypassable QUALITY safeguard, using
+       * data.can_override to mirror the server. Physical impossibilities such as zero images or a
+       * missing slider prompt hide the checkbox and still prevent launch. Keep it outside
+       * collapsed details while a bypassable blocker exists.
+       */}
       {data.can_override && (
         <div className="flex items-start gap-1 px-3 pb-2.5 pt-1 text-[0.75rem]">
           <label className="flex items-start gap-2 cursor-pointer">

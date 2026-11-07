@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { installRuntimeHost } from '../../tests/support/runtimeHost.mjs';
+import { registerBundledDescriptor } from '../../tests/support/bundledDescriptors.mjs';
+import { contributions, setEnabled } from '../plugins/registry.js';
+import cloudDescriptor from '../../../bundled/cloud_training/frontend/index.js';
+
+test.beforeEach(t => {
+  installRuntimeHost(t);
+  assert.equal(registerBundledDescriptor(cloudDescriptor), true);
+  setEnabled(['cloud_training']);
+});
 
 import {
   canvasContinueLanes, canvasContinueRefusal, canvasContinueRequest,
   canvasContinueRow, canvasContinueSettings, canvasContinueSteps,
-} from './canvasContinue.js';
+} from '../../../bundled/canvas/frontend/utils/canvasContinue.js';
 
-const canvas = fs.readFileSync(new URL('../components/canvas/LineageCanvas.jsx', import.meta.url), 'utf8');
+const canvas = fs.readFileSync(new URL("../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
 
 // A cloud lineage node as `_lineage_node` serialises it (cloud branch: run_id +
 // status), with three harvested saves.
@@ -211,7 +221,7 @@ test('an unaddressable run yields no request rather than a wrong one', () => {
 // --- the board wiring (contract) -------------------------------------------
 
 test('the board opens the SHARED ContinueDialog — no third continue form', () => {
-  assert.match(canvas, /import ContinueDialog from '\.\.\/dataset\/ContinueDialog'/);
+  assert.match(canvas, /import \{ ContinueDialog \} from '@lds\/plugin-sdk\/canvas'/);
   assert.match(canvas, /<ContinueDialog/);
   assert.match(canvas, /lanes=\{continueLanes\}/);
   assert.match(canvas, /initialFromStep=\{continueTarget\.step\}/);
@@ -259,7 +269,12 @@ test('the board never guesses a lane input it failed to read', () => {
   // The lane guards are fed from the Runs-hub payload + capabilities, fetched
   // ONLY when the dialog opens — a board that polled them on idle would drain a
   // phone drawing a static graph.
-  assert.match(canvas, /apiFetch\('\/api\/dataset\/train\/cloud\/runs\?limit=50'\)/);
+  const selection = /apiFetch\((contributions\('training.continue.lane', 'dataset'\)[\s\S]*?)\)\s*\.then/.exec(canvas);
+  assert.ok(selection, 'the board reads runs from the active continuation owner');
+  const runsUrl = new Function('contributions', `return (${selection[1]})`);
+  assert.equal(runsUrl(contributions), '/api/dataset/train/cloud/runs?limit=50');
+  setEnabled([]);
+  assert.equal(runsUrl(contributions), '/api/dataset/train/runs?limit=50', 'no cloud owner means the local runs route');
   // ai-toolkit's own probe is the app-wide one — no second request for it
   assert.match(canvas, /const \{ caps \} = useCapabilities\(\)/);
   assert.match(canvas, /aitoolkitValid: caps\?\.aitoolkit\?\.valid/);

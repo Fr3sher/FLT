@@ -6,7 +6,7 @@
 // Nothing failed, nothing warned. So there are two contracts here: the notes
 // carry the What's-new entries added since the previous tag, and a release that
 // announces nothing is never silent about it.
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   extractIds,
@@ -18,6 +18,12 @@ import {
   REPO_URL,
 } from '../scripts/releaseNotes.mjs';
 import { WHATS_NEW } from '../src/whatsNew.js';
+import { WHATS_NEW_ARCHIVE } from '../src/whatsNewArchive.js';
+import { whatsNewEntries } from '../src/plugins/registry.js';
+import { mountPublicPlugins, publicNewsImage, imageDigest } from './support/publicPluginFixtures.mjs';
+
+beforeEach(() => mountPublicPlugins());
+const publishedNews = () => [...WHATS_NEW, ...WHATS_NEW_ARCHIVE, ...whatsNewEntries()];
 
 const PREVIOUS_SOURCE = `
 export const WHATS_NEW = [
@@ -153,9 +159,9 @@ test('every release screenshot on disk is referenced by an entry', async () => {
   const { readdirSync, existsSync } = await import('node:fs');
   const dir = new URL('../../docs/screenshots/release/', import.meta.url);
   if (!existsSync(dir)) return;   // no screenshots yet — nothing to orphan
-  const referenced = new Set(WHATS_NEW.map((e) => e.image).filter(Boolean));
+  const referenced = new Set(publishedNews().filter(e => e.image).map(e => imageDigest(publicNewsImage(e))));
   for (const f of readdirSync(dir)) {
-    assert.ok(referenced.has(`docs/screenshots/release/${f}`),
+    assert.ok(referenced.has(imageDigest(new URL(f, dir))),
       `docs/screenshots/release/${f} is referenced by no What's-new entry — `
       + 'a picture nobody wired is a picture nobody will ever see');
   }
@@ -163,9 +169,9 @@ test('every release screenshot on disk is referenced by an entry', async () => {
 
 test('every screenshot an entry references exists in the tree', async () => {
   const { existsSync } = await import('node:fs');
-  for (const e of WHATS_NEW) {
+  for (const e of publishedNews()) {
     if (!e.image) continue;
-    assert.ok(existsSync(new URL(`../../${e.image}`, import.meta.url)),
+    assert.ok(existsSync(publicNewsImage(e)),
       `${e.id} references ${e.image}, which does not exist — a broken image on the release page`);
   }
 });
@@ -186,4 +192,3 @@ test('an entry with a screenshot renders it under its prose; one without changes
   });
   assert.doesNotMatch(without, /!\[/, 'an entry with no image must add no markup');
 });
-

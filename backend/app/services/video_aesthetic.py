@@ -40,6 +40,7 @@ be the app asserting the shot is hideous. Nothing is deleted, nothing is
 rejected, no triage decision is touched.
 """
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 
 import json
 import logging
@@ -134,7 +135,7 @@ def score_frames(bank_id, *, timeout=TIMEOUT):
         proc = subprocess.run(
             infer_env.worker_argv(python, _SCRIPT),
             input=payload + '\n', capture_output=True,
-            text=True, encoding='utf-8', errors='replace', timeout=timeout,
+            text=True, encoding='utf-8', errors='replace', timeout=processing_timeout(timeout),
             env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         raise RuntimeError('the look score timed out — check the ✨ Score '

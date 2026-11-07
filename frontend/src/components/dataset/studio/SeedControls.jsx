@@ -1,17 +1,15 @@
 import { runCost } from './runCost';
 import { Dices } from 'lucide-react';
 
-// Contrôles de seed : affichage seed + 🎲 re-roll + 🔒/🔓 verrou + ×N gén/config + compteur.
-// Extrait behavior-preserving de LoraTestStudio.jsx (barre seed/lock/×N/compteur).
-// IMPORTANT a11y : le compteur d'images N'A PAS d'aria-live (correctif déjà acté) —
-// il se recalcule à chaque clic de config, une région live le ré-annoncerait sans cesse.
-// `promptMult` : nombre de prompts cochés dans l'historique (axe 📝 lot). Déjà
-// compté dans `total` — il n'est ici que pour NOMMER d'où vient le multiplicateur,
-// sinon le compteur triple sans que rien à l'écran dise pourquoi.
+// Seed controls: value, reroll, lock/unlock, generations per configuration and count, extracted
+// unchanged from LoraTestStudio.jsx. Accessibility: image count deliberately has NO aria-live
+// because every configuration click recalculates it and would cause constant announcements.
+// promptMult names the checked-history-prompt multiplier already included in total, explaining why
+// the count grows.
 export default function SeedControls({ seed, seedLocked, onReroll, onToggleLock, genCount, onGenCount, total, batchMult = 1, promptMult = 1, secondsPerImage = null }) {
-  // ⏱ L'estimation était « ×12 s » en dur : vraie sur une 4090 en Z-Image Turbo,
-  // fausse partout ailleurs. `secondsPerImage` est la médiane RÉELLE mesurée sur
-  // cette machine (null tant que l'historique est trop court → le repli).
+  // The old hardcoded 12 seconds per image matched a 4090 with Z-Image Turbo but not other setups.
+  // secondsPerImage is this machine's measured median, null until enough history exists, then use
+  // fallback.
   const cost = runCost(total * genCount, secondsPerImage);
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -38,8 +36,10 @@ export default function SeedControls({ seed, seedLocked, onReroll, onToggleLock,
         </select>
         gen/config
       </label>
-      {/* Pas d'aria-live : ce compteur se recalcule à chaque clic de config
-          → une région live le ré-annoncerait sans cesse (verbosité parasite). */}
+      {/*
+       * No aria-live: every configuration click recalculates this count, so a live region would
+       * repeat it constantly.
+       */}
       <span className="text-[0.6875rem] tabular-nums text-content-subtle"
         title={[
           batchMult > 1 ? `Includes the ⚖ batch axis: each config runs once without and once with each batch-checked LoRA (×${batchMult})` : null,

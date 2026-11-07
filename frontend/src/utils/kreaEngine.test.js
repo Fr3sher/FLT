@@ -5,20 +5,30 @@ import {
   KREA_ASSET_LABELS, kreaMissingLabels, kreaUnavailableReason, groundingDescription,
 } from './kreaEngine.js';
 import {
-  ENGINES, LOCAL_ENGINES, API_ENGINES, ENGINE_LABELS, ENGINE_RATES, ENGINE_ACCENTS,
+  engineIds, localEngineIds, apiEngineIds, engineLabel, engineRate, engineAccent,
   canonicalEngines, engineBatches, localOnly, localQueuesBehindApi, estimateCost,
   billingEngines, totalImages, readEngines, writeEngines,
 } from '../components/dataset/engineSelection.js';
+import apiDescriptor from '../../../bundled/api_engines/frontend/index.js';
+import { resetRegistry, setEnabled } from '../plugins/registry.js';
+import { registerBundledDescriptor } from '../../tests/support/bundledDescriptors.mjs';
+
+test.beforeEach(() => {
+  resetRegistry();
+  assert.equal(registerBundledDescriptor(apiDescriptor), true);
+  setEnabled(['api_engines']);
+});
+test.afterEach(() => { resetRegistry(); setEnabled([]); });
 
 // ── The engine is a first-class member of the selection model ────────────────
 
 test('krea is a real engine everywhere the selection model looks', () => {
-  assert.ok(ENGINES.includes('krea'));
-  assert.ok(LOCAL_ENGINES.includes('krea'));
-  assert.ok(!API_ENGINES.includes('krea'), 'krea is local, never an API engine');
-  assert.equal(ENGINE_LABELS.krea, 'Krea 2 Edit');
-  assert.equal(ENGINE_RATES.krea, 0, 'local GPU time is free');
-  assert.ok(ENGINE_ACCENTS.krea, 'a card with no accent renders unstyled');
+  assert.ok(engineIds().includes('krea'));
+  assert.ok(localEngineIds().includes('krea'));
+  assert.ok(!apiEngineIds().includes('krea'), 'krea is local, never an API engine');
+  assert.equal(engineLabel('krea'), 'Krea 2 Edit');
+  assert.equal(engineRate('krea'), 0, 'local GPU time is free');
+  assert.ok(engineAccent('krea'), 'a card with no accent renders unstyled');
   assert.deepEqual(canonicalEngines(['krea', 'nope', 'klein']), ['klein', 'krea']);
 });
 
@@ -169,4 +179,12 @@ test('grounding is described in words at every end of the range', () => {
   assert.match(groundingDescription(1536), /sticks to the reference/);
   assert.match(groundingDescription(undefined), /default \(512\)/);
   assert.match(groundingDescription('nonsense'), /default \(512\)/);
+});
+
+test('Krea stays local and free when the API Engines owner is absent', () => {
+  setEnabled([]);
+  assert.ok(engineIds().includes('krea'));
+  assert.deepEqual(apiEngineIds(), []);
+  assert.equal(estimateCost(30, ['krea'], 'split', { multiplier: 2 }), 0);
+  assert.deepEqual(engineBatches([1, 2], ['krea', 'chatgpt'], 'split').map(batch => batch.generator), ['krea']);
 });

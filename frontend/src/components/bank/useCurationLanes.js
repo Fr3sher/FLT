@@ -217,7 +217,7 @@ export function useCurationLanes({
   useEffect(() => () => {
     postJson('/api/bank/text-search/release',
       semanticEnginePatchBody(semanticEngineRef.current)).catch(() => {})
-  }, [semanticEngineRef])   // une ref est stable : ceci reste unmount-only
+  }, [semanticEngineRef])   // A ref is stable: this still runs only on unmount.
 
   const runTextSearch = async () => {
     const q = textQuery.trim()

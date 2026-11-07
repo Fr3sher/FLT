@@ -13,14 +13,19 @@ Key layouts here are the MEASURED ones, read off real files:
 (scaled down here, same shape relationship). Krea 2 keeps q/k/v as separate
 matrices, so the mapping is direct — there is no fused qkv to slice.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 import os
 import struct
 
 import pytest
 
-from app.services import lora_merge as lm
-from app.services import lora_merge_job as job
+from lds_model_tools import lora_merge as lm
+from lds_model_tools import lora_merge_job as job
+from lds_model_tools import lora_merge_worker as worker
+
+pytestmark = pytest.mark.plugins('model_tools')
 
 
 # --- fixtures -----------------------------------------------------------------
@@ -558,11 +563,15 @@ def test_a_worker_without_torch_is_a_plan_refusal_not_a_surprise(
     assert 'pip install torch' in str(ei.value)
 
 
-def test_the_probe_asks_for_torch_and_nothing_else():
+def test_the_probe_exercises_cpu_torch_without_requiring_safetensors():
     """Both lanes that use this probe read and write safetensors by hand, so
-    torch is the only module either of them needs. A probe demanding more would
-    refuse an environment that works — and nobody re-reads a probe."""
-    assert job.fp8_quantize.DEP_MODULES == ('torch',)
+    The CPU probe also exercises the NumPy serialization used by the workers;
+    safetensors remains unnecessary in the worker environment."""
+    from lds_model_tools import runtime
+    assert 'import json, torch' in runtime._PROBE_CODE
+    assert 'device="cpu"' in runtime._PROBE_CODE
+    assert '.numpy().tobytes()' in runtime._PROBE_CODE
+    assert 'safetensors' not in runtime._PROBE_CODE
 
 
 def test_describe_never_raises_so_the_button_can_carry_the_reason(app, tmp_path):
@@ -627,10 +636,11 @@ def test_the_status_route_reports_what_it_reconciled(app, client):
     assert body['status'] == 'error'
 
 
-def test_the_worker_is_invoked_on_the_merge_module_itself():
+def test_the_worker_is_invoked_on_the_owned_tensor_worker():
     command = job.worker_command('py', '/tmp/spec.json', budget_seconds=60)
     assert command[0] == 'py'
-    assert command[1].endswith('lora_merge.py')
+    assert command[1] == '-I'
+    assert command[2] == os.path.abspath(worker.__file__)
     assert '--spec' in command and '/tmp/spec.json' in command
     assert '--progress' in command
 
@@ -746,7 +756,7 @@ def test_merging_writes_the_expected_arithmetic_and_never_touches_the_base(tmp_p
                          @ factors['diffusion_model.blocks.0.attn.wk.lora_A.weight'].float())
                 ).bfloat16()
 
-    result = lm.merge_into_base(str(base), str(out),
+    result = worker.merge_into_base(str(base), str(out),
                                 [{'path': str(lora), 'weight': 0.8}],
                                 metadata=lm.merge_metadata(str(base),
                                                            [{'path': str(lora),
@@ -767,10 +777,10 @@ def test_the_output_is_verified_and_carries_its_provenance(tmp_path):
     base = _real_base(tmp_path)
     lora = _real_lora(tmp_path)
     out = tmp_path / 'merged.safetensors'
-    lm.merge_into_base(str(base), str(out), [{'path': str(lora), 'weight': 1.0}],
+    worker.merge_into_base(str(base), str(out), [{'path': str(lora), 'weight': 1.0}],
                        metadata=lm.merge_metadata(str(base),
                                                   [{'path': str(lora), 'weight': 1.0}]))
-    check = lm.verify_merge(str(out), str(base))
+    check = worker.verify_merge(str(out), str(base))
     assert check['verified'] is True, check['verify_error']
     header = lm.read_header(str(out))['__metadata__']
     assert header['lds_merge_base'] == 'krea2_raw_bf16.safetensors'
@@ -787,10 +797,10 @@ def test_merging_onto_a_merged_model_keeps_the_first_merge_on_record(tmp_path):
     one = _real_lora(tmp_path, 'first.safetensors')
     two = _real_lora(tmp_path, 'second.safetensors')
     round1, round2 = tmp_path / 'r1.safetensors', tmp_path / 'r2.safetensors'
-    lm.merge_into_base(str(base), str(round1), [{'path': str(one), 'weight': 1.0}],
+    worker.merge_into_base(str(base), str(round1), [{'path': str(one), 'weight': 1.0}],
                        metadata=lm.merge_metadata(str(base),
                                                   [{'path': str(one), 'weight': 1.0}]))
-    lm.merge_into_base(str(round1), str(round2), [{'path': str(two), 'weight': 0.5}],
+    worker.merge_into_base(str(round1), str(round2), [{'path': str(two), 'weight': 0.5}],
                        metadata=lm.merge_metadata(str(round1),
                                                   [{'path': str(two), 'weight': 0.5}]))
     meta = lm.read_header(str(round2))['__metadata__']
@@ -807,7 +817,7 @@ def test_a_first_merge_carries_no_empty_lineage_field(tmp_path):
     base = _real_base(tmp_path)
     lora = _real_lora(tmp_path)
     out = tmp_path / 'merged.safetensors'
-    lm.merge_into_base(str(base), str(out), [{'path': str(lora), 'weight': 1.0}],
+    worker.merge_into_base(str(base), str(out), [{'path': str(lora), 'weight': 1.0}],
                        metadata=lm.merge_metadata(str(base),
                                                   [{'path': str(lora), 'weight': 1.0}]))
     assert 'lds_merge_previous' not in lm.read_header(str(out))['__metadata__']
@@ -819,7 +829,7 @@ def test_the_merged_file_keeps_the_bases_dtypes_and_shapes(tmp_path):
     base = _real_base(tmp_path)
     lora = _real_lora(tmp_path)
     out = tmp_path / 'merged.safetensors'
-    lm.merge_into_base(str(base), str(out), [{'path': str(lora), 'weight': 1.0}],
+    worker.merge_into_base(str(base), str(out), [{'path': str(lora), 'weight': 1.0}],
                        metadata={'lds_merge': 'lora_into_base'})
     produced = lm.tensor_entries(lm.read_header(str(out)))
     expected = lm.tensor_entries(lm.read_header(str(base)))
@@ -833,9 +843,9 @@ def test_weight_zero_point_five_applies_exactly_half_the_delta(tmp_path):
     lora = _real_lora(tmp_path)
     full, half = tmp_path / 'full.safetensors', tmp_path / 'half.safetensors'
     meta = {'lds_merge': 'lora_into_base'}
-    lm.merge_into_base(str(base), str(full), [{'path': str(lora), 'weight': 1.0}],
+    worker.merge_into_base(str(base), str(full), [{'path': str(lora), 'weight': 1.0}],
                        metadata=meta)
-    lm.merge_into_base(str(base), str(half), [{'path': str(lora), 'weight': 0.5}],
+    worker.merge_into_base(str(base), str(half), [{'path': str(lora), 'weight': 0.5}],
                        metadata=meta)
     assert torch.allclose(_delta(half, base) * 2, _delta(full, base), atol=1e-6)
 
@@ -845,7 +855,7 @@ def test_two_loras_accumulate_into_the_same_tensor(tmp_path):
     one = _real_lora(tmp_path, 'one.safetensors')
     two = _real_lora(tmp_path, 'two.safetensors')
     out = tmp_path / 'merged.safetensors'
-    result = lm.merge_into_base(
+    result = worker.merge_into_base(
         str(base), str(out),
         [{'path': str(one), 'weight': 1.0}, {'path': str(two), 'weight': 1.0}],
         metadata={'lds_merge': 'lora_into_base'})
@@ -863,9 +873,9 @@ def test_alpha_over_rank_is_honoured_when_the_lora_records_one(tmp_path):
     scaled = _real_lora(tmp_path, 'scaled.safetensors', rank=4, alpha=2.0)  # 2/4 = 0.5
     a_out, b_out = tmp_path / 'a.safetensors', tmp_path / 'b.safetensors'
     meta = {'lds_merge': 'lora_into_base'}
-    lm.merge_into_base(str(base), str(a_out), [{'path': str(plain), 'weight': 1.0}],
+    worker.merge_into_base(str(base), str(a_out), [{'path': str(plain), 'weight': 1.0}],
                        metadata=meta)
-    lm.merge_into_base(str(base), str(b_out), [{'path': str(scaled), 'weight': 1.0}],
+    worker.merge_into_base(str(base), str(b_out), [{'path': str(scaled), 'weight': 1.0}],
                        metadata=meta)
     assert torch.allclose(_delta(b_out, base) * 2, _delta(a_out, base), atol=1e-6)
 
@@ -879,7 +889,7 @@ def test_a_tensor_no_lora_touches_is_carried_over_byte_identical(tmp_path):
     base = _real_base(tmp_path, extra=egg)
     lora = _real_lora(tmp_path)
     out = tmp_path / 'merged.safetensors'
-    result = lm.merge_into_base(str(base), str(out),
+    result = worker.merge_into_base(str(base), str(out),
                                 [{'path': str(lora), 'weight': 1.0}],
                                 metadata={'lds_merge': 'lora_into_base'}, family='krea')
     assert result['carried_over'] == 2
@@ -894,8 +904,8 @@ def test_a_merge_that_fails_leaves_no_half_written_checkpoint(tmp_path):
     base = _real_base(tmp_path)
     lora = _real_lora(tmp_path)
     out = tmp_path / 'merged.safetensors'
-    with pytest.raises(lm.MergeError):
-        lm.merge_into_base(str(base), str(out), [{'path': str(lora), 'weight': 1.0}],
+    with pytest.raises(worker.MergeError):
+        worker.merge_into_base(str(base), str(out), [{'path': str(lora), 'weight': 1.0}],
                            metadata={'lds_merge': 'lora_into_base'},
                            budget_seconds=-1)          # expired before the first tensor
     assert not out.exists()
@@ -906,7 +916,7 @@ def test_verify_catches_a_file_that_is_not_the_model_it_claims(tmp_path):
     base = _real_base(tmp_path)
     other = _real_base(tmp_path, 'other.safetensors',
                        extra={'extra.weight': torch.zeros(4, 4)})
-    check = lm.verify_merge(str(other), str(base))
+    check = worker.verify_merge(str(other), str(base))
     assert check['verified'] is False
     assert 'key set changed' in check['verify_error']
 
@@ -922,9 +932,9 @@ def test_the_worker_cli_round_trips_through_its_spec_file(tmp_path):
         'loras': [{'path': str(lora), 'weight': 0.9}],
         'metadata': lm.merge_metadata(str(base), [{'path': str(lora), 'weight': 0.9}]),
     }), encoding='utf-8')
-    assert lm.main(['--spec', str(spec)]) == 0
+    assert worker.main(['--spec', str(spec)]) == 0
     assert out.is_file()
-    assert lm.verify_merge(str(out), str(base))['verified'] is True
+    assert worker.verify_merge(str(out), str(base))['verified'] is True
 
 
 def test_the_worker_cli_reports_a_refusal_instead_of_crashing(tmp_path, capsys):
@@ -933,7 +943,7 @@ def test_the_worker_cli_reports_a_refusal_instead_of_crashing(tmp_path, capsys):
         'base': str(tmp_path / 'missing.safetensors'),
         'destination': str(tmp_path / 'out.safetensors'), 'loras': [],
     }), encoding='utf-8')
-    assert lm.main(['--spec', str(spec)]) == 1
+    assert worker.main(['--spec', str(spec)]) == 1
     line = [ln for ln in capsys.readouterr().out.splitlines()
             if ln.startswith(lm.RESULT_PREFIX)][-1]
     payload = json.loads(line[len(lm.RESULT_PREFIX):])

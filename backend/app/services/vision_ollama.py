@@ -8,6 +8,7 @@ the classify/caption passes of the face-dataset service can reuse it without
 duplicating the Qwen3-VL quirks.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import base64
 import logging
@@ -138,6 +139,7 @@ def describe_frames_ollama(frames, prompt, *,
                            num_predict: int = 600,
                            num_ctx: int = 8192,
                            keep_alive: str | int = '5m',
+                           think: bool | None = None,
                            timeout: tuple[float, float] | float = (10, 300)) -> str:
     """N frames of ONE shot -> a caption, or '' best-effort — the video door of
     :func:`describe_image_ollama`.
@@ -174,8 +176,10 @@ def describe_frames_ollama(frames, prompt, *,
                         'num_predict': int(num_predict)},
             'keep_alive': keep_alive,
         }
+        if think is not None:          # the top-level switch, as in generate_text_ollama
+            payload['think'] = bool(think)
         _admit_local_ollama(url, model_name, keep_alive=keep_alive)
-        resp = requests.post(f'{url}/api/generate', json=payload, timeout=timeout)
+        resp = requests.post(f'{url}/api/generate', json=payload, timeout=network_timeout(timeout, processing=True))
         resp.raise_for_status()
         data = resp.json()
         caption = (data.get('response') or '').strip()
@@ -205,6 +209,7 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
                           fmt: str | None = None,
                           keep_alive: str | int = 0,
                           auto_start_local: bool = False,
+                          think: bool | None = None,
                           timeout: tuple[float, float] | float = (10, 120)) -> str:
     """Describe an image via Ollama vision. Returns the caption text, or "" on
     failure for ordinary best-effort calls. With ``auto_start_local=True``, a
@@ -225,10 +230,17 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
     that field is empty — and correct for the thinking variant). `num_ctx` defaults to 8192
     so a long answer (plus any thinking trace) fits in context.
 
-    `keep_alive` (défaut 0) : 0 décharge le modèle après CET appel (VRAM-safe,
-    bon pour les appels isolés) ; un batch (caption/classify de N images) doit
-    passer une durée (ex. '5m') pour garder le modèle chaud entre les images, PUIS
-    appeler unload_vision_model() en fin de batch pour rendre la VRAM à ComfyUI.
+    keep_alive defaults to 0, unloading the model after this call to release VRAM.
+    Batches should pass a duration such as 5m to keep it loaded between images,
+    then call unload_vision_model() at batch end to return VRAM to ComfyUI.
+
+    `think` (None: not sent) is Ollama's top-level switch, as in
+    generate_text_ollama. A HYBRID model honours it where the thinking
+    checkpoint above does not: measured 2026-09-06 on Qwen3.8-27B with an
+    image, think:false answered in five sentences with an empty `thinking`,
+    and the same call without it spent the whole budget reasoning INSIDE
+    `response` (done_reason=length) — a trace the fallback below cannot tell
+    from an answer, and which the motion writer then read as the still.
     """
     prepared = _ensure_ollama_decodable(image_bytes)
     if prepared is None:
@@ -258,8 +270,10 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
         # stops the abliterated model from rambling prose instead of the object.
         if fmt:
             payload['format'] = fmt
+        if think is not None:
+            payload['think'] = bool(think)
         _admit_local_ollama(url, model_name, keep_alive=keep_alive)
-        resp = requests.post(f'{url}/api/generate', json=payload, timeout=timeout)
+        resp = requests.post(f'{url}/api/generate', json=payload, timeout=network_timeout(timeout, processing=True))
         resp.raise_for_status()
         data = resp.json()
         caption = (data.get('response') or '').strip()
@@ -315,7 +329,7 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
                 image_bytes, prompt, ollama_url=ollama_url, model=model,
                 num_predict=num_predict, num_ctx=num_ctx,
                 repeat_penalty=repeat_penalty, prefer_json=prefer_json, fmt=fmt,
-                keep_alive=keep_alive, auto_start_local=False, timeout=timeout)
+                keep_alive=keep_alive, auto_start_local=False, think=think, timeout=timeout)
             if not retried:
                 raise RuntimeError(
                     'Ollama did not return a caption after restart — check the configured '
@@ -391,7 +405,7 @@ def generate_text_ollama(prompt: str, *,
         if stop:
             payload['options']['stop'] = list(stop)
         _admit_local_ollama(url, model_name, keep_alive=keep_alive)
-        resp = requests.post(f'{url}/api/generate', json=payload, timeout=timeout)
+        resp = requests.post(f'{url}/api/generate', json=payload, timeout=network_timeout(timeout, processing=True))
         resp.raise_for_status()
         data = resp.json()
         caption = (data.get('response') or '').strip()
@@ -455,7 +469,7 @@ def unload_vision_model(*, ollama_url: str | None = None, model: str | None = No
     payload = {'model': model or get_vision_model(), 'keep_alive': 0}
     for attempt in (1, 2):
         try:
-            response = requests.post(f'{url}/api/generate', json=payload, timeout=(10, 30))
+            response = requests.post(f'{url}/api/generate', json=payload, timeout=network_timeout((10, 30)))
             status = getattr(response, 'status_code', None)
             if type(status) is int and 200 <= status < 300:
                 from .vision_keepalive import forget_lease

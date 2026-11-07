@@ -1,26 +1,11 @@
-// 📚 Saved prompts — tout l'historique des prompts de test, parcouru PAR L'IMAGE.
-//
-// POURQUOI CETTE FENÊTRE EXISTE. L'historique n'est pas une poignée de puces :
-// sur une vraie install il compte ~170 entrées, et il était rendu d'un bloc, en
-// vignettes de 32×40 px, avec ~30 caractères de prompt. Or les prompts de test
-// sont longs (médiane ~500 caractères) et commencent tous pareil : sur cet
-// historique-là, 62 entrées sur 167 partageaient leurs 30 premiers caractères
-// avec une autre, dont 19 qui affichaient exactement « Photograph of a young
-// woman wi… ». Le texte ne pouvait donc PAS distinguer une carte d'une autre à
-// cette largeur — seule l'image qu'elle a produite le peut, et c'était elle
-// qu'on avait réduite. Ici l'image est tirée au même barreau que le navigateur
-// 🌐 Civitai (même geste, même taille) et le prompt prend toute la largeur qui
-// reste, cinq lignes, dépliables.
-//
-// CE QUE LA FENÊTRE APPORTE QUE LA BANDE NE POUVAIT PAS : une recherche. À 167
-// entrées c'est le seul moyen de retrouver un prompt, et c'est la forme que la
-// Bank, le Canvas, Caption Lab et la bibliothèque de datasets emploient déjà.
-//
-// TOUS LES VERBES SONT ICI. La bande n'affiche que les plus récents ; recharger,
-// cocher pour le lot et supprimer existent des deux côtés — la fenêtre est la
-// surface de gestion, pas une vue en lecture seule. Le lot n'est proposé que si
-// l'hôte l'accepte (`onToggleBatch`), exactement comme dans la bande : « Generate
-// from the board » ne le passe pas, il ne doit donc pas apparaître.
+// Saved prompts browses the full history BY IMAGE. A real installation had about 170 entries shown
+// together as 32x40 thumbnails and roughly 30 prompt characters, while median prompt length was
+// about 500. Of 167 entries, 62 shared their first 30 characters, including 19 identical prefixes,
+// so only images distinguished cards. Match Civitai browser thumbnail sizing, giving remaining
+// width to five expandable prompt lines. Search makes that history manageable, consistent with
+// Bank, Canvas, Caption Lab and datasets. Like the recent strip, this management dialog supports
+// reuse, batch selection and deletion. Offer batches only when onToggleBatch exists; callers such
+// as Generate from the board without that handler must not show them.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '../../common/Toast';
@@ -29,14 +14,14 @@ import { HelpBadge } from '../../../help/HelpMode';
 import { datasetThumbUrl } from '../../../utils/datasetThumbUrl';
 import { filterSavedPrompts, normalizeSavedPrompt } from './savedPrompts';
 
-// Le barreau de vignette demandé au serveur. 384 pour une tuile dessinée à
-// 144×192 CSS : les lignes sont paresseuses (`loading="lazy"`), seules ~4 sont
-// visibles à la fois, et regarder l'image EST le but de cette fenêtre.
+// Request 384-pixel thumbnails for 144x192 CSS tiles. Rows load lazily, roughly four are visible
+// at once, and inspecting the image is this dialog's purpose.
 const THUMB_SIDE = 384;
 
-/** Le contenu de la fenêtre, SANS le portail — exporté à part pour que les tests
- *  puissent l'exécuter : `renderToStaticMarkup` ne sait pas rendre un portail,
- *  et une fenêtre qu'aucun test ne peut rendre est une fenêtre non mesurée. */
+/**
+ * Dialog content WITHOUT the portal, exported separately for tests: renderToStaticMarkup cannot
+ * render portals, so separating content makes it testable.
+ */
 export function SavedPromptsPanel({
   open, onClose, items, datasetId, selectedPrompt, onPick, onDelete,
   batch = null, onToggleBatch = null, onClearBatch = null,
@@ -46,8 +31,7 @@ export function SavedPromptsPanel({
   useFocusTrap(ref, open);
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState(() => new Set());
-  // La page derrière ne défile plus tant que la fenêtre est ouverte — même
-  // verrou que les autres dialogues de l'app (CaptionLabPicker).
+  // Lock background page scrolling while open, matching other dialogs such as CaptionLabPicker.
   useEffect(() => {
     if (!open) return undefined;
     const before = document.body.style.overflow;
@@ -75,18 +59,18 @@ export function SavedPromptsPanel({
     if (next.has(p)) next.delete(p); else next.add(p);
     return next;
   });
-  // Choisir un prompt referme : la fenêtre a rempli son office, et laisser le
-  // panneau de lancement caché derrière une modale ouverte est ce qui fait
-  // régler un run sans voir le champ qu'on vient de remplir.
+  // Choosing a prompt closes the dialog: its job is done, and leaving launch setup hidden would
+  // encourage configuring a run without seeing the newly filled field.
   const use = (p) => { onPick(p); onClose(); };
 
   return (
     <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-4"
       onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); onClose(); } }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      {/* Marqué chrome+layer : la sonde responsive ne mesure cibles tactiles et
-          troncature qu'À L'INTÉRIEUR d'un [data-probe-chrome] — un dialogue non
-          marqué n'est pas « propre », il est NON MESURÉ. */}
+      {/*
+       * Mark both chrome and layer: the responsive probe measures touch targets and truncation
+       * only INSIDE data-probe-chrome. An unmarked dialog is unmeasured, not verified clean.
+       */}
       <div role="dialog" aria-modal="true" aria-label="Browse saved test prompts" ref={ref}
         data-probe-chrome="saved-prompts" data-probe-layer
         className="w-full max-w-4xl max-h-[88vh] rounded-2xl border border-border bg-surface-overlay p-4 flex flex-col gap-3 shadow-xl">
@@ -147,9 +131,9 @@ export function SavedPromptsPanel({
                     alt="" loading="lazy" decoding="async"
                     className="w-28 sm:w-36 h-40 sm:h-48 shrink-0 object-cover rounded-lg border border-border" />
                 ) : (
-                  // Pas de vignette = ce prompt n'a jamais rendu d'image (ou elles
-                  // ont été supprimées). Un « ? » de la taille d'une image ne dit
-                  // rien : la place revient au texte, seul signal qui reste.
+                  // No thumbnail means this prompt never produced an image or its images were
+                  // deleted. A large question mark adds no information; give the space to the
+                  // remaining signal, the text.
                   <div className="w-28 sm:w-36 h-40 sm:h-48 shrink-0 rounded-lg border border-dashed border-border bg-app/40 flex items-center justify-center px-2 text-center text-content-subtle text-[0.625rem] leading-snug">
                     No image yet
                   </div>
@@ -162,11 +146,11 @@ export function SavedPromptsPanel({
                     {p.liked && <span title="The thumbnail is an image you liked">👍 liked</span>}
                     {sel && <span className="text-purple-300">in the prompt field</span>}
                   </div>
-                  {/* ⚠️ Le clamp vit sur le SPAN, pas sur le bouton. Mesuré en
-                      navigateur : `-webkit-line-clamp` n'a AUCUN effet posé sur
-                      un <button> — Blink lui refuse le display `-webkit-box` —
-                      et la ligne grandissait alors avec le prompt, qui monte à
-                      2000 caractères. Sur un span à l'intérieur, il coupe. */}
+                  {/*
+                   * Clamp the SPAN, not the button. Browser measurements show Blink refuses
+                   * display:-webkit-box on buttons, so line-clamp does nothing and prompts up to
+                   * 2000 characters enlarge the row. An inner span clamps correctly.
+                   */}
                   <button type="button" onClick={() => toggleExpand(p.prompt)}
                     title={isOpen ? 'Collapse the prompt' : 'Show the full prompt'}
                     className="m-0 min-h-10 text-left text-content text-[0.75rem] leading-snug lg:min-h-0">
@@ -227,14 +211,13 @@ export function SavedPromptsPanel({
   );
 }
 
-/* PORTAILLÉE SUR <body>, et ce n'est pas cosmétique : le panneau de lancement vit
- * dans un `<aside class="lg:sticky lg:overflow-auto">`, et `position: sticky`
- * OUVRE UN CONTEXTE D'EMPILEMENT — un z-index posé dedans, si haut soit-il, ne
- * peut pas monter au-dessus de l'en-tête de l'app, et au-delà de `lg` la fenêtre
- * était en plus DÉCOUPÉE par le scroll de l'aside. Mesuré en navigateur avant le
- * correctif : l'en-tête et des morceaux de la page se peignaient par-dessus.
- * C'est le motif que CaptionLabPicker et le dialogue ▶ Continue emploient déjà,
- * pour la même raison (un dialogue rendu là où on ne le voit pas). */
+/*
+ * Portal to body is required: the launch panel lives inside a sticky, scrollable aside. Sticky
+ * creates a stacking context that traps any inner z-index below the app header, and at lg sizes
+ * the aside's scrolling also clips the dialog. Before the fix, browser measurements showed
+ * header/page fragments painted over it. CaptionLabPicker and Continue already use portals for the
+ * same reason.
+ */
 export default function SavedPromptsModal(props) {
   if (!props.open) return null;
   return createPortal(<SavedPromptsPanel {...props} />, document.body);

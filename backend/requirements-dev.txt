@@ -80,7 +80,7 @@ setuptools==84.0.0
 # installs them into dedicated environments on demand (see requirements-ml.txt).
 # A handful of suites — test_watermarks.py above all — exercise real numpy/OpenCV
 # pixel maths and the Telea fallback that runs when LaMa is absent, so these
-# (and ONLY these in the lightweight base: Torch has its own overlay, while
+# (and only these plus PyAV in the lightweight base: Torch has its own overlay, while
 # LaMa stays absent) make those tests run for real while keeping "LaMa absent"
 # true.
 numpy>=1.26,<2
@@ -116,3 +116,9 @@ safetensors>=0.4
 # post that refuses to parse stays a real failure. Pure Python, no wheels to
 # build, so running it for real costs nothing.
 instaloader>=4.12
+
+# Direct video-dataset import tests encode and decode real CPU clips. The
+# optional product runtime is not installed by CI, so declare its decoder and
+# bundled encoder here rather than depend on a system-wide ffmpeg installation.
+av==18.1.0
+imageio-ffmpeg==0.6.0

@@ -37,14 +37,17 @@ import threading
 
 import pytest
 
-from app.services import video_training_local as vtl
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_training_local as vtl
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _video_dataset(tmp_path, name='surf clips', profile='wan22_14b', frames=81,
                    fps=16, width=384, height=384, clips=2, out_dir=None):
     """A promoted video dataset: the row AND the flat folder on disk. The folder
     is load-bearing — the launcher counts clips before it takes the GPU."""
-    from app.models import VideoDataset
+    from lds_video.models import VideoDataset
     from app.extensions import db
     if out_dir is None:
         out_dir = str(tmp_path / f'vds_{name.replace(" ", "_")}')
@@ -326,7 +329,7 @@ def test_a_target_that_states_no_sizes_says_nothing_rather_than_guessing(
     source states one, and the catalogue refuses to invent them. A note derived
     from a number we do not have would be exactly the dressed-up guess that field
     exists to avoid."""
-    from app.services import video_targets as vt
+    from lds_video import video_targets as vt
     _aitoolkit(monkeypatch, tmp_path)
     with app.app_context():
         _clear_fence()
@@ -605,7 +608,7 @@ def test_an_unsupported_target_is_refused_before_the_gpu(
     """The same builder refusal the cloud lane gets, in the same position: before
     anything is reserved. Locally the cost is not money, it is a card taken away
     from ComfyUI for a run that was never going to start."""
-    from app.services import video_training as vt
+    from lds_video import video_training as vt
     _aitoolkit(monkeypatch, tmp_path)
     with app.app_context():
         _clear_fence()
@@ -739,7 +742,7 @@ def test_the_recipe_is_offered_only_to_a_toolkit_that_can_run_it(
 
     Everything unreadable answers False: no folder, no file, no arch. A false
     negative costs a recipe, a false positive costs the run."""
-    from app.services import video_training_local as vtl
+    from lds_video import video_training_local as vtl
     _aitoolkit(monkeypatch, tmp_path)
     arch_dir = (tmp_path / 'aitk' / 'extensions_built_in' / 'diffusion_models'
                 / 'minimax_h3')

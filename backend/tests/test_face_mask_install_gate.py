@@ -166,20 +166,32 @@ def test_insightface_never_enters_the_flask_venv_requirements():
 
 def test_out_of_range_python_is_explained_in_plain_english_not_a_pip_traceback(
         app, monkeypatch):
-    """The most likely state of a brand-new install: a Python too recent for the
-    insightface wheels. The install log must LEAD with why, not end with a
-    cryptic source-build failure."""
-    from app import setup_installer, capabilities
-    lines = []
+    """A too-new app Python triggers managed provisioning, never a blind pip run.
+
+    If that preparation is unavailable, preserve the app and explicit selection,
+    and give a retry gesture instead of a source-build traceback.
+    """
+    from app import setup_installer, config
+    lines, preparations = [], []
     monkeypatch.setattr(setup_installer, '_append', lambda a, l: lines.append(l))
-    monkeypatch.setattr(setup_installer, '_run_pip', lambda a, cmd: 1)
-    monkeypatch.setattr(setup_installer, '_capability_python',
-                        lambda a: setup_installer.sys.executable)
-    monkeypatch.setattr(capabilities, 'python_ml_status',
-                        lambda: {'version': '3.14.0', 'ml_supported': False,
-                                 'ml_range': '3.10–3.12'})
+    monkeypatch.setattr(setup_installer, '_run_pip',
+                        lambda *args: (_ for _ in ()).throw(AssertionError('pip must not start')))
+    monkeypatch.setattr(setup_installer, '_base_python_candidates', lambda: ['app-python'])
+    monkeypatch.setattr(setup_installer, '_python_minor',
+                        lambda p: (setup_installer._VENV_PY_MAX[0], setup_installer._VENV_PY_MAX[1] + 1))
+
+    def unavailable(log):
+        preparations.append(True)
+        raise OSError('fixture runtime download unavailable')
+
+    monkeypatch.setattr(setup_installer.managed_python, 'ensure_python', unavailable)
     with app.app_context():
-        setup_installer._run_ml_capability('face_scoring')
+        config.save_config({'face_scoring': {'python': 'borrowed-python'}})
+        assert setup_installer._run_ml_capability('face_scoring') == 1
+        assert config.get('face_scoring.python') == 'borrowed-python'
     joined = '\n'.join(lines)
-    assert '3.14.0' in joined and '3.10–3.12' in joined
-    assert 'face_scoring.python' in joined
+    assert preparations == [True]
+    assert 'Could not prepare the managed Python' in joined
+    assert 'Nothing was installed in the app Python' in joined
+    assert 'click Install again to retry' in joined
+    assert 'Traceback' not in joined

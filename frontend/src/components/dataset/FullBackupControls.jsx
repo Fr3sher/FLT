@@ -157,8 +157,10 @@ export default function FullBackupControls({ backup, onRestore }) {
   const closeMenu = () => { if (menuRef.current) menuRef.current.open = false; };
   return (
     <>
-      {/* summary en display:flex → pas de marqueur natif ; les items restent
-          montés en permanence (details ne fait que masquer l'affichage). */}
+      {/*
+       * display:flex removes the native summary marker; items stay mounted because details only
+       * hides their display.
+       */}
       <details ref={menuRef} className="relative">
         <summary
           title="Back up the whole library, or import a backup archive"

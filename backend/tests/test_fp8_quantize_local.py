@@ -3,14 +3,58 @@
 The interesting half is what it REFUSES — the same header guard as the training
 base check, used in reverse — and the fact that it never touches the source.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import os
+from pathlib import Path
+import sys
+import venv
 
 import pytest
 
-from app.services import fp8_quantize as fq
+from lds_model_tools import fp8_quantize as fq
+from lds_model_tools import runtime
+
+pytestmark = pytest.mark.plugins('model_tools')
 
 torch = pytest.importorskip('torch', reason='fp8 quantization needs torch')
 safetensors_torch = pytest.importorskip('safetensors.torch')
+
+
+@pytest.fixture(scope='session')
+def isolated_cpu_python(tmp_path_factory):
+    """An explicit CPU test environment, using only dependencies already present.
+
+    No pip, downloads or ambient PYTHONPATH: -I reads this venv's own declared
+    site dependencies. The real runtime probe and CLI verify those dependencies.
+    """
+    import numpy
+
+    directory = tmp_path_factory.mktemp('model-tools-cpu')
+    venv.EnvBuilder(with_pip=False).create(directory)
+    if os.name == 'nt':
+        python = directory / 'Scripts' / 'python.exe'
+        site = directory / 'Lib' / 'site-packages'
+    else:
+        python = directory / 'bin' / 'python'
+        site = directory / 'lib' / f'python{sys.version_info.major}.{sys.version_info.minor}' / 'site-packages'
+    dependencies = {str(Path(module.__file__).resolve().parent.parent)
+                    for module in (torch, numpy)}
+    (site / 'declared-test-dependencies.pth').write_text(
+        '\n'.join(sorted(dependencies)) + '\n', encoding='utf-8')
+    return str(python)
+
+
+@pytest.fixture(autouse=True)
+def selected_cpu_runtime(app, monkeypatch, isolated_cpu_python):
+    from app import config
+
+    monkeypatch.setenv('CUDA_VISIBLE_DEVICES', '')
+    with app.app_context():
+        config.save_config({'quantize': {'python': isolated_cpu_python}})
+        assert runtime.explicit_python() == isolated_cpu_python
+        runtime.clear_probe_cache()
+        yield isolated_cpu_python
 
 
 def _model(tmp_path, name='BigModel.safetensors'):
@@ -25,13 +69,15 @@ def _model(tmp_path, name='BigModel.safetensors'):
 
 
 def test_plan_describes_the_output_without_writing_anything(tmp_path):
-    src = _model(tmp_path)
+    model_dir = tmp_path / 'models'
+    model_dir.mkdir()
+    src = _model(model_dir)
     plan = fq.plan(str(src))
     assert plan['destination_name'] == 'BigModel_fp8.safetensors'
     assert plan['destination_exists'] is False
     assert plan['quantized_tensors'] == 2 and plan['kept_tensors'] == 1
     assert 0 < plan['estimated_bytes'] < plan['source_bytes']
-    assert list(tmp_path.iterdir()) == [src]
+    assert list(model_dir.iterdir()) == [src]
 
 
 def test_quantizing_writes_a_verified_twin_and_never_touches_the_source(tmp_path):
@@ -192,15 +238,16 @@ def test_an_interpreter_without_torch_is_refused_by_the_PLAN_not_by_a_traceback(
     """
     src = _model(tmp_path)
     fq.clear_probe_cache()
-    monkeypatch.setattr(fq, 'candidates', lambda: ['/nowhere/python-without-ml'])
-    monkeypatch.setattr(fq, '_probe',
+    monkeypatch.setattr(runtime, 'candidates', lambda: ['/nowhere/python-without-ml'])
+    monkeypatch.setattr(runtime, 'probe',
                         lambda _p: {'torch': False, 'safetensors': False})
     described = fq.describe(str(src))
     assert described['ok'] is False
-    assert 'torch' in described['error']
-    assert 'pip install' in described['error']
+    assert 'PyTorch and NumPy on CPU' in described['error']
+    assert 'Plugins > Model tools > Settings' in described['error']
+    assert 'Keep the LDS application environment unchanged' in described['error']
     # ...and the start path refuses with the same sentence rather than running.
-    with pytest.raises(fq.QuantizeError, match='missing'):
+    with pytest.raises(fq.QuantizeError, match='could not run PyTorch'):
         fq.quantize(str(src))
 
 
@@ -209,101 +256,103 @@ def test_an_environment_without_safetensors_is_no_longer_refused(tmp_path, monke
 
     The worker opened checkpoints with ``safe_open`` back then, so safetensors
     was genuinely required. It no longer is: fp8_export reads and writes the
-    format by hand so that nothing memory-maps a 26 GB file, and torch is the
-    only module left. Keeping the old demand would refuse an environment that
-    works — which is why the probe now asks for exactly what it uses, and why
-    this pins the new answer rather than being deleted.
+    format by hand so that nothing memory-maps a 26 GB file. The CPU probe asks
+    Torch and NumPy to serialize a tiny tensor without requiring safetensors.
+    Keeping the old demand would refuse an environment that works.
     """
     src = _model(tmp_path)
     fq.clear_probe_cache()
-    assert fq.DEP_MODULES == ('torch',)
-    monkeypatch.setattr(fq, 'candidates', lambda: ['/nowhere/python'])
-    monkeypatch.setattr(fq, '_probe', lambda _p: {'torch': True, 'safetensors': False})
+    assert 'import json, torch' in runtime._PROBE_CODE
+    monkeypatch.setattr(runtime, 'candidates', lambda: ['/nowhere/python'])
+    monkeypatch.setattr(runtime, 'probe', lambda _p: {'torch': True, 'safetensors': False})
     assert fq.describe(str(src))['ok'] is True
     # and the probe does not even ask about it any more
-    assert 'safetensors' not in fq._PROBE_CODE
+    assert 'safetensors' not in runtime._PROBE_CODE
 
 
-def test_an_unanswerable_probe_never_invents_a_refusal(tmp_path, monkeypatch):
-    """A probe that times out is UNKNOWN. Freezing a working venv into "unusable"
-    would be a lie, and this feature has enough refusals that are true."""
+def test_an_unanswerable_probe_requires_a_working_owned_cpu_engine(tmp_path, monkeypatch):
+    """An unknown environment cannot admit a worker or borrow another product."""
     src = _model(tmp_path)
     fq.clear_probe_cache()
-    monkeypatch.setattr(fq, '_probe', lambda _p: None)
-    assert fq.describe(str(src))['ok'] is True
+    monkeypatch.setattr(runtime, 'probe', lambda _p: None)
+    described = fq.describe(str(src))
+    assert described['ok'] is False
+    assert 'could not run PyTorch and NumPy on CPU' in described['error']
+    assert 'select a compatible existing environment' in described['error']
+    with pytest.raises(fq.QuantizeError, match='could not run PyTorch'):
+        fq.quantize(str(src))
 
 
 def test_an_explicitly_configured_interpreter_is_the_only_candidate(monkeypatch):
     """Falling back past someone's own setting would hide the problem they have
     to fix — and would silently do the work somewhere they did not choose."""
     fq.clear_probe_cache()
-    monkeypatch.setattr(fq.cfg, 'get', lambda key, *a, **k: (
+    monkeypatch.setattr(runtime.cfg, 'get', lambda key, *a, **k: (
         'D:/their/venv/python.exe' if key == 'quantize.python' else ''))
     assert fq.candidates() == ['D:/their/venv/python.exe']
-    monkeypatch.setattr(fq, '_probe', lambda _p: {'torch': False, 'safetensors': True})
+    monkeypatch.setattr(runtime, 'probe', lambda _p: {'torch': False, 'safetensors': True})
     verdict = fq.interpreter()
     assert verdict['ready'] is False
     assert verdict['python'] == 'D:/their/venv/python.exe'
 
 
-def test_the_first_interpreter_that_has_the_dependencies_wins(monkeypatch):
+def test_an_unusable_selected_interpreter_never_borrows_the_next_one(monkeypatch):
     fq.clear_probe_cache()
-    monkeypatch.setattr(fq, 'candidates', lambda: ['/a/python', '/b/python'])
-    monkeypatch.setattr(fq, '_probe', lambda p: (
-        {'torch': False, 'safetensors': True} if p == '/a/python'
-        else {'torch': True, 'safetensors': True}))
+    seen = []
+    monkeypatch.setattr(runtime, 'candidates', lambda: ['/a/python', '/b/python'])
+
+    def probe(python):
+        seen.append(python)
+        return {'torch': python == '/b/python'}
+
+    monkeypatch.setattr(runtime, 'probe', probe)
     chosen = fq.interpreter()
-    assert chosen['python'] == '/b/python' and chosen['ready'] is True
+    assert chosen['python'] == '/a/python' and chosen['ready'] is False
+    assert seen == ['/a/python']
 
 
 def test_the_worker_runs_the_shipped_exporter_as_a_cli(tmp_path):
     """One conversion in the product: the child IS the file the pod runs.
 
-    With `quantize.python` unset this falls back on the interpreter ✨ Score
-    borrows, so a BORROWED one is launched without the machine's user
-    site-packages — the same contract `_probe` asks its question under, and the
-    same one every other infer worker keeps (services/infer_env)."""
-    import sys
-
-    from app.services import fp8_export
+    Both the Model tools environment and any explicit override run with -I;
+    selecting the application interpreter does not relax that isolation."""
     command = fq.worker_command('py.exe', 'A.safetensors', 'B.safetensors')
     assert command[0] == 'py.exe'
-    assert command[1] == '-s'
-    assert command[2] == os.path.abspath(fp8_export.__file__)
+    assert command[1] == '-I'
+    assert command[2] == os.path.abspath(fq.fp8_export.worker_script())
     assert command[3:] == ['--src', 'A.safetensors', '--dst', 'B.safetensors',
                            '--progress']
 
-    # ...and our OWN interpreter keeps its user site, because on a system-Python
-    # install that directory is where torch itself lives.
     ours = fq.worker_command(sys.executable, 'A.safetensors', 'B.safetensors')
-    assert ours[1] == os.path.abspath(fp8_export.__file__)
+    assert ours[1] == '-I'
+    assert ours[2] == os.path.abspath(fq.fp8_export.worker_script())
 
 
 def test_a_worker_that_cannot_even_start_is_a_sentence_not_an_oserror(tmp_path):
+    from app import config
+    config.save_config({'quantize': {'python': str(tmp_path / 'no-such-python.exe')}})
     with pytest.raises(fq.QuantizeError, match='could not be started'):
         fq.run_worker(str(tmp_path / 'no-such-python.exe'), 'a', 'b')
 
 
-def test_the_worker_s_own_error_reaches_the_user_verbatim(tmp_path):
-    import sys
+def test_the_worker_s_own_error_reaches_the_user_verbatim(tmp_path, selected_cpu_runtime):
     with pytest.raises(fq.QuantizeError, match='not a readable .safetensors file'):
-        fq.run_worker(sys.executable, str(tmp_path / 'nope.safetensors'),
+        fq.run_worker(selected_cpu_runtime, str(tmp_path / 'nope.safetensors'),
                       str(tmp_path / 'out.safetensors'))
 
 
-def test_a_worker_that_says_nothing_quotes_what_it_did_say(tmp_path, monkeypatch):
-    import sys
+def test_a_worker_that_says_nothing_quotes_what_it_did_say(
+        tmp_path, monkeypatch, selected_cpu_runtime):
     stub = tmp_path / 'silent_worker.py'
     stub.write_text('print("loading something enormous")\n', encoding='utf-8')
     monkeypatch.setattr(fq, 'worker_command',
-                        lambda python, src, dst: [sys.executable, str(stub)])
+                        lambda python, src, dst: [python, '-I', str(stub)])
     with pytest.raises(fq.QuantizeError, match='no result'):
-        fq.run_worker(sys.executable, 'a', 'b')
+        fq.run_worker(selected_cpu_runtime, 'a', 'b')
 
 
-def test_the_conversion_really_happens_in_that_subprocess(tmp_path):
+def test_the_conversion_really_happens_in_that_subprocess(tmp_path, selected_cpu_runtime):
     """End to end through the CLI, exactly as the app runs it."""
-    import sys
     src = _model(tmp_path)
     seen = []
     result = fq.quantize(str(src), progress=lambda d, t: seen.append((d, t)))
@@ -311,7 +360,7 @@ def test_the_conversion_really_happens_in_that_subprocess(tmp_path):
     assert result['scaled_tensors'] == 2
     assert seen and seen[-1] == (3, 3), 'the child must stream its progress back'
     assert (tmp_path / 'BigModel_fp8.safetensors').is_file()
-    assert result['python'] == fq.interpreter()['python'] == sys.executable or True
+    assert result['python'] == fq.interpreter()['python'] == selected_cpu_runtime
 
 
 def test_the_output_can_be_sent_to_another_folder_when_this_one_is_full(tmp_path):

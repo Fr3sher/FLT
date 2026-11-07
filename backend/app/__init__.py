@@ -2,6 +2,8 @@ import os
 import logging
 import mimetypes
 import sqlite3
+import hashlib
+import hmac
 import json
 from pathlib import Path
 from flask import (
@@ -118,6 +120,18 @@ _DATASET_ARCHIVE_UPLOAD_ENDPOINTS = frozenset({
     'backup.full_restore',
 })
 
+# Photos dropped into a dataset are the same kind of legitimately large upload,
+# and this app is not a public service: the files come off the user's own disk,
+# on their own machine. The generic 64 MiB ceiling is a web default written for
+# a stranger's client, and applying it here refused five to eight body shots
+# with "upload too large" (_nofaceman, Discord). What DOES bound this route is
+# its own rule — 20 files per import, because with auto head-crop each image
+# goes through a vision pass that holds ComfyUI for the whole batch. So the
+# ceiling only has to cover twenty photographs: 512 MiB is 25 MiB each, past
+# any camera master, and the env var is there for someone who shoots bigger.
+_DEFAULT_DATASET_IMPORT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024
+_DATASET_IMPORT_UPLOAD_ENDPOINTS = frozenset({'datasets.dataset_import'})
+
 
 class ArchiveAwareRequest(Request):
     """Give the archive-upload endpoints — and only them — a raised ceiling.
@@ -145,12 +159,21 @@ class ArchiveAwareRequest(Request):
     def max_content_length(self):
         if self._forced_max_content_length is not None:
             return self._forced_max_content_length
+        if current_app:
+            registry = current_app.extensions.get('lds_plugins')
+            limit = registry.request_limits.get(self.endpoint) if registry else None
+            if limit:
+                from .auth_policy import plugin_available
+                if plugin_available(limit[0]):
+                    return limit[1]
         if self.endpoint in _DATASET_ARCHIVE_UPLOAD_ENDPOINTS and current_app:
             archive_max = int(
                 current_app.config['DATASET_ARCHIVE_MAX_UPLOAD_BYTES'])
             overhead = max(0, int(
                 current_app.config['DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES']))
             return archive_max + overhead
+        if self.endpoint in _DATASET_IMPORT_UPLOAD_ENDPOINTS and current_app:
+            return int(current_app.config['DATASET_IMPORT_MAX_UPLOAD_BYTES'])
         return super().max_content_length
 
     @max_content_length.setter
@@ -216,6 +239,14 @@ event.listen(Engine, 'connect', _configure_sqlite_connection)
 # column already exists) and is additive only — never a drop. Names/types are
 # hardcoded constants (no user input) → safe to interpolate into the ALTER.
 _SCHEMA_ADDITIONS = (
+    ('video_dataset', 'best_settings', 'TEXT'),
+    ('cloud_training_run', 'video_preview_key', 'VARCHAR(36)'),
+    ('video_test_clip', 'generation_settings', 'TEXT'),
+    ('video_test_clip', 'end_image', 'VARCHAR(255)'),
+    ('video_test_clip', 'user_id', 'VARCHAR(255)'),
+    ('video_test_clip', 'references_json', 'TEXT'),
+    ('video_test_clip', 'ref_base', 'VARCHAR(16)'),
+    ('video_test_clip', 'ref_image_size', 'VARCHAR(8)'),
     ('video_dataset', 'trigger_word', 'VARCHAR(100)'),
     ('video_clip', 'caption_fields', 'TEXT'),
     ('video_clip', 'caption_tokens', 'INTEGER'),
@@ -263,9 +294,9 @@ _SCHEMA_ADDITIONS = (
     # name for anything else — an old database would hand you stale values.
     ('face_dataset_image', 'caption_short', 'TEXT'),
     ('face_dataset_image', 'fail_reason', 'TEXT'),
-    # Nature de l'échec ('refused' | 'empty' | 'error') pour compter les refus
-    # fournisseur séparément des pannes. Les lignes existantes restent NULL :
-    # elles gardent leur phrase, et les compteurs ne les rangent nulle part.
+    # Failure kind (refused/empty/error) separates provider refusals from
+    # actual failures. Existing rows remain NULL: retain their message
+    # without assigning them to a counter category.
     ('face_dataset_image', 'fail_kind', 'VARCHAR(16)'),
     ('face_dataset_image', 'parent_image_id', 'INTEGER'),
     ('face_dataset_image', 'derivation_kind', 'VARCHAR(32)'),
@@ -411,6 +442,8 @@ _SCHEMA_ADDITIONS = (
     ('bank_image', 'edit_method', 'VARCHAR(16)'),
     ('bank_image', 'edit_generation', 'INTEGER'),
     ('bank_image', 'edit_baked_rotation', 'INTEGER'),
+    ('bank_image', 'edit_history', 'TEXT'),
+    ('bank_image', 'edit_sequence', 'INTEGER'),
     # Where a face_cluster id came from: NULL = the embeddings pass computed it
     # (what every existing row means), 'asserted' = a "this subfolder is one
     # person" declaration wrote it with no inference. Additive: a database that
@@ -653,9 +686,23 @@ def create_app(config_object=None):
             _DEFAULT_DATASET_ARCHIVE_MAX_UPLOAD_BYTES),
         DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES=(
             _DEFAULT_DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES),
+        # The photo-import ceiling (see _DEFAULT_DATASET_IMPORT_MAX_UPLOAD_BYTES):
+        # a local drop of twenty photographs, not a stranger's request.
+        DATASET_IMPORT_MAX_UPLOAD_BYTES=_positive_env_int(
+            'LDS_DATASET_IMPORT_MAX_UPLOAD_BYTES',
+            _DEFAULT_DATASET_IMPORT_MAX_UPLOAD_BYTES),
         DATASET_ARCHIVE_SPOOL_MEMORY_BYTES=8 * 1024 * 1024,
     )
     app.config.update(config_object or {})
+    if 'SESSION_COOKIE_NAME' not in (config_object or {}):
+        # Cookies ignore ports. Other local Flask/LDS apps must not overwrite
+        # this install's signed session while a CSRF-protected request retries.
+        # The persistent key keeps the name stable across restarts without
+        # exposing a machine path or sharing a session with another install.
+        key = app.secret_key
+        scope = hmac.new(key.encode('utf-8') if isinstance(key, str) else key,
+                         b'lds-session-cookie', hashlib.sha256).hexdigest()[:16]
+        app.config['SESSION_COOKIE_NAME'] = f'lds_session_{scope}'
 
     # File logging (skipped under TESTING): every module logger flows into
     # data/app.log (rotating, 2 MB x 2) so the in-app log viewer — and a novice
@@ -693,10 +740,23 @@ def create_app(config_object=None):
                 'ok': False,
                 'error': f'archive too large (maximum {limit // (1024 * 1024)} MiB)',
             }), 413
-        return jsonify({'ok': False, 'error': 'upload too large'}), 413
+        # Name the numbers: "upload too large" alone sent people resizing
+        # single photos when the whole DROP was the problem — five to eight
+        # high-resolution body shots in one request (_nofaceman, Discord). The
+        # dropzone now batches by these same figures; this is the belt.
+        size, limit = request.content_length, request.max_content_length
+        detail = ''
+        if size and limit:
+            # "the app", not "the server": this runs on the user's own machine,
+            # and calling it a server invites them to look for one (the
+            # maintainer made the same objection about our own wording).
+            detail = (f': this request is {size / (1024 * 1024):.1f} MiB, the app accepts '
+                      f'{limit / (1024 * 1024):.1f} MiB at a time — drop fewer files at once')
+        return jsonify({'ok': False, 'error': 'upload too large' + detail}), 413
 
     with app.app_context():
         from . import models  # noqa: F401
+        from lds_sdk import _legacy_schema, _video_schema  # noqa: F401
         db.create_all()
         _apply_additive_migrations()
         _cleanup_orphaned_lora_test_images()
@@ -753,13 +813,25 @@ def create_app(config_object=None):
     # registration order, so an extension's hook can never answer a request the
     # token gate would have refused. Extensions are trusted local code either
     # way — this only keeps a public bind's front door in front.
-    from .extension_loader import load_extensions
-    load_extensions(app, csrf)
+    from .plugins.restart import install_gate
+    install_gate(app)
 
     # Registered last of the write-path guards, so a caller still has to clear CSRF
     # and the access token before we tell them anything about their own body.
     from .routes._common import reject_unparsable_json_body
     app.before_request(reject_unparsable_json_body)
+
+    # Optional product statistics run only after the normal request guards.
+    from .usage_statistics import install as install_usage_statistics
+    install_usage_statistics(app)
+
+    # The schema and host request guards exist before a plugin registers any
+    # callback. One loader owns both modern packages and the legacy adapter.
+    from .plugins.loader import load_plugins
+    with app.app_context():
+        from .engines.builtin import register_builtin
+        register_builtin()
+        load_plugins(app, csrf)
 
     @app.get('/api/health')
     def health():
@@ -768,7 +840,9 @@ def create_app(config_object=None):
     @app.get('/api/csrf-token')
     def csrf_token():
         from flask_wtf.csrf import generate_csrf
-        return jsonify({'csrf_token': generate_csrf()})
+        response = jsonify({'csrf_token': generate_csrf()})
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
     @app.get('/')
     def index():
@@ -834,11 +908,7 @@ def _start_workers(app):
     except ImportError:
         pass  # phase(<3): training service not lifted yet
 
-    import threading
-    from .services import cloud_training
-    threading.Thread(target=cloud_training.boot_recover, args=(app,),
-                     daemon=True, name='cloud-boot-recover').start()
-    # Started separately from boot_recover on purpose: the watchdog that
-    # enforces the runtime cap, the stop deadline and the freeze detection must
-    # not share a fate with the recovery it supervises.
-    cloud_training.start_supervisor(app)
+    from .plugins.loader import run_boot_hooks
+    run_boot_hooks(app)
+    from .services.legacy_cloud_recovery import start as recover_legacy_cloud
+    recover_legacy_cloud(app)

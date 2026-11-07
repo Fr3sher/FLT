@@ -2,14 +2,36 @@ import { useEffect, useRef, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import { fmtSize } from './fmtSize'
+import ScoringPythonDialog from '../bank/ScoringPythonDialog'
+import { PICKER_PROFILES } from '../bank/scoringPython'
+import { installCompletion, installRuntimeNotice } from './installRuntimeNotice'
 
 const POLL_MS = 1200
 const MAX_POLL_FAILURES = 5
 
+export function InstallRuntimeNotice({ result, onChoose }) {
+  if (!result) return null
+  return (
+    <div role="status" className={`space-y-2 rounded-md border p-3 text-xs ${result.warn
+      ? 'border-amber-400/50 bg-amber-500/10 text-amber-200' : 'border-border bg-surface-raised text-content'}`}>
+      <p className="font-semibold">{result.title}</p>
+      <p>{result.detail}</p>
+      {result.validation && <p>{result.validation}</p>}
+      <dl className="space-y-1 text-content-muted">
+        <div><dt>Installed into</dt><dd className="break-all font-mono">{result.managedPython}</dd></div>
+        <div><dt>Selected at the end of this repair</dt><dd className="break-all font-mono">{result.effectivePython}</dd></div>
+      </dl>
+      <button type="button" onClick={onChoose}
+        className="min-h-10 rounded-md border border-current px-3 py-1.5 font-medium hover:bg-surface-raised">
+        Choose Python / test calculation
+      </button>
+    </div>
+  )
+}
 
-// One-click installer. Every failure ends in either auto-recovery (the backend
-// retries transient file locks and repairs on re-click) or ONE button to click
-// again — there is deliberately NO "run this pip command by hand" path here. Pip
+// One-click installer. Install failures retry in place; a repaired Bank environment
+// with a broken external selection opens the shared Python picker instead. There
+// is deliberately NO "run this pip command by hand" path here. Pip
 // installs are serialized by the backend: a second one requested while one runs
 // comes back 'queued' and starts on its own, so this shows an honest "waiting"
 // state instead of a dead-looking button.
@@ -20,6 +42,8 @@ export default function InstallRunner({ action, buttonLabel, onDone }) {
   const [log, setLog] = useState([])
   const [returncode, setReturncode] = useState(null)
   const [progress, setProgress] = useState(null)  // {done,total,pct} for streaming downloads
+  const [runtimeNotice, setRuntimeNotice] = useState(null)
+  const [pythonPicker, setPythonPicker] = useState(null)
   const timer = useRef(null)
   const mountedRef = useRef(true)
   const fails = useRef(0)
@@ -27,6 +51,7 @@ export default function InstallRunner({ action, buttonLabel, onDone }) {
   const apply = (s) => {
     setState(s.state); setLog(s.log || []); setReturncode(s.returncode)
     setProgress(s.progress || null)
+    setRuntimeNotice(s.runtime_notice || null)
     if (s.state !== 'running') setCancelling(false)
   }
 
@@ -39,9 +64,12 @@ export default function InstallRunner({ action, buttonLabel, onDone }) {
       if (s.state === 'running' || s.state === 'queued') {
         timer.current = setTimeout(poll, POLL_MS)   // keep polling while queued too
       } else if (s.state === 'success') {
-        toast.success('Installed.'); onDone?.()
+        const completion = installCompletion(s.state, s.runtime_notice)
+        toast[completion.tone](completion.message); onDone?.()
       } else if (s.state === 'error') {
-        toast.error('Install failed — click to try again.')
+        const completion = installCompletion(s.state, s.runtime_notice)
+        toast[completion.tone](completion.message)
+        if (s.runtime_notice?.managed_installed) onDone?.()
       } else if (s.state === 'cancelled') {
         toast.info('Download cancelled.')
       }
@@ -62,6 +90,7 @@ export default function InstallRunner({ action, buttonLabel, onDone }) {
   // (e.g. the user left this page mid-install and came back). Idle -> stay ready.
   useEffect(() => {
     mountedRef.current = true
+    setRuntimeNotice(null); setPythonPicker(null)
     apiFetch(`/api/setup/install/${action}/status`).then((s) => {
       if (!mountedRef.current) return
       if (s.state === 'idle') return
@@ -74,6 +103,7 @@ export default function InstallRunner({ action, buttonLabel, onDone }) {
 
   const start = async () => {
     setLog([]); setReturncode(null); setProgress(null); setState('running')
+    setRuntimeNotice(null); setPythonPicker(null)
     setCancelling(false); fails.current = 0
     try {
       const s = await postJson(`/api/setup/install/${action}`, {})
@@ -102,6 +132,7 @@ export default function InstallRunner({ action, buttonLabel, onDone }) {
 
   const running = state === 'running'
   const busy = running || state === 'queued'
+  const repairResult = installRuntimeNotice(runtimeNotice)
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -135,12 +166,14 @@ export default function InstallRunner({ action, buttonLabel, onDone }) {
           )}
         </div>
       )}
+      {!busy && <InstallRuntimeNotice result={repairResult}
+        onChoose={() => setPythonPicker(repairResult.profile)} />}
       {(log.length > 0 || running) && (
         <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface-raised p-2 text-[11px] text-content-muted">
           {log.slice(-40).join('\n') || 'starting…'}
         </pre>
       )}
-      {state === 'error' && (
+      {state === 'error' && !repairResult?.errorIsSelection && (
         <p className="text-xs text-rose-400">
           {returncode != null
             ? `Install failed (exit ${returncode}). Click "${buttonLabel}" to try again — it repairs in place.`
@@ -152,6 +185,13 @@ export default function InstallRunner({ action, buttonLabel, onDone }) {
           Download cancelled. The partial Ollama transfer can be resumed safely by clicking
           “{buttonLabel}” again.
         </p>
+      )}
+      {pythonPicker && (
+        <ScoringPythonDialog profile={PICKER_PROFILES[pythonPicker]}
+          onClose={() => setPythonPicker(null)}
+          onChanged={() => {
+            setRuntimeNotice(null); setState('idle'); setReturncode(null); onDone?.()
+          }} />
       )}
     </div>
   )

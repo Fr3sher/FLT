@@ -17,11 +17,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const dialog = read('./ContinueDialog.jsx');
 const panel = read('./TrainingPanel.jsx');
-const hub = read('../../pages/CloudRunsPage.jsx');
-const canvas = read('../canvas/LineageCanvas.jsx');
+const hub = read('../runs/useRunsHubContinue.js');
+const canvas = read("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx");
 
 /* Comments are stripped before any ordering check: the comment explaining why a
    dialog no longer closes first is exactly where the old call gets written down
@@ -76,7 +76,7 @@ test('a request in flight cannot be dismissed out from under itself', () => {
 test('all three hosts read the SAME answer out of a submission', () => {
   for (const [host, src] of [['panel', panel], ['Runs hub', hub], ['canvas', canvas]]) {
     assert.match(src, /continueAttemptOutcome/, `${host} must classify the answer with the shared rule`);
-    assert.match(src, /error=\{continueError\}/, `${host} must feed the refusal back into the dialog`);
+    assert.match(src, host === 'Runs hub' ? /busy, error, onResolve: submitContinue/ : /error=\{continueError\}/, `${host} must feed the refusal back into the dialog`);
   }
 });
 
@@ -84,7 +84,7 @@ test('the dataset panel posts with the dialog open, and keeps its preflight + co
   const body = handler(panel, 'const runContinue = async (payload)', 'const askResumeOrFresh');
   assertPostsBeforeClosing(body, 'setContinueOpen(false)', 'dataset panel');
   // what makes this host different must survive untouched
-  assert.match(body, /await preflightOk\(\{ lane, trainType: checkpointTrainType/);
+  assert.match(body, /await preflightOk\(\{ lane, trainType: continueType/);
   assert.match(body, /runConfirmableTrainingRequest\(/);
   assert.match(body, /confirmableRetryFlag\(error, 'Continue anyway \(force\)'\)/);
   // a preflight that stops the launch must SAY so in the dialog, not just toast
@@ -92,9 +92,9 @@ test('the dataset panel posts with the dialog open, and keeps its preflight + co
 });
 
 test('the Runs hub posts with the dialog open, and keeps postWithConfirmations on the local lane', () => {
-  const body = handler(hub, 'const submitContinue = async (payload)', 'const shareConfig');
-  assertPostsBeforeClosing(body, 'setContinueRunTarget(null)', 'Runs hub');
-  assert.match(hub, /return postWithConfirmations\(/,
+  const body = handler(hub, 'const submitContinue = async payload', '  return {\n    canContinueRun');
+  assertPostsBeforeClosing(body, 'setTarget(null)', 'Runs hub');
+  assert.match(hub, /await postWithConfirmations\(/,
     'the local lane keeps the confirm-and-retry loop — a refusal is not a question');
 });
 

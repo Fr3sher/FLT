@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const canvas = fs.readFileSync(new URL('./LineageCanvas.jsx', import.meta.url), 'utf8');
+const canvas = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
 const probe = fs.readFileSync(
   new URL('../../../scripts/responsiveProbe.mjs', import.meta.url), 'utf8');
 

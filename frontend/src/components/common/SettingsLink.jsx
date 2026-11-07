@@ -9,6 +9,8 @@
  * maintenance). A plain hash anchor rather than a router Link: these sit inside
  * lightboxes and panels that are sometimes portaled, where a bare <a> is the one
  * form that behaves identically everywhere.
+ * `pluginId` opens that plugin's own settings instead. It takes precedence over
+ * the legacy `section`, and preserves the same focus target.
  *
  * `focus` (optional): the DOM id of the ONE field the label promises. A label
  * that names a single setting must land ON it — "Adjust improve strength →"
@@ -30,10 +32,10 @@ const TONES = {
   warning: 'text-amber-300 underline decoration-amber-300/50',
 };
 
-export default function SettingsLink({ section, focus, children, tone = 'subtle', className = '' }) {
+export default function SettingsLink({ section, pluginId, focus, children, tone = 'subtle', className = '' }) {
   return (
     <a
-      href={settingsLinkHref(section, focus)}
+      href={settingsLinkHref(section, focus, pluginId)}
       className={`${TONES[tone] || TONES.subtle} text-[0.6875rem] ${className}`}
       // Stops the click from also triggering a parent that opens a lightbox,
       // toggles a tile or starts a job — these links live on top of active surfaces.

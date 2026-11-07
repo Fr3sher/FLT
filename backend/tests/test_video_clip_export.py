@@ -18,7 +18,10 @@ a review of the ffmpeg line. No ffmpeg binary is invoked: this is the builder.
 """
 import pytest
 
-from app.services import video_clip_export as ex
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_clip_export as ex
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _cmd(**over):
@@ -214,7 +217,7 @@ def test_slice_spans_cuts_a_long_shot_into_whole_consecutive_clips():
     """A fifteen-second shot promoted at 209 frames used to train on its first
     8.7 s. Sliced, it yields whole clips end to end — never overlapping (no two
     clips of a dataset show the same frames) and never partial."""
-    from app.services.video_clip_export import clip_duration_s, slice_spans
+    from lds_video.video_clip_export import clip_duration_s, slice_spans
     need = clip_duration_s(209, 24)                     # 8.666… s
     spans = slice_spans(0.0, 20.0, 209, 24)
     assert len(spans) == 2
@@ -227,7 +230,7 @@ def test_slice_spans_cuts_a_long_shot_into_whole_consecutive_clips():
 
 
 def test_slice_spans_refuses_what_the_encoder_would_refuse():
-    from app.services.video_clip_export import fits_frames, slice_spans
+    from lds_video.video_clip_export import fits_frames, slice_spans
     assert slice_spans(0.0, 2.0, 209, 24) == []
     assert not fits_frames(2.0, 209, 24)                # the same verdict
     assert slice_spans(0.0, 0.0, 39, 24) == []
@@ -236,7 +239,7 @@ def test_slice_spans_refuses_what_the_encoder_would_refuse():
 def test_the_inset_is_applied_once_at_the_ends_not_between_slices():
     """A shot boundary is where a dissolve lives; the joins BETWEEN slices are
     not shot boundaries, so trimming them would throw away good frames."""
-    from app.services.video_clip_export import slice_spans
+    from lds_video.video_clip_export import slice_spans
     spans = slice_spans(10.0, 30.0, 39, 24, inset_s=0.5)
     assert spans[0][0] == 10.5                          # trimmed at the head
     assert spans[-1][1] <= 29.5                         # and at the tail
@@ -247,7 +250,7 @@ def test_the_inset_is_applied_once_at_the_ends_not_between_slices():
 def test_one_shot_cannot_become_the_whole_dataset():
     """`limit` is the same guard as the per-source cap, one level down: a very
     long take must not outweigh every other shot on its own."""
-    from app.services.video_clip_export import slice_spans
+    from lds_video.video_clip_export import slice_spans
     assert len(slice_spans(0.0, 600.0, 39, 24, limit=8)) == 8
 
 
@@ -260,7 +263,7 @@ def test_the_promote_job_is_actually_told_to_slice():
     call itself."""
     import ast
     import inspect
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     src = inspect.getsource(svc.start_promote)
     tree = ast.parse(src.lstrip())
     calls = [n for n in ast.walk(tree)

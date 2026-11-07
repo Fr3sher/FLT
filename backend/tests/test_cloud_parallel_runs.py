@@ -4,14 +4,18 @@ fleet ceiling and the monthly budget stay hard blocks. vast_client and the
 monitor thread are always mocked -- no network."""
 import json
 from app.extensions import db
+from app.services.cloud_training import active_runs_for
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
 def ct(app, monkeypatch):
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
-    from app.services import cloud_training
+    from lds_cloud_training import cloud_training
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     monkeypatch.setattr(cloud_training, '_reconcile_before_launch', lambda a: None)
     return cloud_training
@@ -53,7 +57,7 @@ def test_allow_parallel_run_launches_and_stamps_the_flag(ct, app, seeded_dataset
         ct.launch_cloud_training('local', seeded_dataset)
         second = ct.launch_cloud_training('local', seeded_dataset,
                                           allow_parallel_run=True)
-        runs = ct.active_runs_for(seeded_dataset)
+        runs = active_runs_for(seeded_dataset)
         assert len(runs) == 2
         params = json.loads(next(r for r in runs
                                  if r.id == second['run_id']).train_params)
@@ -93,7 +97,7 @@ def test_unknown_family_sibling_is_not_waivable(ct, app, seeded_dataset, monkeyp
     ct.cfg.save_config({'cloud': {'max_concurrent_runs': 2}})
     with app.app_context():
         ct.launch_cloud_training('local', seeded_dataset)
-        run = ct.active_runs_for(seeded_dataset)[0]
+        run = active_runs_for(seeded_dataset)[0]
         run.train_params = json.dumps({})
         ct.db.session.commit()
         with pytest.raises(RuntimeError) as e:
@@ -358,7 +362,7 @@ def test_continue_routes_read_the_flag_from_the_request(
         ct, app, client, seeded_dataset, monkeypatch):
     """Both HTTP routes must hand the JSON flag to their service — the frontend
     confirm loop retries through THEM, not through the services directly."""
-    from app.routes import training as troutes
+    from lds_cloud_training import routes as troutes
     seen = {}
 
     def fake_continue_cloud(user_id, run_id, **kw):

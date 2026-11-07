@@ -12,10 +12,10 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(here, p), 'utf8');
-const studio = read('./VideoTestStudio.jsx');
-const history = read('./VideoClipHistory.jsx');
-const dialog = read('./SmoothDialog.jsx');
-const api = read('./videoStudioApi.js');
+const studio = read("../../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx");
+const history = read("../../../../../../bundled/video/frontend/studio/video/VideoClipHistory.jsx");
+const dialog = read("../../../../../../bundled/video/frontend/studio/video/SmoothDialog.jsx");
+const api = read("../../../../../../bundled/video/frontend/studio/video/videoStudioApi.js");
 
 test('the Smooth button opens the window; the window posts the factor', () => {
   assert.match(studio, /onVfi=\{setVfiClip\}/, 'the card hands the clip to the window, it posts nothing');

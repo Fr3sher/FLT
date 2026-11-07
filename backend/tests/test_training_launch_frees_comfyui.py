@@ -55,6 +55,7 @@ def _wire_image_launch(app, tmp_path, monkeypatch, *, free, calls):
     from app.services import face_dataset_service as svc
     from app.services import lora_training as lt
 
+    monkeypatch.setenv('LDS_TRAINING_FREE_COMFYUI', '1')
     _configure_aitoolkit(tmp_path, monkeypatch, app)
     monkeypatch.setattr(lt, 'assert_interpreter_ready', lambda: None)
     monkeypatch.setattr(lt, 'assert_free_disk', lambda *a, **k: None)
@@ -108,6 +109,18 @@ def _launch_image(app, ds_id):
 
 # --- the image lane -------------------------------------------------------------
 
+
+def test_shared_comfyui_is_not_unloaded_without_opt_in(monkeypatch):
+    from app.services import lora_training as lt
+    calls = []
+    monkeypatch.delenv('LDS_TRAINING_FREE_COMFYUI', raising=False)
+    monkeypatch.setattr('app.utils.comfyui.free_comfyui_vram',
+                        lambda *a, **k: calls.append('free'))
+    state = lt._comfyui_free_before_training('image')
+    assert state['verdict'] == 'skipped'
+    assert calls == []
+
+
 def test_the_image_launch_asks_comfyui_between_the_ollama_fence_and_the_spawn(
         app, tmp_path, monkeypatch):
     calls = []
@@ -158,6 +171,7 @@ def test_the_video_launch_asks_too(app, tmp_path, monkeypatch):
     same request, at the same place: after the Ollama fence, before the child."""
     from app.services import system_stats
     from app.services import video_training_local as vtl
+    monkeypatch.setenv('LDS_TRAINING_FREE_COMFYUI', '1')
     calls = []
     _video_aitoolkit(monkeypatch, tmp_path)
     monkeypatch.setattr(system_stats, 'gpu_vram_used_gb', lambda: 1.5)

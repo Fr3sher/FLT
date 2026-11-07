@@ -52,6 +52,7 @@ Live clips are EPHEMERAL: no `video_test_clip` row, nothing in the history —
 a channel that produced a thousand clips must not leave a thousand cards.
 """
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 
 import collections
 import logging
@@ -283,7 +284,7 @@ def _run_ffmpeg(cmd):
     same): no console window in the frozen Windows build, utf-8 stderr with
     replacement, and a timeout — a clip is seconds, never minutes."""
     return subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
-                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), timeout=600)
+                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), timeout=processing_timeout(600))
 
 
 def segment_name(seq) -> str:
@@ -311,7 +312,7 @@ def ffmpeg_facts(force=False) -> dict:
     if path:
         try:
             r = subprocess.run([path, '-hide_banner', '-filters'], capture_output=True,
-                               text=True, timeout=20)
+                               text=True, timeout=processing_timeout(20))
             rubber = bool(re.search(r'^\s*\S+\s+rubberband\s', r.stdout or '', re.M))
         except (OSError, subprocess.SubprocessError):
             rubber = False

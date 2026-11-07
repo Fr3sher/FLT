@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { flipOrder } from './flipOrder.js';
 
-// Clé « studio solo » : variante (z_model/aspect/cfg/steps) → checkpoint → seed →
-// STRENGTH en dernier (les strengths d'un même rendu doivent être adjacentes).
+// Solo Studio sort key: variant (z_model/aspect/cfg/steps), checkpoint, seed, then STRENGTH last
+// so strengths of the same rendering stay adjacent.
 const soloKey = (c) => [
   c.z_model_label || c.z_model || '', c.aspect || '', c.cfg ?? 0,
   c.steps ?? 0, c.steps2 ?? 0, c.label || '', c.seed ?? 0, c.strength ?? 0,
@@ -23,8 +23,8 @@ test('drops cells that have no openable image (pending / failed / no filename)',
 });
 
 test('strength variants of the SAME render are adjacent, ascending', () => {
-  // Deux rendus (seed 5 et seed 9) sur le même checkpoint, chacun en 3 strengths,
-  // fournis dans le désordre. On attend chaque rendu regroupé, strengths croissantes.
+  // Two seeds, 5 and 9, on one checkpoint with three strengths each, supplied out of order. Expect
+  // each rendering grouped with ascending strengths.
   const cells = [
     done({ id: 'a', label: 'ep8', seed: 5, strength: 0.9 }),
     done({ id: 'b', label: 'ep8', seed: 9, strength: 0.5 }),
@@ -34,7 +34,7 @@ test('strength variants of the SAME render are adjacent, ascending', () => {
     done({ id: 'f', label: 'ep8', seed: 9, strength: 0.7 }),
   ];
   const ids = flipOrder(cells, soloKey).map((c) => c.id);
-  // seed 5 : 0.5, 0.7, 0.9 puis seed 9 : 0.5, 0.7, 0.9
+  // Seed 5: 0.5, 0.7, 0.9, then seed 9: 0.5, 0.7, 0.9.
   assert.deepEqual(ids, ['c', 'e', 'a', 'b', 'f', 'd']);
 });
 
@@ -46,7 +46,7 @@ test('different checkpoints stay grouped (checkpoint before seed before strength
     done({ id: 4, label: 'ep4', seed: 5, strength: 0.6 }),
   ];
   const ids = flipOrder(cells, soloKey).map((c) => c.id);
-  // ep4 (0.6, 1.0) puis ep8 (0.6, 1.0) — tri numérique sur le label
+  // ep4 at 0.6/1.0, then ep8 at 0.6/1.0: numeric label sorting.
   assert.deepEqual(ids, [4, 2, 3, 1]);
 });
 
@@ -59,7 +59,7 @@ test('comparison key groups strengths of the same LoRA+seed adjacently', () => {
     done({ id: 4, dataset_id: 11, seed: 7, strength: 1.0 }),
   ];
   const ids = flipOrder(cells, compKey).map((c) => c.id);
-  // dataset 11 (0.5, 1.0) puis dataset 42 (0.5, 1.0)
+  // Dataset 11 (0.5, 1.0), then dataset 42 (0.5, 1.0).
   assert.deepEqual(ids, [2, 4, 3, 1]);
 });
 

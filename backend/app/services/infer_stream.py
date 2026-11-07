@@ -81,6 +81,8 @@ def run_infer_script(python, script, payload, timeout, on_line=None,
     megabyte download reaches no polling point, and there a kill costs nothing
     because nothing has been computed yet.
     """
+    from ..timeout_settings import processing_timeout
+    timeout = processing_timeout(timeout)
     proc = subprocess.Popen(
         infer_env.worker_argv(python, script),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,

@@ -1,75 +1,59 @@
 // react-frontend/src/components/dataset/studio/stackResults.js
 /**
- * Logique PURE de la VUE RÉSULTATS d'une pile 🧬 (mode combine du Test Studio) —
- * extraite du JSX pour être testable sous `node --test`, comme ./loraStack.js qui
- * porte, lui, la logique du LANCEMENT.
- *
- * Un run de pile ne produit qu'UNE colonne (le LoRA de tête) : la grille de
- * comparaison et le classement par-LoRA, conçus pour opposer des LoRA entre eux,
- * n'ont alors rien à dire. Ce que l'utilisateur veut savoir d'une pile, c'est :
- *   1. ce qu'il y a DEDANS (chaque LoRA, son poids, son trigger) ;
- *   2. ce que donnent d'AUTRES poids sur la même pile (les variantes, côte à côte) ;
- *   3. quel jeu de poids garder — le « best setting » d'une pile, ce sont ses poids,
- *      pas un checkpoint isolé.
- *
- * Le backend fournit `stack` (composition, null si ce n'est pas une pile) et
- * `stack_variants` (les combinaisons de la MÊME pile, celles du run affiché
- * marquées `active`).
- *
- * ⚠️ Depuis le balayage 🧬, « une variante » n'est plus « un run » : un seul run
- * porte N combinaisons de poids. Une variante est donc identifiée par le COUPLE
- * (run, vecteur de poids) — cf. `variantKey`.
+ * PURE Blend-stack RESULTS logic, extracted for node --test like loraStack.js handles LAUNCH
+ * logic. A stack produces only the leading LoRA column, making ordinary comparison/ranking
+ * unhelpful. Users need composition (LoRAs, weights, triggers), side-by-side alternate weights,
+ * and the best WEIGHT SET rather than an isolated checkpoint. Backend supplies stack, null for
+ * non-stacks, and stack_variants for the SAME composition with current-run variants marked active.
+ * Since weight sweeps, one variant is no longer one run: identify it by the PAIR of run and weight
+ * vector through variantKey.
  */
-// Extension explicite : ce module est importé par `node --test`, qui ne résout
-// pas les spécificateurs sans extension.
+// Keep the explicit extension because node --test does not resolve extensionless imports.
 import { blendComboLabel } from './loraStack.js';
 
-/** Composition de la pile du run affiché, [] si le run n'est pas une pile. */
+/* Displayed run's stack composition, or [] when it is not a stack. */
 export function stackMembers(data) {
   const members = data?.stack;
   return Array.isArray(members) ? members : [];
 }
 
-/** Le run affiché est-il une pile ? (≥2 LoRA dans la même image) */
+/* Is the displayed run a stack of at least two LoRAs in one image? */
 export function isStackRun(data) {
   return stackMembers(data).length > 1;
 }
 
 /**
- * Poids numérique, ou NaN s'il est absent. `Number(null)` vaut 0 : sans ce garde, un
- * poids manquant (run ancien, cellule tronquée) s'afficherait comme un vrai 0.00 —
- * « ce LoRA était désactivé » au lieu de « on ne sait pas ».
+ * Numeric weight, or NaN if absent. Number(null) is zero; guard missing weights from old runs or
+ * truncated cells so unknown is not falsely displayed as 0.00, meaning the LoRA was disabled.
  */
 const numWeight = (weight) => (weight == null || weight === '' ? NaN : Number(weight));
 
-/** Un poids affichable : 2 décimales, « — » quand le backend n'en a pas. */
+/* Display weight with two decimals, or a dash when absent from the backend. */
 export function fmtWeight(weight) {
   const n = numWeight(weight);
   return Number.isFinite(n) ? n.toFixed(2) : '—';
 }
 
 /**
- * Étiquette courte d'une variante : son VECTEUR de poids, dans l'ordre de la pile.
- * C'est ce qui distingue deux colonnes — les LoRA, eux, sont les mêmes partout.
+ * Short variant label is its WEIGHT VECTOR in stack order. LoRAs are identical across columns;
+ * weights distinguish them.
  */
 export function weightVectorText(weights) {
   return (weights || []).map((w) => fmtWeight(w?.weight)).join(' / ');
 }
 
 /**
- * Identité d'une variante DANS la liste. Le run ne suffit plus : depuis le
- * balayage 🧬, un même run porte plusieurs combinaisons, et les distinguer par
- * leur seul `run_id` collerait la même clé React à des colonnes différentes.
+ * Variant identity WITHIN the list. Since sweeps, one run carries multiple weight combinations;
+ * run_id alone would give different columns the same React key.
  */
 export function variantKey(v) {
   return `${v?.run_id}:${weightVectorText(v?.weights)}`;
 }
 
 /**
- * L'étiquette LISIBLE d'une combinaison — « margot 0.8 × telegram 0.6 ».
- * Délègue à loraStack.blendComboLabel, celui-là même que le panneau utilise pour
- * annoncer le balayage AVANT lancement : ce qui est promis et ce qui est affiché
- * sortent de la même fonction.
+ * Readable combination label, such as subject 0.8 x style 0.6. Delegate to the same
+ * loraStack.blendComboLabel used before launch, keeping promised and displayed sweep labels
+ * consistent.
  */
 export function comboLabelText(weights) {
   const list = weights || [];
@@ -80,11 +64,10 @@ export function comboLabelText(weights) {
 }
 
 /**
- * Poids d'une variante alignés sur la composition de référence, avec le delta face
- * à la variante active. Aligné PAR FICHIER (et non par position) : deux relances de
- * la même pile peuvent avoir été lancées dans un ordre de sélection différent, et
- * comparer alors la ligne 1 de l'une avec la ligne 2 de l'autre mentirait.
- * Retourne une entrée par membre : { filename, label, weight, delta, changed }.
+ * Align variant weights to reference composition and compute deltas against the active variant BY
+ * FILENAME, not position. Relaunches may select the same stack in different orders; positional
+ * comparison would misrepresent members. Return {filename, label, weight, delta, changed} per
+ * member.
  */
 export function alignWeights(members, variantWeights, activeWeights = null) {
   const byFile = new Map((variantWeights || []).map((w) => [w?.filename, w]));
@@ -93,8 +76,8 @@ export function alignWeights(members, variantWeights, activeWeights = null) {
     const here = numWeight(byFile.get(m?.filename)?.weight);
     const there = activeWeights ? numWeight(activeByFile.get(m?.filename)?.weight) : NaN;
     const comparable = Number.isFinite(here) && Number.isFinite(there);
-    // Arrondi au centième avant comparaison : les poids sont réglés au pas de 0.05
-    // et stockés arrondis, un delta de 1e-15 ne serait pas un changement.
+    // Round to hundredths before comparison. Weights are set in 0.05 increments and stored
+    // rounded; a 1e-15 delta is not a real change.
     const delta = comparable ? Math.round((here - there) * 100) / 100 : 0;
     return {
       filename: m?.filename ?? null,
@@ -106,7 +89,7 @@ export function alignWeights(members, variantWeights, activeWeights = null) {
   });
 }
 
-/** Bilan d'une variante : combien d'images rendues, et le solde des votes. */
+/** Variant summary: generated-image count and net votes. */
 export function variantSummary(variant) {
   const cells = variant?.cells || [];
   const likes = variant?.likes ?? cells.filter((c) => c.rating === 1).length;
@@ -116,10 +99,9 @@ export function variantSummary(variant) {
 }
 
 /**
- * Poids d'une variante ramenés dans la map du panneau de lancement
- * (clé `${dataset_id}:${checkpoint}` — celle de loraStack.stackKey), pour rejouer la
- * pile à ces poids-là. Les dataset_id viennent de la COMPOSITION : une variante ne
- * transporte que des fichiers.
+ * Restore variant weights to the launch map keyed by dataset_id:checkpoint, using
+ * loraStack.stackKey, to replay those weights. Get dataset IDs from COMPOSITION because variants
+ * carry only filenames.
  */
 export function weightsIntoStackMap(members, variantWeights) {
   const byFile = new Map((variantWeights || []).map((w) => [w?.filename, w]));
@@ -134,16 +116,15 @@ export function weightsIntoStackMap(members, variantWeights) {
 }
 
 /**
- * Corps du POST « ★ best setting » pour une pile : le LoRA de tête dans
- * checkpoint/strength (ce que lisent déjà le pin du Canvas, ★ Appliquer et le
- * garde-fou de suppression), les autres dans `stack`. `null` si la composition est
- * incomplète — mieux vaut ne pas proposer le bouton que d'épingler une demi-pile.
+ * Build stack best-setting POST: leading LoRA goes in checkpoint/strength for Canvas pins, Apply
+ * and deletion safeguards; other members go in stack. Return null for incomplete composition: hide
+ * the button rather than save half a stack.
  */
 export function bestStackPayload(members) {
   const list = members || [];
   if (list.length < 2) return null;
   const [head, ...rest] = list;
-  // `Number(null)` vaut 0 : un poids ABSENT doit être rejeté, pas pris pour un zéro.
+  // Number(null) is zero: reject an ABSENT weight rather than treating it as zero.
   const incomplete = (m) => m?.dataset_id == null || !m?.filename
     || m?.weight == null || !Number.isFinite(Number(m.weight));
   if (incomplete(head) || rest.some(incomplete)) return null;

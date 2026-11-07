@@ -9,7 +9,7 @@ import {
   purgeRunResultMessage,
   runStagingCleanup,
   stagingSpareReason,
-} from './stagingCleanup.js';
+} from '../../../bundled/cloud_training/frontend/lib/stagingCleanup.js';
 
 const done = { source: 'cloud', run_id: 93, status: 'done' };
 
@@ -35,7 +35,7 @@ test('stagingSpareReason spares exactly what the global purge spares', () => {
 
 test('the FRONT rule mirrors the BACKEND rule (one sparing law, two places)', () => {
   const svc = fs.readFileSync(
-    new URL('../../../backend/app/services/cloud_training.py', import.meta.url), 'utf8');
+    new URL('../../../backend/app/services/cloud_training.py', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // both purges go through the same backend helper…
   assert.match(svc, /def staging_spare_reason\(run\)/);
   assert.match(svc, /if staging_spare_reason\(run\):\s*\n\s*continue/);
@@ -142,18 +142,25 @@ test('the global toast distinguishes "nothing to clean" from a real cleanup', ()
 });
 
 test('the hub wires the per-run 🧹 without paying for sizes on every poll', () => {
-  const page = fs.readFileSync(new URL('../pages/CloudRunsPage.jsx', import.meta.url), 'utf8');
+  const page = fs.readFileSync(new URL('../../../bundled/cloud_training/frontend/CloudRunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   // sizes come from their OWN endpoint, fetched on mount and after a cleanup —
   // never folded into the 5 s runs poll (a staging walk is thousands of files).
   assert.match(page, /\/api\/dataset\/train\/cloud\/staging-sizes/);
   assert.match(page, /useEffect\(\(\) => \{ loadStagingSizes\(\); \}, \[loadStagingSizes\]\)/);
   // …and the 5 s poll itself never sizes anything: its callback only fetches runs.
-  const pollBody = page.slice(page.indexOf('const poll = useCallback'),
-    page.indexOf('}, [historyLimit]);'));
+  const host = fs.readFileSync(new URL('../components/runs/RunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const pollBody = host.slice(host.indexOf('const poll = useCallback'),
+    host.indexOf('}, [endpoint, historyLimit])'));
   assert.ok(pollBody.length > 50);
   assert.doesNotMatch(pollBody, /staging-sizes/);
-  // the button and its confirmation come from the shared helper, not from inline JSX
-  assert.match(page, /const cleanup = runStagingCleanup\(run, stagingSizes\);/);
+  // The core renders the row; Cloud supplies sizes and the guarded mutation.
+  assert.match(page, /const cloud = \{ stagingSizes,/);
+  assert.match(page, /purgeRun, purgingRun,/);
+  assert.match(page, /<RunsHubContent host=\{host\} cloud=\{cloud\}/);
+  assert.match(host, /const cleanup = runStagingCleanup\(run, stagingSizes\);/);
+  assert.match(host, /cleanup\.available && typeof purgeRun === 'function'/);
+  assert.match(host, /onClick=\{\(\) => purgeRun\(run\)\}/);
+  assert.match(page, /const info = runStagingCleanup\(run, stagingSizes\);/);
   assert.match(page, /window\.confirm\(info\.confirmMessage\)/);
   assert.match(page, /cloud\/purge-run/);
   assert.match(page, /purgeAllResultMessage\(d\)/);

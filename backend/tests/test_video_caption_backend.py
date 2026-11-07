@@ -17,8 +17,11 @@ from pathlib import Path
 
 import pytest
 
-from app.services import video_caption as vc
-from app.services import video_caption_worker as vcw
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_caption as vc
+from lds_video import video_caption_worker as vcw
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _no_cache(monkeypatch):
@@ -124,7 +127,7 @@ def test_the_lmstudio_provider_resolves_through_its_own_driver(app, monkeypatch)
 
 def _bank_with_one_clip(app):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -140,7 +143,7 @@ def _bank_with_one_clip(app):
 
 
 def test_run_captions_records_the_local_engine_and_estimates_tokens(app, monkeypatch):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
 
     class _Fake:
         def __init__(self, **kw):
@@ -304,7 +307,7 @@ def test_the_ollama_video_door_sends_one_deterministic_request(app, monkeypatch)
 
 
 def test_the_runtime_line_reports_the_resolved_engine(app, monkeypatch):
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     monkeypatch.setattr(vc, 'resolve_backend', lambda fresh=False: {
         'backend': 'local_llm', 'engine': 'ollama', 'label': 'Ollama',
         'model': 'qwen3-vl:4b-instruct', 'record_id': 'ollama:qwen3-vl:4b-instruct',
@@ -320,7 +323,7 @@ def test_the_runtime_line_reports_the_resolved_engine(app, monkeypatch):
 def test_the_fields_tail_survives_a_local_engine(app, monkeypatch):
     """C12-C is engine-independent: the labelled tail is parsed from whatever
     text comes back, so a local LLM's caption stores fields too."""
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
 
     class _Fake:
         def __init__(self, **kw):
@@ -385,7 +388,7 @@ def test_run_captions_surfaces_a_failure_streak_while_it_happens(app, monkeypatc
     same — the user watching the bar can stop instead of paying for a pass
     that writes nothing but error rows."""
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
 
     class _Fake:
         def __init__(self, **kw):

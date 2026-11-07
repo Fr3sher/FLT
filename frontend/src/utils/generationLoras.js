@@ -14,10 +14,8 @@
 
 export const LORA_STRENGTH_MAX = 1.5;
 
-/** Hard caps — mirror the backend's klein_edit_helper.MAX_GENERATION_LORAS /
- *  MAX_GENERATION_LORA_PRESETS (shown in the Settings card). */
+/** Active chain bound — mirror klein_edit_helper.MAX_GENERATION_LORAS. */
 export const MAX_GENERATION_LORAS = 8;
-export const MAX_GENERATION_LORA_PRESETS = 12;
 
 /** Clamp a slider/user value into the [0, 1.5] strength range the backend
  *  enforces too (NaN and negatives collapse to 0). */
@@ -29,7 +27,7 @@ export function clampLoraStrength(value) {
 
 /** Sanitize a config-shaped preset list (from /api/settings or a Settings
  *  edit): drop blank/duplicate names and blank/malformed rows, normalize
- *  strengths (junk -> 0.6), cap rows per preset and the preset count. Order
+ *  strengths (junk -> 0.6), cap rows per preset and retain every preset. Order
  *  is preserved everywhere — row order IS the chain order. */
 export function sanitizeGenerationLoraPresets(list) {
   const out = [];
@@ -52,7 +50,6 @@ export function sanitizeGenerationLoraPresets(list) {
     }
     seen.add(name);
     out.push({ name, loras: rows });
-    if (out.length >= MAX_GENERATION_LORA_PRESETS) break;
   }
   return out;
 }

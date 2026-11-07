@@ -26,11 +26,18 @@ import os
 from datetime import timedelta
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
 def ct(app, monkeypatch):
-    from app.services import cloud_training
+    monkeypatch.setenv('VAST_API_KEY', 'k-test')
+    from lds_cloud_training import cloud_training
+    monkeypatch.setattr(cloud_training.vast_client, 'get_instance',
+                        lambda iid, **_kw: {'instance_id': '90001', 'label': 'lds-1'}
+                        if str(iid) == '90001' else None)
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     yield cloud_training
 
@@ -65,7 +72,7 @@ class _OkResponse:
 
 def _remote(monkeypatch, response=None):
     """A RemoteAiToolkit whose HTTP layer is stubbed, recording each POST."""
-    from app.services.aitoolkit_remote import RemoteAiToolkit
+    from lds_cloud_training.aitoolkit_remote import RemoteAiToolkit
     remote = RemoteAiToolkit('http://pod.invalid:1234', 'tok')
     calls = []
 
@@ -128,7 +135,7 @@ def test_upload_without_a_callback_still_works(tmp_path, monkeypatch):
 
 def test_an_unreadable_file_is_counted_as_a_file_worth_zero_bytes(tmp_path, monkeypatch):
     """Sizing the folder must not be able to fail the upload."""
-    from app.services import aitoolkit_remote
+    from lds_cloud_training import aitoolkit_remote
     folder = _dataset(tmp_path, pairs=2)
     real_getsize = os.path.getsize
 
@@ -293,7 +300,7 @@ def test_a_stalled_upload_destroys_the_pod_with_its_own_message(
     and the error must say the DATASET never arrived, not that the run froze."""
     destroyed = []
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(str(iid)) or True)
+                        lambda iid, **_kw: destroyed.append(str(iid)) or True)
     with app.app_context():
         run = _mkrun(ct, tmp_path)
         ct._write_upload_progress(run, 8, 12422, 25_000_000, 24_000_000_000)
@@ -316,7 +323,7 @@ def test_a_slow_but_moving_upload_is_left_alone(ct, app, tmp_path, monkeypatch):
     it was rented for and must not be touched — not at 25 min, not at 3 h."""
     destroyed = []
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(str(iid)) or True)
+                        lambda iid, **_kw: destroyed.append(str(iid)) or True)
     with app.app_context():
         run = _mkrun(ct, tmp_path,
                      created_at=naive_utcnow() - timedelta(hours=3))
@@ -338,7 +345,7 @@ def test_a_restart_does_not_kill_the_run_on_its_predecessors_byte_count(
     the same direction of error the fingerprint chooses everywhere else."""
     destroyed = []
     monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                        lambda iid: destroyed.append(str(iid)) or True)
+                        lambda iid, **_kw: destroyed.append(str(iid)) or True)
     with app.app_context():
         run = _mkrun(ct, tmp_path)
         ct._write_upload_progress(run, 900, 12422, 2_000_000_000, 24_000_000_000)
@@ -378,7 +385,7 @@ def test_the_monitor_hands_the_heartbeat_to_both_uploads(ct, app, tmp_path, monk
     """Wiring check: the dataset AND the masks folder must both report. A
     masked run that goes silent for its mask upload is the same incident."""
     import inspect
-    src = inspect.getsource(ct._monitor)
+    src = inspect.getsource(ct._monitor_with_credentials)
     assert src.count('_upload_heartbeat(run,') == 2
     assert 'Uploading the masks' in src
 

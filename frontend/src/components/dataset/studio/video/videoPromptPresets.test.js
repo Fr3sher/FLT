@@ -10,7 +10,7 @@ import test from 'node:test';
 
 import {
   VIDEO_QUICK_PROMPT_CATEGORIES, allQuickPrompts, promptForMode, appendQuickPrompt,
-} from './videoPromptPresets.js';
+} from "../../../../../../bundled/video/frontend/studio/video/videoPromptPresets.js";
 
 test('every category carries an id, a label, an emoji and at least one preset', () => {
   const ids = new Set();
@@ -83,11 +83,11 @@ test('the picker is wired into the Motion field, and appends rather than replace
      the wiring as text, the same compromise the rest of the studio's contract
      tests make. What it guards is the promise: `setPrompt` receives the RESULT
      of appendQuickPrompt, not the chip alone. */
-  const studio = fs.readFileSync(new URL('./VideoTestStudio.jsx', import.meta.url), 'utf8');
+  const studio = fs.readFileSync(new URL("../../../../../../bundled/video/frontend/studio/video/VideoTestStudio.jsx", import.meta.url), 'utf8');
   assert.match(studio, /<VideoQuickPrompts mode=\{mode\}/);
   assert.match(studio, /onAppend=\{\(text\) => setPrompt\(\(p\) => appendQuickPrompt\(p, text\)\)\}/);
 
-  const picker = fs.readFileSync(new URL('./VideoQuickPrompts.jsx', import.meta.url), 'utf8');
+  const picker = fs.readFileSync(new URL("../../../../../../bundled/video/frontend/studio/video/VideoQuickPrompts.jsx", import.meta.url), 'utf8');
   // finger-sized below lg, on every control the picker draws (the responsive
   // contract: fixed with `min-h-10 lg:min-h-0`, never by exempting a chip)
   assert.equal((picker.match(/min-h-10 lg:min-h-0/g) || []).length, 2);

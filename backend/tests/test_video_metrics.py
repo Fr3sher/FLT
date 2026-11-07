@@ -23,7 +23,10 @@ sits behind one seam, so these stay green on an install with no video extra.
 """
 import pytest
 
-from app.services import video_metrics as vm
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_metrics as vm
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- the aggregation semantics ------------------------------------------------

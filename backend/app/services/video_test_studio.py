@@ -29,6 +29,7 @@ The build is a PURE function. It takes what it needs — including whether the
 database: the whole option matrix is testable without a GPU, which is the only
 reason the pitfalls below can be pinned by tests at all.
 """
+from ..timeout_settings import network_timeout, processing_timeout
 
 import json
 import os
@@ -1239,7 +1240,7 @@ def _run_ffmpeg(cmd, timeout=600):
     same): no console window in the frozen Windows build, utf-8 stderr with
     replacement, and a timeout."""
     return subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
-                          errors='replace', timeout=timeout,
+                          errors='replace', timeout=processing_timeout(timeout),
                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
 
@@ -1872,7 +1873,7 @@ def comfyui_launch_facts(timeout=3):
     if not api:
         return None, None, None
     try:
-        r = requests.get(f'{api}/system_stats', timeout=timeout, allow_redirects=False)
+        r = requests.get(f'{api}/system_stats', timeout=network_timeout(timeout), allow_redirects=False)
         if r.status_code != 200:
             return None, None, None
         payload = r.json()

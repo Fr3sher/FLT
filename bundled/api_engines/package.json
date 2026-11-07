@@ -1,0 +1,11 @@
+{
+  "name": "@lds-plugins/api-engines",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "lds": {
+    "entry": "frontend/index.js",
+    "sdk": "1.7.0"
+  },
+  "dependencies": {}
+}

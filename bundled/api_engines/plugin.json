@@ -1,0 +1,100 @@
+{
+  "id": "api_engines",
+  "bundled": true,
+  "name": "API image engines",
+  "version": "1.2.0",
+  "api": 1,
+  "description": "Generate dataset images with the cloud engines — Nano Banana (Gemini), ChatGPT (gpt-image, by API key or a ChatGPT subscription) and OpenRouter. Pay-per-image; each needs its own key in Plugins ▸ API image engines ▸ Settings.",
+  "requires": [],
+  "python_package": "lds_api_engines",
+  "frontend": "frontend/index.js",
+  "in_process_requirements": true,
+  "owns": {
+    "install_actions": [],
+    "install_groups": [],
+    "probes": [
+      "chatgpt_subscription"
+    ],
+    "engines": [
+      "nanobanana",
+      "chatgpt",
+      "openrouter"
+    ],
+    "config_sections": [],
+    "config_keys_in_shared_sections": {
+      "engines": [
+        "chatgpt_auth",
+        "chatgpt_subscription_model",
+        "openrouter_model",
+        "nanobanana_model",
+        "chatgpt_image_model"
+      ]
+    },
+    "help_topics": [
+      "engines.chatgpt_auth",
+      "engines.chatgpt_subscription_model",
+      "GEMINI_API_KEY",
+      "OPENAI_API_KEY",
+      "OPENROUTER_API_KEY",
+      "engines.openrouter_model",
+      "engines.nanobanana_model",
+      "engines.chatgpt_image_model",
+      "nanobanana-filter-and-synthid"
+    ],
+    "tables": [],
+    "whats_new_ids": [
+      "2026-09-23-chatgpt-subscription-models",
+      "2026-09-23-gpt-image-25",
+      "2026-08-09-setup-chatgpt-subscription",
+      "2026-07-29-chatgpt-failures-name-their-cause",
+      "2026-07-28-nano-banana-says-when-google-refused",
+      "2026-07-26-edit-the-reference-with-openrouter",
+      "2026-07-26-pick-the-model-of-every-api-engine",
+      "2026-07-26-openrouter-image-engine"
+    ],
+    "model_slots": []
+  },
+  "models": [],
+  "node_packs": [],
+  "permissions": [
+    "network",
+    "datasets:write",
+    "secrets:GEMINI_API_KEY",
+    "secrets:OPENAI_API_KEY",
+    "secrets:OPENROUTER_API_KEY"
+  ],
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "lora-dataset-studio",
+  "experience": {
+    "entrypoints": [
+      {
+        "label": "Choose an image engine",
+        "path": "/plugins/api_engines/settings"
+      }
+    ],
+    "setup": {
+      "label": "Configure",
+      "path": "/plugins/api_engines/settings"
+    },
+    "setup_hint": "Connect your provider account or API key, then choose an engine in Test Studio.",
+    "surfaces": [
+      "Test Studio",
+      "Dataset",
+      "Image engine settings"
+    ]
+  },
+  "compatibility": {
+    "api": ">=1.12,<2"
+  },
+  "guide_ownership": {
+    "chapters": [],
+    "sections": [
+      "settings-reference#api-image-engines-configuration-keys",
+      "settings-reference#api-keys",
+      "settings-reference#image-models",
+      "settings-reference#what-the-gemini-engine-will-and-will-not-do",
+      "settings-reference#chatgpt-subscription-experimental",
+      "using-the-app#generate-dataset-images-with-api-image-engines"
+    ]
+  }
+}

@@ -1,3 +1,4 @@
+import { installRestorationOwners } from '../../tests/support/restorationOwners.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -20,7 +21,7 @@ test('every engine states what it does to the ORIGINAL, not just that it improve
   assert.match(klein.summary, /shift|change/i)
   assert.match(seedvr2.summary, /keeps the original/i)
   assert.notEqual(klein.summary, seedvr2.summary)
-  for (const engine of IMPROVE_ENGINES) {
+  for (const engine of availableImproveEngines()) {
     assert.ok(engine.id && engine.label && engine.action && engine.summary)
   }
 })
@@ -30,11 +31,11 @@ test('an unknown engine id falls back to Klein rather than blowing up a label', 
   assert.equal(improveEngine(undefined).id, 'klein')
 })
 
-test('SeedVR2 only appears once it is ready; Klein always does', () => {
+test('active restoration products stay discoverable before engine preparation', () => {
   const ids = (caps) => availableImproveEngines(caps).map((e) => e.id)
-  assert.deepEqual(ids(undefined), ['klein'])
-  assert.deepEqual(ids({ comfyui: {} }), ['klein'])
-  assert.deepEqual(ids({ comfyui: { seedvr2_ready: false } }), ['klein'])
+  assert.deepEqual(ids(undefined), ['klein', 'seedvr2'])
+  assert.deepEqual(ids({ comfyui: {} }), ['klein', 'seedvr2'])
+  assert.deepEqual(ids({ comfyui: { seedvr2_ready: false } }), ['klein', 'seedvr2'])
   assert.deepEqual(ids({ comfyui: { seedvr2_ready: true } }), ['klein', 'seedvr2'])
 })
 
@@ -99,10 +100,13 @@ test('the lightbox offers BOTH engines once SeedVR2 is installed', () => {
   assert.deepEqual(ids, ['klein', 'seedvr2'])
 })
 
-test('SeedVR2 absent from the lightbox until it is installed', () => {
+test('an unprepared active SeedVR2 remains visible with a disabled launch', () => {
   const ids = lightboxImproveButtons({ caps: { comfyui: {} }, engines: { klein: true } })
     .map((b) => b.id)
-  assert.deepEqual(ids, ['klein'])
+  assert.deepEqual(ids, ['klein', 'seedvr2']);
+  const seed = lightboxImproveButtons({ caps: { comfyui: {} }, engines: { klein: true } }).find(button => button.id === 'seedvr2');
+  assert.equal(seed.disabled, true);
+  assert.match(seed.title, /prepare|Setup/);
 })
 
 test('the amber anime warning belongs to Klein ALONE', () => {
@@ -157,3 +161,9 @@ test('the idle labels name the engine, matching the selection toolbar', () => {
     .map((b) => b.label)
   assert.deepEqual(labels, ['✨ Improve via Klein', '🔍 Upscale via SeedVR2'])
 })
+
+
+test.beforeEach(t => installRestorationOwners(t, { runtime: false }))
+
+
+test('the core bundles no restoration engine by default', () => { assert.deepEqual(IMPROVE_ENGINES, []); })

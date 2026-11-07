@@ -27,6 +27,7 @@ progress, log, error}) so every screen that already knows how to render a pull
 renders this one unchanged.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 
 import logging
 import os
@@ -65,7 +66,7 @@ def _post_download(ref: str) -> tuple[int, dict]:
     try:
         resp = requests.post(f'{_base_url()}/api/v1/models/download',
                              json={'model': ref}, headers=_headers(),
-                             timeout=_TIMEOUT)
+                             timeout=network_timeout(_TIMEOUT))
     except requests.RequestException as exc:
         return 0, {'error': {'message': str(exc), 'type': 'unreachable'}}
     try:

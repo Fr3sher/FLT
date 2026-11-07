@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { ensureLicenceAck, hasLicenceAck, licencePrompt, readAcks } from './licenceAck.js'
+import { ensureLicenceAck, hasLicenceAck, licencePrompt, readAcks } from "../../../../bundled/video/frontend/videobank/licenceAck.js"
 
 /** A storage fake with localStorage's shape and none of its moods. */
 function memoryStorage(seed = {}) {

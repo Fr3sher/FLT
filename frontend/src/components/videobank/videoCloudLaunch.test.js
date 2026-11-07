@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import {
   videoOffersUrl, videoPreflightUrl, CLOUD_STATUS_URL, launchFooterLine,
   offersEmptyMessage, launchStatusLine, preflightGate,
-} from './videoCloudLaunch.js'
+} from '../../../../bundled/cloud_training/frontend/video/videoCloudLaunch.js'
 
 const DS = { id: 9, target_label: 'Wan 2.2 T2V A14B', frames: 81, clips: 6 }
 

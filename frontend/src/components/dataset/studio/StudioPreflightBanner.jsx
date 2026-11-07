@@ -1,25 +1,19 @@
 // react-frontend/src/components/dataset/studio/StudioPreflightBanner.jsx
 /**
- * Bandeau « le pipeline de test ne peut pas tourner » — affiché quand le lancement
- * d'une grille Studio renvoie un 409 `studio_missing` (P0-a). Même esprit que le
- * message Klein « place X ici », mais itemisé : chaque fichier modèle manquant avec
- * son chemin relatif attendu (models/vae/…) et chaque custom node absent du ComfyUI
- * cible. Sans ça, un utilisateur frais lançait une grille dont chaque tuile échouait
- * en silence. Dismissable (le prochain lancement le réémet si le manque persiste).
- *
- * `missing` = { family, files: [{path, kind}], nodes: [class_type],
- *   node_packs: [{class_type, pack, url, search}] } | null. `node_packs` names the
- *   ComfyUI-Manager pack (+ search term & link) for each recognised missing node, so
- *   the user knows WHAT to install instead of reverse-mapping a raw class_type.
- * `archMismatch` = { family, detected, checkpoint } | null — a selected checkpoint
- * whose REAL architecture (read from its header) isn't this Studio's family, so
- * ComfyUI would silently drop it and every tile would render as if the LoRA were
- * off. A distinct, higher-priority stop than a missing asset.
+ * Pipeline-cannot-run banner appears on launch 409 studio_missing (P0-a). List each missing model
+ * with its expected relative path and each missing ComfyUI node, preventing new installations from
+ * launching grids whose tiles all fail silently. Dismissible; another launch repeats it if still
+ * unresolved. missing contains family, files [{path,kind}], nodes [class_type], and optional
+ * node_packs [{class_type,pack,url,search}] identifying ComfyUI-Manager packages instead of
+ * leaving users to interpret class names. archMismatch contains family, detected and checkpoint
+ * when header-detected architecture conflicts with the Studio family. ComfyUI would otherwise
+ * ignore that LoRA and render every tile without it. This is a separate, higher-priority blocker.
  */
-const FAMILY_LABELS = { zimage: 'Z-Image', sdxl: 'SDXL', krea: 'Krea 2 Turbo',
-  flux: 'FLUX.1', flux2klein: 'FLUX.2 Klein' };
+import { FAMILY_LABELS } from './constants';
+import { studioModelSettingsLink } from '../../../utils/studioFamilySettings';
+import ComfyNodeRepair from '../../setup/ComfyNodeRepair';
 
-export default function StudioPreflightBanner({ missing, archMismatch, onDismiss }) {
+export default function StudioPreflightBanner({ missing, archMismatch, onDismiss, onRefresh }) {
   if (archMismatch) {
     const fam = FAMILY_LABELS[archMismatch.family] || archMismatch.family || 'this';
     const det = FAMILY_LABELS[archMismatch.detected] || archMismatch.detected || 'a different';
@@ -44,9 +38,9 @@ export default function StudioPreflightBanner({ missing, archMismatch, onDismiss
   const files = missing.files || [];
   const nodes = missing.nodes || [];
   const nodePacks = missing.node_packs || [];
-  const packFor = (ct) => nodePacks.find((p) => p.class_type === ct);
   if (!files.length && !nodes.length) return null;
   const fam = FAMILY_LABELS[missing.family] || missing.family || 'This';
+  const modelSettingsLink = studioModelSettingsLink(missing.family);
 
   return (
     <div role="alert"
@@ -75,55 +69,28 @@ export default function StudioPreflightBanner({ missing, archMismatch, onDismiss
                   <code className="text-red-100 text-[0.6875rem] break-all">{f.path}</code>
                   <span className="text-red-200/60 text-[0.625rem]">({f.kind})</span>
                 </span>
-                {/* `hint` = ce que le résolveur a réellement cherché (noms acceptés,
-                    racines balayées). Sans lui, le chemin affiché se lit comme « ce
-                    nom exact est obligatoire », alors qu'une douzaine d'orthographes
-                    passent. (bobba84, GitHub #18) */}
+                {/*
+                 * hint reports what the resolver actually searched: accepted names and scanned
+                 * roots. Without it, the shown path falsely implies one exact filename is
+                 * mandatory despite multiple accepted spellings. (bobba84, GitHub #18)
+                 */}
                 {f.hint && (
                   <span className="text-red-200/60 text-[0.625rem] leading-snug">{f.hint}</span>
                 )}
               </li>
             ))}
           </ul>
+          {modelSettingsLink && (
+            <a href={modelSettingsLink}
+              className="self-start text-sm underline hover:text-red-100">
+              Install {fam} test models in Settings →
+            </a>
+          )}
         </div>
       )}
 
       {nodes.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <span className="text-red-200/80 text-[0.6875rem] uppercase tracking-wide">
-            Missing custom node{nodes.length > 1 ? 's' : ''} — install into ComfyUI
-          </span>
-          <ul className="m-0 flex flex-col gap-1">
-            {nodes.map((n) => {
-              const p = packFor(n);
-              return (
-                <li key={n} className="flex flex-col gap-0.5">
-                  <code className="self-start px-1.5 py-0.5 rounded border border-red-400/40 bg-red-500/10 text-red-100 text-[0.6875rem]">
-                    {n}
-                  </code>
-                  {p && (
-                    <span className="text-red-200/70 text-[0.625rem]">
-                      {p.url ? (
-                        <>
-                          Install <b className="font-semibold">{p.pack}</b> via ComfyUI-Manager
-                          {p.search ? <> (search “{p.search}”)</> : null} —{' '}
-                          <a href={p.url} target="_blank" rel="noreferrer"
-                            className="underline break-all hover:text-red-100">{p.url}</a>
-                          , then restart ComfyUI.
-                        </>
-                      ) : (
-                        <>
-                          Install <b className="font-semibold">{p.pack}</b> from {p.setup},
-                          then restart ComfyUI.
-                        </>
-                      )}
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+        <ComfyNodeRepair nodes={nodes} nodePacks={nodePacks} onRefresh={onRefresh} />
       )}
     </div>
   );

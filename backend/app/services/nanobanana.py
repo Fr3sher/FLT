@@ -68,6 +68,7 @@ above. `None` is now unreachable on this engine and only survives as the shared
 signature. The API key never appears in a message or a log line.
 """
 from __future__ import annotations
+from ..timeout_settings import network_timeout
 import base64
 import logging
 import os
@@ -265,20 +266,19 @@ def parse_image_response(data) -> bytes | None:
 
 def generate_variation(ref_bytes: bytes | list[bytes], prompt: str, model: str | None = None,
                        aspect_ratio: str = '1:1') -> bytes | None:
-    """Reference photo(s) + variation prompt -> generated image bytes, or None.
+    """Reference photos plus variation prompt produce generated image bytes.
 
-    `ref_bytes` : une image (bytes) ou une LISTE d'images de la même personne
-    (multi-références — gemini-3-pro-image accepte jusqu'à 14 images d'entrée et
-    s'appuie sur toutes pour la cohérence d'identité). La principale en premier.
-    `aspect_ratio` (ex. '1:1' visage, '3:4' buste/corps) évite de letterboxer les
-    plans corps. Tries with imageConfig first (Pro models); on a 400 retries once
-    with a slim payload for models that don't accept imageConfig.
+    ref_bytes accepts one image or a list of the same person, main reference
+    first. gemini-3-pro-image accepts up to 14 inputs for identity consistency.
+    Choose aspect_ratio for framing to avoid letterboxing body shots. Try
+    imageConfig first, then retry one 400 with a reduced payload for models
+    that do not accept it.
 
-    Every outcome that is not an image RAISES with the cause named: a filter
-    refusal as NanoBananaRefused (per-request, the batch continues), a
-    malfunction as NanoBananaError, and a cause that would repeat on every row as
-    NanoBananaFatal. The `| None` in the signature is the shared engine contract,
-    kept so the three engines stay interchangeable; this one no longer uses it."""
+    Every non-image outcome raises a named cause: NanoBananaRefused for
+    per-request filtering while the batch continues, NanoBananaError for
+    malfunction, NanoBananaFatal for a cause affecting every row. The
+    optional return annotation remains for shared-engine compatibility
+    but this engine no longer returns None."""
     key = _api_key()
     if not key:
         # An exception, not None: a missing key must never read to the user as
@@ -301,7 +301,7 @@ def generate_variation(ref_bytes: bytes | list[bytes], prompt: str, model: str |
         try:
             r = requests.post(_API.format(model=mdl),
                               headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                              json=payload, timeout=(10, 180))
+                              json=payload, timeout=network_timeout((10, 180), processing=True))
         except requests.RequestException as e:
             raise NanoBananaError(f'could not reach Gemini: {e}')
         if r.status_code == 400 and i == 0:

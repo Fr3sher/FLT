@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   deployedSummary, familyLabel, groupByDataset, rowKey, undeployButtonLabel,
   undeployConfirm, undeployItems, undeployOutcome,
-} from './deployedLoras.js';
+} from "../../../../bundled/canvas/frontend/components/canvas/deployedLoras.js";
 
 const row = (over = {}) => ({
   dataset_id: 1, dataset_name: 'Elsa', family: 'krea',

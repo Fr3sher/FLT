@@ -4,7 +4,7 @@ import {
   HEADER_MACHINE_LOAD_PREF_KEY, MACHINE_LOAD_PREF_KEY, formatGb, freeMemorySummary, loadTone,
   machineLoadSummary, readMachineLoadPref, shouldPoll, systemStatsSegments,
   tempTone, writeMachineLoadPref,
-} from './systemStats.js';
+} from "../../../bundled/resource_monitor/frontend/lib/systemStats.js";
 
 test('🧹 the free-memory toast says what was MEASURED, then which lever acted', () => {
   assert.equal(freeMemorySummary({

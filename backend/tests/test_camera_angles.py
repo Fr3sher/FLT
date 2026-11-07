@@ -15,9 +15,13 @@ What is asserted here is what a second reader would plausibly get wrong:
   * the VAE is NOT a download of this lane's own — it is the Krea 2 lane's file,
     and the Setup key this lane reports must be the button that installs it.
 """
+
 import pytest
 
-from app.services import camera_angles as ca
+pytestmark = pytest.mark.plugins('camera_angles')
+
+
+from lds_camera_angles import camera_angles as ca, views
 
 
 # --- the grammar --------------------------------------------------------------
@@ -111,7 +115,7 @@ def test_the_vae_is_the_krea_lanes_download_not_a_second_copy(app):
     """One file, one Setup button. A second key for the same bytes would offer
     the same gigabyte twice and let two copies drift apart."""
     from app import setup_installer
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     assert qch.CAMERA_VAE_ACTION == 'krea_vae'
     assert qch.CAMERA_VAE_ACTION in qch.CAMERA_REQUIRED
     assert 'camera_vae' not in setup_installer._MODEL_DOWNLOADS
@@ -121,11 +125,12 @@ def test_the_vae_is_the_krea_lanes_download_not_a_second_copy(app):
 
 def test_every_camera_asset_can_be_installed_from_setup(app):
     from app import setup_installer
-    from app.services import qwen_camera_helper as qch
-    for action in setup_installer._CAMERA_DOWNLOADS:
-        assert action in setup_installer.INSTALL_ACTIONS, action
+    from lds_camera_angles import DOWNLOADS
+    from lds_camera_angles import qwen_camera_helper as qch
+    for action in DOWNLOADS:
+        assert setup_installer.known_action(action), action
     for action in qch.CAMERA_REQUIRED + qch.CAMERA_RECOMMENDED:
-        assert action in setup_installer.INSTALL_ACTIONS, action
+        assert setup_installer.known_action(action), action
 
 
 def test_the_text_encoder_is_never_confused_with_the_other_two_qwens(app):
@@ -133,7 +138,7 @@ def test_the_text_encoder_is_never_confused_with_the_other_two_qwens(app):
     interchangeable. A resolver matching a bare 'qwen' picks the wrong one and
     the sampler dies on a shape mismatch — or worse, does not."""
     from app import setup_installer
-    dest = setup_installer._CAMERA_DOWNLOADS['camera_text_encoder']['dest'][-1]
+    dest = setup_installer.model_download_spec('camera_text_encoder')['dest'][-1]
     assert dest == 'qwen_2.5_vl_7b_fp8_scaled.safetensors'
     klein = setup_installer._KLEIN_DOWNLOADS['klein_text_encoder']['dest'][-1]
     krea = setup_installer._KREA_DOWNLOADS['krea_text_encoder']['dest'][-1]
@@ -141,7 +146,7 @@ def test_the_text_encoder_is_never_confused_with_the_other_two_qwens(app):
 
 
 def test_a_missing_required_asset_names_the_setup_buttons(app, monkeypatch):
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     monkeypatch.setattr(qch, 'resolve_camera_unet', lambda: None)
     monkeypatch.setattr(qch, 'resolve_camera_lora', lambda: ('x', None))
     monkeypatch.setattr(qch, 'resolve_camera_text_encoder', lambda: 'te.safetensors')
@@ -156,7 +161,7 @@ def test_a_missing_required_asset_names_the_setup_buttons(app, monkeypatch):
 def test_the_speed_lora_alone_missing_does_not_block_the_lane(app, monkeypatch):
     """It buys steps, not correctness: absent, the graph runs at 20 instead of
     4. Gating the lane on it would refuse to render over a speed-up."""
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     monkeypatch.setattr(qch, 'resolve_camera_unet', lambda: 'm.safetensors')
     monkeypatch.setattr(qch, 'resolve_camera_lora', lambda: ('a', 'path'))
     monkeypatch.setattr(qch, 'resolve_camera_text_encoder', lambda: 'te.safetensors')
@@ -178,7 +183,7 @@ def test_a_resolvable_pin_is_a_loader_name_never_the_status_tuple(app, monkeypat
     writes `camera.unet` — which is exactly why it gets a test the day the path
     is exercised."""
     from app import config as cfg
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     with app.app_context():
         cfg.save_config({'camera': {'unet': 'qwen/picked.safetensors'}})
         monkeypatch.setattr(qch, 'resolve_model_ref',
@@ -192,7 +197,7 @@ def test_a_stale_pin_falls_back_to_the_scan_as_the_config_comment_promises(app, 
     """config.py: "a pin that cannot be resolved falls back to auto-detection;
     it never blocks a render". The promise is only true if the status is READ."""
     from app import config as cfg
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     with app.app_context():
         cfg.save_config({'camera': {'unet': 'qwen/deleted.safetensors'}})
         monkeypatch.setattr(qch, 'resolve_model_ref', lambda _t, _v: (None, 'missing'))
@@ -205,7 +210,7 @@ def test_a_stale_lora_pin_degrades_to_the_scan_instead_of_crashing(app, monkeypa
     """The LoRA twin of the same bug — the old pinned path handed the tuple to
     normalize_rel_model_name, which is an AttributeError, not a render."""
     from app import config as cfg
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     with app.app_context():
         cfg.save_config({'camera': {'angles_lora': 'qwen/deleted.safetensors'}})
         monkeypatch.setattr(qch, 'resolve_model_ref', lambda _t, _v: (None, 'missing'))
@@ -224,7 +229,7 @@ def _enqueue_capturing_workflow(app, monkeypatch, tmp_path, *, unet, speed_pin='
     assert the three speed-LoRA regimes, because the regime decision lives at
     enqueue time, not in any resolver."""
     from app import config as cfg
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     src = tmp_path / 'src.png'
     src.write_bytes(b'\x89PNG\r\n\x1a\n')
     captured = {}
@@ -254,7 +259,7 @@ def test_a_distilled_pick_skips_the_chained_speed_lora_and_keeps_4_steps(
     v23, same seed, same pose): chained = confetti patches over skin and
     tiles with every job reporting success; unchained at the SAME 4 steps =
     clean. The name-based read is deliberately visible (catalog + log)."""
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     wf = _enqueue_capturing_workflow(
         app, monkeypatch, tmp_path,
         unet='qwen\\phr00tQwenImageEditRapid_v230.safetensors')
@@ -264,7 +269,7 @@ def test_a_distilled_pick_skips_the_chained_speed_lora_and_keeps_4_steps(
 
 
 def test_an_ordinary_build_still_chains_the_speed_lora(app, monkeypatch, tmp_path):
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     wf = _enqueue_capturing_workflow(
         app, monkeypatch, tmp_path,
         unet='qwen\\qwen_image_edit_2511_fp8mixed.safetensors')
@@ -283,7 +288,7 @@ def test_a_pinned_speed_lora_overrides_the_distilled_skip(app, monkeypatch, tmp_
 
 
 def test_the_distilled_read_is_by_name_and_the_official_build_is_not_one():
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     assert qch.unet_is_distilled('qwen\\phr00tQwenImageEditRapid_v230.safetensors')
     assert qch.unet_is_distilled('turbo-merge.safetensors')
     assert qch.unet_is_distilled('some-lightning-8step.gguf')
@@ -298,7 +303,7 @@ def test_the_catalog_reports_the_distilled_read(client, app):
 
 def test_the_shipped_workflow_still_has_the_nodes_the_helper_edits(app):
     import json
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     graph = json.loads(qch.WORKFLOW_CAMERA_PATH.read_text(encoding='utf-8'))
     for node in qch._REQUIRED_NODES:
         assert node in graph, node
@@ -350,7 +355,7 @@ def test_a_camera_view_cannot_be_re_shot_from_another_angle(client, app):
     with app.app_context():
         row = _row(ds, derivation_kind=lts.CAMERA_ANGLE, camera_pose='right/eye/medium')
         with pytest.raises(ValueError, match=ca.ALREADY_DERIVED):
-            lts.camera_views_for_canvas_image('local', row.id, ['back/eye/medium'])
+            views.camera_views_for_canvas_image('local', row.id, ['back/eye/medium'])
 
 
 def test_an_improve_result_IS_allowed_as_a_source(client, app, monkeypatch, tmp_path):
@@ -361,7 +366,7 @@ def test_an_improve_result_IS_allowed_as_a_source(client, app, monkeypatch, tmp_
     library settled it: the newest six tiles were all improve results, so the
     verb was greyed out on exactly the pictures people keep."""
     from app.services import lora_test_studio as lts
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     ds = _dataset(client)
     with app.app_context():
         row = _row(ds, derivation_kind='canvas_image_improve')
@@ -371,16 +376,15 @@ def test_an_improve_result_IS_allowed_as_a_source(client, app, monkeypatch, tmp_
         # stops it here, which is proof the source itself was accepted.
         monkeypatch.setattr(qch, 'camera_missing_assets', lambda: ['camera_model'])
         with pytest.raises(qch.CameraModelsMissing):
-            lts.camera_views_for_canvas_image('local', row.id, ['back/eye/medium'])
+            views.camera_views_for_canvas_image('local', row.id, ['back/eye/medium'])
 
 
 def test_an_unfinished_render_is_refused_before_anything_is_queued(client, app):
-    from app.services import lora_test_studio as lts
     ds = _dataset(client)
     with app.app_context():
         row = _row(ds, status='pending', filename=None)
         with pytest.raises(ValueError, match=ca.SOURCE_NOT_DONE):
-            lts.camera_views_for_canvas_image('local', row.id, ['back/eye/medium'])
+            views.camera_views_for_canvas_image('local', row.id, ['back/eye/medium'])
 
 
 def test_missing_weights_refuse_BEFORE_any_row_is_created(client, app, monkeypatch, tmp_path):
@@ -388,7 +392,7 @@ def test_missing_weights_refuse_BEFORE_any_row_is_created(client, app, monkeypat
     late left the dataset full of failed tiles."""
     from app.models import LoraTestImage
     from app.services import lora_test_studio as lts
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     ds = _dataset(client)
     with app.app_context():
         row = _row(ds)
@@ -399,14 +403,14 @@ def test_missing_weights_refuse_BEFORE_any_row_is_created(client, app, monkeypat
                             lambda: ['camera_model', 'camera_lora'])
         before = LoraTestImage.query.count()
         with pytest.raises(qch.CameraModelsMissing):
-            lts.camera_views_for_canvas_image('local', row.id, ['back/eye/medium'])
+            views.camera_views_for_canvas_image('local', row.id, ['back/eye/medium'])
         assert LoraTestImage.query.count() == before
 
 
 def test_the_route_turns_missing_weights_into_an_actionable_409(client, app,
                                                                 monkeypatch, tmp_path):
     from app.services import lora_test_studio as lts
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     ds = _dataset(client)
     with app.app_context():
         row = _row(ds)
@@ -507,7 +511,7 @@ def test_the_caption_phrase_names_the_angle_and_only_the_angle():
 def test_the_captioner_reinjects_the_angle_on_every_pass(client, app):
     """Seeding the phrase at row creation lasts exactly until the first batch
     pass overwrites it — the stamp-site injection is what makes it survive."""
-    from app.services.face_dataset_service import _with_camera_pose_phrase
+    from lds_camera_angles.views import with_camera_pose_phrase as _with_camera_pose_phrase
 
     class Row:
         camera_pose = 'back/low/medium'
@@ -544,7 +548,7 @@ def test_dataset_views_are_pending_candidates_with_pose_and_caption_seed(
         client, app, monkeypatch, tmp_path):
     from app.models import FaceDatasetImage
     from app.services import face_dataset_service as fds
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     with app.app_context():
         ds_id, img = _kept_image(client, tmp_path, monkeypatch)
         monkeypatch.setattr(qch, 'camera_missing_assets', lambda: [])
@@ -554,7 +558,7 @@ def test_dataset_views_are_pending_candidates_with_pose_and_caption_seed(
             enqueued.append(kw)
             return f'job-{len(enqueued)}'
         monkeypatch.setattr(qch, 'enqueue_camera_view', fake_enqueue)
-        res = fds.camera_views_for_dataset_image(
+        res = views.camera_views_for_dataset_image(
             'local', img.id, ['back/low/medium', 'front/eye/medium'])
         assert res['queued'] == 2
         rows = (FaceDatasetImage.query
@@ -582,7 +586,7 @@ def test_a_dataset_camera_view_cannot_be_reshot_but_an_import_can(
     from app.extensions import db
     from app.models import FaceDatasetImage
     from app.services import face_dataset_service as fds
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     with app.app_context():
         ds_id, img = _kept_image(client, tmp_path, monkeypatch)
         view = FaceDatasetImage(dataset_id=ds_id, source='generated',
@@ -592,7 +596,7 @@ def test_a_dataset_camera_view_cannot_be_reshot_but_an_import_can(
         db.session.add(view)
         db.session.commit()
         with pytest.raises(ValueError, match=ca.ALREADY_DERIVED):
-            fds.camera_views_for_dataset_image('local', view.id, ['back/eye/medium'])
+            views.camera_views_for_dataset_image('local', view.id, ['back/eye/medium'])
         # An import is a legitimate source (real photo, best source there is).
         imp = FaceDatasetImage(dataset_id=ds_id, source='import', status='keep',
                                filename='src.png')
@@ -600,12 +604,12 @@ def test_a_dataset_camera_view_cannot_be_reshot_but_an_import_can(
         db.session.commit()
         monkeypatch.setattr(qch, 'camera_missing_assets', lambda: ['camera_model'])
         with pytest.raises(qch.CameraModelsMissing):
-            fds.camera_views_for_dataset_image('local', imp.id, ['back/eye/medium'])
+            views.camera_views_for_dataset_image('local', imp.id, ['back/eye/medium'])
 
 
 def test_the_dataset_route_answers_like_its_canvas_twin(client, app,
                                                         monkeypatch, tmp_path):
-    from app.services import qwen_camera_helper as qch
+    from lds_camera_angles import qwen_camera_helper as qch
     with app.app_context():
         ds_id, img = _kept_image(client, tmp_path, monkeypatch)
         img_id = img.id

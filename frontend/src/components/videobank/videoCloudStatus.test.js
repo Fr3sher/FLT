@@ -3,12 +3,12 @@ import assert from 'node:assert/strict'
 
 import {
   isActive, launchBlockedReason, runSummary, canRetry, canContinue, stepLabel,
-} from './videoCloudStatus.js'
+} from '../../../../bundled/cloud_training/frontend/video/videoCloudStatus.js'
 import {
   videoDatasetCloudUrl, videoDatasetCloudProgressUrl,
   videoDatasetCloudCheckpointsUrl, videoDatasetCheckpointUrl,
   videoDatasetCloudRetryUrl, videoDatasetCloudContinueUrl,
-} from './videoBankApi.js'
+} from "../../../../bundled/video/frontend/videobank/videoBankApi.js"
 
 test('the cloud URLs name the VIDEO dataset table, never the face one', () => {
   // Same integer, two tables. `/api/dataset/7/...` is a face dataset and

@@ -7,9 +7,13 @@ the lineage edge to the rank-32 record — the graph then claimed a continuation
 is physically impossible (rank-32 weights cannot load into a rank-64 network), and
 the launch stamped the dataset's LIVE rank onto the run instead of the checkpoint's.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 
 import pytest
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _rec(dataset_id, family='krea', variant='base', steps=1000, version=1,
@@ -301,7 +305,7 @@ def test_local_continue_refuses_conv_geometry_mismatch(app, monkeypatch):
 # --- the local→cloud lane (the one that actually burned 3000 steps) -----------
 
 def test_local_to_cloud_continue_inherits_parent_and_geometry(app, monkeypatch):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import lora_training as lt
     from app.config import LOCAL_USER
     with app.app_context():
@@ -321,7 +325,7 @@ def test_local_to_cloud_continue_inherits_parent_and_geometry(app, monkeypatch):
 
 
 def test_local_to_cloud_inherits_known_lokr_topology(app, monkeypatch):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import lora_training as lt
     from app.config import LOCAL_USER
     topology = {'rank': 64, 'alpha': 32, 'network_type': 'lokr',
@@ -352,7 +356,7 @@ def test_local_to_cloud_inherits_known_lokr_topology(app, monkeypatch):
 
 
 def test_local_to_cloud_inherits_parent_conv_topology(app, monkeypatch):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import lora_training as lt
     from app.config import LOCAL_USER
     topology = {
@@ -376,7 +380,7 @@ def test_local_to_cloud_inherits_parent_conv_topology(app, monkeypatch):
 
 
 def test_local_to_cloud_refuses_legacy_lokr_with_unknown_full_rank(app, monkeypatch):
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import lora_training as lt
     from app.config import LOCAL_USER
     with app.app_context():

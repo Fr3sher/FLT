@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { installRuntimeHost } from '../../tests/support/runtimeHost.mjs';
+
+test.beforeEach(installRuntimeHost);
 import { buildLineageGraph, CARD_W, PAD } from './lineageGraph.js';
 import {
   NEW_NODE_GAP, applyPlacement, clampNodePosition, freeSpotBelow, pinSnapshot,
   toOverrideMap,
-} from './canvasPlacement.js';
+} from "../../../bundled/canvas/frontend/utils/canvasPlacement.js";
 
 /* The placement layer is tested against the REAL automatic layout, not against
    a hand-written fake of it. Rule 3 ("a new run moves nothing") only means

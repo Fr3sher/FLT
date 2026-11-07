@@ -16,7 +16,11 @@ So what is pinned here is the plumbing, not the arithmetic:
 """
 import json
 
-from app.services import video_metrics
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_metrics
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 
 def test_a_non_representative_member_of_a_group_is_flagged():
@@ -84,7 +88,7 @@ def test_re_measuring_a_bank_keeps_the_verdicts_the_other_passes_produced():
 
 
 def test_the_scan_merges_rather_than_replaces(app, monkeypatch):
-    from app.services import video_metrics_scan as scan
+    from lds_video import video_metrics_scan as scan
     bank_id, clip_id = _bank_with_one_clip(app)
     _stored(app, clip_id, {'metrics_state': 'ok', 'sharpness_p90': 1.0,
                            'watermark_score': 0.8, 'watermark_state': 'ok'})
@@ -105,12 +109,12 @@ def test_a_clip_nobody_measured_still_carries_its_duplicate_flag(app):
     """The dedup pass reads VECTORS, not measurements, so an embedded-but-never-
     measured bank can legitimately have duplicate groups. Reading the flags off
     the 'ok'-only summary would drop every one of them, with no error to see."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     bank_id, clip_id = _bank_with_one_clip(app)
     _stored(app, clip_id, {'duplicate_group': 1, 'duplicate_of': 4})
 
     with app.app_context():
-        from app.models import VideoClip
+        from lds_video.models import VideoClip
         clip = VideoClip.query.filter_by(bank_id=bank_id).one()
         row = svc._clip_row(clip, {}, svc.metric_thresholds())
 
@@ -126,7 +130,7 @@ def test_the_preview_counts_the_watermark_cut_on_an_unmeasured_clip(app):
     wrote on a clip nobody measured. A preview that says "0 would be flagged"
     over a bank the grid then flags is worse than no preview."""
     from app.config import LOCAL_USER
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     bank_id, clip_id = _bank_with_one_clip(app)
     _stored(app, clip_id, {'watermark_state': 'ok', 'watermark_score': 0.99})
 
@@ -141,7 +145,7 @@ def test_the_preview_counts_the_watermark_cut_on_an_unmeasured_clip(app):
 
 def _bank_with_one_clip(app):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -158,7 +162,7 @@ def _bank_with_one_clip(app):
 
 def _stored(app, clip_id, summary):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         db.session.get(VideoClip, clip_id).metrics_json = json.dumps(summary)
         db.session.commit()
@@ -166,6 +170,6 @@ def _stored(app, clip_id, summary):
 
 def _summary(app, clip_id):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         return json.loads(db.session.get(VideoClip, clip_id).metrics_json)

@@ -9,8 +9,11 @@ import json
 import pytest
 
 from app.extensions import db
-from app.models import VideoBank, VideoClip, VideoSource
-from app.services import video_metrics, video_temporal_coherence as coherence
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoBank, VideoClip, VideoSource
+from lds_video import video_metrics, video_temporal_coherence as coherence
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- forged vectors -----------------------------------------------------------------
@@ -341,7 +344,7 @@ def test_the_embed_pass_checks_coherence_when_it_is_done(app, bank, monkeypatch)
     """The step is reachable, or the whole feature is dead code. It runs AFTER
     the embedding — that is where the vectors it reads come from — and its
     numbers reach the job's own result."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     with app.app_context():
         rows = clips_of(bank)
         store = {rows[0].id: frames((0.25, vec(1, 0)), (2.25, vec(0, 1)))}
@@ -359,20 +362,20 @@ def test_it_runs_after_the_look_score_not_before(app):
     egress; this pays dot products and cannot. Behind it, the cheap certainty
     still lands when the expensive one does not."""
     import inspect
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     source = inspect.getsource(svc._embed_job)
     assert source.index('_rate_the_look') < source.index('_check_coherence')
 
 
 def test_a_re_embed_asks_for_a_re_check(app, monkeypatch):
     """Rewritten vectors are different vectors — `reembed` IS `recheck`."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     seen = {}
     monkeypatch.setattr(
-        'app.services.video_temporal_coherence.pending_clips',
+        'lds_video.video_temporal_coherence.pending_clips',
         lambda bank_id, recheck=False: [object()])
     monkeypatch.setattr(
-        'app.services.video_temporal_coherence.run_coherence',
+        'lds_video.video_temporal_coherence.run_coherence',
         lambda bank_id, recheck=False, **kw: seen.update(recheck=recheck)
         or {'measured': 0, 'one_frame': 0, 'unmeasured': 0})
     with app.app_context():
@@ -381,13 +384,13 @@ def test_a_re_embed_asks_for_a_re_check(app, monkeypatch):
 
 
 def test_a_cancelled_embed_pass_does_not_run_the_check(app, monkeypatch):
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
 
     def _explode(*a, **k):
         raise AssertionError('the coherence check ran after a cancel')
 
     monkeypatch.setattr(
-        'app.services.video_temporal_coherence.run_coherence', _explode)
+        'lds_video.video_temporal_coherence.run_coherence', _explode)
     with app.app_context():
         assert svc._check_coherence({'done': 0, 'total': 0, 'cancelled': True},
                                     1, False) == {}
@@ -396,7 +399,7 @@ def test_a_cancelled_embed_pass_does_not_run_the_check(app, monkeypatch):
 def test_an_embed_run_with_nothing_left_to_check_says_nothing(app, bank, monkeypatch):
     """The common case on a re-run: no announcement and no noise in the job's
     final sentence."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     with app.app_context():
         rows = clips_of(bank)
         store = {r.id: frames((0.25, vec(1, 0)), (2.25, vec(1, 0))) for r in rows}

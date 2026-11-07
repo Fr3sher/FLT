@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DRIFT_TOLERANCE_S, syncActions, sidesFor } from './videoSync.js'
+import { DRIFT_TOLERANCE_S, syncActions, sidesFor } from "../../../../bundled/video/frontend/videobank/videoSync.js"
 
 test('a follower in step needs nothing', () => {
   const a = { currentTime: 3.0, paused: false, playbackRate: 1 }

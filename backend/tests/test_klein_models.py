@@ -11,6 +11,8 @@ import io
 import os
 import struct
 
+import pytest
+
 from PIL import Image
 
 # Smallest structurally-valid safetensors header (8-byte LE length + '{}'), so a
@@ -786,6 +788,7 @@ def test_prompt_and_aspect_lookup_cover_nsfw_labels(app):
         assert aspect_for_label('Corps, nu douche') == '9:16'
 
 
+@pytest.mark.plugins('api_engines')
 def test_generate_route_refuses_nsfw_on_api_engines(client):
     resp = client.post('/api/dataset/1/generate', json={
         'generator': 'nanobanana', 'multiplier': 1,
@@ -796,6 +799,7 @@ def test_generate_route_refuses_nsfw_on_api_engines(client):
     assert 'Klein' in resp.get_json()['error']
 
 
+@pytest.mark.plugins('api_engines')
 def test_service_fanout_refuses_nsfw_on_api_engines(app):
     import pytest
     from app.services import face_dataset_service as svc

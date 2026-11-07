@@ -1,10 +1,7 @@
-// Sélecteur multi-toggle des strengths à balayer.
-// Extrait behavior-preserving de LoraTestStudio.jsx (bloc « Strengths »), enrichi
-// d'une divulgation progressive symétrique : les valeurs > 2.0 (jusqu'à 4.0) sont
-// cachées derrière un bouton « + » discret, les valeurs NÉGATIVES (jusqu'à −2.0,
-// le pôle inverse — indispensable pour tester un slider LoRA) derrière un bouton
-// « − » miroir. Si une valeur étendue/négative est sélectionnée, sa rangée reste
-// ouverte (jamais de sélection invisible).
+// Strength sweep toggles, extracted unchanged from LoraTestStudio.jsx and extended symmetrically:
+// values above 2.0 up to 4.0 hide behind +; NEGATIVE values down to -2.0, needed for inverse
+// slider-LoRA concepts, hide behind -. Any selected extended/negative value keeps its row open so
+// selections never become invisible.
 import { useState } from 'react';
 import { STRENGTH_CHOICES_EXTENDED, STRENGTH_CHOICES_NEGATIVE } from './constants';
 import { hasExtendedSelection, hasNegativeSelection } from './strengthDisclosure';
@@ -12,9 +9,8 @@ import { hasExtendedSelection, hasNegativeSelection } from './strengthDisclosure
 export default function StrengthPicker({ choices, selected, onToggle, fmt,
                                          extendedChoices = STRENGTH_CHOICES_EXTENDED,
                                          negativeChoices = STRENGTH_CHOICES_NEGATIVE }) {
-  // Ouverture manuelle par « + »/« − » ; l'ouverture EFFECTIVE force aussi si une
-  // valeur de la rangée est sélectionnée (rechargement d'un prompt récent,
-  // persistance…).
+  // Manual +/- expansion is overridden to keep a row open whenever it contains a selected value,
+  // including restored or recent-prompt settings.
   const [expanded, setExpanded] = useState(false);
   const [negExpanded, setNegExpanded] = useState(false);
   const forced = hasExtendedSelection(selected);

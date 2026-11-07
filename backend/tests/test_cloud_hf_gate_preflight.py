@@ -11,7 +11,10 @@ import urllib.error
 
 import pytest
 
-from app.services import cloud_training as ct
+from lds_cloud_training import cloud_training as ct
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _http_error(code):

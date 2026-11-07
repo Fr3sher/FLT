@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = pytest.mark.plugins('scrape')
+
 
 @pytest.mark.parametrize('payload', [
     {'suggest_best': True, 'urls': ['https://example.invalid/a.jpg']},
@@ -20,9 +22,9 @@ def test_scoring_error_is_returned_and_every_temp_file_is_removed(
         created.append(path)
         return str(path)
 
-    monkeypatch.setattr('app.routes.scrape._fetch_image_to_temp', fake_fetch)
+    monkeypatch.setattr('lds_scrape.routes._fetch_image_to_temp', fake_fetch)
     monkeypatch.setattr(
-        'app.services.face_similarity.score_faces',
+        'lds_sdk.face_similarity.score_faces',
         lambda *args, **kwargs: (
             {}, {'kind': 'gpu_busy', 'detail': 'the GPU is busy'}))
 

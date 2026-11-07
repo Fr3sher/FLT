@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runSilenceWarning, stopOutcomeMessage } from './runSilence.js';
+import { runSilenceWarning, stopOutcomeMessage } from "../../../bundled/cloud_training/frontend/lib/runSilence.js";
 
 const run = (over) => ({
   status: 'training', idle_seconds: 0, idle_limit_seconds: 45 * 60, ...over,

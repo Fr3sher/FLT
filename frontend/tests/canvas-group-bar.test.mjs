@@ -21,14 +21,14 @@ import assert from 'node:assert/strict'
 import { readSource } from './support/readSource.mjs'
 import test from 'node:test'
 
-import { layoutBoxes, layoutImageNodes, occupiedBox } from '../src/utils/canvasImageGroups.js'
+import { layoutBoxes, layoutImageNodes, occupiedBox } from "../../bundled/canvas/frontend/utils/canvasImageGroups.js"
 import { groupBarHeight, groupBarMaxHeight, isNodeControlTarget, nodePointerIntent }
   from '../src/utils/canvasNodeChrome.js'
 
-const read = (rel) => readSource(`src/${rel}`)
-const CANVAS = read('components/canvas/LineageCanvas.jsx')
-const BAR = read('components/canvas/CanvasGroupBar.jsx')
-const GROUP = read('components/canvas/CanvasImageGroup.jsx')
+const read = readSource
+const CANVAS = read('../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx')
+const BAR = read('../bundled/canvas/frontend/components/canvas/CanvasGroupBar.jsx')
+const GROUP = read('../bundled/canvas/frontend/components/canvas/CanvasImageGroup.jsx')
 
 const img = (id, x, y, w, h, extra = {}) => ({
   imageId: id, x, y, w, h, visible: true, groupId: null, groupPos: null,
@@ -114,10 +114,10 @@ test('the placers are handed the reserved boxes, so Tidy up cannot create the ov
   // puts the lone pictures down. That sequence lives in `tidyLaneRows` because
   // it has a SECOND caller: the lane stack, which has to reserve the room the
   // tidy layout will need before the button is ever pressed.
-  const batch = read('utils/canvasPinBatch.js')
+  const batch = read('../bundled/canvas/frontend/utils/canvasPinBatch.js')
   assert.match(batch, /tidyGroupRows/)
   assert.match(batch, /existing:\s*strips\.boxes/)
-  assert.match(read('pages/CanvasPage.jsx'), /tidyLaneRows/)
+  assert.match(read('../bundled/canvas/frontend/pages/CanvasPage.jsx'), /tidyLaneRows/)
   assert.match(CANVAS, /tidyLaneReach/)
   assert.match(CANVAS, /layoutBoxes\(layoutImageNodes\(visibleImageNodes\(laneMap\)\)\)/)
 })

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { clipTags } from './videoClipTags.js'
+import { clipTags } from "../../../../../../bundled/video/frontend/studio/video/videoClipTags.js"
 
 test('clipTags carries the same facts as the summary, one per pill, no emoji', () => {
   const tags = clipTags({ eros: true, lora: 'h3/lds/j.safetensors', lora_strength: 1.3,

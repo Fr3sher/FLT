@@ -6,6 +6,11 @@ this file exists for; everything else here guards the ways a stored pointer can
 rot — the image gets deleted, the dataset gets deleted, the geometry is
 nonsense, or the row belongs to somebody else's lane.
 """
+
+import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
 from sqlalchemy import text
 
 
@@ -87,7 +92,8 @@ def test_a_pinned_image_that_was_deleted_leaves_the_board_instead_of_a_ghost(cli
     """The bug that only shows up in week 3: a node rendering a picture that no
     longer exists. The read prunes it — the board loses the node, nothing else."""
     from app.extensions import db
-    from app.models import CanvasImageNode, LoraTestImage
+    from lds_canvas.models import CanvasImageNode
+    from app.models import LoraTestImage
     with app.app_context():
         ds_id = _dataset().id
         img_id = _image(ds_id)
@@ -130,7 +136,7 @@ def test_an_image_from_another_dataset_cannot_be_pinned_into_this_lane(client, a
 def test_a_giant_or_nonsense_size_is_clamped_not_stored(client, app):
     """An 8 000-px node would make ✦ Fit collapse the board to an unreadable
     scale; a NaN would make it unreachable forever."""
-    from app.services.cloud_training import CANVAS_IMAGE_MAX, CANVAS_IMAGE_MIN
+    from lds_canvas.canvas_state import CANVAS_IMAGE_MAX, CANVAS_IMAGE_MIN
     with app.app_context():
         ds_id = _dataset().id
         big = _image(ds_id, filename='b.png')
@@ -169,7 +175,7 @@ def test_the_reach_is_a_rail_on_both_sides_so_one_row_cannot_collapse_fit(client
     """The position axes had no ceiling at all before: only the SIZE was
     bounded, so one corrupt row could blow a lane's extent up and collapse
     ✦ Fit to a scale where nothing on the board is readable."""
-    from app.services.cloud_training import CANVAS_IMAGE_REACH
+    from lds_canvas.canvas_state import CANVAS_IMAGE_REACH
     with app.app_context():
         ds_id = _dataset().id
         far = _image(ds_id, filename='far.png')
@@ -193,7 +199,7 @@ def test_a_board_written_before_free_placement_reads_back_byte_for_byte(client, 
     world origin — a number the server cannot even compute, because lane heights
     are laid out in the browser and depend on which datasets are ticked.)"""
     from app.extensions import db
-    from app.models import CanvasImageNode
+    from lds_canvas.models import CanvasImageNode
     with app.app_context():
         ds_id = _dataset().id
         img_id = _image(ds_id)
@@ -220,7 +226,7 @@ def test_an_unknown_dataset_is_404_on_both_write_paths(client, app):
 
 def test_pinned_images_of_another_user_are_not_on_my_board(client, app):
     from app.extensions import db
-    from app.models import CanvasImageNode
+    from lds_canvas.models import CanvasImageNode
     from app.services import face_dataset_service as svc
     with app.app_context():
         mine = _dataset('Mine', 'mine').id
@@ -252,7 +258,7 @@ def test_deleting_a_dataset_that_has_pinned_images_does_not_500(client, app):
     """Same trap as canvas_node_position: foreign_keys=OFF reproduces a database
     created before ON DELETE CASCADE, where a parent-first DELETE is fatal."""
     from app.extensions import db
-    from app.models import CanvasImageNode
+    from lds_canvas.models import CanvasImageNode
     from app.services import face_dataset_service as svc
     with app.app_context():
         ds_id = _dataset().id

@@ -1,0 +1,454 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plugin.schema.json",
+  "title": "LDS plugin package manifest",
+  "description": "Structural schema for plugin.json, with optional legacy v1 and explicit v2 package metadata. LDS also performs semantic validation of PEP 440 specifiers, path portability, dependency declarations and trusted ID provenance.",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "version",
+    "api"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1,
+        2
+      ],
+      "default": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{1,31}(?:\\.[a-z][a-z0-9_]{1,31})?$",
+      "description": "Syntax only. External short IDs require independently verified official provenance; a publisher declaration never grants this exception."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "api": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Legacy major API requirement; compatibility.api further restricts the full API version for v2."
+    },
+    "bundled": {
+      "type": "boolean",
+      "default": false
+    },
+    "description": {
+      "type": "string"
+    },
+    "author": {
+      "type": "string"
+    },
+    "license": {
+      "type": "string"
+    },
+    "python_package": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "native_backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "implementation", "cache_tag", "entry"],
+      "properties": {
+        "kind": {"const": "cpython-extension"},
+        "implementation": {"const": "cpython"},
+        "cache_tag": {"const": "cpython-312"},
+        "entry": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,63}\\.cp312-win_amd64\\.pyd$"}
+      },
+      "description": "API 1.19 native backend. LDS additionally checks the entry matches python_package, Windows x86_64, the CPython 3.12 range and the API floor. This metadata does not grant installation trust."
+    },
+    "frontend": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "requirements": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "in_process_requirements": {
+      "type": "boolean",
+      "default": false
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Dependency IDs, including every key from dependency_versions."
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "owns": {
+      "type": "object"
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "node_packs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pack", "url"],
+        "properties": {
+          "pack": {"type": "string", "minLength": 1},
+          "url": {"type": "string", "minLength": 1},
+          "search": {"type": "string"},
+          "classes": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": 160}
+          },
+          "installation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action", "id", "version", "folder", "url", "sha256"],
+            "properties": {
+              "action": {"type": "string", "pattern": "^[a-z][a-z0-9_.:-]{0,119}$"},
+              "id": {"type": "string", "minLength": 1, "maxLength": 80},
+              "version": {"type": "string", "minLength": 1, "maxLength": 80},
+              "folder": {"type": "string", "minLength": 1, "maxLength": 80},
+              "url": {"type": "string", "pattern": "^https://"},
+              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+              "python": {
+                "type": "string", "minLength": 1, "maxLength": 120, "default": ">=3.10",
+                "description": "Nonempty Python version specifier for ComfyUI's own interpreter, checked before dependency resolution or downloads. LDS validates the specifier syntax."
+              },
+              "requirements": {
+                "type": "array", "maxItems": 100,
+                "items": {"type": "string", "minLength": 1},
+                "description": "Exact name==version pins only. LDS rejects URLs, flags, markers, extras, ranges and duplicate normalized package names."
+              },
+              "archive_prefix": {"type": "string", "default": ""},
+              "wheelhouse": {
+                "type": "string", "minLength": 1,
+                "description": "Safe relative subdirectory inside this plugin package. Never an absolute path, URL or client-selected location."
+              },
+              "wheels": {
+                "type": "array", "maxItems": 100,
+                "items": {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["filename", "sha256"],
+                  "properties": {
+                    "filename": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+-]{0,235}\\.whl$"},
+                    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+                  }
+                },
+                "description": "Author-built, qualified wheels carried by this plugin; at most one wheel per normalized distribution. No source builds on the user's machine."
+              }
+            },
+            "allOf": [
+              {"if": {"required": ["wheels"], "properties": {"wheels": {"minItems": 1}}}, "then": {"required": ["wheelhouse"]}},
+              {"if": {"required": ["wheelhouse"]}, "then": {"required": ["wheels"], "properties": {"wheels": {"minItems": 1}}}}
+            ],
+            "description": "API 1.20: immutable archive recipe. LDS also checks action ownership, unique recipe identities, comfyui/filesystem permissions, expected classes, portable paths and compatibility.api >=1.20. No user command or URL override is accepted."
+          }
+        },
+        "allOf": [{
+          "if": {"required": ["installation"]},
+          "then": {"required": ["classes"], "properties": {"classes": {"minItems": 1}}}
+        }]
+      }
+    },
+    "experience": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entrypoints"
+      ],
+      "properties": {
+        "entrypoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "path"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^/(?!/)",
+                "description": "Local LDS route; semantic validation rejects external URLs, escapes and traversal."
+              }
+            }
+          }
+        },
+        "setup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "label",
+            "path"
+          ],
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "pattern": "^/(?!/)",
+              "description": "Local LDS route; semantic validation rejects external URLs, escapes and traversal."
+            }
+          }
+        },
+        "setup_hint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "surfaces": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "frontend_workers": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry",
+          "loaders"
+        ],
+        "properties": {
+          "entry": {
+            "type": "string",
+            "pattern": "\\.(?:js|mjs)$"
+          },
+          "loaders": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "\\.(?:js|mjs)$"
+            }
+          }
+        }
+      },
+      "description": "Explicit browser worker assets and loaders; all must be included. Static authoring profile, not a sandbox."
+    },
+    "host_dependencies": {
+      "type": "object",
+      "maxProperties": 100,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Host distribution constraints checked before plugin import; never an instruction to install dependencies."
+    },
+    "guide_ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "chapters": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]+\\.[a-z0-9_.-]+$"
+          }
+        },
+        "sections": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.-]*#[a-z0-9][a-z0-9_.-]*$"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"required": ["native_backend"]},
+      "then": {
+        "required": ["schema_version", "python_package"],
+        "properties": {"schema_version": {"const": 2}, "python_package": {"type": "string"}}
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "schema_version"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "publisher",
+          "compatibility"
+        ],
+        "properties": {
+          "publisher": {
+            "type": "object",
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{1,31}$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "description": "Declared metadata, not evidence of authorship or signing authority."
+          },
+          "compatibility": {
+            "type": "object",
+            "required": [
+              "lds",
+              "api",
+              "python",
+              "os",
+              "arch"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "lds": {
+                "$ref": "#/$defs/specifier"
+              },
+              "api": {
+                "$ref": "#/$defs/specifier"
+              },
+              "python": {
+                "$ref": "#/$defs/specifier"
+              },
+              "os": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "windows",
+                    "linux",
+                    "darwin"
+                  ]
+                }
+              },
+              "arch": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "x86_64",
+                    "arm64"
+                  ]
+                }
+              }
+            }
+          },
+          "requires": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,31}(?:\\.[a-z][a-z0-9_]{1,31})?$"
+            }
+          },
+          "dependency_versions": {
+            "type": "object",
+            "default": {},
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{1,31}(?:\\.[a-z][a-z0-9_]{1,31})?$"
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/specifier"
+            },
+            "description": "Every key must also be present in requires; LDS checks this semantic rule."
+          },
+          "frontend_styles": {
+            "type": "array",
+            "default": [],
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/stylePath"
+            },
+            "description": "Relative to the package root. LDS additionally rejects case-insensitive duplicates and Windows device names."
+          },
+          "data_schema": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "Publisher-declared data format version. It does not execute or authorize a migration."
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "specifier": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "format": "pep440-specifier",
+      "description": "Non-empty PEP 440 SpecifierSet, parsed by packaging at runtime. Generic JSON Schema validators may ignore this custom format. Prereleases require explicit opt-in in the specifier set."
+    },
+    "stylePath": {
+      "type": "string",
+      "minLength": 5,
+      "pattern": "^(?![/\\\\])(?!.*(?:^|[/\\\\])\\.{1,2}(?:[/\\\\]|$))(?!.*[:?#%<>\"|*\\u0000-\\u001f\\u007f])(?:[^/\\\\]+[/\\\\])*[^/\\\\]*\\.css$",
+      "description": "Portable relative CSS asset path. Backslashes normalize to forward slashes. Semantic validation also rejects trailing dots/spaces and Windows device names in path components."
+    }
+  }
+}

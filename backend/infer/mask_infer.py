@@ -1,13 +1,13 @@
-"""Person-mask generator — rembg (u2net), lance par le python_embeded de ComfyUI
-(rembg absent du venv Flask). Meme pattern subprocess que face_score_infer.py.
+"""Person-mask generator using rembg/u2net through ComfyUI's embedded
+Python because rembg is absent from Flask's venv. Uses the same
+subprocess pattern as face_score_infer.py.
 
-stdin  : {"images": [paths...], "out_dir": path}
-stdout : derniere ligne = JSON {"ok": bool, "written": N, "results": {path: state}}
-Logs -> stderr. Le masque est la matte u2net BRUTE (L, blanc=personne, noir=fond,
-bords doux pour les cheveux) sauvee en PNG sous le MEME nom de base que l'image —
-la convention mask_path d'ai-toolkit (le fond est ensuite pondere par
-mask_min_value cote training, pas ici).
-"""
+stdin: {images: [paths], out_dir: path}. The final stdout line is JSON
+{ok: bool, written: N, results: {path: state}}; logs go to stderr.
+Save the raw grayscale u2net matte (white=person, black=background,
+soft hair edges) as PNG with the image's basename, matching ai-toolkit's
+mask_path convention. Training applies mask_min_value to the background;
+this worker does not."""
 import json
 import os
 import sys

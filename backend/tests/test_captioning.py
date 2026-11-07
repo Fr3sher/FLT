@@ -506,6 +506,8 @@ def test_caption_images_exposes_joycaption_stage_while_batch_runs(app, monkeypat
 
         def _caption(paths, **kwargs):
             seen.append(da.get(ds.id))
+            kwargs['on_progress'](1, len(paths))
+            seen.append(da.get(ds.id))
             return {path: 'a joycaption result'}
 
         monkeypatch.setattr(jc_mod, 'caption_images_joycaption', _caption)
@@ -514,6 +516,7 @@ def test_caption_images_exposes_joycaption_stage_while_batch_runs(app, monkeypat
     assert seen and seen[0]['kind'] == 'caption'
     assert seen[0]['done'] == 0 and seen[0]['total'] == 1
     assert 'JoyCaption' in seen[0]['detail']
+    assert seen[1]['done'] == seen[1]['total'] == 1
 
 
 def test_caption_images_backend_joycaption_unavailable_raises(app, monkeypatch):
@@ -856,13 +859,16 @@ def test_joycaption_streams_stderr_to_log_live(app, monkeypatch, caplog, tmp_pat
     stdout_text = json.dumps({'captions': {img: 'a caption'}, 'errors': {}}) + '\n'
     monkeypatch.setattr(jc.subprocess, 'Popen',
                         lambda *a, **k: _FakePopen(stderr_lines, stdout_text))
+    diagnostics = {}
     with app.app_context():
         with caplog.at_level('INFO'):
-            out = jc.caption_images_joycaption([img])
+            out = jc.caption_images_joycaption([img], diagnostics_out=diagnostics)
     assert out == {img: 'a caption'}
     # Every subprocess stderr line reached the app log live (not only at the end).
     assert 'first run: downloading model' in caplog.text
     assert 'model loaded' in caplog.text
+    assert diagnostics == {'returncode': 0, 'timed_out': False,
+                           'stderr_tail': [line.rstrip('\n') for line in stderr_lines]}
 
 
 def test_joycaption_reflects_stage_markers_into_activity(app, monkeypatch, tmp_path):
@@ -905,13 +911,71 @@ def test_joycaption_timeout_returns_empty_and_logs_first_run_hint(app, monkeypat
     fake = _FakePopen(stderr_lines, '',
                       wait_raises=subprocess.TimeoutExpired(cmd='joycaption', timeout=1))
     monkeypatch.setattr(jc.subprocess, 'Popen', lambda *a, **k: fake)
+    diagnostics = {}
     with app.app_context():
         with caplog.at_level('ERROR'):
-            out = jc.caption_images_joycaption([img], timeout=1)
+            out = jc.caption_images_joycaption([img], timeout=1, diagnostics_out=diagnostics)
     assert out == {}
     assert fake.killed, 'a timed-out subprocess must be killed'
     # The timeout message explains the first-run download so the user knows to re-run.
     assert '7 GB' in caplog.text and 'resume' in caplog.text.lower()
+    assert diagnostics['timed_out'] is True
+    assert diagnostics['stderr_tail'] == [stderr_lines[0].rstrip('\n')]
+
+
+def test_joycaption_video_sdk_reports_worker_failure_without_losing_captions(
+        app, monkeypatch, tmp_path):
+    """The Video reader calls this exact SDK API with diagnostics_out."""
+    import app.services.joycaption as jc
+    from lds_sdk.video_host import joycaption as video_jc
+    img = _prep_joycaption(monkeypatch, jc, tmp_path)
+    secret = 'hf_' + 'exampletoken' * 3
+    tail = [f'Loading shard {i}\n' for i in range(30)]
+    tail.append(f'RuntimeError: download rejected with {secret}\n')
+    stdout = json.dumps({'path': img, 'caption': 'A person standing.'}) + '\n'
+    stdout += json.dumps({'path': 'unreadable.webp', 'error': 'image cannot be read'})
+    monkeypatch.setattr(jc.subprocess, 'Popen',
+                        lambda *a, **k: _FakePopen(tail, stdout, returncode=1))
+    diagnostics, errors = {}, {}
+    with app.app_context():
+        result = video_jc.caption_images_joycaption(
+            [img], diagnostics_out=diagnostics, errors_out=errors)
+    assert result == {img: 'A person standing.'}
+    assert errors == {'unreadable.webp': 'image cannot be read'}
+    assert diagnostics['returncode'] == 1
+    assert diagnostics['timed_out'] is False
+    assert len(diagnostics['stderr_tail']) == 25
+    assert diagnostics['stderr_tail'][-1] == 'RuntimeError: download rejected with ***'
+    assert secret not in str(diagnostics)
+
+
+@pytest.mark.parametrize('available,has_paths', [(False, True), (True, False)])
+def test_joycaption_no_worker_clears_stale_diagnostics(app, monkeypatch, tmp_path,
+                                                   available, has_paths):
+    import app.services.joycaption as jc
+    img = _prep_joycaption(monkeypatch, jc, tmp_path)
+    monkeypatch.setattr(jc, 'is_available', lambda: available)
+    def no_worker(*args, **kwargs):
+        pytest.fail('unavailable JoyCaption must not start a process')
+    monkeypatch.setattr(jc.subprocess, 'Popen', no_worker)
+    diagnostics = {'returncode': 1, 'timed_out': True, 'stderr_tail': ['old failure']}
+    with app.app_context():
+        assert jc.caption_images_joycaption([img] if has_paths else [],
+                                            diagnostics_out=diagnostics) == {}
+    assert diagnostics == {'returncode': None, 'timed_out': False, 'stderr_tail': []}
+
+
+def test_joycaption_start_failure_is_available_to_the_video_reader(app, monkeypatch, tmp_path):
+    import app.services.joycaption as jc
+    img = _prep_joycaption(monkeypatch, jc, tmp_path)
+    def failed_start(*args, **kwargs):
+        raise OSError('caption worker could not start')
+    monkeypatch.setattr(jc.subprocess, 'Popen', failed_start)
+    diagnostics = {}
+    with app.app_context():
+        assert jc.caption_images_joycaption([img], diagnostics_out=diagnostics) == {}
+    assert diagnostics == {'returncode': None, 'timed_out': False,
+                           'stderr_tail': ['caption worker could not start']}
 
 
 # --- graceful caption-batch cancellation ------------------------------------
@@ -1115,7 +1179,64 @@ def test_joycaption_batch_without_cancel_hook_streams_all(app, monkeypatch, tmp_
     monkeypatch.setattr(jc.cfg, 'aitoolkit_path', lambda k: str(tmp_path / str(k)))
     monkeypatch.setattr(jc.subprocess, 'Popen', lambda *a, **k: _FakePopen([], stdout_text))
 
+    progress = []
     with app.app_context():
-        out = jc.caption_images_joycaption([pa, pb], prompt='p')
+        out = jc.caption_images_joycaption(
+            [pa, pb], prompt='p', on_progress=lambda d, t: progress.append((d, t)))
 
     assert out == {pa: 'cap a', pb: 'cap b'}
+    assert progress == [(1, 2), (2, 2)]
+
+
+@pytest.mark.parametrize('backend', ['joycaption', 'auto'])
+def test_caption_paths_progress_arrives_before_worker_finishes(
+        app, monkeypatch, tmp_path, backend):
+    from app.services import face_dataset_service as svc, joycaption as jc, vision_llm
+    import threading
+
+    pa, pb = _joy_paths(tmp_path, 2)
+    monkeypatch.setattr(jc, 'is_available', lambda: True)
+    monkeypatch.setattr(jc.cfg, 'aitoolkit_path', lambda k: str(tmp_path / str(k)))
+    monkeypatch.setattr(vision_llm, 'describe_image', lambda *a, **k: 'fallback caption')
+    monkeypatch.setattr(vision_llm, 'unload_vision_model', lambda *a, **k: None)
+    progress, during_stream, persisted = [], [], []
+    caller = threading.get_ident()
+
+    def stream():
+        yield json.dumps({'i': 1, 'path': pa, 'caption': 'first caption'}) + '\n'
+        during_stream.append(list(progress))
+        # Duplicate events and the final aggregate must not count twice.
+        yield json.dumps({'i': 1, 'path': pa, 'caption': 'first caption'}) + '\n'
+        yield json.dumps({'i': 2, 'path': pb, 'error': 'unreadable'}) + '\n'
+        yield json.dumps({'captions': {pa: 'first caption'}, 'errors': {pb: 'unreadable'}})
+
+    proc = _FakePopen([], '')
+    proc.stdout = stream()
+    monkeypatch.setattr(jc.subprocess, 'Popen', lambda *a, **k: proc)
+    with app.app_context():
+        out = svc.caption_paths(
+            [pa, pb], backend=backend,
+            progress=lambda d, t: progress.append((d, t)),
+            on_caption=lambda *a: persisted.append((threading.get_ident(), a[0])))
+    assert during_stream == [[(0, 2), (1, 2)]]
+    assert [d for d, _ in progress] == sorted(d for d, _ in progress)
+    assert all(t == 2 and d <= t for d, t in progress)
+    assert persisted == [(caller, p) for p in out]
+    assert out[pa] == 'first caption'
+    if backend == 'auto':
+        assert out[pb] == 'fallback caption'
+        assert progress[-1] == (2, 2)
+
+
+def test_joycaption_progress_error_does_not_lose_captions(app, monkeypatch, tmp_path):
+    from app.services import joycaption as jc
+    pa = _prep_joycaption(monkeypatch, jc, tmp_path)
+    proc = _FakePopen([], json.dumps({'path': pa, 'caption': 'kept caption'}))
+    monkeypatch.setattr(jc.subprocess, 'Popen', lambda *a, **k: proc)
+
+    def broken_progress(*args):
+        raise RuntimeError('activity unavailable')
+
+    with app.app_context():
+        assert jc.caption_images_joycaption([pa], on_progress=broken_progress) == {
+            pa: 'kept caption'}

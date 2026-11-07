@@ -35,8 +35,8 @@ const history = (n) => Array.from({ length: n }, (_, i) => ({
 }))
 
 test('the strip draws a handful, and its button names the whole history', () => {
-  // Le partage bande/fenêtre est le cœur du changement : si la bande dessinait
-  // encore les 167, le bouton n'aurait rien à ouvrir et le mur serait intact.
+  // Splitting strip and dialog is essential: if the strip still showed all 167,
+  // the button would have nothing new to open and the wall would remain.
   const html = draw(RecentPrompts, {
     items: history(20), datasetId: 7, selectedPrompt: null,
     onPick: () => {}, onDelete: () => {},
@@ -56,8 +56,8 @@ test('a strip tile asks for a thumbnail big enough to see', () => {
   })
   const srcs = srcsOf(html).filter((s) => s.includes('/api/dataset/'))
   assert.equal(srcs.length, 1)
-  // Le barreau demandé, pas seulement l'appel à l'aide : c'est `s=` qui décide
-  // du nombre de pixels reçus, et 128 était le réglage de la vignette de 32 px.
+  // Check requested size, not just the helper call: s= determines received
+  // pixels, and 128 was the old 32px thumbnail setting.
   const side = Number(/\bs=(\d+)/.exec(srcs[0])?.[1])
   assert.ok(side >= 192, `a strip tile still asks for s=${side}`)
   assert.match(srcs[0], /\/thumb\//, 'a tile must never decode the original')
@@ -82,8 +82,8 @@ test('the browser renders every entry, at the Civitai browser’s picture size',
 })
 
 test('a prompt that never rendered says so, and spends the space on its text', () => {
-  // 39 des 167 entrées mesurées n'ont aucune image : un « ? » de la taille d'une
-  // vignette ne les distingue pas les unes des autres, le texte si.
+  // Of 167 measured entries, 39 have no image. A thumbnail-sized question mark
+  // cannot distinguish them, but their text can.
   const html = draw(SavedPromptsPanel, {
     open: true, onClose: () => {}, items: [{ prompt: 'a prompt never launched', count: 0 }],
     datasetId: 7, selectedPrompt: null, onPick: () => {},
@@ -96,8 +96,8 @@ test('a prompt that never rendered says so, and spends the space on its text', (
 })
 
 test('the batch tick appears only for a host that asked for it', () => {
-  // « Generate from the board » monte la liste SANS le lot ; la case ne doit pas
-  // y apparaître, ni dans la bande ni dans la fenêtre.
+  // Generate from the board mounts the list WITHOUT batching: neither the strip
+  // nor the dialog should show its checkbox.
   const props = {
     open: true, onClose: () => {}, items: history(3), datasetId: 7,
     selectedPrompt: null, onPick: () => {}, onDelete: () => {},
@@ -112,8 +112,8 @@ test('the batch tick appears only for a host that asked for it', () => {
 })
 
 test('a history the API sent as bare strings still renders', () => {
-  // Rétro-compat : avant un restart Flask la route répond des strings. Une
-  // fenêtre qui explose sur cette forme casserait l'écran juste après un update.
+  // Backward compatibility: before Flask restarts, the route returns strings.
+  // Rejecting that shape would crash the screen immediately after an update.
   for (const Component of [RecentPrompts, SavedPromptsPanel]) {
     const html = draw(Component, {
       open: true, onClose: () => {}, items: ['plain string prompt'],

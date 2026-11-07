@@ -3,6 +3,11 @@ engine, mocked) -> curate (keep + caption) -> export ZIP. Exercises the same
 HTTP surface the lifted frontend (Task 11) drives, with the fan-out's
 background thread stubbed the same way test_dataset_service.py does (never
 race a real thread against test teardown)."""
+
+import pytest
+
+pytestmark = pytest.mark.plugins('api_engines')
+
 import io
 import zipfile
 from unittest.mock import patch
@@ -70,7 +75,7 @@ def test_api_only_end_to_end(client, app, monkeypatch):
         'app.services.face_dataset_service.threading.Thread',
         lambda target, args=(), daemon=True: type('T', (), {'start': lambda s: calls.append(args)})())
 
-    with patch('app.services.chatgpt_image.generate_variation', return_value=_png()), \
+    with patch('lds_api_engines.chatgpt_image.generate_variation', return_value=_png()), \
          patch('concurrent.futures.ThreadPoolExecutor', _SyncExecutor):
         with app.app_context():
             ids = svc.generate_variations_nanobanana(app, LOCAL_USER, did,

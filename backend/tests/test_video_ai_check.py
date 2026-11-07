@@ -31,12 +31,15 @@ from types import SimpleNamespace
 import pytest
 
 from app import config as cfg
-from app.services import video_ai_check as ac
-from app.services import video_metrics
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_ai_check as ac
+from lds_video import video_metrics
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _infer_dir():
-    return Path(__file__).resolve().parents[1] / 'infer'
+    return Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'infer'
 
 
 def _infer_source(name):
@@ -210,7 +213,7 @@ def test_a_degenerate_frame_size_returns_the_whole_frame_rather_than_an_empty_bo
 
 def _bank_with_clips(app, spans, probe_state='ok'):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes',
                          user_id=cfg.LOCAL_USER)
@@ -257,7 +260,7 @@ def _stub_model(monkeypatch, steps_for):
 
 
 def _metrics(app, clip_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         raw = db.session.get(VideoClip, clip_id).metrics_json
     return json.loads(raw) if raw else {}
@@ -343,7 +346,7 @@ def test_a_partial_window_is_no_measurement_rather_than_a_smaller_one(app, monke
 
 def test_the_pass_merges_into_the_blob_and_never_erases_another_passs_verdict(app, monkeypatch):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     bank_id, ids = _bank_with_clips(app, _long(1))
     with app.app_context():
         clip = db.session.get(VideoClip, ids[0])
@@ -367,7 +370,7 @@ def test_a_recheck_that_now_finds_a_shot_too_short_leaves_no_stale_score(app, mo
     """The keys this pass owns are cleared before the new ones are written, so a
     'too_short' state can never sit next to last run's number."""
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     bank_id, ids = _bank_with_clips(app, [(0.0, 1.0)])
     with app.app_context():
         clip = db.session.get(VideoClip, ids[0])
@@ -487,7 +490,7 @@ def test_the_state_key_is_owned_so_a_recheck_cannot_leave_two_answers():
 def test_this_pass_does_not_write_a_key_another_pass_owns():
     """The blob is shared by seven passes now. An overlap would make one pass's
     re-run silently rewrite another's verdict."""
-    from app.services import video_defect_sweep, video_safe_zone
+    from lds_video import video_defect_sweep, video_safe_zone
     others = set(video_safe_zone.OWNED_KEYS) | set(video_defect_sweep.OWNED_KEYS)
     others |= {'aesthetic_score', 'watermark_score', 'watermark_state',
                'duplicate_group', 'duplicate_of', video_metrics.SHARPNESS_KEY}
@@ -714,7 +717,7 @@ def test_the_pass_needs_no_install_action_of_its_own():
 def test_the_route_starts_the_pass_and_the_button_has_a_name(app, client, monkeypatch):
     bank_id, _ids = _bank_with_clips(app, _long(1))
     started = {}
-    monkeypatch.setattr('app.services.video_bank_service.start_ai_check',
+    monkeypatch.setattr('lds_video.video_bank_service.start_ai_check',
                         lambda *a, **k: started.update(k) or {'ok': True})
     monkeypatch.setattr('app.capabilities.probe_video',
                         lambda: {'decode': True, 'detect': True, 'encode': True,
@@ -740,7 +743,7 @@ def test_the_pass_refuses_up_front_when_no_interpreter_can_run_the_encoder(app, 
     bank_id, _ids = _bank_with_clips(app, _long(1))
     monkeypatch.setattr(ac, 'unavailable_reason',
                         lambda: 'the AI check needs the ✨ Score interpreter')
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     with app.app_context():
         with pytest.raises(RuntimeError, match='Score interpreter'):
             svc.start_ai_check(app, cfg.LOCAL_USER, bank_id)
@@ -750,7 +753,7 @@ def test_the_pass_takes_no_gpu_window(app):
     """It runs for tens of minutes; holding the card that long over an advisory
     flag would unload ComfyUI and block a training start for the whole run. Not
     touching it is what lets a bank be checked WHILE a training owns the card."""
-    src = (Path(__file__).resolve().parents[1] / 'app' / 'services'
+    src = (Path(__file__).resolve().parents[2] / 'bundled' / 'video' / 'lds_video'
            / 'video_bank_service.py').read_text(encoding='utf-8')
     body = src.split('def start_ai_check')[1].split('def _caption_available')[0]
     assert 'gpu_exclusive' not in body

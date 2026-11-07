@@ -88,12 +88,13 @@ def test_configured_presets_sanitized_ordered_capped(app):
     ]
 
 
-def test_row_and_preset_caps(app):
+def test_row_cap_preserves_every_saved_preset(app):
     from app.services import krea_edit_helper as keh
     rows = [{'file': f'krea/{i}.safetensors', 'strength': 1.0} for i in range(20)]
     _set_presets([{'name': f'P{i}', 'loras': rows} for i in range(20)])
     presets = keh.configured_generation_lora_presets()
-    assert len(presets) == keh.MAX_GENERATION_LORA_PRESETS
+    assert len(presets) == 20
+    assert presets[-1]['name'] == 'P19'
     assert len(presets[0]['loras']) == keh.MAX_GENERATION_LORAS
 
 

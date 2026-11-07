@@ -1,10 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { registerDescriptor, resetRegistry, setEnabled } from '../../plugins/registry.js';
+import apiEngines from '../../../../bundled/api_engines/frontend/index.js';
+import { readFileSync } from 'node:fs';
+import { freeEngines } from '../../engines/catalog.js';
+const apiManifest = JSON.parse(readFileSync(new URL('../../../../bundled/api_engines/plugin.json', import.meta.url), 'utf8'));
 import {
   canonicalEngines, readEngines, writeEngines, readMode, writeMode, primaryEngine,
   distributeVariations, engineBatches, kleinQueuesBehindApi, totalImages, estimateCost,
   billingEngines, generateBlockedReason, STORAGE_ENGINES, STORAGE_PRIMARY, STORAGE_MODE,
 } from './engineSelection.js';
+
+// These main-era cases exercise the three API engines. V2 provides them only
+// after the API Engines product is active; the execution assertions stay intact.
+test.beforeEach(() => {
+  resetRegistry();
+  assert.equal(registerDescriptor(apiEngines, { guideOwnership: apiManifest.guide_ownership }), true);
+  setEnabled(['api_engines']);
+});
+test.afterEach(() => resetRegistry());
 
 /** Minimal localStorage stand-in. `boom` makes every access throw, the private-
  *  browsing case the real code must survive. */
@@ -144,8 +158,8 @@ test('estimateCost: Klein is free and only pays for its own share in split', () 
   // Klein only → free whatever the mode.
   assert.equal(estimateCost(30, ['klein'], 'all'), 0);
   // The ChatGPT subscription lane spends quota, not dollars.
-  assert.equal(estimateCost(10, ['chatgpt'], 'all', { gptViaSub: true }), 0);
-  assert.equal(estimateCost(10, ['nanobanana', 'chatgpt'], 'all', { gptViaSub: true }).toFixed(2),
+  assert.equal(estimateCost(10, ['chatgpt'], 'all', { free: freeEngines({ engineConfig: { chatgpt_auth: 'subscription' } }) }), 0);
+  assert.equal(estimateCost(10, ['nanobanana', 'chatgpt'], 'all', { free: freeEngines({ engineConfig: { chatgpt_auth: 'subscription' } }) }).toFixed(2),
     (10 * 0.15).toFixed(2));
   // The multiplier bills too.
   assert.equal(estimateCost(4, ['nanobanana'], 'all', { multiplier: 3 }).toFixed(2),
@@ -158,23 +172,33 @@ test('estimateCost: Klein is free and only pays for its own share in split', () 
 
 test('billingEngines names only the lanes that really charge', () => {
   assert.deepEqual(billingEngines(['klein', 'nanobanana', 'chatgpt']), ['nanobanana', 'chatgpt']);
-  assert.deepEqual(billingEngines(['klein', 'chatgpt'], { gptViaSub: true }), []);
+  assert.deepEqual(billingEngines(['klein', 'chatgpt'], { free: freeEngines({ engineConfig: { chatgpt_auth: 'subscription' } }) }), []);
   assert.deepEqual(billingEngines(['klein']), []);
 });
 
-test('generateBlockedReason: no silent empty batch, and the server cap is explained', () => {
+test('the configured local queue budget counts only the local share', () => {
+  const run = { engines: ['klein'], shotCount: 100, mode: 'all', multiplier: 3,
+    maxFanout: 60, maxLocalFanout: 1000 };
+  assert.equal(generateBlockedReason(run), null);
+  assert.match(generateBlockedReason({ ...run, multiplier: 20 }), /Local tools/);
+  assert.equal(generateBlockedReason({ ...run, engines: ['klein', 'chatgpt'] }), null);
+  assert.equal(generateBlockedReason({ ...run, maxLocalFanout: undefined }), null);
+  const mixed = { engines: ['klein', 'nanobanana', 'chatgpt'], shotCount: 104,
+    mode: 'split', multiplier: 2, maxLocalFanout: 70 };
+  assert.equal(generateBlockedReason(mixed), null); // 35 local shots, twice each.
+  assert.match(generateBlockedReason({ ...mixed, maxLocalFanout: 69 }), /70 images/);
+  assert.match(generateBlockedReason({ ...mixed, mode: 'all' }), /208 images/);
+});
+
+test('generateBlockedReason: empty selections are blocked, large batches are accepted', () => {
   assert.match(generateBlockedReason({ engines: [], shotCount: 5, mode: 'split' }), /at least one engine/);
   assert.match(generateBlockedReason({ engines: ['klein'], shotCount: 0, mode: 'split' }), /at least one shot/);
   assert.equal(generateBlockedReason({ engines: ['klein'], shotCount: 5, mode: 'split' }), null);
-  // 25 shots × 3 engines = 75 > 60: refused HERE, before the click, not by a
-  // half-dispatched batch on the server.
-  const over = generateBlockedReason({
-    engines: ['klein', 'nanobanana', 'chatgpt'], shotCount: 25, mode: 'all', maxFanout: 60 });
-  assert.match(over, /75 images/);
-  assert.match(over, /switch to Split/);
-  assert.equal(generateBlockedReason({
-    engines: ['klein', 'nanobanana', 'chatgpt'], shotCount: 25, mode: 'split', maxFanout: 60 }), null);
-  // Unknown cap (older server / probe failed) → never blocks the user.
-  assert.equal(generateBlockedReason({
-    engines: ['klein', 'nanobanana', 'chatgpt'], shotCount: 25, mode: 'all' }), null);
+  for (const mode of ['split', 'all']) {
+    for (const shotCount of [104, 100_000]) {
+      // An old cached capability value must not bring back the fixed cap.
+      assert.equal(generateBlockedReason({ engines: ['nanobanana', 'chatgpt'],
+        shotCount, mode, multiplier: 20, maxFanout: 60, maxLocalFanout: 1000 }), null);
+    }
+  }
 });

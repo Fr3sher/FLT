@@ -80,6 +80,127 @@ def test_the_old_ollama_path_answers_exactly_what_the_new_one_does(app, client, 
     assert old.get_json()['provider'] == provider
 
 
+@pytest.mark.parametrize('provider', ['ollama', 'lmstudio'])
+def test_settings_lists_inactive_provider_at_draft_url_without_saving(
+        app, client, monkeypatch, provider):
+    other = 'lmstudio' if provider == 'ollama' else 'ollama'
+    with app.app_context():
+        config.save_config({'local_llm': {'provider': other},
+                            'ollama': {'url': 'http://saved.invalid:11434'},
+                            'lmstudio': {'url': 'http://saved.invalid:1234'}})
+        config.set_secrets({'LMSTUDIO_API_KEY': 'lms-test-draft'})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Model discovery must not save, start a server or load a model')
+
+    monkeypatch.setattr(config, 'save_config', forbidden)
+    monkeypatch.setattr(vision_llm, 'start_server', forbidden)
+    monkeypatch.setattr(vision_llm, 'load_model', forbidden)
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            if provider == 'ollama':
+                return {'models': [{'name': 'custom-vision:latest'}]}
+            return {'models': [{'key': 'custom-vision', 'type': 'vlm'},
+                               {'key': 'embedding-model', 'type': 'embedding'}]}
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs.get('headers')))
+        return Response()
+
+    monkeypatch.setattr(vision_lmstudio.requests, 'get', get)
+    draft = 'http://draft.invalid:1299'
+    typed = draft + ('/v1/' if provider == 'lmstudio' else '/')
+    response = client.post('/api/local-llm/models',
+                           json={'provider': provider, 'url': typed})
+    assert response.status_code == 200
+    assert response.get_json() == {
+        'ok': True, 'reachable': True, 'provider': provider,
+        'models': ['custom-vision:latest' if provider == 'ollama' else 'custom-vision'],
+    }
+    endpoint = '/api/tags' if provider == 'ollama' else '/api/v1/models'
+    assert calls and all(url == draft + endpoint for url, _ in calls)
+    if provider == 'lmstudio':
+        assert calls[0][1] == {'Authorization': 'Bearer lms-test-draft'}
+    assert 'lms-test-draft' not in response.get_data(as_text=True)
+    with app.app_context():
+        assert config.get('local_llm.provider') == other
+        assert config.get(f'{provider}.url').startswith('http://saved.invalid:')
+
+
+@pytest.mark.parametrize('provider', ['ollama', 'lmstudio'])
+@pytest.mark.parametrize('url', ['', 'file:///tmp/model', 'http://user:password@host',
+                                 'http://host:invalid', 'http://[invalid'])
+def test_settings_rejects_invalid_model_server_without_requesting_it(
+        client, monkeypatch, provider, url):
+    monkeypatch.setattr(vision_llm, 'list_models',
+                        lambda **kw: pytest.fail('Invalid URL reached model discovery'))
+    response = client.post('/api/local-llm/models',
+                           json={'provider': provider, 'url': url})
+    assert response.status_code == 400
+    assert response.get_json()['error']
+
+
+@pytest.mark.parametrize('provider', ['', 'unsupported'])
+def test_settings_rejects_unknown_model_provider(client, monkeypatch, provider):
+    monkeypatch.setattr(vision_llm, 'list_models',
+                        lambda **kw: pytest.fail('Invalid provider reached model discovery'))
+    response = client.post('/api/local-llm/models', json={'provider': provider})
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize('provider', ['ollama', 'lmstudio'])
+@pytest.mark.parametrize('reachable', [False, True])
+def test_settings_model_discovery_distinguishes_empty_from_unreachable(
+        client, monkeypatch, provider, reachable):
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {'models': []}
+
+    def get(*args, **kwargs):
+        if not reachable:
+            raise vision_lmstudio.requests.exceptions.ConnectionError('not running')
+        return Response()
+
+    monkeypatch.setattr(vision_lmstudio.requests, 'get', get)
+    response = client.post('/api/local-llm/models', json={
+        'provider': provider, 'url': 'http://draft.invalid:1299'})
+    assert response.status_code == 200
+    assert response.get_json() == {
+        'ok': reachable, 'reachable': reachable, 'provider': provider, 'models': [],
+    }
+
+
+def test_draft_model_url_cannot_be_requested_through_get(client, monkeypatch):
+    monkeypatch.setattr(vision_llm, 'list_models',
+                        lambda **kw: pytest.fail('GET must not forward saved credentials'))
+    response = client.get('/api/local-llm/models', query_string={
+        'provider': 'lmstudio', 'url': 'https://other.invalid'})
+    assert response.status_code == 400
+
+
+def test_draft_model_discovery_requires_csrf(app, client, monkeypatch):
+    app.config['WTF_CSRF_ENABLED'] = True
+    calls = []
+    monkeypatch.setattr(vision_llm, 'list_models', lambda **kw: calls.append(kw) or {
+        'ok': True, 'reachable': True, 'provider': 'lmstudio', 'models': []})
+    body = {'provider': 'lmstudio', 'url': 'https://draft.invalid/v1'}
+    rejected = client.post('/api/local-llm/models', json=body)
+    assert rejected.status_code == 400
+    assert calls == [], 'A CSRF-less request reached model discovery'
+
+    token = client.get('/api/csrf-token').get_json()['csrf_token']
+    allowed = client.post('/api/local-llm/models', json=body,
+                          headers={'X-CSRFToken': token})
+    assert allowed.status_code == 200
+    assert calls == [{'name': 'lmstudio', 'url': 'https://draft.invalid'}]
+
+
 # --- the probes never raise, and say the real reason ------------------------
 
 def test_a_server_that_answers_and_refuses_is_not_reported_as_switched_off(

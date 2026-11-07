@@ -116,6 +116,7 @@ def lanes(app, monkeypatch):
 
 
 # --- 1. The choice reaches the queue, on all three lanes ---------------------
+@pytest.mark.plugins('image_upscale')
 @pytest.mark.parametrize('lane', ['single', 'reimprove', 'batch'])
 def test_the_stored_choice_reaches_enqueue_on_every_lane(lanes, lane):
     getattr(lanes, lane)(stored=OTHER_FILE)
@@ -124,6 +125,7 @@ def test_the_stored_choice_reaches_enqueue_on_every_lane(lanes, lane):
 
 
 # --- 2. Anti-regression: a dataset that never chose is untouched -------------
+@pytest.mark.plugins('image_upscale')
 @pytest.mark.parametrize('lane', ['single', 'reimprove', 'batch'])
 def test_a_dataset_that_never_chose_keeps_todays_model(lanes, lane):
     """`klein_model=None` is what every improve sent before this feature existed,

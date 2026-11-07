@@ -1,11 +1,15 @@
 """Checkpoint management: app-wide trash (nothing destroyed directly),
 selective delete, run cleanup, cloud staging purge, source-side save cap."""
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import os
 from app.utils.timestamps import naive_utcnow
 
 import pytest
 
 from app.config import LOCAL_USER
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
@@ -71,7 +75,7 @@ def test_cleanup_keeps_only_the_keep_set(app, ds, tmp_path, monkeypatch):
 def test_purge_finished_runs_spares_active_and_pod_kept(app, ds, tmp_path):
     from app.extensions import db
     from app.models import CloudTrainingRun
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         def mk(status, sub):
             d = tmp_path / sub

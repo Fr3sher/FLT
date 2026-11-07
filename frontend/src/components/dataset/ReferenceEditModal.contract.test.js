@@ -119,7 +119,7 @@ test('Retry replays the exact session request, including transient reference fil
   const readyEnd = modal.indexOf('\n        ) : (', readyStart);
   assert.ok(readyStart > 0 && readyEnd > readyStart, 'the ready branch must be isolated');
   const ready = modal.slice(readyStart, readyEnd);
-  assert.match(ready, /ENGINE_LABELS\[candidate\.engine\] \|\| candidate\.engine/,
+  assert.match(ready, /engineLabel\(candidate\.engine\)/,
     'every result must use its canonical engine label');
   assert.match(ready, /onClick=\{\(\) => keep\(candidate\.engine\)\}/,
     'each successful candidate must own its Keep action');

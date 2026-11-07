@@ -1,29 +1,21 @@
 // react-frontend/src/components/dataset/studio/LoraPicker.jsx
 /**
- * Sélecteur de LoRA(s) à tester (Studio autonome). Fetch /api/studio/checkpoints,
- * affiche une carte cochable par (dataset × FAMILLE) ; chaque LoRA coché ouvre un
- * <select> de checkpoint (défaut = le 1er = le final). Pré-coche `preselectDataset`.
- *
- * Un dataset entraîné en PLUSIEURS familles (ex. « Lola » en Z-Image ET Krea) apparaît
- * en PLUSIEURS lignes (une par famille) — le backend émet une entrée par (dataset,
- * famille). D'où la clé COMPOSITE `${dataset_id}:${family}` : sans elle, deux lignes du
- * même dataset auraient la même clé React et un état `picked` ambigu.
- *
- * Émet `onSelectionChange([{dataset_id, checkpoint, lora_label, trigger_word, train_type, family}])` à
- * chaque changement (coche/décoche/choix de checkpoint). Affiche un badge
- * « Comparaison » dès que ≥2 LoRA sont cochés.
- *
- * Verrou de type (Task 5) : un run = une seule famille. Dès qu'un LoRA est coché, les
- * LoRA d'une autre famille sont désactivés (grisés + infobulle). Désélectionner tout
- * réinitialise le verrou.
+ * Standalone Studio LoRA picker fetches /api/studio/checkpoints and shows one selectable card per
+ * dataset/FAMILY. Each selected card offers checkpoint selection, defaulting to the first/final
+ * checkpoint; preselectDataset is checked initially. Multi-family datasets have multiple rows,
+ * requiring composite dataset_id:family keys for unique React identity and unambiguous picked
+ * state. Every selection/checkpoint change emits onSelectionChange([{dataset_id, checkpoint,
+ * lora_label, trigger_word, train_type, family}]). Multiple selections get a badge. One run uses
+ * one family: selecting a LoRA disables other families with a tooltip; clearing all selections
+ * resets the lock.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { familyBadgeClass, familyLabel } from '../../../utils/familyBadges';
 import { useToast } from '../../common/Toast';
 
-// Famille de l'entrée (le backend la fournit ; `train_type` = alias rétro-compat).
+// Entry family is supplied by the backend; train_type is the backward-compatible alias.
 const famOf = (l) => l.family || l.train_type || 'zimage';
-// Clé composite d'une ligne (dataset × famille) — identité stable dans `picked`.
+// Composite dataset/family row key provides stable identity in picked.
 const keyOf = (l) => `${l.dataset_id}:${famOf(l)}`;
 
 
@@ -31,11 +23,11 @@ export default function LoraPicker({ preselectDataset, preselectFamily = null, o
   const toast = useToast();
   const [loras, setLoras] = useState([]);
   const [loading, setLoading] = useState(true);
-  // Map "datasetId:family" -> checkpoint filename choisi (présence de la clé = coché).
+  // Map datasetId:family to the selected checkpoint filename; presence means checked.
   const [picked, setPicked] = useState({});
-  // Pré-cocher une seule fois (sinon on re-coche à chaque re-fetch).
+  // Preselect only once, not again on every refetch.
   const preselectedRef = useRef(false);
-  // Restauration de la sélection persistée : une seule fois, après le 1er fetch.
+  // Restore saved selection once, after the first fetch.
   const restoredRef = useRef(false);
 
   useEffect(() => {
@@ -55,8 +47,8 @@ export default function LoraPicker({ preselectDataset, preselectFamily = null, o
     return () => { cancelled = true; };
   }, [toast]);
 
-  // Pré-coche la 1re ligne du dataset pré-sélectionné (depuis l'URL) une fois la liste
-  // chargée : checkpoint par défaut = le 1er (= le final côté backend).
+  // After loading, preselect the URL-selected dataset's first row. Its default checkpoint is first
+  // in the list, meaning final on the backend.
   useEffect(() => {
     if (preselectedRef.current || !preselectDataset || !loras.length) return;
     const target = loras.find((l) => (
@@ -69,11 +61,10 @@ export default function LoraPicker({ preselectDataset, preselectFamily = null, o
     }
   }, [preselectDataset, preselectFamily, loras]);
 
-  // Restaure la sélection du DERNIER passage (recharger la page ne perd plus les
-  // LoRA cochés ni leurs checkpoints — demande user 2026-07-03). L'URL
-  // `?dataset=` (préselection explicite) garde la priorité. On ne restaure que
-  // les entrées encore présentes dans la liste fraîche (LoRA supprimé = ignoré),
-  // et une seule famille (règle « un run = une famille »).
+  // Restore the LAST visit's selected LoRAs/checkpoints across reloads, as requested on
+  // 2026-07-03. Explicit ?dataset= URL selection takes priority. Restore only entries still
+  // present in the fresh list, ignoring deleted LoRAs, and only one family to preserve the
+  // one-run/one-family rule.
   useEffect(() => {
     if (restoredRef.current || !loras.length) return;
     restoredRef.current = true;
@@ -93,16 +84,16 @@ export default function LoraPicker({ preselectDataset, preselectFamily = null, o
     if (Object.keys(valid).length) setPicked(valid);
   }, [loras, preselectDataset]);
 
-  // Persiste la sélection à chaque changement (après restauration seulement,
-  // sinon le {} initial écraserait la sauvegarde avant qu'on l'ait relue).
+  // Persist changes only AFTER restoration; otherwise the initial {} would overwrite the saved
+  // selection before reading it.
   useEffect(() => {
     if (!restoredRef.current && !preselectedRef.current) return;
     try { localStorage.setItem('studioPicked_v1', JSON.stringify(picked)); } catch { /* ignore */ }
   }, [picked]);
 
-  // Remonte la sélection normalisée au parent à chaque changement. Chaque entrée inclut
-  // train_type ET family (= la famille de la LIGNE, pas le train_type du dataset) pour
-  // que StudioShell fetch les bonnes bases et que le backend valide la famille unique.
+  // Emit normalized selection to the parent on every change. Include train_type AND family from
+  // the ROW, not the dataset's train_type, so StudioShell fetches correct bases and the backend
+  // can validate a single family.
   const selection = useMemo(() => {
     const out = [];
     for (const l of loras) {
@@ -111,8 +102,8 @@ export default function LoraPicker({ preselectDataset, preselectFamily = null, o
         dataset_id: l.dataset_id,
         checkpoint: cp,
         lora_label: l.lora_label,
-        // Remonté pour le mode « pile » (LoraStackPanel affiche le trigger de CHAQUE
-        // LoRA combiné — le backend les injecte tous dans le prompt).
+        // Expose each combined LoRA's trigger to LoraStackPanel; the backend injects all triggers
+        // into the prompt.
         trigger_word: l.trigger_word || null,
         train_type: famOf(l),
         family: famOf(l),
@@ -121,13 +112,13 @@ export default function LoraPicker({ preselectDataset, preselectFamily = null, o
     return out;
   }, [loras, picked]);
 
-  // Famille du run = celle du 1er LoRA coché (null si rien coché).
+  // Run family is that of the first selected LoRA, or null when none is selected.
   const runType = selection.length > 0 ? selection[0].family : null;
 
   useEffect(() => { onSelectionChange?.(selection); }, [selection, onSelectionChange]);
 
   const toggle = (l) => {
-    // Ne pas permettre de cocher un LoRA d'une famille différente du run en cours.
+    // Do not allow selection of a LoRA from a different family than the current run.
     const k = keyOf(l);
     if (runType !== null && famOf(l) !== runType && picked[k] == null) return;
     setPicked((cur) => {
@@ -146,10 +137,11 @@ export default function LoraPicker({ preselectDataset, preselectFamily = null, o
     <div data-probe-panel="picker" className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-content-muted text-[0.6875rem] uppercase">LoRA to test</span>
-        {/* Ce badge annonçait « ⚖ Comparaison » dès 2 LoRA cochés — faux depuis que
-            la pile (🧬 Blend) est un mode à part entière, et le mode réel est
-            choisi juste en dessous (LoraStackPanel). On n'annonce plus que le FAIT
-            d'avoir plusieurs LoRA, pas ce qu'on va en faire. */}
+        {/*
+         * This badge used to say Comparison for two or more LoRAs, which became inaccurate once
+         * Blend was a separate mode selected below in LoraStackPanel. State only the FACT of
+         * multiple selections, not what will be done with them.
+         */}
         {count >= 2 && (
           <span className="px-2 py-0.5 rounded-full text-[0.625rem] font-semibold border border-border-strong bg-surface-raised text-content">
             Multi-LoRA ({count})
@@ -169,7 +161,7 @@ export default function LoraPicker({ preselectDataset, preselectFamily = null, o
           {loras.map((l) => {
             const k = keyOf(l);
             const on = picked[k] != null;
-            // Verrou de famille : grisé si une autre famille est déjà sélectionnée.
+            // Family lock: disable when another family is already selected.
             const lType = famOf(l);
             const locked = runType !== null && !on && lType !== runType;
             return (
@@ -194,9 +186,11 @@ export default function LoraPicker({ preselectDataset, preselectFamily = null, o
                       {l.trigger_word}
                     </code>
                   )}
-                  {/* Badge de famille — TOUTES les familles taguées (Z-Image incluse) :
-                      un dataset multi-famille a une ligne par pipeline, une ligne sans
-                      badge serait ambiguë. Couleur distincte par famille. */}
+                  {/*
+                   * Badge EVERY family, including Z-Image: multi-family datasets have one row per
+                   * pipeline, so unbadged rows would be ambiguous. Give each family a distinct
+                   * color.
+                   */}
                   <span className={`px-1.5 py-0.5 rounded border text-[0.5625rem] font-semibold uppercase ${familyBadgeClass(lType)}`}>
                     {familyLabel(lType)}
                   </span>

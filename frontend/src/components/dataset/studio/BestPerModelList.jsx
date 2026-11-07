@@ -1,16 +1,15 @@
-// Meilleur réglage PAR MODÈLE (les votes varient selon le checkpoint).
-// Extrait de LoraTestStudio.jsx (bloc d.best_per_model), rendu REPLIABLE + couleur
-// corrigée : un modificateur d'opacité à 60 % sur `bg-surface` rendait un panneau
-// BLANC (surface = blanc) → on utilise `bg-surface-raised` (surface sombre surélevée).
+// Best setting PER MODEL because votes vary by checkpoint. Extracted from LoraTestStudio.jsx
+// d.best_per_model, made collapsible, and corrected to bg-surface-raised: 60% opacity on
+// bg-surface produced a WHITE panel because surface is white.
 import { useState } from 'react';
 import { datasetThumbUrl } from '../../../utils/datasetThumbUrl';
 
 export default function BestPerModelList({ items, breakdown, datasetId, onMemorize, fmt }) {
-  const [open, setOpen] = useState(false); // replié par défaut (dépliable au besoin)
+  const [open, setOpen] = useState(false); // Collapsed by default; expand as needed.
   if (!Array.isArray(items) || items.length === 0) return null;
 
-  // Détail « générées/votées par base » regroupé par checkpoint (idée user :
-  // voir où l'échantillon est mince, ex. testé 12× sur une base vs 3× sur une autre).
+  // Group generated/voted counts by checkpoint to expose thin samples, such as one base tested 12
+  // times versus another only 3 times; suggested by a user.
   const byCheckpoint = {};
   (breakdown || []).forEach((b) => { (byCheckpoint[b.checkpoint] ||= []).push(b); });
 

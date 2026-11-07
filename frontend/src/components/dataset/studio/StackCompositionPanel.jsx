@@ -1,24 +1,17 @@
 // react-frontend/src/components/dataset/studio/StackCompositionPanel.jsx
 /**
- * « 🧬 Stack composition » — ce qu'il y a DANS la pile du run affiché : chaque LoRA,
- * son poids, son trigger. Remplace le « 🏆 LoRA Ranking » quand le run est une pile :
- * un classement à une entrée (une pile n'a qu'un LoRA « testé ») n'apprend rien, alors
- * que la composition est la seule chose qui distingue ce run de la même image générée
- * avec un LoRA seul.
- *
- * Porte aussi le « ★ Save as best setting » de la pile : le réglage gagnant d'une pile,
- * ce sont SES POIDS. Le corps du POST est fabriqué par ./stackResults (testé).
- *
- * Responsive : nom / trigger / poids sur deux lignes — à 400 px la colonne du studio
- * écrase un nom de LoRA mis côte à côte avec le reste (même leçon que LoraStackPanel).
+ * Stack composition shows every LoRA, weight and trigger in the displayed run. Replace LoRA
+ * Ranking for stacks: a one-entry ranking adds nothing, while composition distinguishes the stack
+ * from a solo-LoRA image. Save as best setting stores the stack's winning WEIGHTS through a POST
+ * body built by tested stackResults helpers. Use two rows for name/trigger/weight: at 400 px,
+ * placing them side by side crushes the name, as in LoraStackPanel.
  */
 import { useState } from 'react';
 import { HelpBadge } from '../../../help/HelpMode';
 import { bestStackPayload, fmtWeight } from './stackResults';
 
-// 🔤 `injectTrigger` = la vérité du RUN AFFICHÉ (relue de ses cellules par le
-// parent), pas l'état courant de la case : un run lancé décoché doit le dire
-// même si la case a été recochée depuis.
+// injectTrigger reflects the DISPLAYED RUN as read from its cells by the parent, not the current
+// checkbox. A run launched unchecked must still say so after the checkbox is checked again.
 export default function StackCompositionPanel({ members, onSaveBest, saving = false, savedAt = null,
   injectTrigger = true }) {
   const [open, setOpen] = useState(true);
@@ -67,8 +60,8 @@ export default function StackCompositionPanel({ members, onSaveBest, saving = fa
                       {m.trigger}
                     </code>
                   ) : (
-                    // Les runs lancés avant cette vue n'ont pas figé le trigger de leurs
-                    // LoRA empilés : on le dit plutôt que de laisser croire qu'il n'y en a pas.
+                    // Older runs did not snapshot stacked LoRA triggers. Explain that instead of
+                    // implying there were none.
                     <span className="text-content-subtle text-[0.625rem]" title="This run predates the stack view, which is when trigger words started being recorded.">
                       trigger not recorded
                     </span>

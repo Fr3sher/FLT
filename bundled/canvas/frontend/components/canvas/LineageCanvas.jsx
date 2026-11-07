@@ -1,0 +1,2914 @@
+import { contributions } from '@lds/plugin-sdk/canvas';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Camera, Palette, Plug } from 'lucide-react';
+import { buildLineageGraph, CARD_W } from '@lds/plugin-sdk/canvas';
+import {
+  LANE_HEADER_H, MAX_SCALE, MIN_SCALE,
+  clampScale, clampView, fitView, initialView, panBy, pinchCenter, pinchDistance,
+  stackLanes, viewTransform, zoomAt,
+} from '../../utils/canvasLayout.js';
+import { applyPlacement, pinSnapshot, toOverrideMap } from '../../utils/canvasPlacement.js';
+import {
+  clampImageBox, defaultImageSpot, imageNodeEdges,
+  openGeometry, visibleImageNodes,
+} from '../../utils/canvasImageNodes.js';
+import {
+  drawnNodes, edgeAnchors, extractFromGroup, groupBoxOf, layoutBoxes,
+  layoutImageNodes, mergeIntoGroup, mergeTargetAt, shouldExtract,
+} from '../../utils/canvasImageGroups.js';
+import { DEPLOY_BAR_CLASS, DEPLOY_LEGEND } from '@lds/plugin-sdk/canvas';
+import { GraphCard, CheckpointPill } from '@lds/plugin-sdk/canvas';
+import { LineageEdgeDefs, LineageEdges } from '@lds/plugin-sdk/canvas';
+import { noteBadge, toggleDiffSelection } from '@lds/plugin-sdk/canvas';
+import { lineageImportPayload } from '@lds/plugin-sdk/canvas';
+import { removeRunFromTree } from '@lds/plugin-sdk/canvas';
+import {
+  canvasCheckpointKey, describeCanvasLaunch, isCanvasCheckpointSelected,
+  pruneCanvasSelection, refreshCanvasSelection, toggleCanvasCheckpoint,
+} from '../../utils/canvasGeneration.js';
+import { apiFetch, postJson, putJson } from '@lds/plugin-sdk';
+import { useMediaQuery } from '@lds/plugin-sdk/canvas';
+import { LineageDetailPanel } from '@lds/plugin-sdk/canvas';
+import { LineageDiffPanel } from '@lds/plugin-sdk/canvas';
+import { CheckpointActionsPopover } from '@lds/plugin-sdk/canvas';
+import { ContinueDialog } from '@lds/plugin-sdk/canvas';
+import {
+  canvasContinueLanes, canvasContinueRefusal, canvasContinueRequest,
+  canvasContinueRow, canvasContinueSettings, canvasContinueSteps,
+} from '../../utils/canvasContinue.js';
+import { continueAttemptOutcome } from '@lds/plugin-sdk/canvas';
+import { postWithConfirmations } from '@lds/plugin-sdk/training';
+import { PreviewLightbox } from '@lds/plugin-sdk/canvas';
+import { GeneratedImageLightbox } from '@lds/plugin-sdk/ui';
+import { PluginSlot } from '@lds/plugin-sdk/ui';
+import { clampPopoverToViewport, POPOVER_W, popoverHeight } from '@lds/plugin-sdk/canvas';
+import { useCheckpointActions } from '@lds/plugin-sdk/canvas';
+import { useCanvasImageImprove } from '@lds/plugin-sdk/inference';
+import { useRestoreImproveSettings } from '@lds/plugin-sdk/inference';
+import { useCanvasRun } from '../../hooks/useCanvasRun.js';
+import {
+  canvasRunDatasetIds, describeCanvasRun, readyImageCount, runPinCandidates,
+} from '../../utils/canvasRunResults.js';
+import { isNodeControlTarget, laneEdgeHeight, nodePointerIntent } from '../../utils/canvasNodeChrome.js';
+import {
+  laneOverflows, mergeLanePlacement, moveLaneTo, resizeLaneHeight,
+} from '../../utils/canvasLanePlacement.js';
+import { showsZoomLabels, zoomLabelScale, zoomLabelText } from '../../utils/canvasZoomLegibility.js';
+import {
+  pinBatchAnnouncement, pinBatchPendingAcrossLanes, placeImageBatch,
+  groupPinnedBatchBySource, laneStackEntries,
+} from '../../utils/canvasPinBatch.js';
+import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick.js';
+import { galleryDeleteSummary } from '@lds/plugin-sdk/canvas';
+import { canImproveCanvasImage } from '@lds/plugin-sdk/inference';
+import { loraFolderLabel } from '@lds/plugin-sdk/canvas';
+import { runIdentityLabel } from '@lds/plugin-sdk/canvas';
+import CanvasGenerationPanel from './CanvasGenerationPanel.jsx';
+import BoardNodeLayer from './boardNodes/BoardNodeLayer.jsx';
+import { BOARD_NODE_TYPES } from './boardNodes/registry.js';
+import { normalizeExternalLoras } from '@lds/plugin-sdk/canvas';
+import CanvasRunTracker from './CanvasRunTracker.jsx';
+import CanvasImageNode from './CanvasImageNode.jsx';
+import CanvasImageGroup from './CanvasImageGroup.jsx';
+import CanvasGroupBar from './CanvasGroupBar.jsx';
+import CanvasLayoutPresets from './CanvasLayoutPresets.jsx';
+import CanvasSystemStats from './CanvasSystemStats.jsx';
+import { blendEdgesFor, blendSourcesNote } from '../../utils/canvasBlendEdges.js';
+import { externalEdgesFor } from '../../utils/canvasExternalEdges.js';
+// 🎨 Which colour this dataset's connectors are drawn in (utils/datasetTint).
+import { tintIndexFor, tintFor } from '@lds/plugin-sdk/canvas';
+import {
+  boardExportFilename, boardExportPlan, boardExportRefusal, drawBoardExport,
+} from '../../utils/canvasExportPng.js';
+import { ExportGridModal } from '@lds/plugin-sdk/canvas';
+import { CheckpointGalleryPanel } from '@lds/plugin-sdk/canvas';
+import { useToast } from '@lds/plugin-sdk';
+import { useCapabilities } from '@lds/plugin-sdk/ui';
+import { HelpBadge } from '@lds/plugin-sdk';
+
+/* ◉ The LoRA Canvas surface — every selected dataset's genealogy on ONE board,
+   with zoom and pan.
+
+   It draws with the SAME card, pill and edge components as the graph embedded in
+   a run's card (components/dataset/lineageNodes + lineageEdges); the geometry of
+   each dataset's tree is still utils/lineageGraph.js. What is new here is only
+   the surface: several trees stacked into lanes, and a viewport you can move.
+
+   Slice 2 added direct manipulation: cards can be dragged, and where they land
+   is remembered (utils/canvasPlacement.js + the canvas_node_position table).
+
+   Slice 3 makes the board GENERATE. Ticking a pill adds that checkpoint to a
+   run; picks may come from several lanes at once, which is the whole reason the
+   board holds every dataset. The settings are not a canvas invention — the
+   panel is the Test Studio's own RunSetupPanel on the Test Studio's own hooks
+   (see hooks/useCanvasStudio), so the two screens are one implementation. Each
+   pill also carries a × N badge opening the gallery of everything that
+   checkpoint ever produced.
+
+   Gestures: wheel (or trackpad pinch, which arrives as ctrl+wheel) zooms around
+   the pointer; dragging the background pans; two fingers pinch-zoom; dragging a
+   card moves it.
+
+   ⚠️ Moving a card and moving the view are the SAME physical gesture. With a
+   mouse, hit-testing settles it: the press either landed on a card or it did
+   not. On touch there is nothing to hit-test with — a finger on a card could
+   mean either — so the finger PANS by default and only starts moving the card
+   after a long press, which is the gesture every touch UI already uses for
+   "pick this up". Moving before the press completes cancels it, so a flick that
+   happens to start on a card still scrolls the board. */
+
+const ZOOM_STEP = 1.25;
+// How long a finger must rest on a card before it picks it up. Long enough not
+// to fire on a flick that starts on a card, short enough not to feel broken.
+const LONG_PRESS_MS = 420;
+// Screen pixels of travel before a press counts as a drag. Below it the gesture
+// is still a click, so inspecting a run never depends on holding perfectly
+// still — and a 2-px twitch must not write a position to the database.
+const DRAG_SLOP = 4;
+/* 🛝 Two presses on a lane's bottom edge inside this window mean "fit this lane
+   to what it draws". Measured as PRESSES, never as a dblclick: the frame takes
+   the pointer capture the moment a grip is grabbed, and a captured pointer
+   retargets every click that follows to the frame itself — so an onDoubleClick
+   written on the edge is a handler that can never fire. That is the same trap
+   that once made a pinned image's ✕ do nothing, and it was found here the same
+   way: by driving the board rather than by reading it. */
+const LANE_FIT_PRESS_MS = 400;
+/* ONE empty layout array for every lane that has no pinned picture.
+   `layoutByLane[id] || []` looks harmless and is not: a fresh [] on every render
+   is a new prop identity, and a new prop identity is a re-render of the whole
+   lane — which is precisely what the memo boundaries below exist to stop. */
+const NO_LAYOUT = [];
+/* How long a stale frame rectangle may be reused during a wheel burst (ms).
+   The board preventDefault()s the wheel, so nothing can scroll the frame out
+   from under a burst; a resize invalidates it explicitly (see the observer). */
+const RECT_TTL_MS = 250;
+/* Floor between two "the run produced images, re-read the lanes" refreshes. A
+   generation reports new images every poll for minutes; re-reading every lane's
+   full lineage on each of those ticks is the board's most expensive background
+   habit, and nothing about a × N badge needs to be four seconds fresher. */
+const REFETCH_MIN_MS = 6000;
+
+/* What the board can be told to do, written ONCE.
+   The toolbar shows it inline from `lg` up and behind a one-tap ☝ Gestures
+   disclosure below that. Two copies of this sentence would have drifted the
+   first time a gesture was added, and it is the only documentation the board
+   has. The touch half is named explicitly (pinch, long-press) because the
+   device that most needs this list is the one with no wheel and no hover. */
+const BOARD_GESTURES = (
+  <>
+    Drag a run to move it (on touch, hold it first) · drag the background to pan ·
+    wheel or pinch to zoom · click a run for all its images, notes and settings ·
+    click a checkpoint for its actions · tick a checkpoint’s <span aria-hidden>✓</span> to
+    generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to
+    compare - pin an image from its gallery to put it ON the board ·{' '}
+    <span className="font-semibold">drop one pinned image onto another</span> to fuse them
+    side by side, drag one off the group to take it back out
+  </>
+);
+
+/** One dataset's title strip above its tree. Inside the zoomed world, so it
+ *  scales with the board it labels — a lane whose name floated at a constant
+ *  size would drift off its tree the moment you zoomed out.
+ *
+ *  🪪 It opens with the dataset's REFERENCE face. A board whose whole job is
+ *  judging whether a checkpoint got the likeness right showed every render and
+ *  never the person, so the comparison happened from memory. It lives in the
+ *  header rather than as a node on the board on purpose: it is not a pinned
+ *  picture — it cannot be moved, closed, grouped or exported — and giving it a
+ *  node would have made it look like one. Being inside the zoomed world it
+ *  grows with the pins as you zoom in on them, and one click opens it full
+ *  size against the renders.
+ *
+ *  Only a CHARACTER dataset has one: a concept or a style dataset is not built
+ *  around a face, and `kind` says so rather than a filename being guessed at. */
+const LaneHeader = memo(function LaneHeader({ lane, onZoomRef }) {
+  const showRef = lane.kind !== 'concept' && lane.kind !== 'style' && Boolean(lane.refFilename);
+  const refUrl = showRef
+    ? `/api/dataset/${lane.datasetId}/img/${encodeURIComponent(lane.refFilename)}`
+    : null;
+  return (
+    <div
+      // 🛝 The lane's own GRIP. The title strip was already the one piece of a
+      // lane that is chrome rather than content, and it is now what you drag to
+      // move the whole block — the same bargain the group bar makes, for the
+      // same reason: a dataset needs exactly one thing to grab, visible at rest,
+      // that cannot be confused with grabbing a card inside it.
+      data-canvas-lane=""
+      data-canvas-lane-move=""
+      data-dataset-id={lane.datasetId}
+      title={`${lane.name} — drag to move this dataset's block`}
+      style={{ position: 'absolute', left: lane.x, top: lane.y, height: LANE_HEADER_H,
+        width: Math.max(lane.width, CARD_W) }}
+      className="flex cursor-grab touch-none items-center gap-2 overflow-hidden">
+      {refUrl && (
+        <button type="button" data-canvas-control
+          onClick={() => onZoomRef?.({ url: refUrl, name: lane.name })}
+          title={`Reference image — ${lane.name} (click to enlarge)`}
+          aria-label={`Reference image of ${lane.name} — click to enlarge`}
+          className="shrink-0 overflow-hidden rounded border border-border bg-app/60 hover:border-indigo-400/60"
+          style={{ width: LANE_HEADER_H - 4, height: LANE_HEADER_H - 4 }}>
+          <img src={refUrl} alt="" loading="lazy" draggable={false}
+            className="h-full w-full object-cover" />
+        </button>
+      )}
+      {/* 🎨 The dataset's edge colour, said once where its name is. Without it
+          the tints on the connectors are only "these two lines are different";
+          with it they read "this line comes from THAT lane", which is the whole
+          point on a board where pictures can be parked anywhere. A 6-px dot, no
+          label: the name next to it IS the label. */}
+      <span aria-hidden data-testid="lane-tint-dot"
+        className="shrink-0 rounded-full"
+        style={{ width: 6, height: 6, background: tintFor(lane.datasetId) }} />
+      <span className="truncate text-[0.8125rem] font-semibold text-content" title={lane.name}>
+        {lane.name}
+      </span>
+      <span className="shrink-0 rounded-full border border-border bg-app/60 px-1.5 py-0.5 text-content-muted text-[0.5625rem] font-medium tabular-nums">
+        {lane.runs} run{lane.runs === 1 ? '' : 's'}
+      </span>
+      {lane.status === 'loading' && (
+        <span className="shrink-0 animate-pulse text-content-subtle text-[0.625rem]">loading…</span>
+      )}
+      {lane.status === 'error' && (
+        <span className="shrink-0 text-amber-300 text-[0.625rem]" title={lane.error || ''}>
+          could not load this dataset
+        </span>
+      )}
+      {lane.status === 'ready' && !lane.height && (
+        <span className="shrink-0 text-content-subtle text-[0.625rem]">no runs to draw</span>
+      )}
+    </div>
+  );
+});
+
+/** 🛝 The ROOM a lane keeps, drawn.
+ *
+ *  Until lanes could be arranged there was nothing to draw: a lane WAS its
+ *  tree, and its block ended wherever that tree did. It does not any more —
+ *  `📌 Pin all` hangs a contact sheet below the tree that the stack never
+ *  counted, so the sheet landed on the next dataset (measured: 894 world units
+ *  of the lane below covered). The reservation is now a number the user can
+ *  set, and a number you can set is a number you have to be able to SEE.
+ *
+ *  Purely visual and `pointer-events: none`: every card, pill and picture of
+ *  this lane is drawn over it, and a frame that ate their clicks would be the
+ *  same bug the group bar already taught this board once. The grips are drawn
+ *  separately, in the chrome layer (LaneEdge / LaneHeader).
+ *
+ *  The bottom rule turns amber when the lane's content reaches past the room it
+ *  keeps — which is the collision, named at the place it happens instead of
+ *  being discovered as "the board looks broken". */
+const LaneFrame = memo(function LaneFrame({ lane, active = false }) {
+  const overflowing = laneOverflows(lane);
+  return (
+    <div aria-hidden data-testid="canvas-lane-frame"
+      data-lane-overflow={overflowing ? 'true' : 'false'}
+      style={{ position: 'absolute', left: lane.x, top: lane.y,
+        width: Math.max(lane.width, CARD_W), height: LANE_HEADER_H + lane.reserved }}
+      className={'pointer-events-none rounded-lg border transition-colors '
+        + (active
+          ? 'border-indigo-400/70 bg-indigo-500/5'
+          : (overflowing
+            ? 'border-dashed border-amber-400/50'
+            : 'border-border'))} />
+  );
+});
+
+/** 🛝 …and the grip that sets it: a grab band along the lane's bottom edge.
+ *
+ *  In the CHROME layer, after every card and every picture, and that placement
+ *  is load-bearing rather than tidy. The board has already shipped this bug
+ *  once: a group's title bar drawn as an ordinary sibling was painted over by
+ *  whatever the board placed on it, and the group became impossible to move,
+ *  export and close at once. A lane is the biggest object here and a picture
+ *  parked at its bottom edge is the ordinary case, not the exotic one.
+ *
+ *  Double-click FITS the lane to its content. It is the one-gesture answer to
+ *  the collision this whole feature is about, and it is exactly what a drag to
+ *  the amber rule would achieve by hand. */
+const LaneEdge = memo(function LaneEdge({ lane, boardScale, active = false }) {
+  const h = laneEdgeHeight(boardScale, lane.reserved);
+  const overflowing = laneOverflows(lane);
+  return (
+    <div
+      data-canvas-lane=""
+      data-canvas-lane-resize=""
+      data-dataset-id={lane.datasetId}
+      data-testid="canvas-lane-resize"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={`Room kept by ${lane.name} — drag to change it, `
+        + 'double-click to fit it to what this dataset draws'}
+      title={overflowing
+        ? `${lane.name} draws past the room it keeps — drag this edge down, or `
+          + 'double-click it, to give the block the room it needs'
+        : `Drag to change how much room ${lane.name} keeps (the datasets below `
+          + 'move with it) · double-click to fit it to its content'}
+      style={{ position: 'absolute', left: lane.x,
+        top: lane.y + LANE_HEADER_H + lane.reserved - h / 2,
+        width: Math.max(lane.width, CARD_W), height: h }}
+      className={'cursor-ns-resize touch-none rounded-full transition-colors '
+        + (active
+          ? 'bg-indigo-400/70'
+          : (overflowing ? 'bg-amber-400/40 hover:bg-amber-300/70' : 'bg-transparent hover:bg-indigo-400/50'))} />
+  );
+});
+
+/** One dataset's tree, drawn exactly as the in-card graph draws it.
+ *
+ *  ⚡ MEMOISED, and that is not a micro-optimisation — it is what makes panning
+ *  a big board possible at all. Every frame of a pan is one `setView`, and
+ *  without a boundary here that single state change re-rendered every lane,
+ *  every run card and every checkpoint pill on the board, sixty times a second,
+ *  to draw the exact same SVG at a different CSS transform. A pan changes the
+ *  view's translation and NOTHING this component reads (`boardScale` is the
+ *  scale, which a pan does not touch), so the memo turns the whole subtree into
+ *  a no-op for the one gesture that fires most often.
+ *
+ *  ⚠️ The contract that keeps it honest: every prop reaching this component must
+ *  be stable across renders that changed nothing — hence the useCallback'd
+ *  handlers and the NO_LAYOUT sentinel at the top of the file. A prop rebuilt
+ *  inline in the parent's JSX silently disables the memo without failing
+ *  anything, which is the only way this can rot. */
+const LaneGraph = memo(function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, liftedId,
+  isPicked, onTogglePick, onOpenGallery, onOpenActions, onZoomPreview, boardScale }) {
+  const g = lane.graph;
+  if (!g || !g.nodes.length) return null;
+  return (
+    <svg
+      // `left: lane.x`, not 0 — a lane can be moved sideways now.
+      style={{ position: 'absolute', left: lane.x, top: lane.graphY }}
+      className="lds-lgraph block overflow-visible"
+      width={g.width} height={g.height}
+      viewBox={`0 0 ${g.width} ${g.height}`}
+      role="img"
+      aria-label={`${lane.name}: lineage of ${g.nodes.length} run${g.nodes.length === 1 ? '' : 's'}`}>
+      <LineageEdges edges={g.edges} isLit={isLit} tintIndex={tintIndexFor(lane.datasetId)} />
+      <g>
+        {g.nodes.map((n) => (
+          <foreignObject key={n.node.record_id}
+            className="lds-gnode overflow-visible"
+            x={n.x} y={n.y} width={CARD_W} height={n.cellH}
+            onPointerEnter={() => onHover(n.node.record_id)}
+            onPointerLeave={() => onHover(null, n.node.record_id)}>
+            {/* data-canvas-node is the hit-test handle: the pointer handlers on
+                the frame read the lane + run off it to know WHAT was grabbed,
+                without every card needing its own listener. */}
+            <div data-canvas-node="" data-dataset-id={lane.datasetId} data-record-id={n.node.record_id}
+              style={{ position: 'relative', width: CARD_W, height: n.cellH,
+                ...(liftedId === n.node.record_id
+                  ? { filter: 'drop-shadow(0 6px 14px rgba(0,0,0,0.55))', opacity: 0.92 }
+                  : null) }}
+              className={liftedId === n.node.record_id ? 'lds-gnode-lifted' : undefined}>
+              <GraphCard node={noteOf(n.node)} lit={isLit(n.node.record_id)}
+                annotated={noteBadge(noteOf(n.node))}
+                compareRole={diffRole(n.node.record_id)}
+                onSelect={onNodeClick} />
+              {/* 🔎 Zoomed out, a card's own 11-px title renders at four pixels
+                  and the board shows everything while telling you nothing. One
+                  counter-scaled badge takes over below the threshold — the same
+                  trick the ✕ and the ✓ box already use. `pointer-events: none`:
+                  a legibility aid that eats clicks is a regression. */}
+              {showsZoomLabels(boardScale) && (
+                <span data-testid="canvas-zoom-label" aria-hidden
+                  style={{ position: 'absolute', left: 4, top: 4,
+                    transform: `scale(${zoomLabelScale(boardScale, CARD_W)})`,
+                    transformOrigin: 'top left' }}
+                  className="pointer-events-none max-w-[240px] truncate rounded border border-indigo-300/40 bg-black/70 px-1.5 py-0.5 text-[0.6875rem] font-semibold text-indigo-100 backdrop-blur-sm">
+                  {zoomLabelText(n.node, lane.name, boardScale)}
+                </span>
+              )}
+              {n.checkpoints.map((p) => (
+                <CheckpointPill key={`${p.step}-${p.filename ?? p.x}`}
+                  pill={p} offX={p.x - n.x} offY={p.y - n.y}
+                  selected={isPicked(lane.datasetId, n.node.record_id, p.step)}
+                  preview={p.preview_status || p.preview_url || p.preview_count
+                    ? { status: p.preview_status, url: p.preview_url,
+                      count: p.preview_count || 0 } : null}
+                  // The pill's BODY opens its actions — download, continue,
+                  // deploy/undeploy, delete, details — the same popover the
+                  // in-card graph has always had. It used to open the detail
+                  // drawer instead, which is how the board ended up with a panel
+                  // nobody asked for and no actions at all.
+                  onOpen={(pill, e) => onOpenActions(lane, n.node, pill, e)}
+                  onZoomPreview={onZoomPreview}
+                  // A checkpoint still on disk is pickable even when it is not in
+                  // ComfyUI yet: the launch button then offers to deploy it first.
+                  selectable={p.present !== false}
+                  // ✓ Counter-scales the pick box so it stops shrinking with the
+                  // board — at Fit zoom on a phone it was a 5-px square.
+                  boardScale={boardScale}
+                  onToggleSelect={() => onTogglePick(lane, n.node, p)}
+                  onOpenGallery={() => onOpenGallery(n.node.record_id, p.step)} />
+              ))}
+            </div>
+          </foreignObject>
+        ))}
+      </g>
+    </svg>
+  );
+});
+
+/** One lane's pinned images, plus the links back to the checkpoints that made
+ *  them. The links are drawn with the SAME connector the tree uses for "this
+ *  continued from that" (components/dataset/lineageEdges) -- the board already
+ *  has a grammar for descent and a second one would only be a second thing to
+ *  learn. Its NEUTRAL variant, not the trunk: a render is evidence about a
+ *  checkpoint, not a step of the training lineage.
+ *
+ *  Its own <svg>, sized 1x1 and overflow-visible, because a pinned image may sit
+ *  well outside the tree's box and the tree's <svg> is sized to the tree. */
+const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onDelete, onCloseGroup,
+  onExportGrid, boardScale, hint, blendNotes }) {
+  /* 🖼🖼 Which STRIPS are showing their originals instead of their tiles.
+     Held here, by group id, and deliberately not inside CanvasImageGroup: the
+     button that flips it lives in CanvasGroupBar, which is drawn in a separate
+     LAYER above every picture (see that file's header) and is therefore a
+     SIBLING of the group, not a child of it. This is the nearest node that owns
+     both. Not persisted, like every HQ on this board.
+     A group id that leaves the board (the strip was dissolved or closed) simply
+     stops being read — a stale key here costs nothing and a sweep on every
+     layout change would cost a render. */
+  const [hqGroups, setHqGroups] = useState(() => new Set());
+  const toggleGroupHq = useCallback((g) => {
+    setHqGroups((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(g.groupId)) next.add(g.groupId);
+      return next;
+    });
+  }, []);
+  if (!layout.length) return null;
+  /* Edges are drawn from where each picture actually IS — a member's slot in
+     its strip, not the box it remembers while it waits to leave one.
+
+     And a STRIP answers as ONE object: every line leaves it at the same point
+     rather than fanning out of eight tiles, and repeats of the same source
+     collapse (utils/canvasImageGroups.edgeAnchors). This matters more now that a
+     picture can be parked anywhere on the board: the line to the checkpoint that
+     made it is what keeps free placement honest, so it has to stay legible when
+     it is long. */
+  const edges = imageNodeEdges(edgeAnchors(layout), lane.graph);
+  return (
+    <div style={{ position: 'absolute', left: lane.x, top: lane.graphY }}>
+      <svg width="1" height="1" className="block overflow-visible" aria-hidden>
+        <LineageEdges edges={edges} isLit={() => false} tintIndex={tintIndexFor(lane.datasetId)} />
+      </svg>
+      {layout.map((r) => (r.kind === 'group' ? (
+        <CanvasImageGroup key={r.key} group={r} datasetId={lane.datasetId}
+          laneName={lane.name} onClose={onClose} onOpen={onOpen} onDelete={onDelete}
+          boardScale={boardScale}
+          blendNotes={blendNotes}
+          hq={hqGroups.has(r.groupId)}
+          dropHint={hint?.leaving && hint.groupId === r.groupId ? 'leaving' : null} />
+      ) : (
+        <CanvasImageNode key={r.key} node={r.node} datasetId={lane.datasetId}
+          laneName={lane.name} onGeometry={onGeometry} onClose={onClose}
+          onOpen={onOpen} onDelete={onDelete} boardScale={boardScale}
+          blendNote={blendNotes?.get(r.node.imageId) || null} />
+      )))}
+      {/* 🖼🖼 The groups' title bars, drawn AFTER every picture and every strip.
+          A bar sits on board space above its own strip, so as an ordinary
+          sibling it was painted over by whatever the board placed there — and
+          with it went the group's only grip, its ✕ and its Export grid at once.
+          Chrome belongs above content; the pictures keep their order among
+          themselves. Same idiom as the merge hint just below. */}
+      {layout.map((r) => (r.kind === 'group' ? (
+        <CanvasGroupBar key={`bar:${r.key}`} group={r} datasetId={lane.datasetId}
+          boardScale={boardScale}
+          hq={hqGroups.has(r.groupId)} onToggleHq={toggleGroupHq}
+          onCloseGroup={onCloseGroup} onExportGrid={onExportGrid} />
+      ) : null))}
+      {/* ⊕ "Let go here and these become one node." Without it the very first
+          merge can only be discovered by accident, which is worse than not
+          having the feature: two pictures would fuse and the board would look
+          broken. Sober on purpose — the board's own indigo, an outline and a
+          caret at the exact slot the picture would take, no animation. */}
+      {hint?.merge && (
+        <div style={{ position: 'absolute', left: hint.box.x, top: hint.box.y,
+          width: hint.box.w, height: hint.box.h }}
+          data-testid="canvas-merge-hint"
+          className="pointer-events-none z-20 rounded-md border-2 border-dashed border-indigo-300 bg-indigo-500/15">
+          <span style={{ position: 'absolute', left: hint.caret - hint.box.x - 2, top: 0,
+            width: 4, height: hint.box.h }}
+            className="bg-indigo-300" aria-hidden />
+          <span style={{ position: 'absolute', left: 0, top: -22 / Math.max(boardScale, 0.05),
+            fontSize: Math.max(9, 11 / Math.max(boardScale, 0.05)) }}
+            className="whitespace-nowrap rounded bg-indigo-500 px-1.5 py-0.5 font-semibold text-gray-950">
+            Join — {hint.count} images side by side
+          </span>
+        </div>
+      )}
+    </div>
+  );
+});
+
+export default function LineageCanvas({ entries, positions, imageNodes, allImageNodes = imageNodes, onPinLane,
+  onSaveImageNodes, onForgetImageNodes, onTidyUp, onRefetchDataset, onReloadLayout,
+  // 🛝 Where a whole LANE sits and how much room it keeps. One handler for both
+  // gestures: each sends only the half it changed and the server merges, so a
+  // move can never forget a height and a resize can never forget a position.
+  // `lanePlacements` is {datasetId: {x?,y?,h?}} — read here only to hand it to
+  // the preset panel; the LANES themselves carry their own placement on the
+  // entry, which is what `stackLanes` consumes.
+  onSaveLane, lanePlacements,
+  // Rendered as the board's TOP overlay. A slot rather than an import: which
+  // datasets are shown is the page's question, but the answer belongs on the
+  // board it changes -- and the canvas should not have to know what a dataset
+  // filter is to give it a place to live.
+  filterSlot = null,
+  // ⏏ The page's install-wide action, handed down so the ⋯ shelf can carry it
+  // below `lg` — where the page header that normally holds it is not drawn.
+  onOpenUndeploy = null }) {
+  const toast = useToast();
+  // ▶ Continue's LOCAL lane guard (is ai-toolkit set up at all) — the app's own
+  // capability probe, already loaded app-wide: no second request for it.
+  const { caps } = useCapabilities();
+  const frameRef = useRef(null);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
+  const [hoverId, setHoverId] = useState(null);
+  const [openNode, setOpenNode] = useState(null);
+  const [selectedForDiff, setSelectedForDiff] = useState([]);
+  const [noteEdits, setNoteEdits] = useState({});
+  const [deletedIds, setDeletedIds] = useState([]);
+  const [exportGroup, setExportGroup] = useState(null);
+
+  // A gone run removed from the inspector disappears without a refetch. It is
+  // taken out of the TREE and the lane is laid out again — NOT filtered out of
+  // the finished graph, which would leave its edges hanging in mid-air pointing
+  // at a card that is no longer there. removeRunFromTree is the same helper the
+  // in-card graph uses, so children re-root the same way in both.
+  const shown = useMemo(() => (entries || []).map((e) => {
+    if (!e.tree) return { ...e, graph: null };
+    const tree = deletedIds.reduce((t, id) => removeRunFromTree(t, id), e.tree);
+    return { ...e, graph: buildLineageGraph(tree) };
+  }), [entries, deletedIds]);
+
+  // --- placement: the automatic tree ⊕ what the user moved ------------------
+  // A drag is applied as a temporary override on top of the stored map, over a
+  // BASELINE captured when the drag started. The baseline matters: dropping a
+  // single override onto an otherwise-automatic lane would make that lane
+  // "arranged" halfway through the gesture, and applyPlacement would treat every
+  // other card as a new arrival to slide out of the way. Freezing the lane at
+  // the moment the finger lands keeps the rest of the board perfectly still.
+  const [drag, setDrag] = useState(null);   // {datasetId, recordId, x, y, baseline}
+
+  const placed = useMemo(() => shown.map((e) => {
+    if (!e.graph) return e;
+    let ov = positions?.[e.datasetId] || {};
+    if (drag && drag.datasetId === e.datasetId) {
+      ov = { ...drag.baseline, [drag.recordId]: { x: drag.x, y: drag.y } };
+    }
+    return { ...e, graph: applyPlacement(e.graph, ov) };
+  }), [shown, positions, drag]);
+
+  // A lane that gained a run since it was arranged reports the new card's spot;
+  // persisting it is what makes "a new run moves nothing" survive the NEXT
+  // reload too. Guarded by a seen-set so a failed write cannot become a loop.
+  const pinned = useRef(new Set());
+  useEffect(() => {
+    for (const lane of placed) {
+      const pins = lane.graph?.pendingPins;
+      if (!pins?.length) continue;
+      const key = `${lane.datasetId}:${pins.map((p) => p.record_id).join(',')}`;
+      if (pinned.current.has(key)) continue;
+      pinned.current.add(key);
+      onPinLane?.(lane.datasetId, pins);
+    }
+  }, [placed, onPinLane]);
+
+  /* The images PINNED on the board. Same coordinate system as the cards
+     (lane-local world units) and the same storage decision: server-side, next
+     to canvas_node_position. A board whose cards follow the dataset from
+     machine to machine while its pictures stay stuck in one browser is a board
+     that is only half yours -- and you find that out on the day you change
+     desk. Geometry mid-gesture is an override on top, exactly like a card drag. */
+  const [imgDrag, setImgDrag] = useState(null);   // {datasetId,imageId,x,y,w,h}
+  /* The lanes' COMMITTED rows — the board as it would come back from a reload,
+     with no gesture folded in. Split out from `imagesByLane` below because the
+     LANE STACK has to be measured on it and on nothing else: see
+     utils/canvasPinBatch.laneStackEntries for what went wrong when the stack
+     was measured on the in-flight list instead. */
+  const restingByLane = useMemo(() => {
+    const out = {};
+    for (const e of placed) out[e.datasetId] = visibleImageNodes(imageNodes?.[e.datasetId] || {});
+    return out;
+  }, [placed, imageNodes]);
+  const imagesByLane = useMemo(() => {
+    if (!imgDrag) return restingByLane;
+    const out = {};
+    for (const e of placed) {
+      const list = restingByLane[e.datasetId] || [];
+      out[e.datasetId] = imgDrag.datasetId === e.datasetId
+        ? list.map((n) => (n.imageId === imgDrag.imageId
+          ? { ...n, x: imgDrag.x, y: imgDrag.y, w: imgDrag.w, h: imgDrag.h } : n))
+        : list;
+    }
+    return out;
+  }, [placed, restingByLane, imgDrag]);
+  const imagesRef = useRef(imagesByLane);
+  useEffect(() => { imagesRef.current = imagesByLane; }, [imagesByLane]);
+
+  /* 🖼🖼 What each lane actually DRAWS: lone pictures, and groups of pictures
+     fused into one side-by-side strip (utils/canvasImageGroups). Derived, never
+     stored — the rows keep one geometry per picture, exactly as before, plus
+     two nullable group fields.
+
+     A member being dragged is pulled OUT of its strip here, for the duration of
+     the gesture only. That is the affordance as much as the mechanism: the
+     picture lifts off the band the moment the drag starts, so "I can take this
+     one out" is visible before anything has been committed. */
+  const layoutByLane = useMemo(() => {
+    const out = {};
+    for (const e of placed) {
+      const list = imagesByLane[e.datasetId] || [];
+      const nodes = imgDrag?.detach && imgDrag.datasetId === e.datasetId
+        ? list.map((n) => (n.imageId === imgDrag.imageId
+          ? { ...n, groupId: null, groupPos: null } : n))
+        : list;
+      out[e.datasetId] = layoutImageNodes(nodes);
+    }
+    return out;
+  }, [placed, imagesByLane, imgDrag]);
+  const layoutRef = useRef(layoutByLane);
+  useEffect(() => { layoutRef.current = layoutByLane; }, [layoutByLane]);
+
+  // ⊕ / ⤢ What the gesture in flight would DO on release: a merge target, or
+  // "this one is on its way out of its group". Feedback only — the decision is
+  // taken again from the same functions at pointerup.
+  const [dropHint, setDropHint] = useState(null);
+
+  /* The board's geometry, from TWO different extents (see stackLanes).
+     A lane's STACKING size is its tree, and only its tree — so the lane below
+     sits where it always sat no matter where the pictures went. The pictures'
+     REACH, on all four sides, is reported separately and grows only the box
+     that ✦ Fit frames, that 📷 Export draws and that the pan clamp keeps
+     reachable: a render dragged out of the row is still framed, exported and
+     scrollable-to, it just no longer shoves anything.
+     Measured on the STRIPS: a group is wider than any of its members and
+     cropping it would put a picture out of reach with no way back.
+
+     ⚠️ The stacking height is the tree OR THE TIDY REACH, whichever is taller
+     (utils/canvasPinBatch.tidyLaneReach) — not the tree alone. ✦ Tidy up lays a
+     lane's strips and its contact-sheet band BELOW the tree, so a stack that
+     reserved only the tree started the next dataset straight through them and
+     the button that rebuilds the board produced strips piled on strips and on
+     other lanes' run cards. That reserve is measured on the RESTING rows, never
+     on the gesture in flight — the reach is position-independent but not
+     membership-independent, and a picture on its way out of a strip changes the
+     membership on every frame. See utils/canvasPinBatch.laneStackEntries. */
+  /* `shown` — the AUTOMATIC trees — is what the stack advances by, so where a
+     lane sits never depends on how another lane was arranged. Moving a card
+     down used to grow its lane for good, leaving dead board between it and the
+     next dataset for as long as the arrangement lasted. */
+  /* 🛝 The lane being dragged RIGHT NOW, as a placement override.
+     Held here and merged in below rather than written on every frame: a lane
+     move is one PUT at the end of the gesture, exactly like a card's — the
+     board follows the finger at the speed of the finger and the database hears
+     about it once. */
+  const [laneDrag, setLaneDrag] = useState(null);   // {datasetId, placement}
+  const world = useMemo(() => {
+    const rows = laneStackEntries({
+      placed, layoutByLane, restingByLane, stackPlaced: shown,
+    });
+    return stackLanes(laneDrag
+      ? rows.map((e) => (e.datasetId === laneDrag.datasetId
+        ? { ...e, placement: mergeLanePlacement(e.placement, laneDrag.placement) } : e))
+      : rows);
+  }, [placed, layoutByLane, restingByLane, shown, laneDrag]);
+
+  /* 🔌 External LoRA board nodes: files pinned on the board (not produced by
+     any run here) that, when checked, stack on top of the next generation.
+     Deliberately SEPARATE state from `picks` — the liveKeys purge just below
+     only knows about checkpoints drawn from the lanes on the board, and would
+     silently drop these on every render since they belong to no lane.
+     Declared here, ABOVE the `provenance` memo below, because that memo's
+     dependency array now reads `extNodes`/`boardBoxes` — a dep-array is
+     evaluated at render time, not lazily inside the callback, so declaring
+     them any later throws a TDZ ReferenceError the moment the board renders. */
+  const [extNodes, setExtNodes] = useState([]);
+  const [extChecked, setExtChecked] = useState(new Set());
+  const [extPickerOpen, setExtPickerOpen] = useState(false);
+  const extLoadedOnce = useRef(false);
+  // Per-node world-space boxes reported by BoardNodeLayer (key -> {x,y,w,h}),
+  // consumed by later tasks for edge anchoring. A ref backs the state so the
+  // geometry callback can compare against the last known box and only
+  // re-render when something actually moved or resized — every drag frame
+  // reporting through `setState` unconditionally would re-render the whole
+  // canvas on every pointermove.
+  const boardBoxesRef = useRef(new Map());
+  const [boardBoxes, setBoardBoxes] = useState(boardBoxesRef.current);
+  const onBoardGeometry = useCallback((key, box) => {
+    const prev = boardBoxesRef.current.get(key);
+    if (prev && prev.x === box.x && prev.y === box.y && prev.w === box.w && prev.h === box.h) return;
+    const next = new Map(boardBoxesRef.current);
+    next.set(key, box);
+    boardBoxesRef.current = next;
+    setBoardBoxes(next);
+  }, []);
+  // Mirrors `extNodes` for the unmount flush below (a cleanup closure only
+  // ever sees the render it was created in, and the payload it must send is
+  // whatever is CURRENT at unmount time, not whatever it was when the pending
+  // timer was scheduled — those are usually the same list but need not be).
+  const extNodesRef = useRef(extNodes);
+  // Is there a debounced PUT still pending? Set when the timer is armed,
+  // cleared once it actually fires (normally OR via the unmount flush) — the
+  // one flag both paths share so neither can send the same write twice.
+  const extDirtyRef = useRef(false);
+  useEffect(() => { extNodesRef.current = extNodes; }, [extNodes]);
+  useEffect(() => {
+    apiFetch('/api/train/canvas/external-loras')
+      .then((d) => setExtNodes(normalizeExternalLoras(d?.loras)))
+      .catch(() => { /* the board just starts with none pinned */ });
+  }, []);
+  // Persist on change, debounced: a slider drag or a card drag fires many
+  // updates a second, and each is a full PUT of the list. Skips the very
+  // first render (the load above already reflects the server).
+  useEffect(() => {
+    if (!extLoadedOnce.current) { extLoadedOnce.current = true; return undefined; }
+    extDirtyRef.current = true;
+    const t = setTimeout(() => {
+      extDirtyRef.current = false;
+      putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }).catch(() => {
+        /* best effort — the board keeps the in-memory state either way */
+      });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [extNodes]);
+  // Leaving the Canvas view inside the 500 ms window above used to lose the
+  // last drag/check/strength edit silently: `clearTimeout` on unmount killed
+  // the pending PUT and nothing ever sent it. `keepalive` lets the request
+  // outlive the component even if the navigation that unmounts it also tears
+  // down the page (a plain unmount from an in-app route change does not abort
+  // an in-flight fetch on its own, but a real page unload would).
+  useEffect(() => () => {
+    if (!extDirtyRef.current) return;
+    extDirtyRef.current = false;
+    putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }, { keepalive: true })
+      .catch(() => { /* best effort on the way out — nothing left to update */ });
+  }, []);
+
+  /* 🧬 GENERATION PROVENANCE — a blended picture descends from SEVERAL pills at
+     once, and they are routinely in different lanes (blending across datasets is
+     the point of doing it from the board). A cross-lane edge cannot live in a
+     lane's own <svg>, so these are computed in WORLD units here and drawn once,
+     under everything (see the layer below). The head LoRA keeps the ordinary
+     image → pill edge its lane already draws; only the other parents are added,
+     or one pair would carry two connectors. Declared after `world` — the
+     dependency array reads it at render time, not lazily inside the memo.
+     🔌 The same pass also draws image → external-LoRA-board-node edges: a
+     pinned file is not part of any lane's training lineage, so those edges are
+     computed by `externalEdgesFor` and appended rather than folded into
+     `blendEdgesFor`, which only knows about pills drawn from the board's own lanes. */
+  const provenance = useMemo(() => {
+    const nodes = [];
+    for (const lane of world.lanes) {
+      for (const n of drawnNodes(layoutByLane[lane.datasetId] || [])) {
+        nodes.push({ ...n, datasetId: lane.datasetId });
+      }
+    }
+    const blended = blendEdgesFor(nodes, world.lanes);
+    const external = externalEdgesFor(nodes, world.lanes, extNodes, boardBoxes);
+    return { ...blended, edges: [...blended.edges, ...external] };
+  }, [world.lanes, layoutByLane, extNodes, boardBoxes]);
+  // What each blended picture must OWN UP TO: the sources it could not place.
+  const blendNotes = useMemo(() => {
+    const out = new Map();
+    for (const [imageId, entry] of provenance.unresolved) {
+      const note = blendSourcesNote(entry);
+      if (note) out.set(imageId, note);
+    }
+    return out;
+  }, [provenance]);
+
+  // The latest placement, for the pointer handlers (which must not re-bind on
+  // every board change just to read a card's current position).
+  const placedRef = useRef(placed);
+  useEffect(() => { placedRef.current = placed; }, [placed]);
+
+  // Measure the frame. The board is fitted to it, so an unmeasured frame would
+  // mean an invisible board on first paint.
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return undefined;
+    const measure = () => {
+      // The frame moved or changed size: whatever rectangle a gesture or a wheel
+      // burst was holding is now a lie.
+      rectRef.current = null;
+      setViewport({ width: el.clientWidth, height: el.clientHeight });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Auto-fit until the user takes over. `touched` is what makes the canvas feel
+  // like a board and not a slideshow: once you have zoomed, panned or ARRANGED
+  // anything, a lane finishing its load must NOT yank your view back to a fit.
+  const touched = useRef(false);
+  const fitSignature = `${world.width}x${world.height}:${viewport.width}x${viewport.height}`;
+  const lastFit = useRef('');
+  /* ✦ TIDY UP ENDS ON A FIT, and that is not a nicety — it is what makes the
+     button readable. Tidying is the one gesture that shrinks the board on
+     purpose (every remembered position dropped, every pinned picture brought
+     back beside its run), and it is only ever reached from a board the user has
+     ARRANGED — so `touched` is true and the auto-fit below is, correctly,
+     switched off. The result was a compacted board still framed for the sprawl
+     it used to be: a corner of empty canvas, cards off the edge, and a pan to
+     find them. The frame no longer resizes to hide that (it is fixed now), so
+     the answer is the zoom, which is the reversible half.
+
+     Deferred through a ref rather than called inline: `onTidyUp` clears the
+     positions in the PARENT, so at the moment of the click `world` is still the
+     old, sprawling one. The refit lands on the next world this component sees.
+     `fitView`, not `initialView` — this is the ✦ Fit button's answer (fill the
+     frame, cut nothing), not the first-paint one with its legibility floor. */
+  const refitAfterTidy = useRef(false);
+  const handleTidyUp = useCallback(() => {
+    refitAfterTidy.current = true;
+    onTidyUp?.();
+  }, [onTidyUp]);
+  /* 🖐 ARRANGING THE BOARD IS TAKING THE VIEW OVER, and that is the half that was
+     missing. Not re-fitting mid-gesture fixed the board sliding under the finger
+     while it dragged; it left the jump at the DROP. So: you carry a render up
+     beside another lane to compare the two, you let go — and because the board
+     is now bigger than it was, the whole plateau zooms out and your framing is
+     gone. Every act of tidying re-framed the board being tidied, and the further
+     you placed something the harder it kicked.
+
+     A drop is now a deliberate act on the layout, so it claims the view for the
+     user: from the first thing moved — picture or run CARD, one rule for the
+     whole board — nothing re-frames itself again. ✦ Fit is one click away for
+     when the whole thing IS wanted back, which is the difference between an
+     offer and an interruption.
+
+     A board nobody has arranged still frames itself on arrival: `touched` starts
+     false, so the opening view is exactly what it always was. */
+  const takeOverView = useCallback(() => { touched.current = true; }, []);
+  // …and never mid-gesture either. The board's size is recomputed from the thing
+  // being dragged, so on a board whose view the user has not taken over yet,
+  // every frame of a drag that grows the board used to re-fit it: the picture
+  // followed the finger while the whole board zoomed and slid underneath it.
+  // Free placement made that reachable in one short drag — dragging UP past a
+  // lane's corner grows the board immediately — where before it needed a long
+  // haul to the bottom right.
+  const gesturing = Boolean(drag || imgDrag);
+  // The other half of ✦ Tidy up (see `handleTidyUp`): the tidied world has
+  // arrived, so frame it. Runs BEFORE the auto-fit effect below and claims the
+  // signature, so the two can never both answer the same render.
+  useEffect(() => {
+    if (!refitAfterTidy.current) return;
+    if (!viewport.width || !viewport.height) return;
+    refitAfterTidy.current = false;
+    // A tidied board is an un-arranged board again, so it also earns back the
+    // auto-fit a virgin board gets — same reasoning as the ✦ Fit button.
+    touched.current = false;
+    lastFit.current = fitSignature;
+    setView(fitView(world, viewport));
+  }, [world, viewport, fitSignature]);
+  useEffect(() => {
+    if (touched.current || gesturing || lastFit.current === fitSignature) return;
+    if (!viewport.width || !viewport.height) return;
+    lastFit.current = fitSignature;
+    setView(initialView(world, viewport));
+  }, [fitSignature, world, viewport, gesturing]);
+
+  /* ⚡ applyView must be STABLE — it is the hot path of every pan, pinch and
+     wheel frame, and half a dozen listeners hang off its identity.
+     It used to close over `world` and `viewport` directly, so it was rebuilt on
+     every board change; the native wheel listener below is bound to it, so a
+     card drag (which recomputes `world` every frame) removed and re-added a DOM
+     listener sixty times a second for the duration of the gesture. The clamp
+     reads the same two values through refs instead, exactly as it already read
+     the live view through `viewRef`. */
+  const worldRef = useRef(world);
+  useEffect(() => { worldRef.current = world; }, [world]);
+  const viewportRef = useRef(viewport);
+  useEffect(() => { viewportRef.current = viewport; }, [viewport]);
+
+  const applyView = useCallback((next) => {
+    touched.current = true;
+    setView(clampView(next, worldRef.current, viewportRef.current));
+  }, []);
+
+  const fitNow = useCallback(() => {
+    touched.current = false;
+    lastFit.current = '';
+    if (viewport.width && viewport.height) setView(fitView(world, viewport));
+  }, [world, viewport]);
+
+  // The wheel listener is bound once per applyView identity; it reads the live
+  // view through a ref so it never zooms from a stale one.
+  const viewRef = useRef(view);
+  useEffect(() => { viewRef.current = view; }, [view]);
+
+  const zoomByButton = useCallback((factor) => {
+    const vp = viewportRef.current;
+    const anchor = { x: vp.width / 2, y: vp.height / 2 };
+    applyView(zoomAt(viewRef.current, factor, anchor));
+  }, [applyView]);
+
+  /* 📐 The frame's rectangle, cached for the duration of ONE gesture.
+     `getBoundingClientRect()` forces a style/layout flush, and the pointer path
+     asked for it two and three times PER pointermove — right after the previous
+     frame's transform was written, so every read paid for a full re-layout of
+     the board. The rectangle of the frame cannot move while a finger is down
+     (the board is the scroll container, and a drag does not resize it), so it is
+     read once at pointerdown and dropped at pointerup.
+     The wheel path has no down/up to hang that on, so it caches for RECT_TTL_MS
+     instead — long enough to cover a burst, short enough that a layout change
+     between two bursts is never zoomed from a stale anchor. */
+  const rectRef = useRef(null);
+  const rectAt = useRef(0);
+  const dropRect = useCallback(() => { rectRef.current = null; }, []);
+  const frameRect = useCallback((ttl = 0) => {
+    const now = ttl ? Date.now() : 0;
+    if (rectRef.current && (!ttl || now - rectAt.current < ttl)) return rectRef.current;
+    const r = frameRef.current?.getBoundingClientRect();
+    rectRef.current = r || { left: 0, top: 0 };
+    rectAt.current = now;
+    return rectRef.current;
+  }, []);
+  // A gesture always starts from a FRESH measurement — a rectangle left behind
+  // by an older wheel burst, or by a gesture that ended before a layout change,
+  // must never be what a new drag is measured against.
+  const refreshRect = useCallback(() => {
+    rectRef.current = null;
+    rectAt.current = 0;
+    return frameRect();
+  }, [frameRect]);
+
+  // Wheel zoom needs a NON-PASSIVE listener: React's onWheel is registered
+  // passive, so preventDefault() there is ignored and the page scrolls behind
+  // the board. Hence the manual native listener.
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return undefined;
+    const onWheel = (e) => {
+      e.preventDefault();
+      const rect = frameRect(RECT_TTL_MS);
+      const anchor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      // A trackpad pinch arrives as ctrl+wheel with small deltas; a mouse wheel
+      // as large ones. Normalising on the sign keeps both feeling the same.
+      const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      applyView(zoomAt(viewRef.current, factor, anchor));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [applyView, frameRect]);
+
+  // --- pointer gestures (pan with one, pinch with two) -----------------------
+  const pointers = useRef(new Map());
+  const pan = useRef(null);
+  const pinch = useRef(null);
+
+  // Reads the cached rectangle above — never the DOM — so a pointermove that
+  // asks for three points pays for zero layout flushes.
+  const localPoint = (e) => {
+    const rect = frameRect();
+    return { x: e.clientX - (rect.left || 0), y: e.clientY - (rect.top || 0) };
+  };
+
+  // --- node dragging ---------------------------------------------------------
+  const dragRef = useRef(null);      // {datasetId, recordId, sx, sy, ox, oy, moved}
+  // The pinned image being moved or resized: {datasetId,imageId,mode,sx,sy,box,cur}
+  const imgRef = useRef(null);
+  const longPress = useRef(null);    // touch: the pending pick-up
+  const suppressClick = useRef(false);
+  /* ⚠️ THE press that landed on a card: {datasetId, recordId, at, moved}.
+     A card's own onClick NEVER FIRES on this board, which is why clicking a run
+     used to do nothing at all. onPointerDown calls setPointerCapture on the
+     FRAME (it has to — a drag that leaves the frame must keep receiving moves),
+     and a captured pointer retargets the click that follows to the capturing
+     element. So the click arrives on the frame, the card never hears it, and no
+     amount of handler on the card can change that.
+
+     The gesture therefore answers for itself: the press is remembered here, a
+     travel past DRAG_SLOP marks it as a drag, and a release that never travelled
+     is the click. Same for touch, where the capture is taken too. */
+  const press = useRef(null);
+  // When the gesture has just answered, ignore a DOM click that also arrives
+  // (keyboard Enter, or a browser that did not retarget) — one press, one open.
+  const answeredAt = useRef(0);
+  // The live note edits, for the handlers (which must not re-bind on every save).
+  const noteEditsRef = useRef(noteEdits);
+  useEffect(() => { noteEditsRef.current = noteEdits; }, [noteEdits]);
+
+  /* What a press on a run card DOES. One place for both entry points — the
+     gesture (the real one, see `press`) and the DOM click that still arrives for
+     a keyboard Enter. ⇧ Shift picks the run for the two-run compare; a plain
+     press opens its gallery: every image it made, grouped by step, with its
+     notes and the settings it trained with. */
+  const runCardGesture = useCallback((node, shiftKey) => {
+    if (!node) return;
+    if (shiftKey) {
+      setSelectedForDiff((sel) => toggleDiffSelection(sel, node.record_id));
+      return;
+    }
+    setOpenCk(null);
+    setGallery(runGalleryTarget(noteEditsRef.current[node.record_id] || node));
+  }, []);
+
+  const cancelLongPress = () => {
+    if (longPress.current) { clearTimeout(longPress.current); longPress.current = null; }
+  };
+
+  /** Pick a card up: freeze its lane as it looks RIGHT NOW, then follow the
+   *  pointer. `origin` is the screen point the gesture started from. */
+  const beginDrag = useCallback((datasetId, recordId, origin) => {
+    const lane = placedRef.current.find((l) => l.datasetId === datasetId);
+    const n = lane?.graph?.nodes.find((x) => x.node.record_id === recordId);
+    if (!n) return;
+    dragRef.current = { datasetId, recordId, sx: origin.x, sy: origin.y,
+      ox: n.x, oy: n.y, x: n.x, y: n.y, moved: false };
+    setDrag({ datasetId, recordId, x: n.x, y: n.y,
+      baseline: toOverrideMap(pinSnapshot(lane.graph, recordId, n.x, n.y)) });
+    pan.current = null;
+  }, []);
+
+  /** Write one pinned image's geometry back. Applied to the screen first by the
+   *  page and sent afterwards, like a card position: a picture must follow the
+   *  finger at the speed of the finger, and a failed write heals on the next
+   *  gesture. `visible: false` is the CLOSE -- the row and its geometry stay,
+   *  which is what makes "re-open it exactly where I closed it" possible. */
+  const saveImage = useCallback((datasetId, node, box, visible = true) => {
+    onSaveImageNodes?.(datasetId, [{
+      image_id: node.imageId, ...clampImageBox(box), visible, image: node.image,
+    }]);
+  }, [onSaveImageNodes]);
+
+  /* Write a whole set of rows a group gesture produced (a merge, an extraction,
+     a group close). Same optimistic rule as saveImage: on screen first, sent
+     after. `image` is looked up from the live lane because the pure functions
+     only deal in geometry and membership — they never carry the payload. */
+  const saveRows = useCallback((datasetId, rows, visible = true) => {
+    if (!rows?.length) return;
+    const byId = new Map((imagesRef.current[datasetId] || []).map((n) => [n.imageId, n]));
+    onSaveImageNodes?.(datasetId, rows.map((r) => ({
+      image_id: r.imageId, ...clampImageBox(r),
+      visible: r.visible ?? visible,
+      group_id: r.groupId ?? null,
+      group_pos: r.groupPos ?? null,
+      image: byId.get(r.imageId)?.image,
+    })));
+  }, [onSaveImageNodes]);
+
+  /* Pick a pinned picture — or a whole strip — up.
+     `asGroup` is what tells the two apart: a group is moved and resized through
+     its ANCHOR (the strip sits at the anchor's box), so the very same gesture
+     machinery serves both and there is no second one to keep in step. Without
+     the flag the anchor would be read as "a member being dragged out of its own
+     group", which is the one thing its title bar must never do. */
+  const beginImage = useCallback((datasetId, imageId, mode, origin, opts = {}) => {
+    const node = (imagesRef.current[datasetId] || []).find((n) => n.imageId === imageId);
+    if (!node) return false;
+    const box = { x: node.x, y: node.y, w: node.w, h: node.h };
+    const groupBox = opts.asGroup
+      ? null : groupBoxOf(layoutRef.current[datasetId] || [], imageId);
+    // A member is dragged from the box it is DRAWN in, not the one it
+    // remembers — otherwise it would jump the instant it is picked up.
+    const tile = groupBox
+      ? drawnNodes(layoutRef.current[datasetId] || []).find((n) => n.imageId === imageId)
+      : null;
+    const from = tile ? { x: tile.x, y: tile.y, w: tile.w, h: tile.h } : box;
+    // `cur` is the live box, kept on the gesture itself: reading it back off the
+    // rendered lane at pointerup would race the last frame of the drag.
+    imgRef.current = { datasetId, imageId, mode, sx: origin.x, sy: origin.y,
+      box: from, own: box, cur: from, moved: false, node,
+      keepAspect: !!opts.keepAspect, groupBox, hint: null, leaving: false };
+    setImgDrag({ datasetId, imageId, ...from, detach: !!groupBox && mode === 'move' });
+    pan.current = null;
+    return true;
+  }, []);
+
+  /* 🛝 Pick a whole LANE up — by its title strip (move) or by its bottom edge
+     (the room it keeps). The lane's CURRENT box is read off the laid-out board
+     rather than off its stored placement, because a lane that has never been
+     arranged has no stored placement to add a delta to: its position is
+     wherever the stack put it, and that is the position the drag has to start
+     from or the block jumps on the first pixel. */
+  const laneRef = useRef(null);
+  const beginLane = useCallback((datasetId, mode, origin) => {
+    const lane = (worldRef.current?.lanes || []).find((l) => l.datasetId === datasetId);
+    if (!lane) return false;
+    laneRef.current = { datasetId, mode, sx: origin.x, sy: origin.y,
+      box: { x: lane.x, y: lane.y }, startH: lane.reserved, moved: false, cur: null };
+    pan.current = null;
+    return true;
+  }, []);
+
+  /* ⇕ Fit a lane to what it actually draws — the one-gesture version of
+     dragging its edge down until the amber rule goes out. `contentH` is the
+     lane's real reach below its own origin: its tree, its strips and the
+     contact-sheet band 📌 Pin all lays under them. */
+  const fitLane = useCallback((datasetId) => {
+    const lane = (worldRef.current?.lanes || []).find((l) => l.datasetId === datasetId);
+    if (!lane) return;
+    onSaveLane?.(datasetId, { h: lane.contentH });
+  }, [onSaveLane]);
+  // The first of the two presses that make a fit — see LANE_FIT_PRESS_MS.
+  const laneTap = useRef({ datasetId: null, at: 0 });
+
+  const onPointerDown = useCallback((e) => {
+    suppressClick.current = false;
+    press.current = null;
+    // One measurement for the whole gesture (see frameRect). Taken BEFORE any
+    // localPoint() call below, which all read the cache from here on.
+    refreshRect();
+    // A press on a pill is an inspection, never a drag or a pan.
+    if (e.target.closest?.('.lds-ckpill-wrap')) return;
+    /* A pinned image's own buttons (close, open) answer for themselves.
+       Returning WITHOUT capturing the pointer is the point: a captured pointer
+       retargets the click that follows to the frame, and the button would never
+       hear it -- the same trap the run cards had to work around. The rule lives
+       in utils/canvasNodeChrome so it is testable and cannot be lost in a
+       rewrite of this handler. */
+    if (isNodeControlTarget(e.target)) return;
+    /* 🖼🖼 A GROUP's own grips, hit-tested before its pictures: the title bar
+       moves the whole strip, the corner resizes it. Both act on the ANCHOR,
+       whose box IS the strip's — see beginImage(asGroup). On every pointer
+       type, no long press: the bar is the only grip a group has, and a finger
+       that deliberately grabbed a bar has already said what it means. */
+    const groupEl = e.target.closest?.('[data-canvas-group]');
+    if (groupEl) {
+      const resizing = !!e.target.closest?.('[data-canvas-group-resize]');
+      if (resizing || nodePointerIntent(e.target, e.pointerType) === 'group-move') {
+        frameRef.current?.setPointerCapture?.(e.pointerId);
+        if (beginImage(Number(groupEl.dataset.datasetId),
+          Number(groupEl.dataset.anchorId), resizing ? 'resize' : 'move',
+          localPoint(e), { asGroup: true, keepAspect: resizing })) return;
+      }
+    }
+    const imgEl = e.target.closest?.('[data-canvas-image]');
+    if (imgEl) {
+      const dsId = Number(imgEl.dataset.datasetId);
+      const imageId = Number(imgEl.dataset.imageId);
+      const at0 = localPoint(e);
+      // The resize corner is hit-tested BEFORE the pan/drag decision, on every
+      // pointer type: a finger landing on a 28-px corner handle can only mean
+      // one thing, so it must not have to wait out a long press.
+      const resizing = nodePointerIntent(e.target, e.pointerType) === 'resize';
+      if (resizing || e.pointerType !== 'touch') {
+        frameRef.current?.setPointerCapture?.(e.pointerId);
+        if (beginImage(dsId, imageId, resizing ? 'resize' : 'move', at0)) return;
+      } else {
+        // Touch, on the picture itself: the board pans until a LONG PRESS picks
+        // the node up -- the board's existing answer to "a finger on a node
+        // could mean either".
+        pointers.current.set(e.pointerId, at0);
+        frameRef.current?.setPointerCapture?.(e.pointerId);
+        pan.current = { ...at0, tx: viewRef.current.tx, ty: viewRef.current.ty };
+        longPress.current = setTimeout(() => {
+          longPress.current = null;
+          beginImage(dsId, imageId, 'move', at0);
+        }, LONG_PRESS_MS);
+        return;
+      }
+    }
+    /* 🛝 A LANE's grips. Hit-tested after the pinned nodes and before the run
+       cards, which is the order the DOM already implies: a card sits INSIDE its
+       lane, so a press that reached a lane grip reached the block itself. On
+       every pointer type and with no long press, for the same reason the group
+       bar has none — a finger that landed on a bar or on an edge has already
+       said what it means. */
+    const laneEl = e.target.closest?.('[data-canvas-lane]');
+    if (laneEl) {
+      const resizing = !!e.target.closest?.('[data-canvas-lane-resize]');
+      const laneId = Number(laneEl.dataset.datasetId);
+      if (resizing) {
+        // ⇕ Two presses on the same edge = fit it to its content. Decided here,
+        // on the pointerdown, because the capture taken two lines below makes
+        // every later click land on the frame instead of on the edge.
+        const { datasetId: last, at } = laneTap.current;
+        laneTap.current = { datasetId: laneId, at: Date.now() };
+        if (last === laneId && Date.now() - at < LANE_FIT_PRESS_MS) {
+          laneTap.current = { datasetId: null, at: 0 };
+          suppressClick.current = true;
+          takeOverView();
+          fitLane(laneId);
+          return;
+        }
+      }
+      frameRef.current?.setPointerCapture?.(e.pointerId);
+      if (beginLane(laneId, resizing ? 'resize' : 'move', localPoint(e))) return;
+    }
+    const card = e.target.closest?.('[data-canvas-node]');
+    if (card) {
+      press.current = { datasetId: Number(card.dataset.datasetId),
+        recordId: Number(card.dataset.recordId), at: localPoint(e), moved: false };
+    }
+    // A press on the bare board dismisses an open popover. A press on a card
+    // does not: its own click decides (open another one, or toggle this one
+    // shut), and closing here first would make that click reopen it.
+    if (!card) setOpenCk(null);
+    const at = localPoint(e);
+    if (card && e.pointerType !== 'touch') {
+      // Mouse / pen: the press landed on a card, so it IS the card that moves.
+      frameRef.current?.setPointerCapture?.(e.pointerId);
+      beginDrag(Number(card.dataset.datasetId), Number(card.dataset.recordId), at);
+      return;
+    }
+    pointers.current.set(e.pointerId, at);
+    frameRef.current?.setPointerCapture?.(e.pointerId);
+    if (pointers.current.size === 2) {
+      const [a, b] = [...pointers.current.values()];
+      pinch.current = { dist: pinchDistance(a, b), scale: viewRef.current.scale };
+      pan.current = null;
+      press.current = null;            // a second finger makes this a pinch
+      cancelLongPress();
+    } else if (pointers.current.size === 1) {
+      pan.current = { ...at, tx: viewRef.current.tx, ty: viewRef.current.ty };
+      if (card) {
+        // Touch on a card: pan for now, pick the card up if the finger stays.
+        const dsId = Number(card.dataset.datasetId);
+        const recId = Number(card.dataset.recordId);
+        longPress.current = setTimeout(() => {
+          longPress.current = null;
+          beginDrag(dsId, recId, at);
+        }, LONG_PRESS_MS);
+      }
+    }
+    frameRef.current?.classList.add('is-grabbing');
+    // localPoint reads refs through frameRect() and changes identity on every
+    // render; listing it would needlessly recreate this handler each time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [beginDrag, beginImage, beginLane, fitLane, refreshRect, takeOverView]);
+
+  const onPointerMove = useCallback((e) => {
+    // A press that travels is a drag or a pan, never a click — whichever of the
+    // two branches below ends up handling it.
+    if (press.current && !press.current.moved) {
+      const p = localPoint(e);
+      if (Math.hypot(p.x - press.current.at.x, p.y - press.current.at.y) >= DRAG_SLOP) {
+        press.current.moved = true;
+      }
+    }
+    const gi = imgRef.current;
+    if (gi) {
+      const p = localPoint(e);
+      const s = clampScale(viewRef.current.scale);
+      const dx = (p.x - gi.sx) / s;
+      const dy = (p.y - gi.sy) / s;
+      if (!gi.moved && Math.hypot(p.x - gi.sx, p.y - gi.sy) < DRAG_SLOP) return;
+      gi.moved = true;
+      let box;
+      if (gi.mode === 'resize') {
+        // A strip is resized as a WHOLE and keeps its shape: its height drives
+        // it (every member is scaled to that height), so letting width and
+        // height drift apart would only distort the anchor.
+        box = gi.keepAspect
+          ? clampImageBox({ ...gi.box, h: gi.box.h + dy,
+            w: gi.box.w * Math.max(0.05, (gi.box.h + dy) / Math.max(1, gi.box.h)) })
+          : clampImageBox({ ...gi.box, w: gi.box.w + dx, h: gi.box.h + dy });
+      } else {
+        box = clampImageBox({ ...gi.box, x: gi.box.x + dx, y: gi.box.y + dy });
+      }
+      /* What this drop WOULD do, recomputed on every frame from the very
+         functions that will decide it again on release — so the highlight can
+         never promise something the drop then refuses.
+         The probe is the dragged picture's CENTRE: "superposer" is about the
+         picture, not about where the finger happens to be inside it. */
+      if (gi.mode === 'move') {
+        const centre = { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+        const hit = mergeTargetAt(layoutRef.current[gi.datasetId] || [], gi.imageId, centre);
+        const leaving = !hit && shouldExtract(gi.groupBox, centre);
+        gi.hint = hit;
+        gi.leaving = leaving;
+        // Once it is on its way out, it is drawn at the size it will REALLY
+        // get back, so the change of size happens in the open during the
+        // gesture rather than as a surprise on release.
+        if (leaving && gi.own) {
+          box = clampImageBox({ x: centre.x - gi.own.w / 2, y: centre.y - gi.own.h / 2,
+            w: gi.own.w, h: gi.own.h });
+        }
+        setDropHint(hit
+          ? { datasetId: gi.datasetId, merge: true, box: hit.box, count: hit.count,
+            caret: hit.caret }
+          : (gi.groupBox && !leaving
+            ? { datasetId: gi.datasetId, leaving: true, groupId: gi.groupBox.groupId }
+            : null));
+      }
+      gi.cur = box;
+      setImgDrag({ datasetId: gi.datasetId, imageId: gi.imageId, ...box,
+        detach: !!gi.groupBox && gi.mode === 'move' });
+      return;
+    }
+    const gl = laneRef.current;
+    if (gl) {
+      const p = localPoint(e);
+      const s = clampScale(viewRef.current.scale);
+      const dx = (p.x - gl.sx) / s;
+      const dy = (p.y - gl.sy) / s;
+      if (!gl.moved && Math.hypot(p.x - gl.sx, p.y - gl.sy) < DRAG_SLOP) return;
+      gl.moved = true;
+      // A resize speaks only for the height, a move only for the position —
+      // the merge that keeps the other one is done once, on the way to the
+      // board and again on the way to the database (mergeLanePlacement).
+      gl.cur = gl.mode === 'resize'
+        ? { h: resizeLaneHeight(gl.startH, dy) }
+        : moveLaneTo(gl.box, dx, dy);
+      setLaneDrag({ datasetId: gl.datasetId, placement: gl.cur });
+      return;
+    }
+    const d = dragRef.current;
+    if (d) {
+      const p = localPoint(e);
+      const scale = clampScale(viewRef.current.scale);
+      const dx = (p.x - d.sx) / scale;
+      const dy = (p.y - d.sy) / scale;
+      if (!d.moved && Math.hypot(p.x - d.sx, p.y - d.sy) < DRAG_SLOP) return;
+      d.moved = true;
+      d.x = Math.max(0, d.ox + dx);
+      d.y = Math.max(0, d.oy + dy);
+      setDrag((cur) => (cur ? { ...cur, x: d.x, y: d.y } : cur));
+      return;
+    }
+    if (!pointers.current.has(e.pointerId)) return;
+    const prev = pointers.current.get(e.pointerId);
+    pointers.current.set(e.pointerId, localPoint(e));
+    // A finger that travels is scrolling the board, not picking a card up.
+    if (longPress.current && prev) {
+      const p = localPoint(e);
+      if (Math.hypot(p.x - prev.x, p.y - prev.y) > DRAG_SLOP) cancelLongPress();
+    }
+    if (pointers.current.size >= 2 && pinch.current) {
+      const [a, b] = [...pointers.current.values()];
+      const dist = pinchDistance(a, b);
+      if (!pinch.current.dist) return;
+      const target = clampScale(pinch.current.scale * (dist / pinch.current.dist));
+      applyView(zoomAt(viewRef.current, target / clampScale(viewRef.current.scale),
+        pinchCenter(a, b)));
+      return;
+    }
+    if (!pan.current) return;
+    const p = localPoint(e);
+    applyView(panBy({ ...viewRef.current, tx: pan.current.tx, ty: pan.current.ty },
+      p.x - pan.current.x, p.y - pan.current.y));
+    // As above, deliberately omit localPoint from dependencies: it reads live refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyView]);
+
+  const endPointer = useCallback((e) => {
+    cancelLongPress();
+    // The gesture is over: the cached frame rectangle dies with it, so the next
+    // one measures the board as it is then (see frameRect). Nothing below reads
+    // a local point, so this is safe at the top and covers both exits.
+    dropRect();
+    const gl = laneRef.current;
+    if (gl) {
+      laneRef.current = null;
+      setLaneDrag(null);
+      /* Same rule as everywhere else on this board: only a gesture that
+         actually TRAVELLED writes. A tap on a lane's title strip must stay a
+         tap — it must not turn an automatic lane into an arranged one behind
+         the user's back, and it must not stop the board re-framing itself. */
+      if (gl.moved && gl.cur) {
+        suppressClick.current = true;
+        takeOverView();
+        onSaveLane?.(gl.datasetId, gl.cur);
+      }
+      pointers.current.delete(e.pointerId);
+      frameRef.current?.releasePointerCapture?.(e.pointerId);
+      if (pointers.current.size === 0) frameRef.current?.classList.remove('is-grabbing');
+      return;
+    }
+    const gi = imgRef.current;
+    if (gi) {
+      imgRef.current = null;
+      setDropHint(null);
+      /* Only a gesture that actually MOVED writes: a tap on a pinned picture
+         must not quietly re-save the same coordinates.
+
+         Three outcomes, in this order — the same order the highlight announced
+         them in, recomputed from the same functions so the two can never
+         disagree:
+           ⊕ dropped on another picture (or on a strip) → they FUSE, and the
+             dragged one keeps its own remembered geometry for the day it
+             leaves again;
+           ⤢ dropped clear of the strip it was in → it comes back out, at its
+             own size, where it was let go;
+           · anything else → the ordinary move/resize.
+         A member let go while still over its own strip falls through all three
+         and writes NOTHING: the gesture was started and abandoned, and the
+         board goes back exactly as it was. */
+      const nodes = imagesRef.current[gi.datasetId] || [];
+      // 🖐 The board has been arranged by hand: no automatic re-frame from here
+      // on (see takeOverView). A tap that never travelled is not an arrangement
+      // and leaves a fresh board free to fit itself.
+      if (gi.moved) takeOverView();
+      if (gi.moved && gi.hint) {
+        saveRows(gi.datasetId,
+          mergeIntoGroup(nodes, gi.imageId, gi.hint.targetImageId, gi.hint.side));
+      } else if (gi.moved && gi.leaving) {
+        saveRows(gi.datasetId, extractFromGroup(nodes, gi.imageId, gi.cur));
+      } else if (gi.moved && !gi.groupBox) {
+        saveImage(gi.datasetId, gi.node, gi.cur);
+      }
+      setImgDrag(null);
+      pointers.current.delete(e.pointerId);
+      frameRef.current?.releasePointerCapture?.(e.pointerId);
+      if (pointers.current.size === 0) frameRef.current?.classList.remove('is-grabbing');
+      return;
+    }
+    const d = dragRef.current;
+    if (d) {
+      dragRef.current = null;
+      // Only a gesture that actually MOVED writes anything: a plain click on a
+      // card must stay a click, and must not turn its lane into an arranged one
+      // behind the user's back — nor, for the same reason, take the view over.
+      if (d.moved) {
+        suppressClick.current = true;
+        // A card is a placement like any other: moving one is arranging the
+        // board, so it stops re-framing itself too. One rule for both, because
+        // a board that holds still for pictures and jumps for cards is a board
+        // whose behaviour cannot be learned.
+        takeOverView();
+        const lane = placedRef.current.find((l) => l.datasetId === d.datasetId);
+        if (lane?.graph) onPinLane?.(d.datasetId, pinSnapshot(lane.graph, d.recordId, d.x, d.y));
+      }
+      setDrag(null);
+    }
+    // A press on a card that never travelled IS the click — see `press` above
+    // for why the card's own onClick cannot be relied on here.
+    const p = press.current;
+    press.current = null;
+    if (p && !p.moved && !d?.moved) {
+      const node = placedRef.current
+        .find((l) => l.datasetId === p.datasetId)?.graph?.nodes
+        .find((x) => x.node.record_id === p.recordId)?.node;
+      if (node) {
+        answeredAt.current = Date.now();
+        runCardGesture(node, e.shiftKey);
+      }
+    }
+    pointers.current.delete(e.pointerId);
+    frameRef.current?.releasePointerCapture?.(e.pointerId);
+    if (pointers.current.size < 2) pinch.current = null;
+    if (pointers.current.size === 0) {
+      pan.current = null;
+      frameRef.current?.classList.remove('is-grabbing');
+    }
+  }, [dropRect, onPinLane, onSaveLane, runCardGesture, saveImage, saveRows, takeOverView]);
+
+  // --- inspection / compare (identical rules to the in-card graph) -----------
+  const nodeById = useMemo(() => {
+    const m = new Map();
+    for (const e of shown) for (const n of (e.graph?.nodes || [])) m.set(n.node.record_id, n.node);
+    return m;
+  }, [shown]);
+
+  const ancestors = useMemo(() => {
+    const m = new Map();
+    for (const e of shown) {
+      for (const [id, set] of (e.graph?.ancestorsOf || new Map())) m.set(id, set);
+    }
+    return m;
+  }, [shown]);
+
+  const litNodes = useMemo(() => {
+    const s = new Set();
+    if (hoverId != null) {
+      s.add(hoverId);
+      for (const a of (ancestors.get(hoverId) || [])) s.add(a);
+    }
+    return s;
+  }, [hoverId, ancestors]);
+  const isLit = useCallback((id) => litNodes.has(id), [litNodes]);
+
+  const onHover = useCallback((id, leaving) => {
+    if (id == null) setHoverId((cur) => (cur === leaving ? null : cur));
+    else setHoverId(id);
+  }, []);
+
+  // The open actions popover: { lane, node, pill, anchor } | null. `pill` is null
+  // when a run CARD was clicked — the same popover, with only its run-level rows.
+  const [openCk, setOpenCk] = useState(null);
+  // 🖼 The open gallery: {recordId, step} for a checkpoint pill, or
+  // {kind:'run', recordId, node} for a whole run card. Declared here because the
+  // card-click handler below opens it.
+  const [gallery, setGallery] = useState(null);
+  const closePopover = useCallback(() => setOpenCk(null), []);
+  const [bigPreview, setBigPreview] = useState(null);
+  const zoomPreview = useCallback((url, step) => setBigPreview({ url, step }), []);
+
+  const onOpenActions = useCallback((lane, node, pill, e) => {
+    const anchor = { x: e?.clientX ?? 0, y: e?.clientY ?? 0 };
+    setOpenCk((cur) => (cur && cur.node.record_id === node.record_id
+      && (cur.pill?.step ?? null) === (pill?.step ?? null)
+      ? null                                   // clicking the same target closes it
+      : { lane, node, pill: pill || null, anchor }));
+  }, []);
+
+  /* The DOM path into the same gesture — keyboard Enter/Space on a focused card,
+     and any browser that does NOT retarget the click to the capturing frame. The
+     pointer path (endPointer) is the one that fires in practice, so this guards
+     against answering twice; and a click that is only the tail of a drop is
+     swallowed, because a rearrangement of the board must never end with a panel
+     the user did not ask for. Which of the three it is comes from
+     utils/canvasCardClick — testable, unlike this file. */
+  const onNodeClick = useCallback((node, e) => {
+    const dragged = suppressClick.current;
+    if (dragged) suppressClick.current = false;
+    if (Date.now() - answeredAt.current < 400) return;   // the gesture answered
+    const action = cardClickAction({ dragged, shiftKey: !!(e && e.shiftKey) });
+    if (action === 'ignored') return;
+    runCardGesture(node, action === 'compare');
+  }, [runCardGesture]);
+
+  const diffRole = useCallback((id) => {
+    const i = selectedForDiff.indexOf(id);
+    return i === 0 ? 'A' : i === 1 ? 'B' : null;
+  }, [selectedForDiff]);
+
+  // --- generation: the checkpoints ticked on the board -----------------------
+  // A LIST, not a set: the first pick anchors the settings panel's dataset, so
+  // the order the user clicked in is meaningful (see utils/canvasGeneration).
+  const [picks, setPicks] = useState([]);
+  const [panelOpen, setPanelOpen] = useState(false);
+
+
+  /* 📱 ⋯ — the toolbar's second shelf, and the actual answer to "there is no
+     room to work on this board".
+
+     Measured at 412x780 and again at 904x750 (a phone, and a Fold opened): the
+     bottom bar wrapped to TWO rows and the filter bar above it to two more, so
+     232 px of a 780-px screen were chrome FLOATING ON the board — more than the
+     board had left between them. Shrinking the buttons had already been tried
+     (40-px targets, labels dropped at `sm`); it bought one row back and then ran
+     out, because the row was never RANKED. Everything on it was equally
+     important, so everything stayed on it, so it wrapped.
+
+     The rank the bar carries now, every threshold of it measured on a real
+     board rather than chosen:
+       - always inline: zoom, Fit, 🎨 Generate, ⋯ — the ones you reach for while
+         reading the board, and the only ones it cannot be used without;
+       - `lg` and up inline, in ⋯ below: ✦ Tidy up, 💾 Layouts, 📷 PNG, 🔌 +LoRA
+         — real actions, taken a handful of times per session, not per minute.
+         Measured: inline at 768 they take the bar to two rows, at 1024 they fit
+         on one, so the threshold is 1024 and not "md, that sounds about right";
+       - `2xl` and up inline, in ⋯ below: the colour key and CPU/GPU/VRAM.
+         READOUTS — nothing here is a control, and a whole row of a phone was
+         going to "GPU 0 %";
+       - in ⋯ at EVERY width: the gesture line. It is ~500 characters, so it has
+         never fitted beside anything: measured with it inline the bar is two
+         rows at 1440 AND at 1920, which is where the desktop bar's second row
+         had been coming from all along. It is the board's documentation, read
+         once and then never again — the last thing that should be costing the
+         board a permanent row.
+     Three tiers and not one because they are three different questions: an
+     action behind ⋯ costs a tap, a readout behind ⋯ costs nothing until asked
+     for, and a manual behind ⋯ costs a tap as well — it is FOLDED inside the
+     sheet, not printed in it. Read "costs nothing at all" here once, and it was
+     wrong: unfolded, the sentence is ten lines at 400 px, so opening ⋯ for a
+     button buried the button under the manual. Being one box further out than
+     the toolbar it no longer grew the BAR, which is what the previous pass was
+     measuring — and is why the regression looked like a fix.
+
+     Each control is rendered EXACTLY ONCE — inline or in the sheet, never both
+     (see useMediaQuery: Tailwind can hide a chip at a width, it cannot move
+     one, and two copies of a chip drift the first time one gains a prop). */
+  const [moreOpen, setMoreOpen] = useState(false);
+  /* …and the manual in a bubble of its OWN. ⚠️ Not the same question as
+     `moreOpen`, which is why it is not the same state: ⋯ is "show me the
+     tools", ⓘ is "remind me how the board works", and answering the first with
+     340 px of the second is what made the shelf unusable on a phone.
+
+     Deliberately NOT reset when the shelf closes. The bubble is opened from
+     inside the shelf and then read AGAINST the board — closing ⋯ to see what
+     the sentence is talking about is the obvious next move, and a bubble that
+     vanished with its opener would make that impossible. It closes by its own
+     ×, by ⓘ again, or by Escape. */
+  const [gesturesOpen, setGesturesOpen] = useState(false);
+  const inlineActions = useMediaQuery('(min-width: 1024px)');
+  /* 📏 The fold has a HEIGHT, and every rule on this board was written about
+     its width. Measured at 844×390 — a phone held sideways, which is how a
+     board gets looked at one-handed — the fixed chrome came to 214 px of the
+     390 there are: 55 %, leaving 176 px of actual board. The same chrome is
+     27 % of an 800-px fold and had always passed.
+     500 px is the line because it is under every phone held upright (the
+     shortest common one is 800) and over every phone held sideways. */
+  const tallFold = useMediaQuery('(min-height: 500px)');
+  const inlineReadouts = useMediaQuery('(min-width: 1536px)');
+  useEffect(() => {
+    if (!moreOpen && !gesturesOpen) return undefined;
+    /* Escape takes the TOP layer, not everything. The ⓘ bubble is drawn over
+       the shelf and is the thing you opened last; pulling the shelf out from
+       under it on the first press would leave a bubble on screen whose opener
+       had gone, and a second press would then be needed anyway. One press, one
+       layer, innermost first — the order every stacked overlay uses. */
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (gesturesOpen) setGesturesOpen(false);
+      else setMoreOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [moreOpen, gesturesOpen]);
+
+  const isPicked = useCallback(
+    (dsId, recId, step) => isCanvasCheckpointSelected(picks, dsId, recId, step), [picks]);
+
+  const onTogglePick = useCallback((lane, node, pill) => {
+    setPicks((cur) => toggleCanvasCheckpoint(cur, {
+      datasetId: lane.datasetId,
+      datasetName: lane.name,
+      // 🧬 What a blend of this pick adds to the prompt — named in the panel
+      // rather than injected silently.
+      triggerWord: lane.triggerWord || null,
+      recordId: node.record_id,
+      step: pill.step,
+      family: node.train_type,
+      deployed: pill.testable === true,
+      // What create_comparison_run validates against: the name of the COPY in
+      // ComfyUI, not the run-folder save.
+      filename: pill.deployed_filename || null,
+      // Kept with the pick so "deploy, then generate" needs no second lookup —
+      // the exact body the flat checkpoint list sends.
+      importPayload: lineageImportPayload(node, pill),
+    }));
+    setPanelOpen(true);
+  }, []);
+
+  // Picks whose pill is no longer on the board (its dataset was unticked, its run
+  // deleted) are dropped: a launch must never fire on a checkpoint the user can
+  // no longer see.
+  const liveKeys = useMemo(() => {
+    const s = new Set();
+    for (const e of placed) {
+      for (const n of (e.graph?.nodes || [])) {
+        for (const p of n.checkpoints) {
+          s.add(canvasCheckpointKey(e.datasetId, n.node.record_id, p.step));
+        }
+      }
+    }
+    return s;
+  }, [placed]);
+  useEffect(() => {
+    setPicks((cur) => {
+      const next = pruneCanvasSelection(cur, liveKeys);
+      return next.length === cur.length ? cur : next;
+    });
+  }, [liveKeys]);
+
+  /* Deploy the picks that are not in ComfyUI yet, then hand back the SAME picks
+     with their fresh deployed state. Announced by the button before it runs
+     ("Deploy 2 checkpoints, then generate") — nothing lands on the user's disk
+     from a button that did not say so. A failure returns null and the launch is
+     abandoned: half a comparison answers a different question than the one asked. */
+  const handleDeploy = useCallback(async (needed) => {
+    try {
+      for (const e of needed) {
+        if (!e.importPayload) {
+          throw new Error(`Run #${e.recordId} step ${e.step} has no file to deploy`);
+        }
+        await postJson(`/api/dataset/${e.datasetId}/train/import`, e.importPayload);
+      }
+      toast.success(`${needed.length} checkpoint(s) deployed to ComfyUI`);
+    } catch (err) {
+      toast.error(err?.message || 'Deploy failed — nothing was generated');
+      return null;
+    }
+    // Re-read the lanes so the freshly deployed pills come back testable, with
+    // the deployed copy's real name.
+    const ids = [...new Set(needed.map((e) => e.datasetId))];
+    const fresh = new Map();
+    for (const id of ids) {
+      try {
+        const tree = await onRefetchDataset?.(id);
+        for (const node of (tree?.nodes || [])) {
+          for (const c of (node.checkpoints || [])) {
+            fresh.set(canvasCheckpointKey(id, node.record_id, c.step),
+              { deployed: c.testable === true, filename: c.deployed_filename || null });
+          }
+        }
+      } catch { /* the import already happened server-side; the pick keeps its state */ }
+    }
+    const refreshed = refreshCanvasSelection(picks, (e) => fresh.get(
+      canvasCheckpointKey(e.datasetId, e.recordId, e.step)) || null);
+    // Write it back to the BOARD's selection, not only to the launch in flight.
+    // Without this the chips kept reading "to deploy" after a successful deploy
+    // and the button kept offering to do it again — a lie about what is on disk.
+    setPicks(refreshed);
+    return refreshed;
+  }, [picks, onRefetchDataset, toast]);
+
+  const launchVerdict = describeCanvasLaunch(picks);
+
+  /* --- checkpoint actions: THE shared ones ---------------------------------
+     Deploying and deleting from the board run the exact routes, payloads and
+     confirmation the in-card graph runs (hooks/useCheckpointActions). A lane is
+     re-read afterwards so the pill stops making a claim about the disk that
+     stopped being true — a just-deployed pill flips to ✓ Deployed, a deleted
+     save's pill disappears.
+
+     The ★ pin travels WITH the lane (the dataset index publishes
+     `best_settings_loras`), so the pin handed to the hook is the one belonging to
+     the lane whose popover is open — a board spanning ten datasets must never
+     warn with another dataset's pin. Closed popover → null, and the hook simply
+     falls back to the plain wording. */
+  const onCheckpointChanged = useCallback(
+    async (datasetId) => { await onRefetchDataset?.(datasetId); }, [onRefetchDataset]);
+  const { importing, deleting, deployCheckpoint, deleteCheckpoint } = useCheckpointActions({
+    onChanged: onCheckpointChanged,
+    bestSettingsLora: openCk?.lane?.bestSettingsLoras || null,
+  });
+  const handleDeployCheckpoint = useCallback(async (node, pill) => {
+    if (await deployCheckpoint(openCk?.lane?.datasetId ?? null, node, pill)) setOpenCk(null);
+  }, [deployCheckpoint, openCk]);
+  const handleDeleteCheckpoint = useCallback(async (node, pill) => {
+    if (await deleteCheckpoint(openCk?.lane?.datasetId ?? null, node, pill)) setOpenCk(null);
+  }, [deleteCheckpoint, openCk]);
+
+  /* --- ▶ Continue training, FROM THE BOARD ---------------------------------
+     The popover used to render a greyed sentence here: "open this run from the
+     Runs page (cloud) or the dataset's Checkpoints panel (local)". The capacity
+     existed; only the way in was missing, and it was a different way per lane.
+     The board now opens the app's ONE continue form — components/dataset/
+     ContinueDialog, the very dialog both other hosts mount, with every option it
+     offers (lane, resume-from, extra steps, cadence, preview prompts, timestep,
+     LR factor). No third form: what the board owns is the ROUTING and the LANE
+     RULE, and those live JSX-free in utils/canvasContinue.js.
+
+     Two things are fetched only when the dialog opens, never polled: the Runs
+     hub payload. It answers the lane guards (ai-toolkit, machine-wide local
+     single-flight, this dataset's active cloud run, the concurrency limit) AND
+     supplies the two fields a lineage node does not carry — the run's own
+     `masked` flag and its frozen settings snapshot. A board that polled that on
+     idle would spend a phone's battery drawing a static graph. */
+  const [continueTarget, setContinueTarget] = useState(null);   // {node, pill, step}
+  const [continueRuns, setContinueRuns] = useState(null);       // /cloud/runs payload
+  const [continueBusy, setContinueBusy] = useState(false);
+  // The LAST refusal, shown inside the dialog. See utils/continueOutcome.js: a
+  // refusal keeps the form and its five folded settings, only a success closes it.
+  const [continueError, setContinueError] = useState(null);
+
+  const handleContinueCheckpoint = useCallback((node, pill) => {
+    const refusal = canvasContinueRefusal(node, pill);
+    if (refusal) { toast.warning(refusal); return; }
+    setContinueTarget({ node, pill: pill || null, step: pill?.step ?? null });
+    setContinueRuns(null);
+    setContinueError(null);
+    // The dialog SEEDS its lane and its checkpoint from props on mount and never
+    // re-seeds, so it must not mount before this answer lands: opening a beat
+    // early made a configured cloud lane look like "needs a vast.ai API key",
+    // pre-selected Local for a cloud run, and posted to the local endpoint. Hence
+    // the two-state resolution — `null` while in flight, an OBJECT once settled.
+    // A failed read settles to `{}`: the lanes then read as open and the BACKEND
+    // refuses with its own reason, which beats a dialog refusing on a request
+    // that never left.
+    apiFetch(contributions('training.continue.lane', 'dataset').find((lane) => lane.runsUrl)?.runsUrl
+      || '/api/dataset/train/runs?limit=50')
+      .then((d) => setContinueRuns(d || {}))
+      .catch(() => setContinueRuns({}));
+  }, [toast]);
+
+  const continueRow = useMemo(
+    () => canvasContinueRow(continueTarget?.node,
+      [...(continueRuns?.actives || []), ...(continueRuns?.recent || [])]),
+    [continueTarget, continueRuns]);
+  const continueLanes = useMemo(
+    () => (continueTarget ? canvasContinueLanes(continueTarget.node, continueTarget.pill, {
+      aitoolkitValid: caps?.aitoolkit?.valid,
+      localActive: continueRuns?.local_active,
+      actives: continueRuns?.actives || [],
+      configured: continueRuns?.configured,
+      limit: continueRuns?.limit || 1,
+    }) : null),
+    [continueTarget, caps, continueRuns]);
+
+  const submitContinue = useCallback(async (payload) => {
+    const target = continueTarget;
+    // POST WITH THE DIALOG STILL OPEN. It used to close first — a workaround for
+    // a toast container that lived UNDER every modal (fixed: Toast.jsx is
+    // z-[10000]) — and the price was the whole form: lane, resume checkpoint,
+    // extra steps and the five folded settings, gone before the refusal arrived,
+    // with no clue which of them was refused.
+    if (!payload) { setContinueTarget(null); setContinueError(null); return; }
+    const req = canvasContinueRequest(target.node, payload,
+      { steps: canvasContinueSteps(target.node), masked: continueRow?.masked ?? null });
+    if (!req) { setContinueError('This run cannot be continued from the board.'); return; }
+    setContinueBusy(true);
+    setContinueError(null);
+    let outcome;
+    let d = null;
+    try {
+      // The board's local lane re-exports the CURRENT dataset, so it meets the
+      // same caption/quality guards as the two other hosts — which is a QUESTION
+      // ("12 images have no caption — continue anyway?"), not a refusal. It used
+      // to arrive here as a dead-end error string with no way to answer it. The
+      // app's one confirm-and-retry loop answers it, and its add-the-flag-ONCE
+      // rule is what stops a server that ignores the flag from re-asking forever.
+      d = await postWithConfirmations((b) => postJson(req.url, b), req.body,
+        'Continue anyway (force)');
+      outcome = continueAttemptOutcome(d === null ? { declined: true } : { response: d });
+    } catch (e) {
+      // postJson THROWS on a 400/409. That is exactly how a checkpoint whose
+      // file is gone comes back ("no local checkpoint at step N (available:
+      // …)"), and how a busy GPU does.
+      outcome = continueAttemptOutcome({ thrown: e });
+    } finally {
+      setContinueBusy(false);
+    }
+    if (!outcome.close) { setContinueError(outcome.error); return; }
+    setContinueTarget(null);
+    setContinueError(null);
+    setOpenCk(null);
+    toast.success(`Continuing from step ${d.resumed_from} → ${d.target_steps} `
+      + (payload.lane === 'cloud' ? 'on a fresh pod…' : 'on this machine…'));
+    onRefetchDataset?.(target.node.dataset_id);
+  }, [continueTarget, continueRow, toast, onRefetchDataset]);
+
+  /* --- the generation in flight, owned by the BOARD -------------------------
+     Not by the settings panel: closing that panel used to destroy the run id, so
+     a launch could only be watched at the moment it was fired. */
+  const tracker = useCanvasRun();
+  const trackerTargets = tracker.targets;
+  // Read by the throttled refresh below, which may fire from a timer armed
+  // several polls earlier: it must aim at the run's targets NOW, not at the
+  // ones that happened to be current when the timer was set.
+  const trackerTargetsRef = useRef(trackerTargets);
+  useEffect(() => { trackerTargetsRef.current = trackerTargets; }, [trackerTargets]);
+  /* Which of the four states the launch is in — read from the SAME helper the
+     bar itself renders from, so "is there anything to show" and "what is shown"
+     can never disagree. The overlay needs it to decide whether to draw a pill at
+     all (an empty painted box above the board is worse than no box) and whether
+     the settings panel is already saying this. */
+  const runPhase = describeCanvasRun(tracker.run.data).phase;
+  // New images = new × N badges and new thumbnails on the pills, which come from
+  // the LINEAGE, not from the run. Without this re-read the board looked exactly
+  // as it did before the launch until a full reload — the images were there, and
+  // nowhere to be seen.
+  /* ⏱ …at most once every REFETCH_MIN_MS, and never one call per image.
+     The run poller ticks every three seconds and each tick that carries a new
+     image used to re-read the FULL lineage of every target lane — a long
+     generation therefore fired dozens of lineage requests per lane, each one
+     rebuilding every lane's graph and, before the memo boundaries above, the
+     whole board with it. A leading-edge throttle keeps the first batch instant
+     (which is the one the user is watching for) and a trailing call guarantees
+     the last images are never the ones left out. */
+  const seenReady = useRef(0);
+  const refetchAt = useRef(0);
+  const refetchTimer = useRef(null);
+  const refetchLanes = useCallback(() => {
+    refetchAt.current = Date.now();
+    for (const id of canvasRunDatasetIds(trackerTargetsRef.current)) {
+      Promise.resolve(onRefetchDataset?.(id)).catch(() => { /* the poll retries */ });
+    }
+  }, [onRefetchDataset]);
+  useEffect(() => {
+    const n = readyImageCount(tracker.run.data);
+    if (n <= seenReady.current) return;
+    seenReady.current = n;
+    const since = Date.now() - refetchAt.current;
+    if (since >= REFETCH_MIN_MS) { refetchLanes(); return; }
+    // Inside the window: one trailing call, re-armed rather than duplicated.
+    if (refetchTimer.current) return;
+    refetchTimer.current = setTimeout(() => {
+      refetchTimer.current = null;
+      refetchLanes();
+    }, REFETCH_MIN_MS - since);
+  }, [tracker.run.data, refetchLanes]);
+  // A board left mid-run must not fire a lineage read after it is gone.
+  useEffect(() => () => {
+    if (refetchTimer.current) clearTimeout(refetchTimer.current);
+  }, []);
+
+  /* The three handlers the lanes are given, hoisted out of the JSX below.
+     They were written inline — `onOpenGallery={(recordId, step) => setGallery(…)}`
+     and friends — which is the ordinary way to write them and, on this board,
+     the thing that made the memo boundaries on LaneGraph/LaneImages worthless:
+     a new arrow on every render is a changed prop, and a changed prop re-renders
+     the lane. `onExportGrid` takes the dataset id as an argument rather than
+     closing over the lane's, so it can be one function for the whole board
+     (CanvasGroupBar passes the id it was given). */
+  const openGallery = useCallback((recordId, step) => setGallery({ recordId, step }), []);
+  const openPinnedImage = useCallback((n) => setPinnedZoom(n.image), []);
+  const openExportGrid = useCallback((group, datasetId) => setExportGroup({
+    datasetId,
+    imageIds: group.members.map((member) => member.node.imageId),
+  }), []);
+
+  const noteOf = useCallback((node) => noteEdits[node.record_id] || node, [noteEdits]);
+  const handleNodeChanged = useCallback((updated) => {
+    setNoteEdits((m) => ({ ...m, [updated.record_id]: updated }));
+    setOpenNode((cur) => (cur && cur.record_id === updated.record_id ? updated : cur));
+  }, []);
+  const handleNodeDeleted = useCallback((recordId) => {
+    setDeletedIds((ids) => (ids.includes(recordId) ? ids : [...ids, recordId]));
+    setOpenNode(null);
+  }, []);
+
+  /* Pin a generated image onto the board -- from its gallery, or from the
+     lightbox that opens over it. An image pinned BEFORE comes back exactly
+     where and how big it was left (openGeometry); one that never was lands
+     beside the card that produced it, sliding down past the pins already
+     there. */
+  const [pinnedZoom, setPinnedZoom] = useState(null);
+  // 🪪 The lane's reference face, full size — the other half of the comparison
+  // the thumbnail starts. Its own state, not the pinned-image one: a reference
+  // is not a generated image and has no seed, prompt or settings to show.
+  const [refZoom, setRefZoom] = useState(null);
+  const handlePinImage = useCallback((img) => {
+    const dsId = img?.dataset_id;
+    if (dsId == null || img?.id == null) return;
+    const map = allImageNodes?.[dsId] || {};
+    const lane = placedRef.current.find((l) => l.datasetId === dsId);
+    const geo = openGeometry(map, img.id,
+      defaultImageSpot(lane?.graph, img.record_id, img.step, visibleImageNodes(map)));
+    const grouped = groupPinnedBatchBySource({
+      nodes: Object.values(map),
+      placed: [{ imageId: img.id, ...geo, image: img }],
+      graph: lane?.graph,
+    });
+    onSaveImageNodes?.(dsId, grouped.rows.map((row) => ({
+      image_id: row.imageId, x: row.x, y: row.y, w: row.w, h: row.h,
+      visible: row.visible, group_id: row.groupId, group_pos: row.groupPos, image: row.image,
+    })));
+  }, [allImageNodes, onSaveImageNodes]);
+
+  /* ✨ Upscale & improve THIS picture. The handler is SHARED with the checkpoint
+     gallery's own lightbox (hooks/useCanvasImageImprove) — same row, same route,
+     same toast. It moved out of this file the day the second surface asked for
+     it: the route is a `lora_test_image` id and the dataset improve endpoint
+     resolves a `face_dataset_image`, so a second copy that reached for the wrong
+     one would improve an unrelated picture and report success. */
+  const handleImproveCanvasImage = useCanvasImageImprove();
+  const restoreImproveSettings = useRestoreImproveSettings();
+
+  /* 📌 Pin ALL of a finished run's images, in one click.
+     A lot spanning four checkpoints used to mean opening four galleries and
+     pinning five pictures one by one — the board's own generation, and the
+     board was the last place it landed.
+
+     What each image IS (its prompt, seed, sampler, the checkpoint that made it)
+     is read from the gallery route, one request per checkpoint the run was
+     launched on, so the node carries exactly the payload every other gallery
+     publishes rather than a second shape rebuilt from the run's cells. The
+     geometry is decided by utils/canvasPinBatch — the part where "nothing may
+     ever overlap anything" is a tested property and not a hope. */
+  const [pinAllState, setPinAllState] = useState(null); // {busy}|{said, undo}
+  const pinCandidates = useMemo(
+    () => runPinCandidates(tracker.run.data), [tracker.run.data]);
+  const pinPending = useMemo(
+    () => pinBatchPendingAcrossLanes(pinCandidates, allImageNodes).pending,
+    [pinCandidates, allImageNodes]);
+
+  const handlePinAll = useCallback(async () => {
+    const wanted = new Set(pinPending.map((c) => c.id));
+    if (!wanted.size) return;
+    setPinAllState({ busy: true });
+    // One read per checkpoint the run was launched on. Failures are per-target:
+    // a checkpoint whose gallery cannot be read costs its own pictures, not the
+    // whole gesture.
+    const byLane = new Map();
+    await Promise.all(trackerTargets.map(async (t) => {
+      try {
+        const d = await apiFetch(`/api/train/checkpoint/${t.recordId}/${t.step}/images`);
+        for (const img of (d?.images || [])) {
+          if (!wanted.has(img.id)) continue;
+          const dsId = img.dataset_id ?? t.datasetId;
+          if (!byLane.has(dsId)) byLane.set(dsId, []);
+          byLane.get(dsId).push(img);
+        }
+      } catch { /* reported by the count below: fewer pinned than asked for */ }
+    }));
+
+    let placedTotal = 0;
+    let skippedTotal = 0;
+    const undo = [];
+    for (const [dsId, images] of byLane) {
+      const lane = placedRef.current.find((l) => l.datasetId === dsId);
+      const laneMap = allImageNodes?.[dsId] || {};
+      const res = placeImageBatch({
+        graph: lane?.graph,
+        // The boxes actually OCCUPIED: a strip, not the members' remembered
+        // spots — a fresh pin landing squarely on a group would be exactly the
+        // "nothing lands on top of anything" promise broken.
+        existing: layoutBoxes(layoutImageNodes(visibleImageNodes(laneMap))),
+        images,
+        remembered: laneMap,
+      });
+      if (!res.placed.length) continue;
+      // The SAME grouper the one-picture gallery pin uses: a lot joins the grid
+      // its checkpoint already has on this lane instead of starting a rival one.
+      const grouped = groupPinnedBatchBySource({
+        nodes: Object.values(laneMap), placed: res.placed, graph: lane?.graph,
+      });
+      placedTotal += res.placed.length;
+      skippedTotal += res.skipped.length;
+      onSaveImageNodes?.(dsId, grouped.rows.map((p) => ({
+        image_id: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h,
+        visible: p.visible, group_id: p.groupId, group_pos: p.groupPos, image: p.image,
+      })));
+      // What Undo has to put back: these rows, closed again, at the geometry
+      // they had BEFORE (a picture that had been closed keeps the spot it was
+      // closed at, so undoing does not quietly rewrite it).
+      undo.push({ datasetId: dsId, rows: grouped.undoRows.map((p) => ({
+        image_id: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h,
+        visible: p.visible, group_id: p.groupId, group_pos: p.groupPos, image: p.image,
+      })) });
+    }
+    const missing = wanted.size - placedTotal - skippedTotal;
+    setPinAllState({
+      said: pinBatchAnnouncement({
+        placed: new Array(placedTotal),
+        skipped: new Array(skippedTotal + Math.max(0, missing)),
+      }),
+      undo,
+    });
+  }, [pinPending, trackerTargets, allImageNodes, onSaveImageNodes]);
+
+  /* The way back. Pinning thirty pictures with one tap and offering no way out
+     would be the board rearranging itself on the user's behalf; this closes
+     exactly the nodes that click opened, and nothing else. It is the ordinary
+     close (`visible: false`), so anything pinned by hand before is untouched
+     and every geometry promise still holds. */
+  const handleUndoPinAll = useCallback(() => {
+    for (const { datasetId, rows } of (pinAllState?.undo || [])) {
+      onSaveImageNodes?.(datasetId, rows);
+    }
+    setPinAllState(null);
+  }, [pinAllState, onSaveImageNodes]);
+
+  /* Closing KEEPS the geometry -- that is the whole promise. Only `visible`
+     flips.
+
+     🖼🖼 Closing a picture that is inside a GROUP also takes it out of it: a
+     closed picture is not in the strip, and leaving its membership behind would
+     make the strip re-form around a picture nobody can see. It leaves through
+     exactly the same function a drag-out uses, so the ones staying behind close
+     the gap the same way and a group left with one member dissolves the same
+     way — closing the second-to-last picture of a strip cannot leave a "group"
+     of one. The closed picture keeps its OWN remembered box, which is what
+     re-opening it from its gallery reads. */
+  const handleCloseImage = useCallback((node) => {
+    const dsId = node?.image?.dataset_id;
+    if (dsId == null) return;
+    if (node.groupId) {
+      const nodes = imagesRef.current[dsId] || [];
+      const rows = extractFromGroup(nodes, node.imageId, { x: node.x, y: node.y });
+      if (rows.length) {
+        saveRows(dsId, rows.map((r) => (r.imageId === node.imageId
+          ? { ...r, visible: false } : { ...r, visible: true })));
+        return;
+      }
+    }
+    onSaveImageNodes?.(dsId, [{
+      image_id: node.imageId, x: node.x, y: node.y, w: node.w, h: node.h,
+      visible: false, group_id: null, group_pos: null, image: node.image,
+    }]);
+  }, [onSaveImageNodes, saveRows]);
+
+  /* ✕ on the GROUP's bar: close all N at once.
+     Each picture keeps its OWN remembered geometry — the box it had before it
+     ever joined, never the slot it happened to occupy in the strip — and the
+     group is undone. So re-opening one from its gallery brings back exactly
+     that one, at its own size, which is the promise every other pinned picture
+     already makes; resurrecting a whole strip from a single gallery pin would
+     be the board doing something nobody asked for. The button says all of this
+     before it is pressed, and carries the count on the glyph so it can never be
+     mistaken for a member's ✕. */
+  const handleCloseGroup = useCallback((group) => {
+    const dsId = group?.members?.[0]?.node?.image?.dataset_id;
+    if (dsId == null) return;
+    onSaveImageNodes?.(dsId, group.members.map((m) => ({
+      image_id: m.node.imageId,
+      x: m.node.x, y: m.node.y, w: m.node.w, h: m.node.h,
+      visible: false, group_id: null, group_pos: null, image: m.node.image,
+    })));
+  }, [onSaveImageNodes]);
+
+  /* 🗑 The picture is GONE — the row it pointed at no longer exists.
+     Three things follow, and skipping any one of them leaves the board lying:
+
+       • the node leaves the board immediately. It cannot be closed the
+         ordinary way (`visible: false`): that write goes through
+         save_canvas_image_nodes, which validates the image id against the
+         dataset and would now refuse it — the user would delete a picture and
+         be told, by a toast, that the board could not save the rectangle. It
+         is FORGOTTEN client-side instead, and the orphan row is pruned by the
+         server on the next read of the board (canvas_image_nodes does that
+         already, on purpose);
+       • the lane is re-read, because the pills carry a results COUNT and a
+         thumbnail — the same refresh the gallery's own delete triggers, for
+         the same reason;
+       • the result sentence comes from the SERVER, not from here: whether the
+         file was moved somewhere recoverable or removed for good is an install
+         setting, and the board must not guess which. */
+  const handleDeleteImage = useCallback((node, res) => {
+    const dsId = node?.image?.dataset_id;
+    if (dsId == null) return;
+    onForgetImageNodes?.(dsId, [node.imageId]);
+    toast.success?.(galleryDeleteSummary(res));
+    const lanes = (res?.dataset_ids || []).length ? res.dataset_ids : [dsId];
+    for (const id of lanes) {
+      Promise.resolve(onRefetchDataset?.(id)).catch(() => { /* the next load heals it */ });
+    }
+  }, [onForgetImageNodes, onRefetchDataset, toast]);
+
+  // The keyboard path into the same write (arrows / +- on a focused node), so
+  // moving and resizing are not mouse-only gestures.
+  const handleImageGeometry = useCallback((node, box, opts) => {
+    const dsId = node?.image?.dataset_id;
+    if (dsId == null) return;
+    // `opts` is forwarded verbatim: a held arrow key asks for the write to be
+    // coalesced (see CanvasImageNode), and only the host knows how to do that
+    // without delaying the move the key just made.
+    onSaveImageNodes?.(dsId, [{
+      image_id: node.imageId, ...clampImageBox(box), visible: true, image: node.image,
+    }], opts);
+  }, [onSaveImageNodes]);
+
+  const pct = Math.round(clampScale(view.scale) * 100);
+  const empty = !world.lanes.length;
+
+  /* 📷 The board, as a PNG file.
+     Re-drawn rather than screenshotted — see utils/canvasExportPng for why a
+     DOM screenshot is not available without a dependency, and what the file
+     therefore does and does not carry. The heavy part (loading every picture)
+     happens off-screen, so the board stays usable while it runs; the button
+     says "Exporting…" because a twelve-picture board takes a moment. */
+  const [exporting, setExporting] = useState(false);
+  const exportPng = useCallback(async () => {
+    if (exporting) return;
+    const refusal = boardExportRefusal(world);
+    if (refusal) { toast.error(refusal); return; }
+    setExporting(true);
+    try {
+      const plan = boardExportPlan(world);
+      const canvas = document.createElement('canvas');
+      const drawnByLane = {};
+      for (const lane of world.lanes) {
+        drawnByLane[lane.datasetId] = drawnNodes(layoutByLane[lane.datasetId] || []);
+      }
+      const res = await drawBoardExport(canvas, {
+        world, lanes: world.lanes, drawnByLane, cardW: CARD_W, laneHeaderH: LANE_HEADER_H, plan,
+      });
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('The browser could not build the image — try fewer lanes.');
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = boardExportFilename(new Date(), world.lanes.length);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 0);
+      // The count of what could NOT be drawn is part of the result, not a
+      // detail: a board that quietly exports eleven of its twelve pictures is
+      // worse than one that says which one is off the disk.
+      toast.success(res.missing
+        ? `Board exported (${plan.width}×${plan.height}) — ${res.missing} picture(s) are no longer on disk and came out as placeholders`
+        : `Board exported — ${plan.width}×${plan.height} px`, res.missing ? 8000 : undefined);
+    } catch (e) {
+      toast.error(e?.message || 'The board could not be exported');
+    } finally {
+      setExporting(false);
+    }
+  }, [exporting, world, layoutByLane, toast]);
+  /* Has anything on the visible board been PLACED by hand? Drives ✦ Tidy up: a
+     button that clears nothing should say so by being disabled, not by doing
+     nothing.
+
+     Pinned pictures count, and that is not a detail. This asked about moved
+     CARDS only — so a board where the user had only ever moved pictures offered
+     a greyed-out "Nothing has been moved yet", which was false and, now that a
+     picture can be parked anywhere on the board, was the way home being locked
+     at exactly the moment it is needed. A picture on the board is itself a
+     placement; the worst this costs is a click that tidies a board already
+     tidy, against a picture nobody can get back. */
+  const arranged = shown.some((e) => Object.keys(positions?.[e.datasetId] || {}).length > 0
+    || (imagesByLane[e.datasetId] || []).length > 0);
+
+  // 🔌 One `stores` object, read by BOTH the layer that renders the board
+  // nodes and the generic payload merge just below — a single definition so
+  // the two can never drift apart on what a type's store looks like.
+  const boardStores = {
+    'external-lora': {
+      nodes: extNodes, onNodesChange: setExtNodes,
+      checked: extChecked, onCheckedChange: setExtChecked,
+      extra: {
+        family: picks[0]?.family || 'zimage',
+        pickerOpen: extPickerOpen, onClosePicker: () => setExtPickerOpen(false),
+      },
+    },
+  };
+  // Every registered type contributes its own slice of `genSettings` through
+  // its `payload(nodes, checked)` — this loop never names a type, so a 2nd
+  // board-node type starts contributing here the moment it is added to
+  // `BOARD_NODE_TYPES`, with nothing in this file to touch.
+  const boardPayload = Object.entries(boardStores).reduce((acc, [type, store]) => {
+    const typeDef = BOARD_NODE_TYPES[type];
+    return typeDef ? { ...acc, ...typeDef.payload(store.nodes, store.checked) } : acc;
+  }, {});
+
+  /* ⋯ shelf, tier 1 — the board's real ACTIONS. Inline from `lg`, behind ⋯
+     below it. Written once and placed by `inlineActions`: the same chips, in
+     the toolbar on a laptop and in the sheet on a phone. */
+  const boardActions = (
+    <>
+      {/* The way out of an arrangement that got away from you. Twenty runs
+          later a hand-tidied board can be a knot, and "move them all back by
+          hand" is not an answer — this drops every remembered position, hands
+          the board to the automatic tree again, and brings every picture back
+          beside the run that made it, however far it was dragged. */}
+      <button type="button" onClick={handleTidyUp} disabled={!arranged}
+        title={arranged
+          ? 'Forget every moved card, rebuild the automatic tree, and bring '
+            + 'every pinned image back beside its run'
+          : 'Nothing has been moved yet'}
+        className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
+        <span aria-hidden>✦</span> Tidy up
+      </button>
+      <HelpBadge topic="canvas-arrange" />
+      {/* 💾 Keep this arrangement, and put a kept one back. Next to ✦ Tidy
+          up on purpose: they are the two ends of the same question — Tidy
+          up throws an arrangement away, and until now that was the ONLY
+          way out of one. */}
+      <CanvasLayoutPresets positions={positions} imageNodes={allImageNodes}
+        lanePlacements={lanePlacements}
+        datasetIds={shown.map((e) => e.datasetId)}
+        onRestored={onReloadLayout} toast={toast} />
+      {/* 📷 The board as a file. What it exports is stated before the
+          click, not after: the pictures and the trees, not the buttons. */}
+      <button type="button" onClick={exportPng} disabled={exporting || empty}
+        data-testid="canvas-export-png"
+        title={empty
+          ? 'There is nothing on the board to export yet'
+          : 'Save the whole board as a PNG — every pinned picture and every run '
+            + 'card, at full size. Buttons and badges are not drawn.'}
+        className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
+        <Camera aria-hidden="true" className="h-3.5 w-3.5" /> {exporting ? 'Exporting…' : 'PNG'}
+      </button>
+      {/* 🔌 A LoRA that never trained on this board — pinned as a node instead
+          of a pill, and stacked on top of the next run when checked. See
+          ExternalLoraNodes.jsx for the popover and the node cards. */}
+      <button type="button" onClick={() => setExtPickerOpen((v) => !v)}
+        aria-pressed={extPickerOpen}
+        /* The popover closes on a press anywhere else; this button is the
+           one exception, or the press would shut it and this click would
+           toggle it straight back open — leaving no way to close it here. */
+        data-canvas-ext-lora-toggle
+        title="Add an external LoRA to the board"
+        className={'flex h-10 items-center gap-1 rounded-md border px-2 sm:px-3 text-[0.6875rem] font-semibold lg:h-9 '
+          + (extPickerOpen
+            ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100 '
+            : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
+        <Plug aria-hidden="true" className="h-3.5 w-3.5" /> + LoRA
+        {extNodes.length > 0 && (
+          <span className="rounded-full bg-cyan-500/40 px-1.5 tabular-nums">{extNodes.length}</span>
+        )}
+      </button>
+      <HelpBadge topic="canvas-external-loras" />
+      {/* ⏏ An install-wide action, and on a desktop it lives on the PAGE
+          header where it belongs. Below `lg` that header is gone — 67 px of a
+          780-px screen for a title the nav already highlights — so the button
+          it carried comes down here rather than being lost. Rendered only when
+          the page actually handed one over. */}
+      {onOpenUndeploy && (
+        <button type="button" onClick={onOpenUndeploy}
+          data-testid="canvas-undeploy-more"
+          title="List every LoRA this app deployed into ComfyUI and remove the ones you tick. Your training saves are kept — each one can be deployed again."
+          className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content lg:hidden">
+          <span aria-hidden>⏏</span> Undeploy…
+        </button>
+      )}
+      {/* …and the page's own ? badge with it. The header that carried it is not
+          drawn below `lg`, and "the ? next to the title explains this page at
+          every width" was a promise the page made in its own comments — a
+          promise that folding the header would have quietly broken. */}
+      {onOpenUndeploy && <HelpBadge topic="page-canvas" />}
+    </>
+  );
+
+  /* ⋯ shelf, tier 2 — READOUTS. Nothing here is a control, and that is exactly
+     why they fold last and cost the toolbar nothing until asked for: a whole
+     row of a phone was going to "GPU 0 %". Inline from `xl`. */
+  const boardReadouts = (
+    <>
+      {/* The colour key. A colour with no legend is a guess, and this one
+          answers the question asked most often on this board: "which of these
+          can I generate from RIGHT NOW?". Each state carries a shape as well
+          as a colour (filled disc vs hollow ring), because roughly one man in
+          twelve reads red and green alike and the theme is dark graphite.
+          It renders from utils/checkpointDeployState, the same source the
+          pills read, so the key cannot drift from what it explains. */}
+      <span data-testid="canvas-deploy-legend"
+        className="flex items-center gap-2 text-content-subtle text-[0.625rem]">
+        {DEPLOY_LEGEND.map((l) => (
+          <span key={l.tone} className="flex items-center gap-1 whitespace-nowrap">
+            {/* The swatch is the pill's OWN bar class, so the key is drawn by
+                the thing it explains and cannot drift from it. */}
+            <span aria-hidden className={`inline-block h-3 w-0 ${DEPLOY_BAR_CLASS[l.tone]}`} />
+            {/* 📱 Short below `sm`, in full from there up. */}
+            <span className="sm:hidden">{l.short}</span>
+            <span className="hidden sm:inline">{l.label}</span>
+          </span>
+        ))}
+      </span>
+      <CanvasSystemStats />
+    </>
+  );
+
+  /* ⓘ The door to the board's manual — written ONCE and PLACED, like every
+     other control in this overlay (see useMediaQuery: Tailwind can hide a chip
+     at a width, it cannot move one, and two copies drift the first time one
+     gains a prop). It rides with the action chips while they are in the shelf
+     and joins the readouts once they are inline, so it never occupies a row of
+     its own. */
+  const gestureChip = (
+    <button type="button" data-testid="canvas-gestures-info"
+      onClick={() => setGesturesOpen((v) => !v)}
+      aria-expanded={gesturesOpen}
+      aria-label="How the board is driven"
+      title="How the board is driven — mouse, trackpad and touch"
+      className={'flex h-10 shrink-0 items-center gap-1.5 rounded-md border border-border px-2 '
+        + 'text-[0.6875rem] font-semibold sm:px-3 lg:h-9 '
+        + (gesturesOpen ? 'bg-indigo-500/15 text-content' : 'bg-app/60 text-content-muted hover:text-content')}>
+      <span aria-hidden>ⓘ</span> How this board works
+    </button>
+  );
+
+  return (
+    <>
+      {/* The edge gradients + glow, defined ONCE for the whole page: every lane's
+          <svg> references them by id (see lineageEdges.jsx). */}
+      <svg width="0" height="0" aria-hidden className="absolute"><LineageEdgeDefs /></svg>
+
+      {/* THE BOARD IS THE PAGE, and everything that steers it floats ON it.
+
+          Every control below used to be stacked ABOVE the frame: the zoom row,
+          the colour key, the gestures sheet, the run tracker, the dataset filter.
+          Measured at 400 px that chrome cost ~290 px before a single card was
+          drawn, which is why the frame was pinned to 60vh — and on a phone the
+          board opened at 10% zoom under a wall of buttons. Stacking chrome above
+          a canvas spends the one thing a canvas is for.
+
+          So they are SIBLINGS of the frame, absolutely placed over it, and the
+          frame takes the height they gave back. Siblings, not children, and that
+          is the load-bearing part: the frame owns the pan/zoom pointer handlers
+          and `touch-none`, so a button nested inside it would hand every tap to
+          the board underneath. The wrapper is `pointer-events-none` and only the
+          controls themselves take the pointer, so the board stays draggable
+          through the gaps between them. */}
+      <div className="lds-canvas-stage relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={frameRef}
+        data-testid="lora-canvas-frame"
+        // select-none: shift-click is the compare gesture, and shift-click is ALSO
+        // the browser's extend-selection — without this, comparing two runs paints
+        // half the board blue.
+        /* 📐 THE FRAME IS FIXED, AND IT IS ALL THE ROOM THERE IS. No `vh`
+           fraction and no content-derived height any more: `flex-1 min-h-0`
+           inside a column that is exactly one viewport tall (see App.jsx's
+           `/canvas` shell and CanvasPage's root), so the board takes every
+           pixel left under the app header, the page title and whatever banner
+           happens to be up — and not one pixel more, so the PAGE never scrolls.
+
+           Both of the heights this replaces were wrong in the same way, from
+           opposite ends. A fixed 72vh/76vh left a strip of dead page under the
+           board on a desktop. Sizing the frame to the CONTENT (a clamp around
+           the board's own preferred height, which shipped for one day) then made
+           the frame elastic: ✦ Tidy up compacted the board and the frame collapsed
+           around it mid-view, cutting cards off at the current zoom, and
+           dragging a node downwards inflated the frame live under the hand. A
+           canvas whose own edges move while you work it is unreadable. The
+           board's size is answered by ZOOM (✦ Fit, the +/− buttons, the wheel),
+           which is reversible and asked for; the frame itself just stops
+           moving. */
+        /* `isolate z-0`. The frame already clips (`overflow-hidden`), and the
+           controls are now SIBLINGS drawn over it — so "the board cannot cover
+           its own filter" was resting on one class name plus a sibling order.
+           A stacking context of its own means nothing drawn inside the frame,
+           at any z-index, can paint over a sibling overlay: two independent
+           guarantees instead of one, for the controls the user cannot afford to
+           lose. It sits at z-0 so every overlay above it (z-20) still wins. */
+        data-probe-world="board"
+        className="lds-canvas-frame relative isolate z-0 min-h-[320px] w-full flex-1 select-none touch-none overflow-hidden rounded-xl border border-border bg-app/40"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endPointer}
+        onPointerCancel={endPointer}>
+        {empty ? (
+          <div className="flex h-full items-center justify-center px-6 text-center text-content-subtle text-[0.8125rem]">
+            No dataset selected — pick one in the filter above to put its runs on the board.
+          </div>
+        ) : (
+          <div style={{ position: 'absolute', left: 0, top: 0,
+            width: Math.max(world.width, 1), height: Math.max(world.height, 1),
+            transform: viewTransform(view), transformOrigin: '0 0' }}>
+            {/* 🧬 The provenance layer. FIRST child and `pointer-events: none`,
+                both deliberate: an edge is CONTEXT, not content. It must never
+                cover a card or a picture, and it must never take a click —
+                chrome and content fighting over the pointer is exactly how a
+                group of pinned images became impossible to move AND to close.
+                Under the lanes means a long edge passes behind the cards and
+                reappears between them, which is already how this board reads
+                descent. */}
+            <svg width="1" height="1" aria-hidden
+              data-testid="canvas-provenance-layer"
+              className="pointer-events-none absolute left-0 top-0 block overflow-visible">
+              <LineageEdges edges={provenance.edges} isLit={() => false} />
+            </svg>
+            {/* 🛝 The room each lane keeps, UNDER everything it holds. Drawn as
+                one layer rather than inside each lane's own group so a later
+                lane's frame can never be painted over an earlier lane's cards —
+                the ordering bug this board has already shipped once. */}
+            {world.lanes.map((lane) => (
+              <LaneFrame key={`frame:${lane.datasetId}`} lane={lane}
+                active={laneDrag?.datasetId === lane.datasetId} />
+            ))}
+            {world.lanes.map((lane) => (
+              <div key={lane.datasetId}>
+                <LaneImages lane={lane} layout={layoutByLane[lane.datasetId] || NO_LAYOUT}
+                  blendNotes={blendNotes}
+                  onGeometry={handleImageGeometry} onClose={handleCloseImage}
+                  onDelete={handleDeleteImage}
+                  onCloseGroup={handleCloseGroup}
+                  onExportGrid={openExportGrid}
+                  onOpen={openPinnedImage}
+                  hint={dropHint?.datasetId === lane.datasetId ? dropHint : null}
+                  boardScale={clampScale(view.scale)} />
+                <LaneGraph lane={lane} isLit={isLit} onHover={onHover}
+                  boardScale={clampScale(view.scale)}
+                  onNodeClick={onNodeClick} diffRole={diffRole} noteOf={noteOf}
+                  liftedId={drag && drag.datasetId === lane.datasetId ? drag.recordId : null}
+                  isPicked={isPicked} onTogglePick={onTogglePick}
+                  onOpenActions={onOpenActions} onZoomPreview={zoomPreview}
+                  onOpenGallery={openGallery} />
+              </div>
+            ))}
+            {/* 🛝 …and a lane's two GRIPS, over every card and every picture.
+                Chrome wins over content, always — the rule CanvasGroupBar was
+                extracted to keep. A picture parked on a lane's title strip or
+                across its bottom edge would otherwise leave that dataset with
+                no way to be moved or resized at all. */}
+            {world.lanes.map((lane) => (
+              <div key={`chrome:${lane.datasetId}`} className="z-10">
+                <LaneHeader lane={lane} onZoomRef={setRefZoom} />
+                <LaneEdge lane={lane} boardScale={clampScale(view.scale)}
+                  active={laneDrag?.datasetId === lane.datasetId} />
+              </div>
+            ))}
+            {/* 🔌 Board nodes (the external LoRA type is the first one) live in
+                this SAME transformed layer as the lanes, so they pan and zoom
+                with the board like any other node — the add popover they
+                share the file with is portalled out of here instead (see
+                boardNodes/BoardNodeLayer.jsx and ExternalLoraNodes.jsx). */}
+            <BoardNodeLayer types={BOARD_NODE_TYPES} stores={boardStores}
+              boardScale={clampScale(view.scale)}
+              onGeometry={onBoardGeometry} />
+          </div>
+        )}
+      </div>
+
+        {/* TOP — what the board is SHOWING: which datasets, and what is being
+            generated right now. Absolutely placed, so it can never grow the
+            board: opening a menu must not resize the surface you are reading.
+
+            ⚠️ `overflow-visible`, and it used to be `overflow-y-auto`. That was
+            right for as long as the filter WAS a tall fold-out panel — it kept
+            the panel scrolling inside the frame instead of running off it. The
+            filter is now a 36-px row of chips whose controls live in POPOVERS,
+            and a scroll container clips its children: the Datasets menu opened
+            354 px tall inside a 76-px box and the user saw a 20-px sliver of
+            it. The reason for the clip left with the panel; the clip had to go
+            with it. Nothing replaced it, because there is nothing left here
+            that can grow — measured at 400 px the chips wrap to two rows, and
+            the search field, which was the third, unfolds only when asked. */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex max-h-full flex-col gap-2 overflow-visible p-2 sm:p-3">
+          {/* 🩹 The chrome is PAINTED, and that is the actual fix for "a pinned
+              strip runs over the filter".
+
+              The board could never paint over this row — the frame clips
+              (`overflow-hidden`) and owns its own stacking context, so no
+              z-index inside it can reach a sibling overlay, and two passes of
+              z-index work went into proving that. The symptom kept coming back
+              anyway, because it was never a z-order bug: the chips are
+              `bg-app/60`, Reset and the runs readout have no fill at all, and
+              between and behind them the row was simply TRANSPARENT. A group of
+              pinned images parked in the top-right corner was legible straight
+              through it, which reads as a strip lying on top of Reset — and no
+              amount of z-index can fix something that is already underneath.
+
+              So the top chrome gets what the bottom toolbar has had all along:
+              an opaque pill. Same tokens, deliberately — the two bars are the
+              same kind of object and were never meant to be one solid and one
+              made of glass. */}
+          {/* 📱 …and it STANDS DOWN while the ⋯ shelf is open on a short fold.
+              Not a cut: the filter is what you use to decide WHAT the board
+              shows, and the shelf is what you use to act on what it is already
+              showing — nobody needs both in the same second, and on a 390-px
+              fold the two of them plus the toolbar left 176 px of board. It
+              comes straight back when the shelf closes, and nothing changes at
+              any height a phone is held upright at.
+              The run tracker below does NOT stand down with it: a generation in
+              flight is the one thing you opened the board to watch. */}
+          {filterSlot ? (
+            <div data-probe-chrome="filter"
+              className={'pointer-events-auto rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg'
+                + (moreOpen && !tallFold ? ' hidden' : '')}>
+              {filterSlot}
+            </div>
+          ) : null}
+          {/* 🎨/📱 One status, not two. The board's tracker and the settings
+              panel's own in-flight bar read the SAME numbers (useCanvasStudio
+              hands `run.data` to both), so with the panel open a phone showed
+              "N generating · M queued · Stop (resumable)" twice, ~70 px each,
+              stacked at the two ends of a 800-px screen.
+
+              The BOARD's copy is the one that steps aside, and only while the
+              panel is open AND the run is in flight — which is exactly the state
+              the panel duplicates. It has to be that way round: the panel hides
+              its whole setup form while `pending > 0`, so dropping the panel's
+              bar instead would leave an open sheet with nothing in it, and the
+              board's copy is also the one that survives the panel being closed
+              and the page reloaded. Stopped and finished runs keep the board's
+              bar at every width: ▶ Resume, 📌 Pin all and the result links exist
+              nowhere else.
+
+              From `lg` up nothing changes — a side drawer and the board are read
+              at once there, and the desktop layout is not what this pass is
+              about. */}
+          {runPhase !== 'idle' && (
+          <div data-probe-chrome="tracker"
+            className={'pointer-events-auto rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg'
+            + (panelOpen && runPhase === 'working' ? ' hidden lg:block' : '')}>
+        {/* 🎨 The generation in flight, ON the board. Visible with the settings
+            panel closed, and after a reload — which is the whole point: a launch
+            you can only watch at the second you fired it is a launch you cannot
+            come back to. Its finished state names where the images went. */}
+        <CanvasRunTracker
+          run={tracker.run.data} targets={trackerTargets}
+          onStop={() => tracker.run.cancel?.()}
+          onResume={() => tracker.run.resume?.()}
+          onOpenPanel={() => setPanelOpen(true)}
+          onOpenResult={(t) => setGallery({ recordId: t.recordId, step: t.step })}
+          pinCount={pinPending.length}
+          pinBusy={!!pinAllState?.busy}
+          pinSaid={pinAllState?.said || ''}
+          onPinAll={handlePinAll}
+          onUndoPinAll={pinAllState?.undo?.length ? handleUndoPinAll : null}
+          onDismiss={() => { setPinAllState(null); tracker.forget(); }} />
+          </div>
+          )}
+        </div>
+
+        {/* BOTTOM — what you DO to the board. Bottom edge on purpose: it is
+            thumb-height on a phone, and it is the corner a board has least to
+            say in. */}
+        {/* 📏 A flex COLUMN with a ceiling, and both halves are load-bearing.
+            The ceiling reserves the top chrome — measured at 844×390, a phone
+            held sideways, where the ⓘ bubble grew upward until it lay 448×54 px
+            ON TOP of the dataset filter at the far end of the screen. Being a
+            floating sibling stops this stack from pushing the toolbar; nothing
+            stopped it from covering what is above it.
+            The COLUMN is what makes the ceiling work without arithmetic: the
+            bubble is the only shrinkable child (`min-h-0`), so flexbox hands it
+            whatever is left after the shelf and the bar have taken their
+            height — at any shelf height, on any screen. A `max-h` in rem would
+            have had to guess at a shelf that is 106 px on one phone and 281 on
+            another. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex max-h-[calc(100%-4.5rem)] flex-col justify-end p-2 sm:p-3">
+          {/* ⋯ The second shelf, ON the board instead of IN the toolbar. A
+              SIBLING of the pill and only while asked for: whatever this width
+              cannot hold floats over the board, closes with its Close button or
+              Escape, and the bar keeps the exact height it had — which is the
+              whole difference between tools you can call up and tools that have
+              taken the screen. (Learnt the hard way once already: the gesture
+              help used to be a `<details>` INSIDE the pill, and an open
+              `<details>` grows the box it is in — 213 px of bar became 380 px of
+              an 800-px phone.) */}
+          {/* ⓘ The board's manual, in a BUBBLE of its own.
+
+              It used to be printed in the ⋯ sheet, and that was the bug: ~500
+              characters wrap to ten lines at 400 px — ~340 px of an 800-px
+              screen — so opening ⋯ to reach a BUTTON handed you a wall of text
+              with the buttons pushed off under it. A manual is not a tool and
+              does not belong in the tool shelf; it belongs behind an ⓘ you go
+              and press when you want it.
+
+              A SIBLING of the sheet, for the same reason the sheet is a sibling
+              of the pill: growing it cannot add a row to anything below it. It
+              is the third rung of the same ladder — pill, then shelf, then this
+              — and each one floats over the board instead of pushing it. */}
+          {gesturesOpen && (
+            <div data-testid="canvas-gestures-bubble" data-probe-chrome="bubble"
+              data-probe-reading role="dialog"
+              aria-label="How the board is driven"
+              /* 📏 CAPPED, and it scrolls inside its own cap. Measured at
+                 844×390 — a phone held sideways — the bubble grew upward until
+                 it lay 448×54 px ON TOP of the dataset filter at the other end
+                 of the screen. Being a floating sibling stops it pushing the
+                 toolbar; nothing stopped it from covering what is above it.
+                 `13rem` is the toolbar, the shelf and the filter bar it must
+                 not reach.
+                 ⚠️ A scroll container is safe HERE and would not be in the ⋯
+                 shelf: this box holds one paragraph, and a scroller CLIPS its
+                 children — which is exactly how a 354-px menu once showed as a
+                 20-px sliver inside the filter bar. Nothing in here opens. */
+              /* ⚠️ `min-h-0` is what lets the column above shrink this box at
+                 all — a flex child's default `min-height:auto` refuses to go
+                 below its content, which is precisely how it grew off the top
+                 of a landscape screen. A scroll container is safe HERE and
+                 would not be in the ⋯ shelf: this box holds one paragraph, and
+                 a scroller CLIPS its children — which is how a 354-px menu once
+                 showed as a 20-px sliver inside the filter bar. Nothing in here
+                 opens. */
+              className="pointer-events-auto mb-1.5 min-h-0 max-w-full overflow-y-auto rounded-xl border border-border bg-surface-overlay/95 p-2.5 shadow-xl backdrop-blur sm:max-w-md">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-content text-[0.6875rem] font-semibold">
+                  <span aria-hidden>ⓘ</span> How this board works
+                </span>
+                <button type="button" onClick={() => setGesturesOpen(false)}
+                  aria-label="Close the board help"
+                  /* 40 px below `lg`, like every control in this overlay. It
+                     shipped at 28 — the way OUT of the bubble, and the smallest
+                     thing on it. Found by scripts/responsiveProbe.mjs the first
+                     time it opened the bubble and measured what was inside. */
+                  className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content lg:h-7 lg:w-7">×</button>
+              </div>
+              <p className="m-0 text-content-subtle text-[0.6875rem] leading-relaxed">
+                {BOARD_GESTURES}
+              </p>
+            </div>
+          )}
+          {moreOpen && (
+            <div data-testid="canvas-more-sheet" data-probe-chrome="shelf" data-probe-panel="shelf"
+              className="pointer-events-auto mb-1.5 flex max-w-full flex-col gap-2 rounded-xl border border-border bg-surface-overlay/95 p-2 shadow-xl backdrop-blur">
+              {/* ⚠️ TWO rows, and which control sits in which one MOVES with the
+                  width. Not cosmetics — measured by scripts/responsiveProbe.mjs,
+                  which is where this rule came from: the shelf used to stack
+                  four rows, two of them holding a single small chip in a
+                  900-px box (23 % and 8 % full). Every box was inside every
+                  other box and every source-level test was green; it simply
+                  read as broken, and it cost 47 % of a 360-px fold.
+
+                  The rule is that a row must EARN its line. ⓘ is a chip, so it
+                  travels with the chips — and when the chips are inline in the
+                  toolbar (`lg` and up) it has no row to belong to, so it joins
+                  the readouts instead of sitting alone. Close is pushed to the
+                  far edge of whatever row it lands in: it is the way out, and
+                  the way out belongs at the end. */}
+              {!inlineActions && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {boardActions}
+                  {gestureChip}
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                {!inlineReadouts && boardReadouts}
+                {inlineActions && gestureChip}
+                <button type="button" onClick={() => setMoreOpen(false)}
+                  aria-label="Close the board tools"
+                  className="ml-auto flex h-10 items-center rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content lg:h-9">
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
+          <div data-probe-chrome="toolbar"
+            className="pointer-events-auto inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg">
+        {/* 📱 The board's controls, on a phone.
+            Every target here is 40 px up to `lg` and the familiar 36 px above it.
+            Not cosmetics: this row is the ONLY way to zoom without a wheel, and a
+            36-px button is under the ~40 px a finger actually lands on — a miss on
+            − or + lands on the board and pans it, which reads as "the zoom buttons
+            are unreliable". Desktop keeps the exact sizes it has always had. */}
+        {/* `contents`: the pill above is the flex container now. Keeping a
+            second flex box here would nest a wrap inside a wrap, and its old
+            `mb-2` would push a gap under a bar that no longer has anything
+            below it. */}
+        <div className="contents">
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => zoomByButton(1 / ZOOM_STEP)}
+              disabled={view.scale <= MIN_SCALE + 1e-9}
+              title="Zoom out" aria-label="Zoom out"
+              className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content disabled:opacity-40 lg:h-9 lg:w-9">−</button>
+            <span className="min-w-[2.5rem] sm:min-w-[3.25rem] text-center text-content-muted text-[0.6875rem] tabular-nums">{pct}%</span>
+            <button type="button" onClick={() => zoomByButton(ZOOM_STEP)}
+              disabled={view.scale >= MAX_SCALE - 1e-9}
+              title="Zoom in" aria-label="Zoom in"
+              className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content disabled:opacity-40 lg:h-9 lg:w-9">+</button>
+          </div>
+          <button type="button" onClick={fitNow}
+            title="Fit the whole board in view"
+            className="flex h-10 items-center rounded-md border border-border bg-app/60 px-2 sm:px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content lg:h-9">
+            Fit
+          </button>
+          {/* 🎨 The board's own launch button. It carries the pick count so the
+              settings panel can be closed without losing sight of what is queued
+              up — at 400 px the panel covers the board, and closing it is normal. */}
+          <button type="button" onClick={() => setPanelOpen((v) => !v)}
+            aria-pressed={panelOpen}
+            title={picks.length
+              ? `${picks.length} checkpoint(s) picked — open the run settings`
+              : 'Tick checkpoints on the board, then set the run up here'}
+            className={'flex h-10 items-center gap-1 rounded-md border px-2 sm:px-3 text-[0.6875rem] font-semibold lg:h-9 '
+              + (picks.length
+                ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100 '
+                : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
+            <Palette aria-hidden="true" className="h-3.5 w-3.5" /> Generate
+            {picks.length > 0 && (
+              <span className="rounded-full bg-indigo-500/40 px-1.5 tabular-nums">{picks.length}</span>
+            )}
+          </button>
+          {/* Each shelf is rendered by exactly ONE of these two places — here
+              when the width holds it, in the ⋯ sheet when it does not. */}
+          {inlineActions && boardActions}
+          {inlineReadouts && boardReadouts}
+          {/* ⋯ carries the external-LoRA count while that shelf is folded: a
+              shelf that hides state without saying so is a shelf that makes the
+              board look broken. */}
+          <button type="button" onClick={() => setMoreOpen((v) => !v)}
+            aria-expanded={moreOpen}
+            data-testid="canvas-more-toggle"
+            title="Tidy up, Layouts, PNG, external LoRAs, the colour key and what every gesture on this board does"
+            aria-label="More board tools"
+            className={'ml-auto flex h-10 items-center gap-1 rounded-md border px-2 sm:px-3 text-[0.6875rem] font-semibold lg:h-9 '
+              + (moreOpen
+                ? 'border-primary/60 bg-primary/15 text-content '
+                : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
+            <span aria-hidden>⋯</span>
+            {!inlineActions && extNodes.length > 0 && (
+              <span className="rounded-full bg-cyan-500/40 px-1.5 tabular-nums">{extNodes.length}</span>
+            )}
+          </button>
+          {selectedForDiff.length > 0 && (
+            <button type="button" onClick={() => setSelectedForDiff([])}
+              className="rounded-md border border-amber-400/50 bg-amber-500/10 px-2 py-1 text-amber-100 text-[0.625rem]">
+              Clear compare ({selectedForDiff.length})
+            </button>
+          )}
+        </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ◉ THE checkpoint actions — the very component the in-card graph draws,
+          floated over the board instead of inside an <svg>. Fixed and at a
+          CONSTANT size: a popover that scaled with the board would be unreadable
+          at the zoom levels the board is actually useful at, and it must never
+          be clipped by the frame it hangs over. clampPopoverToViewport keeps it
+          inside the window on a 400-px screen, flipping above the click when
+          there is no room below and narrowing rather than pushing the page
+          sideways. */}
+      {openCk && (() => {
+        const box = clampPopoverToViewport(openCk.anchor, {
+          width: typeof window !== 'undefined' ? window.innerWidth : 400,
+          height: typeof window !== 'undefined' ? window.innerHeight : 800,
+        }, { width: POPOVER_W, height: popoverHeight('canvas') });
+        return (
+          <div style={{ position: 'fixed', left: box.left, top: box.top, width: box.width, zIndex: 60 }}>
+            <CheckpointActionsPopover
+              node={openCk.node} pill={openCk.pill}
+              runLabel={runIdentityLabel(openCk.node)}
+              folderLabel={loraFolderLabel(openCk.node.train_type)}
+              // ▶ Continue from here is a REAL button on the board now. It used
+              // to be a greyed sentence pointing at two other pages — one per
+              // lane — which is the whole reason this exists: the capacity was
+              // there, only the way in was missing. 'any' because the board
+              // serves BOTH sources (a local run's save qualifies too); the
+              // per-lane truth is the dialog's own answer, stated per lane.
+              continueSource="any"
+              onContinue={handleContinueCheckpoint}
+              importing={importing} deleting={deleting}
+              onDeploy={handleDeployCheckpoint}
+              onDelete={handleDeleteCheckpoint}
+              onDetails={(node) => setOpenNode(node)}
+              surface="canvas"
+              onClose={closePopover} />
+          </div>
+        );
+      })()}
+
+      {/* ▶ Continue training — the app's ONE dialog, hosted by the board.
+
+          It is a full-screen modal, NOT more rows inside the popover, and that
+          is a deliberate call: the popover is a fixed 210×232 px card sized to
+          fit a 400-px phone, and the launch form has a lane picker, a
+          checkpoint select, a step field and five folded settings. Cramming it
+          in would have produced a third, smaller, diverging form — the exact
+          debt the shared popover was extracted to avoid. The popover stays what
+          it is good at: the launcher.
+
+          It is also drawn in SCREEN pixels (fixed inset-0), like the popover
+          above it — neither scales with the board. A control drawn in world
+          units becomes a ~6-px target at 45 % zoom, which is how the ✕ became
+          unclickable once already. */}
+      {continueTarget && continueRuns && (
+        <ContinueDialog
+          context={runIdentityLabel(continueTarget.node)}
+          // Opens on the lane the SOURCE run trained in; resolveInitialLane then
+          // moves off it if that lane is closed and the other one isn't.
+          where={continueTarget.node.source === 'cloud' ? 'cloud' : 'local'}
+          lanes={continueLanes}
+          // This run's OWN saves — not the dataset's current selection. On a
+          // board holding ten datasets that distinction is the feature.
+          checkpoints={continueTarget.node.checkpoints || []}
+          // THE point of opening from a pill: step 2500 of a 3500-step run, not
+          // "the latest". initialResumeStep honours it only when it is a real
+          // save of this run (unit-tested in lineageContinue.js).
+          initialFromStep={continueTarget.step}
+          settings={canvasContinueSettings(continueTarget.node, continueRow)}
+          busy={continueBusy}
+          error={continueError}
+          onResolve={submitContinue} />
+      )}
+
+      {/* One drawer at a time: two picked runs → the compare diff, otherwise the
+          single-run inspector. Both are the EXISTING panels, hosted unchanged —
+          and because the board holds several datasets, the compare now works
+          across them for free. */}
+      {selectedForDiff.length === 2 ? (
+        <LineageDiffPanel
+          a={nodeById.get(selectedForDiff[0])}
+          b={nodeById.get(selectedForDiff[1])}
+          onClose={() => setSelectedForDiff([])} />
+      ) : (
+        <LineageDetailPanel node={openNode} onClose={() => setOpenNode(null)}
+          onNodeChanged={handleNodeChanged} onNodeDeleted={handleNodeDeleted} />
+      )}
+
+      {/* 🎨 The run settings — the Test Studio's own panel, on the Test Studio's
+          own hooks. Only the checkpoints differ: they are the ticked pills. */}
+      {panelOpen && (
+        <CanvasGenerationPanel
+          selection={picks}
+          onToggle={(entry) => setPicks((cur) => toggleCanvasCheckpoint(cur, entry))}
+          onClear={() => setPicks([])}
+          onDeploy={handleDeploy}
+          tracker={tracker}
+          externalLoras={boardPayload.external_loras || []}
+          onClose={() => setPanelOpen(false)} />
+      )}
+
+      {/* 🖼 Everything one checkpoint — or one whole run — ever produced. Deleting
+          from it re-reads the affected lanes: the pills carry a results COUNT and
+          a thumbnail, and without this the board keeps advertising images that no
+          longer exist. `onDetails` hands the run over to the drawer that owns
+          note EDITING, so the panel can show notes without owning a second
+          editor for them. */}
+      <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)}
+        onPin={handlePinImage}
+        onDetails={(node) => { setGallery(null); setOpenNode(node); }}
+        onDeleted={(ids) => (ids || []).forEach((id) => {
+          Promise.resolve(onRefetchDataset?.(id)).catch(() => { /* the poll retries */ });
+        })} />
+
+      {/* 🔍 A pill's preview, full-screen. The thumbnail was already clickable on
+          the board and did nothing at all — the host passed no handler. */}
+      <PreviewLightbox target={bigPreview} onClose={() => setBigPreview(null)} />
+
+      {/* The layers the plugins keep mounted here for their popover rows
+          (checkpoint.layer): a dialog a row asked for outlives the popover. A
+          change made in one changes what the pills carry, so the lane is
+          re-read when it closes. */}
+      <PluginSlot slot="checkpoint.layer" surface="canvas"
+        onChanged={(node) => {
+          const ds = node?.dataset_id;
+          if (ds != null) Promise.resolve(onRefetchDataset?.(ds)).catch(() => { /* the poll retries */ });
+        }} />
+
+      {/* A PINNED image's full record: every setting it was made with, its
+          prompt, and the copy buttons. The node on the board is the picture;
+          the facts stay one click away rather than crammed onto a thumbnail. */}
+      <GeneratedImageLightbox img={pinnedZoom} alt="Pinned generated image"
+        onClose={() => setPinnedZoom(null)}
+        /* ✨ only where it means something: a picture with a library row that is
+           not itself an improvement (canvasImprove.js states both reasons). */
+        onImprove={canImproveCanvasImage(pinnedZoom) ? handleImproveCanvasImage : undefined}
+        /* ↩ A pinned ✨ result can hand its recorded settings back to the
+           global improve knobs — same ONE handler as the other hosts. */
+        onUseImproveSettings={restoreImproveSettings}
+        /* ✦ and 📷 are the viewer's own verbs now (it wires the standard
+           repair routes itself) — this host only says how to refresh ITS
+           board once a repair rewrote the file. */
+        onRowChanged={() => onRefetchDataset?.(pinnedZoom?.dataset_id)}
+        datasetId={pinnedZoom?.dataset_id ?? null} />
+
+      {/* 🪪 The lane's reference face, full size — and only that. A reference
+          has no seed, no sampler and no prompt, so it gets no facts column. */}
+      <GeneratedImageLightbox img={refZoom ? { url: refZoom.url } : null}
+        alt={`Reference image of ${refZoom?.name || 'the dataset'}`}
+        facts={false} onClose={() => setRefZoom(null)} />
+
+      <ExportGridModal open={Boolean(exportGroup)} onClose={() => setExportGroup(null)}
+        datasetId={exportGroup?.datasetId} imageIds={exportGroup?.imageIds || []}
+        canvasMode />
+
+      {/* An untouched board with picks waiting: say so, because the settings panel
+          may be closed and the ✓ boxes are small. Also the only place the
+          mixed-family refusal is visible without opening the panel. */}
+      {!panelOpen && picks.length > 0 && (
+        <p className={'mt-2 rounded-lg border px-3 py-1.5 text-[0.6875rem] '
+          + (launchVerdict.blocked
+            ? 'border-amber-400/40 bg-amber-500/10 text-amber-100 '
+            : 'border-indigo-400/40 bg-indigo-500/10 text-indigo-100 ')}>
+          {picks.length} checkpoint{picks.length > 1 ? 's' : ''} picked
+          {launchVerdict.reason ? ` — ${launchVerdict.reason}` : ''}
+        </p>
+      )}
+    </>
+  );
+}

@@ -7,7 +7,7 @@ import {
   removeClipsConfirmation, removeClipsReport, lightboxTargets, lightboxKeyAction, purgeDraft,
   CLIP_FILTERS, CLIP_SORTS,
   normalizeClipFilter, normalizeClipSort,
-} from './videoDatasetClips.js'
+} from "../../../../bundled/video/frontend/videobank/videoDatasetClips.js"
 
 const clip = (over = {}) => ({
   id: 1, filename: 'clip_0001.mp4', caption: null,

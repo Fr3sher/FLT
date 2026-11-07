@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { extractCredits } from './releaseNotes.mjs';
-import { DISCORD_LIMIT, renderAnnouncement, renderLines, surfaceOf } from './discordAnnounce.mjs';
+import { DISCORD_LIMIT, isV2PreviewVersion, isV2StableVersion, renderAnnouncement, renderLines, surfaceOf } from './discordAnnounce.mjs';
 
 const entry = (id, title, blurb = 'x') => ({ id, title, blurb, date: '2026-07-28' });
 
@@ -54,6 +54,44 @@ test('announcing nothing throws instead of posting an empty message', () => {
      skipped, and a cheerful "0 changes" post is worse than no post. */
   assert.throws(() => renderAnnouncement({ tag: 'v1', entries: [], previousTag: 'v0' }),
     /nothing to announce/);
+});
+
+test('the tagged release channel keeps V2 preview instructions out of historical V1 posts', () => {
+  assert.equal(isV2PreviewVersion("APP_VERSION = '2026.09.04'\n"), false);
+  assert.equal(isV2PreviewVersion("APP_VERSION = '2026.09.14'\nAPP_RELEASE_CHANNEL = 'v2-preview'\n"), true);
+  const entries = [entry('a', 'A')];
+  const oldPost = renderAnnouncement({ tag: 'v2026.09.04', entries }).join('\n');
+  assert.match(oldPost, /Settings ▸ Maintenance ▸ Update & restart/);
+  assert.doesNotMatch(oldPost, /V2|manual/);
+  const previewPost = renderAnnouncement({ tag: 'v2026.09.14', entries, preview: true }).join('\n');
+  assert.match(previewPost, /V2 — Preview/);
+  assert.match(previewPost, /Plugins ▸ Store/);
+  assert.match(previewPost, /V1 Update & restart does not switch to V2/);
+  assert.match(previewPost, /preview ZIP updates are manual/);
+});
+
+test('the longer V2 install footer fits even when a wave almost fills one message', () => {
+  const entries = Array.from({ length: 20 }, (_, i) =>
+    entry(`e${i}`, `A headline about change number ${i} and the benefit this release brings you`));
+  for (const channel of [{ preview: true }, { v2: true }]) {
+    const parts = renderAnnouncement({ tag: 'v2026.09.14', entries, ...channel });
+    for (const part of parts) assert.ok(part.length <= DISCORD_LIMIT, `${part.length} chars`);
+    for (const e of entries) assert.ok(parts.join('\n').includes(e.title));
+  }
+});
+
+test('stable V2 uses normal updates and introduces the free Store plugins', () => {
+  const version = "APP_VERSION = '2026.09.14'\nAPP_RELEASE_CHANNEL = 'v2'\n";
+  assert.equal(isV2StableVersion(version), true);
+  assert.equal(isV2PreviewVersion(version), false);
+  assert.equal(isV2StableVersion("APP_RELEASE_CHANNEL = 'v2-preview'\n"), false);
+  assert.equal(isV2StableVersion("APP_VERSION = '2026.09.04'\n"), false);
+  const post = renderAnnouncement({ tag: 'v2026.09.14', entries: [entry('a', 'A')], v2: true }).join('\n');
+  assert.match(post, /LoRA Dataset Studio V2 \(v2026\.09\.14\)/);
+  assert.match(post, /Settings ▸ Maintenance ▸ Update & restart/);
+  assert.match(post, /13 free public plugins/);
+  assert.match(post, /datasets, media and history stay in place/);
+  assert.doesNotMatch(post, /Preview|manual|does not switch/);
 });
 
 test('a single wave fits one message and keeps every entry', () => {

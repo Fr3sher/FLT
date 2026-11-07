@@ -18,14 +18,9 @@ const dialog = fs.readFileSync(new URL('./ScoringPythonDialog.jsx', import.meta.
 const device = fs.readFileSync(new URL('./bankScoreDevice.js', import.meta.url), 'utf8');
 const logic = fs.readFileSync(new URL('./scoringPython.js', import.meta.url), 'utf8');
 
-test('the picker is reachable from BOTH dead ends: a CPU pass, and no extra at all', () => {
-  assert.match(ws, /scoreNote\?\.tone === 'warn' \|\| !caps\.bank_scoring/);
-  // …but never before the capabilities have loaded: EMPTY_CAPS has no
-  // bank_scoring, so an ungated check flashes "Score needs its own packages" on
-  // every open of a bank that is perfectly set up.
-  assert.match(ws, /!capsLoading && \(scoreNote\?\.tone === 'warn'/);
+test('the picker remains wired independently of the import-status warnings', () => {
   assert.match(ws, /const \{ caps, loading: capsLoading, refresh: refreshCaps \}/);
-  assert.match(ws, /openerLabel\(scoreGpuPresent\)/);
+  assert.match(ws, /Manage Score Python/);
   assert.match(ws, /<ScoringPythonDialog/);
   assert.match(ws, /onPickPython\('scoring'\)/);
   // …and the workspace really hands the panel the setter that opens it.
@@ -40,8 +35,8 @@ test('ONE dialog serves both features — the semantic index gets the same picke
     new URL('./BankSemanticEngine.jsx', import.meta.url), 'utf8');
   assert.match(ws, /profile=\{PICKER_PROFILES\[pythonPickerFor\]\}/);
   assert.match(ws, /onPickPython=\{\(\) => onPickPython\('semantic'\)\}/);
-  assert.match(semantic, /offersSemanticGpuPython\(state, gpuPresent\)/);
-  assert.match(semantic, /openerLabel\(gpuPresent\)/);
+  assert.match(semantic, /Manage SigLIP 2 Python/);
+  assert.doesNotMatch(semantic, /offersSemanticGpuPython/);
   // The dialog reads its endpoint from the profile — never a hardcoded route,
   // which is how the semantic picker would silently write Score's config key.
   assert.match(dialog, /apiFetch\(`\$\{picker\.endpoint\}/);
@@ -60,7 +55,7 @@ test('a machine with no NVIDIA card is never sold a CUDA fix', () => {
   // …and where the picker IS still offered (it saves a second install), both
   // the button label and the dialog copy drop every mention of a GPU.
   assert.match(ws, /const scoreGpuPresent = /);
-  assert.match(ws, /openerLabel\(scoreGpuPresent\)/);
+  assert.match(ws, /Manage Score Python/);
   assert.match(dialog, /dialogCopy\(nvidia, picker\)/);
   assert.match(dialog, /result\.nvidia_present !== false/);
 });
@@ -97,6 +92,16 @@ test('the dialog can re-probe after a manual install, and can be undone', () => 
   assert.match(dialog, /Check again/);
   assert.match(dialog, /Back to the app default/);
   assert.match(dialog, /choose\(''\)/);
+  assert.match(dialog, /can select an external Python/);
+  assert.match(dialog, /choose\(paths\.managed\)/);
+});
+
+test('calculation is a separate explicit gesture, never part of discovery or selection', () => {
+  const discovery = dialog.slice(dialog.indexOf('const load ='), dialog.indexOf('const checkCalculation ='));
+  assert.doesNotMatch(discovery, /\/check|checkCalculation/);
+  assert.match(dialog, /postJson\(`\$\{picker\.endpoint\}\/check`, \{ python: path \}\)/);
+  assert.match(dialog, /onClick=\{\(\) => checkCalculation\(r\.path\)\}/);
+  assert.match(dialog, /Passing this check does not verify every model or a whole pass/);
 });
 
 test('the CPU warning offers the reuse route before the 2.5 GB download', () => {

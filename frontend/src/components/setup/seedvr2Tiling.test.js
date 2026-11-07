@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { ceilingLine, laneForTarget, tilingStatus, TTP_PACK, TTP_URL } from './seedvr2Tiling.js'
+import { ceilingLine, laneForTarget, tilingStatus, TTP_PACK, TTP_URL } from "../../../../bundled/seedvr2/frontend/lib/seedvr2Tiling.js"
 
 const caps = (comfyui) => ({ comfyui: { reachable: true, ...comfyui } })
 

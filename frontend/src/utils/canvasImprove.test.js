@@ -21,7 +21,7 @@ import {
 const lightbox = fs.readFileSync(
   new URL('../components/shared/GeneratedImageLightbox.jsx', import.meta.url), 'utf8');
 const canvas = fs.readFileSync(
-  new URL('../components/canvas/LineageCanvas.jsx', import.meta.url), 'utf8');
+  new URL("../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
 const gallery = fs.readFileSync(
   new URL('../components/shared/CheckpointGalleryPanel.jsx', import.meta.url), 'utf8');
 const preview = fs.readFileSync(

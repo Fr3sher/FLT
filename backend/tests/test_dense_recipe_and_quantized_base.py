@@ -9,15 +9,19 @@ Three rules are asserted here that no single-file test can catch on its own:
 * the quantized-base refusal must fire on the file HEADER, never on the body;
 * the fp8 export never turns "the twin failed" into "the run failed".
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 import struct
 
 import pytest
 
-from app.services import dense_fp8_delivery as dfd
-from app.services import hf_storage
+from lds_cloud_training import dense_fp8_delivery as dfd
+from lds_cloud_training import hf_storage
 from app.services import lora_training as lt
 from app.services import model_integrity as mi
+
+pytestmark = pytest.mark.plugins('cloud_training', 'model_tools')
 
 
 class FakeDataset:
@@ -480,7 +484,7 @@ def test_a_bare_fp8_cast_is_still_refused_by_the_fp8_EXPORTER(tmp_path):
     """Allowing it as a TRAINING base must not allow quantizing it AGAIN: that
     doubles the error and produces a file nothing can load. Different question,
     same report — `quantized` stays the broad answer the exporter reads."""
-    from app.services import fp8_quantize
+    from lds_model_tools import fp8_quantize
     tensors = {f'blocks.{i}.attn.wq.weight': ('F8_E4M3', [3072, 3072], 128)
                for i in range(20)}
     tensors.update({f'blocks.{i}.norm.scale': ('F32', [3072], 12) for i in range(5)})

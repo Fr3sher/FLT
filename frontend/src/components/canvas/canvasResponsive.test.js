@@ -15,10 +15,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { contributions, resetRegistry, setEnabled } from '../../plugins/registry.js';
+import { registerBundledDescriptor } from '../../../tests/support/bundledDescriptors.mjs';
+import resourceMonitor from '../../../../bundled/resource_monitor/frontend/index.js';
 
-const canvas = fs.readFileSync(new URL('./LineageCanvas.jsx', import.meta.url), 'utf8');
-const page = fs.readFileSync(new URL('../../pages/CanvasPage.jsx', import.meta.url), 'utf8');
-const filter = fs.readFileSync(new URL('./CanvasDatasetFilter.jsx', import.meta.url), 'utf8');
+const canvas = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx", import.meta.url), 'utf8');
+const page = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/pages/CanvasPage.jsx", import.meta.url), 'utf8');
+const filter = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasDatasetFilter.jsx", import.meta.url), 'utf8');
 const app = fs.readFileSync(new URL('../../App.jsx', import.meta.url), 'utf8');
 
 /* ── THE MEASUREMENT THIS WHOLE FILE EXISTS FOR ──────────────────────────────
@@ -226,7 +229,7 @@ test('⋯ says what is folded behind it', () => {
    What did NOT come back is the height: the targets are still 40 px up to `lg`
    and 36 above, and the padding still shrinks below `sm`. */
 test('the shelf’s chips carry their words, and the toolbar keeps its targets', () => {
-  const presets = fs.readFileSync(new URL('./CanvasLayoutPresets.jsx', import.meta.url), 'utf8');
+  const presets = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasLayoutPresets.jsx", import.meta.url), 'utf8');
   assert.ok(canvas.includes('<span aria-hidden>✦</span> Tidy up'));
   assert.ok(canvas.includes('/> + LoRA'));
   assert.ok(canvas.includes('<span aria-hidden>⏏</span> Undeploy…'));
@@ -255,9 +258,9 @@ test('the shelf’s chips carry their words, and the toolbar keeps its targets',
    when you are not sitting at it. The line itself lives in the shared
    SystemStatsReadout (the header mounts it too); the board's mount keeps its
    historical testid and localStorage key. */
-test('the load readout is reachable from a phone', () => {
+test('the load readout is reachable from a phone', (t) => {
   const stats = fs.readFileSync(
-    new URL('../shared/SystemStatsReadout.jsx', import.meta.url), 'utf8');
+    new URL("../../../../bundled/resource_monitor/frontend/components/SystemStatsReadout.jsx", import.meta.url), 'utf8');
   assert.doesNotMatch(stats, /className="hidden items-center gap-1\.5 sm:flex"/);
   assert.match(stats, /data-testid=\{testId\}[^]{0,120}className="flex flex-wrap items-center/);
   // The ▾ toggle still STOPS THE POLL rather than just hiding the line — this
@@ -265,9 +268,23 @@ test('the load readout is reachable from a phone', () => {
   assert.match(stats, /data-testid=\{`\$\{testId\}-toggle`\}/);
   assert.match(stats, /shouldPoll\(\{ enabled: enabledRef\.current, visibility \}\)/);
   // …and the board still mounts it under the ids the probe holds on to.
-  const mount = fs.readFileSync(new URL('./CanvasSystemStats.jsx', import.meta.url), 'utf8');
-  assert.match(mount, /testId="canvas-system-stats"/);
-  assert.match(mount, /prefKey=\{MACHINE_LOAD_PREF_KEY\}/);
+  const mount = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasSystemStats.jsx", import.meta.url), 'utf8');
+  assert.match(mount, /<PluginSlot slot="resource_monitor.readout" surface="canvas"/);
+  const readout = fs.readFileSync(new URL('../../../../bundled/resource_monitor/frontend/components/Readout.jsx', import.meta.url), 'utf8');
+  assert.match(readout, /const canvas = surface === 'canvas'/);
+  assert.match(readout, /testId=\{canvas \? 'canvas-system-stats' : 'header-system-stats'\}/);
+  assert.match(readout, /prefKey=\{canvas \? MACHINE_LOAD_PREF_KEY : HEADER_MACHINE_LOAD_PREF_KEY\}/);
+  resetRegistry();
+  setEnabled([]);
+  t.after(() => { resetRegistry(); setEnabled([]); });
+  assert.deepEqual(contributions('resource_monitor.readout', 'canvas'), []);
+  assert.equal(registerBundledDescriptor(resourceMonitor), true);
+  setEnabled(['resource_monitor']);
+  const [item] = contributions('resource_monitor.readout', 'canvas');
+  assert.equal(item.plugin, 'resource_monitor');
+  assert.match(String(item.panel), /components\/Readout\.jsx/);
+  setEnabled([]);
+  assert.deepEqual(contributions('resource_monitor.readout', 'canvas'), []);
 });
 
 /* 📏 360 px: the toolbar needed 326 of the 316 it had, and 12 of the missing 10
@@ -286,7 +303,7 @@ test('the zoom readout reserves what the board can show, not what a number could
    to a chip that moves is a menu that can open anywhere; below `sm` it stops
    being anchored at all. */
 test('the Layouts menu opens on the screen, not off the side of it', () => {
-  const presets = fs.readFileSync(new URL('./CanvasLayoutPresets.jsx', import.meta.url), 'utf8');
+  const presets = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasLayoutPresets.jsx", import.meta.url), 'utf8');
   assert.match(presets, /fixed inset-x-2 bottom-28/);
   // …and from sm up it is the SAME anchored menu it has always been: under its
   // own button, 18 rem wide. Desktop must not notice this pass at all.
@@ -365,7 +382,7 @@ test('the board search folds behind 🔍 on a phone and is untouched from lg', (
    below `sm`, exactly like the board toolbar under them; the glyph, the count
    and the 40-px target never do. */
 test('the filter chips drop their words on a phone, never their counts', () => {
-  const menu = fs.readFileSync(new URL('./CanvasFilterMenu.jsx', import.meta.url), 'utf8');
+  const menu = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasFilterMenu.jsx", import.meta.url), 'utf8');
   assert.match(menu, /className="hidden truncate md:inline">\{label\}</);
   // A hidden word is never a lost one: the accessible name stays a sentence.
   const named = (menu.match(/\{`\$\{label\}\$\{summary \? ` — \$\{summary\}` : ''\}`\}/g) || []);
@@ -393,7 +410,7 @@ test('the filter chips drop their words on a phone, never their counts', () => {
    10 px of side padding is not. */
 test('the filter bar is one row on a phone, bought from padding not from height', () => {
   assert.match(filter, /className="lds-canvas-filter [^"]*flex flex-wrap items-center gap-1 md:gap-1\.5"/);
-  const menu = fs.readFileSync(new URL('./CanvasFilterMenu.jsx', import.meta.url), 'utf8');
+  const menu = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasFilterMenu.jsx", import.meta.url), 'utf8');
   assert.match(menu, /h-10 max-w-full items-center gap-1 md:gap-1\.5 rounded-md border px-2 md:px-2\.5/);
   assert.ok((filter.match(/px-2 md:px-2\.5/g) || []).length >= 3, 'the bar’s own chips too');
   // No fold-out body left to grow: no max-height panel, no unfold state.
@@ -486,7 +503,7 @@ test('the Generate chip keeps showing the pick count with the panel closed', () 
 });
 
 test('every filter target is finger-sized on a phone and 36 px from lg', () => {
-  const menu = fs.readFileSync(new URL('./CanvasFilterMenu.jsx', import.meta.url), 'utf8');
+  const menu = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasFilterMenu.jsx", import.meta.url), 'utf8');
   // Both tokens, asserted SEPARATELY: these class strings are concatenated
   // across source lines, and a regex spanning them would be testing where the
   // author happened to wrap rather than what the browser receives.
@@ -500,7 +517,7 @@ test('every filter target is finger-sized on a phone and 36 px from lg', () => {
 /* 400 px: a fixed-width popover hangs off the screen, and a filter half off the
    screen is a filter with no Clear button in reach. */
 test('a filter popover never grows past the viewport', () => {
-  const menu = fs.readFileSync(new URL('./CanvasFilterMenu.jsx', import.meta.url), 'utf8');
+  const menu = fs.readFileSync(new URL("../../../../bundled/canvas/frontend/components/canvas/CanvasFilterMenu.jsx", import.meta.url), 'utf8');
   assert.match(menu, /w-\[min\(20rem,calc\(100vw-2rem\)\)\]/);
   // …and its list scrolls rather than making the menu taller than the window.
   assert.match(filter, /max-h-64[^"]*overflow-y-auto/);

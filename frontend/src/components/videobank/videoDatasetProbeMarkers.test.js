@@ -22,8 +22,8 @@ import fs from 'node:fs'
 import test from 'node:test'
 
 const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8')
-const workspace = read('./VideoDatasetWorkspace.jsx')
-const lightbox = read('./VideoDatasetLightbox.jsx')
+const workspace = read("../../../../bundled/video/frontend/videobank/VideoDatasetWorkspace.jsx")
+const lightbox = read("../../../../bundled/video/frontend/videobank/VideoDatasetLightbox.jsx")
 const probe = read('../../../scripts/responsiveProbe.mjs')
 
 test('every fixed surface of the workspace is marked for the responsive probe', () => {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import Markdown from './Markdown'
 import { getHelpTopic, topicGuideHref } from '../../help/helpRegistry'
-import { sliceGuideSection } from '../../utils/guideSection'
+import { loadGuideSection } from '../../help/guideSections.js'
 
 /** ⓘ One guide section, in a modal, where the button is.
  *
@@ -20,24 +20,16 @@ import { sliceGuideSection } from '../../utils/guideSection'
  * file, and every page mounting this component must not carry the whole guide
  * in its chunk for a modal most sessions never open.
  */
-const CHAPTER_LOADERS = {
-  'getting-started': () => import('../../../../docs/guide/getting-started.md?raw'),
-  'using-the-app': () => import('../../../../docs/guide/using-the-app.md?raw'),
-  'dataset-guide': () => import('../../../../docs/DATASET_GUIDE.md?raw'),
-  'settings-reference': () => import('../../../../docs/guide/settings-reference.md?raw'),
-  'troubleshooting': () => import('../../../../docs/guide/troubleshooting.md?raw'),
-}
-
 export default function GuideSectionModal({ topic, onClose }) {
   const t = getHelpTopic(topic)
   const [section, setSection] = useState(null)   // null = loading, '' = not found
 
   useEffect(() => {
     let alive = true
-    const load = CHAPTER_LOADERS[t?.guide?.chapter]
-    if (!t || !load) { setSection(''); return undefined }
-    load().then((mod) => {
-      if (alive) setSection(sliceGuideSection(mod.default, t.guide.anchor))
+    if (!t) { setSection(''); return undefined }
+    setSection(null)
+    loadGuideSection(t).then((content) => {
+      if (alive) setSection(content)
     }).catch(() => { if (alive) setSection('') })
     return () => { alive = false }
   }, [t])
@@ -64,15 +56,15 @@ export default function GuideSectionModal({ topic, onClose }) {
           )}
           {section === '' && (
             <p className="text-sm text-content-muted">
-              This section moved — open the guide below to read it there.
+              {t.plugin ? `The installed ${t.pluginName} plugin does not provide this guide section. Update the plugin in Plugins to read its current guide.` : 'This guide section is not available. Its link may be outdated.'}
             </p>
           )}
           {!!section && <Markdown source={section} variant="guide" />}
         </div>
         <div className="border-t border-border px-4 py-2">
-          <Link to={topicGuideHref(t)} onClick={onClose}
+          <Link to={section === '' ? '/plugins' : topicGuideHref(t)} onClick={onClose}
             className="text-xs text-indigo-300 hover:text-indigo-200 hover:underline">
-            Open this in the guide →
+            {section === '' ? 'Open Plugins →' : 'Open this in the guide →'}
           </Link>
         </div>
       </div>

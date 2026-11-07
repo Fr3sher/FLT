@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   edgeAnchors, extractFromGroup, groupMembers, layoutImageNodes, mergeIntoGroup,
   mergeTargetAt, nextGroupId, shouldExtract,
-} from './canvasImageGroups.js';
+} from "../../../bundled/canvas/frontend/utils/canvasImageGroups.js";
 
 /* 🖼🖼 Grouped pinned images — the arithmetic.
 

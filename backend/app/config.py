@@ -56,6 +56,7 @@ _V3_KREA_REF_BOOST = 0.25
 _V3_KREA_STEPS = 8
 
 DEFAULTS = {
+    'plugins': {'enabled': {}},
     # host: '127.0.0.1' = this machine only ; '0.0.0.0' = reachable from the LAN
     # (phone, tablet, another PC) — the Settings "Server" card's LAN toggle just
     # flips this. Port defaults to 5051 to match the Docker/Caddy runtime (Caddy owns
@@ -99,7 +100,19 @@ DEFAULTS = {
                 # hardcoded 8 s broke the people who had invested the most in their
                 # ComfyUI (reported by j_o_e_l. on Discord, who measured ~15 s on his
                 # own install). Clamped to 5-300 by utils.comfyui.object_info_timeout().
-                'object_info_timeout_s': 45},
+                'object_info_timeout_s': 45,
+                # Local generation is queued serially; this is a queue budget,
+                # not the number of images rendered simultaneously.
+                'local_queue_limit': 1000,
+                # Per submitted ComfyUI prompt. Zero removes the elapsed-time
+                # deadline; cancellation and worker-health checks still apply.
+                'generation_timeout_minutes': 15,
+                'repair_timeout_minutes': 5,
+                'improve_timeout_minutes': 30},
+    # Factors preserve each operation's existing budget (including batch-size
+    # allowances). They apply at execution/transport boundaries, not to polling
+    # intervals, retry counts or the grace period after an explicit Stop.
+    'timeouts': {'processing_multiplier': 1.0, 'network_multiplier': 1.0},
     'ollama': {'url': 'http://127.0.0.1:11434', 'vision_model': 'huihui_ai/qwen3-vl-abliterated:8b-instruct',  # -instruct, NOT ':8b' (=thinking): see get_vision_model()
                # How many vision calls a bank pass keeps in flight. 4 is the
                # measured knee; see services/vision_pool.py for the numbers.
@@ -210,6 +223,13 @@ DEFAULTS = {
     # trade, offered rather than imposed; the Settings card says so.
     'image_input': {'max_side': 16384, 'max_pixels': 64 * 1024 * 1024},
     'training': {'default_family': 'zimage'},
+    # Empty slots discover compatible local assets; explicit pins remain visible
+    # as missing when moved, rather than silently choosing another model.
+    'studio_models': {
+        'flux': {'diffusion_model': '', 'text_encoder': '', 'text_encoder_2': '', 'vae': ''},
+        'anima': {'diffusion_model': '', 'text_encoder': '', 'vae': ''},
+        'qwenimage21': {'diffusion_model': '', 'text_encoder': '', 'vae': ''},
+    },
     # Concept face masking (opt-in per dataset, Advanced training options). Both
     # knobs are exposed because NOBODY has measured the right value: no public A/B
     # of a concept LoRA trained with vs without face masking exists, so shipping a
@@ -319,16 +339,14 @@ DEFAULTS = {
         # "[Errno 28] No space left on device". Floored in code like that
         # lane's, so a config frozen before this key existed cannot undercut it.
         'video_disk_gb': 120,
-        # min_vram_gb est PAR FAMILLE (pas par variante) : pour flux2klein on prend
-        # 32 — le 9B (32-48 GB) est la voie cloud principale de cette famille, et un
-        # pod 32 GB entraîne aussi le 4B sans problème (l'inverse serait faux).
-        # 'video' covers the whole video-dataset lane, whose pods run with
-        # low_vram OFF (paying cloud prices for the PCIe shuttle is the thing
-        # the lane exists to avoid) — so the weights are RESIDENT: MiniMax H3's
-        # pruned int8 transformer alone is ~21 GB with a ~16 GB nvfp4 text
-        # encoder beside it, and Wan 2.2 A14B holds two experts. The 24 GB
-        # fallback that applied before this entry existed rented pods that
-        # could only OOM after the money was spent.
+        # min_vram_gb is per family, not variant. flux2klein uses 32: its 9B
+        # model (32-48 GB) is the main cloud option, and a 32 GB pod also trains
+        # 4B successfully; the reverse is not true.
+        # video covers the entire video-dataset lane with low_vram OFF, avoiding
+        # paid PCIe shuttling. Weights therefore remain resident: MiniMax H3's
+        # pruned int8 transformer is about 21 GB plus a 16 GB nvfp4 text encoder,
+        # and Wan 2.2 A14B holds two experts. The previous 24 GB fallback rented
+        # pods that could only run out of memory after payment.
         'min_vram_gb': {'zimage': 24, 'sdxl': 16, 'krea': 24, 'flux2klein': 32,
                         'video': 48},
         # Compute capability floor, per family, as vast reports it: 750 Turing,
@@ -1252,7 +1270,8 @@ def _clean_engines(seq):
 def _engine_catalog(*groups):
     """Every engine this build knows about, in DEFAULTS order, plus any extra
     (older or hand-written) names the caller passes — nothing is ever dropped."""
-    out = list(DEFAULTS['engines']['enabled'])
+    from .engines.registry import ids
+    out = list(ids() or DEFAULTS['engines']['enabled'])
     for group in groups:
         for e in _clean_engines(group):
             if e not in out:
@@ -1278,6 +1297,7 @@ def _merge_new_engines(conf: dict, user: dict) -> dict:
     saved = ((user or {}).get('engines') or {})
     saved = saved.get('enabled') if isinstance(saved, dict) else None
     if not isinstance(saved, list):
+        eng['enabled'] = _engine_catalog()
         return conf
     enabled = _clean_engines(eng.get('enabled'))
     if not enabled:
@@ -1288,7 +1308,7 @@ def _merge_new_engines(conf: dict, user: dict) -> dict:
     known = ((user or {}).get('engines') or {}).get('known')
     known = _clean_engines(known) if isinstance(known, list) else []
     known = known or list(LEGACY_KNOWN_ENGINES)
-    eng['enabled'] = enabled + [e for e in DEFAULTS['engines']['enabled']
+    eng['enabled'] = enabled + [e for e in _engine_catalog()
                                 if e not in known and e not in enabled]
     eng['known'] = _engine_catalog(known, eng['enabled'])
     return conf
@@ -1377,7 +1397,7 @@ def load_config(force=False) -> dict:
             user)
         return copy.deepcopy(_cache)
 
-def save_config(partial: dict) -> dict:
+def save_config(partial: dict, *, plugin_id=None) -> dict:
     global _cache
     with _lock:
         p = _config_path()
@@ -1392,6 +1412,16 @@ def save_config(partial: dict) -> dict:
         # file must not resurrect a preset the user just deleted — only purge.
         if not isinstance(current, dict):
             current = {}
+        incoming_engines = (partial or {}).get('engines')
+        if plugin_id and isinstance(incoming_engines, dict) and 'enabled' in incoming_engines:
+            # A plugin edits only its own slice of this shared list. Merge under
+            # the write lock so a stale settings page cannot undo other choices.
+            owned = plugin_engine_ids(plugin_id)
+            effective = _merge_new_engines(_deep_merge(DEFAULTS, current), current)
+            partial = copy.deepcopy(partial)
+            partial['engines']['enabled'] = [
+                engine for engine in effective['engines']['enabled'] if engine not in owned
+            ] + incoming_engines['enabled']
         merged = _stamp_known_engines(_migrate_klein_loras(
             _migrate_krea_pose_profile(_deep_merge(current, partial or {}), current,
                                        partial or {}),
@@ -1409,6 +1439,12 @@ def get(dotted: str, default=None):
         if not isinstance(node, dict) or part not in node:
             return default
         node = node[part]
+    if dotted in ('engines.enabled', 'engines.default'):
+        from .engines.registry import available_specs
+        available = tuple(spec.id for spec in available_specs())
+        if dotted == 'engines.enabled':
+            return [engine for engine in (node or []) if engine in available]
+        return node if node in available else (available[0] if available else None)
     return node
 
 def is_configured() -> bool:
@@ -1713,3 +1749,120 @@ def secret_key() -> str:
     if not f.exists():
         f.write_text(_secrets.token_hex(32), encoding='utf-8')
     return f.read_text(encoding='utf-8').strip()
+
+
+def register_plugin_defaults(plugin_id: str, mapping: dict) -> None:
+    """A plugin's own settings defaults, merged under DEFAULTS['plugins'][<id>]
+    at load. Keys a plugin owns inside a shared core section stay in the core
+    DEFAULTS above (a stored key never moves)."""
+    global _cache
+    section = DEFAULTS.setdefault('plugins', {})
+    section[plugin_id] = _deep_merge(section.get(plugin_id, {}), mapping)
+    with _lock:
+        _cache = None
+
+
+def settings_ownership():
+    """Combine historical ownership with discovered package declarations."""
+    from .plugins.registry import active
+    owners = copy.deepcopy(_PRODUCT_SETTINGS)
+    registry = active()
+    for pid, record in (registry.records.items() if registry else ()):
+        manifest = record.manifest
+        historical = owners.get(pid, {'sections': [], 'keys': {}, 'secrets': []})
+        owners[pid] = {
+            'sections': sorted(set(historical['sections']) | set(manifest.owned('config_sections'))),
+            'keys': _deep_merge(historical['keys'], manifest.owns.get('config_keys_in_shared_sections', {})),
+            'secrets': sorted(set(historical['secrets']) |
+                              {p[8:] for p in manifest.permissions if p.startswith('secrets:')}),
+        }
+    return owners
+
+
+def plugin_engine_ids(plugin_id):
+    """Declared image engines whose selection a plugin settings page edits."""
+    from .plugins.registry import active
+    registry = active()
+    record = registry.records.get(plugin_id) if registry and plugin_id else None
+    return record.manifest.owned('engines') if record else ()
+
+
+def settings_view(value, plugin_id=None):
+    """Filter a settings payload without moving or deleting persisted keys."""
+    owners = settings_ownership()
+    sections = {section for spec in owners.values() for section in spec['sections']}
+    keys = {(section, key) for spec in owners.values() for section, names in spec['keys'].items()
+            for key in names}
+    own = owners.get(plugin_id, {}) if plugin_id else {}
+    result = {}
+    for section, node in value.items():
+        if section == 'plugins':
+            if plugin_id and isinstance(node, dict) and plugin_id in node:
+                result[section] = {plugin_id: copy.deepcopy(node[plugin_id])}
+            continue  # Enablement is changed only through /api/plugins.
+        if plugin_id:
+            if section in own.get('sections', ()):
+                result[section] = copy.deepcopy(node)
+            elif section in own.get('keys', {}) and isinstance(node, dict):
+                result[section] = {key: copy.deepcopy(item) for key, item in node.items()
+                                   if key in own['keys'][section]}
+        elif section not in sections:
+            result[section] = ({key: copy.deepcopy(item) for key, item in node.items()
+                                if (section, key) not in keys}
+                               if isinstance(node, dict) else copy.deepcopy(node))
+    if plugin_id:
+        owned_engines = plugin_engine_ids(plugin_id)
+        engines = value.get('engines')
+        enabled = engines.get('enabled') if isinstance(engines, dict) else None
+        if owned_engines and isinstance(enabled, list):
+            result.setdefault('engines', {})['enabled'] = [
+                engine for engine in enabled if isinstance(engine, str) and engine in owned_engines
+            ]
+    return result
+
+
+def settings_secret_keys(plugin_id=None):
+    owners = settings_ownership()
+    if plugin_id:
+        return tuple(k for k in owners.get(plugin_id, {}).get('secrets', ()) if k in SECRET_KEYS)
+    owned = {key for spec in owners.values() for key in spec['secrets']}
+    # Core model downloads and the prompt browser use these even with zero
+    # products installed. Declared products share the same saved credential.
+    shared_core = {'HF_TOKEN', 'CIVITAI_API_KEY'}
+    return tuple(key for key in SECRET_KEYS if key not in owned or key in shared_core)
+
+
+# Historical public settings retain their on-disk spelling. This ownership
+# ledger also hides them when their package is absent from a Store install.
+_PRODUCT_SETTINGS = {'api_engines': {'sections': [],
+                 'keys': {'engines': ['chatgpt_auth',
+                                      'chatgpt_subscription_model',
+                                      'openrouter_model',
+                                      'nanobanana_model',
+                                      'chatgpt_image_model']},
+                 'secrets': ['GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY']},
+ 'camera_angles': {'sections': ['camera'], 'keys': {}, 'secrets': []},
+ 'canvas': {'sections': ['canvas'], 'keys': {}, 'secrets': []},
+ 'civitai_publish': {'sections': ['civitai'], 'keys': {}, 'secrets': ['CIVITAI_API_KEY']},
+ 'cloud_training': {'sections': ['cloud'],
+                    'keys': {'paths': ['cloud_runs_dir']},
+                    'secrets': ['VAST_API_KEY', 'HF_CLOUD_TOKEN', 'HF_TOKEN']},
+ 'hf_publish': {'sections': [], 'keys': {}, 'secrets': ['HF_TOKEN']},
+ 'image_upscale': {'sections': [],
+                   'keys': {'klein': ['improve_consistency_strength',
+                                      'improve_character_lora_strength',
+                                      'improve_steps',
+                                      'improve_base_lora_strength',
+                                      'improve_megapixels',
+                                      'improve_lora_preset'],
+                            'identity_prompts': ['klein_improve', 'klein_improve_enabled'],
+                            'improve': ['colour_match', 'sharpen', 'grain', 'grain_saturation']},
+                   'secrets': []},
+ 'live': {'sections': [], 'keys': {}, 'secrets': []},
+ 'model_tools': {'sections': ['quantize'], 'keys': {}, 'secrets': []},
+ 'resource_monitor': {'sections': [], 'keys': {}, 'secrets': []},
+ 'scrape': {'sections': [],
+            'keys': {'klein': ['small_image_prompt']},
+            'secrets': ['CIVITAI_API_KEY', 'PEXELS_API_KEY', 'REDDIT_CLIENT_ID']},
+ 'seedvr2': {'sections': ['seedvr2'], 'keys': {}, 'secrets': []},
+ 'video': {'sections': ['video_caption', 'video_bank', 'video', 'shot_detect'], 'keys': {}, 'secrets': ['VAST_API_KEY']}}

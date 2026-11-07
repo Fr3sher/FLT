@@ -1,21 +1,15 @@
 /**
- * Ce que le balayage 🧬 va coûter, dit AVANT de lancer : combien de
- * combinaisons, combien d'images, combien de minutes.
- *
- * Il n'y a pas de plafond dur, et c'est délibéré — `build_matrix` porte la même
- * règle écrite côté serveur : « PAS de plafond sur le nombre de cellules : la
- * file est sérielle et l'utilisateur voit le compte + l'estimation de durée
- * avant de lancer ». Un balayage de poids est un balayage comme l'axe des
- * strengths ; il obéit donc à la même règle plutôt qu'à une seconde. Au-delà de
- * BLEND_WARN_CELLS on chiffre en ambre, on n'interdit pas : c'est la machine de
- * celui qui clique.
+ * Show the blend sweep's combinations, images and estimated minutes BEFORE launch. No hard cap by
+ * design, matching server build_matrix: the queue is serial and users see count and duration
+ * first. A weight sweep follows the same rule as strength sweeps. Above BLEND_WARN_CELLS, show
+ * amber figures rather than forbid the run on the user's machine.
  */
 import { blendSweepCost } from './loraStack';
 
 export default function BlendSweepSummary({ configCount, count = 1, batchMult = 1,
   secondsPerImage = null }) {
   const cost = blendSweepCost({ configCount, count, batchMult, secondsPerImage });
-  if (cost.configs <= 1) return null;   // une seule configuration : rien à annoncer
+  if (cost.configs <= 1) return null;   // A single configuration needs no announcement.
 
   return (
     <p data-testid="blend-sweep-summary"

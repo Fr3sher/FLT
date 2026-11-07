@@ -51,8 +51,8 @@ def test_sends_every_reference_as_a_data_url_with_the_configured_model(app, monk
     """The dataset generator's whole point is reference-driven generation: all the
     references handed over must ride in input_references, principal first."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post',
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(200, _ok_body())) as post:
         out = openrouter.generate_variation([b'ref-a', b'ref-b'], 'a portrait',
                                             aspect_ratio='3:4')
@@ -72,8 +72,8 @@ def test_sends_every_reference_as_a_data_url_with_the_configured_model(app, monk
 
 def test_a_single_reference_is_accepted_like_the_other_engines(app, monkeypatch):
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post',
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(200, _ok_body())) as post:
         assert openrouter.generate_variation(b'ref', 'p') == PNG
     assert len(post.call_args.kwargs['json']['input_references']) == 1
@@ -83,11 +83,11 @@ def test_the_model_is_free_text_from_config(app, monkeypatch):
     """A model slug must never require a release: OpenRouter's catalogue moves."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
     from app import config as cfg
-    from app.services import openrouter
+    from lds_api_engines import openrouter
     with app.app_context():
         cfg.save_config({'engines': {'openrouter_model': 'bytedance-seed/seedream-4.5'}})
         assert openrouter.get_model() == 'bytedance-seed/seedream-4.5'
-        with patch('app.services.openrouter.requests.post',
+        with patch('lds_api_engines.openrouter.requests.post',
                    return_value=_resp(200, _ok_body())) as post:
             openrouter.generate_variation(b'r', 'p')
         assert post.call_args.kwargs['json']['model'] == 'bytedance-seed/seedream-4.5'
@@ -101,10 +101,10 @@ def test_an_endpoint_that_refuses_aspect_ratio_is_retried_without_it(app, monkey
     better than losing the image — but only the framing is given up, never the
     references or the prompt."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
+    from lds_api_engines import openrouter
     responses = [_resp(400, _err('aspect_ratio is not supported')),
                  _resp(200, _ok_body())]
-    with patch('app.services.openrouter.requests.post',
+    with patch('lds_api_engines.openrouter.requests.post',
                side_effect=responses) as post:
         assert openrouter.generate_variation(b'r', 'p', aspect_ratio='9:16') == PNG
     assert post.call_count == 2
@@ -118,8 +118,8 @@ def test_an_endpoint_that_refuses_aspect_ratio_is_retried_without_it(app, monkey
 
 def test_the_key_is_sent_as_a_bearer_header_and_nowhere_else(app, monkeypatch):
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post',
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(200, _ok_body())) as post:
         openrouter.generate_variation(b'r', 'p')
     call = post.call_args
@@ -140,9 +140,9 @@ def test_no_error_message_or_log_line_can_ever_carry_the_key(app, monkeypatch, c
     """The one thing that must hold for EVERY failure path, including the ones a
     user is most likely to paste into a public help channel."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
+    from lds_api_engines import openrouter
     caplog.set_level(logging.DEBUG)
-    with patch('app.services.openrouter.requests.post',
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(status, body, text=str(body))):
         with pytest.raises(openrouter.OpenRouterError) as e:
             openrouter.generate_variation(b'r', 'p')
@@ -156,8 +156,8 @@ def test_a_missing_key_says_so_instead_of_looking_like_a_refusal(app, monkeypatc
     'empty response - often a content-policy refusal', sending the user to rewrite
     a prompt when the real fix is pasting a key."""
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post') as post:
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post') as post:
         with pytest.raises(openrouter.OpenRouterFatal) as e:
             openrouter.generate_variation(b'r', 'p')
     post.assert_not_called()                    # no request without a key
@@ -177,8 +177,8 @@ def test_a_failure_that_would_repeat_on_every_row_is_fatal_and_named(app, monkey
                                                                     status, message,
                                                                     expected):
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post',
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(status, _err(message, status))):
         with pytest.raises(openrouter.OpenRouterFatal) as e:
             openrouter.generate_variation(b'r', 'p')
@@ -194,8 +194,8 @@ def test_a_transient_failure_stays_per_row(app, monkeypatch, status, expected):
     """A rate limit or a provider hiccup must NOT cancel a run that would have
     finished: it fails this image only."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post',
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(status, _err('boom', status))):
         with pytest.raises(openrouter.OpenRouterError) as e:
             openrouter.generate_variation(b'r', 'p')
@@ -209,9 +209,9 @@ def test_a_refused_request_reports_the_reference_count_instead_of_dropping_some(
     the catalogue, so nothing is hardcoded: we send them all and, if refused, name
     the count as a possible cause rather than truncating behind the user's back."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
+    from lds_api_engines import openrouter
     refs = [b'a', b'b', b'c', b'd', b'e']
-    with patch('app.services.openrouter.requests.post',
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(400, _err('too many input references'))) as post:
         with pytest.raises(openrouter.OpenRouterError) as e:
             openrouter.generate_variation(refs, 'p')
@@ -226,8 +226,8 @@ def test_a_refused_request_reports_the_reference_count_instead_of_dropping_some(
 def test_a_network_error_names_the_network(app, monkeypatch):
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
     import requests
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post',
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post',
                side_effect=requests.ConnectionError('dns failure')):
         with pytest.raises(openrouter.OpenRouterError) as e:
             openrouter.generate_variation(b'r', 'p')
@@ -237,8 +237,8 @@ def test_a_network_error_names_the_network(app, monkeypatch):
 def test_an_unparseable_error_body_still_yields_a_status(app, monkeypatch):
     """An edge/proxy failure answers HTML, not the documented error envelope."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post',
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(503, None, text='<html>gateway</html>')):
         with pytest.raises(openrouter.OpenRouterError) as e:
             openrouter.generate_variation(b'r', 'p')
@@ -252,8 +252,8 @@ def test_a_200_with_no_image_and_no_reason_is_the_only_none(app, monkeypatch):
     AND without saying why. That is the one case this engine cannot read, and it
     is reported as unreadable rather than being called a refusal."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post',
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(200, {'created': 1, 'data': []})):
         assert openrouter.generate_variation(b'r', 'p') is None
 
@@ -263,12 +263,12 @@ def test_a_moderation_block_embedded_in_a_200_is_read_out_of_the_body(app, monke
     error.metadata). Flattening that to None threw away a stated cause and made
     the tile read as if the app had come back empty-handed."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
+    from lds_api_engines import openrouter
     from app.services.engine_errors import EngineFatal, EngineRefused
     body = {'created': 1, 'data': [],
             'error': {'code': 403, 'message': 'Blocked by moderation',
                       'metadata': {'reasons': ['sexual', 'minors']}}}
-    with patch('app.services.openrouter.requests.post', return_value=_resp(200, body)):
+    with patch('lds_api_engines.openrouter.requests.post', return_value=_resp(200, body)):
         with pytest.raises(openrouter.OpenRouterRefused) as e:
             openrouter.generate_variation(b'r', 'p')
     msg = str(e.value)
@@ -284,11 +284,11 @@ def test_a_provider_failure_embedded_in_a_200_is_not_called_a_refusal(app, monke
     """The mirror case: an upstream provider that died mid-response also lands in
     the body. It must keep its own words and never read as content moderation."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
+    from lds_api_engines import openrouter
     from app.services.engine_errors import EngineRefused
     body = {'created': 1, 'data': [],
             'error': {'code': 502, 'message': 'Provider returned an error'}}
-    with patch('app.services.openrouter.requests.post', return_value=_resp(200, body)):
+    with patch('lds_api_engines.openrouter.requests.post', return_value=_resp(200, body)):
         with pytest.raises(openrouter.OpenRouterError) as e:
             openrouter.generate_variation(b'r', 'p')
     assert 'Provider returned an error' in str(e.value)
@@ -306,8 +306,8 @@ def test_an_unreadable_embedded_error_never_crashes_the_row(app, monkeypatch, bo
     degrade to a sentence or to None — never to an AttributeError the user reads
     as an app bug."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post', return_value=_resp(200, body)):
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post', return_value=_resp(200, body)):
         try:
             assert openrouter.generate_variation(b'r', 'p') is None
         except openrouter.OpenRouterError as e:
@@ -318,9 +318,9 @@ def test_a_vector_answer_is_refused_where_it_happens(app, monkeypatch):
     """Recraft's vector models put SVG markup in the same b64_json field. Passing
     it on would fail much later, blaming the image-saving step."""
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
+    from lds_api_engines import openrouter
     body = _ok_body(b64=base64.b64encode(b'<svg/>').decode(), media='image/svg+xml')
-    with patch('app.services.openrouter.requests.post', return_value=_resp(200, body)):
+    with patch('lds_api_engines.openrouter.requests.post', return_value=_resp(200, body)):
         with pytest.raises(openrouter.OpenRouterError) as e:
             openrouter.generate_variation(b'r', 'p')
     assert 'vector image' in str(e.value)
@@ -328,8 +328,8 @@ def test_a_vector_answer_is_refused_where_it_happens(app, monkeypatch):
 
 def test_a_non_json_success_body_is_reported_not_swallowed(app, monkeypatch):
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
-    from app.services import openrouter
-    with patch('app.services.openrouter.requests.post',
+    from lds_api_engines import openrouter
+    with patch('lds_api_engines.openrouter.requests.post',
                return_value=_resp(200, None, text='not json')):
         with pytest.raises(openrouter.OpenRouterError) as e:
             openrouter.generate_variation(b'r', 'p')
@@ -338,6 +338,7 @@ def test_a_non_json_success_body_is_reported_not_swallowed(app, monkeypatch):
 
 # --- wiring into the engine set --------------------------------------------
 
+@pytest.mark.plugins('api_engines')
 def test_the_engine_is_registered_without_disturbing_the_existing_two(app):
     """Engine ids and file tags are PERSISTED (dataset rows, filenames on disk):
     this locks that the new one was appended, never a rename or a reorder."""
@@ -346,17 +347,17 @@ def test_the_engine_is_registered_without_disturbing_the_existing_two(app):
     assert svc._ENGINE_FILE_TAG['nanobanana'] == 'NBFace'
     assert svc._ENGINE_FILE_TAG['chatgpt'] == 'GPTFace'
     assert svc._ENGINE_FILE_TAG['openrouter'] == 'ORFace'
-    from app.services import openrouter
-    assert svc._api_generate_fn('openrouter') is openrouter.generate_variation
+    from lds_api_engines import openrouter
+    assert svc._api_generate_fn('openrouter').__wrapped__ is openrouter.generate_variation
     # ...and the other two still resolve to THEIR own module.
-    from app.services import nanobanana
-    assert svc._api_generate_fn('nanobanana') is nanobanana.generate_variation
+    from lds_api_engines import nanobanana
+    assert svc._api_generate_fn('nanobanana').__wrapped__ is nanobanana.generate_variation
 
 
 def test_the_engine_lights_up_on_the_key_alone(app, monkeypatch):
     """Readiness is key-presence only: probing for real would mean a billed
     request on every capability poll."""
-    from app import capabilities
+    from lds_api_engines import probes as capabilities
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
     assert capabilities.probe_openrouter() == {'ok': False, 'detail': 'key missing'}
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
@@ -372,7 +373,7 @@ def test_the_key_is_a_declared_secret_so_it_is_never_echoed_back(app, monkeypatc
     assert 'OPENROUTER_API_KEY' in cfg.SECRET_KEYS
     monkeypatch.setenv('OPENROUTER_API_KEY', KEY)
     from app.routes.settings import _secret_presence
-    with app.app_context():
+    with app.test_request_context('/api/settings?plugin=api_engines'):
         presence = _secret_presence()
     assert presence['OPENROUTER_API_KEY'] is True
     assert KEY not in str(presence)
@@ -411,7 +412,7 @@ def test_a_fatal_failure_stops_the_batch_instead_of_paying_per_row(app, monkeypa
     from app.config import LOCAL_USER
     from app.models import FaceDatasetImage
     from app.services import face_dataset_service as svc
-    from app.services.openrouter import OpenRouterFatal
+    from lds_api_engines.openrouter import OpenRouterFatal
     monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', _SerialPool)
     calls = []
 
@@ -446,7 +447,7 @@ def test_a_transient_failure_does_not_stop_the_batch(app, monkeypatch):
     from app.config import LOCAL_USER
     from app.models import FaceDatasetImage
     from app.services import face_dataset_service as svc
-    from app.services.openrouter import OpenRouterError
+    from lds_api_engines.openrouter import OpenRouterError
     monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', _SerialPool)
     calls = []
 

@@ -96,7 +96,7 @@ jobs:
           Get-Content ../release-notes.md -Raw | Write-Host
           Get-Content ../release-notes.md -Raw >> $env:GITHUB_STEP_SUMMARY
 
-      - name: Run all frontend tests
+      - name: Run all frontend tests (core and bundled plugins)
         working-directory: frontend
         run: npm test
 
@@ -107,14 +107,13 @@ jobs:
       - name: Note if the tracked frontend build differs from a fresh CI build
         shell: pwsh
         run: |
-          # The step above rebuilt frontend/dist, and the ZIP packages THAT fresh
-          # build — so the release artifact is never stale. A byte diff here only
-          # means the committed dist was built on a different toolchain (e.g. a
-          # newer Node minor than this runner), which is cosmetic for git-clone
-          # users, not a stale release. Report it, don't block the release.
+          # The ZIP builder reads the committed tree, including frontend/dist;
+          # it does not package this job's working-tree rebuild. Report a diff
+          # here for review: toolchain drift can change bytes, but source changes
+          # still require a committed frontend build before tagging.
           $changes = @(git status --porcelain --untracked-files=all -- frontend/dist)
           if ($changes.Count -gt 0) {
-            Write-Warning "Committed frontend/dist differs from a fresh CI build (toolchain drift). The ZIP ships the fresh build; consider recommitting dist from the release toolchain."
+            Write-Warning "Committed frontend/dist differs from a fresh CI build. The ZIP ships the committed build; confirm that its sources are current and any difference is toolchain drift."
             $changes | ForEach-Object { Write-Host $_ }
           }
 
@@ -133,10 +132,26 @@ jobs:
       - name: Enforce release asset policy
         run: python scripts/check_release_artifacts.py
 
-      - name: Test release asset guard
-        run: python -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Run bundled Python contracts in isolated processes
+        shell: pwsh
+        run: |
+          # Product harnesses replace SDK modules; never collect them with the
+          # host suite or another product in the same Python process.
+          # Run these before the longer host suite. pytest creates each leaf
+          # basetemp directory, but its parent must exist on a fresh runner.
+          New-Item -ItemType Directory -Path 'D:/pt' -Force -ErrorAction Stop | Out-Null
+          $tested = 0
+          foreach ($plugin in (Get-ChildItem -LiteralPath bundled -Directory | Sort-Object Name)) {
+            $tests = Join-Path $plugin.FullName 'tests'
+            if (-not (Test-Path -LiteralPath $tests -PathType Container)) { continue }
+            if (-not (Get-ChildItem -LiteralPath $tests -Filter 'test_*.py' -File -Recurse)) { continue }
+            python -X utf8 -m pytest $tests -q -p no:flask "--basetemp=D:/pt/$($plugin.Name)"
+            if ($LASTEXITCODE -ne 0) { throw "Python contracts failed: $($plugin.Name)" }
+            $tested++
+          }
+          if ($tested -eq 0) { throw 'No bundled Python contracts were discovered.' }
 
-      - name: Run the test suite
+      - name: Run backend and release tooling tests
         # Parallel: xdist workers are separate processes and this suite was
         # hardened for it (in-memory SQLite per app instance, shared registries
         # reset by fixtures). `auto` sizes to the runner rather than pinning a
@@ -146,7 +161,8 @@ jobs:
         # test_docker_launcher_fake_e2e asserts on a message PowerShell wraps by
         # path length — measured: it fails at the default path, passes at a short
         # one. D: is the runner's workspace drive.
-        run: python -m pytest backend/tests -q -n auto --dist loadfile --basetemp=D:/t
+        # pytest also discovers the unittest cases and pytest functions in scripts/tests.
+        run: python -X utf8 -m pytest backend/tests scripts/tests -q -n auto --dist loadfile --basetemp=D:/t
 
       - name: Build the Windows source ZIP
         shell: pwsh
@@ -162,17 +178,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # release-notes.md was built at the top of this job: the install
-          # preamble (the ZIP updates only from release to release, a git clone
-          # updates from every commit - people cannot guess that, so every
-          # release says it) followed by the 🎁 What's new entries this tag adds.
+          # The notes explain the update channel of this tagged tree, followed
+          # by its new core entries. The stable V2 channel becomes the latest
+          # release; a preview channel remains opt-in.
           #
           # --generate-notes is deliberately GONE. It builds "What's Changed"
           # from MERGED PULL REQUESTS, and everything here lands straight on
           # main - so it contributed an empty heading plus one useful line, the
           # Full Changelog compare link, which the generator now emits itself.
           # Three releases shipped a preamble-only body before that was noticed.
+          $channel = (Select-String -Path backend/app/version.py -Pattern "^APP_RELEASE_CHANNEL = '([^']+)'$").Matches
+          $publishFlags = @()
+          $releaseTitle = "LoRA Dataset Studio $env:RELEASE_REF_NAME"
+          if ($channel.Count -gt 0 -and $channel[0].Groups[1].Value -eq 'v2-preview') {
+            $publishFlags = @('--prerelease', '--latest=false')
+            $releaseTitle = 'LoRA Dataset Studio V2 — Preview'
+          } elseif ($channel.Count -gt 0 -and $channel[0].Groups[1].Value -eq 'v2') {
+            $publishFlags = @('--latest=true')
+            $releaseTitle = "LoRA Dataset Studio V2 — $env:RELEASE_REF_NAME"
+          }
           gh release create "$env:RELEASE_REF_NAME" `
             "packaging/dist/LoRA-Dataset-Studio-windows.zip" `
             --title "FLT - Fresh LoRa Trainer $env:RELEASE_REF_NAME" `
-            --notes-file release-notes.md
+            --notes-file release-notes.md @publishFlags

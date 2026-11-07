@@ -8,8 +8,11 @@ clip bounds are sub-second quantities, not integers.
 Pure schema behaviour. Cutting, detecting and encoding live elsewhere.
 """
 from app.extensions import db
-from app.models import (VideoBank, VideoClip, VideoDataset, VideoDatasetClip,
-                        VideoSource)
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoBank, VideoClip, VideoDataset, VideoDatasetClip, VideoSource
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 
 def _bank_with_one_source(name='rushes', relpath='a.mp4'):

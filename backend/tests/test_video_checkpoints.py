@@ -18,6 +18,9 @@ from app.services import cloud_training as ct
 from test_cloud_video_launch import _face_dataset, _run, _video_dataset
 from test_cloud_video_lifecycle import _saves
 
+import pytest
+pytestmark = pytest.mark.plugins('video')
+
 PAIR_100 = ['video_surf_000000100_high_noise.safetensors',
             'video_surf_000000100_low_noise.safetensors']
 PAIR_50 = ['video_surf_000000050_high_noise.safetensors',
@@ -38,12 +41,12 @@ def _local_saves(tmp_path, monkeypatch, names):
     """Give the dataset's LOCAL run saves on disk, by pointing the lane's
     save root at a folder the test owns (the real one is ai-toolkit's output
     dir, resolved from config)."""
-    from app.services import video_training_local as vtl
+    from lds_video import video_training_local as vtl
     d = tmp_path / 'local_saves'
     d.mkdir(exist_ok=True)
     for n in names:
         (d / n).write_bytes(b'L' * 16)
-    monkeypatch.setattr(vtl, 'save_root', lambda ds: d)
+    monkeypatch.setattr(vtl, 'save_root', lambda ds, *, missing_ok=False: d)
     monkeypatch.setattr(vtl, 'video_training_progress',
                         lambda dataset_id, user_id=None: {'active': False})
     return d
@@ -253,6 +256,7 @@ def test_undeploy_moves_only_the_apps_own_copy_to_the_trash(
 # ── 4. 🗑 Delete a step ─────────────────────────────────────────────────
 
 
+@pytest.mark.plugins('video', 'cloud_training')
 def test_deleting_a_cloud_step_trashes_every_file_of_the_pair(
         app, client, tmp_path, monkeypatch):
     _loras_root(tmp_path, monkeypatch)
@@ -314,7 +318,7 @@ def test_deleting_a_local_step_trashes_its_files(app, client, tmp_path, monkeypa
 def test_deleting_a_local_step_is_refused_while_training_writes_it(
         app, client, tmp_path, monkeypatch):
     _loras_root(tmp_path, monkeypatch)
-    from app.services import video_training_local as vtl
+    from lds_video import video_training_local as vtl
     with app.app_context():
         ds = _video_dataset(tmp_path)
         d = _local_saves(tmp_path, monkeypatch, PAIR_50)
@@ -327,6 +331,7 @@ def test_deleting_a_local_step_is_refused_while_training_writes_it(
     assert all((d / n).is_file() for n in PAIR_50)
 
 
+@pytest.mark.plugins('video', 'cloud_training')
 def test_a_held_file_is_kept_and_named_rather_than_reported_gone(
         app, client, tmp_path, monkeypatch):
     """The clips' rule (`remove_dataset_clips`): a file the OS holds open stays,
@@ -356,7 +361,7 @@ def test_a_held_file_is_kept_and_named_rather_than_reported_gone(
 def test_a_step_delete_and_a_clip_removal_share_the_trash_destination():
     """Two verbs of one workspace name ONE destination — the wording on screen
     comes from `delete_mode`, and it must be the same word for both."""
-    from app.services import video_bank_service, video_checkpoints
+    from lds_video import video_bank_service, video_checkpoints
     assert video_checkpoints.DELETE_MODE == video_bank_service.DATASET_CLIP_DELETE_MODE
 
 
@@ -422,19 +427,21 @@ def test_run_details_are_allow_listed_and_owned(app, client, tmp_path, monkeypat
 def _guardrails_spy(monkeypatch):
     """The launch relay test's idiom (test_video_training_preflight): stop at
     the guardrails and record the answer they were handed."""
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as cloud_owner
     seen = {}
 
     def spy(dataset_id, fam, dataset_table=None, allow_parallel_run=False):
         seen['allow_parallel_run'] = allow_parallel_run
         raise RuntimeError('stop here — the guardrails were consulted')
-    monkeypatch.setattr(ct, '_assert_launch_guardrails', spy)
+    monkeypatch.setattr(cloud_owner, '_assert_launch_guardrails', spy)
     monkeypatch.setattr(ct.cfg, 'secret', lambda key, *a, **k: 'k' if key == 'VAST_API_KEY' else None)
     monkeypatch.setattr(cvt, '_count_clips', lambda folder: 2)
     monkeypatch.setattr(cvt.video_training, 'build_job_config', lambda *a, **k: {})
     return seen
 
 
+@pytest.mark.plugins('video', 'cloud_training')
 def test_continue_from_a_step_relays_allow_parallel_run_to_the_guardrails(
         app, client, tmp_path, monkeypatch):
     """Found by the live check: the section's ▶ asked the PARALLEL_RUN question
@@ -455,6 +462,7 @@ def test_continue_from_a_step_relays_allow_parallel_run_to_the_guardrails(
     assert seen.get('allow_parallel_run') is True
 
 
+@pytest.mark.plugins('video', 'cloud_training')
 def test_retry_relays_allow_parallel_run_to_the_guardrails(
         app, client, tmp_path, monkeypatch):
     seen = _guardrails_spy(monkeypatch)

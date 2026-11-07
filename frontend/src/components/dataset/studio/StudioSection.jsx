@@ -1,17 +1,11 @@
 // react-frontend/src/components/dataset/studio/StudioSection.jsx
 /**
- * StudioSection — section repliable réutilisable du rail de réglages du Studio.
- * Garde l'aside de 320px lisible : chaque groupe de knobs (Format, Sampling,
- * Détail, Engine, Négatif…) est plié/déplié indépendamment et son état est
- * persisté par `storageKey` (localStorage).
- *
- * A11y : l'en-tête est un <button aria-expanded aria-controls> avec un chevron
- * ▼/▶ (indicateur NON-couleur de l'état ouvert/fermé).
- *
- * Props : { title, defaultOpen=true, storageKey, anchorId, children }.
- * `anchorId` (optionnel) : id DOM posé sur la section + écoute de l'événement
- * global `studio:reveal` (émis par la barre de raccourcis du bas) — la section
- * s'OUVRE avant que la vue n'y scrolle, sinon on atterrit sur un en-tête plié.
+ * StudioSection is a reusable collapsible group for the 320px settings rail. Format, Sampling,
+ * Detail, Engine and Negative expand independently and persist by localStorage storageKey.
+ * Accessible button header uses aria-expanded, aria-controls and a chevron as a non-color
+ * indicator. Props: title, defaultOpen=true, storageKey, anchorId, children. Optional anchorId
+ * sets the DOM ID and listens for global studio:reveal from bottom shortcuts, opening BEFORE
+ * scrolling instead of landing on a collapsed header.
  */
 import { useEffect, useState } from 'react';
 
@@ -39,7 +33,7 @@ export default function StudioSection({ title, defaultOpen = true, storageKey, a
     return next;
   });
 
-  // id stable pour aria-controls (chevron/panneau).
+  // Stable ID for aria-controls between the chevron and panel.
   const bodyId = `studio-section-${String(storageKey || title).replace(/\W+/g, '-')}`;
 
   return (

@@ -1,7 +1,6 @@
-// Comparaison ÉQUITABLE des modèles de base (z_model) selon les votes.
-// Classé par Wilson lower bound (taux × confiance) côté backend → ne favorise PAS
-// le modèle le plus testé (biais de volume). Affiche taux 👍 + n (générées/votées).
-// Repliable, masqué s'il y a moins de 2 bases (rien à comparer).
+// FAIR base-model comparison from votes. Backend Wilson lower-bound ranking combines rate and
+// confidence instead of rewarding the most-tested model's volume. Show positive-vote rate and
+// generated/voted sample counts. Collapsible; hide with fewer than two bases.
 import { useState } from 'react';
 
 export default function ModelComparison({ items }) {

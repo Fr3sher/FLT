@@ -22,18 +22,18 @@ import assert from 'node:assert/strict';
 import { readSource } from './support/readSource.mjs'
 import test from 'node:test';
 
-const read = (rel) => readSource(`src/${rel}`)
+const read = readSource
 
 const SURFACES = [
-  ['bank/BankWatermarkPanel.jsx', 'the bank cleaner\'s Level-3 engine toggle'],
-  ['dataset/DatasetWorkspace.jsx', 'the dataset watermark engine toggle'],
-  ['dataset/WatermarkReviewLightbox.jsx', 'the per-image review engine toggle'],
-  ['dataset/ConceptSourcesPanel.jsx', 'the small-image Klein rescue checkbox'],
+  ['src/components/bank/BankWatermarkPanel.jsx', 'the bank cleaner\'s Level-3 engine toggle'],
+  ['src/components/dataset/DatasetWorkspace.jsx', 'the dataset watermark engine toggle'],
+  ['src/components/dataset/WatermarkReviewLightbox.jsx', 'the per-image review engine toggle'],
+  ['../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx', 'the small-image Klein rescue checkbox'],
 ];
 
 for (const [file, what] of SURFACES) {
   test(`${what} explains a Klein refusal from the shared reason`, () => {
-    const src = read(`components/${file}`);
+    const src = read(file);
     assert.match(src, /localEngineUnavailableReason/,
       `${file} must ask utils/localEngineReason, not invent its own sentence`);
     assert.match(src, /localEngineUnavailableReason\('klein', caps\)/);
@@ -43,15 +43,15 @@ for (const [file, what] of SURFACES) {
 test('the bank cleaner passes the reason down to its JSX-free state helper', () => {
   // bankWatermark.js decides which Level-3 button is live and why not; the panel
   // is only the shell, so the reason has to travel with the verdict.
-  const panel = read('components/bank/BankWatermarkPanel.jsx');
+  const panel = read('src/components/bank/BankWatermarkPanel.jsx');
   assert.match(panel, /kleinReason,/);
-  const helper = read('components/bank/bankWatermark.js');
+  const helper = read('src/components/bank/bankWatermark.js');
   assert.match(helper, /kleinReason = null/);
   assert.match(helper, /kleinReason\s*\n?\s*\|\|/);
 });
 
 test('the concept rescue checkbox no longer states a verdict with no cause', () => {
-  const src = read('components/dataset/ConceptSourcesPanel.jsx');
+  const src = read('../bundled/scrape/frontend/panels/ConceptSourcesPanel.jsx');
   assert.ok(!src.includes('Klein is not ready in this setup.'),
     'that sentence named the verdict and hid the one thing the user needed');
   assert.match(src, /kleinReason \?/);
@@ -61,8 +61,8 @@ test('the concept rescue checkbox no longer states a verdict with no cause', () 
    capabilities payload has nothing better to say), but never as the only text on
    the branch — that is the state this test was written to end. */
 test('no Klein catch-all is stated outright — each one is a `||` fallback', () => {
-  const files = [...SURFACES.map(([f]) => `components/${f}`),
-                 'components/bank/bankWatermark.js'];
+  const files = [...SURFACES.map(([f]) => f),
+                 'src/components/bank/bankWatermark.js'];
   for (const file of files) {
     const src = read(file);
     const needle = /Klein inpaint(?:ing)? needs ComfyUI/g;

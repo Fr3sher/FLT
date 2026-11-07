@@ -17,7 +17,6 @@ from ..config import LOCAL_USER
 from ..gpu_window import gpu_exclusive_vision_window
 from ..services import face_dataset_service as fds
 from ..services import lora_test_studio as lts
-from ..utils.comfyui import get_zimage_models
 # The engine-preflight misses answer the SAME actionable 409 here as in the
 # dataset lane — the body is what itemizes the missing assets and starts their
 # download. Imported rather than re-derived (routes/bank.py does the same).
@@ -61,15 +60,16 @@ def _family_axes(kind):
     selected, in blend or in comparison"). Same source, so the screens cannot
     drift into two ladders. `steps2` stays SDXL-only: the second pass is a
     property of that workflow, not a setting the others hide."""
+    defaults = lts.studio_family_defaults(kind)
     return {
-        'cfg_choices': lts.CFG_CHOICES, 'default_cfg': lts.DEFAULT_CFG,
-        'steps_choices': lts.STEPS_CHOICES, 'default_steps': lts.DEFAULT_STEPS,
+        'cfg_choices': [1.0] if kind == 'flux2klein' else lts.CFG_CHOICES,
+        'default_cfg': defaults['cfg'],
+        'steps_choices': lts.STEPS_CHOICES, 'default_steps': defaults['steps'],
         'steps2_choices': lts.STEPS_CHOICES if kind == 'sdxl' else None,
         'default_steps2': lts.DEFAULT_STEPS if kind == 'sdxl' else None,
-        # Rythme mesuré de la machine (médiane observée) — même clé et même
-        # source que le payload par dataset, pour que les deux branches du Studio
-        # n'annoncent jamais deux durées pour un seul lancement. null = pas assez
-        # d'historique, l'UI garde son « ~ » et son défaut.
+        # Measured machine speed (observed median), with the same key/source
+        # as the dataset payload so both Studio modes estimate the same run
+        # consistently. NULL means insufficient history; UI keeps its estimate.
         'seconds_per_image': lts.measured_seconds_per_image(kind),
     }
 
@@ -96,22 +96,23 @@ def studio_base_models():
     `models` keeps its exact shape — an older frontend reads it unchanged and
     simply ignores the two extras."""
     kind = (request.args.get('type') or 'zimage').lower()
+    if not lts.can_generate_with(kind):
+        return jsonify({'error': str(lts._no_generation_lane(kind))}), 400
     axes = _family_axes(kind)
+    capabilities = {'generation_capabilities': lts.generation_capabilities(kind)}
     if kind == 'sdxl':
         models = lts.list_sdxl_base_models()
-        return jsonify({'models': models, 'axes': axes,
+        return jsonify({**capabilities, 'models': models, 'axes': axes,
                         'model_defaults': _base_defaults(kind, models)})
     if kind == 'krea':
-        # Bases Krea locales ALTERNATIVES au défaut ÉLU (cf. lts.krea_default_base).
-        # L'entrée de tête (filename vide → base_model absent → défaut élu) reste le
-        # défaut ; `base_note` dit quel fichier c'est quand ce n'est pas celui que
-        # Setup installe. La note est publiée MÊME sans alternative : c'est
-        # précisément l'install où l'utilisateur n'a rien d'autre qui doit le lire.
+        # Local Krea alternatives exclude the elected default (krea_default_base).
+        # The first empty-filename entry still selects that default. base_note
+        # identifies a default different from Setup's file, even when there are
+        # no alternatives: those users particularly need the explanation.
         entry = lts.krea_default_base_entry()
-        # Les chiffres du défaut sont ceux du fichier RÉELLEMENT élu : sans ça une
-        # base non distillée élue par défaut repartait sur cfg 1 / 8 steps — la
-        # même esquisse floue que le correctif #18 avait déjà réglée ailleurs. La
-        # clé '' est publiée pour l'écran qui la lit sans sélecteur.
+        # Defaults come from the actually elected file. Otherwise a non-distilled
+        # default inherited CFG 1/eight steps and blurry results, repeating #18.
+        # Publish the empty key for surfaces without a selector.
         base_defaults = None
         if entry['source']:
             base_defaults = lts.krea_model_defaults(entry['source'])
@@ -119,17 +120,25 @@ def studio_base_models():
                     'default_steps': base_defaults['steps']}
         alts = lts.krea_alt_base_models()
         if not alts:
-            return jsonify({'models': [], 'axes': axes, 'base_note': entry['note'],
+            return jsonify({**capabilities, 'models': [], 'axes': axes, 'base_note': entry['note'],
                             'model_defaults': {'': base_defaults} if base_defaults else {}})
         out = [{'filename': '', 'label': entry['label']}]
         out += [{'filename': m, 'label': m.split('\\')[-1].rsplit('.', 1)[0]} for m in alts]
         defaults = _base_defaults(kind, out)
         if base_defaults:
             defaults[''] = base_defaults
-        return jsonify({'models': out, 'axes': axes, 'base_note': entry['note'],
+        return jsonify({**capabilities, 'models': out, 'axes': axes, 'base_note': entry['note'],
                         'model_defaults': defaults})
-    out = [{'filename': m, 'label': m.split('\\')[-1]} for m in get_zimage_models()]
-    return jsonify({'models': out, 'axes': axes,
+    out = [{'filename': m or '', 'label': lts._basename(m) if m else 'Default model'}
+           for m in lts.family_base_models(kind)]
+    if kind in lts.TRAINED_IMAGE_FAMILIES:
+        from ..services.trained_image_models import generation_readiness
+        readiness = generation_readiness(kind)
+        capabilities['generation_readiness'] = readiness
+        capabilities['default_model'] = (readiness.get('assets') or {}).get('diffusion_model', '')
+        if readiness.get('config_error'):
+            capabilities['base_note'] = readiness['config_error']
+    return jsonify({**capabilities, 'models': out, 'axes': axes,
                     'model_defaults': _base_defaults(kind, out)})
 
 
@@ -140,14 +149,14 @@ def studio_checkpoints():
 
 @bp.get('/recent-prompts')
 def studio_recent_prompts():
-    """Prompts de test récents GLOBAUX (tous datasets) — alimente le menu
-    « Recent prompts » du mode comparaison ET du studio riche."""
+    """Global recent test prompts across datasets, feeding Recent prompts
+    in comparison mode and the full Studio."""
     return jsonify({'ok': True, 'prompts': lts.user_recent_prompts(LOCAL_USER)})
 
 
 @bp.post('/recent-prompts/delete')
 def studio_recent_prompts_delete():
-    """Supprime un prompt récent (+ cellules/images) sur TOUS les datasets."""
+    """Delete a recent prompt and associated cells/images across all datasets."""
     d = request.get_json(silent=True) or {}
     return jsonify({'ok': True,
                     'deleted': lts.delete_prompt_everywhere(LOCAL_USER, d.get('prompt'))})
@@ -329,14 +338,12 @@ def studio_run():
     try:
         res = lts.create_comparison_run(
             LOCAL_USER, d.get('selections') or [], d.get('strengths') or [],
-            # Réglages partagés (parité Generate) : un objet, mêmes clés wire.
+            # Shared Generate settings: one object, identical wire keys.
             lts.StudioGenSettings.from_payload(d),
-            # 📝 Lot : une passe par prompt coché. `create_comparison_run` accepte
-            # l'argument depuis toujours — c'est CETTE route qui ne le transmettait
-            # pas, et l'axe était donc inatteignable sur la seule surface de
-            # comparaison, alors que les deux autres routes de lancement
-            # (datasets.studio_run, training.canvas_generate) le passent. Absent du
-            # corps ⇒ None ⇒ comportement d'avant, à l'identique.
+            # Prompt batch: one pass per checked prompt. create_comparison_run
+            # already accepted this argument, but this route failed to forward it,
+            # unlike dataset and canvas launch routes. Absent body field remains
+            # None, preserving previous single-prompt behavior.
             prompts=d.get('prompts'),
             external_loras=d.get('external_loras'), combine=d.get('combine'))
     except Exception as e:

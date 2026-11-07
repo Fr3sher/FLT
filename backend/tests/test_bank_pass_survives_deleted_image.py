@@ -189,7 +189,7 @@ def _run_subprocess_pass(monkeypatch, banks, pass_fn, kind, victim, results):
     for path, result in results.items():
         result.setdefault('fingerprint', transfer.content_fingerprint_path(path))
 
-    def fake_drive(job, python, script, payload, cache_path, progress_re, window):
+    def fake_drive(job, python, script, payload, cache_path, progress_re, window, *, include_cached=False):
         _delete_image(victim)
         return {'ok': True, 'results': results, 'clusters': {}}, [], 0
 
@@ -330,7 +330,7 @@ def test_the_inpaint_level_skips_an_image_deleted_under_its_batch(bank_ctx,
     bank_id, ids = bank_ctx
     _flag_watermarks(ids, manual=True)     # a hand mask routes straight to LaMa
 
-    def fake_batch(items, device='cpu'):
+    def fake_batch(items, device='cpu', on_progress=None):
         _delete_image(ids[1])              # deleted while the batch was running
         return {it['image_path']: (True, None) for it in items}
 

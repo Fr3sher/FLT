@@ -1,20 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
-import { INSTALL_ALL_ACTION_LABELS, installCatalog } from '../../hooks/useSetupSteps'
+import { installActionLabel, installCatalog } from '../../hooks/useSetupSteps'
 import InstallRunner from './InstallRunner'
-import CameraInstallCard from './CameraInstallCard'
-import VideoStudioInstallCard from './VideoStudioInstallCard'
 import KreaInstallCard from './KreaInstallCard'
-import SeedVr2InstallCard from './SeedVr2InstallCard'
-import Dlss5InstallCard from './Dlss5InstallCard'
 import { HelpBadge } from '../../help/HelpMode'
 import { fmtSize } from './fmtSize'
 
 const POLL_MS = 1200
 
 
-const label = (action) => INSTALL_ALL_ACTION_LABELS[action] || action
+const label = installActionLabel
 
 // Per-action status glyph/colour for the shortcut's progress list. `queued`/`running` are
 // live; `success`/`error` are terminal; `idle` shows before its turn (a queued pip install).
@@ -31,7 +27,7 @@ const ROW_META = {
 // live pip log/download %, and the repair-in-place error path all come from it). Items whose
 // precondition isn't met yet render their hint (a pointer back to the config step) instead of
 // a button. The tile stays even once installed, so a broken venv can be rebuilt at any time.
-function InstallItem({ item, onDone }) {
+export function InstallItem({ item, onDone }) {
   const { action, label: lbl, present, available, hint, state, stateLabel, brokenReason } = item
   // A component can be in a THIRD state, and there are now two of them:
   //   'restart' — on disk but not yet live (the Krea node pack, which ComfyUI only
@@ -159,7 +155,7 @@ export default function InstallEverything({ plan, caps, onDone }) {
     }
   }
 
-  const catalog = installCatalog(caps)
+  const catalog = installCatalog(caps, { includePlugins: false })
   const rows = (phase === 'idle' ? plan : tracked) || []
   const doneCount = rows.filter((a) => (statuses[a] || {}).state === 'success').length
   // Nothing left for the one-click shortcut to queue (everything installable is already in).
@@ -169,16 +165,17 @@ export default function InstallEverything({ plan, caps, onDone }) {
   return (
     <div className="space-y-4">
       {/* Path 1 — the one-click shortcut. */}
-      <section className="rounded-xl border border-primary/40 bg-primary/5 p-5">
+      <details className="rounded-xl border border-border p-5">
+        <summary className="cursor-pointer min-h-10 text-sm font-semibold text-content">Install shared tools as a group</summary>
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-content">
-              ⬇ Install everything
+              Install the listed tools
               <HelpBadge topic="page-setup" className="ml-2" />
             </h2>
             <p className="mt-1 text-sm text-content-muted">
-              One click sets up every component the app can install for you. Heavy installs run
-              one at a time so they never clash; the big model downloads run in parallel.
+              This optional group includes only the missing tools listed below.
+              ML helpers use managed environments. Models are downloaded only into your configured ComfyUI.
             </p>
           </div>
           {phase === 'running' && (
@@ -190,8 +187,8 @@ export default function InstallEverything({ plan, caps, onDone }) {
 
         {nothingToInstall ? (
           <p className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-content">
-            ✓ Everything the app can install itself is already in place. Use the list below to
-            reinstall or repair any component.
+            No missing tools can currently be installed as a group. You can still install
+            or repair individual tools below.
           </p>
         ) : (
           <>
@@ -229,13 +226,13 @@ export default function InstallEverything({ plan, caps, onDone }) {
             {phase === 'done' ? (
               <p className="mt-4 text-sm font-medium text-content">
                 {rows.every((a) => (statuses[a] || {}).state === 'success')
-                  ? '✓ All done. You can start building datasets.'
-                  : 'Some installs need another look — click Install everything again to retry them, or use the list below.'}
+                  ? '✓ The listed tools are ready.'
+                  : 'Some installs need another look — retry them, or use the list below.'}
               </p>
             ) : (
               <button type="button" onClick={start} disabled={phase === 'running'}
                 className="mt-4 rounded-lg bg-gradient-primary px-5 py-2 text-sm font-semibold text-gray-950 disabled:opacity-50">
-                {phase === 'running' ? 'Installing…' : `Install everything (${(plan || []).length})`}
+                {phase === 'running' ? 'Installing…' : `Install listed tools (${(plan || []).length})`}
               </button>
             )}
             {(phase === 'done' && !rows.every((a) => (statuses[a] || {}).state === 'success')) && (
@@ -246,15 +243,11 @@ export default function InstallEverything({ plan, caps, onDone }) {
             )}
           </>
         )}
-      </section>
+      </details>
 
       {/* Path 2 — one click per OPTIONAL engine. Krea is ~20 GB, so it is installed
           when it is asked for rather than by the unattended shortcut above. */}
       <KreaInstallCard caps={caps} onDone={onDone} />
-      <SeedVr2InstallCard caps={caps} onDone={onDone} />
-      <CameraInstallCard caps={caps} onDone={onDone} />
-      <VideoStudioInstallCard caps={caps} onDone={onDone} />
-      <Dlss5InstallCard caps={caps} onDone={onDone} />
 
       {/* Path 3 — the one-by-one menu, always visible (install/repair a single component). */}
       <section className="rounded-xl border border-border bg-surface p-5">

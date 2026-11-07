@@ -12,7 +12,10 @@ which frame gets picked — stay testable on an install with no video extra at a
 """
 import pytest
 
-from app.services import video_probe as vp
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_probe as vp
+
+pytestmark = pytest.mark.plugins('video')
 
 
 class _FakeStream:

@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import Markdown, { markdownHeadingId } from '../components/common/Markdown'
 import DiagnosticReport from '../components/common/DiagnosticReport'
 import { helpTopicsForChapter } from '../help/helpRegistry'
+import { guideChapters } from '../plugins/registry.js'
+import { findGuideChapter, guideHeadings } from '../plugins/guideContent.js'
 // Vite inlines every chapter as a string at build time (?raw) → the guide
 // lives in the bundle, no fetch, nothing extra to ship in the portable build.
 // DATASET_GUIDE.md keeps its historical path (linked from GitHub); the other
@@ -40,9 +42,10 @@ export default function GuidePage({ helpOnly = false }) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const targetHeading = searchParams.get('h')
-  const chapters = helpOnly ? [HELP_CHAPTER] : CHAPTERS
-  const idx = helpOnly ? 0 : Math.max(0, chapters.findIndex((c) => c.id === section))
-  const chapter = chapters[idx]
+  const chapters = useMemo(() => guideChapters(helpOnly ? [HELP_CHAPTER] : CHAPTERS), [helpOnly])
+  const selected = findGuideChapter(chapters, helpOnly ? HELP_CHAPTER.id : section)
+  const chapter = selected || { id: section, source: '' }
+  const idx = chapters.indexOf(selected)
   const prev = idx > 0 ? chapters[idx - 1] : null
   const next = idx < chapters.length - 1 ? chapters[idx + 1] : null
   const headings = [...chapter.source.matchAll(/^##\s+(.+)$/gm)].map((match) => ({
@@ -85,6 +88,17 @@ export default function GuidePage({ helpOnly = false }) {
     return () => clearTimeout(t)
   }, [targetHeading, chapter.id])
 
+  const missingHeading = targetHeading && !guideHeadings(chapter.source).includes(targetHeading)
+  const missingTopic = missingHeading && helpTopicsForChapter(chapter.id).find(topic => topic.guide.anchor === targetHeading)
+  if (!selected || missingHeading) return <div role="status" className="mx-auto max-w-3xl p-6 text-content">
+    <h1 className="text-xl font-semibold">This guide is not available</h1>
+    <p>{missingTopic?.plugin
+      ? `The installed ${missingTopic.pluginName} plugin does not provide this guide section. Update the plugin in Plugins to read its current guide.`
+      : 'The product may be inactive or removed, or this guide link is outdated. Open Plugins to check its installed version.'}</p>
+    <Link to="/plugins" className="underline">Open Plugins</Link>
+    {selected && <p><Link to={`/guide/${chapter.id}`} className="underline">Read the available sections of {chapter.title}</Link></p>}
+  </div>
+
   const navItem = (c, chip) => {
     const isActive = c.id === chapter.id
     const base = chip
@@ -114,13 +128,13 @@ export default function GuidePage({ helpOnly = false }) {
             (an `.sr-only` label is one) escapes an unpositioned scroller and
             widens the document past the viewport. */}
         <nav aria-label="Guide chapters" className="relative -mx-4 flex gap-2 overflow-x-auto px-4 pb-3 lg:hidden">
-          {CHAPTERS.map((c) => navItem(c, true))}
+          {chapters.map((c) => navItem(c, true))}
         </nav>
         {/* Desktop: sticky numbered chapter rail */}
         <nav aria-label="Guide chapters" className="hidden lg:sticky lg:top-20 lg:block">
           <p className="px-3 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-content-subtle">Field manual</p>
           <div className="flex flex-col gap-0.5">
-            {CHAPTERS.map((c) => navItem(c, false))}
+            {chapters.map((c) => navItem(c, false))}
           </div>
         </nav>
       </aside>}

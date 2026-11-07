@@ -6,6 +6,8 @@ are reduced to booleans.
 """
 import json
 
+import pytest
+
 
 def test_diagnostic_ok_and_shape(client):
     r = client.get('/api/diagnostic')
@@ -23,12 +25,23 @@ def test_diagnostic_ok_and_shape(client):
     assert isinstance(j['generated_at'], int)
 
 
-def test_diagnostic_never_leaks_secret_values(client, monkeypatch):
+@pytest.mark.parametrize('api_enabled', [
+    pytest.param(False, marks=pytest.mark.plugins()),
+    pytest.param(True, marks=pytest.mark.plugins('api_engines')),
+])
+def test_diagnostic_never_leaks_secret_values(client, monkeypatch, api_enabled):
+    from app import capabilities
+    monkeypatch.setattr(capabilities, 'probe', lambda **kw: {'engines': {}})
     monkeypatch.setenv('GEMINI_API_KEY', 'sk-SUPERSECRET-42')
     r = client.get('/api/diagnostic')
     body = r.get_data(as_text=True)
     assert 'sk-SUPERSECRET-42' not in body
-    assert r.get_json()['secrets_present']['GEMINI_API_KEY'] is True
+    present = r.get_json()['secrets_present']
+    assert 'GEMINI_API_KEY' not in present  # general diagnostics keep the core scope
+    if api_enabled:
+        scoped = client.get('/api/diagnostic?plugin=api_engines')
+        assert 'sk-SUPERSECRET-42' not in scoped.get_data(as_text=True)
+        assert scoped.get_json()['secrets_present']['GEMINI_API_KEY'] is True
 
 
 def test_diagnostic_has_no_absolute_paths(client):

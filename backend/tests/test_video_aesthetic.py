@@ -22,8 +22,11 @@ import json
 
 import pytest
 
-from app.services import video_aesthetic as look
-from app.services import video_metrics
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_aesthetic as look
+from lds_video import video_metrics
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- the aggregation --------------------------------------------------------------
@@ -116,7 +119,7 @@ def test_the_cut_ships_with_no_number_and_is_still_readable_as_a_setting():
 
 
 def test_the_threshold_reader_hands_the_cut_through(app):
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     with app.app_context():
         assert 'aesthetic_floor' in svc.metric_thresholds()
 
@@ -172,7 +175,7 @@ def test_a_shot_with_no_embeddings_is_unrated_rather_than_zero(app, monkeypatch)
     bank_id, ids = _bank_with_clips(app, 2)
     with app.app_context():
         from app.extensions import db
-        from app.models import VideoClip
+        from lds_video.models import VideoClip
         db.session.get(VideoClip, ids[1]).embed_state = None
         db.session.commit()
     _fake_scores(monkeypatch, {ids[0]: [5.0]})
@@ -258,7 +261,7 @@ def test_the_pass_never_changes_a_triage_decision(app, monkeypatch):
     _fake_scores(monkeypatch, {ids[0]: [1.0], ids[1]: [9.0]})
 
     with app.app_context():
-        from app.models import VideoClip
+        from lds_video.models import VideoClip
         look.run_aesthetic(bank_id)
         assert {c.status for c in VideoClip.query.filter_by(bank_id=bank_id)} \
             == {'pending'}
@@ -271,7 +274,7 @@ def test_a_re_cut_shot_is_not_rated_on_the_vectors_of_its_old_span(app, monkeypa
     bank_id, ids = _bank_with_clips(app, 1)
     with app.app_context():
         from app.extensions import db
-        from app.models import VideoClip
+        from lds_video.models import VideoClip
         db.session.get(VideoClip, ids[0]).embed_state = None
         db.session.commit()
     _fake_scores(monkeypatch, {ids[0]: [5.0]})
@@ -288,7 +291,7 @@ def test_the_embed_pass_rates_the_look_when_it_is_done(app, monkeypatch):
     """The step is reachable, or the whole feature is dead code. It runs AFTER
     the embedding — that is where the vectors it reads come from — and its
     numbers reach the job's own result."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     bank_id, ids = _bank_with_clips(app, 1)
     _fake_scores(monkeypatch, {ids[0]: [4.0, 6.0]})
 
@@ -305,13 +308,13 @@ def test_the_embed_pass_rates_the_look_when_it_is_done(app, monkeypatch):
 
 def test_a_re_embed_asks_for_a_re_rating(app, monkeypatch):
     """Rewritten vectors need rewritten ratings — `reembed` IS `rescore`."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     seen = {}
     monkeypatch.setattr(
-        'app.services.video_aesthetic.pending_clips',
+        'lds_video.video_aesthetic.pending_clips',
         lambda bank_id, rescore=False: [object()])
     monkeypatch.setattr(
-        'app.services.video_aesthetic.run_aesthetic',
+        'lds_video.video_aesthetic.run_aesthetic',
         lambda bank_id, rescore=False, **kw: seen.update(rescore=rescore)
         or {'rated': 0, 'unrated': 0, 'error': None})
 
@@ -323,12 +326,12 @@ def test_a_re_embed_asks_for_a_re_rating(app, monkeypatch):
 def test_a_cancelled_embed_pass_is_not_charged_a_model_load(app, monkeypatch):
     """Stop means stop. A stopped pass has already kept everything it earned,
     and paying a cold `import torch` on the way out is not what the button says."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
 
     def _explode(*a, **k):
         raise AssertionError('the look score ran after a cancel')
 
-    monkeypatch.setattr('app.services.video_aesthetic.run_aesthetic', _explode)
+    monkeypatch.setattr('lds_video.video_aesthetic.run_aesthetic', _explode)
     with app.app_context():
         assert svc._rate_the_look({'done': 0, 'total': 0, 'cancelled': True},
                                   1, False) == {}
@@ -337,7 +340,7 @@ def test_a_cancelled_embed_pass_is_not_charged_a_model_load(app, monkeypatch):
 def test_an_embed_run_with_nothing_left_to_rate_says_nothing(app, monkeypatch):
     """The common case on a re-run: no announcement, no subprocess, no noise in
     the job's final sentence."""
-    from app.services import video_bank_service as svc
+    from lds_video import video_bank_service as svc
     bank_id, ids = _bank_with_clips(app, 1)
     _fake_scores(monkeypatch, {ids[0]: [5.0]})
     job = {'done': 0, 'total': 1, 'detail': 'embedding shots (CPU)'}
@@ -359,7 +362,7 @@ def test_the_worker_reads_the_arrays_the_embed_pass_writes(app):
     — see below), and doing that to the process running the suite would be a
     side effect on every test after it."""
     np = pytest.importorskip('numpy')
-    from app.services import video_clip_search as vcs
+    from lds_video import video_clip_search as vcs
 
     bank_id, ids = _bank_with_clips(app, 1)
     with app.app_context():
@@ -377,15 +380,31 @@ def test_the_worker_rates_with_the_head_that_matches_the_encoder():
     """The invisible failure this lane is most exposed to. The LAION head was
     fitted on ONE embedding space — openai ViT-L/14, 768-d — and any other 768-d
     vector feeds it without error and yields a plausible, meaningless rating. So
-    the head is imported from ``bank_score_infer`` rather than copied, and the
-    encoder that produced the vectors being rated has to be that same pair."""
+    the packaged head must stay identical to ``bank_score_infer``'s head, and
+    the encoder that produced the vectors being rated has to be that same pair."""
+    import ast
     import re
     worker = _infer_source('video_aesthetic_infer.py')
-    assert 'import bank_score_infer' in worker, \
-        'the video head must be the image lane\'s, not a second copy'
+    assert 'import _aesthetic_head' in worker, \
+        'the video worker must use the packaged public head'
     assert '_load_aesthetic_head' in worker
 
     score = _infer_source('bank_score_infer.py')
+    packaged = _infer_source('_aesthetic_head.py')
+    # Packaging removes the Image Bank inference policy from the Video worker.
+    # Keep the old invariant executable: its weights and MLP cannot drift.
+    def head_contract(source):
+        selected = []
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.FunctionDef) and node.name in {'_aesthetic_mlp', '_load_aesthetic_head'}:
+                selected.append(ast.dump(node))
+            elif isinstance(node, ast.Assign) and any(
+                    isinstance(target, ast.Name) and target.id in {'_AESTHETIC_URL', '_AESTHETIC_FILE'}
+                    for target in node.targets):
+                selected.append(ast.dump(node))
+        assert len(selected) == 4, 'the head contract must include its weights and both functions'
+        return selected
+    assert head_contract(packaged) == head_contract(score), 'the Video and Image heads must agree'
     expects = re.search(r"_AESTHETIC_EXPECTS = \('([^']+)', '([^']+)'\)", score)
     assert expects, 'could not find _AESTHETIC_EXPECTS in bank_score_infer.py'
     frames = _infer_source('clip_image_embed_infer.py')
@@ -409,8 +428,10 @@ def test_the_worker_never_takes_the_card():
 
 def _infer_source(name):
     from pathlib import Path
-    return (Path(__file__).resolve().parents[1] / 'infer'
-            / name).read_text(encoding='utf-8')
+    root = Path(__file__).resolve().parents[2]
+    folder = (root / 'bundled' / 'video' / 'infer' if name in {
+        'video_aesthetic_infer.py', '_aesthetic_head.py'} else root / 'backend' / 'infer')
+    return (folder / name).read_text(encoding='utf-8')
 
 
 def _worker_store_arrays():
@@ -425,7 +446,7 @@ def _worker_store_arrays():
 
 def _bank_with_clips(app, n):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -457,7 +478,7 @@ def _fake_scores(monkeypatch, per_clip):
 
 def _measured(app, sharpness_by_id):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         for cid, sharp in sharpness_by_id.items():
             db.session.get(VideoClip, cid).metrics_json = json.dumps(
@@ -466,7 +487,7 @@ def _measured(app, sharpness_by_id):
 
 
 def _summaries(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         rows = VideoClip.query.filter_by(bank_id=bank_id).all()
         return {r.id: (json.loads(r.metrics_json) if r.metrics_json else {})

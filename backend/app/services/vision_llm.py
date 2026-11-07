@@ -114,6 +114,7 @@ def describe_image(image_bytes: bytes, prompt: str, **kw) -> str:
             # rather than being dropped: eight call sites parse the answer.
             as_json=(kw.get('fmt') == 'json') or bool(kw.get('prefer_json')),
             strict=bool(kw.get('strict') or kw.get('auto_start_local')),
+            think=kw.get('think'),
             timeout=kw.get('timeout', (10, 180)))
     from . import vision_ollama
     return vision_ollama.describe_image_ollama(image_bytes, prompt, **kw)
@@ -135,19 +136,22 @@ def describe_frames(frames, prompt, **kw) -> str:
             url=kw.get('url') or kw.get('ollama_url'),
             model=kw.get('model'),
             num_predict=kw.get('num_predict', 600),
+            think=kw.get('think'),
             timeout=kw.get('timeout', (10, 300)))
     from . import vision_ollama
     return vision_ollama.describe_frames_ollama(frames, prompt, **kw)
 
 
 def generate_text(prompt: str, **kw) -> str:
-    """Text -> text, through whichever provider is configured.
+    """Text -> text, through the pinned provider or the configured default.
 
     The Ollama branch takes every keyword the driver knows (`top_k`, `min_p`,
     `presence_penalty`, `think`...); the LM Studio branch forwards the subset
     its chat call accepts and drops the rest — its defaults were measured
-    with the captioners and stay theirs."""
-    if provider() == LMSTUDIO:
+    with the captioners and stay theirs. Like describe_frames, ``provider=``
+    belongs to this router, not to either driver's generation options."""
+    prov = kw.pop('provider', None) or provider()
+    if prov == LMSTUDIO:
         from . import vision_lmstudio
         return vision_lmstudio.generate_text(
             prompt,
@@ -162,6 +166,7 @@ def generate_text(prompt: str, **kw) -> str:
             temperature=kw.get('temperature', 0.2),
             top_p=kw.get('top_p'),
             stop=kw.get('stop'),
+            think=kw.get('think'),
             timeout=kw.get('timeout', (10, 120)))
     from . import vision_ollama
     return vision_ollama.generate_text_ollama(prompt, **kw)
@@ -291,21 +296,23 @@ def ensure_ready(model: str | None = None) -> dict:
     return ollama_control.ensure_captioning_ready(model)
 
 
-def list_models() -> dict:
+def list_models(*, name: str | None = None, url: str | None = None) -> dict:
     """``{ok, reachable, models: [str]}`` — the shape the model pickers already read.
 
     Kept deliberately identical to what ``/api/ollama/models`` has always returned,
     so both surfaces' pickers (dataset AND bank) can switch endpoint without any
-    change to how they read the answer.
+    change to how they read the answer. Settings may inspect a different provider
+    or draft URL without changing the active configuration.
     """
-    if provider() == LMSTUDIO:
+    options = {'url': url} if url is not None else {}
+    if (name or provider()) == LMSTUDIO:
         from . import vision_lmstudio
-        listed = vision_lmstudio.list_models()
+        listed = vision_lmstudio.list_models(**options)
         return {'ok': listed['ok'], 'reachable': listed['reachable'],
                 'provider': LMSTUDIO,
                 'models': [m['id'] for m in listed['models']
                            if m['id'] and m.get('type') != 'embeddings']}
     from . import ollama_control
-    out = dict(ollama_control.list_models())
+    out = dict(ollama_control.list_models(**options))
     out['provider'] = OLLAMA
     return out

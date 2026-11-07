@@ -1,17 +1,16 @@
 // react-frontend/src/components/dataset/studio/enhanceGate.js
 /**
- * Décide si le bouton « ✨ Enhance » est utilisable, et POURQUOI il ne l'est pas.
- *
- * Extrait du JSX pour être testé sous `node --test`. La règle : sur une install
- * SANS Ollama le bouton est désactivé avec la raison exacte en infobulle — jamais
- * un appel qui part et échoue en silence. Les trois états viennent de
- * /api/capabilities (`caps.ollama`), déjà publié pour les surfaces Bank/Settings.
+ * Decide whether Enhance is available and explain WHY when blocked. Extracted from JSX for node
+ * --test. Without Ollama, disable with the exact tooltip reason rather than sending a request that
+ * fails silently. The three states come from existing /api/capabilities caps.ollama used by Bank
+ * and Settings.
  */
 
-/** Raison de blocage (string, anglais) ou null si Enhance est utilisable.
- * `customModel` = le modèle choisi dans la ⚙️ ('' = défaut) : quand il est posé,
- * l'état « modèle par défaut pas téléchargé » ne bloque plus — l'appel ne s'en
- * sert pas, et le serveur vérifie le modèle choisi lui-même (409 qui le nomme). */
+/**
+ * Return an English blocking reason or null when Enhance is available. customModel is the explicit
+ * settings choice, empty for default. When set, a missing default model does not block because it
+ * is unused; the server validates the selected model and names it in any 409.
+ */
 export function enhanceBlocker(ollama, { capsLoading = false, customModel = '' } = {}) {
   if (capsLoading) return 'Checking local tools…';
   const o = ollama || {};

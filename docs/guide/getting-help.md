@@ -38,14 +38,18 @@ configured). One caveat: the log tail can mention file names from your machine
 ## Feature requests
 
 Describe the **job you were doing when you missed the feature** — the problem
-is more valuable than the proposed solution. Post it in Discord **#roadmap** or
+is more valuable than the proposed solution. Post it in Discord **#feature-requests** or
 open a GitHub issue with the *Feature request* template.
 
 ## Support the project
 
-FLT - Fresh LoRa Trainer is free, open source and built in the open. If it saves
-you time and you want to help development, you can sponsor it on
-[GitHub Sponsors](https://github.com/sponsors/perfectgf) — one-time or
-monthly, and 100% of it goes to the project (GitHub charges no fees).
+FLT - Fresh LoRa Trainer is free and source available under the
+[PolyForm Noncommercial license](../../LICENSE). You can support upstream
+LoRA Dataset Studio development, API testing and test GPUs through
+**monthly support** on [Patreon](https://www.patreon.com/c/Loraperfectgf)
+or [GitHub Sponsors](https://github.com/sponsors/perfectgf).
+
+The small support message on the datasets page can be dismissed. These links
+remain available through **Help & guide → Support LDS**.
 The best free ways to help are just as welcome: report bugs, share ideas on
 Discord, and star the repo.

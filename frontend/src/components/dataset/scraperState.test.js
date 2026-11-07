@@ -1,6 +1,7 @@
+import { isDatasetImportBlocked, isStopGenerationBlocked } from './activityGates.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clearScraperScanState, isDatasetImportBlocked, isStopGenerationBlocked, loadScraperScanState, saveScraperScanState } from './scraperState.js';
+import { clearScraperScanState, loadScraperScanState, saveScraperScanState } from "../../../../bundled/scrape/frontend/lib/scraperState.js";
 
 function memoryStorage() {
   const values = new Map();

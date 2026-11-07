@@ -27,9 +27,13 @@ The contracts held here are the ones that would hurt if they broke:
 
 Nothing touches a real install: every path is a pytest tmp dir and the
 checkpoint scan is pointed at it."""
-import os
 
 import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
+import os
+
 
 
 # ---- fixtures over a temporary run dir --------------------------------------
@@ -271,8 +275,8 @@ def test_child_rows_are_flushed_before_the_parent_with_fk_enforced(
     """The repo's known trap: these tables carry a `record_id` with no declared
     relationship(), so deleting the parent first raises IntegrityError. Run with
     foreign_keys ON so a wrong order is FATAL here instead of silent."""
-    from app.models import (CanvasNodePosition, CheckpointNote, CheckpointPreview,
-                            TrainingRunRecord)
+    from lds_canvas.models import CanvasNodePosition
+    from app.models import CheckpointNote, CheckpointPreview, TrainingRunRecord
     from app.extensions import db
     from sqlalchemy import event, text
     engine = None

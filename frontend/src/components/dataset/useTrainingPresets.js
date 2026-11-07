@@ -18,9 +18,9 @@ export function useTrainingPresets({
   ds, kind, trainType, variant, trainTypeBusy, toast, postTrain,
   toastTrainError, onApplied,
 }) {
-  // Presets de réglages avancés : snapshots nommés, partageables (fichier JSON).
-  // Stockés bruts côté serveur ; la validation se fait à l'APPLICATION (clés
-  // inconnues ignorées, valeurs invalides signalées) → tolérant aux versions.
+  // Advanced-setting presets are named snapshots shareable as JSON. Store raw server-side and
+  // validate on APPLICATION: ignore unknown keys, report invalid values, preserving version
+  // tolerance.
   const [presets, setPresets] = useState([]);
   const [presetSel, setPresetSel] = useState('');
   const [presetBusy, setPresetBusy] = useState(false);

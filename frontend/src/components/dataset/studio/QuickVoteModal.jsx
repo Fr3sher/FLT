@@ -1,12 +1,9 @@
 // react-frontend/src/components/dataset/studio/QuickVoteModal.jsx
 /**
- * File de vote rapide (modal plein écran) : 👎 / passer / 👍, swipe tactile et
- * clavier ←/→/Échap. Extrait 1:1 du bloc `{voteQueue && (...)}` de l'ancien
- * LoraTestStudio (behavior-preserving). Le clavier (←/→/Échap) est géré par le
- * hook useQuickVote — on ne le re-implémente PAS ici. Espace n'est volontairement
- * pas intercepté (correctif a11y : laisse l'activation native du bouton focalisé).
- *
- * Le focus-trap garde Tab dans le dialog (useFocusTrap).
+ * Full-screen quick-vote queue: dislike, skip, like, touch swipe and Left/Right/Escape keys.
+ * Extracted unchanged from old LoraTestStudio's voteQueue block. useQuickVote owns keyboard
+ * handling; do not duplicate it. Intentionally leave Space unhandled for native focused-button
+ * activation. useFocusTrap keeps Tab inside the dialog.
  */
 import { useRef } from 'react';
 import { createPortal } from 'react-dom';
@@ -19,8 +16,10 @@ export default function QuickVoteModal({ vote, datasetId, fmt }) {
   if (!vote.voteQueue || !vote.current) return null;
   const cur = vote.current;
 
-  /* Portaillée : un z-index posé sous un ancêtre sticky/transform y est
-     plafonné. Voir studioModalsArePortaled.contract.test.js. */
+  /*
+   * Portal required: sticky/transform ancestors cap descendant z-index. See
+   * studioModalsArePortaled.contract.test.js.
+   */
   return createPortal(
     <div ref={ref}
       className="fixed inset-0 z-[9999] bg-black/95 flex flex-col items-center justify-center p-4 gap-3"

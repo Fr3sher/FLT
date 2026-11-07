@@ -32,7 +32,7 @@ test('the selector keeps the ownership and cache-conservation copy visible', () 
   assert.match(panel, /semanticPurposeSentence\(state\.engine\)/)
   assert.match(panel, /SCORE_STAYS_CLIP_SENTENCE/)
   assert.match(panel, /SEMANTIC_CACHE_SENTENCE/)
-  assert.match(panel, /Produced by ✨ Score/)
+  assert.match(panel, /Run ✨ Score to build the CLIP index/)
 })
 
 test('switching and unmount release the text encoder that actually owns memory', () => {

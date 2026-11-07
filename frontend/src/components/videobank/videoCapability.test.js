@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import {
   VIDEO_PIECES, PASS_REQUIREMENTS, missingVideoPieces, passBlockedBy,
   videoCapabilityNotice, joinEnglish,
-} from './videoCapability.js'
+} from "../../../../bundled/video/frontend/lib/videoCapability.js"
 
 const caps = (o) => ({ ok: false, detail: 'missing: something', decode: false, detect: false, encode: false, ...o })
 const READY = { ok: true, detail: 'video extra ready', decode: true, detect: true, encode: true }

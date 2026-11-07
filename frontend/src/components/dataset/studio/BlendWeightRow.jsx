@@ -1,15 +1,9 @@
 /**
- * Un LoRA d'une pile 🧬 Blend : son nom, son trigger, son curseur de poids — et
- * ses CASES de poids, qui transforment le lancement en balayage.
- *
- * Composant partagé par les DEUX surfaces qui portent le Blend (le Test Studio
- * via LoraStackPanel, le ◉ LoRA Canvas via CanvasBlendPanel). Elles diffèrent par
- * ce qui identifie un LoRA — un nom de fichier ici, une pastille de run là — donc
- * l'appelant fournit `label` et `trigger` déjà rendus ; tout le reste (curseur,
- * cases, règle « aucune case = le curseur gouverne ») est ici, une fois.
- *
- * Deux lignes plutôt qu'une, comme le reste de ce panneau : à 400 px, le nom et
- * le curseur côte à côte écrasaient le nom en « l… ».
+ * One LoRA in a Blend stack: name, trigger, weight slider and weight CHECKBOXES that turn launch
+ * into a sweep. Shared by Test Studio LoraStackPanel and LoRA Canvas CanvasBlendPanel. Callers
+ * supply rendered label and trigger because one identifies LoRAs by filename, the other by run
+ * badge. Slider, checkboxes and the no-checkbox-means-slider rule live here once. Use two rows: at
+ * 400 px, placing name beside slider reduced it to a single letter.
  */
 import {
   BLEND_WEIGHT_CHIPS, COMBINE_MAX_WEIGHT, COMBINE_MIN_WEIGHT, clampBlendWeight,
@@ -57,11 +51,12 @@ export default function BlendWeightRow({
           className="w-14 shrink-0 rounded border border-border bg-app/60 px-1 py-0.5 text-right text-content tabular-nums focus:border-primary focus:outline-none" />
       </label>
 
-      {/* Les cases. Cocher = balayer cette valeur ; rien de coché = le curseur
-          au-dessus gouverne, ce qui est le comportement d'avant ces cases et
-          reste la façon de donner un poids hors grille. Cette phrase est SOUS les
-          cases parce que « pourquoi mon curseur ne fait plus rien » est
-          exactement la question qu'elles créent. */}
+      {/*
+       * Checking a weight sweeps that value; checking none leaves the slider in control,
+       * preserving the original behavior and allowing off-grid weights. Explain BELOW the
+       * checkboxes because they make users wonder why moving the slider no longer changes the
+       * result.
+       */}
       <div className="flex flex-wrap items-center gap-1">
         <span className="shrink-0 text-content-subtle text-[0.625rem] uppercase">Sweep</span>
         {BLEND_WEIGHT_CHIPS.map((w) => {

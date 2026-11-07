@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   CIVITAI_API, civitaiLinkLine, civitaiTarget, civitaiTargetKnown, civitaiVerbRefusal,
   draftFormFrom, draftFormRefusal, jobOutcome, jobPhaseLabel, pageVersionOptions, preselectVersion,
-} from './civitaiPublish.js';
+} from "../../../../bundled/civitai_publish/frontend/lib/civitaiPublish.js";
 
 test('a looked-up page becomes a version pick: the address\'s version first, else the newest', () => {
   const page = { versions: [

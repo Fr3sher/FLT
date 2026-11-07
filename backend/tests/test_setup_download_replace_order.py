@@ -77,6 +77,49 @@ def _no_other_door(monkeypatch, si):
     monkeypatch.setattr(si, '_krea_asset_already_installed', lambda action: False)
 
 
+@pytest.mark.parametrize('response', ['verified', 'denied', 'wrong_hash'])
+def test_superseded_model_is_replaced_only_by_verified_download(app, tmp_path, monkeypatch, response):
+    import hashlib
+    from pathlib import Path
+    from app import config as cfg, setup_installer as si
+    with app.app_context():
+        _comfy_base(tmp_path, cfg)
+        action = 'klein_model'
+        dest = si._download_dest_path(action)
+        _valid_weights(dest)
+        before = Path(dest).read_bytes()
+        fresh = before + b'new revision'
+        spec = {**si.model_download_spec(action), 'superseded_bytes': (len(before),),
+                'expected_bytes': len(fresh), 'sha256': hashlib.sha256(fresh).hexdigest()}
+        monkeypatch.setattr(si, 'model_download_spec', lambda _: spec)
+        # Extra roots must not let the same superseded revision bypass repair.
+        assert si._is_blocking_invalid(dest, spec)
+        _no_other_door(monkeypatch, si)
+        si._runs[action] = si._new_run()
+        payload = fresh if response != 'wrong_hash' else fresh[:-1] + b'x'
+        monkeypatch.setattr(si.requests, 'get', lambda *a, **k: _Resp(
+            403 if response == 'denied' else 200, payload))
+        assert si._run_model_download(action) == (0 if response == 'verified' else 1)
+        assert Path(dest).read_bytes() == (fresh if response == 'verified' else before)
+        assert not Path(dest + '.part').exists()
+
+
+def test_h3_readiness_detects_superseded_revision_without_rejecting_fp16(tmp_path, monkeypatch):
+    from lds_sdk import h3_render
+    from lds_sdk.h3_downloads import H3_DOWNLOADS
+    from lds_sdk.video_host import comfy_model_paths
+    monkeypatch.setattr(comfy_model_paths, 'search_roots', lambda _: [tmp_path])
+    monkeypatch.setitem(H3_DOWNLOADS['h3_video_vae_int8'], 'superseded_bytes', (3,))
+    # Case-insensitive discovery must apply the same revision check.
+    path = tmp_path / h3_render.VIDEO_VAE_INT8.upper()
+    path.write_bytes(b'old')
+    assert not h3_render.weight_present(('vae',), h3_render.VIDEO_VAE_INT8)
+    path.write_bytes(b'official')
+    assert h3_render.weight_present(('vae',), h3_render.VIDEO_VAE_INT8)
+    (tmp_path / 'other_vae.safetensors').write_bytes(b'old')
+    assert h3_render.weight_present(('vae',), 'other_vae.safetensors')
+
+
 def test_a_denied_download_leaves_the_broken_file_in_place(app, tmp_path, monkeypatch):
     """The regression this file exists for: HTTP 401 and the old file is GONE."""
     from app import config as cfg, setup_installer as si

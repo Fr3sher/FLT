@@ -15,8 +15,11 @@ import os
 
 import pytest
 
-from app.services import video_targets
-from app.services import video_test_studio as vts
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_targets
+from lds_video import video_test_studio as vts
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def build(**kw):

@@ -1,8 +1,12 @@
 """HTTP driver for the pod's ai-toolkit UI API — fully mocked."""
 
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
+
 import pytest
 
-from app.services.aitoolkit_remote import RemoteAiToolkit, RemoteError
+from lds_cloud_training.aitoolkit_remote import RemoteAiToolkit, RemoteError
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 class FakeResp:
@@ -37,7 +41,7 @@ def test_is_ready_and_auth_header(remote, monkeypatch):
         seen['url'], seen['auth'] = url, kw['headers'].get('Authorization')
         return FakeResp(200, {'isAuthenticated': True})
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     assert remote.is_ready() is True
     assert seen['url'] == 'http://1.2.3.4:40123/api/auth'
     assert seen['auth'] == 'Bearer tok-abc'
@@ -46,7 +50,7 @@ def test_is_ready_and_auth_header(remote, monkeypatch):
 def test_is_ready_false_on_connection_error(remote, monkeypatch):
     def boom(*a, **kw):
         raise OSError('refused')
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', boom)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', boom)
     assert remote.is_ready() is False
 
 
@@ -60,7 +64,7 @@ def test_ensure_settings_round_trips_folders(remote, monkeypatch):
         posts['json'] = kw.get('json')
         return FakeResp(200, {'success': True})
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     st = remote.ensure_settings(hf_token='hf_xyz')
     assert st['TRAINING_FOLDER'] == '/root/aitk/out'
     assert posts['json'] == {'HF_TOKEN': 'hf_xyz',
@@ -86,7 +90,7 @@ def test_ensure_settings_echoes_back_every_key_the_pod_reported(remote, monkeypa
         posts['json'] = kw.get('json')
         return FakeResp(200, {'success': True})
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     remote.ensure_settings(hf_token='hf_xyz')
     assert posts['json']['MODELS_PATH'] == '/root/aitk/models'
     assert posts['json']['HF_TOKEN'] == 'hf_xyz'
@@ -103,7 +107,7 @@ def test_ensure_settings_without_token_never_posts(remote, monkeypatch):
         return FakeResp(200, {'TRAINING_FOLDER': '/root/aitk/out',
                               'DATASETS_FOLDER': '/root/aitk/datasets'})
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     st = remote.ensure_settings(hf_token=None)
     assert calls == ['GET']                      # no POST: nothing to change
     assert st['TRAINING_FOLDER'] == '/root/aitk/out'
@@ -115,7 +119,7 @@ def test_ensure_settings_returns_applied_token(remote, monkeypatch):
             return FakeResp(200, {'TRAINING_FOLDER': '/o', 'DATASETS_FOLDER': '/d'})
         return FakeResp(200, {'success': True})
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     st = remote.ensure_settings(hf_token='hf_new')
     assert st['HF_TOKEN'] == 'hf_new'
 
@@ -132,7 +136,7 @@ def test_upload_dataset_batches_and_counts(remote, monkeypatch, tmp_path):
         calls.append({'n_files': len(kw.get('files') or []), 'data': kw.get('data')})
         return FakeResp(200, {'files': ['ok']})
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     n = remote.upload_dataset('run_a', str(folder))
     assert n == 22
     assert sum(c['n_files'] for c in calls) == 22
@@ -144,14 +148,14 @@ def test_upload_dataset_http_error_raises(remote, monkeypatch, tmp_path):
     folder = tmp_path / 'ds'
     folder.mkdir()
     (folder / 'a.png').write_bytes(b'x')
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request',
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request',
                         lambda m, u, **kw: FakeResp(500, {'error': 'boom'}))
     with pytest.raises(RemoteError):
         remote.upload_dataset('run_a', str(folder))
 
 
 def test_create_job_conflict_raises(remote, monkeypatch):
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request',
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request',
                         lambda m, u, **kw: FakeResp(409, {'error': 'Job name already exists'}))
     with pytest.raises(RemoteError):
         remote.create_job('run_a', {'job': 'extension'})
@@ -166,7 +170,7 @@ def test_create_and_start_job(remote, monkeypatch):
             return FakeResp(200, {'id': 'j-1'})
         return FakeResp(200, {})
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     jid = remote.create_job('run_a', {'job': 'extension'})
     assert jid == 'j-1'
     remote.start_job('j-1')
@@ -187,7 +191,7 @@ def test_find_job_by_name_reads_the_unfiltered_job_list(remote, monkeypatch):
             {'id': 'j-7', 'name': 'run_a', 'status': 'running', 'step': 42},
         ]})
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     assert remote.find_job_by_name('run_a')['id'] == 'j-7'
     assert remote.find_job_by_name('nope') is None
     assert seen[0].endswith('/api/jobs')          # unfiltered listing, no ?id=
@@ -206,7 +210,7 @@ def test_get_job_log_samples_files(remote, monkeypatch):
                                   'total_steps': 100, 'info': 'Training', 'speed_string': '1.2 it/s'})
         return FakeResp(404, {})
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     assert remote.get_job('j-1')['status'] == 'running'
     assert remote.get_log('j-1') == 'line1\nline2'
     assert remote.get_samples('j-1')[0].endswith('x__100_0.jpg')
@@ -253,7 +257,7 @@ def test_download_resumes_with_range_until_expected_size(remote, monkeypatch, tm
         return _CuttingResp(body[offset:], serve=30,
                             status_code=206 if offset else 200)
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     dest = tmp_path / 'f.safetensors'
     remote.download_public_file('/out/f.safetensors', str(dest),
                                 expected_size=100, attempts=10)
@@ -266,7 +270,7 @@ def test_download_fails_when_no_progress(remote, monkeypatch, tmp_path):
     """A server answering clean EOFs at the same offset forever (or a dead
     stream) must fail after the no-progress attempt — never spin, never
     register a short file."""
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request',
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request',
                         lambda method, url, **kw: _CuttingResp(b'', serve=0))
     dest = tmp_path / 'f.safetensors'
     with pytest.raises(RemoteError, match='incomplete'):
@@ -279,7 +283,7 @@ def test_download_fails_when_no_progress(remote, monkeypatch, tmp_path):
 def test_download_without_expected_size_keeps_clean_eof_semantics(remote, monkeypatch, tmp_path):
     """Small files (samples) have no size contract: a stream that ends
     cleanly is complete, exactly the old behavior."""
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request',
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request',
                         lambda method, url, **kw: _CuttingResp(b'IMG', serve=3))
     dest = tmp_path / 's.jpg'
     remote.download_sample('/out/s.jpg', str(dest))
@@ -293,7 +297,7 @@ def test_download_public_file_streams_and_urlencodes(remote, monkeypatch, tmp_pa
         seen['url'], seen['stream'] = url, kw.get('stream')
         return FakeResp(200, content=b'BYTES')
 
-    monkeypatch.setattr('app.services.aitoolkit_remote.requests.request', fake)
+    monkeypatch.setattr('lds_cloud_training.aitoolkit_remote.requests.request', fake)
     dest = tmp_path / 'out.safetensors'
     remote.download_public_file('/root/aitk/out/run a/f.safetensors', str(dest))
     assert dest.read_bytes() == b'BYTES'

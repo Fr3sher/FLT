@@ -8,15 +8,12 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 
-// Plage de strength par LoRA selon la famille :
-//  - Krea : 0..6, étendue à 20 pour les LoRA « utility » (ex. filter-bypass, sans
-//    effet marqué sous ~13) — alignée sur le clamp backend (inject_krea_loras ≤ 20).
-//    Le motif accepte les trois orthographes ('filterbypass', 'filter_bypass',
-//    'filter-bypass') : la version d'origine n'en acceptait qu'une, et un fichier
-//    renommé recevait un slider 0..6, donc une plage où ce LoRA ne fait RIEN.
-//    Même source que utils/kreaGenerationLoras.BYPASS_NAME (lane dataset).
-//  - Hors Krea (Z-Image / SDXL) : -2..2 (demande user — le négatif inverse le
-//    concept, au-delà de 2 ça dégrade) ; clamp backend élargi à [-2, 6].
+// Per-family LoRA strength ranges: Krea uses 0-6, extended to 20 for utility LoRAs such as
+// filter-bypass with little effect below about 13, matching inject_krea_loras <= 20. Accept
+// filterbypass, filter_bypass and filter-bypass; recognizing only one spelling left renamed files
+// with ineffective 0-6 sliders. Share utils/kreaGenerationLoras.BYPASS_NAME with Dataset. Other
+// families, Z-Image and SDXL, offer -2 to 2 as requested: negative reverses the concept and higher
+// values degrade it. Backend clamp is -2 to 6.
 const EXTENDED_MAX_PATTERNS = [/filter[-_]?bypass/i];
 const strengthRangeFor = (filename, krea) => {
   if (krea) {
@@ -26,9 +23,8 @@ const strengthRangeFor = (filename, krea) => {
   return { min: -2, max: 2 };
 };
 
-// Libellé court d'un checkpoint dans un groupe déplié : seul le step distingue les
-// frères (le nom du dataset est déjà porté par l'en-tête du groupe). Pas de step =
-// checkpoint FINAL (entraînement terminé).
+// Short checkpoint labels in expanded groups show only step, since the header names the dataset.
+// No step means the FINAL checkpoint from completed training.
 const stepLabel = (l) => (l.step != null ? `${l.step} steps` : 'final');
 
 export default function ZImageLoraConfig({ loras = [], onChange, zModel = '', isFavorite, onToggleFavorite,
@@ -37,8 +33,8 @@ export default function ZImageLoraConfig({ loras = [], onChange, zModel = '', is
   const [cfg, setCfg] = useState(() => {
     try { return JSON.parse(localStorage.getItem(storageKey)) || {}; } catch { return {}; }
   });
-  // Quels groupes de checkpoints (dataset) sont dépliés — persisté à part du cfg
-  // (le cfg reste indexé par filename : aucune migration d'état de sélection).
+  // Expanded dataset/checkpoint groups persist separately from cfg. cfg stays keyed by filename,
+  // requiring no selection-state migration.
   const [openGroups, setOpenGroups] = useState(() => {
     try { return JSON.parse(localStorage.getItem(`${storageKey}_open`)) || {}; } catch { return {}; }
   });
@@ -54,14 +50,14 @@ export default function ZImageLoraConfig({ loras = [], onChange, zModel = '', is
       .map((l) => ({
         filename: l.filename,
         strength: cfg[l.filename]?.strength ?? 1.0,
-        // Studio uniquement (batchToggle) : ☑ batch = ce LoRA devient un AXE de
-        // test (cellules avec/sans) au lieu d'être appliqué à toutes les cellules.
+        // Studio only with batchToggle: checked batch makes this LoRA a with/without test AXIS
+        // instead of applying it to every cell.
         ...(batchToggle ? { batch: !!cfg[l.filename]?.batch } : {}),
       }));
     onChange?.(enabled);
   }, [cfg, loras, onChange, storageKey, batchToggle]);
 
-  // Favoris d'abord (pour le modèle courant) → repérage « d'un coup d'œil ».
+  // Favorites first for the current model, making them easy to find at a glance.
   const favFirst = useMemo(() => {
     if (!zModel || !isFavorite) return loras;
     const fav = [], rest = [];
@@ -69,17 +65,15 @@ export default function ZImageLoraConfig({ loras = [], onChange, zModel = '', is
     return [...fav, ...rest];
   }, [loras, zModel, isFavorite]);
 
-  // Séparation CHARACTER / STYLE (demande user) : un LoRA de personnage est
-  // entraîné avec un trigger word (injecté auto au prompt) ; un LoRA sans
-  // trigger = style/utilitaire partagé. Deux sections visuellement distinctes.
+  // Separate CHARACTER and STYLE visually as requested. Character LoRAs have a trigger
+  // automatically injected into prompts; no trigger means a shared style/utility LoRA.
   const characterLoras = useMemo(() => favFirst.filter((l) => l.triggerWord), [favFirst]);
   const styleLoras = useMemo(() => favFirst.filter((l) => !l.triggerWord), [favFirst]);
 
-  // Regroupement des checkpoints d'un même dataset (même trigger + base = `l.group`
-  // fourni par le backend). Un LoRA sans `group` (non entraîné via l'app) reste seul
-  // sous sa propre clé (= filename). Chaque groupe est trié par step croissant, le
-  // checkpoint FINAL (step nul) en dernier. L'ordre des groupes suit favFirst (les
-  // datasets avec un favori remontent). Un groupe à 1 checkpoint = ligne simple.
+  // Group checkpoints by backend l.group, representing the same dataset trigger and base. Files
+  // without group, not trained in-app, stay alone under filename. Sort group checkpoints by
+  // ascending step, with null-step FINAL last. Preserve favFirst group order so datasets
+  // containing favorites rise. A one-checkpoint group renders as a simple row.
   const characterGroups = useMemo(() => {
     const map = new Map();
     for (const l of characterLoras) {
@@ -106,7 +100,7 @@ export default function ZImageLoraConfig({ loras = [], onChange, zModel = '', is
     ...c, [fn]: { ...c[fn], enabled: !c[fn]?.enabled, strength: c[fn]?.strength ?? 1.0 },
   }));
   const setStrength = (fn, v) => setCfg((c) => {
-    if (c[fn]?.locked) return c; // force verrouillée → ignore
+    if (c[fn]?.locked) return c; // Strength is locked; ignore the change.
     return { ...c, [fn]: { ...c[fn], enabled: c[fn]?.enabled ?? false, strength: v } };
   });
   const toggleLock = (fn) => setCfg((c) => ({
@@ -115,16 +109,15 @@ export default function ZImageLoraConfig({ loras = [], onChange, zModel = '', is
 
   return (
     <div className="flex flex-col gap-1.5 text-left normal-case tracking-normal">
-      {/* label=null/'' → pas de titre interne (le parent Collapsible porte le titre). */}
+      {/* Null/empty label omits the inner title; the parent Collapsible supplies it. */}
       {label && (
         <span className="text-[0.6875rem] text-content-muted uppercase tracking-wide">
           {label}
         </span>
       )}
       {(() => {
-        // visibleLabel : libellé affiché à la place de displayName (ex. step court
-        // « 2000 steps » quand la ligne est un enfant d'un groupe déplié). Les
-        // aria-label gardent le displayName COMPLET (contexte lecteur d'écran).
+        // visibleLabel replaces displayName visually, such as a short 2000 steps label inside a
+        // group. Keep the FULL displayName in aria-label for screen-reader context.
         const renderLora = (l, visibleLabel) => {
         const c = cfg[l.filename] || {};
         const fav = !!(zModel && isFavorite?.(zModel, l.filename));
@@ -194,9 +187,9 @@ export default function ZImageLoraConfig({ loras = [], onChange, zModel = '', is
           </div>
         );
         };
-        // Un groupe de checkpoints (dataset) : en-tête dépliable + enfants (steps).
-        // Groupe à 1 checkpoint → ligne simple (pas de repli inutile). Replié, l'en-tête
-        // montre le checkpoint ACTIF (+ sa strength) ou le nombre de checkpoints.
+        // Dataset checkpoint group: expandable header with step children. A single checkpoint is a
+        // simple row without needless collapse. Collapsed headers show the ACTIVE checkpoint and
+        // strength, or the checkpoint count.
         const renderGroup = ({ key, items }) => {
           if (items.length === 1) return renderLora(items[0]);
           const open = !!openGroups[key];
@@ -228,7 +221,7 @@ export default function ZImageLoraConfig({ loras = [], onChange, zModel = '', is
             </div>
           );
         };
-        // Sous-titres seulement quand les DEUX catégories existent (sinon bruit).
+        // Show category subtitles only when BOTH categories exist, avoiding noise.
         const both = characterLoras.length > 0 && styleLoras.length > 0;
         return (
           <>
@@ -243,8 +236,8 @@ export default function ZImageLoraConfig({ loras = [], onChange, zModel = '', is
                 Style / utility LoRAs
               </span>
             )}
-            {/* arrow-wrap : renderLora prend (l, visibleLabel) — .map passerait l'index
-                comme label. Le style/utility reste PLAT (pas de regroupement). */}
+            {/* Wrap in an arrow: renderLora accepts (l, visibleLabel), so passing it
+                directly to map would use the index as label. Style/utility stays FLAT. */}
             {styleLoras.map((l) => renderLora(l))}
           </>
         );

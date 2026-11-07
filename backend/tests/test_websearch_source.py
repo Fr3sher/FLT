@@ -1,11 +1,13 @@
-"""Recherche d'images par mot-clé (source websearch).
+"""Keyword image search through websearch. Never call ddgs directly: tests replace
+the _images indirection."""
 
-La bibliothèque `ddgs` n'est JAMAIS appelée : les tests remplacent la seule
-indirection `_images`."""
 import pytest
 
-from app.scrape.sources import websearch
-from app.scrape.sources.websearch import WebSearchSource
+pytestmark = pytest.mark.plugins('scrape')
+
+
+from lds_scrape.sources import websearch
+from lds_scrape.sources.websearch import WebSearchSource
 
 
 _RESULT = {
@@ -44,9 +46,9 @@ def test_match_honours_the_strict_safesearch_flag():
 
 
 @pytest.mark.parametrize('url', [
-    'https://duckduckgo.com/?q=&iax=images',      # mot-clé vide
-    'https://duckduckgo.com/',                     # pas de q
-    'https://duckduckgo.com.evil.test/?q=x',       # suffixe d'hôte
+    'https://duckduckgo.com/?q=&iax=images',      # Empty keyword.
+    'https://duckduckgo.com/',                     # No q parameter.
+    'https://duckduckgo.com.evil.test/?q=x',       # Host suffix.
     'https://example.test/?q=x',                   # autre site
 ])
 def test_match_refuses_anything_else(url):
@@ -63,7 +65,7 @@ def test_scan_maps_results_to_the_common_schema(monkeypatch):
 
     assert err is None
     assert items == [{
-        'url': 'https://cdn.example.test/photo.jpg',      # média DIRECT
+        'url': 'https://cdn.example.test/photo.jpg',      # DIRECT media.
         'title': 'Curly hair portrait',
         'thumbnail': 'https://cdn.example.test/thumb.jpg',
         'type': 'image',
@@ -72,7 +74,7 @@ def test_scan_maps_results_to_the_common_schema(monkeypatch):
     }]
     assert seen['query'] == 'curly hair'
     assert seen['safesearch'] == 'off'
-    assert seen['page'] == 1        # ddgs compte à partir de 1, match.page de 0
+    assert seen['page'] == 1        # ddgs pages start at1; match.page starts at0.
 
 
 def test_scan_asks_for_the_next_page(monkeypatch):
@@ -87,7 +89,7 @@ def test_scan_asks_for_the_next_page(monkeypatch):
 
 def test_scan_drops_entries_without_a_usable_https_image(monkeypatch):
     _spy_images(monkeypatch, results=[
-        {'image': 'http://cdn.example.test/insecure.jpg'},        # pas https
+        {'image': 'http://cdn.example.test/insecure.jpg'},        # Not HTTPS.
         {'image': 'https://user:pw@cdn.example.test/creds.jpg'},  # credentials
         {'title': 'no image at all'},
         _RESULT,
@@ -102,7 +104,7 @@ def test_scan_drops_entries_without_a_usable_https_image(monkeypatch):
 
 
 def test_an_empty_search_is_empty_not_an_error(monkeypatch):
-    """Zéro résultat pour un mot-clé est un fait, pas une panne."""
+    """Zero results for a keyword is a valid outcome, not a failure."""
     _spy_images(monkeypatch, results=[])
     m = WebSearchSource().match('https://duckduckgo.com/?q=zzzznotathing')
     m.page = 0
@@ -124,8 +126,8 @@ def test_a_failing_library_is_reported_and_never_raises(monkeypatch):
 
 
 def test_none_from_the_library_is_reported_not_treated_as_empty(monkeypatch):
-    """Un blocage doux (ratelimit, filtre) peut renvoyer None sans lever.
-    Ça reste une panne, pas une liste vide."""
+    """A soft block such as rate limiting or filtering may return None without
+    raising. It remains a failure, not an empty list."""
     def fake(**kw):
         return None
     monkeypatch.setattr(websearch, '_images', fake)
@@ -139,9 +141,9 @@ def test_none_from_the_library_is_reported_not_treated_as_empty(monkeypatch):
 
 
 def test_a_lazy_iterator_raising_mid_iteration_is_reported_not_raised(monkeypatch):
-    """`ddgs` peut renvoyer un itérateur paresseux qui fait son I/O réseau à
-    l'itération : si la compréhension de scan() était hors du try, l'exception
-    s'échapperait et casserait le contrat « scan() ne lève jamais »."""
+    """ddgs may return a lazy iterator performing network I/O during iteration. Keep
+    the scan comprehension inside try so exceptions cannot violate the never-raise
+    contract."""
     def fake(**kw):
         def generator():
             yield _RESULT
@@ -158,8 +160,8 @@ def test_a_lazy_iterator_raising_mid_iteration_is_reported_not_raised(monkeypatc
 
 
 def test_a_missing_dependency_says_how_to_install_it(monkeypatch):
-    """Le registry importe toutes les sources au démarrage : une dépendance
-    optionnelle absente doit donner une consigne, jamais empêcher le boot."""
+    """The registry imports all sources at startup. Missing optional dependencies
+    must produce actionable guidance rather than prevent startup."""
     _spy_images(monkeypatch, raises=ImportError('No module named ddgs'))
     m = WebSearchSource().match('https://duckduckgo.com/?q=portrait')
     m.page = 0
@@ -167,7 +169,7 @@ def test_a_missing_dependency_says_how_to_install_it(monkeypatch):
     items, err = WebSearchSource().scan(m)
 
     assert items is None
-    assert 'requirements-scrape.txt' in err
+    assert 'web scraping dependencies' in err and 'Setup' in err
 
 
 # --- thumbnail fallback ---------------------------------------------------------
@@ -217,6 +219,6 @@ def test_a_thumbnail_with_credentials_or_a_bad_scheme_still_falls_back(monkeypat
 
 
 def test_the_source_is_registered_ahead_of_the_universal_fallback():
-    from app.scrape.sources import registry
+    from lds_scrape.sources import registry
     match = registry.resolve('https://duckduckgo.com/?q=portrait&iax=images')
     assert match is not None and match.source.name == 'websearch'

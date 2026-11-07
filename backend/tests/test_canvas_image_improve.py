@@ -15,10 +15,14 @@ boundary in BOTH directions — invisible to the studio, visible in the gallery 
 because a future contributor "harmonising" either half silently deletes a
 feature or resurrects a bug.
 """
+
+import pytest
+
+pytestmark = pytest.mark.plugins('canvas', 'image_upscale', 'seedvr2')
+
 import io
 import os
 
-import pytest
 from PIL import Image
 
 
@@ -134,7 +138,7 @@ def test_the_preflight_of_the_chosen_engine_still_runs(app, monkeypatch):
     too — that is the point of routing through the shared preflight."""
     from app.services import face_dataset_service as svc
     from app.services import lora_test_studio as lts
-    from app.services.seedvr2_helper import SeedVR2ModelsMissing
+    from lds_seedvr2.seedvr2_helper import SeedVR2ModelsMissing
 
     def boom(engine):
         raise SeedVR2ModelsMissing([])

@@ -269,6 +269,17 @@ def start(app, bank_id, kind, fn, total=0, reserve_ids=None,
         job['_launched'] = True
         job['_touched'] = time.time()
 
+    # Only this explicit image-bank vocabulary is reported. The video lane and
+    # third-party job names are not copied into product statistics.
+    usage_ticket = None
+    usage_action = {'scan': 'scan', 'caption': 'caption', 'faces': 'faces',
+                    'score': 'score', 'framing': 'framing',
+                    'promote': 'promote'}.get(kind)
+    if usage_action and isinstance(_key(bank_id), int):
+        from ..usage_statistics import begin_operation
+        with app.app_context():
+            usage_ticket = begin_operation('bank')
+
     def _run():
         completed = False
         try:
@@ -282,6 +293,14 @@ def start(app, bank_id, kind, fn, total=0, reserve_ids=None,
             with _lock:
                 job['finished'] = True
                 job['_touched'] = time.time()
+            if usage_ticket is not None:
+                from ..usage_statistics import finish_operation
+                result = ('cancelled' if job.get('cancelled') else
+                          'failed' if job.get('error') or not completed else 'completed')
+                if result == 'completed' and job.get('_usage_result') in {'partial', 'failed'}:
+                    result = job['_usage_result']
+                finish_operation(usage_ticket, 'bank', usage_action, result,
+                                 'operation_failed' if result in {'partial', 'failed'} else 'none')
             # AFTER the snapshot is finished, never before: the journal write
             # commits, and a commit inside the pass's own context would race its
             # final progress read. A cancelled or errored run is deliberately

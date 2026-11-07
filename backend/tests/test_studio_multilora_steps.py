@@ -46,6 +46,7 @@ def test_base_models_publishes_the_axes_ladders(client, monkeypatch):
     axes = resp.get_json()['axes']
     # The SAME constants the per-dataset payload sends — not a second ladder.
     assert axes['steps_choices'] == lts.STEPS_CHOICES
+    assert {1, 2, 3, 4, 5, 6, 50}.issubset(axes['steps_choices'])
     assert axes['default_steps'] == lts.DEFAULT_STEPS
     assert axes['cfg_choices'] == lts.CFG_CHOICES
     assert axes['default_cfg'] == lts.DEFAULT_CFG

@@ -2,9 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-import { runsHubContinueLanes } from './runsHubContinueLanes.js';
+import { runsHubContinueLanes } from '../../../bundled/cloud_training/frontend/lib/continueLanes.js';
 
-const page = fs.readFileSync(new URL('../pages/CloudRunsPage.jsx', import.meta.url), 'utf8');
+const read = rel => fs.readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const cloud = read('../../../bundled/cloud_training/frontend/CloudRunsHub.jsx');
+const controller = read('../components/runs/useRunsHubContinue.js');
+const local = read('../components/runs/localContinuation.js');
+const canvasRequest = read('./canvasContinue.js');
+const page = fs.readFileSync(new URL('../components/runs/RunsHub.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 const RUN = { run_id: 7, dataset_id: 3, train_type: 'zimage', variant: 'turbo' };
 const OK = { aitoolkitValid: true, configured: true, limit: 2, actives: [] };
@@ -59,7 +64,9 @@ test('an active run on the dataset no longer closes the cloud lane — the serve
 });
 
 test('the hub cloud lane goes through the confirm loop, so PARALLEL_RUN: can be answered', () => {
-  assert.match(page, /postWithConfirmations\(\s*\n?\s*\(b\) => postJson\('\/api\/dataset\/train\/cloud\/continue'/);
+  assert.match(cloud, /return postWithConfirmations\(/);
+  assert.match(cloud, /\(next\) => postJson\(url, next\)/);
+  assert.match(cloud, /'\/api\/dataset\/train\/cloud\/continue'/);
 });
 
 test('the concurrency limit closes the cloud lane and names the count', () => {
@@ -82,38 +89,28 @@ test('no run open → no picker at all (the dialog stays single-lane)', () => {
 });
 
 test('the Runs hub actually offers the picker and routes the local lane', () => {
-  // The hub used to mount ContinueDialog WITHOUT `lanes` (cloud-only by design)
-  // — Continue was opened from the Runs page and had no local/pod choice.
-  assert.match(page, /lanes=\{continueLanes\}/);
-  assert.match(page, /runsHubContinueLanes\(continueRunTarget/);
-  // and the local lane must reach the LOCAL endpoint, not the cloud one
-  assert.match(page, /const local = payload\.lane === 'local';/);
-  assert.match(page, /postJson\(`\/api\/dataset\/\$\{run\.dataset_id\}\/train\/continue`/);
-  // addressed by the RUN's own base/family/variant, never the dataset's
-  // persisted selection (which may point at another base entirely)
-  assert.match(page, /run\.base_model != null \? \{ base_model: run\.base_model \}/);
-  assert.match(page, /run\.train_type \? \{ train_type: run\.train_type \}/);
-  assert.match(page, /run\.variant \? \{ variant: run\.variant \}/);
+  assert.match(page, /<ContinueDialog \{\.\.\.dialog\}/);
+  assert.match(controller, /initialFromStep: initialStep, lanes, transportPlan/);
+  assert.match(controller, /localContinuationAvailability\(target/);
+  assert.match(cloud, /runsHubContinueLanes\(run/);
+  assert.match(controller, /if \(lane === 'local'\)/);
+  assert.match(controller, /localContinuationRequest\(run, selected\)/);
+  assert.match(local, /canvasContinueRequest\(run, selected/);
+  assert.match(canvasRequest, /train\/continue/);
+  for (const key of ['base_model', 'train_type', 'variant']) assert.ok(canvasRequest.includes(key));
+  assert.match(local, /expected_record_id = selected.expectedRecordId/);
 });
 
 test('a local continuation loops on the confirmable refusals like the panel does', () => {
-  // A resume re-exports the CURRENT dataset, so it hits the caption/quality
-  // guards; without the loop the user just got a raw "MISMATCH_CAPTION: …".
-  // The loop itself now lives in the shared helper (one implementation, one
-  // place where "never ask twice for the same flag" is enforced) — the contract
-  // is that this lane goes through it, with its own label.
-  assert.match(page, /postWithConfirmations\(\s*\n?\s*\(b\) => postJson\(`\/api\/dataset\/\$\{run\.dataset_id\}\/train\/continue`, b\),\s*\n?\s*body, 'Continue anyway \(force\)'\)/);
-  // and a refusal must surface: postJson THROWS on 400/409. It is now shown
-  // INSIDE the still-open dialog (the choices that caused it are still filled
-  // in) instead of as a toast over a dialog that had already been destroyed.
-  assert.match(page, /continueAttemptOutcome\(\{ thrown: e \}\)/);
-  assert.match(page, /if \(!outcome\.close\) \{ setContinueError\(outcome\.error\); return; \}/);
+  assert.match(controller, /await postWithConfirmations\(body => postJson\(request.url, body\), request.body, 'Continue anyway \(force\)'\)/);
+  assert.match(controller, /continueAttemptOutcome\(\{ thrown \}\)/);
+  assert.match(controller, /else setError\(outcome.error\)/);
 });
 
 test('the confirmable refusal markers have ONE definition, shared by both mounts', () => {
-  const util = fs.readFileSync(new URL('./trainingRefusals.js', import.meta.url), 'utf8');
+  const util = fs.readFileSync(new URL('./trainingRefusals.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const panel = fs.readFileSync(
-    new URL('../components/dataset/TrainingPanel.jsx', import.meta.url), 'utf8');
+    new URL('../components/dataset/TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   for (const marker of ['MISMATCH_CAPTION: ', 'UNCAPTIONED: ',
     'CAPTION_QUALITY: ', 'CUSTOM_WEIGHTS_UNVERIFIED: ']) {
     assert.ok(util.includes(marker), `${marker} must live in the shared util`);
@@ -129,9 +126,42 @@ test('the confirmable refusal markers have ONE definition, shared by both mounts
   // user as an error toast asking a question it gave no way to answer. Pinning
   // the exact import line would have made that fix look like a violation.
   assert.match(panel, /import \{[^}]*confirmableRetryFlag[^}]*\} from '\.\.\/\.\.\/utils\/trainingRefusals'/);
-  assert.match(page, /from '\.\.\/utils\/trainingRefusals'/);
+  assert.match(controller, /from '\.\.\/\.\.\/utils\/trainingRefusals\.js'/);
+  assert.match(cloud, /from '@lds\/plugin-sdk\/training'/);
   assert.doesNotMatch(panel, /const CONFIRMABLE_REFUSALS = \[/);
   assert.doesNotMatch(page, /const CONFIRMABLE_REFUSALS = \[/);
   // neither mount may hand-roll the confirm loop again
   assert.doesNotMatch(page, /\[flag\]: true \}/);
+});
+
+
+test('Cloud contributes its continuation transport only while enabled; local remains independent', async t => {
+  const { default: descriptor } = await import('../../../bundled/cloud_training/frontend/index.js');
+  const { contributions, registerDescriptor, resetRegistry, setEnabled } = await import('../plugins/registry.js');
+  const { localContinuationRequest } = await import('../components/runs/localContinuation.js');
+  const manifest = JSON.parse(read('../../../bundled/cloud_training/plugin.json'));
+  resetRegistry();
+  t.after(resetRegistry);
+  assert.equal(registerDescriptor(descriptor, { guideOwnership: manifest.guide_ownership }), true);
+  setEnabled([]);
+  assert.deepEqual(contributions('training.continue.lane', 'dataset'), []);
+  const saved = { source: 'local', dataset_id: 3, record_id: 17, train_type: 'zimage',
+    variant: 'turbo', base_model: 'fixture.safetensors', resume_steps: [100] };
+  const payload = { lane: 'local', fromStep: 100, extraSteps: 50 };
+  const localBefore = localContinuationRequest(saved, payload);
+  assert.equal(localBefore.url, '/api/dataset/3/train/continue');
+  assert.equal(localBefore.body.expected_record_id, 17);
+  setEnabled(['cloud_training']);
+  const [lane] = contributions('training.continue.lane', 'dataset');
+  assert.equal(lane.id, 'cloud');
+  assert.deepEqual(lane.request({ node: { source: 'cloud', run_id: 8 },
+    body: { from_step: 100, extra_steps: 50, base_model: 'ignored', train_type: 'zimage' } }), {
+    url: '/api/dataset/train/cloud/continue', body: { run_id: 8, from_step: 100, extra_steps: 50 },
+  });
+  assert.deepEqual(lane.request({ node: saved, body: localBefore.body }), {
+    url: '/api/dataset/3/train/cloud/continue-local', body: localBefore.body,
+  });
+  setEnabled([]);
+  assert.deepEqual(contributions('training.continue.lane', 'dataset'), []);
+  assert.deepEqual(localContinuationRequest(saved, payload), localBefore);
 });

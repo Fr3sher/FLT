@@ -13,8 +13,9 @@ test('dataset More popover uses an opaque overlay surface', () => {
 
 test('setup never suggests the slow Qwen thinking tag for captioning', () => {
   const setup = readFileSync(new URL('../src/pages/SetupPage.jsx', import.meta.url), 'utf8')
-  const tools = readFileSync(new URL('../src/components/settings/LocalToolsSection.jsx', import.meta.url), 'utf8')
+  const defaults = readFileSync(new URL('../../backend/app/config.py', import.meta.url), 'utf8')
   assert.match(setup, /huihui_ai\/qwen3-vl-abliterated:8b-instruct/)
   assert.doesNotMatch(setup, /huihui_ai\/qwen3-vl-abliterated:8b['"]/)
-  assert.match(tools, /huihui_ai\/qwen3-vl-abliterated:8b-instruct/)
+  // Settings now lists server models; the recommended tag comes from config.
+  assert.match(defaults, /'vision_model':\s*'huihui_ai\/qwen3-vl-abliterated:8b-instruct'/)
 })

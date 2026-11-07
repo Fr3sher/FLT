@@ -6,6 +6,9 @@ import os
 
 import pytest
 from PIL import Image
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 CONCEPTLESS = {'name': 'Lola', 'trigger_word': 'lola'}
 
@@ -163,7 +166,7 @@ def test_run_config_dataset_overrides_without_mutating(app, client):
     dataset it hands build_job_config, WITHOUT touching the real row — the seam
     that keeps two concurrent multi-family cloud runs isolated (incident
     2026-07-14)."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import face_dataset_service as fds
     ds_id = _mkds(client)
     with app.app_context():

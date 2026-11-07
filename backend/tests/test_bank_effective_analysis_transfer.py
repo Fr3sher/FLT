@@ -380,7 +380,7 @@ def test_all_effective_analysis_passes_resolve_the_transformed_image(
 
         subprocess_inputs = {}
 
-        def fake_infer(_job, _python, script, payload, _cache, _regex, _window):
+        def fake_infer(_job, _python, script, payload, _cache, _regex, _window, *, include_cached=False):
             paths = json.loads(payload)['images']
             subprocess_inputs[Path(script).name] = paths
             assert paths == [expected_path]

@@ -8,7 +8,7 @@ import {
   fmtDuration, fmtGB, initialMergeBase, loadMergeDraft, loadMergeOpen,
   loraPayload, newLoraRow, pct, planHeadline, saveMergeDraft, saveMergeOpen,
   weightHint,
-} from './loraMerge.js';
+} from "../../../../bundled/model_tools/frontend/lib/loraMerge.js";
 
 /** A localStorage stand-in. `raise` makes every call throw, which is what a
  *  browser with storage disabled actually does — it is not an absent object. */
@@ -320,7 +320,7 @@ test('the disclosure remembers being open, and only "open" counts as open', () =
 // --- the component's own source: invariants worth pinning --------------------
 
 const tool = readFileSync(
-  fileURLToPath(new URL('./LoraMergeTool.jsx', import.meta.url)), 'utf8');
+  fileURLToPath(new URL("../../../../bundled/model_tools/frontend/panels/LoraMergeTool.jsx", import.meta.url)), 'utf8');
 
 test('the poller never treats apiFetch as if it resolved a Response', () => {
   // apiFetch RESOLVES THE PARSED BODY. `.then((r) => r.json())` throws a
@@ -381,7 +381,7 @@ test('the base prop only overwrites the field when it names something', () => {
 });
 
 const panel = readFileSync(
-  fileURLToPath(new URL('./TrainingPanel.jsx', import.meta.url)), 'utf8');
+  fileURLToPath(new URL('../../../../bundled/model_tools/frontend/panels/TrainingMergeTool.jsx', import.meta.url)), 'utf8');
 
 test('the merge disclosure is controlled, so a remount cannot close it', () => {
   // `open` on a <details> is DOM state. The block sits inside CheckpointPortal,

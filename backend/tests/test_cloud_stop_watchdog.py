@@ -12,11 +12,18 @@ from datetime import timedelta
 from app.utils.timestamps import naive_utcnow
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
 def ct(app, monkeypatch):
-    from app.services import cloud_training
+    monkeypatch.setenv('VAST_API_KEY', 'k-test')
+    from lds_cloud_training import cloud_training
+    monkeypatch.setattr(cloud_training.vast_client, 'get_instance',
+                        lambda iid, **_kw: {'instance_id': '90001', 'label': 'lds-1'}
+                        if str(iid) == '90001' else None)
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     cloud_training._stop_events.clear()
     cloud_training._monitor_threads.clear()
@@ -38,7 +45,7 @@ def _mkrun(ct, **kw):
 def _stub_destroy(ct, monkeypatch, ok=True):
     destroyed = []
 
-    def fake(iid):
+    def fake(iid, **_kw):
         destroyed.append(str(iid))
         if isinstance(ok, Exception):
             raise ok
@@ -347,7 +354,7 @@ def test_supervisor_never_raises(ct, app, monkeypatch):
         ct.cfg.save_config({'cloud': {'freeze_watchdog_minutes': 45}})
         _mkrun(ct, updated_at=naive_utcnow() - timedelta(hours=3))
         monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                            lambda iid: (_ for _ in ()).throw(RuntimeError('boom')))
+                            lambda iid, **_kw: (_ for _ in ()).throw(RuntimeError('boom')))
         ct.supervise_active_runs()      # must not raise
 
 
@@ -360,14 +367,14 @@ def test_run_payload_exposes_the_idle_clock(ct, app):
 
 # ------------------------------------------------------------- Route --
 
-def test_stop_route_surfaces_the_failure(app, client, monkeypatch):
-    from app.services import cloud_training as ct
+def test_stop_route_surfaces_the_failure(ct, app, client, monkeypatch):
+    from lds_cloud_training import cloud_training as ct
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
     with app.app_context():
         run = _mkrun(ct, updated_at=naive_utcnow() - timedelta(hours=2))
         run_id = run.id
         monkeypatch.setattr(ct.vast_client, 'destroy_instance',
-                            lambda iid: False)
+                            lambda iid, **_kw: False)
     r = client.post('/api/dataset/train/cloud/stop', json={'run_id': run_id})
     body = r.get_json()
     assert r.status_code == 200

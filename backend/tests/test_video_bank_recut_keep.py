@@ -1,17 +1,15 @@
-"""A re-cut keeps every shot whose bounds did not move (2026-09-01).
-
-The maintainer's own question — "j'ai déjà des cuts de 1 s, si je réapplique
-avec un minimum de 5 s, ça ne va pas les enlever ?" — pointed at a real cost:
-raising the floor DID delete every clip of every re-cut file, triage, captions
-and measurements with them, so iterating on a threshold cost an afternoon of
-work. Lowering or raising a threshold selects a SUBSET of the same boundaries
-(shot_boundaries.apply_min_length: "strict SUBSET ... never a shifted
-version"), so a surviving shot has byte-identical bounds and everything
-measured about that span is still true of it.
-"""
+"""Re-cutting preserves every shot whose bounds remain identical (2026-09-01).
+Raising minimum length formerly deleted all clips, triage, captions and
+measurements, making threshold experiments costly. Changing the threshold selects
+a strict subset of existing shot boundaries, never shifted boundaries, so
+surviving spans retain valid measurements and saved work."""
 from app.extensions import db
-from app.models import VideoBank, VideoClip, VideoSource
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoBank, VideoClip, VideoSource
+from lds_video import video_bank_service as svc
+
+import pytest
+pytestmark = pytest.mark.plugins('video')
 
 LOCAL_USER = 'local'
 
@@ -89,7 +87,7 @@ def test_a_promoted_clip_is_never_given_a_twin(app):
     """Promoted clips survive every drop; re-inserting their span used to add a
     duplicate row for the same footage. The skip set is measured against what
     the file HOLDS, not against what was kept."""
-    from app.models import VideoDataset
+    from lds_video.models import VideoDataset
     bank_id, src_id = _bank_with_shots(app, [(0.0, 4.0)])
     with app.app_context():
         ds = VideoDataset(user_id=LOCAL_USER, name='d', target_profile='wan22_14b',

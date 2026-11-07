@@ -29,7 +29,10 @@ from unittest.mock import patch
 import pytest
 
 from app.config import LOCAL_USER
-from app.services import video_bank_service as svc
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_bank_service as svc
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # --- fixtures of bytes ---------------------------------------------------------
@@ -102,7 +105,7 @@ def _files(bank):
 
 
 def _sources(bank_id):
-    from app.models import VideoSource
+    from lds_video.models import VideoSource
     return VideoSource.query.filter_by(bank_id=bank_id).all()
 
 
@@ -322,7 +325,7 @@ def _own_folder_bank(tmp_path, name='Own footage', folder='my_rushes'):
     """A bank pointed at a folder of the USER's own, the way `create_bank` makes
     one — the destination this lane spent a wave refusing."""
     from app.extensions import db
-    from app.models import VideoBank
+    from lds_video.models import VideoBank
     rushes = tmp_path / folder
     rushes.mkdir(exist_ok=True)
     bank = VideoBank(user_id=LOCAL_USER, name=name, source_path=str(rushes))
@@ -460,7 +463,7 @@ def test_a_bank_the_user_pointed_at_a_dataset_folder_is_refused_too(app, tmp_pat
     with app.app_context():
         from app import config as cfg
         from app.extensions import db
-        from app.models import VideoBank
+        from lds_video.models import VideoBank
         inside = cfg.dataset_images_root() / '42'
         inside.mkdir(parents=True, exist_ok=True)
         bank = VideoBank(user_id=LOCAL_USER, name='On a dataset',
@@ -581,16 +584,14 @@ def test_an_empty_selection_is_rejected(app):
             svc.scrape_import_to_video_bank(LOCAL_USER, [], name='Nothing')
 
 
-def test_the_per_request_cap_is_lower_than_the_image_outlets(app):
-    """Deliberately: one image is capped at 12 MB and 20 s, one video at 200 MB
-    and 180 s. A big selection is not refused — the client sends batches."""
-    from app.services.face_dataset_service import SCRAPE_IMPORT_MAX
-    assert svc.SCRAPE_VIDEO_IMPORT_MAX < SCRAPE_IMPORT_MAX
+def test_import_keeps_every_video_beyond_the_former_six_item_cap(app):
     with app.app_context():
-        items = [_item(f'http://x/{i}.mp4')
-                 for i in range(svc.SCRAPE_VIDEO_IMPORT_MAX + 1)]
-        with pytest.raises(ValueError):
-            svc.scrape_import_to_video_bank(LOCAL_USER, items, name='Too many')
+        by_url = {f'http://x/{i}.mp4': _mp4(bytes([i])) for i in range(12)}
+        with patch.object(svc, '_download_scrape_video', _fake_downloader(by_url)):
+            result = svc.scrape_import_to_video_bank(
+                LOCAL_USER, [_item(url) for url in by_url], name='All selected videos')
+        assert result['saved'] == 12
+        assert len(_files(svc.get_bank(LOCAL_USER, result['bank_id']))) == 12
 
 
 def test_a_failed_download_is_counted_and_never_stored(app):

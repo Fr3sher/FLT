@@ -25,7 +25,10 @@ import json
 import pytest
 
 from app.extensions import db
-from app.models import VideoBank, VideoClip, VideoSource
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video.models import VideoBank, VideoClip, VideoSource
+
+pytestmark = pytest.mark.plugins('video')
 
 
 # (module, how one shot is marked failed, how one shot is marked done)

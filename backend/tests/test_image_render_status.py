@@ -1,5 +1,10 @@
 """The ✨ modal's heartbeat — two tiny polls, one per id space."""
 
+import pytest
+
+pytestmark = pytest.mark.plugins('canvas')
+
+
 
 def _mk_dataset(app):
     from app.config import LOCAL_USER

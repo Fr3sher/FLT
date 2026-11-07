@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   CANVAS_RUN_KEY, canvasResultLabel, canvasRunDatasetIds, describeCanvasRun,
   normaliseTargets, readCanvasRun, readyImageCount, runPinCandidates, writeCanvasRun,
-} from './canvasRunResults.js';
+} from "../../../bundled/canvas/frontend/utils/canvasRunResults.js";
 
 const fakeStore = (initial = {}) => {
   const m = new Map(Object.entries(initial));

@@ -1,20 +1,14 @@
 // react-frontend/src/components/dataset/studio/EnhancePromptButton.jsx
 /**
- * « ✨ Enhance » : passe le prompt tapé au modèle Ollama LOCAL pour l'enrichir avant
- * génération — par défaut le même modèle que le captioning (pas de second client), et
- * la ⚙️ à côté du bouton permet d'en choisir un autre parmi les modèles Ollama déjà
- * tirés ('' = suivre le défaut, la clé est alors ABSENTE de la requête — même contrat
- * spread-if-set que les cadrans caption de la Bank). Le choix est mémorisé par
- * navigateur (localStorage), une seule préférence pour les deux surfaces qui montent
- * ce bouton (Test Studio et Canvas via RunSetupPanel → PromptField).
- *
- * Échec PROPRE sur une install sans Ollama : le bouton est DÉSACTIVÉ, avec en
- * infobulle la raison exacte (Ollama pas installé / pas joignable / modèle pas
- * téléchargé) — jamais un appel qui part et revient en erreur opaque. La source de
- * vérité est /api/capabilities (caps.ollama), déjà consommée par les surfaces Bank
- * et Settings : aucun probe supplémentaire n'est ajouté ici. Avec un modèle ⚙️
- * choisi, l'état « défaut pas téléchargé » ne bloque plus (l'appel ne s'en sert
- * pas) : le serveur vérifie le modèle choisi et son 409 le nomme.
+ * Enhance sends the typed prompt to LOCAL Ollama before generation, defaulting to the captioning
+ * model without a second client. The adjacent settings picker offers already-pulled Ollama models.
+ * Empty selection follows the default and OMITS the request key, matching Bank caption controls'
+ * spread-if-set contract. One localStorage preference serves Test Studio and Canvas through
+ * RunSetupPanel/PromptField. Without Ollama, disable the button and explain the exact reason:
+ * absent installation, unreachable server or missing model. Reuse /api/capabilities caps.ollama,
+ * already used by Bank and Settings; add no probe. An explicit model bypasses the
+ * missing-default-model gate because that default is not used; the server validates the chosen
+ * model and names it in any 409 response.
  */
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -62,10 +56,11 @@ function EnhanceModelPopover({ model, onPick, onClose }) {
   // A model pulled elsewhere (or picked before Ollama went down) stays selectable —
   // silently dropping the user's choice is worse than offering an unconfirmed name.
   const choices = model && !models.includes(model) ? [model, ...models] : models;
-  /* Portaillée : montée sous un ancêtre qui ouvre un contexte d'empilement
-     (`lg:sticky` de l'aside du Studio, ou le `transform` du canvas), un
-     z-index posé ici est PLAFONNÉ par cet ancêtre et un `overflow-auto`
-     le découpe. Voir studioModalsArePortaled.contract.test.js. */
+  /*
+   * Portal required: the Studio aside's lg:sticky or Canvas transform creates a parent stacking
+   * context that caps inner z-index, while overflow-auto clips content. See
+   * studioModalsArePortaled.contract.test.js.
+   */
   return createPortal(
     <div className="fixed inset-0 z-[9990] flex items-center justify-center bg-black/80 p-3"
       onClick={(e) => { e.stopPropagation(); onClose(); }}

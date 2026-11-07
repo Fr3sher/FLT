@@ -5,14 +5,24 @@
  * are that hold. */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ML_INSTALL_CARDS, cardCaps, cardInstalled } from './mlInstallCards.js'
-import { VIDEO_PIECES } from '../videobank/videoCapability.js'
+import { ML_INSTALL_CARDS, mlInstallCards, cardCaps, cardInstalled } from './mlInstallCards.js'
+import { VIDEO_PIECES } from "../../../../bundled/video/frontend/lib/videoCapability.js"
+import videoDescriptor from '../../../../bundled/video/frontend/index.js'
+import { resetRegistry, setEnabled } from '../../plugins/registry.js'
+import { registerBundledDescriptor } from '../../../tests/support/bundledDescriptors.mjs'
+
+test.beforeEach(() => {
+  resetRegistry()
+  assert.equal(registerBundledDescriptor(videoDescriptor), true)
+  setEnabled(['video'])
+})
+test.afterEach(() => { resetRegistry(); setEnabled([]) })
 
 test('every install the video capability strip points at has a Setup card', () => {
   // A piece whose `fix` line says "from Setup" MUST carry `setupCap`, and a
   // card must exist whose `cap` turns that exact probe green — otherwise the
   // remedy is a dead end the user walks into.
-  const offered = new Set(ML_INSTALL_CARDS.flatMap(cardCaps))
+  const offered = new Set(mlInstallCards().flatMap(cardCaps))
   for (const piece of VIDEO_PIECES) {
     if (!/from Setup/i.test(piece.fix)) continue
     assert.ok(piece.setupCap,
@@ -30,9 +40,9 @@ test('the strip actually names at least one Setup-installable piece', () => {
 })
 
 test('cards are unique per action and carry the fields the page renders', () => {
-  const actions = ML_INSTALL_CARDS.map((c) => c.action)
+  const actions = mlInstallCards().map((c) => c.action)
   assert.equal(new Set(actions).size, actions.length, 'duplicate action in ML_INSTALL_CARDS')
-  for (const c of ML_INSTALL_CARDS) {
+  for (const c of mlInstallCards()) {
     for (const field of ['action', 'cap', 'icon', 'title', 'body']) {
       assert.ok(c[field], `card ${c.action || '?'} is missing "${field}"`)
     }
@@ -47,7 +57,7 @@ test('cards are unique per action and carry the fields the page renders', () => 
 // key said "✓ Installed" on a machine that could not encode a single clip — and
 // a green badge is exactly where the user stops looking for the ↻ Reinstall.
 test('a card is only "installed" when EVERY piece its action installs is present', () => {
-  const video = ML_INSTALL_CARDS.find((c) => c.action === 'video')
+  const video = mlInstallCards().find((c) => c.action === 'video')
   assert.ok(video, 'no video card')
   assert.deepEqual(cardCaps(video), ['video_decode', 'video_encode'])
   assert.equal(cardInstalled(video, { video_decode: true, video_encode: false }), false)
@@ -58,4 +68,13 @@ test('a card is only "installed" when EVERY piece its action installs is present
   assert.equal(cardInstalled(masks, { masks: true }), true)
   assert.equal(cardInstalled(masks, {}), false)
   assert.equal(cardInstalled(masks, null), false)
+})
+
+test('absent Video removes its install offers while core cards remain', () => {
+  setEnabled([])
+  assert.deepEqual(mlInstallCards(), ML_INSTALL_CARDS)
+  assert.equal(mlInstallCards().some(card => card.action === 'video'), false)
+  setEnabled(['video'])
+  assert.equal(mlInstallCards().some(card => card.action === 'video'), true)
+  assert.deepEqual(mlInstallCards({ includePlugins: false }), ML_INSTALL_CARDS)
 })

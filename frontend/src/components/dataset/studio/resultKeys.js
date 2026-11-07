@@ -1,50 +1,31 @@
 // react-frontend/src/components/dataset/studio/resultKeys.js
 /**
- * Les CLÉS de la vue résultats du Studio : ce qui fait « un lancement », ce qui
- * fait « une variante », ce qui fait « une case ». Logique PURE extraite du JSX
- * pour être testable sous `node --test` (comme ./flipOrder.js et
- * ./stackResults.js) — parce qu'une clé fausse ne casse rien de visible : elle
- * fait DISPARAÎTRE des images, en silence.
- *
- * C'est exactement ce qui est arrivé au lot de prompts 📝 : le run était
- * identifié par `run_seed | prompt`, donc UN lancement de N prompts se coupait
- * en N pseudo-runs dont la vue n'en montrait qu'un — « une grille avec une
- * seule image ». Deux règles en sont sorties, et les tests de ce module les
- * tiennent :
- *
- *   1. le PROMPT n'identifie plus un lancement — `run_id` le fait (le backend
- *      pose un id opaque par invocation, cf. `create_run`) ;
- *   2. le PROMPT identifie une VARIANTE et une CASE — au même titre que le
- *      format, la CFG ou les steps. Sans cela, les N prompts d'un run
- *      retomberaient tous dans la même case, empilés sans étiquette.
- *
- * La case est lue de DEUX côtés (l'index construit depuis les cellules, et la
- * recherche faite par `ResultCell` depuis ligne × colonne × variante) : les deux
- * passent par `cellKey`, pour qu'aucun axe ne puisse être ajouté d'un côté et
- * oublié de l'autre.
+ * Studio results KEYS define launches, variants and cells. Pure helpers are extracted from JSX for
+ * node --test, like flipOrder and stackResults, because wrong keys silently hide images.
+ * Previously run_seed | prompt split one N-prompt launch into N pseudo-runs and showed only one.
+ * Tests enforce two rules: run_id identifies a launch, never prompt; prompt DOES identify variants
+ * and cells alongside aspect/CFG/steps so batch images do not collapse into unlabeled cells. Both
+ * cell indexing and ResultCell row/column/variant lookup use cellKey, preventing axes from being
+ * added to one side only.
  */
 
-/** Une partie de clé : `null`/`undefined` valent la chaîne vide, comme les
- *  `?? ''` que ces clés utilisaient quand elles étaient écrites à la main. */
+/**
+ * Key part: null and undefined become empty strings, matching the old manually written ?? ''
+ * behavior.
+ */
 const part = (v) => (v == null ? '' : String(v));
 
 /**
- * Assemblage d'une clé. JSON plutôt qu'un `join('|')` : un prompt est du texte
- * LIBRE, il contient des `|` quand ça lui chante, et deux prompts qui ne
- * diffèrent qu'autour d'un séparateur partageraient alors la même case.
+ * Build keys with JSON rather than joining with |: prompts are FREE TEXT and may contain
+ * delimiters, which would otherwise cause distinct prompts to share a cell.
  */
 const join = (parts) => JSON.stringify(parts.map(part));
 
 /**
- * Identité d'un LANCEMENT. `run_id` est l'id opaque que le backend pose sur
- * chaque cellule d'une invocation — la seule frontière juste, y compris quand un
- * run porte plusieurs prompts, plusieurs bases et plusieurs seeds.
- *
- * Les cellules ANTÉRIEURES à cette colonne n'en ont pas : elles gardent alors
- * strictement l'ancienne clé (`run_seed ?? seed`, plus le prompt). Le prompt y
- * reste nécessaire — deux lancements distincts à seed ÉPINGLÉ partagent leur
- * run_seed, et seul le prompt les séparait. Un vieux run s'affiche donc
- * exactement comme hier ; un run neuf, lui, ne se coupe plus en morceaux.
+ * LAUNCH identity is the opaque run_id placed on every cell by the backend invocation, covering
+ * all prompts, models and seeds. Older cells without this column preserve the exact legacy key:
+ * run_seed ?? seed plus prompt. Prompt remains necessary there because separate launches with a
+ * PINNED seed share run_seed. Old runs render as before; new ones no longer split apart.
  */
 export function runKey(cell) {
   const runId = cell?.run_id;
@@ -54,15 +35,14 @@ export function runKey(cell) {
 }
 
 /**
- * Identité d'une VARIANTE = une grille. Les axes de rendu du run, prompt
- * compris : chaque prompt reçoit sa propre table, comme chaque format et chaque
- * CFG en reçoivent une.
+ * VARIANT identity defines one grid using render axes INCLUDING prompt. Each prompt receives its
+ * own table, like each aspect and CFG value.
  */
 export function variantKey(cell) {
   return join([cell?.z_model, cell?.aspect, cell?.cfg, cell?.steps, cell?.steps2, cell?.prompt]);
 }
 
-/** Le descripteur de variante que consomme la grille (clé + valeurs d'axes). */
+/* Grid-consumed variant descriptor: key and axis values. */
 export function variantOf(cell) {
   return {
     key: variantKey(cell),
@@ -77,17 +57,16 @@ export function variantOf(cell) {
 }
 
 /**
- * Identité d'une CASE = checkpoint × strength × variante. Une seule fonction,
- * deux appelants : l'index (`cellKey(cell)`) et la recherche de `ResultCell`
- * (`cellKey({ checkpoint, strength, ...variant })`). Les deux formes donnent la
- * même chaîne parce qu'elles empruntent le même chemin.
+ * CELL identity is checkpoint x strength x variant. Both index cellKey(cell) and ResultCell lookup
+ * cellKey({checkpoint, strength, ...variant}) use this function and therefore produce the same
+ * string.
  */
 export function cellKey(cell) {
   return join([cell?.checkpoint, cell?.strength,
                cell?.z_model, cell?.aspect, cell?.cfg, cell?.steps, cell?.steps2, cell?.prompt]);
 }
 
-/** La case cherchée par `ResultCell`, depuis sa ligne, sa colonne et sa variante. */
+/* ResultCell lookup key from its row, column and variant. */
 export function cellKeyFor(checkpoint, strength, variant) {
   return cellKey({
     checkpoint,
@@ -102,9 +81,8 @@ export function cellKeyFor(checkpoint, strength, variant) {
 }
 
 /**
- * Un prompt RÉDUIT à une étiquette : les prompts de test font couramment
- * plusieurs centaines de caractères, et une légende de grille doit tenir sur une
- * ligne — y compris à 400 px de large. Le texte entier reste dans le `title`.
+ * Shorten a prompt to a label. Test prompts often span hundreds of characters, but grid captions
+ * must fit one line even at 400 px. Keep full text in title.
  */
 export function promptLabel(prompt, max = 48) {
   const text = String(prompt ?? '').trim().replace(/\s+/g, ' ');
@@ -112,9 +90,10 @@ export function promptLabel(prompt, max = 48) {
   return `${text.slice(0, max - 1).trimEnd()}…`;
 }
 
-/** Combien de prompts DISTINCTS dans ce lot — ce qui décide si la vue doit les
- *  nommer (un run mono-prompt n'a rien à étiqueter, et la légende resterait
- *  identique sur toutes ses tables). */
+/**
+ * Count DISTINCT batch prompts to decide whether labels are needed. A single-prompt run would
+ * repeat the same caption on every table.
+ */
 export function distinctPrompts(cells) {
   return new Set((cells || []).map((c) => c?.prompt || '')).size;
 }

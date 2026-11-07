@@ -16,7 +16,10 @@ import json
 
 import pytest
 
-from app.services import video_clip_dedup as dedup
+import app.models  # noqa: F401 -- declares the historical schemas before owner mappings
+from lds_video import video_clip_dedup as dedup
+
+pytestmark = pytest.mark.plugins('video')
 
 
 def _vec(*values):
@@ -200,7 +203,7 @@ def test_a_re_cut_shot_is_not_grouped_on_the_vectors_of_its_old_span(app, monkey
     })
     with app.app_context():
         from app.extensions import db
-        from app.models import VideoClip
+        from lds_video.models import VideoClip
         db.session.get(VideoClip, ids[1]).embed_state = None
         db.session.commit()
         out = dedup.run_dedup(bank_id, threshold=0.96)
@@ -218,7 +221,7 @@ def test_the_pass_never_changes_a_triage_decision(app, monkeypatch):
     })
 
     with app.app_context():
-        from app.models import VideoClip
+        from lds_video.models import VideoClip
         dedup.run_dedup(bank_id, threshold=0.96)
         assert {c.status for c in VideoClip.query.filter_by(bank_id=bank_id)} == {'pending'}
 
@@ -280,7 +283,7 @@ def test_the_default_threshold_is_the_image_lane_s_measured_cut():
 
 def _bank_with_clips(app, n):
     from app.extensions import db
-    from app.models import VideoBank, VideoClip, VideoSource
+    from lds_video.models import VideoBank, VideoClip, VideoSource
     with app.app_context():
         bank = VideoBank(name='b', source_path='/srv/rushes')
         db.session.add(bank)
@@ -312,7 +315,7 @@ def _fake_store(monkeypatch, store):
 
 def _measured(app, sharpness_by_id):
     from app.extensions import db
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         for cid, sharp in sharpness_by_id.items():
             clip = db.session.get(VideoClip, cid)
@@ -322,7 +325,7 @@ def _measured(app, sharpness_by_id):
 
 
 def _summaries(app, bank_id):
-    from app.models import VideoClip
+    from lds_video.models import VideoClip
     with app.app_context():
         rows = VideoClip.query.filter_by(bank_id=bank_id).all()
         return {r.id: (json.loads(r.metrics_json) if r.metrics_json else {})

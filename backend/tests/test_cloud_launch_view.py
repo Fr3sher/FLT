@@ -13,11 +13,15 @@ from datetime import timedelta
 from app.utils.timestamps import naive_utcnow
 
 import pytest
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 @pytest.fixture()
 def ct(app, monkeypatch):
-    from app.services import cloud_training
+    monkeypatch.setenv('VAST_API_KEY', 'k-test')
+    from lds_cloud_training import cloud_training
     monkeypatch.setattr(cloud_training, '_start_monitor', lambda *a, **k: None)
     with app.app_context():
         yield cloud_training

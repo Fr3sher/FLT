@@ -25,7 +25,7 @@ import { createElement, renderToStaticMarkup } from './support/mountJsx.mjs'
 /* ⚠️ Dynamic — the hooks that teach Node to read .jsx are installed while
    mountJsx.mjs is evaluated, and a static import would already be linked. */
 const { DenseBasePicker } =
-  await import('../src/components/dataset/TrainingPanel.jsx')
+  await import('../../bundled/cloud_training/frontend/dataset/FullTransformerRecipe.jsx')
 const { fullTransformerBaseLabel } =
   await import('../src/utils/trainingMode.js')
 
@@ -44,6 +44,22 @@ function render(props) {
     ...props,
   }))
 }
+
+const { configureHostRuntime } = await import('../src/plugins/runtimeHost.jsx')
+const { publishRuntime } = await import('../src/plugins/loadPlugins.js')
+const { resetRegistry, setEnabled } = await import('../src/plugins/registry.js')
+test.beforeEach(t => {
+  const saved = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch }
+  t.after(() => { Object.assign(globalThis, saved); resetRegistry() })
+  globalThis.window = {}
+  globalThis.document = { cookie: '', querySelector: () => null }
+  globalThis.fetch = () => { throw new Error('Rendering must not contact any service') }
+  resetRegistry()
+  setEnabled([])
+  configureHostRuntime()
+  publishRuntime()
+})
+
 
 test('the Turbo option exists, and so does the way to reach a local checkpoint', () => {
   const html = render({ baseSummary: fullTransformerBaseLabel({ variant: 'base' }) })
@@ -114,8 +130,8 @@ test('the panel still renders the picker inside its full-model arm', () => {
   // could be perfect and unreachable — which was the original bug.
   const panel = readPanel()
   const denseArm = panel.slice(
-    panel.indexOf('FULL_TRANSFORMER_ADVANCED_BRANCH_START'),
-    panel.indexOf('LORA_ADVANCED_CONTROLS_START'))
+    panel.indexOf('DENSE_BASE_PICKER_START'),
+    panel.indexOf('DENSE_BASE_PICKER_END'))
   assert.match(denseArm, /DENSE_BASE_PICKER_START/)
   assert.match(denseArm, /<DenseBasePicker/)
   assert.match(denseArm, /baseSummary=\{denseBaseSummary\}/)
@@ -123,5 +139,5 @@ test('the panel still renders the picker inside its full-model arm', () => {
 
 function readPanel() {
   return readFileSync(
-    new URL('../src/components/dataset/TrainingPanel.jsx', import.meta.url), 'utf8')
+    new URL('../../bundled/cloud_training/frontend/dataset/DenseRecipePanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 }

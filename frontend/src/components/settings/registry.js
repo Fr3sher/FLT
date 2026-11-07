@@ -1,3 +1,4 @@
+import { engineIds } from '../../engines/catalog.js'
 import { BarChart3, Dumbbell, Globe, Monitor, Palette, PenLine, Save, Search, Wrench } from 'lucide-react';
 // Data-driven section list for the Settings page: sidebar labels, deep-link
 // ids, the mono eyebrow tag, and the keywords the sidebar search matches on.
@@ -7,21 +8,17 @@ export const SETTINGS_SECTIONS = [
     description: 'What is configured and what to do next.',
     keywords: ['status', 'summary', 'capabilities', 'ready'] },
   { id: 'engines', title: 'Image engines', icon: Palette, eyebrow: 'generation',
-    description: 'API keys and engines used to generate dataset images.',
-    keywords: ['gemini', 'openai', 'openrouter', 'api key', 'chatgpt', 'nano banana', 'klein', 'krea', 'krea 2 edit',
-      'grounding', 'engine', 'subscription', 'gpt-image',
-      'lora', 'preset', 'texture', 'anatomy', 'nsfw', 'identity', 'prompt', 'guard', 'improve', 'upscale',
-      'seedvr2', 'seed vr2', 'upscaler', 'super resolution', 'restore', 'sharpen', 'fidelity',
-      'colour shift', 'color shift', 'target resolution', 'colour correction', 'blocks to swap',
+    description: 'Local image engines and shared generation defaults.',
+    // The API engines' own words (their providers' names) come from their
+    // plugin's settings group (sectionKeywords below), not from here.
+    keywords: ['klein', 'krea', 'krea 2 edit',
+      'grounding', 'engine',
+      'lora', 'preset', 'texture', 'anatomy', 'nsfw', 'identity', 'prompt', 'guard',
       'hi-res fix', 'hires fix', 'highres', 'second pass', 'two pass', '2 pass', 'latent upscale',
-      'detail', 'denoise',
-      'finishing', 'finish', 'film grain', 'grain', 'noise', 'unsharp', 'colour match',
-      'color match', 'plastic', 'smooth', 'photographic'] },
-  { id: 'scraping', title: 'Scraping & sources', icon: Search, eyebrow: 'sources',
-    description: 'Credentials used when scanning image sources.',
-    keywords: ['reddit', 'client id', 'civitai', 'pexels', 'pexels api', 'api key', 'scrape', 'scraper',
-      'rate limit', '429', 'quota', 'nsfw', 'source', 'import',
-      'klein', 'small image', 'rescue', 'upscale'] },
+      'detail', 'denoise'] },
+  { id: 'scraping', title: 'Shared service access', icon: Search, eyebrow: 'services',
+    description: 'Access shared by the Civitai browser, model downloads and installed plugins.',
+    keywords: ['civitai', 'api key', 'nsfw', 'source', 'import'] },
   { id: 'local-tools', title: 'Local tools', icon: Monitor, eyebrow: 'integrations',
     description: 'ComfyUI, Ollama and ai-toolkit — where they run and where they live.',
     keywords: ['comfyui', 'ollama', 'ai-toolkit', 'vision model', 'path', 'url', 'hugging face', 'hf token', 'directory', 'install'] },
@@ -30,21 +27,21 @@ export const SETTINGS_SECTIONS = [
     keywords: ['caption', 'joycaption', 'backend', 'face score', 'threshold', 'green', 'orange', 'similarity',
       'import', 'resolution', 'downscale', 'normalize', '1024', 'webp', 'lossless', 'original size'] },
   { id: 'training', title: 'Training', icon: Dumbbell, eyebrow: 'training',
-    description: 'Default model family and cloud GPU guardrails.',
-    keywords: ['family', 'zimage', 'sdxl', 'krea', 'cloud', 'vast', 'budget', 'price', 'stall', 'gpu',
-      'verified host', 'secure cloud', 'community cloud', 'offer filter'] },
+    description: 'Default model family and training settings.',
+    keywords: ['family', 'zimage', 'sdxl', 'krea', 'gpu'] },
   { id: 'storage', title: 'Storage', icon: Save, eyebrow: 'disk',
     description: 'Where everything lives on disk, and how much space it takes.',
     keywords: ['storage', 'disk', 'space', 'full', 'drive', 'path', 'folder', 'location',
       'move', 'relocate', 'another drive', 'data', 'dataset root', 'checkpoint store',
-      'cloud runs', 'staging', 'trash', 'archive', 'hugging face', 'hf', 'quota',
+      'trash', 'archive',
       'free space', 'gb', 'cleanup', 'orphan'] },
   { id: 'server', title: 'Server & access', icon: Globe, eyebrow: 'network',
     description: 'Port, LAN access and the access token.',
     keywords: ['port', 'host', 'lan', 'network', 'token', 'remote', 'phone', 'bind'] },
   { id: 'maintenance', title: 'Maintenance', icon: Wrench, eyebrow: 'housekeeping',
-    description: 'Updates, server log and bug reports.',
-    keywords: ['update', 'restart', 'log', 'diagnostic', 'version', 'bug'] },
+    description: 'Usage sharing, updates, server log and bug reports.',
+    keywords: ['update', 'restart', 'log', 'diagnostic', 'version', 'bug',
+      'usage', 'statistics', 'analytics', 'telemetry', 'privacy', 'consent', 'sharing'] },
 ]
 
 /* Sidebar LED per section — derived from live capabilities so the rail doubles
@@ -54,7 +51,7 @@ export function sectionStatus(id, caps) {
   const e = c.engines || {}
   switch (id) {
     case 'engines':
-      return (e.nanobanana || e.chatgpt || e.openrouter || e.klein || e.krea) ? 'ready' : 'off'
+      return engineIds().some((id) => e[id]) ? 'ready' : 'off'
     case 'local-tools': {
       const parts = [
         !!(c.comfyui && c.comfyui.reachable),
@@ -76,15 +73,20 @@ export function sectionStatus(id, caps) {
         || (cap.local_llm !== undefined ? cap.local_llm : cap.ollama)) ? 'ready' : 'off'
     }
     case 'training':
-      return c.training_visible ? (c.cloud_training ? 'ready' : 'partial') : 'off'
+      return c.training_visible ? 'ready' : 'off'
     default:
       return null
   }
+}
+
+/** General Settings indexes core sections; product fields live in their plugin. */
+export function sectionKeywords(section) {
+  return section.keywords
 }
 
 export function matchesQuery(section, q) {
   const needle = (q || '').trim().toLowerCase()
   if (!needle) return true
   return section.title.toLowerCase().includes(needle)
-    || section.keywords.some((k) => k.includes(needle))
+    || sectionKeywords(section).some((k) => k.includes(needle))
 }

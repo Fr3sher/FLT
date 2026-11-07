@@ -19,7 +19,8 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setenv('LDS_CONFIG', str(tmp_path / 'config.json'))
     monkeypatch.setenv('LDS_ENV', str(tmp_path / '.env'))
     import app.config as config
-    importlib.reload(config)
+    monkeypatch.setattr(config, 'ENV_PATH', tmp_path / '.env')
+    monkeypatch.setattr(config, '_cache', None)
     return config
 
 

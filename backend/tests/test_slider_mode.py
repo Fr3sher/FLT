@@ -15,6 +15,8 @@ What matters here:
 - settings live in the dedicated `train_slider` column, so applying a training
   preset (which REPLACES train_settings) can never wipe a slider setup.
 """
+
+from public_dense_test_io import no_dense_provider_io  # noqa: F401
 import json
 from app.extensions import db
 
@@ -22,6 +24,8 @@ import pytest
 
 from app.config import LOCAL_USER
 from _dataset_files import write_kept_image_files
+
+pytestmark = pytest.mark.plugins('cloud_training')
 
 
 def _mk(app, n_keep=0, caption='a nice varied caption with many words',
@@ -486,7 +490,7 @@ def test_cloud_launch_accepts_slider_and_snapshots_settings(app, monkeypatch):
     into the run params (dedicated snapshot key), so a later toggle-off can't
     retarget the in-flight run — same immutability contract as train_settings."""
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     monkeypatch.setattr(ct, '_start_monitor', lambda *a, **k: None)
     monkeypatch.setattr(ct, '_reconcile_before_launch', lambda a: None)
     monkeypatch.setattr(ct.vast_client, 'search_offers', lambda **kw: [])
@@ -508,7 +512,7 @@ def test_cloudify_preserves_concept_slider_type(app):
     'diffusion_trainer', but a 'concept_slider' job keeps its uid: the pod runs
     that built-in extension as-is, and flattening it would silently drop the
     slider loss and train an ordinary LoRA."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     pod = {'DATASETS_FOLDER': '/pod/ds', 'TRAINING_FOLDER': '/pod/out'}
 
     def _cfg(ptype):
@@ -528,7 +532,7 @@ def test_slider_snapshot_freezes_pod_job_against_later_edits(app, tmp_path):
     """The pod job is built minutes after launch through _run_config_dataset,
     which must read the LAUNCH-TIME slider snapshot: disabling slider mode on the
     dataset in between cannot turn an in-flight slider run into a plain LoRA."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import lora_training as lt
     from app.services import face_dataset_service as svc
     from app import config as cfg
@@ -555,7 +559,7 @@ def test_legacy_run_without_slider_snapshot_reads_live_column(app, tmp_path):
     """A pre-feature run row carries no train_slider snapshot: _run_config_dataset
     then falls back to the live dataset column (never crashes on the missing key,
     mirroring the train_settings legacy fallback)."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     from app.services import lora_training as lt
     from app.services import face_dataset_service as svc
     from app import config as cfg
@@ -576,6 +580,7 @@ def test_legacy_run_without_slider_snapshot_reads_live_column(app, tmp_path):
 
 def test_slider_route_and_base_info_payload(app, client, monkeypatch):
     from app import capabilities
+    monkeypatch.setattr(capabilities, 'probe_aitoolkit', lambda: {'ok': True})
     monkeypatch.setattr(capabilities, 'probe', lambda: {
         'aitoolkit': {'valid': True}, 'cloud_training': False})
     ds_id = client.post('/api/dataset/create',
@@ -596,6 +601,7 @@ def test_slider_route_rejects_dense_activation_and_allows_disable(
     from app.extensions import db
     from app.models import FaceDataset
 
+    monkeypatch.setattr(capabilities, 'probe_aitoolkit', lambda: {'ok': True})
     monkeypatch.setattr(capabilities, 'probe', lambda: {
         'aitoolkit': {'valid': True}, 'cloud_training': False})
     ds_id = client.post(

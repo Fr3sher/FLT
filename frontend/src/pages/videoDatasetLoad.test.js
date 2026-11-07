@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { shouldEjectOnLoadError, staleNote } from './videoDatasetLoad.js'
+import { shouldEjectOnLoadError, staleNote } from "../../../bundled/video/frontend/pages/videoDatasetLoad.js"
 
 // The rule the page owes, as values. It had none of these before: the
 // condition lived inline in a callback, unreachable by node --test, and the

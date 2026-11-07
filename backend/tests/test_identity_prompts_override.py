@@ -175,6 +175,7 @@ def _run_improve(app, monkeypatch, overrides):
         return candidate, queued
 
 
+@pytest.mark.plugins('image_upscale')
 def test_klein_improve_default_when_enabled_no_override(app, monkeypatch):
     from app.services import face_dataset_service as svc
     candidate, queued = _run_improve(app, monkeypatch, {})
@@ -182,6 +183,7 @@ def test_klein_improve_default_when_enabled_no_override(app, monkeypatch):
     assert candidate.variation_prompt == svc.KLEIN_IMAGE_IMPROVE_PROMPT
 
 
+@pytest.mark.plugins('image_upscale')
 def test_klein_improve_uses_override_when_enabled(app, monkeypatch):
     candidate, queued = _run_improve(
         app, monkeypatch, {'klein_improve_enabled': True, 'klein_improve': 'sharpen only'})
@@ -189,6 +191,7 @@ def test_klein_improve_uses_override_when_enabled(app, monkeypatch):
     assert candidate.variation_prompt == 'sharpen only'
 
 
+@pytest.mark.plugins('image_upscale')
 def test_klein_improve_disabled_applies_no_prompt(app, monkeypatch):
     candidate, queued = _run_improve(
         app, monkeypatch, {'klein_improve_enabled': False, 'klein_improve': 'ignored'})
@@ -198,20 +201,27 @@ def test_klein_improve_disabled_applies_no_prompt(app, monkeypatch):
 
 # --- settings API: persist + restore round-trip -----------------------------
 
+@pytest.mark.plugins('image_upscale')
 def test_settings_api_persists_and_restores_override(client):
-    # set an override
+    # Shared identity prompts remain core; the improvement toggle belongs to its plugin.
     r = client.put('/api/settings', json={'config': {'identity_prompts': {
-        'face_single': 'CUSTOM API GUARD', 'klein_improve_enabled': False}}})
+        'face_single': 'CUSTOM API GUARD'}}})
+    improve = client.put('/api/settings?plugin=image_upscale', json={'config': {
+        'identity_prompts': {'klein_improve_enabled': False}}})
     assert r.status_code == 200
+    assert improve.status_code == 200
     ip = r.get_json()['config']['identity_prompts']
     assert ip['face_single'] == 'CUSTOM API GUARD'
-    assert ip['klein_improve_enabled'] is False
+    assert improve.get_json()['config']['identity_prompts']['klein_improve_enabled'] is False
     # restore default = save blank; blank is preserved (no guard-loop pop)
     r2 = client.put('/api/settings', json={'config': {'identity_prompts': {
-        'face_single': '', 'klein_improve_enabled': True}}})
+        'face_single': ''}}})
+    improve2 = client.put('/api/settings?plugin=image_upscale', json={'config': {
+        'identity_prompts': {'klein_improve_enabled': True}}})
+    assert r2.status_code == improve2.status_code == 200
     ip2 = r2.get_json()['config']['identity_prompts']
     assert ip2['face_single'] == ''
-    assert ip2['klein_improve_enabled'] is True
+    assert improve2.get_json()['config']['identity_prompts']['klein_improve_enabled'] is True
 
 
 # --- the label contract: klein_identity belongs to EVERY local engine --------

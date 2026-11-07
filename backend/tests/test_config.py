@@ -1,4 +1,4 @@
-import json, importlib, os
+import json, os
 import pytest
 
 
@@ -23,13 +23,16 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setenv('LDS_CONFIG', str(tmp_path / 'config.json'))
     monkeypatch.setenv('LDS_ENV', str(tmp_path / '.env'))
     import app.config as config
-    importlib.reload(config)
+    # Reset test state without replacing functions already imported by the SDK.
+    monkeypatch.setattr(config, 'ENV_PATH', tmp_path / '.env')
+    monkeypatch.setattr(config, '_cache', None)
     return config
 
 def test_defaults_when_no_file(tmp_path, monkeypatch):
     config = _fresh(monkeypatch, tmp_path)
     assert config.get('server.port') == 5051
-    assert config.get('engines.default') == 'chatgpt'
+    assert config.load_config()['engines']['default'] == 'chatgpt'
+    assert config.get('engines.default') is None  # owner plugin not installed
     assert config.is_configured() is False
 
 def test_save_and_reload_deep_merge(tmp_path, monkeypatch):

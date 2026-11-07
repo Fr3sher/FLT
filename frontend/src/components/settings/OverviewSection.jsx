@@ -23,11 +23,11 @@ export default function OverviewSection({ caps }) {
     <div className="space-y-6">
       {!caps.configured && (
         <div role="status" className="rounded-xl border border-primary/40 bg-primary/10 p-4 text-sm text-content">
-          <p className="font-medium">Let's get you set up.</p>
+          <p className="font-medium">Your dataset workspace is ready.</p>
           <p className="mt-1 text-content-muted">
-            Add at least one image API key to start, or let the{' '}
+            Import your own images and edit captions now. To prepare optional tools, open the{' '}
             <Link to="/setup" className="font-medium text-sky-300 underline hover:text-sky-200">Setup wizard</Link>
-            {' '}scan your machine and walk you through it.
+            {' '}and choose what you need.
           </p>
         </div>
       )}

@@ -34,6 +34,9 @@ from pathlib import Path
 
 from app.services import cloud_run_dataset as crd
 from test_cloud_video_launch import _face_dataset, _run, _video_dataset
+from public_cloud_test_io import no_cloud_provider_io  # noqa: F401
+
+pytestmark = pytest.mark.plugins('cloud_training', 'video')
 
 
 def _saves(run, tmp_path, names):
@@ -161,8 +164,8 @@ def test_retrying_a_video_run_goes_through_the_video_launcher(
     colliding id that is a face training on someone else's data, billed. It now
     rebuilds them for the VIDEO launcher instead, with the params stamped at the
     original launch."""
-    from app.services import cloud_training as ct
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import cloud_video_training as cvt
     seen = {}
     with app.app_context():
         _face_dataset('portraits')
@@ -190,7 +193,7 @@ def test_retrying_a_video_run_goes_through_the_video_launcher(
 def test_only_a_failed_video_run_can_be_retried(app, tmp_path, monkeypatch):
     """Same rule as the face lane. A finished run has a Continue, not a Retry;
     retrying it would rent a pod to redo work that is already on disk."""
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
         run = _run(vid.id, crd.VIDEO, status='done')
@@ -205,7 +208,7 @@ def test_a_run_naming_an_unknown_table_is_still_refused(app, tmp_path):
     """The named refusal stays for the case it was written for. A hand-edited or
     downgraded row cannot say which lane it belongs to, and guessing is the
     silent mis-attribution this whole column exists to prevent."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     with app.app_context():
         run = _run(1, dataset_table='something_else', status='error')
         with pytest.raises(ValueError) as e:
@@ -217,8 +220,8 @@ def test_a_run_naming_an_unknown_table_is_still_refused(app, tmp_path):
 
 def test_continuing_a_video_run_targets_the_resumed_step_plus_the_extra(
         app, tmp_path, monkeypatch):
-    from app.services import cloud_training as ct
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import cloud_video_training as cvt
     seen = {}
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
@@ -242,7 +245,7 @@ def test_continuing_a_wan_run_seeds_BOTH_experts_of_the_chosen_step(
     pod and ai-toolkit resumes one expert while the other restarts from zero.
     The result is a LoRA that loads, trains, and is quietly half as trained as
     the user believes."""
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     seen = {}
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips', profile='wan22_14b')
@@ -266,7 +269,7 @@ def test_the_seed_puts_every_half_of_the_pair_in_the_pods_save_root(
     then reads its sibling by rewriting `_high_noise` into `_low_noise` — so the
     two files must arrive under THIS job's prefix WITH their stage suffixes
     intact. Renaming them both to the same stepped name would leave one file."""
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     pushed = []
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips', profile='wan22_14b')
@@ -296,7 +299,7 @@ def test_the_seed_puts_every_half_of_the_pair_in_the_pods_save_root(
 
 def test_continuing_a_video_run_with_nothing_harvested_is_refused(
         app, tmp_path, monkeypatch):
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
         run = _run(vid.id, crd.VIDEO, status='done')
@@ -308,7 +311,7 @@ def test_continuing_a_video_run_with_nothing_harvested_is_refused(
 
 
 def test_a_still_running_video_run_cannot_be_continued(app, tmp_path, monkeypatch):
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
         run = _run(vid.id, crd.VIDEO, status='training')
@@ -335,7 +338,7 @@ def test_the_relaunch_routes_refuse_a_run_of_the_other_table(app, client, tmp_pa
 
 def test_the_continue_route_relaunches_through_the_video_lane(
         app, client, tmp_path, monkeypatch):
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     seen = {}
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
@@ -417,7 +420,7 @@ def test_a_continued_video_run_names_the_run_it_grew_from(
     """Genealogy for the video lane, kept inside the video lane: the child
     stamps its parent's RUN id, not a face `TrainingRunRecord` id. Without it a
     3000-step LoRA made of three continuations looks like three unrelated runs."""
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     seen = {}
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
@@ -430,7 +433,7 @@ def test_a_continued_video_run_names_the_run_it_grew_from(
 
 
 def test_the_parent_run_id_is_stamped_on_the_child_row(app, tmp_path, monkeypatch):
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path)
         out = cvt.launch_cloud_video_training(
@@ -449,7 +452,7 @@ def test_the_probe_asks_the_pod_about_a_clip_that_actually_reached_it(app):
     clips with `cv2.VideoCapture` and falls back to PyAV for what OpenCV cannot
     decode (toolkit/dataloader_mixins.py) — so the command names both, in that
     order, and points at the pod-side dataset directory."""
-    from app.services import pod_video_probe as pvp
+    from lds_cloud_training import pod_video_probe as pvp
     cmd = pvp.build_probe_command('/workspace/datasets/lds9_video_surf',
                                   want_audio=False)
     assert '/workspace/datasets/lds9_video_surf' in cmd
@@ -462,8 +465,8 @@ def test_a_pod_that_cannot_decode_the_clips_refuses_before_the_job_starts(
     """Run #138 paid for a pod whose upload phase nobody verified. This is the
     same lesson one step later: the refusal must land BEFORE `start_job`, when
     the bill is minutes of boot rather than hours of a job producing nothing."""
-    from app.services import cloud_training as ct
-    from app.services import pod_video_probe as pvp
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import pod_video_probe as pvp
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
         run = _run(vid.id, crd.VIDEO, status='uploading')
@@ -492,8 +495,8 @@ def test_a_check_that_cannot_run_does_not_ground_the_run(app, tmp_path, monkeypa
     restriction lasts, which is the exact opposite of what the guard is for. The
     launch carries on, no blinder than it was before the probe existed, and the
     phase says so rather than claiming a check that never happened."""
-    from app.services import cloud_training as ct
-    from app.services import pod_video_probe as pvp
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import pod_video_probe as pvp
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
         run = _run(vid.id, crd.VIDEO, status='uploading')
@@ -510,8 +513,8 @@ def test_a_check_that_cannot_run_does_not_ground_the_run(app, tmp_path, monkeypa
 
 
 def test_a_pod_that_decodes_fine_lets_the_run_through(app, tmp_path, monkeypatch):
-    from app.services import cloud_training as ct
-    from app.services import pod_video_probe as pvp
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import pod_video_probe as pvp
     asked = {}
     with app.app_context():
         vid = _video_dataset(tmp_path, 'surf clips')
@@ -534,8 +537,8 @@ def test_an_audio_target_makes_the_probe_demand_an_audio_track(
     profile). A pod that decodes the video and silently finds no audio stream
     trains a video-only LoRA under an audio target's name — so the probe asks
     for the track when, and only when, the profile says it is trained on."""
-    from app.services import cloud_training as ct
-    from app.services import pod_video_probe as pvp
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import pod_video_probe as pvp
     asked = {}
     with app.app_context():
         vid = _video_dataset(tmp_path, 'h3 clips', profile='minimax_h3',
@@ -554,8 +557,8 @@ def test_an_audio_target_makes_the_probe_demand_an_audio_track(
 def test_a_face_run_is_never_probed_for_a_video_decoder(app, tmp_path, monkeypatch):
     """It uploads jpegs. Spending a pod command — and a refusal — on a decoder it
     will never call would be a new way for an image run to fail."""
-    from app.services import cloud_training as ct
-    from app.services import pod_video_probe as pvp
+    from lds_cloud_training import cloud_training as ct
+    from lds_cloud_training import pod_video_probe as pvp
     with app.app_context():
         face = _face_dataset('portraits')
         run = _run(face.id, status='uploading')
@@ -569,8 +572,8 @@ def test_the_probe_reports_which_decoder_answered(app, monkeypatch):
     """The verdict is read from the pod's ONE result line, exactly like the Hub
     transfers — `dense_pod_hub.run_program` is the shared executor, so there is
     one idea in this app of what a failure on a rented pod looks like."""
-    from app.services import dense_pod_hub as dph
-    from app.services import pod_video_probe as pvp
+    from lds_cloud_training import dense_pod_hub as dph
+    from lds_cloud_training import pod_video_probe as pvp
     monkeypatch.setattr(pvp, '_run_program',
                         lambda *a, **k: {'ok': True, 'decoder': 'pyav',
                                          'frames': 81, 'clip': 'clip_0001.mp4'})
@@ -585,8 +588,8 @@ def test_a_pod_program_failure_becomes_a_named_decoder_refusal(app, monkeypatch)
     """`run_program` raises `PodHubError` for everything from a missing result
     line to a non-zero verdict. Letting that name reach the run's error field
     would tell a user with a video dataset that Hugging Face went wrong."""
-    from app.services import dense_pod_hub as dph
-    from app.services import pod_video_probe as pvp
+    from lds_cloud_training import dense_pod_hub as dph
+    from lds_cloud_training import pod_video_probe as pvp
     monkeypatch.setattr(pvp, '_run_program', lambda *a, **k: (_ for _ in ()).throw(
         dph.PodHubError('no .mp4 reached the pod')))
     with pytest.raises(pvp.PodDecoderUnusable) as e:
@@ -623,7 +626,7 @@ def test_a_deleted_dataset_s_runs_never_attach_to_the_id_s_next_owner(
 def _forge_video_run(app, tmp_path, status='done'):
     from app.extensions import db
     from app.models import CloudTrainingRun, VideoDataset
-    from app.services import cloud_training as ct
+    from lds_cloud_training import cloud_training as ct
     ds = VideoDataset(user_id='local', name='jz', target_profile='minimax_h3',
                       fps=24, frames=39, output_dir=str(tmp_path / 'ds'))
     db.session.add(ds)
@@ -640,7 +643,7 @@ def _forge_video_run(app, tmp_path, status='done'):
 def test_deleting_a_terminal_run_removes_its_files_and_its_row(app, tmp_path):
     from app.extensions import db
     from app.models import CloudTrainingRun
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         _ds, run, store = _forge_video_run(app, tmp_path, status='done')
 
@@ -655,7 +658,7 @@ def test_deleting_a_terminal_run_removes_its_files_and_its_row(app, tmp_path):
 def test_an_active_run_is_refused_its_pod_is_on_the_clock(app, tmp_path):
     from app.extensions import db
     from app.models import CloudTrainingRun
-    from app.services import cloud_video_training as cvt
+    from lds_cloud_training import cloud_video_training as cvt
     with app.app_context():
         _ds, run, store = _forge_video_run(app, tmp_path, status='training')
 

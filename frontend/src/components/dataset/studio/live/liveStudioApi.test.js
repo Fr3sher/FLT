@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildStartPayload, isLiveRunning, paceLine, pauseLine, sceneCount, streamUrlFor,
-} from './liveStudioApi.js';
+} from "../../../../../../bundled/live/frontend/studio/live/liveStudioApi.js";
 
 test('scenes are counted between --- lines, blank blocks ignored', () => {
   assert.equal(sceneCount('a\n---\nb\n  ---  \n\n---\nc'), 3);

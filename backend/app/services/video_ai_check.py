@@ -79,6 +79,7 @@ so two shots measured over different frame counts are not on one scale and a
 single cut across them would be a silent lie. Sixteen frames, or no measurement.
 """
 from __future__ import annotations
+from ..timeout_settings import processing_timeout
 
 import json
 import logging
@@ -432,7 +433,7 @@ def score_chunk(payload, *, timeout=None):
         proc = subprocess.run(
             infer_env.worker_argv(python, _SCRIPT),
             input=request + '\n', capture_output=True,
-            text=True, encoding='utf-8', errors='replace', timeout=budget,
+            text=True, encoding='utf-8', errors='replace', timeout=processing_timeout(budget),
             env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         raise RuntimeError('the AI check timed out — check the ✨ Score '

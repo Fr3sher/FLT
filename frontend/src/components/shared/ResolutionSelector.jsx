@@ -40,10 +40,9 @@ const clampMult = (m) => {
   return Number.isFinite(v) ? Math.max(MULT_MIN, Math.min(MULT_MAX, v)) : MULT_MIN;
 };
 
-// `maxLongSide` (optionnel) : plafond par MODÈLE — SDXL casse au-delà de ~1 Mpx,
-// donc le mode SDXL passe 1024 et l'affichage colle aux dimensions réellement
-// générées (le backend applique la même re-borne). `multiplier` (1.0–1.9) agrandit
-// le PRESET après le cap de palier, borné ensuite au cap absolu 3072.
+// Optional maxLongSide is a MODEL-specific cap. SDXL passes 1024 because it fails beyond roughly 1
+// megapixel, matching backend dimensions. multiplier 1.0-1.9 scales the PRESET after the tier cap,
+// then clamps to the absolute 3072 limit.
 function tierDims(aspectRatio, mp, maxLongSide, multiplier = 1) {
   const [rw, rh] = RATIOS[aspectRatio] || RATIOS.square;
   const r = rw / rh;

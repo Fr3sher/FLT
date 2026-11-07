@@ -4,8 +4,8 @@ import {
   LANE_MAX_H, LANE_MIN_H, LANE_REACH,
   clampLanePlacement, laneOverflows, mergeLanePlacement, moveLaneTo,
   resizeLaneHeight, toLanePlacementMap,
-} from './canvasLanePlacement.js';
-import { LANE_GAP, LANE_HEADER_H, stackLanes } from './canvasLayout.js';
+} from "../../../bundled/canvas/frontend/utils/canvasLanePlacement.js";
+import { LANE_GAP, LANE_HEADER_H, stackLanes } from "../../../bundled/canvas/frontend/utils/canvasLayout.js";
 
 // ---- clampLanePlacement ----------------------------------------------------
 

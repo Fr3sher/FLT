@@ -17,13 +17,13 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 const root = new URL('../src/', import.meta.url);
-const read = (rel) => readSource(`src/${rel}`)
+const read = readSource
 
-const canvas = read('components/canvas/LineageCanvas.jsx');
-const panel = read('components/shared/CheckpointGalleryPanel.jsx');
+const canvas = read('../bundled/canvas/frontend/components/canvas/LineageCanvas.jsx');
+const panel = read('src/components/shared/CheckpointGalleryPanel.jsx');
 
 test('a run card click opens the run gallery, via the tested decision helper', () => {
-  assert.match(canvas, /from '\.\.\/\.\.\/utils\/canvasCardClick'/);
+  assert.match(canvas, /from '\.\.\/\.\.\/utils\/canvasCardClick\.js'/);
   assert.match(canvas, /cardClickAction\(\{\s*dragged/);
   assert.match(canvas, /setGallery\(runGalleryTarget\(/);
   // The drag guard is READ from the same ref the drop sets — not re-derived.
@@ -60,7 +60,7 @@ test('clicking a checkpoint pill still opens that checkpoint, unchanged', () => 
 });
 
 test('there is exactly one gallery panel, hosting both scopes', () => {
-  assert.ok(!fs.existsSync(new URL('components/canvas/RunGalleryPanel.jsx', root)));
+  assert.ok(!fs.existsSync(new URL('../../bundled/canvas/frontend/components/canvas/RunGalleryPanel.jsx', root)));
   assert.ok(!fs.existsSync(new URL('components/shared/RunGalleryPanel.jsx', root)));
   assert.match(panel, /from '\.\.\/\.\.\/utils\/runGallery'/);
   // Both endpoints come from the shared resolver — never built inline, which is

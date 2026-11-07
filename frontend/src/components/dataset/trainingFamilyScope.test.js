@@ -4,15 +4,17 @@ import test from 'node:test';
 
 import {
   baseOptionSuffix, baseSelectionNote, basesForFamily,
-  cloudUnsupportedFamilyReason, isCustomWeightsBase, looksAbsoluteBase,
+  isCustomWeightsBase, looksAbsoluteBase,
   typedBaseNote,
 } from './trainingFamilyScope.js';
+import { cloudUnsupportedFamilyReason } from '../../../../bundled/cloud_training/frontend/lib/trainingFamily.js';
 
-const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8');
+const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  + fs.readFileSync(new URL('../../../../bundled/cloud_training/frontend/dataset/cloudTraining.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 // The families the panel's own selector offers — the list these helpers must
 // stay exhaustive against.
-const FAMILIES = ['zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima'];
+const FAMILIES = ['zimage', 'sdxl', 'krea', 'flux', 'flux2klein', 'anima', 'qwenimage21'];
 
 // A base-info shaped like the server's, with a Z-Image merge in the flat list
 // so an accidental fallback is visible rather than merely wrong-labelled.
@@ -31,6 +33,7 @@ const BASE_INFO = {
     flux: [{ value: '', label: 'Official - FLUX.1-dev' }],
     flux2klein: [{ value: '', label: 'Official - FLUX.2 Klein' }],
     anima: [{ value: '', label: 'Official - Anima-Base' }],
+    qwenimage21: [{ value: '', label: 'Official - Qwen-Image 2.1' }],
   },
 };
 
@@ -187,12 +190,13 @@ test('the dropdown tags compromised entries, and only those', () => {
 
 // --- the cloud lane names the families it does not serve ----------------------
 
-test('the three local-only families each state their own refusal', () => {
+test('the local-only families each state their own refusal', () => {
   assert.match(cloudUnsupportedFamilyReason('sdxl'), /SDXL trains locally only/);
   assert.match(cloudUnsupportedFamilyReason('flux'), /FLUX\.1 trains locally only/);
   // Anima was missing from the ladder: with enough kept images the cloud button
   // enabled itself, and the server refused only after the click.
   assert.match(cloudUnsupportedFamilyReason('anima'), /Anima cloud training is coming/);
+  assert.equal(cloudUnsupportedFamilyReason('qwenimage21'), null);
 });
 
 test('the cloud-served families are not blocked by family', () => {

@@ -1,9 +1,9 @@
 # app/scrape/sources/registry.py
-"""Registry de sources : résolution d'une URL vers LA source qui la gère.
+"""Source registry: resolve a URL to its responsible source.
 
-Remplace le triple-dispatch (validators / routes / download_service). Les sources
-sont triées par priorité décroissante ; resolve(url) renvoie le 1er Match truthy,
-donc une source dédiée (priorité 100) gagne sur la fallback universelle (0)."""
+Replace separate dispatch in validators, routes and download_service. Sources
+are sorted by descending priority; resolve(url) returns the first truthy Match,
+so a dedicated source (priority 100) wins over the universal fallback (0)."""
 import logging
 from typing import Optional
 
@@ -28,7 +28,7 @@ class _Registry:
             try:
                 m = src.match(url)
             except Exception as exc:
-                logger.warning("Source %r match() a levé, ignorée: %r",
+                logger.warning("Source %r match() raised an exception; skipped: %r",
                                getattr(src, 'name', '?'), exc)
                 m = None
             if m is not None:
@@ -39,15 +39,15 @@ class _Registry:
     def assert_one_universal(self) -> None:
         names = [s.name for s in self._sources]
         if len(names) != len(set(names)):
-            raise RuntimeError(f"Sources de scraping : noms en double ({names})")
+            raise RuntimeError(f"Scraping sources: duplicate names ({names})")
         universals = [s.name for s in self._sources
                       if getattr(s.capabilities, 'is_universal_fallback', False)]
         if len(universals) != 1:
             raise RuntimeError(
-                f"Il doit y avoir EXACTEMENT une source universelle, trouvé : {universals}")
+                f"There must be EXACTLY one universal source; found: {universals}")
 
 
-# Registry global du module (peuplé par les imports dans sources/__init__.py).
+# Module-level registry populated by imports in sources/__init__.py.
 _registry = _Registry()
 
 
