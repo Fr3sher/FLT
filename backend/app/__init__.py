@@ -111,6 +111,12 @@ def pin_static_mime_types():
 
 pin_static_mime_types()
 
+# HEIC/HEIF photos decode in THIS process, where images enter the app, for the
+# same reason as above: every entry point is covered without having to remember.
+# Pillow's plugin registry is process-wide and nothing resets it, so once is enough.
+from .services import heif_decoder  # noqa: E402 - after the module-level setup above
+heif_decoder.register()
+
 _DEFAULT_DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 # Archives carry no size ceiling: they come off the user's own disk, and a full
 # backup holds the whole library, trained LoRAs included. The old 2 GiB ceiling
@@ -137,6 +143,11 @@ _DATASET_ARCHIVE_UPLOAD_ENDPOINTS = frozenset({
 # any camera master, and the env var is there for someone who shoots bigger.
 _DEFAULT_DATASET_IMPORT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024
 _DATASET_IMPORT_UPLOAD_ENDPOINTS = frozenset({'datasets.dataset_import'})
+
+# A plugin archive installed from a ZIP may be as large as one the Store installs
+# (plugins.install.MAX_TOTAL_BYTES): the generic 64 MiB ceiling refused a larger
+# one with a 413 while the Store installed the same archive.
+_PLUGIN_ARCHIVE_UPLOAD_ENDPOINTS = frozenset({'plugins.install_plugin'})
 
 
 class ArchiveAwareRequest(Request):
@@ -181,6 +192,9 @@ class ArchiveAwareRequest(Request):
             return int(archive_max) + overhead
         if self.endpoint in _DATASET_IMPORT_UPLOAD_ENDPOINTS and current_app:
             return int(current_app.config['DATASET_IMPORT_MAX_UPLOAD_BYTES'])
+        if self.endpoint in _PLUGIN_ARCHIVE_UPLOAD_ENDPOINTS:
+            from .plugins.install import MAX_TOTAL_BYTES
+            return MAX_TOTAL_BYTES + _DEFAULT_DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES
         return super().max_content_length
 
     @max_content_length.setter

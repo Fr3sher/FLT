@@ -988,6 +988,9 @@ def dataset_import(dataset_id):
         ids, failed = svc.import_images(LOCAL_USER, dataset_id, files, crop=False,
                                         dedupe=True, stats=stats)
         return jsonify({'ok': True, 'imported': len(ids), 'failed': failed,
+                        # Closed cause -> count (svc.IMPORT_FAILURE_CAUSES): what
+                        # the usage-statistics hook reports, never a file name.
+                        'failed_reasons': stats.get('failed_reasons', {}),
                         'duplicates': stats.get('duplicates', 0),
                         'small': stats.get('small', 0)})
     try:
@@ -999,6 +1002,7 @@ def dataset_import(dataset_id):
     except Exception as e:
         return _map_error(e)
     return jsonify({'ok': True, 'imported': len(ids), 'failed': failed,
+                    'failed_reasons': stats.get('failed_reasons', {}),
                     'duplicates': stats.get('duplicates', 0),
                     'small': stats.get('small', 0)})
 
@@ -1098,6 +1102,14 @@ def dataset_caption(dataset_id):
     # from `engines`, which is a writer-count map the UI renders name by name — a
     # 'skipped' key in there would be shown as an engine that wrote captions.
     outcome = {}
+    # A dataset frozen by an exclusive operation (a copy to or from a Bank, a
+    # training export, a backup) refuses here, BEFORE the vision window asks
+    # ComfyUI to unload its models for a pass that cannot run. The pass itself
+    # refused it too, but only once inside the window.
+    try:
+        svc._guard_not_bank_export(dataset_id)
+    except Exception as e:
+        return _map_error(e)
     try:
         with gpu_exclusive_vision_window(flag_ttl=1800):
             n = svc.caption_images(LOCAL_USER, dataset_id, force=force, mode=mode,
@@ -2038,6 +2050,7 @@ def dataset_import_zip(dataset_id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'imported': len(ids), 'failed': failed,
+                    'failed_reasons': stats.get('failed_reasons', {}),
                     'duplicates': stats.get('duplicates', 0),
                     'captions': stats.get('captions', 0),
                     # Captions that landed on images ALREADY in the dataset (the
@@ -2067,6 +2080,7 @@ def dataset_import_folder(dataset_id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'imported': len(ids), 'failed': failed,
+                    'failed_reasons': stats.get('failed_reasons', {}),
                     'duplicates': stats.get('duplicates', 0),
                     'captions': stats.get('captions', 0),
                     # Captions that landed on images ALREADY in the dataset (the

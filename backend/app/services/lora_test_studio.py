@@ -209,12 +209,17 @@ def _aspect_dims(aspect, train_type=None, resolution_tier=None, resolution_multi
     A supplied fast/standard/hq/max tier uses compute_tier_dims and a clamped
     1.0-1.9 multiplier. Otherwise use family-specific legacy tables; the multiplier
     does not affect them. SDXL tier output caps its long side at 1024*multiplier
-    in multiples of 64, avoiding dimensions that distort SDXL merges/DMD models."""
+    in multiples of 64, avoiding dimensions that distort SDXL merges/DMD models.
+    MOSS-Image stops at the 4 MP its authors document (moss_capped_dims; the frontend's
+    ResolutionSelector shows the same size)."""
     if resolution_tier in RESOLUTION_TIERS:
         named = _ASPECT_TO_TIER_RATIO.get(aspect)
         if named:
             from ..utils.resolution import clamp_multiplier, compute_tier_dims
             w, h = compute_tier_dims(named, resolution_tier, resolution_multiplier)
+            if (train_type or '').lower() == 'moss':
+                from ..utils.trained_image_workflows import moss_capped_dims
+                return moss_capped_dims(w, h)
             if (train_type or '').lower() == 'sdxl':
                 # Scale the SDXL cap too, matching the frontend instead of silently cancelling its multiplier.
                 ceiling = 1024.0 * clamp_multiplier(resolution_multiplier)
@@ -487,6 +492,11 @@ def identity_prompt(ds, with_trigger=True) -> str:
     return IDENTITY_PROMPT_TEMPLATE.format(trigger=(ds.trigger_word or '').strip())
 
 
+def _trigger_pattern(trigger):
+    """`trigger` as a whole token, case-insensitive; group 1 is the boundary before it."""
+    return re.compile(r'(^|[^0-9A-Za-z])' + re.escape(trigger) + r'(?=[^0-9A-Za-z]|$)', re.IGNORECASE)
+
+
 def _prompt_with_trigger(prompt, trigger_word):
     """Prepend the dataset trigger unless empty or already a whole token.
 
@@ -496,9 +506,55 @@ def _prompt_with_trigger(prompt, trigger_word):
     t = (trigger_word or '').strip()
     if not p or not t:
         return p
-    if re.search(r'(?:^|[^0-9A-Za-z])' + re.escape(t) + r'(?:[^0-9A-Za-z]|$)', p, re.IGNORECASE):
+    if _trigger_pattern(t).search(p):
         return p
     return f'{t}, {p}'
+
+
+def _learned_trigger(lora_name, trigger):
+    """`trigger` spelled as the LoRA file `lora_name` learned it.
+
+    Training writes the dataset trigger through lora_training._safe_trigger, in every
+    family, so "Double pen" is learned as "Double_pen", and a text encoder splits the
+    two differently: sending the typed words never activates the LoRA. The file's own
+    record (lora_training.recorded_trigger) is the authority, which also covers a
+    trigger renamed after training and a guest LoRA's own word. A LoRA that records no
+    trigger keeps the historical injection: `trigger` as typed."""
+    if not lora_name or not (trigger or '').strip():
+        return trigger
+    path = _resolve_lora_abs_path(lora_name)
+    return (lt.recorded_trigger(path) if path else None) or trigger
+
+
+def _respell_trigger(prompt, typed, learned):
+    """`prompt` with each whole-token `typed` trigger respelled `learned`. The default
+    identity prompt carries the typed trigger, and so may a written prompt: that word is
+    the trigger, so it is respelled in place instead of getting a second copy prefixed."""
+    t, u = (learned or '').strip(), (typed or '').strip()
+    if not t or not u or t.casefold() == u.casefold() or _trigger_pattern(t).search(prompt):
+        return prompt
+    return _trigger_pattern(u).sub(lambda m: m.group(1) + t, prompt)
+
+
+def _inject_triggers(prompt, checkpoint, trigger_word, extra_loras=None):
+    """The prompt a cell sends: each trigger spelled as its LoRA learned it, head first.
+
+    `trigger_word` is the tested checkpoint's dataset trigger, or a list headed by it
+    (combine mode); a stacked member's trigger belongs to the `extra_loras` entry that
+    carries it as `trigger`. Respells the typed triggers, then prefixes the missing ones."""
+    if trigger_word is None:
+        return _prompt_with_triggers(prompt, None)
+    typed = [trigger_word] if isinstance(trigger_word, str) else list(trigger_word)
+    owners = {}
+    for entry in extra_loras or ():
+        if isinstance(entry, dict) and entry.get('trigger') and entry.get('filename'):
+            owners.setdefault(entry['trigger'], entry['filename'])
+    learned = [_learned_trigger(checkpoint if i == 0 else owners.get(t), t)
+               for i, t in enumerate(typed)]
+    p = (prompt or '').strip()
+    for t, u in zip(learned, typed):
+        p = _respell_trigger(p, u, t)
+    return _prompt_with_triggers(p, learned)
 
 
 def _prompt_with_triggers(prompt, trigger_words):
@@ -545,7 +601,16 @@ def studio_family_defaults(family):
 
 
 def generation_capabilities(family):
-    return {'negative_prompt': family in ('zimage', 'anima', 'qwenimage21', 'moss')}
+    caps = {'negative_prompt': family in ('zimage', 'anima', 'qwenimage21', 'moss', 'krea')}
+    if family == 'krea':
+        # Krea 2 Turbo samples at CFG 1, where ComfyUI never evaluates the
+        # negative branch. The panel offers the field once a cell runs above
+        # CFG 1 (a Raw base, or a CFG axis value): the only cells it can change.
+        caps['negative_prompt_needs_cfg'] = True
+    if family == 'moss':
+        from ..utils.trained_image_workflows import MOSS_MAX_PIXELS
+        caps['max_pixels'] = MOSS_MAX_PIXELS
+    return caps
 
 
 def family_base_models(family):
@@ -1573,9 +1638,9 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
                                   weight_dtype=None,
                                   base_model=None, allowed_bases=None,
                                   sampler_preset=None, hires_scale=None,
-                                  hires_steps=None, hires_denoise=None):
+                                  hires_steps=None, hires_denoise=None, negative=None):
     """Configure a Krea 2 Turbo test cell: inject the tested LoRA after the
-    UNETLoader (node 20 -> KSampler node 26), plus prompt/seed/dims/steps/cfg.
+    UNETLoader (node 20 -> KSampler node 26), plus prompt/negative/seed/dims/steps/cfg.
     `extra_loras` are additional always-on style/utility LoRAs in the same chain,
     applied unchanged to this cell outside the batch axis. Krea has one pass
     (no steps2).
@@ -1609,6 +1674,10 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
             _set("20", "unet_name", elected)
 
     _set("23", "text", prompt)                    # prompt (CLIPTextEncode Krea)
+    if negative:
+        # Node 24 feeds the KSampler's negative input. ComfyUI only evaluates it
+        # above CFG 1, so a Turbo cell at CFG 1 renders exactly as before.
+        _set("24", "text", str(negative))
     _set("25", "width", int(width))
     _set("25", "height", int(height))
     _set("25", "batch_size", int(batch_size))
@@ -1760,14 +1829,15 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
     and showing one LoRA's images in another's studio. The UUID also prevents
     collisions within a dataset when rerunning after a ComfyUI restart."""
     # Inject trigger words here, only when building the graph; retain the raw
-    # prompt in storage. `trigger_word` may be a list, one per stacked LoRA.
+    # prompt in storage. `trigger_word` may be a list, one per stacked LoRA, each
+    # spelled as its LoRA learned it (_inject_triggers).
     base_family = _base_model_family(checkpoint)
     if base_family:
         if base_family != train_type:
             raise ValueError('base-model run family does not match its saved settings')
         checkpoint = None
         trigger_word = None
-    prompt = _prompt_with_triggers(prompt, trigger_word)
+    prompt = _inject_triggers(prompt, checkpoint, trigger_word, extra_loras)
     ds_tag = f"d{dataset_id}_" if dataset_id is not None else ""
     fname = f"{user_id}_{ds_tag}LoraTest_{uuid.uuid4().hex[:8]}"
     extra_loras = extra_loras or []
@@ -1824,7 +1894,7 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
             batch_size=1, filename_prefix=fname, allowed_loras=allowed_krea,
             extra_loras=extra_loras,
             sampler=sampler, scheduler=scheduler, weight_dtype=weight_dtype,
-            sampler_preset=sampler_preset,
+            sampler_preset=sampler_preset, negative=negative,
             # Optional local Krea base (z_model, as for SDXL/Z-Image). None keeps the
             # workflow UNET. The disk-scan allowlist prevents path injection.
             base_model=z_model, allowed_bases=set(get_krea_models()),
@@ -2629,7 +2699,7 @@ def measured_seconds_per_image(family=None) -> float | None:
     return round(median, 1)
 
 
-def checkpoint_origins(checkpoints, explicit=None) -> dict:
+def checkpoint_origins(checkpoints, explicit=None, family=None) -> dict:
     """{deployed filename: (record_id, step)} — WHICH training checkpoint each
     selected LoRA came from, so every cell can record it on its row instead of
     the app re-deriving it from the filename on every render (the heuristic that
@@ -2645,6 +2715,13 @@ def checkpoint_origins(checkpoints, explicit=None) -> dict:
     written by the app, not inferred from a trigger word — and a name that
     carries none resolves to (None, None), i.e. an honestly unlinked cell.
 
+    A run's FINAL save is deployed with the tag and NO step (`…_rc192_v2`). Its
+    step is the one the run's lineage pairs that file with — the final pill that
+    shows it as deployed (`final_save_step`; `family`, the launch's, names the
+    ComfyUI folder that pairing reads). A file no pill shows keeps its run with
+    no step, as the boot backfill records it. Keeping neither left every image
+    tested from a final save out of the Canvas and the checkpoint galleries.
+
     Resolved ONCE per distinct filename: a 40-cell grid over 6 checkpoints costs
     6 lookups."""
     out = {}
@@ -2659,8 +2736,13 @@ def checkpoint_origins(checkpoints, explicit=None) -> dict:
             except (KeyError, TypeError, ValueError):
                 pass                     # malformed hint → fall through to the tag
         try:
-            from .checkpoint_link_backfill import resolve_checkpoint_name
+            from .checkpoint_link_backfill import (
+                final_save_step, resolve_checkpoint_name, resolve_run_name)
             hit = resolve_checkpoint_name(cp)
+            if hit is None:
+                run = resolve_run_name(cp)
+                if run:
+                    hit = (run[0], final_save_step(cp, run[0], run[1], family))
         except Exception:                # a registry read must never fail a launch
             hit = None
         out[cp] = (hit[0], hit[1]) if hit else (None, None)
@@ -3077,7 +3159,7 @@ def create_run(user_id, dataset_id, checkpoints, strengths, settings=None, *,
     # WHICH lineage checkpoint each selected LoRA is, stamped on every cell it
     # produces (see checkpoint_origins) — the canvas gallery reads these columns,
     # it never re-parses a filename.
-    origin_of = checkpoint_origins(cps_in, origins)
+    origin_of = checkpoint_origins(cps_in, origins, family=run_family)
     # One opaque id per invocation is the strict boundary of a render-equivalent
     # timeline.  A later launch with the same prompt/seed/settings must never be
     # spliced into this one; resume_run reuses the ids already stored on rows.
@@ -3495,14 +3577,15 @@ def _cmp_enqueue_cells(user_id, cell_plan, members, _dataset_and_checkpoints,
     ids = []
     for sel, cell, combo, zm in cell_plan:
         # Member weights for this combination. Graph-facing stack_extra keeps the
-        # always-on format; only the persisted copy carries member identity so the
+        # always-on format plus the member's trigger (spelled at graph build as that
+        # LoRA learned it); only the persisted copy carries member identity so the
         # stack view can recover its dataset and trigger without guessing.
         stack_extra, stack_row = [], []
         for i, m in enumerate(members):
             entry = {'filename': m['filename'], 'strength': combo[i + 1]}
-            stack_extra.append(entry)
+            stack_extra.append({**entry, 'trigger': m['trigger']})
             # Only the persisted copy carries provenance; stack_extra retains the
-            # always-on format expected by the workflow builder.
+            # always-on format (and the trigger) the workflow builder reads.
             stack_row.append({**entry, 'combined': True,
                               'dataset_id': m['dataset_id'], 'trigger': m['trigger'],
                               'record_id': m['record_id'], 'step': m['step']})
@@ -3665,7 +3748,8 @@ def create_comparison_run(user_id, selections, strengths, settings=None, *,
         [s.get('checkpoint') for s in selections if s.get('checkpoint') and not base_family],
         {s['checkpoint']: s for s in selections
          if s.get('checkpoint') and s.get('record_id') is not None
-         and s.get('step') is not None})
+         and s.get('step') is not None},
+        family=run_type)
 
     combine, selections, stack_triggers, combos, members = _cmp_expand_stack(
         combine, selections, origin_of, _dataset_and_checkpoints)

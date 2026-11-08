@@ -543,7 +543,7 @@ export function useDataset() {
     toast.success(`${imported} imported${dup ? ` · ${dup} duplicate(s) skipped` : ''}`);
     // No numbers here on purpose: the input budget is a setting now, and a
     // copy of it in a toast is exactly how a hint goes stale.
-    if (failed) toast.warning(`${failed} image${failed === 1 ? '' : 's'} not imported — use JPEG, PNG, WebP or BMP within the image size budget (Settings ▸ Captioning & quality ▸ Image size budget); resize a larger file, or raise the budget.`);
+    if (failed) toast.warning(`${failed} image${failed === 1 ? '' : 's'} not imported — use JPEG, PNG, WebP, BMP, HEIC or AVIF within the image size budget (Settings ▸ Captioning & quality ▸ Image size budget); resize a larger file, or raise the budget.`);
     if (dup && !imported && !failed) toast.warning('All files were already in the dataset (perceptual duplicates).');
     if (small) toast.warning(`${small} image(s) are under 768 px — training only downscales, they will stay soft.`);
     await refresh();
@@ -1471,8 +1471,9 @@ export function useDataset() {
 
   // Persists the adapter-vs-dense recipe independently from the other advanced
   // settings. The server returns the canonical exact enum; callers use null as a
-  // rollback signal so a failed save never leaves the control lying.
-  const setDatasetTrainingMode = useCallback(async (trainingMode, selection = {}) => {
+  // rollback signal so a failed save never leaves the control lying. `quiet`: a
+  // refusal that is not news, such as a path still being typed.
+  const setDatasetTrainingMode = useCallback(async (trainingMode, selection = {}, { quiet = false } = {}) => {
     if (!currentId) {
       toast.error('No dataset selected');
       return null;
@@ -1482,11 +1483,11 @@ export function useDataset() {
     try {
       d = await postJson(`/api/dataset/${currentId}/train/settings`, payload);
     } catch (error) {
-      toast.error(error?.message || 'Could not save the training mode');
+      if (!quiet) toast.error(error?.message || 'Could not save the training mode');
       return null;
     }
     if (!d.ok) {
-      toast.error(d.error || 'Could not save the training mode');
+      if (!quiet) toast.error(d.error || 'Could not save the training mode');
       return null;
     }
     const saved = {

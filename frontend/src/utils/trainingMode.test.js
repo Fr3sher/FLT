@@ -517,6 +517,9 @@ test('the full Advanced branch cannot render the unchanged LoRA controls', () =>
   const denseArm = branch.slice(0, split);
   const loraArm = branch.slice(split);
   assert.match(denseArm, /<PluginSlot slot="training.dense" surface="dataset" placement="recipe"/);
+  // Without it, Cloud Training can neither save the base when it is picked, nor
+  // estimate the run, nor show which files the run delivers.
+  assert.match(denseArm, /placement="recipe"\s+datasetId=\{ds\.currentId\}/);
   // LoRA-ONLY controls must not leak in. The base picker is deliberately NOT on
   // this list any more: a dense run can now be pointed at Raw, Turbo or a local
   // checkpoint, so the base/variant selectors are shared, not LoRA-only — and
@@ -604,7 +607,8 @@ test('full run cards surface Hub status and suppress LoRA-only actions', () => {
   assert.match(runsPage, /function FullArtifactStatus/);
   assert.match(runsPage, /!fullModel && run\.checkpoint_ready/);
   assert.match(runsPage, /!fullModel && run\.dataset_id != null/);
-  assert.match(runsPage, /!fullModel && run\.record_id != null/);
+  // The graph is LoRA-only too: runOpensGraph refuses a full model (runGraph.test.js).
+  assert.match(runsPage, /runOpensGraph\(run, \{ fullModel \}\)/);
   assert.match(runsPage, /isFullTransformerRun\(run\) && \([\s\S]*?<FullArtifactStatus run=\{run\}/);
   // The stop consequence moved into pages/cloudStopDialog.js when the confirm
   // became a dialog — same sentence, one testable home, still the sentence a

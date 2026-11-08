@@ -84,6 +84,120 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-11-08-z-diagnostic-report-firefox',
+    date: '2026-11-08',
+    title: 'The diagnostic report copies in Firefox',
+    blurb: 'In Firefox, 📋 Copy diagnostic report could fail with "Clipboard write was blocked due to lack of user activation" '
+      + 'when the report took more than a few seconds to build. The copy now starts with your click and finishes once the '
+      + 'report is ready. If a browser still refuses, the report appears under the button so you can copy it by hand.',
+    to: '/settings/maintenance',
+  },
+  {
+    id: '2026-11-08-y-start-bat-powershell-7',
+    date: '2026-11-08',
+    title: 'start.bat works from a PowerShell 7 prompt',
+    blurb: 'Launched from PowerShell 7, start.bat could not fetch its own Python ("Get-FileHash is not recognized") and warned '
+      + 'that the ML extras would not install. The download now works from any prompt, and a Python 3.10–3.12 already on '
+      + 'your PATH is used as is, even without the py launcher.',
+  },
+  {
+    id: '2026-11-07-zzzzz-krea-negative-prompt',
+    date: '2026-11-07',
+    title: 'A negative prompt for Krea test runs above CFG 1',
+    blurb: 'The Test Studio offered no negative prompt for Krea, even on a Raw base that samples at CFG 4, where it changes the image. '
+      + 'The Negative section now appears as soon as a Krea run uses a CFG above 1. At CFG 1 the sampler ignores it.',
+  },
+  {
+    id: '2026-11-07-zzzz-bank-heic-avif',
+    date: '2026-11-07',
+    title: 'Your Bank shows HEIC and AVIF photos too',
+    blurb: 'A Bank over a folder of iPhone photos or AVIF images used to skip them. They are now inventoried, shown, '
+      + 'scored, face-sorted and promoted like any other image, through a lossless PNG copy the app keeps in its own '
+      + 'data folder. Your files are never touched.',
+  },
+  {
+    id: '2026-11-07-zzz-heic-photo-import',
+    date: '2026-11-07',
+    title: 'iPhone photos (HEIC) and AVIF images import into your datasets',
+    blurb: 'HEIC/HEIF photos and AVIF images were refused at import. They now import from the dropzone, a ZIP or a folder, '
+      + 'with or without auto head-crop, and work as a reference too. The trainers cannot read them, so the default '
+      + 'original-file mode keeps each one as a lossless PNG.',
+  },
+  {
+    id: '2026-11-07-zzy-queued-training-failure-shown',
+    date: '2026-11-07',
+    title: 'A queued training that cannot start says why',
+    blurb: 'When a training waiting in the queue failed to start when its turn came, it left the queue without a word. '
+      + 'The Training panel now names it and gives the reason.',
+  },
+  {
+    id: '2026-11-07-zzx-queued-training-keeps-its-place',
+    date: '2026-11-07',
+    title: 'A queued training waits for the GPU instead of vanishing',
+    blurb: 'A training in the queue could disappear when its turn came while ComfyUI was generating or a vision pass held '
+      + 'the GPU. It now keeps its place, the queue says what it is waiting for, and it starts on its own once the GPU is free.',
+  },
+  {
+    id: '2026-11-07-zz-stopped-local-run-checkpoints',
+    date: '2026-11-07',
+    title: 'A stopped local training keeps its checkpoints in Runs',
+    blurb: 'Stopping a local training showed it as a crash, with an error and ↻ Retry, and the Runs page offered no ◉ Graph '
+      + 'for a local run on its own. A Stop now reads as a stop, and every local run opens its ◉ Graph with the checkpoints it saved.',
+    to: '/cloud',
+  },
+  {
+    id: '2026-11-07-z-regenerate-keeps-its-source',
+    date: '2026-11-07',
+    title: 'Regenerate no longer remakes a camera view from the wrong picture',
+    blurb: 'A camera view is made from one picture of your dataset, but 🔄 and the retry offered when rejecting it restarted from '
+      + 'the dataset reference and made an unrelated image. Those tiles no longer offer it: generate the view again from its picture.',
+  },
+  {
+    id: '2026-11-07-z-plugin-zip-size',
+    date: '2026-11-07',
+    title: 'Install from a ZIP takes the same plugins as the Store',
+    blurb: 'Install from a ZIP refused any archive over 64 MiB, even one the Store installs without trouble. '
+      + 'It now accepts the same size as the Store.',
+  },
+  {
+    id: '2026-11-07-z-plugin-updates-disk-space',
+    date: '2026-11-07',
+    title: 'Plugin updates stop filling your disk',
+    blurb: 'Every plugin update kept the previous package and a full copy of the plugin’s data forever. '
+      + 'Those copies are now removed after a successful start; a change that did not finish keeps everything it needs to roll back.',
+  },
+  {
+    id: '2026-11-07-z-plugin-repair-damaged-files',
+    date: '2026-11-07',
+    title: 'Repairing a plugin environment replaces damaged files',
+    blurb: 'Repair could report a verified environment that still could not import its packages, because pip keeps an installed '
+      + 'version even when its files are gone. It now compares each package with what was installed, reinstalls only the damaged ones, '
+      + 'and keeps the environment unready if files are still missing.',
+  },
+  {
+    id: '2026-11-07-z-moss-size-ceiling',
+    date: '2026-11-07',
+    title: 'MOSS-Image stays within the size it supports',
+    blurb: 'MOSS-Image is documented up to 4 MP (2048×2048), but Max with a high multiplier could ask for almost 6 MP. '
+      + 'Larger sizes now scale down to that limit with the same proportions, and the size picker shows what will be rendered.',
+    to: '/studio',
+  },
+  {
+    id: '2026-11-07-z-local-token-settings-card',
+    date: '2026-11-07',
+    title: 'Local token protection shows up in Settings',
+    blurb: 'With LDS_REQUIRE_LOCAL_TOKEN=1, Server & access now shows your access token, puts it in the phone links and the QR code, '
+      + 'and keeps the switch locked on. A new token works as soon as you save.',
+    to: '/settings/server',
+  },
+  {
+    id: '2026-11-07-z-full-model-base-kept',
+    date: '2026-11-07',
+    title: 'Your full-model base survives a reload',
+    blurb: 'The base you choose for full-model training (Raw, Turbo, a listed checkpoint or your own file) was only saved at launch, '
+      + 'so reloading the page brought the previous one back. It is now saved as soon as you pick it.',
+  },
+  {
     id: '2026-11-07-z-flt-mobile-header-fit',
     date: '2026-11-07',
     title: 'Keep the navigation menu on narrow phone screens',
@@ -109,6 +223,27 @@ export const WHATS_NEW = [
     title: 'See the members features where they apply',
     blurb: 'Without an active LDS Patreon membership, Test Studio, Training, the crop windows and the watermark clean '
       + 'now name the members features that apply there, with a link to join. Nothing else changes.',
+  },
+  {
+    id: '2026-11-02-zzz-final-save-galleries',
+    date: '2026-11-02',
+    title: 'See every image made with a run’s final save',
+    blurb: 'The Canvas and the checkpoint galleries now show every image made with a run’s final save, '
+      + 'including the ones tested from its deployed LoRA file. Images tested earlier are added the next time the app starts.',
+  },
+  {
+    id: '2026-11-02-zz-saved-keys-survive-restart',
+    date: '2026-11-02',
+    title: 'A key you change in Settings stays changed after a restart',
+    blurb: 'After an in-app restart, the app could go back to an older copy of a key you had replaced in Settings — a new Hugging Face token was then refused as if it were wrong. '
+      + 'The keys saved in Settings now always win when the app starts.',
+  },
+  {
+    id: '2026-11-02-zz-full-model-readiness-cloud',
+    date: '2026-11-02',
+    title: 'Full-model datasets show their real launch readiness',
+    blurb: 'The readiness card above Training now checks a full-model dataset the way its cloud launch will. '
+      + 'It reads “Ready to launch in the cloud” (or “Almost ready” with its warnings) instead of “Not ready” because this computer cannot train it.',
   },
   {
     id: '2026-10-31-huggingface-error-settings',
@@ -186,6 +321,12 @@ export const WHATS_NEW = [
     title: 'Restore a backup of any size',
     blurb: 'Import backup refused archives over 2 GB, so a full backup with its trained LoRAs ended on "Failed to fetch". Any size now restores as long as the drive holding the LDS data folder has room, and LDS tells you how much space is missing when it does not. The upload stays on screen while it runs, and an interrupted upload says so plainly. Thanks to lunchingfriar (GitHub #76) for reporting this.',
     to: '/datasets',
+  },
+  {
+    id: '2026-10-19-zz-studio-trigger-as-trained', date: '2026-10-19',
+    title: 'Test Studio sends the trigger your LoRA learned',
+    blurb: 'A trigger typed with spaces, like "Double pen", trains as "Double_pen", and the Studio used to send the typed words, which the LoRA never learned. It now sends the trigger recorded in each LoRA file, in every model family, and respells the typed one in your prompt.',
+    to: '/studio',
   },
   {
     id: '2026-10-19-plugins-membership-features', date: '2026-10-19',

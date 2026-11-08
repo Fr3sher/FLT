@@ -194,6 +194,39 @@ def _image(db, dataset_id, checkpoint, **kw):
     return img
 
 
+# A minimal safetensors header: listed and arch-sniffed like a deploy, never loaded.
+_ST = (b'\x08\x00\x00\x00\x00\x00\x00\x00{"__metadata__":{}}'
+       .ljust(32, b'\x00'))
+
+
+def _comfy_loras(tmp_path, names):
+    """Configure a ComfyUI whose LoRA folder holds exactly `names` (LoraLoader
+    form, 'krea\\lora_….safetensors') — the pool a lineage pill is joined to."""
+    from app import config
+    base = tmp_path / 'Comfy'
+    loras = base / 'models' / 'loras'
+    loras.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        dest = loras.joinpath(*name.split('\\'))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(_ST)
+    config.save_config({'comfyui': {'base_dir': str(base)}})
+
+
+def _cloud_run_with_final_save(db, ds, monkeypatch, final_step=6000):
+    """A cloud record whose save list ends on a final save at `final_step`."""
+    from app.models import CloudTrainingRun
+    from app.services import cloud_training as ct
+    crun = CloudTrainingRun(dataset_id=ds, status='done')
+    db.session.add(crun)
+    db.session.commit()
+    rec = _record(db, ds, source='cloud', cloud_run_id=crun.id)
+    monkeypatch.setattr(ct, '_node_checkpoints', lambda rec, crun: [
+        {'step': final_step // 2, 'filename': 'a', 'present': True},
+        {'step': final_step, 'filename': 'b', 'present': True, 'final': True}])
+    return rec, crun.id
+
+
 def test_a_deployed_name_resolves_to_its_run_and_step(client, app):
     from app.extensions import db
     from app.services.checkpoint_link_backfill import resolve_checkpoint_name
@@ -306,6 +339,59 @@ def test_the_run_marker_makes_the_pass_run_once(client, app, monkeypatch):
         assert calls == []
 
 
+def test_the_v3_pass_gives_final_saves_their_step_and_waits_for_unreadable_folders(
+        client, app, monkeypatch, tmp_path):
+    """Images tested from a step-less final save before the launch could name its
+    step sit unlinked, or linked to their run only. Pass 4 gives them the step of
+    the final pill that shows their file, leaves a file no pill shows at its run,
+    never touches a merge or a stack's member list — and when it cannot read the
+    ComfyUI LoRA folder or a run's saves, records nothing and waits for the next
+    start."""
+    import json
+    from app import config
+    from app.extensions import db
+    from app.models import LoraTestImage
+    from app.services import checkpoint_link_backfill as bf
+    from app.services import cloud_training as ct
+    with app.app_context():
+        ds = _create(client)
+        rec, cid = _cloud_run_with_final_save(db, ds, monkeypatch)
+        final = f'krea\\lora_nova_Krea-2-Raw_rc{cid}_v2.safetensors'
+        gone = f'krea\\lora_nova_Krea-2-Raw_rc{cid}_v1.safetensors'  # since removed
+        merge = 'krea\\lora_nova_merged_20261102-190604.safetensors'
+        stack = json.dumps([{'filename': final, 'weights': [0.5], 'combined': True,
+                             'record_id': None, 'step': None}])
+        unlinked = _image(db, ds, final, extra_loras=stack)
+        run_only = _image(db, ds, final, record_id=rec.id)   # what version 2 wrote
+        undeployed = _image(db, ds, gone)
+        merged = _image(db, ds, merge)
+        bf._save_state({'version': 2})
+
+        config.save_config({'comfyui': {'base_dir': str(tmp_path / 'unplugged')}})
+        assert bf.run_if_needed()['deferred'] == 'the ComfyUI LoRA folder'
+        assert bf._load_state()['version'] == 2
+        _comfy_loras(tmp_path, [final])
+        lineage = ct._node_checkpoints
+        monkeypatch.setattr(ct, '_node_checkpoints',
+                            lambda rec, crun: (_ for _ in ()).throw(OSError('drive')))
+        assert bf.run_if_needed()['deferred'] == "a run's saves"
+        assert bf._load_state()['version'] == 2
+
+        monkeypatch.setattr(ct, '_node_checkpoints', lineage)
+        res = bf.run_if_needed()
+        assert (res['version'], bf._load_state()['version']) == (3, 3)
+        assert (res['by_final_save'], res['run_only'], res['unlinked']) == (2, 1, 1)
+        db.session.expire_all()
+
+        def link(img):
+            row = db.session.get(LoraTestImage, img.id)
+            return row.record_id, row.step
+        assert link(unlinked) == link(run_only) == (rec.id, 6000)
+        assert link(undeployed) == (rec.id, None)
+        assert link(merged) == (None, None)
+        assert db.session.get(LoraTestImage, unlinked.id).extra_loras == stack
+
+
 # --- what the link is FOR ----------------------------------------------------
 
 def test_the_gallery_returns_every_image_of_a_checkpoint_newest_first(client, app):
@@ -405,6 +491,27 @@ def test_a_studio_launch_recovers_the_origin_from_the_deploy_tag(client, app):
         # …and an untagged pick is left unlinked rather than attached to a guess.
         assert checkpoint_origins(['krea\\lora_nova.safetensors']) == {
             'krea\\lora_nova.safetensors': (None, None)}
+
+
+def test_a_studio_launch_on_a_step_less_final_deploy_records_its_final_step(
+        client, app, monkeypatch, tmp_path):
+    """ai-toolkit deploys a run's FINAL save with the run tag and no step
+    (`…_rc192_v2`). Cells tested from it were stored with neither run nor step,
+    so the Canvas and the checkpoint galleries never showed them. The run's
+    lineage already pairs that file with its final pill; the launch asks the
+    same join."""
+    from app.extensions import db
+    from app.services.lora_test_studio import checkpoint_origins
+    with app.app_context():
+        ds = _create(client)
+        rec, cid = _cloud_run_with_final_save(db, ds, monkeypatch)
+        final = f'krea\\lora_nova_Krea-2-Raw_rc{cid}_v2.safetensors'
+        older = f'krea\\lora_nova_Krea-2-Raw_rc{cid}_v1.safetensors'
+        _comfy_loras(tmp_path, [final, older])
+        assert checkpoint_origins([final], family='krea')[final] == (rec.id, 6000)
+        # An older deploy of the same final save: no pill shows it (the newest
+        # version takes the final pill), so it keeps its run and no step.
+        assert checkpoint_origins([older], family='krea')[older] == (rec.id, None)
 
 
 def test_the_gallery_publishes_WHICH_LAUNCH_made_each_image(client, app):

@@ -544,7 +544,7 @@ def _capture_krea_enqueue(monkeypatch, lts, checkpoints, base_models=()):
     monkeypatch.setattr(lts, '_target_node_classes', lambda: None)
     monkeypatch.setattr(
         lts, 'checkpoint_origins',
-        lambda selected, explicit=None: {checkpoint: (None, None)
+        lambda selected, explicit=None, family=None: {checkpoint: (None, None)
                                          for checkpoint in selected},
     )
 
@@ -1921,7 +1921,8 @@ def test_combine_run_stacks_every_lora_with_its_own_weight_and_all_triggers(
         # ONE cell: the strength sweep is replaced by the per-LoRA weights.
         assert out['created'] == 1 and len(built) == 1
         kw = built[0]
-        assert kw['extra_loras'] == [{'filename': cp_b, 'strength': 0.55}]
+        # The member's trigger rides along: the graph spells it as that LoRA learned it.
+        assert kw['extra_loras'] == [{'filename': cp_b, 'strength': 0.55, 'trigger': 'bbb'}]
         assert kw['trigger_word'] == ['aaa', 'bbb']
         assert kw['train_type'] == 'zimage'
 

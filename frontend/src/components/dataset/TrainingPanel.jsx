@@ -58,6 +58,7 @@ import { toggleDiffSelection } from './lineageDetail.js';
 import { UseDatasetCaptionsButton } from './UseDatasetCaptionsButton';
 import TrainingProgress from './TrainingProgress';
 import PreflightModal from './PreflightModal';
+import { denseChoiceSaver, densePickerSetters } from './denseChoice.js';
 import { laneOfPayload, preflightUrl } from './preflightLane.js';
 import { continuationFromNode, explicitRunContinuation } from '../runs/localContinuation.js';
 import {
@@ -144,6 +145,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                                         navigationPanel = null,
                                         onNavigationStateChange,
                                         onPanelOpenChange,
+                                        // {datasetId, trainingMode, revision} for the readiness
+                                        // badge above the panel: a full-model recipe is checked
+                                        // on the cloud lane, and asked again when its base is saved.
+                                        onTrainingSelectionChange,
                                         // Is Training visible? The panel stays MOUNTED in other
                                         // sections so queue polling continues. Visibility must be
                                         // explicit because the step recipe refreshes only while
@@ -260,6 +265,13 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const [trainingMode, setTrainingMode] = useState(TRAINING_MODE_LORA);
   const [trainingModeBusy, setTrainingModeBusy] = useState(false);
   const [trainingModeError, setTrainingModeError] = useState('');
+  // The dataset `trainingMode` was read for: while the next dataset's base-info
+  // loads, the previous mode must not be reported as this one's.
+  const [trainingModeDatasetId, setTrainingModeDatasetId] = useState(null);
+  // Bumped each time a full-model choice is saved, so the readiness badge
+  // re-reads a verdict that depends on it.
+  const [denseSelectionRevision, setDenseSelectionRevision] = useState(0);
+  const [denseSaver] = useState(denseChoiceSaver);
   const trainingModeRadioRefs = useRef({});
   const incompatibleModeFallbackRef = useRef('');
   // Independent results browser: changing the NEXT training configuration must never
@@ -394,12 +406,18 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         setVariant(safeVariant);
         setTrainType(info.train_type || 'zimage');
         setTrainingMode(normalizeTrainingMode(info.training_mode));
+        setTrainingModeDatasetId(ds.currentId);
         setAdv(info.train_settings || null);
         setSlider(info.slider || null);
       }
     });
     return () => { alive = false; };
   }, [ds.currentId, caps.training_visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (trainingModeDatasetId == null) return;
+    onTrainingSelectionChange?.({
+      datasetId: trainingModeDatasetId, trainingMode, revision: denseSelectionRevision });
+  }, [trainingModeDatasetId, trainingMode, denseSelectionRevision, onTrainingSelectionChange]);
   //
   // Poll conversion status every 4 seconds. Depend on the STABLE callback keyed by currentId, not
   // the entire ds object: recreating the interval every render previously prevented the timer from
@@ -784,7 +802,22 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const fullTransformerReason = fullTransformerUnavailableReason(fullTransformerSelection);
   const fullMode = trainingMode === TRAINING_MODE_FULL_TRANSFORMER;
 
+  // A full-model choice is saved here, not by the plugin's picker (denseChoice.js):
+  // only the launch used to save it, so a reload brought the previous base back.
+  const denseCustomRef = useRef(customBase);
+  denseCustomRef.current = customBase;
+  const densePicker = densePickerSetters({
+    variant, base, customRef: denseCustomRef, setVariant, setBase, setCustomBase,
+    saver: denseSaver,
+    persist: async (selection, options) => {
+      const saved = await ds.setDatasetTrainingMode?.(
+        TRAINING_MODE_FULL_TRANSFORMER, selection, options);
+      if (saved) setDenseSelectionRevision((n) => n + 1);
+    },
+  });
+
   const onTrainingModeChange = async (nextValue) => {
+    denseSaver.drop();
     const nextMode = normalizeTrainingMode(nextValue);
     if (nextMode === trainingMode || trainingModeBusy) return false;
     if (nextMode === TRAINING_MODE_FULL_TRANSFORMER && !fullTransformerEligible) {
@@ -2093,12 +2126,13 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               the false branch below: the backend ignores all of them in dense. */}
           {fullMode ? (<>
             <PluginSlot slot="training.dense" surface="dataset" placement="recipe"
+              datasetId={ds.currentId}
               variant={variant}
-              setVariant={setVariant}
+              setVariant={densePicker.setVariant}
               base={base}
-              setBase={setBase}
+              setBase={densePicker.setBase}
               customBase={customBase}
-              setCustomBase={setCustomBase}
+              setCustomBase={densePicker.setCustomBase}
               currentBases={currentBases}
               customSupported={customSupported}
               baseNote={baseNote}
@@ -3135,6 +3169,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         <div id="ds-training-queue" tabIndex={-1} data-workspace-focus
           className="flex flex-col gap-1 rounded-lg border border-indigo-400/30 bg-indigo-500/5 px-3 py-2 scroll-mt-20">
           <span className="text-content-muted text-[0.625rem] uppercase">Training queue ({status.queue.length})</span>
+          {status.queue_waiting_for ? (
+            <span role="status" className="text-indigo-200/90 text-[0.6875rem]">
+              Waiting for {status.queue_waiting_for} — the next one starts on its own when the GPU is free.
+            </span>
+          ) : null}
           {status.queue.map((q, i) => (
             <div key={q.dataset_id} className="flex items-center gap-2 text-[0.6875rem]">
               <span className="text-content-subtle tabular-nums">{i + 1}.</span>
@@ -3160,6 +3199,13 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       {enqErr && (
         <p className="m-0 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-red-300 text-[0.6875rem]">
           ⚠️ Enqueue refused: {enqErr}
+        </p>
+      )}
+
+      {status.queue_error?.error && (
+        <p className="m-0 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-red-300 text-[0.6875rem]">
+          ⚠️ A queued training could not start{status.queue_error.name ? ` (${status.queue_error.name})` : ''} and
+          left the queue: {status.queue_error.error}
         </p>
       )}
 
