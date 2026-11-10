@@ -57,6 +57,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [privatePluginBuild({ distribution }), react(), {
       name: 'lds-plugin-build-mode',
+      // Select the development entry before Vite resolves the real Store file.
+      enforce: 'pre',
       generateBundle() {
         this.emitFile({ type: 'asset', fileName: 'plugin-build.json',
           source: JSON.stringify({ schema_version: 1, distribution: storeBuild ? 'store' : 'bundled' }) })
