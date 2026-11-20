@@ -12,7 +12,9 @@
 Free local LoRA training studio: turn one reference photo or a whole image folder into a captioned LoRA dataset, train character, style and concept LoRAs for Krea 2, FLUX.1, FLUX.2 Klein, Qwen-Image 2.1, Z-Image, SDXL and Anima, then pick the best checkpoint side by side. FLT runs on your machine in one browser tab and uses [ai-toolkit](https://github.com/ostris/ai-toolkit) for training and [ComfyUI](https://github.com/comfyanonymous/ComfyUI) for local generation and checkpoint testing, without a node graph to wire.
 
 The core and public plugins require no account. Optional usage statistics are off by default. API engines and rented GPUs are optional; local and manual workflows remain available.
-Upstream Patreon membership can unlock members-only plugins and early upstream builds; existing public features remain available without membership. Optional cloud signup referral links are disclosed and do not change the price.
+Upstream Patreon membership can unlock members-only features, plugins and early upstream builds. Member features require an active, linked **LDS Member** subscription, including in an already installed version; existing public features remain available without membership. Your files and datasets remain yours when membership ends. Optional cloud signup referral links are disclosed and do not change the price.
+
+Upstream documents **MOSS-Image** and **MiniMax H3-Image** LoRA training and testing in its [member edition](#latest-member-updates), alongside additional editing, refinement and workflow tools.
 
 <h3 align="center">☕ Keep the project in development</h3>
 
@@ -52,6 +54,32 @@ People shown in the demo and screenshots are AI-generated.
 | Files | Standard training ZIPs and sidecars, backup/restore without API keys, ComfyUI deployment, configurable storage and Trash |
 
 Dependencies vary by feature. Bank search ranks matches; it does not guarantee exclusions. Undo covers specific actions, and **Delete rejected** can remove source files after confirmation. Video and slider workflows are experimental. See the [feature reference](docs/guide/features.md), [requirements](docs/guide/requirements.md) and [known limitations](docs/guide/known-limitations.md) for the detailed behavior.
+
+## Latest member updates
+
+Upstream describes the following improvements in its **2026.11.12.21 member update**. This section summarizes the upstream member edition; FLT has its own public core and release schedule. In the member edition, install core updates from **Settings → Maintenance → Updates** and member plugins from **Plugins → Store / Updates**.
+
+| Area | What's new |
+|---|---|
+| H3 Image workspace | **Create, Edit and Combine** have their own controls. Edit one source or combine up to **16 ordered references**, with a role for each image. Import originals from the **Gallery**, filter by the main or additional LoRAs recorded on each image, and keep your selection as you change filters. |
+| H3 sampling and finishing | Use the native **6-step** recipe or prepare the optional pDMD adapter for **Turbo at 2, 3 or 4 steps**. Standard refinement supports one, two or three passes: **6, 12 or 18 total sampling steps**, with optional enlargement up to 2× within the size limit, sharpening and film grain. References and settings stay with each result. |
+| Image Test Studio | Drop an image file or a previous result onto H3 references, the prompt or **Describe**. Earlier results stay in the grid when you change sampling settings, including tests without a LoRA. Each tile shows its settings; generation status sits directly above the bottom shortcuts. Compatible **Always LoRAs** also work without a selected dataset. |
+| Image Bank | Clear **Analyze, Review and Create dataset** action groups. Right-click an image to find similar images, or the grid to select a diverse or balanced set, search by description and apply quality-based rejection. Each tool exposes its settings before running. |
+| H3 Image training | Train image LoRAs locally or on a rented GPU. Start from the sourced AI Toolkit rank-16 recipe or the rank-32 adaptation of DiffSynth's image recipe for Character, Style and Concept datasets. The default quantized cloud recipe starts its GPU search at an estimated **48 GB VRAM**; larger settings can need more. |
+| Trainer maintenance | Update the configured **AI Toolkit** and its dependencies from the dataset, follow the log and refresh readiness automatically. Local jobs are protected during the update. |
+| Civitai prompts | Search by image tag name, choose a suggestion and keep that filter across further pages or a model's gallery, with the original prompts available. |
+
+H3 Image training, its Studio workspace and automatic trainer updates are member features. H3 model terms and the hardware requirements still apply. The in-app **What's new** panel and Guide describe the controls available in your installed version.
+
+Upstream also documents these previously released member tools:
+
+| Area | Member capabilities |
+|---|---|
+| MOSS-Image | Train locally or in the cloud on image-and-caption datasets, then generate and compare LoRAs in Test Studio. Use Base or compatible SFT models, with sampler, scheduler, second-pass and finishing controls. The optional SFT distillation LoRA offers 4 steps up to 1 MP, 6 around 1536 px and 8 at 2048 px; output is limited to 4 MP. Image-edit training pairs are not supported for this family. |
+| Krea 2 image tools | Optional **Krea2T prompt enhancer** with adjustable strength, plus a **2.25× two-stage upscale**: a 1.5× latent pass followed by a 1.5× image upscale and light refinement. Model and node preparation depend on the selected tool. |
+| Training recipes | Edit learning rates, layer exclusions, caching and preview settings together. Saved presets and run snapshots keep the recipe for local and cloud training, with model-specific safeguards. |
+| Suggested crops and recovery | Ask a local vision model to suggest a crop around the visible subject, adjust it before applying, then undo new dataset crops or restore their saved original. This does not recover edits discarded before crop history was available. |
+| Remake one image | Render one Test Studio result again with a new seed without restarting the whole test. |
 
 ## Plugins
 
@@ -309,6 +337,7 @@ These are built on personal time, and how fast they arrive depends on how much o
 | [Camera angles](bundled/camera_angles/) | Create new viewpoints of Gallery or dataset images with controls for direction, height and distance | ComfyUI, Qwen-Image-Edit and Multiple-Angles LoRA |
 | [Canvas](bundled/canvas/) | Arrange runs and checkpoints on a visual board, compare or blend LoRAs, generate images and export layouts | ComfyUI for generation; one model family per generation batch |
 | [Cloud training](bundled/cloud_training/) | Train image or video models on rented GPUs, monitor runs, recover checkpoints and deliver full Krea 2 models | [vast.ai](https://cloud.vast.ai/?ref_id=683073) account and API key; Hugging Face access for applicable runs |
+| [Dataset Forge](bundled/qwen_dataset/) | Generate dataset variations locally with Qwen-Image 2.1, using 1–10 references of the same subject and your selected shots | Recent ComfyUI and Qwen-Image 2.1 model files; preparation included |
 | [DLSS 5 Neural Rendering](bundled/dlss5/) | Improve a finished video's lighting and materials, compare with the original and export the result | Windows x86-64, NVIDIA driver, compatible model supplied by you and the prepared bridge |
 | [Klein Improve](bundled/image_upscale/) | Re-render image detail with instructions, LoRA presets and finishing controls | ComfyUI and Klein models; appearance and color can change |
 | [Live channels](bundled/live/) | Continuously render scripted H3 scenes and watch them in a browser or VLC | Compatible local ComfyUI, H3 weights and stream encoder; experimental |
@@ -321,6 +350,23 @@ These are built on personal time, and how fast they arrive depends on how much o
 | [Web scraping](bundled/scrape/) | Import selected images or clips from searches and supported gallery URLs into datasets or banks | Source-dependent credentials and permissions; Pexels requires explicit dataset/ML authorization |
 
 API providers apply their own billing and content policies. Model licenses also apply, including MiniMax H3's territory restrictions; check the [video limits](docs/guide/features.md#video-bank-beta--first-release-read-the-limits) before using it. Plugin authors can start with the [SDK and package guide](docs/plugins/README.md).
+
+### Member plugins
+
+These plugins are delivered through the upstream member catalog and require an active, linked **LDS Member** membership. Their cards list the included features, dependencies and preparation steps.
+
+| Plugin | Available version | What it adds |
+|---|---|---|
+| Dataset Pilot | **1.4.0** | Prepare independent face datasets from selected references with saved multi-engine recipes, identity and quality checks, framing balance, profile review, optional watermark repair and JoyCaption. Resume interrupted work and fill missing shots within the original budget. Completion rounds favor engines that produced usable images; near-identical compositions are set aside. Follow each identity's progress and choose which dataset to view. |
+| LoRA Manager | **1.8.2** | Manage and deploy training saves, merge weighted LoRAs, or bake LoRA/LoKr adapters into compatible base checkpoints, including H3 Image. Manage merged files and ComfyUI copies; the merge engine runs on the CPU. |
+| Civitai Studio | **1.1.2** | Prepare editable LoRA or checkpoint drafts with up to 20 matching Gallery examples, resume uploads, publish video checkpoints and stamp posted images with their LoRA name and strength. Example uploads omit embedded prompts, metadata and workflows. |
+| PiD 4K Upscale | **1.0.1** | Decode a Krea 2 Test Studio result at 4× size, about 4096 × 4096 for a square image, and keep it beside the original. Prepares its additional models when needed. |
+| Angle Variations | **1.0.2** | Generate new dataset viewpoints with Qwen-Image 2.1 Turbo, from three-quarter and profile views to back, high and low angles. |
+| Multi-subject | **1.1.2** | Place 2–8 people in one Krea 2 Test Studio image, each with their own LoRA, strength, description and drawn region. Requires Krea2 Regional nodes. |
+| Full Model Files | **1.0.0** | Prepare INT8 convrot and Turbo files automatically after a full Krea 2 model returns from cloud training. |
+| H3 Video Decoders | **1.0.0** | Prepare and select the optional Sol-H3 video decoder in FP16 or INT8, with verified downloads and ComfyUI compatibility checks. |
+| Qwen Watermark Cleaner | **1.0.0** | Clean watermarks in datasets and the Bank with Qwen-Image 2.1 or its 8-step Turbo engine, with model preparation included. |
+| Creative Library | **1.0.8** | Browse visual prompt libraries, save favorites and compose prompts from outfits, scenes, poses and lighting. Batch prompts or individual parts in Test Studio, and fill multi-subject scenes or templates. Use the online library or import your own Sick Ollie packs. |
 
 ## Screenshots
 
@@ -355,7 +401,7 @@ Click a screenshot to view it at full size.
 
 Complete **Setup**, then create a dataset and install the optional plugins you need. Importing, organizing and manually captioning images require no GPU or API key.
 
-**Updates:** ZIP installations use **Update & restart** and retain their datasets, media, settings and history. Git installations follow their configured branch; this fork continues to use `main`. Pinokio and Docker use their own [update procedures](docs/guide/installation.md). Back up your data before the first v2 launch because it may migrate the database.
+**Updates:** ZIP installations use **Update & restart** and retain their datasets, media, settings and history. Git installations follow their configured branch; this fork continues to use `main`. Pinokio and Docker use their own [update procedures](docs/guide/installation.md). Back up your data before the first v2 launch because it may migrate the database. Plugin updates are available from **Plugins → Updates**. Upstream member updates use the linked Patreon service; reserved features require an active **LDS Member** membership, while public features remain available without one.
 
 ### Minimum requirements
 
