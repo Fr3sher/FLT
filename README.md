@@ -399,13 +399,13 @@ Click a screenshot to view it at full size.
 
 **Windows:** download `LoRA-Dataset-Studio-windows.zip` from [FLT's latest release](https://github.com/Fr3sher/FLT/releases/latest) when that asset is available; otherwise use GitHub's **Source code (zip)**. Extract the entire archive and run `start.bat`. The launcher prepares Python and opens FLT in your browser.
 
-Complete **Setup**, then create a dataset and install the optional plugins you need. Importing, organizing and manually captioning images require no GPU or API key.
+Complete **Setup**, then create a dataset and install the optional plugins you need. Importing, organizing and manually captioning images require no GPU or API key. Setup can install [ai-toolkit](https://github.com/ostris/ai-toolkit) into a new folder on a PC with an NVIDIA GPU, or you can select an existing copy in **Settings → Local tools**. Local generation also needs [ComfyUI](https://github.com/comfyanonymous/ComfyUI); see the [external tools guide](docs/guide/installation.md#external-tools).
 
 **Updates:** ZIP installations use **Update & restart** and retain their datasets, media, settings and history. Git installations follow their configured branch; this fork continues to use `main`. Pinokio and Docker use their own [update procedures](docs/guide/installation.md). Back up your data before the first v2 launch because it may migrate the database. Plugin updates are available from **Plugins → Updates**. Upstream member updates use the linked Patreon service; reserved features require an active **LDS Member** membership, while public features remain available without one.
 
 ### Minimum requirements
 
-The core runs without a GPU. Python 3.10–3.12 supports the local ML extras; the Windows launcher downloads Python 3.12 if needed. Local generation typically needs about 16 GB NVIDIA VRAM; training requirements depend on the family and settings. See the [hardware and dependency tables](docs/guide/requirements.md) before downloading models or renting a GPU.
+The core runs without a GPU. Python 3.11–3.12 supports the local ML extras; the Windows launcher downloads Python 3.12 if needed. Local generation typically needs about 16 GB NVIDIA VRAM; training requirements depend on the family and settings. See the [hardware and dependency tables](docs/guide/requirements.md) before downloading models or renting a GPU.
 
 ### Option 1 — Git checkout (Windows)
 
@@ -521,7 +521,7 @@ The app scales from "no GPU at all" to a full local training rig — each capabi
 
 | Mode / capability | GPU (NVIDIA) | Disk | Notes |
 |---|---|---|---|
-| **API-only** (Gemini/ChatGPT/OpenRouter generation, import/scrape, curate, manual captions, export/backup) | none | ~2 GB | Any machine with Python 3.10+ (3.13/3.14 run the core app fine — the 3.10–3.12 window is an ML-extras constraint); Docker image available |
+| **API-only** (Gemini/ChatGPT/OpenRouter generation, import/scrape, curate, manual captions, export/backup) | none | ~2 GB | Any machine with Python 3.11+ (3.13/3.14 run the core app fine — the 3.11–3.12 window is an ML-extras constraint); Docker image available |
 | **Auto-captioning & framing** (Ollama vision, 8B model) | ~8 GB VRAM | ~7 GB | Runs alongside generation, not concurrently |
 | **Local generation** (Klein 9B **KV** fp8 via ComfyUI) | ~16 GB VRAM | ~30 GB (model + text encoder + VAE) | Free, local and NSFW-capable; Setup downloads the models. The KV build is up to **2.5× faster on multi-reference edits** at the same quality. Available in Docker GPU mode |
 | **LoRA training — Z-Image / SDXL** (ai-toolkit) | 16 GB+ recommended | 10 GB+ free enforced per run | Quantized (qfloat8) + low-VRAM mode |
@@ -529,10 +529,10 @@ The app scales from "no GPU at all" to a full local training rig — each capabi
 | **LoRA training — FLUX.2 Klein** (ai-toolkit) | 4B: **16–24 GB VRAM** · 9B: **32–48 GB** | base download + 10 GB+ free | Both bases are gated on Hugging Face; the cloud lane is practical for 9B |
 | **LoRA training — FLUX.1 / Anima** (ai-toolkit) | ~24 GB VRAM (both are 12B-class families) | base download + 10 GB+ free | **Local only — neither has a cloud lane.** FLUX.1 is gated on Hugging Face; Anima's base is public and reads booru tags natively |
 | **Full-model (dense) training — Krea 2** (experimental, cloud only) | **80 GB VRAM** — there is no local lane | 200 GB on the pod, plus a private Hugging Face repo for the ~26 GB master | Not the recommended path: Krea's own advice is a LoRA on Raw applied to Turbo. Needs a separate `HF_CLOUD_TOKEN` |
-| **Face scoring / person masks / watermark inpaint** (ML extras) | none (CPU) | ~3 GB (+ CPU torch for LaMa) | Python **3.10–3.12 required** for wheels; installable per capability from Setup |
+| **Face scoring / person masks / watermark inpaint** (ML extras) | none (CPU) | ~3 GB (+ CPU torch for LaMa) | Python **3.11–3.12 required** for wheels; installable per capability from Setup |
 
 - **OS:** Windows 10/11 for the full local stack (`start.bat`). Linux/macOS work for API-only + manual venv; GPU Docker depends on host NVIDIA support.
-- **Python:** 3.10–3.12, but not required up front: `start.bat` fetches a self-contained CPython 3.12 when none is installed. Python 3.13+ can run the core app but not the ML extras.
+- **Python:** 3.11–3.12, but not required up front: `start.bat` fetches a self-contained CPython 3.12 when none is installed. Python 3.13+ can run the core app but not the ML extras. After updating an installation on Python 3.10, run `start.bat` again to rebuild its environment on Python 3.12 while keeping your data.
 - **RAM:** 16 GB+ recommended for local training. Unlike VRAM and free disk, this one is a recommendation the app never measures — a run that dies for want of system memory has no guard-rail in front of it.
 - **Dataset size:** a launch is gated on a per-family floor — 12 images for Z-Image, 15 for Krea 2 / FLUX.1 / FLUX.2 Klein, 20 for SDXL, 4 for a slider LoRA — with 20-30 recommended. Below the floor the app asks you to confirm and warns about overfitting rather than refusing outright.
 - Reference development rig: RTX 4090 (24 GB); every number above was measured or enforced there.
@@ -563,7 +563,7 @@ Start from the guided recipe for your family: LDS fills in the ai-toolkit settin
 
 ### [Which LoRA trainer should I use? Do I need the command line?](docs/faq/which-lora-trainer.md)
 
-LDS trains with [ai-toolkit](https://github.com/ostris/ai-toolkit). Once ai-toolkit is installed and set in **Settings → Local tools**, LDS writes the training config: pick a recipe and start the run from the browser, with the queue and logs on the runs page. Datasets also export as standard ZIPs with `.txt` caption files, so the same set can feed kohya_ss, OneTrainer or another trainer.
+LDS trains with [ai-toolkit](https://github.com/ostris/ai-toolkit). **Setup** can install it on a PC with an NVIDIA GPU, or you can select an existing copy in **Settings → Local tools**. Once configured, LDS writes the training config: pick a recipe and start the run from the browser, with the queue and logs on the runs page. Datasets also export as standard ZIPs with `.txt` caption files, so the same set can feed kohya_ss, OneTrainer or another trainer.
 
 ### [How much VRAM do I need to train a LoRA?](docs/faq/lora-training-vram.md)
 

@@ -129,6 +129,18 @@ def plugin_actions():
     return jsonify({'actions': setup_installer.plugin_actions_catalog()})
 
 
+@bp.get('/aitoolkit-install/plan')
+def aitoolkit_install_plan():
+    """The dry run of Install AI Toolkit for `?dest=` (or the default folder):
+    the GPU and driver verdict, the CUDA build, the free space, the source
+    (git clone or archive), the Python base and the exact commands, with the
+    reason when it cannot run here. Read-only: nothing is downloaded or written."""
+    from ..services import aitoolkit_install
+    response = jsonify(aitoolkit_install.plan(request.args.get('dest', '')))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 @bp.post('/install/<action>')
 def start_install(action):
     if not setup_installer.known_action(action):
@@ -136,7 +148,12 @@ def start_install(action):
     if (denied := _plugin_action_admin_gate(action)) is not None:
         return denied
     try:
-        state = setup_installer.start(action)
+        if action == 'aitoolkit_install':
+            # The one action that takes options (its destination folder). Every other
+            # action keeps the one-argument call the rest of the app and its tests use.
+            state = setup_installer.start(action, request.get_json(silent=True))
+        else:
+            state = setup_installer.start(action)
     except setup_installer.AlreadyRunning:
         return jsonify({'error': 'install already running'}), 409
     except (setup_installer.Precondition, ValueError) as e:

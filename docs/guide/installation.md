@@ -14,7 +14,7 @@ Download **`LoRA-Dataset-Studio-windows.zip`** from [FLT's latest release](https
 start.bat
 ```
 
-`start.bat` uses Python 3.10–3.12 if available. If none is installed, it downloads a self-contained CPython 3.12 into `.python\`, creates `.venv`, installs the core requirements, opens `http://127.0.0.1:5050/`, and starts the server. It requires no admin rights and changes no system PATH.
+`start.bat` uses Python 3.11–3.12 if available. If none is installed, it downloads a self-contained CPython 3.12 into `.python\`, creates `.venv`, installs the core requirements, opens `http://127.0.0.1:5050/`, and starts the server. It requires no admin rights and changes no system PATH.
 
 On an existing ZIP installation, **Update & restart** downloads the next release and swaps the core in, keeping `data/`, `config.json`, `.env`, `.venv` and `.python` untouched. Install and update optional plugins separately from the Store. A git checkout follows its configured branch instead and needs `git` on your PATH, which an install made through a desktop Git client does not always provide.
 
@@ -100,16 +100,20 @@ In [Pinokio](https://pinokio.computer), open **Discover → Download from URL** 
 
 Only the core app is installed this way. Complete **Setup**, then choose your optional features in **Plugins → Store**; each plugin carries its own settings and preparation steps. Updates go through Pinokio's **Update** tab: because Pinokio starts and stops the server, the app detects this install shape and shows *Stop → Update → Start* instead of its own **Update & restart** button, which would relaunch the server outside Pinokio's control.
 
+The app needs Python 3.11 or newer. Pinokio creates `env/` on Python 3.12 (`venv_python`), which requires **Pinokio 3.8.27 or newer**: update Pinokio first if it is older. An installation made on Pinokio's bundled Python 3.10 needs **Update twice** when it reaches this version: the first Update still runs the previous installer, which cannot install the new requirements, and Start then says so; the second one moves the old `env/` aside and rebuilds it on Python 3.12. Datasets, settings and the Image Bank are not touched.
+
 ## External tools
 
 | Tool | Unlocks | Connect it |
 |---|---|---|
-| [ai-toolkit](https://github.com/ostris/ai-toolkit) | Local LoRA training and JoyCaption | Set its directory and Python interpreter in **Settings → Local tools**; conda, uv, venv and portable Python installs are supported |
+| [ai-toolkit](https://github.com/ostris/ai-toolkit) | Local LoRA training and JoyCaption | On an NVIDIA machine, **Setup → LoRA training** installs it in one click: a new folder, the CUDA build of PyTorch it documents, then its directory and Python set for you ([details](settings-reference.md#install-ai-toolkit)). An existing install is selected in **Settings → Local tools**; conda, uv, venv and portable Python installs are supported |
 | [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | Klein/Krea local generation, Studio, Canvas generation and deployment; SDXL base discovery | Keep its API reachable and set the install/models paths in **Settings → Local tools** |
 | [Ollama](https://ollama.com) | Auto-captioning, framing, head-crop and watermark detection | In Docker, choose none/host/companion in **Setup**, then pull the model explicitly from LDS; native installs can use their configured URL |
 | [LM Studio](https://lmstudio.ai) | The same, if that is the local model server you already run | Pick it in **Settings ▸ Local tools**. It only serves a model you have loaded (no JIT by default), and LDS cannot start it for you — its Developer tab has the switch |
 
 Which of the two serves those features is a single setting (**Settings ▸ Local tools ▸ Local LLM provider**); Ollama stays the default. The full path rules, model layouts and provider states are in the [settings reference](settings-reference.md#local-tools). If a tool remains unavailable, use the [troubleshooting guide](troubleshooting.md).
+
+The one-click AI Toolkit install needs an NVIDIA GPU and about 8 GB free on the chosen drive (10 GB with an older NVIDIA driver, whose PyTorch build is larger). It works on the Windows ZIP without Git (it then downloads a fixed copy of AI Toolkit, which you can turn into a Git checkout later to update it), on Git checkouts and on Linux. It is not offered in Docker. In Pinokio you can also install AI Toolkit from Pinokio itself and select its folder.
 
 ## API keys
 

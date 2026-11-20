@@ -84,6 +84,28 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-11-16-setup-check-comfyui-stopped', date: '2026-11-16',
+    title: 'No “stopped working” warning when ComfyUI is simply off',
+    blurb: 'A local engine added by a plugin, such as Dataset Forge, was reported as a part of your setup that stopped working whenever ComfyUI was not running. The background check now waits for ComfyUI to answer before it judges such an engine.',
+  },
+  {
+    id: '2026-11-15-setup-install-ai-toolkit', date: '2026-11-15',
+    title: 'Install AI Toolkit from Setup',
+    blurb: 'No trainer yet? Setup can install AI Toolkit for you. It checks your NVIDIA GPU and free space, downloads AI Toolkit with the CUDA build of PyTorch it documents into a new folder, confirms that the GPU is visible and selects it in Settings. Follow the log, cancel at any time and resume after an interruption.',
+    to: '/setup?step=training',
+  },
+  {
+    id: '2026-11-12-pillow-13-python-3-11',
+    date: '2026-11-12',
+    title: 'Image decoding security update, on Python 3.11 or newer',
+    blurb: 'LDS now runs Pillow 13 and filelock 4.2, which fix the security advisories filed against image decoding and '
+      + 'file locking. Both need Python 3.11 or newer. An installation still on Python 3.10 stops after updating and says '
+      + 'what to do: run start.bat again and it rebuilds its environment on Python 3.12, keeping datasets, settings and the '
+      + 'Image Bank; optional ML extras installed in the old environment are installed again from Setup. In Pinokio '
+      + '(3.8.27 or newer), click Update twice: the second one rebuilds the environment on Python 3.12. Installed '
+      + 'plugins keep working.',
+  },
+  {
     id: '2026-11-09-start-bat-python-shim',
     date: '2026-11-09',
     title: 'start.bat starts when python is a version-manager shim',

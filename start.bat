@@ -8,11 +8,12 @@ REM (UnicodeDecodeError). Reported by the community. Requirements comments are
 REM also kept ASCII-only as a second line of defence.
 set "PYTHONUTF8=1"
 
-REM --- Pick a Python the OPTIONAL ML extras have wheels for (CPython 3.10-3.12).
-REM     insightface / numpy<2 / onnxruntime publish NO wheels for 3.13+, so a venv
-REM     built on e.g. 3.14 cannot install requirements-ml.txt (pip falls back to
-REM     source builds that fail). `py -3.x` selects an EXACT version; bare `py -3`
-REM     or `python` grab the NEWEST installed one -- which is exactly the trap.
+REM --- Pick a CPython 3.11-3.12. The core needs 3.11 or newer (Pillow 13 and
+REM     filelock 4.2), and the OPTIONAL ML extras -- insightface / numpy<2 /
+REM     onnxruntime -- publish NO wheels for 3.13+, so a venv built on e.g. 3.14
+REM     cannot install requirements-ml.txt (pip falls back to source builds that
+REM     fail). `py -3.x` selects an EXACT version; bare `py -3` or `python` grab
+REM     the NEWEST installed one -- which is exactly the trap.
 set "PY="
 set "PY_SUPPORTED=1"
 
@@ -22,18 +23,18 @@ REM     python.bat, other version managers python.cmd), and cmd never comes back
 REM     from a batch file started without CALL. Issue #77: start.bat ended inside
 REM     the check in 1b, with no message and no app.
 
-REM 1) A CPython 3.10-3.12 already installed (via the Windows py launcher)?
-for %%V in (3.12 3.11 3.10) do (
+REM 1) A CPython 3.11-3.12 already installed (via the Windows py launcher)?
+for %%V in (3.12 3.11) do (
   if not defined PY ( call py -%%V -c "import sys" >nul 2>nul && set "PY=py -%%V" )
 )
 
-REM 1b) ... or a `python` on PATH that IS a 3.10-3.12 itself: python.org installs
+REM 1b) ... or a `python` on PATH that IS a 3.11-3.12 itself: python.org installs
 REM     made without the py launcher, scoop, pyenv-win, conda. Issue #77: such a 3.11
 REM     was skipped for a download, then used anyway once the download failed. Its
 REM     version is checked, so a newer default `python` -- the 3.14 trap above --
 REM     still can't slip through.
 if not defined PY (
-  call python -c "import sys; sys.exit(0 if (3,10)<=sys.version_info[:2]<=(3,12) else 1)" >nul 2>nul && set "PY=python"
+  call python -c "import sys; sys.exit(0 if (3,11)<=sys.version_info[:2]<=(3,12) else 1)" >nul 2>nul && set "PY=python"
 )
 
 REM 2) A self-contained Python we fetched on a previous run? (skip the PowerShell hop)
@@ -46,29 +47,30 @@ REM    system install, no admin, nothing added to PATH. This is what lets start.
 REM    be a true one-click launcher even on a machine with no Python at all. Needs
 REM    PowerShell (ships with Windows) + an internet connection.
 if not defined PY (
-  echo [i] No CPython 3.10-3.12 found -- downloading a self-contained one ^(~44 MB, one time^)...
+  echo [i] No CPython 3.11-3.12 found -- downloading a self-contained one ^(~44 MB, one time^)...
   powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\bootstrap_python.ps1" -Dest "%~dp0.python" -PyVersion 3.12
   if exist ".python\python.exe" set "PY=.python\python.exe"
 )
 
-REM 4) Download failed (offline?) -> fall back to ANY Python so the CORE app can
-REM    still run; the optional ML extras just won't install on 3.13+.
+REM 4) Download failed (offline?) -> fall back to any Python 3.11 or newer so the
+REM    CORE app can still run; the optional ML extras just won't install on 3.13+.
+REM    Not 3.10 any more: this version's requirements cannot install on it.
 if not defined PY (
   set "PY_SUPPORTED=0"
-  echo [!] Could not obtain CPython 3.10-3.12 automatically ^(offline?^). The core app
-  echo     can still run on any Python, but the OPTIONAL ML extras -- face-similarity
+  echo [!] Could not obtain CPython 3.11-3.12 automatically ^(offline?^). The core app
+  echo     can still run on a newer Python, but the OPTIONAL ML extras -- face-similarity
   echo     scoring and background masks -- won't install. Get 3.12 at https://www.python.org/downloads/
   echo.
-  where py >nul 2>nul && set "PY=py -3"
-  if not defined PY ( where python >nul 2>nul && set "PY=python" )
+  call py -3 -c "import sys; sys.exit(0 if sys.version_info[:2]>=(3,11) else 1)" >nul 2>nul && set "PY=py -3"
+  if not defined PY ( call python -c "import sys; sys.exit(0 if sys.version_info[:2]>=(3,11) else 1)" >nul 2>nul && set "PY=python" )
 )
 
-REM 5) Truly no Python anywhere and no download -> can't build a venv, stop.
+REM 5) No Python 3.11+ anywhere and no download -> can't build a venv, stop.
 REM    A double-clicked window closes the moment this script ends: from here on,
 REM    every stop says why and waits for a key, so the reason stays readable.
 if not defined PY (
-  echo Python 3.10-3.12 is required and the automatic download failed.
-  echo Install it from https://www.python.org/downloads/ then re-run start.bat
+  echo Python 3.11 or newer is required ^(3.12 recommended^) and the automatic download failed.
+  echo Install Python 3.12 from https://www.python.org/downloads/ then re-run start.bat
   pause
   exit /b 1
 )
@@ -81,22 +83,31 @@ REM     `python` silently falls back to the machine default (the 3.14 trap). The
 REM     python.exe stub, by contrast, always resolves to the venv interpreter.
 set "VPY=.venv\Scripts\python.exe"
 
-REM --- Ensure .venv exists AND runs a supported Python; rebuild it otherwise
-REM     (a stale venv on 3.13+ can't install the ML extras). Only rebuild when a
-REM     supported Python is actually available -- rebuilding on 3.14 gains nothing.
+REM --- Ensure .venv exists AND runs a supported Python; rebuild it otherwise.
+REM     A venv older than 3.11 (one built on 3.10 by an earlier version) cannot run
+REM     this version at all; a stale venv on 3.13+ can't install the ML extras.
+REM     Rebuild when that helps: onto 3.11-3.12, or off a pre-3.11 venv onto the
+REM     3.11+ fallback found above -- rebuilding a 3.14 venv on 3.14 gains nothing.
 set "REBUILD=0"
 set "VENV_BAD=0"
+set "VENV_OLD=0"
 if not exist "%VPY%" set "REBUILD=1"
 if "%REBUILD%"=="0" (
-  "%VPY%" -c "import sys; sys.exit(0 if (3,10)<=sys.version_info[:2]<=(3,12) else 1)" >nul 2>nul
+  "%VPY%" -c "import sys; sys.exit(0 if (3,11)<=sys.version_info[:2]<=(3,12) else 1)" >nul 2>nul
   if errorlevel 1 set "VENV_BAD=1"
+  "%VPY%" -c "import sys; sys.exit(0 if sys.version_info[:2]>=(3,11) else 1)" >nul 2>nul
+  if errorlevel 1 set "VENV_OLD=1"
 )
 if "%VENV_BAD%"=="1" if "%PY_SUPPORTED%"=="1" (
-  echo [i] Existing .venv is not on Python 3.10-3.12 -- rebuilding it so the ML extras can install.
+  echo [i] Existing .venv is not on Python 3.11-3.12 -- rebuilding it.
   set "REBUILD=1"
 )
-if "%VENV_BAD%"=="1" if "%PY_SUPPORTED%"=="0" (
-  echo [!] .venv runs an unsupported Python and no CPython 3.10-3.12 is installed.
+if "%VENV_OLD%"=="1" if "%PY_SUPPORTED%"=="0" (
+  echo [i] Existing .venv runs a Python older than 3.11, which this version needs -- rebuilding it on %PY%.
+  set "REBUILD=1"
+)
+if "%VENV_BAD%"=="1" if "%VENV_OLD%"=="0" if "%PY_SUPPORTED%"=="0" (
+  echo [!] .venv runs an unsupported Python and no CPython 3.11-3.12 is installed.
   echo     Core features work; ML extras stay unavailable until you install 3.12.
 )
 
@@ -117,11 +128,63 @@ if "%REBUILD%"=="0" if "%PY_SUPPORTED%"=="1" (
   )
 )
 
+REM --- Recheck right before rebuilding, whatever led here: a start.bat that an update
+REM     replaced while cmd was running it resumes reading the NEW file from the old
+REM     position, wherever that falls. A .venv on Python 3.11-3.12 whose core packages
+REM     import is never rebuilt, whatever REBUILD says; scripts\retire_venv.ps1 checks
+REM     the same, and a new .venv is only created where none is left.
+if "%REBUILD%"=="1" if exist "%VPY%" (
+  "%VPY%" -c "import sys; sys.exit(0 if (3,11)<=sys.version_info[:2]<=(3,12) else 1)" >nul 2>nul && "%VPY%" -c "import flask, werkzeug, sqlalchemy, PIL.Image" >nul 2>nul && (
+    echo [i] .venv runs Python 3.11-3.12 and its core packages import: kept, not rebuilt.
+    set "REBUILD=0"
+  )
+)
+
+REM --- Replace a venv without ever leaving a half-built one, nor losing the last
+REM     usable one. scripts\retire_venv.ps1 waits for the app that used the old folder
+REM     to exit (an in-app update restarts it from that venv), then renames it whole to
+REM     .venv-previous. The new one is built in its place; if creating it or installing
+REM     into it fails, the old one comes back -- unless the new one cannot be removed:
+REM     then the old one stays in .venv-previous, and the next run keeps it set aside.
+REM     It is deleted only once the new one is installed.
+set "SET_ASIDE=0"
+set "RETIRE_RC=skip"
+if "%REBUILD%"=="1" if exist .venv (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\retire_venv.ps1" -Venv "%~dp0.venv" -Backup "%~dp0.venv-previous"
+  call set "RETIRE_RC=%%errorlevel%%"
+)
+if "%RETIRE_RC%"=="3" set "REBUILD=0"
+if "%RETIRE_RC%"=="2" (
+  echo.
+  echo [!] The old .venv is still in use, so it was left as it is. Close every
+  echo     LoRA Dataset Studio window, then run start.bat again.
+  pause
+  exit /b 1
+)
+if not "%RETIRE_RC%"=="skip" if not "%RETIRE_RC%"=="0" if not "%RETIRE_RC%"=="2" if not "%RETIRE_RC%"=="3" (
+  echo.
+  echo [!] PowerShell could not run scripts\retire_venv.ps1 ^(exit code %RETIRE_RC%^), so the
+  echo     old .venv was left as it is. To rebuild it by hand: close LoRA Dataset Studio,
+  echo     rename the .venv folder ^(for example to .venv-old^), then run start.bat again.
+  pause
+  exit /b 1
+)
+if "%RETIRE_RC%"=="0" set "SET_ASIDE=1"
 if "%REBUILD%"=="1" (
-  if exist .venv rmdir /s /q .venv
-  call %PY% -m venv .venv || (
+  if not exist "%VPY%" call %PY% -m venv .venv || (
     echo.
     echo [!] Could not create .venv with %PY% -- see the messages above.
+    if exist .venv-previous (
+      if exist .venv-previous if exist .venv rmdir /s /q .venv
+      if exist .venv (
+        echo [!] The unfinished .venv could not be removed ^(a file in it is still open,
+        echo     for example by an antivirus^). The previous environment is kept unchanged
+        echo     in .venv-previous; run start.bat again once nothing holds .venv.
+      ) else (
+        if not exist .venv if exist .venv-previous ren .venv-previous .venv
+        if exist .venv-previous ( echo [!] .venv-previous could not be renamed back to .venv; it is kept as it is. ) else ( echo     The previous .venv was put back unchanged. )
+      )
+    )
     pause
     exit /b 1
   )
@@ -130,9 +193,21 @@ if "%REBUILD%"=="1" (
 "%VPY%" -m pip install -q -r backend\requirements.txt || (
   echo.
   echo [!] Installing the backend requirements failed -- see the pip messages above.
+  if "%SET_ASIDE%"=="1" if exist .venv-previous (
+    if "%SET_ASIDE%"=="1" if exist .venv-previous if exist .venv rmdir /s /q .venv
+    if exist .venv (
+      echo [!] The unfinished .venv could not be removed ^(a file in it is still open,
+      echo     for example by an antivirus^). The previous environment is kept unchanged
+      echo     in .venv-previous; run start.bat again once nothing holds .venv.
+    ) else (
+      if not exist .venv if exist .venv-previous ren .venv-previous .venv
+      if exist .venv-previous ( echo [!] .venv-previous could not be renamed back to .venv; it is kept as it is. ) else ( echo     The previous .venv was put back unchanged. )
+    )
+  )
   pause
   exit /b 1
 )
+if exist .venv-previous if exist "%VPY%" if exist .venv\pyvenv.cfg rmdir /s /q .venv-previous
 if not exist frontend\dist\index.html (
   echo frontend\dist is missing -- this repo ships it prebuilt. Run: cd frontend ^&^& npm install ^&^& npm run build
   pause

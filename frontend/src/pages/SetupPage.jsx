@@ -20,6 +20,7 @@ import { completeCoreSetup } from '../components/setup/completeCoreSetup'
 import { mlInstallCards, cardInstalled } from '../components/setup/mlInstallCards'
 import InstallRunner from '../components/setup/InstallRunner'
 import InstallEverything from '../components/setup/InstallEverything'
+import AiToolkitInstall from '../components/setup/AiToolkitInstall'
 import { HelpBadge } from '../help/HelpMode'
 import { kleinAssetBlocks } from '../utils/kleinAssets.js'
 
@@ -1453,6 +1454,13 @@ export default function SetupPage() {
         {saveRecheckBtn}
       </>
     )
+    // The one-click install writes aitoolkit.dir/python on the server: reload the
+    // form first, so a later "Save & return" cannot write the old empty folder back.
+    const aitoolkitInstall = (
+      <AiToolkitInstall
+        onInstalled={async () => { await load(); await refresh(true) }}
+        onUseFolder={(path) => applyDetectedPath('aitoolkit', 'dir', path)} />
+    )
     if (step.valid) {
       return (
         <div className="space-y-4">
@@ -1507,16 +1515,25 @@ export default function SetupPage() {
             )}
           </div>
           {fields}
+          <details className="rounded-md border border-border bg-surface-raised px-3 py-2">
+            <summary className="cursor-pointer text-xs text-content-subtle hover:text-content">
+              Or install a fresh AI Toolkit in a new folder
+            </summary>
+            <div className="mt-2">{aitoolkitInstall}</div>
+          </details>
         </div>
       )
     }
     return (
-      <GuidedSteps
-        intro="ai-toolkit trains the LoRA. Install it once, give it a Python, then point the app at its folder."
-        steps={AITOOLKIT_INSTALL_STEPS}
-        link={{ href: 'https://github.com/ostris/ai-toolkit', label: 'ai-toolkit on GitHub →' }}>
-        {fields}
-      </GuidedSteps>
+      <div className="space-y-4">
+        {aitoolkitInstall}
+        <GuidedSteps
+          intro="Or install it yourself: ai-toolkit trains the LoRA. Install it once, give it a Python, then point the app at its folder."
+          steps={AITOOLKIT_INSTALL_STEPS}
+          link={{ href: 'https://github.com/ostris/ai-toolkit', label: 'ai-toolkit on GitHub →' }}>
+          {fields}
+        </GuidedSteps>
+      </div>
     )
   }
 
@@ -1718,7 +1735,9 @@ export default function SetupPage() {
       { label: 'LoRA training — ai-toolkit', stepId: 'training', optional: true,
         state: stepById.training.valid ? 'ready'
           : (detected && detected.aitoolkit && detected.aitoolkit.dir ? 'partial' : 'missing'),
-        partial: 'found on disk — one click to use' },
+        partial: 'found on disk — one click to use',
+        // Its step installs it (AiToolkitInstall); Docker explains instead.
+        missing: oll.dockerManaged ? '' : 'one-click install' },
       { label: 'Quality tools — scoring, masks and cleanup', stepId: 'quality', optional: true,
         state: isReady('quality') ? 'ready' : 'missing' },
     ]
@@ -1761,7 +1780,7 @@ export default function SetupPage() {
               const m = soft ? { ...SCAN_META[r.state], ...NEUTRAL } : SCAN_META[r.state]
               const word = ['partial', 'initializing'].includes(r.state) ? r.partial
                 : r.state === 'skipped' && r.partial ? r.partial
-                : r.state === 'missing' ? (r.optional ? 'optional' : m.word)
+                : r.state === 'missing' ? (r.missing || (r.optional ? 'optional' : m.word))
                 : m.word
               return (
                 <li key={r.label}>
