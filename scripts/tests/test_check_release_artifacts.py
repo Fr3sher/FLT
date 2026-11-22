@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from scripts import check_release_artifacts as policy
 
@@ -83,13 +86,18 @@ class ReleaseArtifactPolicyTests(unittest.TestCase):
     # The counter-proof matters more than the happy path: a scan that rejects
     # nothing is indistinguishable from a scan that is broken.
 
+    @contextmanager
     def _no_name_list(self):
         """Pin the name list to a path that does not exist.
 
         Otherwise a developer's own .privacy-names would decide whether these
         tests pass, and CI (which has none) would be testing something else.
         """
-        return patch.dict("os.environ", {"LDS_PRIVACY_NAMES": "/nonexistent-name-list"})
+        # patch.dict clears the whole native environment on rollback, losing
+        # unrelated empty entries on Windows. Restore only this fixture's key.
+        with pytest.MonkeyPatch.context() as env:
+            env.setenv("LDS_PRIVACY_NAMES", "/nonexistent-name-list")
+            yield
 
     def test_archive_is_rejected_for_each_forbidden_shape(self):
         cases = {
@@ -166,7 +174,8 @@ class ReleaseArtifactPolicyTests(unittest.TestCase):
             names.write_text("# one per line\nRosalind\n", encoding="utf-8")
             path = _zip_with(root, "release.zip",
                             {"README.md": "Written by Rosalind, one evening.\n"})
-            with patch.dict("os.environ", {"LDS_PRIVACY_NAMES": str(names)}):
+            with pytest.MonkeyPatch.context() as env:
+                env.setenv("LDS_PRIVACY_NAMES", str(names))
                 errors = policy.check_artifact(path)
         self.assertTrue(
             any("a forbidden identifier: Rosalind" in error for error in errors),

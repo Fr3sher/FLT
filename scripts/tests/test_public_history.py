@@ -17,6 +17,8 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 spec = importlib.util.spec_from_file_location('public_history', SCRIPTS / 'check_public_history.py')
@@ -192,7 +194,9 @@ class PublicHistoryTests(unittest.TestCase):
     def test_inherited_git_context_cannot_redirect_the_explicit_repository(self):
         other = Path(self.temp.name) / 'other'
         self.git('init', '-q', str(other))
-        with patch.dict(os.environ, {'GIT_DIR': str(other / '.git'), 'GIT_WORK_TREE': str(other)}):
+        with pytest.MonkeyPatch.context() as env:
+            env.setenv('GIT_DIR', str(other / '.git'))
+            env.setenv('GIT_WORK_TREE', str(other))
             actual = Path(policy.git(self.repo, 'rev-parse', '--show-toplevel').decode().strip())
             self.assertEqual(actual.resolve(), self.repo.resolve())
 
@@ -205,7 +209,9 @@ class PublicHistoryTests(unittest.TestCase):
         (other / '.git/objects/info/alternates').write_bytes(
             ((self.repo / '.git/objects').as_posix() + '\n').encode())
         options = self.pin(path=self.repo / 'candidate-policy.json')
-        with patch.dict(os.environ, {'GIT_DIR': str(other / '.git'), 'GIT_WORK_TREE': str(other)}):
+        with pytest.MonkeyPatch.context() as env:
+            env.setenv('GIT_DIR', str(other / '.git'))
+            env.setenv('GIT_WORK_TREE', str(other))
             self.refused(**options)
 
     def test_shallow_history_is_refused(self):

@@ -668,6 +668,60 @@ def test_subprocess_activation_is_opt_in_and_process_activation_rolls_back(
     assert dict(os.environ) == before
 
 
+@pytest.mark.parametrize("raise_inside", [False, True])
+def test_temporary_activation_preserves_native_empty_environment(tmp_path, raise_inside):
+    """Python's mapping alone misses empty values lost by Windows' putenv.
+
+    Start a fresh process with an explicitly empty inherited value, then check
+    what its children inherit during activation and after normal/error rollback.
+    This also keeps a broken implementation from corrupting the pytest worker.
+    """
+    source = _fake_source_tree(tmp_path / "aitk")
+    identity = _identity(tmp_path / "identity.json")
+    script = """
+import os
+import subprocess
+import sys
+sys.path.insert(0, sys.argv[1])
+from app.services import aitoolkit_state_bridge as activation
+
+def check_child():
+    child = subprocess.run(
+        [sys.executable, "-c",
+         "import os; assert os.environ.get('LDS_TEST_EMPTY_ENV') == ''"],
+        capture_output=True, timeout=30)
+    assert child.returncode == 0, "native empty environment entry was lost"
+
+before = dict(os.environ)
+check_child()
+try:
+    with activation.temporary_activation(
+        aitoolkit_dir=sys.argv[2], identity_file=sys.argv[3],
+        status_file=sys.argv[4],
+    ):
+        check_child()
+        os.environ["LDS_TEST_MUTABLE_ENV"] = "changed"
+        os.environ["LDS_TEST_ADDED_ENV"] = "temporary"
+        del os.environ["LDS_TEST_REMOVED_ENV"]
+        if sys.argv[5] == "True":
+            raise RuntimeError("exercise rollback")
+except RuntimeError:
+    assert sys.argv[5] == "True"
+assert dict(os.environ) == before, "environment mapping was not restored"
+check_child()
+"""
+    env = dict(os.environ, LDS_TEST_EMPTY_ENV="", LDS_TEST_MUTABLE_ENV="before",
+               LDS_TEST_REMOVED_ENV="before")
+    env.pop("LDS_TEST_ADDED_ENV", None)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(Path(__file__).resolve().parents[1]),
+         str(source), str(identity), str(tmp_path / "status.json"), str(raise_inside)],
+        env=env, capture_output=True, timeout=60,
+    )
+    assert result.returncode == 0, "activation must preserve native child environment"
+
+
+
 def test_environment_overlay_refuses_preplanted_status_symlink(
     tmp_path,
 ):

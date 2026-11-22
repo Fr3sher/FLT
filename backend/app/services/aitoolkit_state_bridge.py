@@ -227,16 +227,21 @@ def deactivate_environment(env: Mapping[str, str]) -> dict[str, str]:
 
 @contextlib.contextmanager
 def temporary_activation(**kwargs: Any) -> Iterator[MutableMapping[str, str]]:
-    """Temporarily mutate ``os.environ`` and restore it byte-for-byte."""
+    """Activate the bridge and restore the prior environment on exit."""
     before = dict(os.environ)
     activated = subprocess_environment(base=before, **kwargs)
-    os.environ.clear()
-    os.environ.update(activated)
+    # Do not clear/rewrite untouched entries: on Windows, putenv(key, "")
+    # removes the native entry even while os.environ still contains it.
+    # Inherited empty Git config values must survive for child processes.
     try:
+        os.environ.update({key: value for key, value in activated.items()
+                           if os.environ.get(key) != value})
         yield os.environ
     finally:
-        os.environ.clear()
-        os.environ.update(before)
+        for key in os.environ.keys() - before.keys():
+            del os.environ[key]
+        os.environ.update({key: value for key, value in before.items()
+                           if os.environ.get(key) != value})
 
 
 def read_status(path: os.PathLike[str] | str) -> dict[str, Any] | None:
